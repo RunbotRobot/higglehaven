@@ -1968,6 +1968,18 @@ async function handleCatalog(request, db, route, url, models, env) {
       bindings.push(`%${query.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`);
     }
     if (sort !== 'name') conditions.push('price_cents IS NOT NULL');
+    // #1946: hidden from real shopper-facing browse/search by default --
+    // but Build mode's own "Add Item" picker (buildCatalogPickerButtons in
+    // src/main.js) fetches this exact same unfiltered endpoint via
+    // fetchCatalog(), with no separate code path, so an admin session
+    // (the owner's own account) still sees test models here, same bypass
+    // shape as every other requireAdmin-gated surface in this file.
+    // currentUser (not requireAdmin) -- an anonymous/non-admin caller
+    // still gets a normal, just-filtered response, not a 401/403.
+    const requester = await currentUser(request, db);
+    if (!requester || !requester.is_admin) {
+      conditions.push('is_test_model = 0');
+    }
     if (cursor && sort === 'name') {
       // #1015: COLLATE NOCASE on both comparisons, matching the ORDER BY
       // below and migrations/0092's own idx_catalog_templates_name_nocase
@@ -2008,7 +2020,16 @@ async function handleCatalog(request, db, route, url, models, env) {
 
   if (request.method === 'GET' && route.length === 2) {
     const row = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
-    return row ? json({ template: templateFromRow(row) }) : json({ error: 'Catalog template not found' }, 404);
+    if (!row) return json({ error: 'Catalog template not found' }, 404);
+    // #1946: same admin-only visibility as the list endpoint above -- a
+    // non-admin direct fetch by id gets the identical 404 a nonexistent
+    // template would, rather than leaking that a hidden test-model row
+    // exists.
+    if (row.is_test_model) {
+      const requester = await currentUser(request, db);
+      if (!requester || !requester.is_admin) return json({ error: 'Catalog template not found' }, 404);
+    }
+    return json({ template: templateFromRow(row) });
   }
 
   // #327: stores the flat thumbnail the client rendered from this
@@ -13516,6 +13537,13 @@ async function handleInstancePurchase(request, env, instanceId) {
   if (template.price_cents == null) {
     throw new HttpError('This product has no price set and cannot be purchased', 400);
   }
+  // #1946: a test/demo model -- never a real listing the owner intends to
+  // sell -- is still placeable (Build mode's own picker keeps showing it
+  // to an admin session) but must never actually be bought, real money or
+  // simulated alike.
+  if (template.is_test_model) {
+    throw new HttpError('This is a test/demo product and cannot be purchased', 400);
+  }
   const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
   if (!landlet?.owner_builder_id) {
     throw new HttpError('This instance is not on a claimed landlet, so there is no builder to credit', 400);
@@ -15571,6 +15599,11 @@ function templateFromRow(row) {
     imageUrl: row.image_url,
     imageEmbedding: row.image_embedding ? JSON.parse(row.image_embedding) : null,
     metadata: JSON.parse(row.metadata_json || '{}'),
+    // #1946: never settable through POST/PATCH's own generic field
+    // merge (validateTemplate/templateParams deliberately don't read or
+    // write this column) -- same "not ordinary-self-service-settable"
+    // treatment as is_admin.
+    isTestModel: Boolean(row.is_test_model),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
