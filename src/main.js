@@ -7515,6 +7515,7 @@ const levelMenuPanel = document.getElementById('level-menu-panel');
 levelMenuToggle.addEventListener('click', () => {
   levelMenuPanel.classList.toggle('expanded');
   levelMenuToggle.classList.toggle('active', levelMenuPanel.classList.contains('expanded'));
+  levelMenuToggle.setAttribute('aria-expanded', String(levelMenuPanel.classList.contains('expanded')));
 });
 document.addEventListener('click', (event) => {
   if (!levelMenuPanel.classList.contains('expanded')) return;
@@ -7527,6 +7528,7 @@ document.addEventListener('click', (event) => {
   if (levelMenuToggle.contains(event.target) || levelMenuPanel.contains(event.target)) return;
   levelMenuPanel.classList.remove('expanded');
   levelMenuToggle.classList.remove('active');
+  levelMenuToggle.setAttribute('aria-expanded', 'false');
 });
 
 function setLevelStatus(message, { isError = false } = {}) {
