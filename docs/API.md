@@ -4628,13 +4628,21 @@ eligible purchase, `409` if that purchase has already been reviewed.
 template's own seller once it has one — `403` for anyone else — the same
 `if (existing.seller_id)` ownership check the catalog template's own
 PATCH/DELETE handler uses; a template with no seller stays unrestricted,
-since there's no owner to check against.
+since there's no owner to check against. An admin session (`is_admin`)
+can delete any review outright regardless of the template's own seller
+(#1712, owner-confirmed) — checked first, before the ownership branch —
+for harassment, doxxing, or other policy-violating text the seller is
+unreachable or unwilling to act on; logged to `admin_action_log`
+(`delete_review_override`, target type `product_review`), the same
+accountability convention as the purchase refund/mark-shipped admin
+overrides.
 
 Both `POST` and `DELETE` are rate-limited (20 per 15-minute window, `429`
 past that) — `POST` per builder (`product-review-create:<builderId>`),
-`DELETE` per seller when the template has one or per client IP otherwise
-(`product-review-delete:<sellerId|IP>`), same bucket shape as other
-per-account/per-IP mutation limits in this file.
+`DELETE` per seller when the template has one, per admin user when an
+admin is acting, or per client IP otherwise
+(`product-review-delete:<sellerId|adminUserId|IP>`), same bucket shape as
+other per-account/per-IP mutation limits in this file.
 
 `POST` also notifies the template's own seller (#1043) — best-effort,
 fired after the insert succeeds, same "informational, never worth failing
