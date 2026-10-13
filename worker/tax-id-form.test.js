@@ -102,6 +102,37 @@ describe('Tax-ID form (#614)', () => {
     expect(got.body.error).toMatch(/taxIdNumber/);
   });
 
+  // #1972: taxIdNumber used to go through the same bare labelValue() as
+  // every other short field here -- any non-empty, <=100-char string was
+  // accepted and later sent verbatim as a real 1099 e-filing TIN. A US
+  // SSN/EIN is always 9 digits, so a malformed value (wrong length, or
+  // letters) should be rejected the same way individual.ssnLast4 already
+  // is elsewhere in this file.
+  it('rejects a W-9 taxIdNumber that is not a 9-digit SSN/EIN', async () => {
+    const builder = await signupBuilder('tax-id-form-w9-bad-taxid');
+    for (const taxIdNumber of ['123-45-678', '123-45-67890', 'not-a-tax-id', '']) {
+      const got = await api('/tax/id-form', builder.session({
+        method: 'POST',
+        body: JSON.stringify({
+          formType: 'w9', legalName: 'Ada Lovelace', addressLine1: '1 Way', city: 'London', state: 'LDN', postalCode: '00000', taxIdNumber,
+        }),
+      }));
+      expect(got.response.status).toBe(400);
+      expect(got.body.error).toMatch(/taxIdNumber/);
+    }
+  });
+
+  it('accepts a W-9 taxIdNumber given as 9 plain digits with no dashes', async () => {
+    const builder = await signupBuilder('tax-id-form-w9-plain-digits');
+    const got = await api('/tax/id-form', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        formType: 'w9', legalName: 'Ada Lovelace', addressLine1: '1 Way', city: 'London', state: 'LDN', postalCode: '00000', taxIdNumber: '123456789',
+      }),
+    }));
+    expect(got.response.status).toBe(200);
+  });
+
   it('accepts a W-8BEN submission with its own required fields', async () => {
     const builder = await signupBuilder('tax-id-form-w8ben');
     const got = await api('/tax/id-form', builder.session({
