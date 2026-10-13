@@ -1968,6 +1968,21 @@ async function handleCatalog(request, db, route, url, models, env) {
       bindings.push(`%${query.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`);
     }
     if (sort !== 'name') conditions.push('price_cents IS NOT NULL');
+    // #1946: is_test_model deliberately does NOT filter this list -- see
+    // that migration's own comment. This is the one endpoint Build mode's
+    // own "Add Item" picker (buildCatalogPickerButtons/fetchCatalog) uses
+    // for every ordinary builder, not just the owner's own account, and
+    // there's no separate real shopper-facing marketplace browse surface
+    // to filter instead (confirmed: Shop mode walks placed_instances, it
+    // never lists catalog_templates directly). Hiding here was tried and
+    // reverted after CI caught it breaking ordinary (non-admin) Build-mode
+    // placement of every pre-existing system/feature template (community
+    // signs, calendar events, flooring, basic furniture) that got
+    // backfilled to is_test_model the same as everything else -- those
+    // were never "real for-sale products" to begin with (no price, no
+    // real seller), so losing Build-mode access to them is a functional
+    // regression, not the intended effect. See handleInstancePurchase's
+    // own guard below for what is_test_model actually gates today.
     if (cursor && sort === 'name') {
       // #1015: COLLATE NOCASE on both comparisons, matching the ORDER BY
       // below and migrations/0092's own idx_catalog_templates_name_nocase
@@ -2008,6 +2023,8 @@ async function handleCatalog(request, db, route, url, models, env) {
 
   if (request.method === 'GET' && route.length === 2) {
     const row = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
+    // #1946: no admin-only visibility here either, same reasoning as the
+    // list endpoint above.
     return row ? json({ template: templateFromRow(row) }) : json({ error: 'Catalog template not found' }, 404);
   }
 
@@ -13521,6 +13538,13 @@ async function handleInstancePurchase(request, env, instanceId) {
   if (template.price_cents == null) {
     throw new HttpError('This product has no price set and cannot be purchased', 400);
   }
+  // #1946: a test/demo model -- never a real listing the owner intends to
+  // sell -- is still placeable (Build mode's own picker keeps showing it
+  // to an admin session) but must never actually be bought, real money or
+  // simulated alike.
+  if (template.is_test_model) {
+    throw new HttpError('This is a test/demo product and cannot be purchased', 400);
+  }
   const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
   if (!landlet?.owner_builder_id) {
     throw new HttpError('This instance is not on a claimed landlet, so there is no builder to credit', 400);
@@ -15604,6 +15628,11 @@ function templateFromRow(row) {
     imageUrl: row.image_url,
     imageEmbedding: row.image_embedding ? JSON.parse(row.image_embedding) : null,
     metadata: JSON.parse(row.metadata_json || '{}'),
+    // #1946: never settable through POST/PATCH's own generic field
+    // merge (validateTemplate/templateParams deliberately don't read or
+    // write this column) -- same "not ordinary-self-service-settable"
+    // treatment as is_admin.
+    isTestModel: Boolean(row.is_test_model),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

@@ -1678,6 +1678,7 @@ landlet. They are not production commerce listings yet.
   "metadata": {
     "placeholder": true
   },
+  "isTestModel": false,
   "createdAt": "2026-07-29T07:30:06.519Z",
   "updatedAt": "2026-07-29T07:30:06.519Z"
 }
@@ -1686,6 +1687,18 @@ landlet. They are not production commerce listings yet.
 `imageUrl` and `imageEmbedding` are `null` until set via `POST
 /api/catalog/:templateId/thumbnail` below — every other endpoint on this
 object (create, update, batch) leaves them untouched.
+
+`isTestModel` (#1946) marks a downloaded/demo model that isn't a real
+for-sale product — a different concept than `category: "placeholder"`
+above (that one only means "no real category was ever set"; it's an
+ordinary, freely seller-settable value). `isTestModel` is never settable
+through `POST`/`PUT`/`PATCH /api/catalog` or its batch siblings — like
+`users.is_admin`, it has no ordinary self-service write path. Every
+pre-existing row as of migration `0126` was backfilled to `true`; any row
+created afterward defaults to `false`. It does **not** affect `GET
+/api/catalog`'s own visibility — see that endpoint's own note on why an
+attempt to hide these rows there was tried and reverted — only
+purchasability (see `POST /api/instances/:instanceId/purchase` below).
 
 ### `GET /api/catalog`
 
@@ -1717,6 +1730,21 @@ Optional query parameters:
 The response includes `nextCursor`, which is `null` after the final page. Keep
 the same filters and `sort` mode while following a cursor; cursors are specific
 to their sort mode.
+
+A row with `isTestModel: true` (#1946) is listed here exactly like any
+other row — this endpoint does not filter by it. An earlier version of
+this endpoint hid those rows from a non-admin caller, but that broke
+ordinary (non-admin) Build mode's own "Add Item" picker (which fetches
+this same endpoint via `fetchCatalog()`, with no separate code path):
+every pre-existing template — including core, non-commerce feature
+fixtures like the community-sign/calendar-event/flooring/basic-furniture
+templates, none of which were ever real for-sale products — got
+backfilled to `isTestModel: true`, so every ordinary builder lost access
+to them in Build mode. There is no separate real shopper-facing
+marketplace browse surface to filter instead (Shop mode walks
+`placed_instances`, it never lists `catalog_templates` directly), so
+`isTestModel` is purchasability-only for now — see `POST
+/api/instances/:instanceId/purchase` below.
 
 Response:
 
@@ -1752,7 +1780,8 @@ Response:
 
 ### `GET /api/catalog/:templateId`
 
-Fetches one catalog template.
+Fetches one catalog template. No `isTestModel` visibility rule here
+either, matching the list endpoint above.
 
 ### `POST /api/catalog/batch`
 ### `PUT /api/catalog/batch`
@@ -5881,13 +5910,15 @@ just this endpoint — see `src/main.js`'s `ensureShopperIdentity`.
 
 `404` if the instance or its underlying catalog template doesn't exist,
 `400` if the template has no price set (`priceCents == null` — nothing to
-buy), the instance sits on an unclaimed lándlet (no builder to credit), or
-`quantity` exceeds `1000` — a sanity bound (not a spec requirement, same
-reasoning as auctions' `durationHours` cap above) against one request
-turning into an unbounded `higgles_balance_cents`/land-cap credit. `429`
-past 30 calls per 15 minutes from one account (see "Rate limiting" above)
-closes the other half of that gap — repeated smaller requests instead of
-one large one.
+buy), the template is marked `isTestModel` (#1946 — a downloaded/demo
+model, never a real listing, placeable in Build mode by an admin account
+but never purchasable, real money or simulated alike), the instance sits
+on an unclaimed lándlet (no builder to credit), or `quantity` exceeds
+`1000` — a sanity bound (not a spec requirement, same reasoning as
+auctions' `durationHours` cap above) against one request turning into an
+unbounded `higgles_balance_cents`/land-cap credit. `429` past 30 calls per
+15 minutes from one account (see "Rate limiting" above) closes the other
+half of that gap — repeated smaller requests instead of one large one.
 
 `GET /api/purchases?builderId=...` requires a session logged in as that
 builder (`403` otherwise); lists everything hosted on that builder's own

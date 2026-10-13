@@ -1126,3 +1126,101 @@ describe('Prompt-mode concept-image generation (#328)', () => {
     expect(limited.response.status).toBe(429);
   });
 });
+
+// #1946: is_test_model has no ordinary self-service write path (same
+// "not folded into the generic create/update merge" treatment as
+// users.is_admin) -- these tests flip it directly via SQL, mirroring the
+// migration's own backfill, since there's no API call that can set it.
+describe('Test-model designation (#1946)', () => {
+  async function createTemplate(templateId, overrides = {}) {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId,
+        name: `Test-model fixture ${templateId}`,
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 500,
+        ...overrides,
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    return created.body.template;
+  }
+
+  async function markAsTestModel(templateId) {
+    await env.DB.prepare('UPDATE catalog_templates SET is_test_model = 1 WHERE template_id = ?').bind(templateId).run();
+  }
+
+  it('defaults a newly created template to isTestModel: false, not settable via POST', async () => {
+    const template = await createTemplate('test-model-create-ignores-flag', { isTestModel: true });
+    expect(template.isTestModel).toBe(false);
+  });
+
+  it('is not settable via PATCH either', async () => {
+    await createTemplate('test-model-patch-ignores-flag');
+    const patched = await api('/catalog/test-model-patch-ignores-flag', {
+      method: 'PATCH',
+      body: JSON.stringify({ isTestModel: true }),
+    });
+    expect(patched.response.status).toBe(200);
+    expect(patched.body.template.isTestModel).toBe(false);
+    const row = await env.DB.prepare('SELECT is_test_model FROM catalog_templates WHERE template_id = ?')
+      .bind('test-model-patch-ignores-flag').first();
+    expect(row.is_test_model).toBe(0);
+  });
+
+  // Tried hiding these rows from GET /api/catalog for a non-admin caller
+  // in an earlier version of this change -- reverted after CI caught it
+  // breaking ordinary (non-admin) Build mode's own "Add Item" picker,
+  // which fetches this exact same endpoint with no separate code path:
+  // every pre-existing template (including core, non-commerce feature
+  // fixtures like community-sign/calendar-event/flooring templates) got
+  // backfilled to isTestModel, so every ordinary builder lost Build-mode
+  // access to them. These tests lock in the corrected, non-filtering
+  // behavior so it doesn't regress back.
+  it('does not exclude a test-model row from GET /api/catalog for any caller', async () => {
+    await createTemplate('test-model-list-visibility');
+    await markAsTestModel('test-model-list-visibility');
+
+    const anonymous = await api('/catalog?limit=100');
+    expect(anonymous.response.status).toBe(200);
+    expect(anonymous.body.templates.map((t) => t.templateId)).toContain('test-model-list-visibility');
+
+    const builder = await signupBuilder('test-model-list-visibility-builder');
+    const nonAdmin = await api('/catalog?limit=100', builder.session());
+    expect(nonAdmin.response.status).toBe(200);
+    const nonAdminHit = nonAdmin.body.templates.find((t) => t.templateId === 'test-model-list-visibility');
+    expect(nonAdminHit).toBeTruthy();
+    expect(nonAdminHit.isTestModel).toBe(true);
+  });
+
+  it('does not 404 GET /api/catalog/:templateId for a test-model row for any caller', async () => {
+    await createTemplate('test-model-single-fetch-visibility');
+    await markAsTestModel('test-model-single-fetch-visibility');
+
+    const anonymous = await api('/catalog/test-model-single-fetch-visibility');
+    expect(anonymous.response.status).toBe(200);
+    expect(anonymous.body.template.isTestModel).toBe(true);
+  });
+
+  it('rejects purchasing an instance backed by a test-model template', async () => {
+    const builder = await signupBuilder('test-model-purchase-builder');
+    await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ landletId: 'test-model-purchase-landlet', name: 'Test-model purchase landlet', areaM2: 1000, status: 'greenbelt' }),
+    }));
+    await api('/landlets/test-model-purchase-landlet/claim', builder.session({ method: 'POST' }));
+    await createTemplate('test-model-purchase-template');
+    await markAsTestModel('test-model-purchase-template');
+    const placed = await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId: 'test-model-purchase-instance', landletId: 'test-model-purchase-landlet', templateId: 'test-model-purchase-template', x: 0, y: 0 }),
+    }));
+    expect(placed.response.status).toBe(201);
+
+    const purchased = await api('/instances/test-model-purchase-instance/purchase', builder.session({ method: 'POST' }));
+    expect(purchased.response.status).toBe(400);
+    expect(purchased.body.error).toMatch(/test\/demo product/);
+  });
+});

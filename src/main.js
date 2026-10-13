@@ -8537,7 +8537,17 @@ function updateSelectionUI() {
     trimControls.detach();
     return;
   }
-  setProductInfo(count === 1 ? [...selectedMeshes][0].userData.template.name : `${count} items selected`);
+  // #1946 (owner correction): a builder selecting a test/demo model needs
+  // the same "not a real product" disclosure a shopper gets from
+  // productInfoText's own isTestModel note — this pill only ever shows a
+  // bare name today (no price/metadata disclosures at all), so there's no
+  // existing multi-note pattern to extend, just this one flag.
+  let singleSelectionInfo = '';
+  if (count === 1) {
+    const template = [...selectedMeshes][0].userData.template;
+    singleSelectionInfo = template.isTestModel ? `${template.name} (Testing Model — not a real product)` : template.name;
+  }
+  setProductInfo(count === 1 ? singleSelectionInfo : `${count} items selected`);
   modeControlsEl.classList.add('visible');
   // Rotate has no group form (rotating several items around a shared pivot
   // while also spinning each one's own orientation is a much harder problem
@@ -15118,8 +15128,16 @@ function updateReviewFade() {
     shopProductPreviewReviewBtn.classList.toggle('visible', tappedInRange);
     // Only a priced product has anything to "buy" — an unpriced one (the
     // common case for most placeholder catalog items) shows no buy button at
-    // all rather than one that would just 400 on click.
-    const canBuy = tappedInRange && shopTappedProduct.mesh.userData.template.priceCents != null;
+    // all rather than one that would just 400 on click. #1946 (owner
+    // correction): a test/demo model is never purchasable either, even on
+    // the rare chance it somehow carried a price — same "hide the
+    // affordance entirely" treatment as the unpriced case, not a disabled
+    // button. tappedInRange's own !!shopTappedProduct check (above) is what
+    // makes the short-circuit here safe -- shopTappedProduct can be null
+    // while tappedInRange is false.
+    const canBuy = tappedInRange
+      && shopTappedProduct.mesh.userData.template.priceCents != null
+      && !shopTappedProduct.mesh.userData.template.isTestModel;
     shopProductPreviewBuyBtn.classList.toggle('visible', canBuy);
     // #659: same gate as the Buy button just above — a return policy only
     // matters for something with a price to actually refund.
@@ -15131,8 +15149,16 @@ function updateReviewFade() {
 // "name — price (disclaimer)" line the preview modal (#shop-product-preview-info)
 // shows once tapped.
 function productInfoText(template) {
-  const { name, priceCents, metadata, category, skeletonSignature } = template;
+  const {
+    name, priceCents, metadata, category, skeletonSignature, isTestModel,
+  } = template;
   let text = priceCents == null ? name : `${name} — ${formatPriceCents(priceCents)}`;
+  // #1946 (owner correction): a test/demo model must read as obviously not
+  // a real product wherever a shopper sees it, same tap-to-inspect
+  // disclosure slot as the digital-goods/domestic-only/no-returns notes
+  // below -- shown first since it overrides the ordinary "is this for
+  // sale" assumption the rest of this text otherwise implies.
+  if (isTestModel) text += ' (Testing Model — not a real product, not for sale)';
   // The "clear higglehaven-controlled disclaimer" digital goods require
   // (docs/SPEC.md §4) — shown to the shopper right where they'd otherwise
   // assume every placed item is a physical one.
@@ -15757,8 +15783,13 @@ async function promptSellerFeedback(purchase) {
 async function handleShopProductBuyClick() {
   const review = shopTappedProduct;
   if (!review) return;
-  const { name, priceCents } = review.mesh.userData.template;
+  const { name, priceCents, isTestModel } = review.mesh.userData.template;
   if (priceCents == null) return;
+  // #1946 (owner correction): defense in depth alongside the canBuy gate
+  // above (updateReviewFade) that already hides this button entirely for
+  // a test model -- same belt-and-suspenders relationship priceCents ==
+  // null already has with its own .visible toggle.
+  if (isTestModel) return;
   // #659: a one-line mention right at the moment of buying, alongside the
   // full Return Policy button this same tapped product already surfaces
   // (#shop-product-preview-return-policy-btn, above) — this dialog is a
