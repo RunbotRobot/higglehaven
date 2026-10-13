@@ -11699,6 +11699,10 @@ const shopReviewHintEl = document.getElementById('shop-review-hint');
 const shopProductInfoEl = document.getElementById('shop-product-info');
 const shopReturnPolicyLinkEl = document.getElementById('shop-return-policy-link');
 const shopBuyHintEl = document.getElementById('shop-buy-hint');
+const shopProductPreviewModalEl = document.getElementById('shop-product-preview-modal');
+const shopProductPreviewCloseBtn = document.getElementById('shop-product-preview-close-btn');
+const shopProductPreviewCanvas = document.getElementById('shop-product-preview-canvas');
+const shopProductPreviewInfoEl = document.getElementById('shop-product-preview-info');
 const accountMenuLandletInfoEl = document.getElementById('account-menu-landlet-info');
 const refundPolicyModalEl = document.getElementById('refund-policy-modal');
 const refundPolicyCloseBtn = document.getElementById('refund-policy-close-btn');
@@ -13427,6 +13431,34 @@ function clampShopRadius(position, maxRadius) {
   }
 }
 
+// #1828: shopMaxRadiusM/shopAvatarMaxRadiusM above are each one flat
+// radius regardless of height, which only matches the world's real
+// boundary down at ground level -- the wall is a true vertical cylinder
+// there, but above the wall's rim the boundary is shopDomeMesh's own
+// curved dome (an ellipsoid cap: horizontal radius shopWorldRadiusM,
+// vertical rise shopDomeRiseM -- see its own scale.set() call), which
+// narrows in radius as height increases. Clamping to the flat radius at
+// every height let the avatar/camera sit inside the cylindrical bounding
+// box those two flat clamps (this one and clampShopCameraHeight) form
+// together while already outside the dome's actual curved surface, worst
+// right at the top. Derives the dome's own real cross-section radius at a
+// given world z from the same ellipse equation the mesh's own non-uniform
+// scale encodes, then applies the caller's existing clearance
+// (baseMaxRadiusM is already shopWorldRadiusM minus whatever clearance
+// that caller wants) by subtracting that same clearance from the dome
+// radius instead of from the flat shopWorldRadiusM -- continuous with the
+// flat formula right at the wall's own rim (heightAboveDomeBaseM <= 0),
+// where it returns baseMaxRadiusM unchanged.
+function shopMaxRadiusAtWorldZM(worldZ, baseMaxRadiusM) {
+  if (shopWorldRadiusM === null) return 0;
+  const heightAboveDomeBaseM = worldZ - (SHOP_WALL_HEIGHT_M - curvatureDropM(shopWorldRadiusM));
+  if (heightAboveDomeBaseM <= 0) return baseMaxRadiusM;
+  const clearanceM = shopWorldRadiusM - baseMaxRadiusM;
+  const domeRadiusAtHeightM = shopWorldRadiusM *
+    Math.sqrt(Math.max(0, 1 - (heightAboveDomeBaseM / shopDomeRiseM) ** 2));
+  return Math.max(0, domeRadiusAtHeightM - clearanceM);
+}
+
 // docs/SPEC.md §2's altitude/speed curve — the actual math (a power law
 // clamped to the spec's own [1x, 100x] range) now lives in flight.js as a
 // pure, directly-unit-tested function (src/flight.test.js); this call site
@@ -13750,7 +13782,7 @@ function positionShopCamera() {
   shopCameraAnchor.z += shopCameraAnchorHeightM();
   camera.position.copy(shopCameraAnchor).addScaledVector(shopViewDirection, -SHOP_CAMERA_FOLLOW_DISTANCE_M);
   clampShopCameraHeight();
-  clampShopRadius(camera.position, shopMaxRadiusM());
+  clampShopRadius(camera.position, shopMaxRadiusAtWorldZM(camera.position.z, shopMaxRadiusM()));
   // #1631: e2e-only hook (same "expose computed state purely for
   // verification" convention as window.__shopInstanceDisposedCount) --
   // lets a test confirm the avatar/camera's real world z stays under the
@@ -13761,15 +13793,23 @@ function positionShopCamera() {
     avatarZ: shopAvatarPosition.z,
     cameraZ: camera.position.z,
     domeApexWorldZ: (shopDomeMesh?.position.z ?? 0) + shopDomeRiseM,
-    // #1840: avatarX/avatarY plus domeRadiusM let a test independently
-    // reconstruct the leaning avatar mesh's own farthest world-space point
-    // (pivot + lean reach in the facing direction, from
+    // #1828: lets a test independently verify the avatar/camera stay
+    // inside the dome's actual curved cross-section at their own height,
+    // not just under its flat apex (which the fields above alone can't
+    // distinguish from poking through the dome's curved side lower down).
+    avatarRadiusM: Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y),
+    cameraRadiusM: Math.hypot(camera.position.x, camera.position.y),
+    domeBaseWorldZ: shopDomeMesh?.position.z ?? 0,
+    domeRadiusM: shopWorldRadiusM,
+    domeRiseM: shopDomeRiseM,
+    // #1840: avatarX/avatarY let a test independently reconstruct the
+    // leaning avatar mesh's own farthest world-space point (pivot + lean
+    // reach in the facing direction, from
     // window.__shopAvatarOrientation's pitchRad/facingRad) and confirm it
     // stays inside the wall's real radius -- not just the clamped pivot
-    // itself, which is all shopAvatarPosition alone can verify.
+    // itself, which avatarRadiusM above alone can verify.
     avatarX: shopAvatarPosition.x,
     avatarY: shopAvatarPosition.y,
-    domeRadiusM: shopWorldRadiusM,
   };
 }
 
@@ -13963,7 +14003,16 @@ function updateShopMovement(now) {
       );
       shopAvatarFacing += turnDelta * Math.min(1, SHOP_AVATAR_TURN_EASE_PER_S * dt);
     }
-    clampShopRadius(shopAvatarPosition, shopAvatarMaxRadiusM() - (airborne ? SHOP_AVATAR_FLIGHT_LEAN_CLEARANCE_M : 0));
+    // #1840: the extra lean clearance (reserved whenever airborne) is
+    // folded into baseMaxRadiusM *before* shopMaxRadiusAtWorldZM (#1839)
+    // derives its own clearanceM from it, so the leaning-body margin holds
+    // consistently at every height -- both down at the flat wall (this
+    // issue's own low-altitude case) and up where the dome's real curved
+    // cross-section already narrows the radius on its own (#1839's case).
+    clampShopRadius(
+      shopAvatarPosition,
+      shopMaxRadiusAtWorldZM(shopAvatarPosition.z, shopAvatarMaxRadiusM() - (airborne ? SHOP_AVATAR_FLIGHT_LEAN_CLEARANCE_M : 0)),
+    );
   }
 
   // #1588: with the setting on, and only while the shopper isn't actively
@@ -14850,6 +14899,105 @@ function findTappedShopProduct(object) {
   return null;
 }
 
+// #1811 (sub-issue of #1809): isolated 3D preview for a tapped product,
+// shown alongside the existing #shop-product-info pill for now. Same
+// self-contained-scene technique as Sell mode's own showAxisPreview/
+// disposeAxisPreview (see that function's own comment, above) — a
+// dedicated scene/camera/renderer/controls bound to this modal's own
+// canvas, built via createMeshForInstance so a real scanned model (or
+// placeholder box) renders exactly as it would in the world, not a
+// simplified stand-in. No axis arrows here (this modal is read-only
+// "what is this," not the Extensibility editor those arrows serve), and
+// no shared-canvas reparenting (this canvas always lives in this one
+// modal's own markup, unlike the seller preview's single canvas moved
+// between row panels).
+let shopProductPreview = null;
+// Same reopen-before-the-previous-load-finishes guard as
+// axisPreviewLoadToken — a quick double-tap, or tapping a second product
+// before createMeshForInstance's await on the first resolves, would
+// otherwise race two calls into building their own renderer bound to the
+// same canvas.
+let shopProductPreviewLoadToken = 0;
+
+function disposeShopProductPreview() {
+  if (!shopProductPreview) return;
+  shopProductPreview.controls.dispose();
+  shopProductPreview.renderer.dispose();
+  disposeObject(shopProductPreview.previewObject);
+  shopProductPreview = null;
+}
+
+async function showShopProductPreview(template) {
+  const myLoadToken = ++shopProductPreviewLoadToken;
+  disposeShopProductPreview();
+
+  const scene = new THREE.Scene();
+  scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+  sun.position.set(2, -3, 4);
+  scene.add(sun);
+
+  // At the origin and with no crop, same as showAxisPreview — shows the
+  // product's real full-size geometry, not the specific crop any one
+  // placed instance of it happens to have in the world.
+  const previewObject = await createMeshForInstance({
+    templateId: template.templateId,
+    x: 0, y: 0, z: 0,
+    rotationX: 0, rotationY: 0, rotationZ: 0,
+    crop: {},
+  });
+  if (myLoadToken !== shopProductPreviewLoadToken) {
+    // A newer call owns the preview now — same superseded-load leak guard
+    // showAxisPreview uses: this object was never added to any scene the
+    // dispose function above knows about.
+    if (previewObject) disposeObject(previewObject);
+    return;
+  }
+  if (!previewObject) return;
+  scene.add(previewObject);
+
+  const box = new THREE.Box3().setFromObject(previewObject);
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const radius = Math.max(sphere.radius, 0.05);
+
+  const rect = shopProductPreviewCanvas.getBoundingClientRect();
+  const camera = new THREE.PerspectiveCamera(45, rect.width / Math.max(rect.height, 1), 0.01, 100);
+  camera.up.set(0, 0, 1);
+  const dist = radius * 2.6;
+  camera.position.set(dist * 0.75, -dist * 0.95, dist * 0.65);
+  camera.lookAt(0, 0, 0);
+
+  const renderer = new THREE.WebGLRenderer({ canvas: shopProductPreviewCanvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(rect.width, rect.height, false);
+
+  const controls = new OrbitControls(camera, shopProductPreviewCanvas);
+  controls.target.set(0, 0, 0);
+  controls.enableDamping = false;
+  controls.enablePan = false;
+  controls.minDistance = dist * 0.35;
+  controls.maxDistance = dist * 3;
+  const render = () => renderer.render(scene, camera);
+  controls.addEventListener('change', render);
+
+  render();
+  shopProductPreview = { renderer, scene, camera, controls, previewObject };
+}
+
+function openShopProductPreviewModal(review) {
+  shopProductPreviewModalEl.classList.add('visible');
+  shopProductPreviewInfoEl.textContent = productInfoText(review.mesh.userData.template);
+  openModalA11y(shopProductPreviewModalEl, closeShopProductPreviewModal);
+  showShopProductPreview(review.mesh.userData.template);
+}
+
+function closeShopProductPreviewModal() {
+  shopProductPreviewModalEl.classList.remove('visible');
+  disposeShopProductPreview();
+  closeModalA11y(shopProductPreviewModalEl);
+}
+shopProductPreviewCloseBtn.addEventListener('click', closeShopProductPreviewModal);
+
 // Tap-to-inspect: Shop mode has no other use for a plain single-finger tap
 // on open canvas (movement/look are joystick-driven, pinch-zoom needs two
 // fingers — see the pointerdown/pointermove pair just above), so this is
@@ -14869,6 +15017,13 @@ renderer.domElement.addEventListener('click', (event) => {
   shopTappedProduct = review;
   shopProductInfoEl.classList.toggle('visible', !!review);
   if (review) shopProductInfoEl.textContent = productInfoText(review.mesh.userData.template);
+  // #1811: the new preview modal opens alongside the pill above for now
+  // (it covers #1812's buy/review/return-policy actions next, and the
+  // pill itself is only removed once that and #1813 land) — same tap
+  // that reveals one reveals the other, same tap-away that dismisses one
+  // dismisses the other.
+  if (review) openShopProductPreviewModal(review);
+  else closeShopProductPreviewModal();
 });
 
 // The creative-tool trigger itself (docs/SPEC.md §6's own "scheduled
@@ -15425,6 +15580,10 @@ function unloadShopLandletInstances(entry) {
       shopReviewHintEl.classList.remove('visible');
       shopBuyHintEl.classList.remove('visible');
       shopReturnPolicyLinkEl.classList.remove('visible');
+      // #1811: same stale-reference reasoning as the pill/hints above —
+      // the preview modal's own template/model would otherwise keep
+      // pointing at a mesh that's about to be disposed.
+      closeShopProductPreviewModal();
     }
     // #1810: same reasoning as the hints just above -- the highlight's own
     // BoxHelper/fill reference this review's mesh directly, which is about
