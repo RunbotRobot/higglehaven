@@ -872,6 +872,38 @@ describe('Admin landlet ownership reassignment (#1177)', () => {
     expect(JSON.parse(log.detail_json)).toMatchObject({ cancelledAuctionId: auctionId });
   });
 
+  // #1955: the new owner may have placed a losing-so-far bid on the exact
+  // auction being cancelled before the admin handed them the land outright
+  // -- without excluding them from cancelledAuctionBidderIds, they'd get a
+  // "your bid was cancelled, no winner" notification directly contradicting
+  // the "it's yours now" one, about the same landlet.
+  it('does not send the new owner a "bid cancelled" notification when they bid on the auction they are being handed', async () => {
+    const owner = await signupBuilder('reassign-auction-cancel-self-bid-owner');
+    const target = await signupBuilder('reassign-auction-cancel-self-bid-target');
+    await fundHiggles(target);
+    await createGreenbeltLandlet('reassign-auction-cancel-self-bid-landlet');
+    await api('/landlets/reassign-auction-cancel-self-bid-landlet/claim', owner.session({ method: 'POST' }));
+    const started = await api('/landlets/reassign-auction-cancel-self-bid-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({}),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, target.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 700 }),
+    }));
+
+    const result = await api('/landlets/reassign-auction-cancel-self-bid-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId, cancelActiveAuction: true }),
+    }));
+    expect(result.response.status).toBe(200);
+    expect(result.body.landlet.ownerBuilderId).toBe(target.builderId);
+
+    const { results: targetNotifications } = await env.DB.prepare(
+      'SELECT message FROM notifications WHERE builder_id = ? ORDER BY created_at',
+    ).bind(target.builderId).all();
+    expect(targetNotifications.some((n) => /reassigned to you by an admin/i.test(n.message))).toBe(true);
+    expect(targetNotifications.some((n) => /bid.*cancelled/i.test(n.message))).toBe(false);
+  });
+
   it('cancelActiveAuction is a harmless no-op when there is no active auction to cancel', async () => {
     const owner = await signupBuilder('reassign-auction-cancel-noop-owner');
     const target = await signupBuilder('reassign-auction-cancel-noop-target');
