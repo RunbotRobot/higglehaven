@@ -2165,14 +2165,27 @@ async function handleCatalog(request, db, route, url, models, env) {
     // `category`/`color`/dimensions are never legitimately null once
     // provided (labelValue/positiveNumber reject it), so a plain COALESCE
     // sentinel is unambiguous there; `subcategory`/`priceCents`/`modelUrl`/
-    // `modelSizeBytes`/`skeletonSignature` can legitimately be set to null
-    // (clearing the field), so those use an explicit presence flag instead
-    // of COALESCE -- a bare null sentinel would be indistinguishable from
-    // "clear this field" and silently fail to clear it. `dimensions` is
-    // provided (or not) as one atomic group, same as validateTemplate's own
-    // all-or-nothing handling of it. `seller_id`/`metadata_json` are
-    // intentionally excluded (see this handler's own seller_id/#424
-    // comments) and keep being written unconditionally.
+    // `modelSizeBytes`/`skeletonSignature`/`metadata` can legitimately be
+    // set to null/cleared (metadata down to `{}`), so those use an explicit
+    // presence flag instead of COALESCE -- a bare null/empty sentinel would
+    // be indistinguishable from "omitted" and silently fail to clear them.
+    // `dimensions` is provided (or not) as one atomic group, same as
+    // validateTemplate's own all-or-nothing handling of it. `seller_id` is
+    // intentionally excluded (see this handler's own seller_id comment
+    // above) and keeps being written unconditionally -- it's never read
+    // from `input` at all (always pinned back to `existing.seller_id`), so
+    // there's no separate request-provided value for it to race against.
+    // `metadata_json` itself used to be unconditional here the same way,
+    // which meant any PATCH that didn't touch metadata (a price or
+    // dimension-only edit, say) still re-wrote the *stale* `existing`
+    // snapshot's metadata_json verbatim -- silently reverting a concurrent
+    // metadata-only save (digital-good flag, no-returns, ...) racing
+    // against it, the exact #1742 shape this handler's other columns
+    // already guard against. #1807's audit found no live instance of this
+    // actually injecting an unintended value (every client call site gates
+    // its own metadata write on explicit user input), but it's the one real
+    // gap that investigation surfaced, so it gets the same atomic treatment
+    // the sibling columns already have.
     const result = await db.prepare(`
       UPDATE catalog_templates
       SET name = COALESCE(?, name), category = COALESCE(?, category),
@@ -2182,7 +2195,8 @@ async function handleCatalog(request, db, route, url, models, env) {
           model_url = CASE WHEN ? = 1 THEN ? ELSE model_url END,
           model_size_bytes = CASE WHEN ? = 1 THEN ? ELSE model_size_bytes END,
           skeleton_signature = CASE WHEN ? = 1 THEN ? ELSE skeleton_signature END,
-          metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          metadata_json = CASE WHEN ? = 1 THEN ? ELSE metadata_json END,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE template_id = ?
     `).bind(
       input.name === undefined ? null : template.name,
@@ -2197,7 +2211,8 @@ async function handleCatalog(request, db, route, url, models, env) {
       input.modelUrl === undefined ? 0 : 1, template.modelUrl,
       input.modelSizeBytes === undefined ? 0 : 1, template.modelSizeBytes,
       input.skeletonSignature === undefined ? 0 : 1, template.skeletonSignature,
-      JSON.stringify(template.metadata), route[1],
+      input.metadata === undefined ? 0 : 1, JSON.stringify(template.metadata),
+      route[1],
     ).run();
     // #932: unlike every other single-item update handler on a comparably-
     // shaped resource (builder/seller rename, bundles PATCH, friendships

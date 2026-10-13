@@ -4396,6 +4396,77 @@ describe('Landlet levels', () => {
     });
   });
 
+  // #1807: metadata_json was the one column #1742 deliberately left
+  // unconditional (see that handler's own comment) -- so a PATCH that
+  // never touches metadata at all (a plain price change, say) still
+  // re-wrote metadata_json from its own stale pre-race snapshot, silently
+  // reverting a concurrent metadata-only save (digital-good flag,
+  // no-returns, ...) racing against it. Forces the exact interleaving that
+  // reproduces it: hooks the price-only PATCH's own UPDATE call to run the
+  // metadata-only PATCH to completion first, so the metadata change is
+  // already committed by the time the price-only PATCH's stale snapshot
+  // gets written -- matching "whichever PATCH omits a field commits its
+  // own stale copy of it last" rather than relying on real scheduling.
+  describe('Catalog template PATCH concurrent-edit race on metadata (#1807)', () => {
+    it('does not let a price-only PATCH silently revert a concurrent metadata-only save', async () => {
+      const created = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'template-1807-race',
+          name: 'Metadata race template',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          priceCents: 100,
+          metadata: { placeholder: true },
+        }),
+      });
+      expect(created.response.status).toBe(201);
+
+      const originalPrepare = env.DB.prepare.bind(env.DB);
+      let armed = true;
+      env.DB.prepare = (sql) => {
+        const stmt = originalPrepare(sql);
+        if (armed && sql.includes('UPDATE catalog_templates') && sql.includes('SET name = COALESCE')) {
+          const originalBind = stmt.bind.bind(stmt);
+          return {
+            bind: (...bindArgs) => {
+              const bound = originalBind(...bindArgs);
+              const originalRun = bound.run.bind(bound);
+              bound.run = async () => {
+                armed = false;
+                // The metadata-only PATCH must actually commit before this
+                // price-only PATCH's own UPDATE runs, not just be fired --
+                // awaiting it here (rather than firing it unawaited
+                // alongside this one) is what makes the test deterministic
+                // instead of a coin flip on which write lands first, same
+                // reasoning avatar-ownership.test.js's own #1261 test gives
+                // for its own await.
+                await api('/catalog/template-1807-race', {
+                  method: 'PATCH', body: JSON.stringify({ metadata: { placeholder: true, noReturns: true } }),
+                });
+                return originalRun();
+              };
+              return bound;
+            },
+          };
+        }
+        return stmt;
+      };
+      let priced;
+      try {
+        priced = await api('/catalog/template-1807-race', { method: 'PATCH', body: JSON.stringify({ priceCents: 500 }) });
+      } finally {
+        env.DB.prepare = originalPrepare;
+      }
+      expect(priced.response.status).toBe(200);
+
+      const row = await env.DB.prepare('SELECT * FROM catalog_templates WHERE template_id = ?')
+        .bind('template-1807-race').first();
+      expect(row.price_cents).toBe(500);
+      expect(JSON.parse(row.metadata_json)).toEqual({ placeholder: true, noReturns: true });
+    });
+  });
+
   // #729: saved_layout_instances and version_instances both hold a
   // template_id under ON DELETE RESTRICT (see migrations/0080 and 0007's
   // own comments), so a template referenced only by one of these snapshot
