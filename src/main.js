@@ -12223,15 +12223,38 @@ const SHOP_SKY_FRAGMENT_SHADER = `
       // (the pole-proximity cutoff just below) barely changed the result,
       // so the problem wasn't limited to the literal pole either — it's
       // this fade engaging too late. Starting the fade an order of
-      // magnitude sooner (0.0005) and finishing it well before the old
-      // lower bound (0.006 vs 0.005) closes that gap: confirmed via the
-      // same direct visual comparison that every previously-streaked
-      // camera angle (near the apex, pitched up and yawed, flying near
-      // the horizon) now renders cleanly, while views with little
-      // foreshortening to begin with (near the wall, moderate pitch)
-      // render identically to before — nothing that wasn't already
-      // aliasing got newly suppressed.
-      float fade = 1.0 - smoothstep(0.0005, 0.006, footprint);
+      // magnitude sooner (0.0005) closes that gap — confirmed via direct
+      // visual comparison that every previously-streaked camera angle
+      // (near the apex, pitched up and yawed, flying near the horizon)
+      // renders cleanly once the fade engages that early.
+      //
+      // #1799: #1585's own fix additionally narrowed the *upper* bound
+      // from 0.05 to 0.006 (a ~9x tighter span, 0.0055 wide vs. the
+      // original 0.045), which traded the undersampling streaks for a
+      // new, different-looking artifact — a hard, jagged/stair-stepped
+      // edge in the cloud overlay, most visible on a pitched-up-and-yawed
+      // view (confirmed via direct Playwright screenshots, cropped and
+      // contrast-boosted to make it unambiguous). Root cause: fwidth() is
+      // a GPU quad-derivative — effectively constant across each 2x2
+      // pixel block, not a true per-pixel value — and that inherent
+      // blockiness is negligible against a wide threshold span but
+      // becomes the dominant signal once the span narrows enough that
+      // one quad's worth of footprint jitter covers a large fraction of
+      // it, which is exactly what a 0.0055-wide span did. This shows up
+      // worst along diagonal gradients (yawed views) because GPU quad
+      // derivatives are axis-aligned, so a diagonal transition steps
+      // through quads one axis at a time rather than smoothly. Widening
+      // the upper bound back out to 0.03 — keeping #1585's early-
+      // engaging 0.0005 lower bound (the actual fix for the original
+      // streaks), while still well under the pre-#1585 0.05 that let
+      // those streaks through — gives the transition enough span again
+      // to absorb normal quad-to-quad footprint jitter: confirmed via
+      // the same screenshot technique that the jagged edge is gone at
+      // every angle that showed it (pitched up and yawed, near the
+      // horizon), while a full straight-up apex view and an ordinary
+      // moderate-pitch view both still render as a smooth gradient with
+      // no streaking, same as #1585's own fix already established.
+      float fade = 1.0 - smoothstep(0.0005, 0.03, footprint);
       value += amplitude * fade * noise(p);
       totalWeight += amplitude * fade;
       p *= 2.05;
