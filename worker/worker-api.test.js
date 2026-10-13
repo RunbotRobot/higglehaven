@@ -2843,6 +2843,29 @@ describe('Worker API', () => {
     expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
   });
 
+  // #1867: these GET branches used to have no auth gate at all, unlike
+  // every POST/PATCH/DELETE on the same two resources -- same "no session,
+  // and a logged-in-but-not-admin session, are both rejected before the
+  // handler touches the DB" bar as the admin-only GET /api/models/*
+  // coverage above. A nonexistent id is fine for the single-item routes:
+  // requireAdmin runs before any DB lookup, so the gate rejects before
+  // "not found" ever gets a chance to fire.
+  it('requires admin for every GET branch on land candidates and rings', async () => {
+    expect((await api('/land-candidates')).response.status).toBe(401);
+    expect((await api('/land-candidates/missing-candidate')).response.status).toBe(401);
+    expect((await api('/land-candidate-rings')).response.status).toBe(401);
+    expect((await api('/land-candidate-rings/missing-ring')).response.status).toBe(401);
+
+    const nonAdmin = await signupBuilder('non-admin-land-candidate-reader');
+    expect((await api('/land-candidates', nonAdmin.session())).response.status).toBe(403);
+    expect((await api('/land-candidates/missing-candidate', nonAdmin.session())).response.status).toBe(403);
+    expect((await api('/land-candidate-rings', nonAdmin.session())).response.status).toBe(403);
+    expect((await api('/land-candidate-rings/missing-ring', nonAdmin.session())).response.status).toBe(403);
+
+    expect((await api('/land-candidates', adminSession())).response.status).toBe(200);
+    expect((await api('/land-candidate-rings', adminSession())).response.status).toBe(200);
+  });
+
   it('starts generation immediately for candidates already overlapping the world', async () => {
     const created = await api('/land-candidates', adminSession({
       method: 'POST',
@@ -2948,7 +2971,7 @@ describe('Worker API', () => {
     }));
     expect(overlapsMaterialized.response.status).toBe(409);
     expect(overlapsMaterialized.body).toEqual({ error: 'Candidate would overlap existing land' });
-    expect((await api('/land-candidates/overlap-vs-materialized')).response.status).toBe(404);
+    expect((await api('/land-candidates/overlap-vs-materialized', adminSession())).response.status).toBe(404);
 
     const pendingBase = await api('/land-candidates', adminSession({
       method: 'POST',
@@ -2970,7 +2993,7 @@ describe('Worker API', () => {
       }),
     }));
     expect(batchVsExisting.response.status).toBe(409);
-    expect((await api('/land-candidates/batch-overlap-vs-existing')).response.status).toBe(404);
+    expect((await api('/land-candidates/batch-overlap-vs-existing', adminSession())).response.status).toBe(404);
 
     const batchInternalOverlap = await api('/land-candidates/batch', adminSession({
       method: 'POST',
@@ -2982,8 +3005,8 @@ describe('Worker API', () => {
       }),
     }));
     expect(batchInternalOverlap.response.status).toBe(409);
-    expect((await api('/land-candidates/batch-internal-a')).response.status).toBe(404);
-    expect((await api('/land-candidates/batch-internal-b')).response.status).toBe(404);
+    expect((await api('/land-candidates/batch-internal-a', adminSession())).response.status).toBe(404);
+    expect((await api('/land-candidates/batch-internal-b', adminSession())).response.status).toBe(404);
 
     const clear = await api('/land-candidates/batch', adminSession({
       method: 'POST',
@@ -3007,7 +3030,7 @@ describe('Worker API', () => {
     const deleted = await api('/land-candidates/cancelled-candidate', adminSession({ method: 'DELETE' }));
     expect(deleted.response.status).toBe(200);
     expect(deleted.body).toEqual({ deleted: true });
-    const absent = await api('/land-candidates/cancelled-candidate');
+    const absent = await api('/land-candidates/cancelled-candidate', adminSession());
     expect(absent.response.status).toBe(404);
 
     // #813/#817
@@ -3064,16 +3087,16 @@ describe('Worker API', () => {
     expect(ringLog.admin_user_id).toBe(adminUserId);
     expect(JSON.parse(ringLog.detail_json)).toEqual({ count: 6 });
 
-    const listed = await api('/land-candidates/generated-ring-006');
+    const listed = await api('/land-candidates/generated-ring-006', adminSession());
     expect(listed.response.status).toBe(200);
     expect(listed.body.candidate.materializedAt).toBeNull();
     expect(listed.body.candidate.ringId).toBe('generated-ring');
 
-    const ringCandidates = await api('/land-candidates?ringId=generated-ring&limit=100');
+    const ringCandidates = await api('/land-candidates?ringId=generated-ring&limit=100', adminSession());
     expect(ringCandidates.response.status).toBe(200);
     expect(ringCandidates.body.candidates).toHaveLength(6);
     expect(ringCandidates.body.candidates.every((candidate) => candidate.ringId === 'generated-ring')).toBe(true);
-    expect((await api('/land-candidates?ringId=')).response.status).toBe(400);
+    expect((await api('/land-candidates?ringId=', adminSession())).response.status).toBe(400);
 
     const deleteMember = await api('/land-candidates/generated-ring-001', adminSession({ method: 'DELETE' }));
     expect(deleteMember.response.status).toBe(409);
@@ -3143,21 +3166,21 @@ describe('Worker API', () => {
       { ring_id: 'adjacent-ring', candidate_count: 6 },
     ]);
 
-    const firstPage = await api('/land-candidate-rings?limit=1');
+    const firstPage = await api('/land-candidate-rings?limit=1', adminSession());
     expect(firstPage.response.status).toBe(200);
     expect(firstPage.body.rings).toHaveLength(1);
     expect(firstPage.body.rings[0]).toMatchObject({ ringId: 'generated-ring', candidateCount: 6 });
     expect(firstPage.body.nextCursor).not.toBeNull();
-    const secondPage = await api(`/land-candidate-rings?limit=1&cursor=${encodeURIComponent(firstPage.body.nextCursor)}`);
+    const secondPage = await api(`/land-candidate-rings?limit=1&cursor=${encodeURIComponent(firstPage.body.nextCursor)}`, adminSession());
     expect(secondPage.body.rings).toHaveLength(1);
     expect(secondPage.body.rings[0].ringId).toBe('adjacent-ring');
     expect(secondPage.body.nextCursor).toBeNull();
-    const childListing = await api('/land-candidate-rings?adjacentToRingId=generated-ring');
+    const childListing = await api('/land-candidate-rings?adjacentToRingId=generated-ring', adminSession());
     expect(childListing.response.status).toBe(200);
     expect(childListing.body.rings.map((ring) => ring.ringId)).toEqual(['adjacent-ring']);
-    expect((await api('/land-candidate-rings?adjacentToRingId=')).response.status).toBe(400);
+    expect((await api('/land-candidate-rings?adjacentToRingId=', adminSession())).response.status).toBe(400);
 
-    const fetchedRing = await api('/land-candidate-rings/adjacent-ring');
+    const fetchedRing = await api('/land-candidate-rings/adjacent-ring', adminSession());
     expect(fetchedRing.response.status).toBe(200);
     expect(fetchedRing.body.ring.innerRadiusM).toBe(generated.body.outerRadiusM);
     expect(fetchedRing.body.ring.adjacentToRingId).toBe('generated-ring');
@@ -3169,12 +3192,12 @@ describe('Worker API', () => {
       completedLandlets: 0,
       greenbeltLandlets: 0,
     });
-    const fetchedParent = await api('/land-candidate-rings/generated-ring');
+    const fetchedParent = await api('/land-candidate-rings/generated-ring', adminSession());
     expect(fetchedParent.body.ring.adjacentChildRingId).toBe('adjacent-ring');
-    const missingRing = await api('/land-candidate-rings/missing-ring');
+    const missingRing = await api('/land-candidate-rings/missing-ring', adminSession());
     expect(missingRing.response.status).toBe(404);
-    expect((await api('/land-candidate-rings?limit=101')).response.status).toBe(400);
-    expect((await api('/land-candidate-rings?cursor=invalid')).response.status).toBe(400);
+    expect((await api('/land-candidate-rings?limit=101', adminSession())).response.status).toBe(400);
+    expect((await api('/land-candidate-rings?cursor=invalid', adminSession())).response.status).toBe(400);
 
     await expect(env.DB.prepare(`
       INSERT INTO landlet_candidate_rings
@@ -3494,7 +3517,7 @@ describe('Worker API', () => {
       }),
     }));
     expect(conflict.response.status).toBe(409);
-    const rolledBack = await api('/land-candidates/batch-rolled-back');
+    const rolledBack = await api('/land-candidates/batch-rolled-back', adminSession());
     expect(rolledBack.response.status).toBe(404);
   });
 
@@ -3510,7 +3533,7 @@ describe('Worker API', () => {
       }),
     }));
 
-    const materialized = await api('/land-candidates?state=materialized');
+    const materialized = await api('/land-candidates?state=materialized', adminSession());
     expect(materialized.body.candidates.map(({ landletId }) => landletId)).toContain('page-inside');
     expect(materialized.body.candidates.every(({ materializedAt }) => materializedAt !== null)).toBe(true);
     expect(materialized.body.nextCursor).toBeNull();
@@ -3519,7 +3542,7 @@ describe('Worker API', () => {
     let cursor = null;
     do {
       const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
-      const page = await api(`/land-candidates?state=pending&limit=1${suffix}`);
+      const page = await api(`/land-candidates?state=pending&limit=1${suffix}`, adminSession());
       expect(page.body.candidates).toHaveLength(1);
       expect(page.body.candidates[0].materializedAt).toBeNull();
       pendingIds.push(page.body.candidates[0].landletId);
@@ -3528,12 +3551,12 @@ describe('Worker API', () => {
     expect(new Set(pendingIds).size).toBe(pendingIds.length);
     expect(pendingIds).toEqual(expect.arrayContaining(['page-outside-a', 'page-outside-b']));
 
-    const badState = await api('/land-candidates?state=waiting');
+    const badState = await api('/land-candidates?state=waiting', adminSession());
     expect(badState.response.status).toBe(400);
     expect(badState.body).toEqual({ error: 'state must be pending or materialized' });
-    const badLimit = await api('/land-candidates?limit=101');
+    const badLimit = await api('/land-candidates?limit=101', adminSession());
     expect(badLimit.response.status).toBe(400);
-    const badCursor = await api('/land-candidates?cursor=not-base64');
+    const badCursor = await api('/land-candidates?cursor=not-base64', adminSession());
     expect(badCursor.response.status).toBe(400);
     expect(badCursor.body).toEqual({ error: 'cursor is invalid' });
   // #978's own shape: several real HTTP round trips against a shared,
@@ -3578,7 +3601,7 @@ describe('Worker API', () => {
     }));
     expect(singleOverlap.response.status).toBe(409);
     expect(singleOverlap.body.error).toMatch(/overlap/i);
-    expect((await api('/land-candidates/overlap-single')).response.status).toBe(404);
+    expect((await api('/land-candidates/overlap-single', adminSession())).response.status).toBe(404);
 
     const batchOverlap = await api('/land-candidates/batch', adminSession({
       method: 'POST',
@@ -3595,7 +3618,7 @@ describe('Worker API', () => {
     expect(batchOverlap.body.error).toMatch(/overlap/i);
     // Atomic: the conflicting item in the batch must not let its clean
     // sibling slip through either.
-    expect((await api('/land-candidates/overlap-batch-clean')).response.status).toBe(404);
+    expect((await api('/land-candidates/overlap-batch-clean', adminSession())).response.status).toBe(404);
   });
 
   it('expands the world by one increment and promotes enclosed landlets', async () => {
