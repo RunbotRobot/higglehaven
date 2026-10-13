@@ -31,10 +31,15 @@ await anonPage.close();
 // --- The owner's own admin session sees the real page ---
 const sessionCookie = await ensureAdminSession(); // "hh_session=<token>"
 const [, token] = sessionCookie.split('=');
+const me = await fetch(`${BASE_URL}/api/auth/me`, { headers: { cookie: sessionCookie } });
+const adminEmail = (await me.json()).user.email;
 
 const page = await browser.newPage();
 page.on('pageerror', (err) => errors.push(err.message));
 page.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()); });
+// The roster panel's Revoke button goes through a confirm() -- auto-accept
+// it, same as launchPage's own dialog handler elsewhere in this suite.
+page.on('dialog', (dialog) => dialog.accept());
 await page.context().addCookies([{ name: 'hh_session', value: token, url: BASE_URL }]);
 
 await page.goto(`${BASE_URL}/admin/dashboard`, { waitUntil: 'networkidle' });
@@ -46,6 +51,36 @@ const rosterVisibleByDefault = await page.locator('#panel-roster').isVisible();
 console.log('roster panel visible by default (should be true):', rosterVisibleByDefault);
 const modelsHiddenByDefault = await page.locator('#panel-models').isVisible();
 console.log('models panel hidden by default (should be false):', modelsHiddenByDefault);
+
+// --- #1819: roster panel actually lists/grants/revokes admins ---
+await page.waitForSelector('#rosterTableWrap table', { timeout: 10000 });
+const ownRowVisible = await page.locator('#rosterTableWrap', { hasText: adminEmail }).isVisible();
+console.log('roster panel lists the signed-in admin by email (should be true):', ownRowVisible);
+
+// grant-admin only promotes an *existing* account by email -- it doesn't
+// create one -- so this needs a real signup first, the same prerequisite
+// handleGrantAdmin's own unit test (worker/reviews-auth.test.js) sets up
+// via signupBuilder before ever calling grant-admin.
+const grantEmail = `e2e-roster-grant-${crypto.randomUUID()}@e2e.test`;
+await fetch(`${BASE_URL}/api/auth/signup`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    email: grantEmail, password: 'e2e-roster-grant-password-123',
+    username: `e2e-roster-grant-${crypto.randomUUID().slice(0, 8)}`, ageAttested: true,
+  }),
+});
+await page.fill('#grantEmailInput', grantEmail);
+await page.click('#grantBtn');
+const grantedRow = page.locator('#rosterTableWrap tr', { has: page.locator('td', { hasText: grantEmail }) });
+await grantedRow.waitFor({ timeout: 10000 });
+const grantedRowVisible = await grantedRow.isVisible();
+console.log('granting a new admin by email adds it to the roster list (should be true):', grantedRowVisible);
+
+await grantedRow.locator('.revoke-btn').click();
+await grantedRow.waitFor({ state: 'detached', timeout: 10000 });
+const grantedRowGoneAfterRevoke = await page.locator('#rosterTableWrap', { hasText: grantEmail }).count() === 0;
+console.log('revoking that admin removes it from the roster list (should be true):', grantedRowGoneAfterRevoke);
 
 // Clicking a nav item switches the visible panel.
 await page.click('button[data-panel="models"]');
@@ -74,6 +109,9 @@ const pass = anonStatus === 401 &&
   heading === 'Admin Dashboard' &&
   rosterVisibleByDefault &&
   !modelsHiddenByDefault &&
+  ownRowVisible &&
+  grantedRowVisible &&
+  grantedRowGoneAfterRevoke &&
   modelsVisibleAfterClick &&
   !rosterHiddenAfterClick &&
   modelsNavActive &&
@@ -84,6 +122,6 @@ const pass = anonStatus === 401 &&
   errors.length === 0;
 await finish(browser, {
   pass,
-  label: 'Admin Dashboard shell (#1818): gated for anon visitors, nav switches panels, Test/Ops Fixtures clearly labeled, external links to existing admin pages',
+  label: 'Admin Dashboard shell (#1818) + roster panel (#1819): gated for anon visitors, nav switches panels, roster lists/grants/revokes admins, Test/Ops Fixtures clearly labeled, external links to existing admin pages',
   errors,
 });
