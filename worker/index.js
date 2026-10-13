@@ -7807,6 +7807,14 @@ const TRIPO_MODEL_VERSION = 'v3.0-20250812';
 // own research -- same reasoning as DIDIT_SESSION_RATE_LIMIT_MAX above,
 // bucketed per-builder since this is a session-gated seller action.
 const VIDEO_GENERATION_RATE_LIMIT_MAX = 10;
+
+// #1993 (sub-issue of #1976): the honest-budget message the owner asked
+// for directly, shown whenever a builder has no video_generation_credits
+// left (migrations/0127) -- not a bare cap, an explanation plus a real
+// free alternative that doesn't need a credit at all.
+const VIDEO_GENERATION_NO_CREDITS_MESSAGE = 'No free model-generation credits available right now — this platform is '
+  + 'bootstrapped from very little budget, so generations are rationed. Collect a credit orb in the world, or '
+  + 'generate a model for free elsewhere (e.g. Sketchfab) and upload it here directly — no credit needed for that.';
 // handleVideoGenerationJobStatus below reconciles against a live Tripo
 // status call whenever a job is still pending -- same cadence reasoning
 // as DIDIT_STATUS_RATE_LIMIT_MAX, generous enough to cover the frontend's
@@ -8101,10 +8109,27 @@ async function handleVideoGenerationJobCreate(request, env, db) {
     return json({ jobId: latest.job_id, status: latest.status });
   }
   await checkRateLimit(db, `video-generation:${sessionBuilder.builder_id}`, VIDEO_GENERATION_RATE_LIMIT_MAX);
+  // #1993: alongside (not instead of) the rate limit above -- the rate
+  // limit still guards against abuse of a large credit balance, this
+  // guards against spending credits the builder doesn't have. Folding the
+  // balance check into the UPDATE's own WHERE clause makes "is there a
+  // credit" and "spend it" one atomic statement, the same race-safe shape
+  // checkRateLimit's own INSERT...WHERE uses just above.
+  const creditSpent = await db.prepare(
+    'UPDATE builders SET video_generation_credits = video_generation_credits - 1 WHERE builder_id = ? AND video_generation_credits > 0',
+  ).bind(sessionBuilder.builder_id).run();
+  if (creditSpent.meta.changes === 0) {
+    throw new HttpError(VIDEO_GENERATION_NO_CREDITS_MESSAGE, 402);
+  }
   const { reservationId, existing } = await reserveVideoGenerationJob(db, sessionBuilder.builder_id);
   if (!reservationId) {
     // Lost a genuine concurrent race against another request for this
     // same builder -- hand back that one instead of ever calling Tripo.
+    // #1993: no new job actually started here, so the credit spent above
+    // was never really used -- refund it rather than charging a request
+    // that just relayed an already-in-flight job's own status.
+    await db.prepare('UPDATE builders SET video_generation_credits = video_generation_credits + 1 WHERE builder_id = ?')
+      .bind(sessionBuilder.builder_id).run();
     return json({ jobId: existing.job_id, status: existing.status });
   }
 
@@ -8155,6 +8180,15 @@ async function handleVideoGenerationJobCreate(request, env, db) {
     // doesn't permanently block this builder from ever starting a video-
     // to-3D job again.
     await db.prepare('DELETE FROM video_generation_jobs WHERE job_id = ?').bind(reservationId).run();
+    // #1993: if the billed call never went out (or never got a real
+    // task_id back), the credit spent above paid for nothing -- refund it.
+    // If it's already billed, the credit was legitimately spent regardless
+    // of what happened after (same "billed means billed" reasoning the
+    // #1886/#1935 durable-logging above already applies).
+    if (!billedTaskId) {
+      await db.prepare('UPDATE builders SET video_generation_credits = video_generation_credits + 1 WHERE builder_id = ?')
+        .bind(sessionBuilder.builder_id).run();
+    }
     throw err;
   }
 }
