@@ -915,6 +915,28 @@ describe('Builders', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #1844: unlike the create/rename writes just above, GET /builders (the
+  // ids=/label=/plain-list branches) had no rate limit at all, despite each
+  // one forcing recomputeLandCapsBatch's three full-table aggregate scans
+  // plus a batch of UPDATEs -- unauthenticated and unscoped to the request,
+  // so a repeated GET forces unbounded real work. Mirrors #1790/#1791's own
+  // auction-list rate-limit test: pre-seed the bucket directly (cheap,
+  // exact) rather than firing 200 real requests just to prove the limit.
+  it('rate-limits repeated GET /builders calls from the same client', async () => {
+    const ip = `test-${crypto.randomUUID()}`;
+    const bucketKey = `builder-list:${ip}`;
+    const now = Date.now();
+    await env.DB.batch(Array.from({ length: 199 }, () => env.DB.prepare(
+      'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+    ).bind(bucketKey, now)));
+
+    const atLimit = await api('/builders', { headers: { 'cf-connecting-ip': ip } });
+    expect(atLimit.response.status).toBe(200);
+
+    const limited = await api('/builders', { headers: { 'cf-connecting-ip': ip } });
+    expect(limited.response.status).toBe(429);
+  });
+
   // #946: getOrCreateBuilderForUser used to SELECT-then-conditionally-
   // INSERT, racing two concurrent requests against the partial UNIQUE INDEX
   // on builders.user_id (migrations/0054) -- the loser got a raw 409
