@@ -11699,6 +11699,10 @@ const shopReviewHintEl = document.getElementById('shop-review-hint');
 const shopProductInfoEl = document.getElementById('shop-product-info');
 const shopReturnPolicyLinkEl = document.getElementById('shop-return-policy-link');
 const shopBuyHintEl = document.getElementById('shop-buy-hint');
+const shopProductPreviewModalEl = document.getElementById('shop-product-preview-modal');
+const shopProductPreviewCloseBtn = document.getElementById('shop-product-preview-close-btn');
+const shopProductPreviewCanvas = document.getElementById('shop-product-preview-canvas');
+const shopProductPreviewInfoEl = document.getElementById('shop-product-preview-info');
 const accountMenuLandletInfoEl = document.getElementById('account-menu-landlet-info');
 const refundPolicyModalEl = document.getElementById('refund-policy-modal');
 const refundPolicyCloseBtn = document.getElementById('refund-policy-close-btn');
@@ -14821,6 +14825,105 @@ function findTappedShopProduct(object) {
   return null;
 }
 
+// #1811 (sub-issue of #1809): isolated 3D preview for a tapped product,
+// shown alongside the existing #shop-product-info pill for now. Same
+// self-contained-scene technique as Sell mode's own showAxisPreview/
+// disposeAxisPreview (see that function's own comment, above) — a
+// dedicated scene/camera/renderer/controls bound to this modal's own
+// canvas, built via createMeshForInstance so a real scanned model (or
+// placeholder box) renders exactly as it would in the world, not a
+// simplified stand-in. No axis arrows here (this modal is read-only
+// "what is this," not the Extensibility editor those arrows serve), and
+// no shared-canvas reparenting (this canvas always lives in this one
+// modal's own markup, unlike the seller preview's single canvas moved
+// between row panels).
+let shopProductPreview = null;
+// Same reopen-before-the-previous-load-finishes guard as
+// axisPreviewLoadToken — a quick double-tap, or tapping a second product
+// before createMeshForInstance's await on the first resolves, would
+// otherwise race two calls into building their own renderer bound to the
+// same canvas.
+let shopProductPreviewLoadToken = 0;
+
+function disposeShopProductPreview() {
+  if (!shopProductPreview) return;
+  shopProductPreview.controls.dispose();
+  shopProductPreview.renderer.dispose();
+  disposeObject(shopProductPreview.previewObject);
+  shopProductPreview = null;
+}
+
+async function showShopProductPreview(template) {
+  const myLoadToken = ++shopProductPreviewLoadToken;
+  disposeShopProductPreview();
+
+  const scene = new THREE.Scene();
+  scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+  const sun = new THREE.DirectionalLight(0xffffff, 0.8);
+  sun.position.set(2, -3, 4);
+  scene.add(sun);
+
+  // At the origin and with no crop, same as showAxisPreview — shows the
+  // product's real full-size geometry, not the specific crop any one
+  // placed instance of it happens to have in the world.
+  const previewObject = await createMeshForInstance({
+    templateId: template.templateId,
+    x: 0, y: 0, z: 0,
+    rotationX: 0, rotationY: 0, rotationZ: 0,
+    crop: {},
+  });
+  if (myLoadToken !== shopProductPreviewLoadToken) {
+    // A newer call owns the preview now — same superseded-load leak guard
+    // showAxisPreview uses: this object was never added to any scene the
+    // dispose function above knows about.
+    if (previewObject) disposeObject(previewObject);
+    return;
+  }
+  if (!previewObject) return;
+  scene.add(previewObject);
+
+  const box = new THREE.Box3().setFromObject(previewObject);
+  const sphere = box.getBoundingSphere(new THREE.Sphere());
+  const radius = Math.max(sphere.radius, 0.05);
+
+  const rect = shopProductPreviewCanvas.getBoundingClientRect();
+  const camera = new THREE.PerspectiveCamera(45, rect.width / Math.max(rect.height, 1), 0.01, 100);
+  camera.up.set(0, 0, 1);
+  const dist = radius * 2.6;
+  camera.position.set(dist * 0.75, -dist * 0.95, dist * 0.65);
+  camera.lookAt(0, 0, 0);
+
+  const renderer = new THREE.WebGLRenderer({ canvas: shopProductPreviewCanvas, antialias: true, alpha: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(rect.width, rect.height, false);
+
+  const controls = new OrbitControls(camera, shopProductPreviewCanvas);
+  controls.target.set(0, 0, 0);
+  controls.enableDamping = false;
+  controls.enablePan = false;
+  controls.minDistance = dist * 0.35;
+  controls.maxDistance = dist * 3;
+  const render = () => renderer.render(scene, camera);
+  controls.addEventListener('change', render);
+
+  render();
+  shopProductPreview = { renderer, scene, camera, controls, previewObject };
+}
+
+function openShopProductPreviewModal(review) {
+  shopProductPreviewModalEl.classList.add('visible');
+  shopProductPreviewInfoEl.textContent = productInfoText(review.mesh.userData.template);
+  openModalA11y(shopProductPreviewModalEl, closeShopProductPreviewModal);
+  showShopProductPreview(review.mesh.userData.template);
+}
+
+function closeShopProductPreviewModal() {
+  shopProductPreviewModalEl.classList.remove('visible');
+  disposeShopProductPreview();
+  closeModalA11y(shopProductPreviewModalEl);
+}
+shopProductPreviewCloseBtn.addEventListener('click', closeShopProductPreviewModal);
+
 // Tap-to-inspect: Shop mode has no other use for a plain single-finger tap
 // on open canvas (movement/look are joystick-driven, pinch-zoom needs two
 // fingers — see the pointerdown/pointermove pair just above), so this is
@@ -14840,6 +14943,13 @@ renderer.domElement.addEventListener('click', (event) => {
   shopTappedProduct = review;
   shopProductInfoEl.classList.toggle('visible', !!review);
   if (review) shopProductInfoEl.textContent = productInfoText(review.mesh.userData.template);
+  // #1811: the new preview modal opens alongside the pill above for now
+  // (it covers #1812's buy/review/return-policy actions next, and the
+  // pill itself is only removed once that and #1813 land) — same tap
+  // that reveals one reveals the other, same tap-away that dismisses one
+  // dismisses the other.
+  if (review) openShopProductPreviewModal(review);
+  else closeShopProductPreviewModal();
 });
 
 // The creative-tool trigger itself (docs/SPEC.md §6's own "scheduled
@@ -15396,6 +15506,10 @@ function unloadShopLandletInstances(entry) {
       shopReviewHintEl.classList.remove('visible');
       shopBuyHintEl.classList.remove('visible');
       shopReturnPolicyLinkEl.classList.remove('visible');
+      // #1811: same stale-reference reasoning as the pill/hints above —
+      // the preview modal's own template/model would otherwise keep
+      // pointing at a mesh that's about to be disposed.
+      closeShopProductPreviewModal();
     }
     // #1810: same reasoning as the hints just above -- the highlight's own
     // BoxHelper/fill reference this review's mesh directly, which is about
