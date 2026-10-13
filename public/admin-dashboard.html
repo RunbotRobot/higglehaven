@@ -722,6 +722,11 @@
   const ringDetailWrap = document.getElementById('ringDetailWrap');
   let ringsRows = [];
   let ringsNextCursor = null;
+  // #1909: same monotonic-token guard loadModelsPage already uses -- without
+  // it, a "Load more" response landing after a later "Refresh" reset (or two
+  // overlapping Refresh clicks) can apply out of order, duplicating or
+  // reverting rows with no ordering protection.
+  let ringsLoadToken = 0;
 
   function renderRings() {
     if (!ringsRows.length) {
@@ -758,6 +763,7 @@
   }
 
   async function loadRings(append) {
+    const myLoadToken = ++ringsLoadToken;
     clearError();
     if (!append) {
       ringsRows = [];
@@ -769,10 +775,12 @@
     if (append && ringsNextCursor) params.set('cursor', ringsNextCursor);
     try {
       const body = await apiFetch('/api/land-candidate-rings?' + params.toString());
+      if (myLoadToken !== ringsLoadToken) return;
       ringsRows = append ? ringsRows.concat(body.rings) : body.rings;
       ringsNextCursor = body.nextCursor;
       renderRings();
     } catch (error) {
+      if (myLoadToken !== ringsLoadToken) return;
       showError(error.message);
       if (!append) ringsTableWrap.innerHTML = '<p class="empty">Failed to load.</p>';
     }
