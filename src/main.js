@@ -2534,7 +2534,9 @@ function renderCatalogMode() {
   catalogManualModeEl.hidden = promptActive;
   catalogPromptModeEl.hidden = !promptActive;
   for (const btn of catalogModeTabButtons) {
-    btn.classList.toggle('active', btn.dataset.catalogMode === activeCatalogMode);
+    const isActive = btn.dataset.catalogMode === activeCatalogMode;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
   }
 }
 for (const btn of catalogModeTabButtons) {
@@ -2543,6 +2545,15 @@ for (const btn of catalogModeTabButtons) {
     renderCatalogMode();
   });
 }
+// #1965: unlike its sibling toggle groups in this same modal (e.g.
+// searchScopeButtons, re-synced every time the picker opens via
+// updateCatalogSearchPanel), renderCatalogMode() was previously only ever
+// invoked from its own click handler above -- so aria-pressed would never
+// get set at all until a builder's first click on either tab. One eager
+// call here gives both buttons a correct initial aria-pressed from page
+// load, matching the already-correct initial .active/hidden state the
+// static markup provides.
+renderCatalogMode();
 
 function setPromptModeStatus(text) {
   promptModeStatusEl.textContent = text;
@@ -5538,6 +5549,9 @@ let settingsRenderToken = 0;
 function refreshUnitDisplays() {
   for (const el of trimUnitLabelEls) el.textContent = unitSuffix();
   updateTrimLengthInput();
+  // #1939: the Measure tool's own live readout is unit-dependent (formatLength)
+  // but was never covered here, unlike its sibling updateTrimLengthInput().
+  if (measurePointA && measurePointB) updateMeasureResultText();
   if (sellerModalEl.classList.contains('visible')) renderActiveSellerView();
 }
 
@@ -8263,6 +8277,8 @@ function exitMultiSelectMode() {
   multiSelectBtn.classList.remove('active');
   multiSelectBtn.setAttribute('aria-pressed', 'false');
   controls.enableRotate = true;
+  multiselectBrushControlEl.classList.remove('visible');
+  multiselectBrushIndicatorEl.classList.remove('visible');
 }
 // Measure is its own sibling tool too — taps while it's on place ruler
 // points rather than selecting or swiping, so switching to any selection-
@@ -8390,6 +8406,48 @@ const pointerNdc = new THREE.Vector2();
 // object, so they're only shown when the set holds exactly one.
 const selectedMeshes = new Set();
 let multiSelectMode = false;
+
+// #1945: an adjustable-size brush, shown only while multi-select is on,
+// lets a swipe sweep up every placed item within a screen-space radius of
+// the cursor rather than requiring the drag to pass exactly over each one
+// — the "mass-selecting bricks in a wall is difficult" ask. Screen-space
+// pixels (not a 3D-world radius) so the brush's own on-screen size (the
+// indicator below) always matches what it actually sweeps regardless of
+// zoom/distance, and the slider's range is a fixed, predictable pixel
+// scale rather than one that behaves differently depending on camera
+// distance from the current selection.
+const multiselectBrushControlEl = document.getElementById('multiselect-brush-control');
+const multiselectBrushSizeInput = document.getElementById('multiselect-brush-size-input');
+const multiselectBrushSizeLabelEl = document.getElementById('multiselect-brush-size-label');
+const multiselectBrushIndicatorEl = document.getElementById('multiselect-brush-indicator');
+let multiselectBrushRadiusPx = Number(multiselectBrushSizeInput.value);
+
+function updateBrushIndicatorSize() {
+  const diameter = multiselectBrushRadiusPx * 2;
+  multiselectBrushIndicatorEl.style.width = `${diameter}px`;
+  multiselectBrushIndicatorEl.style.height = `${diameter}px`;
+}
+updateBrushIndicatorSize();
+
+multiselectBrushSizeInput.addEventListener('input', () => {
+  multiselectBrushRadiusPx = Number(multiselectBrushSizeInput.value);
+  multiselectBrushSizeLabelEl.textContent = `${multiselectBrushRadiusPx}px`;
+  updateBrushIndicatorSize();
+});
+
+// Follows the cursor/finger across the canvas, visible the whole time
+// multi-select is on (not just mid-drag) — like an image editor's own
+// eraser/brush cursor, so the builder can see and judge the brush's reach
+// before committing to a drag, not just discover it after the fact.
+renderer.domElement.addEventListener('pointermove', (event) => {
+  if (!multiSelectMode) return;
+  multiselectBrushIndicatorEl.classList.add('visible');
+  multiselectBrushIndicatorEl.style.left = `${event.clientX}px`;
+  multiselectBrushIndicatorEl.style.top = `${event.clientY}px`;
+});
+renderer.domElement.addEventListener('pointerleave', () => {
+  multiselectBrushIndicatorEl.classList.remove('visible');
+});
 
 // Highlighting via emissive tint (an earlier approach) silently did nothing
 // on builder-uploaded models: RealityScan/Sketchfab-style exports commonly
@@ -8589,6 +8647,8 @@ multiSelectBtn.addEventListener('click', () => {
   multiSelectMode = !multiSelectMode;
   multiSelectBtn.classList.toggle('active', multiSelectMode);
   multiSelectBtn.setAttribute('aria-pressed', String(multiSelectMode));
+  multiselectBrushControlEl.classList.toggle('visible', multiSelectMode);
+  if (!multiSelectMode) multiselectBrushIndicatorEl.classList.remove('visible');
   // One-finger drag is repurposed as a selection swipe while multi-select
   // is on (see the swipe-select handlers below) instead of orbiting the
   // camera — two-finger pan/pinch-zoom are untouched.
@@ -9357,12 +9417,53 @@ function addToSelectionBySwipe(mesh) {
   updateSelectionUI();
 }
 
-function addWhateverIsAtClientPos(x, y) {
-  raycaster.setFromCamera(ndcFromEvent({ clientX: x, clientY: y }), camera);
-  const hits = raycaster.intersectObjects(productMeshes, true);
-  if (hits.length === 0) return;
-  addToSelectionBySwipe(findRootProduct(hits[0].object));
+// #1945: screen-space distance from each candidate's own projected
+// position, rather than a real raycast against its geometry (the
+// alternative the issue itself flags as an open, non-blocking
+// implementation choice) — this runs over every placed item on every
+// pointermove while a swipe is live, so the cheaper test matters, and an
+// item showing its highlight once any part of the brush circle nears its
+// own placement point is exactly the mass-selection behavior being asked
+// for here.
+const brushScratchVec = new THREE.Vector3();
+// Null for something behind the camera, whose projected x/y would
+// otherwise alias onto some unrelated on-screen pixel.
+function projectMeshToScreen(mesh) {
+  brushScratchVec.copy(mesh.position).project(camera);
+  if (brushScratchVec.z < -1 || brushScratchVec.z > 1) return null;
+  const rect = renderer.domElement.getBoundingClientRect();
+  return {
+    x: rect.left + (brushScratchVec.x * 0.5 + 0.5) * rect.width,
+    y: rect.top + (-brushScratchVec.y * 0.5 + 0.5) * rect.height,
+  };
 }
+
+function addEverythingInBrushAtClientPos(x, y) {
+  const radiusSq = multiselectBrushRadiusPx * multiselectBrushRadiusPx;
+  for (const mesh of productMeshes) {
+    if (selectedMeshes.has(mesh)) continue;
+    const screenPos = projectMeshToScreen(mesh);
+    if (!screenPos) continue;
+    const dx = screenPos.x - x;
+    const dy = screenPos.y - y;
+    if (dx * dx + dy * dy <= radiusSq) addToSelectionBySwipe(mesh);
+  }
+}
+
+// #1945: lets a test read back each placed item's own real current
+// screen-space position (the same projection addEverythingInBrushAtClientPos
+// uses to decide what a brush drag sweeps up) rather than assuming it
+// coincides with wherever it was originally clicked to place — a tall
+// model's own footprint renders well above its flat ground-click point
+// once the camera's perspective is applied (see handlePlacementClick and
+// e2e/bundles.test.mjs's own note on the same effect), so a test needs the
+// real value, not the click coordinates, to build a reliable brush-radius
+// assertion. Same "inert unless a test calls it" convention as this file's
+// other window.__test* hooks.
+window.__testProductScreenPositions = () => productMeshes.map((mesh) => ({
+  instanceId: mesh.userData.instanceId,
+  ...projectMeshToScreen(mesh),
+}));
 
 window.addEventListener('pointermove', (event) => {
   if (event.pointerId !== swipePointerId || !swipeStartPos) return;
@@ -9372,15 +9473,15 @@ window.addEventListener('pointermove', (event) => {
   if (!swipeArmed) {
     if (Math.hypot(dx, dy) <= CLICK_DRAG_THRESHOLD_PX) return;
     swipeArmed = true;
-    // A real swipe starts by touching down ON an item — without this, that
-    // first item (whatever the finger landed on, before crossing the
-    // tap-vs-drag threshold above) never gets a chance to be raycast at all
+    // A real swipe starts by touching down near an item — without this,
+    // whatever was already under/near the brush before crossing the
+    // tap-vs-drag threshold above never gets a chance to be swept at all
     // and silently drops out of the swipe, which is exactly wrong for
     // closely-packed items like a course of bricks where the threshold
     // alone can already cover the gap to the *next* one.
-    addWhateverIsAtClientPos(swipeStartPos.x, swipeStartPos.y);
+    addEverythingInBrushAtClientPos(swipeStartPos.x, swipeStartPos.y);
   }
-  addWhateverIsAtClientPos(event.clientX, event.clientY);
+  addEverythingInBrushAtClientPos(event.clientX, event.clientY);
 });
 
 function endSwipe(event) {
@@ -10181,15 +10282,17 @@ function appendNotificationRow(notification) {
   // separate per-row dismiss button, and "Mark all read" still exists
   // for clearing the whole list at once.
   if (!notification.readAt) {
-    row.addEventListener('click', async () => {
+    const markReadOnClick = async () => {
       try {
         await markNotificationRead(notification.notificationId);
         row.classList.remove('unread');
+        row.removeEventListener('click', markReadOnClick);
         refreshNotificationsBadge();
       } catch (err) {
         console.warn('Could not mark notification read:', err);
       }
-    });
+    };
+    row.addEventListener('click', markReadOnClick);
   }
   notificationsListEl.appendChild(row);
 }
@@ -11436,17 +11539,17 @@ function resetLocalSessionState() {
   sellerIdentityFlowPromise = null;
 }
 
-// Build and Sell both require a real, logged-in account
+// Build, Sell, and layout-preview all require a real, logged-in account
 // (ensureBuilderIdentity/ensureSellerIdentity's own login walls) — staying
-// on either once that account is gone would just immediately reprompt the
-// login modal over whatever was on screen (or, for Sell, strand the
-// now-stale showcase/modal with no identity behind it). A reload into Shop
-// instead is the same clean-slate escape hatch #mode-nav's own mode
-// switching already uses (see its own comment), and Shop needs no account
-// at all, so it's always a safe place to land. Returns whether it reloaded
-// (the caller's own post-logout/-deletion UI update is moot if so).
+// on any of them once that account is gone would just immediately reprompt
+// the login modal over whatever was on screen (or, for Sell/layout-preview,
+// strand the now-stale showcase/modal with no identity behind it). A reload
+// into Shop instead is the same clean-slate escape hatch #mode-nav's own
+// mode switching already uses (see its own comment), and Shop needs no
+// account at all, so it's always a safe place to land. Returns whether it
+// reloaded (the caller's own post-logout/-deletion UI update is moot if so).
 function leaveAccountScopedModeIfNeeded() {
-  if (currentMode === 'build' || currentMode === 'sell') {
+  if (currentMode === 'build' || currentMode === 'sell' || currentMode === 'layoutPreview') {
     sessionStorage.setItem(START_MODE_KEY, 'shop');
     location.reload();
     return true;
