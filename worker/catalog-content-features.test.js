@@ -81,7 +81,7 @@ describe('Bundles', () => {
     expect(limited.response.status).toBe(429);
   });
 
-  it('rejects an empty items array, more than 250 items, and a nonexistent templateId', async () => {
+  it('rejects an empty items array, more than 2000 items, and a nonexistent templateId', async () => {
     const builder = await signupBuilder('bundle-validate');
     const empty = await api('/bundles', builder.session({
       method: 'POST', body: JSON.stringify(bundleBody({ items: [] })),
@@ -91,7 +91,7 @@ describe('Bundles', () => {
     const tooMany = await api('/bundles', builder.session({
       method: 'POST',
       body: JSON.stringify(bundleBody({
-        items: Array.from({ length: 251 }, () => ({ templateId: 'placeholder-chair', dx: 0, dy: 0, dz: 0 })),
+        items: Array.from({ length: 2001 }, () => ({ templateId: 'placeholder-chair', dx: 0, dy: 0, dz: 0 })),
       })),
     }));
     expect(tooMany.response.status).toBe(400);
@@ -101,6 +101,23 @@ describe('Bundles', () => {
       body: JSON.stringify(bundleBody({ items: [{ templateId: 'template-does-not-exist', dx: 0, dy: 0, dz: 0 }] })),
     }));
     expect(badTemplate.response.status).toBe(400);
+  });
+
+  // #1974 (owner report): the old 250-item cap rejected a real, ordinary
+  // build (a 32-foot brick wall with a door) saved as one bundle -- well
+  // under the new 2000-item cap, but well over the old one, so this is the
+  // actual regression case for the bug report, not just a boundary probe.
+  it('accepts a large, legitimate bundle that the old 250-item cap would have rejected', async () => {
+    const builder = await signupBuilder('bundle-large-legitimate');
+    const wall = await api('/bundles', builder.session({
+      method: 'POST',
+      body: JSON.stringify(bundleBody({
+        name: 'Brick wall with door',
+        items: Array.from({ length: 400 }, (_, i) => ({ templateId: 'placeholder-chair', dx: i, dy: 0, dz: 0 })),
+      })),
+    }));
+    expect(wall.response.status).toBe(201);
+    expect(wall.body.bundle.items).toHaveLength(400);
   });
 
   // Found during a broader backlog-exploration pass (#358): name had no
