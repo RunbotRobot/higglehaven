@@ -134,7 +134,7 @@
 <nav>
   <h1 style="padding: 0 8px;">Admin Dashboard</h1>
   <div class="nav-title">Panels</div>
-  <button class="nav-item active" data-panel="roster">Admin roster &amp; access</button>
+  <button class="nav-item active" data-panel="roster" aria-current="page">Admin roster &amp; access</button>
   <button class="nav-item" data-panel="models">R2 model storage</button>
   <button class="nav-item" data-panel="world">World &amp; land candidates</button>
   <button class="nav-item" data-panel="landlets">Landlet overrides</button>
@@ -359,7 +359,15 @@
   const buttons = [...document.querySelectorAll('nav button.nav-item')];
   const panels = [...document.querySelectorAll('main .panel')];
   function activate(name) {
-    buttons.forEach((btn) => btn.classList.toggle('active', btn.dataset.panel === name));
+    // #1966: same aria-current gap already fixed for the main app's own
+    // toggle/tab groups (#1503/#1760/#1842/#1901) -- the .active class alone
+    // never told a screen reader which panel is current.
+    buttons.forEach((btn) => {
+      const isActive = btn.dataset.panel === name;
+      btn.classList.toggle('active', isActive);
+      if (isActive) btn.setAttribute('aria-current', 'page');
+      else btn.removeAttribute('aria-current');
+    });
     panels.forEach((panel) => panel.classList.toggle('active', panel.id === 'panel-' + name));
     if (!initialized.has(name) && window.__adminDashboardPanels[name]) {
       initialized.add(name);
