@@ -7807,10 +7807,26 @@ export async function reserveVideoGenerationJob(db, builderId) {
   // builder's own stuck 'pending' reservation (scoped to them, not a
   // global sweep) lets the NOT EXISTS guard below admit a genuinely fresh
   // reservation instead of blocking on one nothing will ever resolve.
-  await db.prepare(`
+  //
+  // #1886 (piece 1 -- making the failure loud, not the still-open retry/
+  // cost policy): a row swept here might be the exact residual gap
+  // VIDEO_GENERATION_RESERVATION_TIMEOUT_MS's own comment documents -- a
+  // real, billed Tripo call whose result never got persisted because the
+  // worker was killed before handleVideoGenerationJobCreate's own UPDATE
+  // ever ran. There's no way to tell from this row alone whether that
+  // happened or whether it's just an abandoned, never-submitted
+  // reservation -- so log every sweep that actually removes a row,
+  // durably, rather than only ever being reconstructable by reading code.
+  const staleCleanup = await db.prepare(`
     DELETE FROM video_generation_jobs
     WHERE builder_id = ? AND status = 'pending' AND processed_at IS NULL AND created_at < ?
   `).bind(builderId, new Date(Date.now() - VIDEO_GENERATION_RESERVATION_TIMEOUT_MS).toISOString()).run();
+  if (staleCleanup.meta.changes > 0) {
+    await adminActionLogStatement(db, null, 'video_generation_stale_reservation_swept', 'builder', builderId, {
+      rowsDeleted: staleCleanup.meta.changes,
+      reservationTimeoutMs: VIDEO_GENERATION_RESERVATION_TIMEOUT_MS,
+    }).run();
+  }
   const jobId = `job-${crypto.randomUUID()}`;
   const result = await db.prepare(`
     INSERT INTO video_generation_jobs (job_id, builder_id, status)
@@ -8036,6 +8052,12 @@ async function handleVideoGenerationJobCreate(request, env, db) {
     return json({ jobId: existing.job_id, status: existing.status });
   }
 
+  // #1886 (piece 1): set only once the billed tripoRequest call has
+  // actually returned a real task_id -- lets the catch below tell "the
+  // outbound call itself failed" (never billed, or at least no task_id in
+  // hand) apart from "the billed call succeeded but persisting its result
+  // failed," which needs a durable record rather than a silent delete.
+  let billedTaskId = null;
   try {
     const inputs = [];
     for (const [view, file] of views) {
@@ -8050,11 +8072,28 @@ async function handleVideoGenerationJobCreate(request, env, db) {
     if (!task?.task_id) {
       throw new HttpError('Video-to-3D job creation failed — please try again', 502);
     }
+    billedTaskId = task.task_id;
     await db.prepare(`
       UPDATE video_generation_jobs SET provider_task_id = ?, status = 'processing' WHERE job_id = ?
     `).bind(task.task_id, reservationId).run();
     return json({ jobId: reservationId, status: 'processing' }, 201);
   } catch (err) {
+    // #1886 (piece 1 -- making the failure loud, not the still-open retry/
+    // cost policy, which stays owner-judgment): if billedTaskId is set, the
+    // outbound call didn't fail -- only persisting its result did (a
+    // transient D1 write error; a hard kill between the two never reaches
+    // this catch at all, see reserveVideoGenerationJob's own stale-sweep
+    // logging above for that case instead). Deleting the reservation below
+    // either way (so this builder isn't permanently blocked) would
+    // otherwise discard the only local record that a real, billed
+    // generation is now untracked -- log it durably first.
+    if (billedTaskId) {
+      await adminActionLogStatement(db, null, 'video_generation_task_id_lost', 'video_generation_job', reservationId, {
+        builderId: sessionBuilder.builder_id,
+        providerTaskId: billedTaskId,
+        error: err instanceof Error ? err.message : String(err),
+      }).run();
+    }
     // The outbound call itself failed (or a later view's upload failed
     // after an earlier one succeeded) -- release the reservation so it
     // doesn't permanently block this builder from ever starting a video-

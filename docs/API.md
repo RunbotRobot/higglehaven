@@ -7440,6 +7440,22 @@ analogous reservation. Without this, the one-pending-per-builder guard
 above would otherwise block that builder from ever starting another job
 — or self-deleting their account — indefinitely.
 
+**Lost-task_id visibility (#1886):** the real, billed Tripo task-create
+call happens *while* the reservation is still `pending` — it only flips to
+`processing` once `provider_task_id` is persisted afterward. Two distinct
+failure windows can discard that result: the self-healing sweep above
+clearing a `pending` row that was actually mid-flight (a hard kill, not a
+thrown exception), or the request's own catch block deleting the
+reservation after a transient D1 write error on the same `UPDATE` that
+persists `provider_task_id` — in the latter case specifically, i.e. after
+Tripo has already returned a real `task_id` and billed the call. Neither
+case is currently prevented or retried (that's a separate, still-open
+owner-judgment call on retry/cost policy) — but both are now recorded as a
+durable `admin_action_log` row (`action_type: 'video_generation_stale_reservation_swept'`
+or `'video_generation_task_id_lost'`, `admin_user_id: null` since no admin
+acted) rather than only reconstructable by reading code, so this is
+queryable/alertable on going forward.
+
 `GET /api/video-generation-jobs/:jobId` is session-gated and returns the
 current state of one of the requesting builder's own jobs (`404` if the
 job doesn't exist, `403` if it belongs to a different builder):
