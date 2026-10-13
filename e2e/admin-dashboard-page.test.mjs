@@ -165,6 +165,35 @@ const fixturesBadgeText = await page.textContent('#panel-fixtures .fixtures-badg
 console.log('fixtures panel visible after clicking its nav item (should be true):', fixturesVisible);
 console.log('fixtures panel carries its own "not a real transaction" badge (actual):', fixturesBadgeText.trim());
 
+// --- #1823: tax / 1099 e-filing panel ---
+await page.click('button[data-panel="tax"]');
+const taxVisible = await page.locator('#panel-tax').isVisible();
+const taxNotPlaceholder = await page.locator('#panel-tax .placeholder').count() === 0;
+console.log('tax panel visible after clicking its nav item (should be true):', taxVisible);
+console.log('tax panel no longer shows the "Coming soon" placeholder (should be true):', taxNotPlaceholder);
+
+await page.waitForFunction(
+  () => !document.querySelector('#taxTableWrap').textContent.includes('Loading'),
+  { timeout: 10000 },
+);
+const taxLoadedWithoutError = await page.locator('#taxErr').isHidden();
+console.log('tax panel loads its initial (current-year) form list without an error (should be true):', taxLoadedWithoutError);
+
+// This environment never configures the e-filing vendor's secrets (same as
+// every Stripe/Didit test suite here) — the connection test should surface
+// that as a real, visible error, not silently fail/succeed.
+await page.click('#taxConnectionTestBtn');
+await page.waitForFunction(() => !document.querySelector('#taxErr').hidden, { timeout: 10000 });
+const taxConnectionErrorText = await page.textContent('#taxErr');
+console.log('connection test surfaces the unconfigured-vendor message (actual):', taxConnectionErrorText.trim());
+
+// The connection-test click above deliberately triggers a real 503
+// (unconfigured e-filing vendor) — Chromium logs any non-2xx fetch
+// response as "Failed to load resource" independent of whether the app
+// handled it gracefully, same reason e2e/redeem-higgles-settings.test.mjs
+// and others already filter this out of their own errors.length === 0 check.
+const unexpectedErrors = errors.filter((e) => !e.includes('Failed to load resource'));
+
 // External links out to the two pre-existing admin pages, not rebuilt here.
 const controlRoomHref = await page.getAttribute('a[href="/admin/control-room"]', 'href');
 const actionLogHref = await page.getAttribute('a[href="/admin/action-log"]', 'href');
@@ -190,11 +219,15 @@ const pass = anonStatus === 401 &&
   reassignHiddenForGreenbelt &&
   fixturesVisible &&
   fixturesBadgeText.toLowerCase().includes('not a real transaction') &&
+  taxVisible &&
+  taxNotPlaceholder &&
+  taxLoadedWithoutError &&
+  taxConnectionErrorText.toLowerCase().includes('not configured') &&
   controlRoomHref === '/admin/control-room' &&
   actionLogHref === '/admin/action-log' &&
-  errors.length === 0;
+  unexpectedErrors.length === 0;
 await finish(browser, {
   pass,
-  label: 'Admin Dashboard shell (#1818) + roster panel (#1819, #1877) + landlet override panel (#1822): gated for anon visitors, nav switches panels, roster lists/grants/revokes admins and survives a stale overlapping reload, landlet lookup renders real data, Test/Ops Fixtures clearly labeled, external links to existing admin pages',
+  label: 'Admin Dashboard shell (#1818) + roster panel (#1819, #1877) + landlet override panel (#1822) + tax/1099 panel (#1823): gated for anon visitors, nav switches panels, roster lists/grants/revokes admins and survives a stale overlapping reload, landlet lookup renders real data, Test/Ops Fixtures clearly labeled, tax panel loads forms and surfaces the unconfigured e-filing vendor, external links to existing admin pages',
   errors,
 });
