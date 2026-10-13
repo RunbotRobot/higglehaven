@@ -5537,6 +5537,9 @@ let settingsRenderToken = 0;
 function refreshUnitDisplays() {
   for (const el of trimUnitLabelEls) el.textContent = unitSuffix();
   updateTrimLengthInput();
+  // #1939: the Measure tool's own live readout is unit-dependent (formatLength)
+  // but was never covered here, unlike its sibling updateTrimLengthInput().
+  if (measurePointA && measurePointB) updateMeasureResultText();
   if (sellerModalEl.classList.contains('visible')) renderActiveSellerView();
 }
 
