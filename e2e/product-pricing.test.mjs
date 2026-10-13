@@ -5,10 +5,11 @@
 // change adds: setting a price during the upload wizard, and editing it
 // afterward via a product's own "Edit Price" panel (same collapsed-panel-
 // with-a-Save-step idiom as "Edit Size", see e2e/seller-upload-and-
-// resize.test.mjs). The Shop-mode "name — price" readout near a placed
-// instance (#shop-product-info) isn't covered here for the same reason
-// real camera movement never is in this suite — see docs/API.md's own
-// testing note for this feature; that's verified manually instead.
+// resize.test.mjs). The Shop-mode "name — price" readout in the tapped-
+// product preview modal (#shop-product-preview-info) isn't covered here
+// for the same reason real camera movement never is in this suite — see
+// docs/API.md's own testing note for this feature; that's verified
+// manually instead.
 //
 // #1601: the upload wizard's own price field is required (owner wants an
 // explicit $0 for a free product, not a blank field) — only the separate

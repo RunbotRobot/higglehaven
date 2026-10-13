@@ -522,90 +522,6 @@
         font: 13px/1.4 sans-serif;
         cursor: pointer;
       }
-      /* Same treatment as #shop-sign-hint/#shop-calendar-hint above, stacked
-         one slot higher still so all three can show at once near an
-         instance that's flagged as more than one of sign/calendar/
-         reviewable without colliding. */
-      #shop-review-hint {
-        bottom: 280px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgb(var(--pill-rgb) / 0.9);
-        padding: 8px 16px;
-        border-radius: 8px;
-        border: none;
-        color: var(--pill-text);
-        font: 13px/1.4 sans-serif;
-        cursor: pointer;
-      }
-      /* The nearest placed instance's own name/price (docs/API.md's
-         "Catalog templates" — priceCents was never actually surfaced to a
-         shopper anywhere in the UI before this). Non-interactive (unlike
-         the hint buttons above), so it doesn't inherit their cursor/
-         pointer-events, and sits one slot higher than #shop-review-hint
-         since both track the same nearest-instance proximity and should
-         never collide. */
-      #shop-product-info {
-        bottom: 330px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgb(var(--pill-rgb) / 0.55);
-        padding: 6px 12px;
-        border-radius: 8px;
-        color: var(--pill-text-soft);
-        font: 12px/1.4 sans-serif;
-        /* #1808: this started out always short ("name — price"), but a
-           digital-good/no-returns/domestic-only disclaimer (productInfoText
-           in main.js) can make it run well past a phone's width -- nowrap
-           then ran it off both screen edges instead of wrapping. Same
-           max-width idiom #catalog-picker already uses. width: max-content
-           is needed alongside it -- with the default width: auto, this
-           element's left: 50% (and no "right") makes the browser's
-           shrink-to-fit sizing treat only the *half* of the viewport past
-           that 50% mark as available, forcing even an ordinary short
-           "name — price" line to wrap well before it actually needs to. */
-        width: max-content;
-        max-width: min(90vw, 360px);
-        text-align: center;
-        pointer-events: none;
-      }
-      /* Same treatment as #shop-sign-hint/#shop-calendar-hint/#shop-review-hint
-         above, stacked one slot higher still (above #shop-product-info, which
-         shares the same nearest-instance proximity but isn't a button). Only
-         ever shown for an instance whose template actually has a price set —
-         see updateReviewFade's own comment on why a priceless product has
-         nothing to buy. */
-      #shop-buy-hint {
-        bottom: 380px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgb(var(--pill-rgb) / 0.9);
-        padding: 8px 16px;
-        border-radius: 8px;
-        border: none;
-        color: var(--pill-text);
-        font: 13px/1.4 sans-serif;
-        cursor: pointer;
-      }
-      /* #659 (owner, Control Room, 2026-09-11): "Buyers are never shown the
-         refund policy... before purchasing" — same tap-a-priced-product
-         visibility gate as #shop-buy-hint just above (only shown once a
-         priced product is tapped, one slot higher in the same stack), but
-         a plain underlined text link rather than a filled pill — this
-         isn't the primary action on this product the way Buy is, just a
-         disclosure a shopper can check before deciding. */
-      #shop-return-policy-link {
-        bottom: 430px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: none;
-        border: none;
-        padding: 4px 10px;
-        color: var(--pill-text-soft);
-        font: 12px/1.4 sans-serif;
-        text-decoration: underline;
-        cursor: pointer;
-      }
       /* Dual virtual joysticks: lower-left walks (forward/back/strafe),
          right looks (yaw/pitch) — each tracks its own pointer via
          setPointerCapture so both thumbs work at once. The knob is an
@@ -3570,10 +3486,9 @@
       }
       /* #1811 (sub-issue of #1809): isolated 3D preview + item info for a
          tapped product, same modal shell/reasoning as #sign-posts-modal
-         above. Shown alongside #shop-product-info for now — the pill is
-         still removed separately, in #1813, once the later sub-issues in
-         that same tracking issue land the buy/review actions this modal
-         doesn't have yet. */
+         above — replacing the old #shop-product-info/#shop-buy-hint/
+         #shop-review-hint/#shop-return-policy-link pills, removed in
+         #1813 once this modal covered everything they did. */
       #shop-product-preview-modal {
         position: fixed;
         inset: 0;
@@ -3615,12 +3530,13 @@
         font-size: 14px;
         color: var(--pill-text);
       }
-      /* #1812: the Buy/Review/Return-Policy actions migrated in from
-         #shop-buy-hint/#shop-review-hint/#shop-return-policy-link -- same
-         rounded-pill-button look as #sign-posts-unflag-btn's own rule
-         above, laid out in a row rather than stacked since all three can
-         be visible together. Hidden by default (no .visible) the same way
-         their originals are, toggled by the same updateReviewFade gating. */
+      /* #1812: the Buy/Review/Return-Policy actions, migrated in from the
+         original #shop-buy-hint/#shop-review-hint/#shop-return-policy-link
+         pills (removed in #1813) -- same rounded-pill-button look as
+         #sign-posts-unflag-btn's own rule above, laid out in a row rather
+         than stacked since all three can be visible together. Hidden by
+         default (no .visible), toggled by the same updateReviewFade gating
+         their pill-era originals used. */
       #shop-product-preview-actions {
         display: flex;
         flex-wrap: wrap;
@@ -3983,10 +3899,6 @@
     <button id="shop-last-location-btn" type="button">Go to Last Location</button>
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
-    <button id="shop-review-hint" class="shop-ui" type="button">Rate this Product</button>
-    <div id="shop-product-info" class="shop-ui"></div>
-    <button id="shop-return-policy-link" class="shop-ui" type="button">Return Policy</button>
-    <button id="shop-buy-hint" class="shop-ui" type="button">Simulate Purchase</button>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <!-- #506/N45 history (see this button's own CSS comment below for the
