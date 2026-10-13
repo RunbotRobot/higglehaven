@@ -1039,7 +1039,10 @@
     return body;
   }
 
+  let taxFormsLoadToken = 0;
+
   async function loadForms() {
+    const myLoadToken = ++taxFormsLoadToken;
     clearMessages();
     tableWrap.innerHTML = '<p class="empty">Loading…</p>';
     const year = yearInput.value.trim();
@@ -1048,10 +1051,12 @@
     try {
       body = await apiFetch('/api/tax/admin-forms' + query);
     } catch (error) {
+      if (myLoadToken !== taxFormsLoadToken) return;
       showError(error.message);
       tableWrap.innerHTML = '<p class="empty">Failed to load.</p>';
       return;
     }
+    if (myLoadToken !== taxFormsLoadToken) return;
     if (!yearInput.value) yearInput.value = body.year;
     renderForms(body.forms || []);
   }
