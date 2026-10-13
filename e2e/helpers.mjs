@@ -148,6 +148,24 @@ export async function createGreenbeltLandletAsAdmin(landletId, { areaM2 = 1000 }
   }
 }
 
+// Same admin-gated seeding shape as createGreenbeltLandletAsAdmin above, but
+// for a landlet stuck in 'generating' -- lets a test control whether the
+// world circle already encloses it (center near the origin) or not (a
+// center far enough out that landletMaxWorldRadius exceeds any real test
+// world's own radiusM, worker/geometry.js's own formula with no polygon:
+// hypot(center) + sameAreaRadius(areaM2)) without needing to drive the real
+// generate-ring/world-expand flow growWorldAsAdmin above already exercises.
+export async function createGeneratingLandletAsAdmin(landletId, { areaM2 = 1000, center = { x: 0, y: 0 } } = {}) {
+  const cookie = await ensureAdminSession();
+  const created = await adminApi('/landlets', cookie, {
+    method: 'POST',
+    body: JSON.stringify({ landletId, name: landletId, areaM2, status: 'generating', center }),
+  });
+  if (created.response.status !== 201) {
+    throw new Error(`createGeneratingLandletAsAdmin: create failed — ${created.body.error}`);
+  }
+}
+
 // #489: land cap now actually gates vertical construction and auction
 // bidding, and every fresh builder's owned area already equals their
 // default cap exactly — so a suite whose real point is something *else*
