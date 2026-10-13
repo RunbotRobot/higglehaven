@@ -2,14 +2,15 @@
 // product reviews: rates a specific seller's own service (listing
 // accuracy, timeliness, communication) for one specific purchase from
 // them, not the product itself. Submission happens via a confirm()+two-
-// prompt() flow right after #shop-buy-hint completes a purchase
-// (promptSellerFeedback, src/main.js), which — like #shop-review-hint
-// (see product-reviews.test.mjs's own comment) — isn't reachable without
-// real in-world camera movement, so this exercises the feedback API
-// directly (the same one that flow calls, createSellerFeedback in
-// src/api.js) and covers the one real piece of UI this feature has: the
-// Seller modal's own aggregate display (#seller-feedback-summary,
-// renderSellerFeedbackSummary), fetched fresh on every modal open.
+// prompt() flow right after the preview modal's Buy button completes a
+// purchase (promptSellerFeedback, src/main.js), which — like the preview
+// modal's Review button (see product-reviews.test.mjs's own comment) —
+// isn't reachable without real in-world camera movement, so this exercises
+// the feedback API directly (the same one that flow calls,
+// createSellerFeedback in src/api.js) and covers the one real piece of UI
+// this feature has: the Seller modal's own aggregate display
+// (#seller-feedback-summary, renderSellerFeedbackSummary), fetched fresh
+// on every modal open.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';

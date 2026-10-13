@@ -13290,7 +13290,7 @@ async function handleInstancePurchase(request, env, instanceId) {
 // the only difference between them is WHERE this gets called from and
 // what happens with the resulting numbers, never how they're computed.
 // #761: fallbackBuyerLabel is the resolved session buyerBuilder's own
-// label — the shipped in-world buy flow (#shop-buy-hint, src/main.js) never
+// label — the shipped in-world buy flow (handleShopProductBuyClick, src/main.js) never
 // sends an explicit buyerLabel in the request body at all, so without this
 // fallback every real purchase lands with buyer_label NULL, and the
 // review-eligibility check (requires an exact buyer_label match) then

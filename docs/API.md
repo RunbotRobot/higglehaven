@@ -4569,18 +4569,21 @@ unconditionally (`registerShopReview`, keyed by the instance's underlying
 `isCommunitySign`/`isCommunityCalendar` gate their own registration.
 `rebuildReviewSprites` mirrors the sign/calendar machinery exactly, reusing
 `makeSignPostSprite`/`SIGN_FADE_NEAR_M`/`SIGN_FADE_FAR_M`/
-`SIGN_MAX_VISIBLE_POSTS` for the sprite fade. `#shop-review-hint` ("Rate
-this Product") sits one slot higher than `#shop-calendar-hint`
-(`bottom: 280px` vs. `230px`/`180px`) so it can show alongside a sign/
-calendar hint without colliding.
-Unlike signs/calendars, `#shop-review-hint` is NOT proximity-driven — it
-was originally, but the owner flagged that as noisy (N42): since every
+`SIGN_MAX_VISIBLE_POSTS` for the sprite fade. The "Rate this Product"
+action lives as a button inside the isolated product preview modal
+(`#shop-product-preview-review-btn`, see "Shop-side: seeing a price"
+below and #1809/#1811-#1813) rather than its own floating pill — #1813
+removed the original `#shop-review-hint` element once the modal covered
+everything it did.
+`#shop-product-preview-review-btn` is NOT proximity-driven — an earlier
+version was, but the owner flagged that as noisy (N42): since every
 instance is reviewable, a purely-proximity hint would show near almost
-anything a shopper walks up to. `updateReviewFade` now gates it (and
-`#shop-buy-hint`, below) on `shopTappedProduct` instead — the same
-tap-to-inspect state `#shop-product-info` already used — so a shopper has
-to deliberately tap the product first, still re-checking `SIGN_INTERACT_RADIUS_M`
-every frame so walking away from a tapped product hides its buttons again.
+anything a shopper walks up to. `updateReviewFade` gates its visibility
+(and the preview modal's Buy button, below) on `shopTappedProduct`
+instead — the same tap-to-inspect state that opens the preview modal in
+the first place — so a shopper has to deliberately tap the product first,
+still re-checking `SIGN_INTERACT_RADIUS_M` every frame so walking away
+from a tapped product hides the modal's action buttons again.
 
 Each placement fetches its product's review list independently rather than
 sharing a per-template cache across every loaded instance of the same
@@ -4588,9 +4591,10 @@ product — a shopper posting a review near one placement won't instantly
 update another loaded instance of the same product elsewhere, an edge case
 rare and purely cosmetic enough that the added bookkeeping isn't worth it.
 
-`#shop-review-hint`'s click handler requires a real session
-(`ensureBuilderIdentity()`, #1113 — the same gate the checkout flow already
-uses) before prompting at all, replacing the old `shopperLabel()`
+The review button's click handler (`handleShopProductReviewClick`)
+requires a real session (`ensureBuilderIdentity()`, #1113 — the same gate
+the checkout flow already uses) before prompting at all, replacing the
+old `shopperLabel()`
 `localStorage`-backed free-text name prompt that used to supply
 `authorLabel` client-side (the actual client-side manifestation of #893's
 spoofing gap — the server now derives it from the session instead, and no
@@ -4737,17 +4741,19 @@ history to leave feedback from later doesn't exist in this app at all
 (see "Product reviews"' own `#454` comment on why — the server never
 stores a raw token/receipt a shopper could come back to), so submission
 instead happens at the one moment a shopper is guaranteed to still have
-their own purchase in hand: immediately after `#shop-buy-hint` completes a
-purchase (both the real-money and simulated paths), via a `confirm()` then
-the same two-`prompt()` rating+comment flow `#shop-review-hint` already
-uses. `promptSellerFeedback` silently no-ops when the purchase has no
-`sellerId` (nothing to rate) or no `buyerLabel` (the purchase predates a
-real buyer identity) — never shown for a product with no seller or an
-unidentified buyer. The seller's own aggregate — `#seller-feedback-summary`
-in the Seller modal, right below `#seller-hint` — is fetched fresh on
-every modal open (`renderSellerFeedbackSummary`) and stays hidden entirely
-until that seller has at least one real rating, same "nothing to show yet
-stays invisible" convention `#product-info`'s own comment documents.
+their own purchase in hand: immediately after the preview modal's Buy
+button (`handleShopProductBuyClick`) completes a purchase (both the
+real-money and simulated paths), via a `confirm()` then the same
+two-`prompt()` rating+comment flow the modal's own Review button
+(`handleShopProductReviewClick`) already uses. `promptSellerFeedback`
+silently no-ops when the purchase has no `sellerId` (nothing to rate) or
+no `buyerLabel` (the purchase predates a real buyer identity) — never
+shown for a product with no seller or an unidentified buyer. The seller's
+own aggregate — `#seller-feedback-summary` in the Seller modal, right
+below `#seller-hint` — is fetched fresh on every modal open
+(`renderSellerFeedbackSummary`) and stays hidden entirely until that
+seller has at least one real rating, same "nothing to show yet stays
+invisible" convention the preview modal's own info text documents.
 
 ## Scheduled calendar events + creative-tool trigger
 
@@ -5882,11 +5888,12 @@ Refund/reversal against a real-money purchase's PaymentIntent is handled by
 
 ### Frontend wiring
 
-Shop mode's tap-gated product hint column (`updateReviewFade` in
-`src/main.js`, shared with "Product reviews" and "Product pricing" above —
-see "Product reviews"' own note on why this is tap-driven, not proximity)
-gains a "Buy" button (`#shop-buy-hint`), shown only when the tapped
-instance's template has a price set. Clicking it
+Shop mode's isolated product preview modal (its action buttons' visibility
+is driven by `updateReviewFade` in `src/main.js`, shared with "Product
+reviews" and "Product pricing" above — see "Product reviews"' own note on
+why this is tap-driven, not proximity) gains a "Simulate Purchase" button
+(`#shop-product-preview-buy-btn`, `handleShopProductBuyClick`), shown only
+when the tapped instance's template has a price set. Clicking it
 confirms the purchase, then calls `purchaseInstance` (`src/api.js`). If
 the response is an already-completed `purchase` (the simulated path),
 that's the whole flow — same as before this feature existed. If it's
@@ -6061,34 +6068,37 @@ a shopper about it before they bought — per the owner's own Control Room
 direction, this closes that gap with a plain-language disclosure, entirely
 client-side (no new route, no schema change).
 
-A `#shop-return-policy-link` button sits alongside `#shop-product-info`,
-sharing that same tap-gated `shopTappedProduct`/`canBuy` visibility state as
-`#shop-buy-hint` (see "Shop-side: seeing a price" above) — both toggle
-together off one shared `canBuy` boolean in `updateReviewFade()`, so the
-link only ever appears once a shopper has actually tapped a buyable
-product. Clicking it opens `#refund-policy-modal` (same
-modal-with-a-close-button idiom as every other Shop-mode modal in this
-file), which states the 99% rate plainly and explains why (higglehaven's
-own commission share, clawed back on refund, isn't returned). The buy
-confirmation dialog itself also gets a one-line reminder pointing at this
-same policy, so a shopper sees it again right before committing to a
-purchase, not just if they happen to tap the link first.
+A "Return Policy" button inside the preview modal
+(`#shop-product-preview-return-policy-btn`, `handleShopReturnPolicyClick`)
+shares that same tap-gated `shopTappedProduct`/`canBuy` visibility state as
+the modal's own "Simulate Purchase" button (see "Shop-side: seeing a
+price" above) — both toggle together off one shared `canBuy` boolean in
+`updateReviewFade()`, so the button only ever appears once a shopper has
+actually tapped a buyable product. Clicking it opens `#refund-policy-modal`
+(same modal-with-a-close-button idiom as every other Shop-mode modal in
+this file), which states the 99% rate plainly and explains why
+(higglehaven's own commission share, clawed back on refund, isn't
+returned). The buy confirmation dialog itself also gets a one-line
+reminder pointing at this same policy, so a shopper sees it again right
+before committing to a purchase, not just if they happen to tap the
+button first.
 
 `productInfoText` (see "Shop-side: seeing a price" above) also appends a
 plain `"(no returns)"` suffix when `metadata.noReturns` is set, so a
-no-returns product's own tapped-info line discloses that up front too,
-independent of the general 99%-refund modal.
+no-returns product's own preview-modal info line discloses that up front
+too, independent of the general 99%-refund modal.
 
 **Testing note.** Verified manually via Playwright against the running
-dev server, for the same reason `#shop-product-info`'s own tap-to-show
+dev server, for the same reason the preview modal's own tap-to-show
 behavior is (see "Testing note" above): this suite has no real 3D
 camera/raycast simulation to drive the tap-gating honestly. Confirmed
-`#shop-return-policy-link` and `#refund-policy-modal` both start hidden,
-that programmatically invoking the link's click handler (standing in for
-the real tap) opens the modal showing the "Refund Policy" heading and its
-99%-mentioning copy, that the close button hides it again, and that no
-console/page errors occurred anywhere in the flow. The verification script
-itself was a temporary scratch file, deleted before committing.
+`#shop-product-preview-return-policy-btn` and `#refund-policy-modal` both
+start hidden, that programmatically invoking the button's click handler
+(standing in for the real tap) opens the modal showing the "Refund Policy"
+heading and its 99%-mentioning copy, that the close button hides it
+again, and that no console/page errors occurred anywhere in the flow. The
+verification script itself was a temporary scratch file, deleted before
+committing.
 
 ## Tax reporting
 
@@ -7554,22 +7564,29 @@ the field is cleared back to blank, not `0`.
 
 ### Shop-side: seeing a price
 
-`#shop-product-info`, a non-interactive text line, shows a tapped placed
-instance's own product name and price (`"<name> — <price>"`, or just
-`"<name>"` when unpriced). Originally proximity-tracked the same way
-Product Reviews' own hint was (nearest in `SIGN_INTERACT_RADIUS_M`), but
-that read as noisy — a name/price popup appearing the instant a shopper
-walked near anything, whether or not they cared. Now driven by a plain
-raycast click/tap handler against every loaded `shopReviews` mesh (the
-same "walk up to whichever registered root mesh is this hit's ancestor"
-pattern Build mode's own click handler uses against `productMeshes`, see
-`findTappedShopProduct`): tapping a product shows its info, tapping
-anything else (ground, sky, empty space) dismisses it. `#shop-review-hint`/
-`#shop-buy-hint` share this same `shopTappedProduct` state (see "Product
-reviews" above) — the owner later flagged the same noisiness for those two
-as well (N42), so all three are now tap-gated rather than just
-`#shop-product-info`. It sits one slot higher than `#shop-review-hint`
-(`bottom: 330px` vs. `280px`) so both can show together without colliding.
+#1809/#1811: tapping a placed instance opens an isolated 3D product
+preview modal (`#shop-product-preview-modal`) showing the product's model
+rendered in its own self-contained Three.js scene, plus a non-interactive
+text line (`#shop-product-preview-info`) with the product's name and
+price (`"<name> — <price>"`, or just `"<name>"` when unpriced) — reusing
+Sell mode's own existing on-demand preview pattern (`showAxisPreview`)
+rather than inventing a new one. This replaced an earlier, proximity-
+tracked design (nearest in `SIGN_INTERACT_RADIUS_M`, the same way Product
+Reviews' own hint originally was) that read as noisy — a name/price popup
+appearing the instant a shopper walked near anything, whether or not they
+cared. Driven by a plain raycast click/tap handler against every loaded
+`shopReviews` mesh (the same "walk up to whichever registered root mesh
+is this hit's ancestor" pattern Build mode's own click handler uses
+against `productMeshes`, see `findTappedShopProduct`): tapping a product
+opens the modal, tapping anything else (ground, sky, empty space) closes
+it. The modal's own Review/Buy/Return-Policy buttons
+(`#shop-product-preview-review-btn`/`-buy-btn`/`-return-policy-btn`,
+#1812) share this same `shopTappedProduct` state (see "Product reviews"
+above) — the owner flagged the same noisiness for the pill-era versions of
+these three as well (N42), so all of it is tap-gated. #1813 removed the
+original floating `#shop-product-info`/`#shop-review-hint`/
+`#shop-buy-hint`/`#shop-return-policy-link` pills once the modal covered
+everything they did.
 
 ### Shop-side: highlighting the tapped product
 
@@ -7583,7 +7600,7 @@ into a `MeshBasicMaterial` with no `emissive` property at all, so a tint-
 based highlight silently does nothing on them. `updateReviewFade` tracks
 which product currently carries the highlight (`shopHighlightedProduct`)
 and adds/removes it exactly alongside the same `tappedInRange` check that
-already gates `#shop-buy-hint`/`#shop-review-hint` — so it appears the
+already gates the preview modal's own Buy/Review buttons — so it appears the
 moment a product is tapped while in `SIGN_INTERACT_RADIUS_M`, and clears
 either on a follow-up tap elsewhere or on walking out of range, without
 needing its own separate state machine. The landlet-unload cleanup path
@@ -7599,14 +7616,14 @@ next `updateReviewFade` tick to notice it's gone).
 through the real UI: setting a price during upload, the row's own display
 of it, editing an unpriced product's price afterward via "Edit Price," and
 clearing a price back to blank (verified as `null` server-side, not `0`,
-at every step). `#shop-product-info`'s tap-to-show/tap-away-to-dismiss
+at every step). The preview modal's tap-to-show/tap-away-to-dismiss
 display isn't covered there for the same reason real Shop-mode camera
 movement never is in this suite (see "Product reviews" above's own testing
 note) — verified manually instead, using temporary `window.__debugSetCameraPos`/
 `window.__debugSetShopYawPitch` hooks (removed before committing, confirmed
 via `grep`) to aim the camera at a placed instance and simulate a tap at
-its on-screen position, confirming the info appears only after that tap
-and clears on a follow-up tap at empty sky.
+its on-screen position, confirming the modal appears only after that tap
+and closes on a follow-up tap at empty sky.
 
 #1810's mesh highlight was verified the same way, but isolating its own
 logic from the raycast tap itself (already covered by the manual pass
@@ -7709,11 +7726,11 @@ clearing it afterward. Unchecking and saving deletes the metadata key
 entirely rather than setting it `false` or `null` — the same clear-to-
 absent convention flooring's own toggle uses.
 
-`#shop-product-info` (see "Product pricing" above) appends the disclosure
-text in parentheses when the nearest instance is a digital good — a
-shopper standing next to one sees `"<name> — <price> (<disclosure>)"`
-rather than assuming every placed item is a physical one they could pick
-up.
+The preview modal's info text (`#shop-product-preview-info`,
+`productInfoText` — see "Product pricing" above) appends the disclosure
+text in parentheses when the tapped instance is a digital good — a
+shopper tapping one sees `"<name> — <price> (<disclosure>)"` rather than
+assuming every placed item is a physical one they could pick up.
 
 A prohibited-content rejection surfaces through the exact same upload-flow
 error path every other validation failure already does (`setUploadStatus`
@@ -7737,7 +7754,7 @@ it — triggering that real rejected `fetch` from inside the page logs a
 "Failed to load resource" console error (plus this app's own
 `console.error` in the upload catch block) that would trip the suite's own
 `errors.length === 0` check, the same reasoning already documented for
-community signs/calendar's own analogous `400` cases. `#shop-product-info`'s
+community signs/calendar's own analogous `400` cases. The preview modal's
 digital-good text was verified manually alongside its price display (see
 "Product pricing" above's own testing note), using the same temporary
 debug-hook technique.
@@ -7765,8 +7782,8 @@ row's "Edit Returns Policy" panel) — `.seller-domestic-only-toggle`/
 `.seller-domestic-only-panel` in `src/main.js`. Unchecking and saving
 deletes the metadata key entirely rather than setting it `false`, the same
 clear-to-absent convention `noReturns` and flooring's own toggle use.
-`#shop-product-info` (see "Product pricing" above) appends "(ships to
-United States only)" in parentheses when the nearest instance is
+The preview modal's info text (see "Product pricing" above) appends
+"(ships to United States only)" in parentheses when the tapped instance is
 domestic-only-flagged — the same tap-to-inspect disclosure treatment as
 the digital-goods disclaimer above.
 

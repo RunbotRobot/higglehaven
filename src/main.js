@@ -11714,10 +11714,6 @@ const shopUpBtn = document.getElementById('shop-up-btn');
 const shopDownBtn = document.getElementById('shop-down-btn');
 const shopSignHintEl = document.getElementById('shop-sign-hint');
 const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
-const shopReviewHintEl = document.getElementById('shop-review-hint');
-const shopProductInfoEl = document.getElementById('shop-product-info');
-const shopReturnPolicyLinkEl = document.getElementById('shop-return-policy-link');
-const shopBuyHintEl = document.getElementById('shop-buy-hint');
 const shopProductPreviewModalEl = document.getElementById('shop-product-preview-modal');
 const shopProductPreviewCloseBtn = document.getElementById('shop-product-preview-close-btn');
 const shopProductPreviewCanvas = document.getElementById('shop-product-preview-canvas');
@@ -12470,11 +12466,11 @@ let nearestActiveCalendar = null;
 // {mesh, group, templateId, reviews, sprites} entry per loaded one, with
 // `reviews` populated once rather than re-fetched.
 const shopReviews = [];
-// #shop-product-info's own content/visibility is driven by this (see the
-// tap handler further below) — showing it the instant a shopper wanders
-// near anything read as noisy/intrusive, closer to a tooltip stuck to the
-// cursor than an intentional "what is this." Requiring a tap makes seeing
-// it a deliberate choice.
+// The product preview modal's own content/visibility is driven by this
+// (see the tap handler further below) — showing it the instant a shopper
+// wanders near anything read as noisy/intrusive, closer to a tooltip stuck
+// to the cursor than an intentional "what is this." Requiring a tap makes
+// seeing it a deliberate choice.
 //
 // Owner (Control Room, N42): the buy/review hints used to be purely
 // proximity-driven (visible whenever nearest-in-range, no tap needed) —
@@ -14895,26 +14891,21 @@ function updateReviewFade() {
   if (tappedInRange !== shopReviewHintsVisible || shopTappedProduct !== shopReviewHintsProduct) {
     shopReviewHintsVisible = tappedInRange;
     shopReviewHintsProduct = shopTappedProduct;
-    shopReviewHintEl.classList.toggle('visible', tappedInRange);
-    // #1812: same gate, mirrored onto the migrated copy inside the preview
-    // modal -- both the floating pill-era hint and the modal's own button
-    // stay in lockstep until #1813 removes the former.
     shopProductPreviewReviewBtn.classList.toggle('visible', tappedInRange);
     // Only a priced product has anything to "buy" — an unpriced one (the
-    // common case for most placeholder catalog items) shows no buy hint at
+    // common case for most placeholder catalog items) shows no buy button at
     // all rather than one that would just 400 on click.
     const canBuy = tappedInRange && shopTappedProduct.mesh.userData.template.priceCents != null;
-    shopBuyHintEl.classList.toggle('visible', canBuy);
     shopProductPreviewBuyBtn.classList.toggle('visible', canBuy);
-    // #659: same gate as the Buy hint just above — a return policy only
+    // #659: same gate as the Buy button just above — a return policy only
     // matters for something with a price to actually refund.
-    shopReturnPolicyLinkEl.classList.toggle('visible', canBuy);
     shopProductPreviewReturnPolicyBtn.classList.toggle('visible', canBuy);
   }
 }
 
 // Shared by the tap handler below and formerly by proximity — the actual
-// "name — price (disclaimer)" line #shop-product-info shows once tapped.
+// "name — price (disclaimer)" line the preview modal (#shop-product-preview-info)
+// shows once tapped.
 function productInfoText(template) {
   const { name, priceCents, metadata, category, skeletonSignature } = template;
   let text = priceCents == null ? name : `${name} — ${formatPriceCents(priceCents)}`;
@@ -14964,7 +14955,7 @@ function findTappedShopProduct(object) {
 }
 
 // #1811 (sub-issue of #1809): isolated 3D preview for a tapped product,
-// shown alongside the existing #shop-product-info pill for now. Same
+// replacing the old #shop-product-info pill (removed in #1813). Same
 // self-contained-scene technique as Sell mode's own showAxisPreview/
 // disposeAxisPreview (see that function's own comment, above) — a
 // dedicated scene/camera/renderer/controls bound to this modal's own
@@ -15079,13 +15070,6 @@ renderer.domElement.addEventListener('click', (event) => {
   const hits = raycaster.intersectObjects(shopReviews.map((r) => r.mesh), true);
   const review = hits.length > 0 ? findTappedShopProduct(hits[0].object) : null;
   shopTappedProduct = review;
-  shopProductInfoEl.classList.toggle('visible', !!review);
-  if (review) shopProductInfoEl.textContent = productInfoText(review.mesh.userData.template);
-  // #1811: the new preview modal opens alongside the pill above for now
-  // (it covers #1812's buy/review/return-policy actions next, and the
-  // pill itself is only removed once that and #1813 land) — same tap
-  // that reveals one reveals the other, same tap-away that dismisses one
-  // dismisses the other.
   if (review) openShopProductPreviewModal(review);
   else closeShopProductPreviewModal();
 });
@@ -15283,10 +15267,6 @@ shopCalendarHintEl.addEventListener('click', async () => {
   }
 });
 
-// #1812: shared by both #shop-review-hint (the pill-era floating button)
-// and #shop-product-preview-review-btn (its migrated copy inside the new
-// preview modal) — one function so the two can never drift apart while
-// both exist, right up until #1813 removes the former.
 async function handleShopProductReviewClick() {
   const review = shopTappedProduct;
   if (!review) return;
@@ -15308,7 +15288,6 @@ async function handleShopProductReviewClick() {
   // prompt is an optional extra, same as the calendar hint's own scheduling
   // step above.
   const text = prompt('Add a comment (up to 280 characters), or leave blank:', '');
-  shopReviewHintEl.disabled = true;
   shopProductPreviewReviewBtn.disabled = true;
   try {
     const posted = await createProductReview(review.templateId, { rating, text: text?.trim() || undefined });
@@ -15320,11 +15299,9 @@ async function handleShopProductReviewClick() {
   } catch (err) {
     alert(err.message || 'Could not review this product.');
   } finally {
-    shopReviewHintEl.disabled = false;
     shopProductPreviewReviewBtn.disabled = false;
   }
 }
-shopReviewHintEl.addEventListener('click', handleShopProductReviewClick);
 shopProductPreviewReviewBtn.addEventListener('click', handleShopProductReviewClick);
 
 // #453: Stripe.js is loaded lazily, only the first time a real-money
@@ -15450,17 +15427,14 @@ function closeRefundPolicyModal() {
   refundPolicyModalEl.classList.remove('visible');
   closeModalA11y(refundPolicyModalEl);
 }
-// #1812: shared by #shop-return-policy-link and its migrated copy inside
-// the preview modal, same reasoning as handleShopProductReviewClick above.
 function handleShopReturnPolicyClick() {
   refundPolicyModalEl.classList.add('visible');
   openModalA11y(refundPolicyModalEl, closeRefundPolicyModal);
 }
-shopReturnPolicyLinkEl.addEventListener('click', handleShopReturnPolicyClick);
 shopProductPreviewReturnPolicyBtn.addEventListener('click', handleShopReturnPolicyClick);
 refundPolicyCloseBtn.addEventListener('click', closeRefundPolicyModal);
 
-// #1096: distinct from shopReviewHintEl's product review above — this
+// #1096: distinct from handleShopProductReviewClick's product review above — this
 // rates the seller's own service (listing accuracy, timeliness,
 // communication) for one specific purchase, not the product itself, so it
 // only ever fires right after that purchase rather than from a standalone
@@ -15486,21 +15460,18 @@ async function promptSellerFeedback(purchase) {
   }
 }
 
-// #1812: shared by #shop-buy-hint and its migrated copy inside the
-// preview modal, same reasoning as handleShopProductReviewClick above.
 async function handleShopProductBuyClick() {
   const review = shopTappedProduct;
   if (!review) return;
   const { name, priceCents } = review.mesh.userData.template;
   if (priceCents == null) return;
   // #659: a one-line mention right at the moment of buying, alongside the
-  // full Return Policy link this same tapped product already surfaces
-  // (#shop-return-policy-link, above) — this dialog is a native confirm(),
-  // so it can't carry an actual link, just the fact worth knowing before
-  // saying yes.
+  // full Return Policy button this same tapped product already surfaces
+  // (#shop-product-preview-return-policy-btn, above) — this dialog is a
+  // native confirm(), so it can't carry an actual link, just the fact
+  // worth knowing before saying yes.
   const confirmed = confirm(`Buy "${name}" for ${formatPriceCents(priceCents)}? (Refunds return 99% — see Return Policy.)`);
   if (!confirmed) return;
-  shopBuyHintEl.disabled = true;
   shopProductPreviewBuyBtn.disabled = true;
   const instanceId = review.mesh.userData.instanceId;
   try {
@@ -15542,11 +15513,9 @@ async function handleShopProductBuyClick() {
   } catch (err) {
     if (err.message !== 'Checkout cancelled.') alert(err.message || 'Could not complete this purchase.');
   } finally {
-    shopBuyHintEl.disabled = false;
     shopProductPreviewBuyBtn.disabled = false;
   }
 }
-shopBuyHintEl.addEventListener('click', handleShopProductBuyClick);
 shopProductPreviewBuyBtn.addEventListener('click', handleShopProductBuyClick);
 
 // #1358: the renderer's own live (i.e. still-referenced, not-yet-disposed)
@@ -15658,12 +15627,7 @@ function unloadShopLandletInstances(entry) {
       shopTappedProduct = null;
       shopReviewHintsVisible = false;
       shopReviewHintsProduct = null;
-      shopProductInfoEl.classList.remove('visible');
-      shopReviewHintEl.classList.remove('visible');
-      shopBuyHintEl.classList.remove('visible');
-      shopReturnPolicyLinkEl.classList.remove('visible');
-      // #1811: same stale-reference reasoning as the pill/hints above —
-      // the preview modal's own template/model would otherwise keep
+      // #1811: the preview modal's own template/model would otherwise keep
       // pointing at a mesh that's about to be disposed.
       closeShopProductPreviewModal();
     }
