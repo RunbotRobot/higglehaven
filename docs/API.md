@@ -7768,6 +7768,74 @@ Collision math (client-side) deliberately still only reads `rotationZ` — see
 approximated as its untilted bounding rectangle; this is an accepted
 simplification, not an oversight, since 3D OBB collision isn't implemented.
 
+## Credit orbs
+
+#1994 (sub-issue of #1976 — "Orb-collection mechanic to ration free
+video-to-3D generation credits within a hard $5/day budget", one of three
+independently-mergeable sub-issues alongside #1993's credit-balance work and
+#1995's rendering/collection work): the data model, spawn cadence, and read
+endpoint for a server-spawned "credit orb" — a visible object with no
+builder action behind it, appearing in a random greenbelt landlet, that
+whichever builder collects first (#1995's own scope) gets credited one
+video-generation credit (#1993) for. This sub-issue covers only the spawn
+side; consuming a credit at upload time and the out-of-credits messaging
+are #1993's, and the frontend rendering/proximity-collection mechanic is
+#1995's.
+
+`credit_orbs` (migrations/0127): `orb_id`, `landlet_id`, a position
+(`x_m`/`y_m`/`z_m`, matching `placed_instances`' own position shape),
+`spawned_at`, and `collected_at`/`collected_by_builder_id` (both nullable,
+always set together — #1995's own atomic collect endpoint).
+
+### Spawn cadence
+
+A new `scheduled()` entry, `spawnCreditOrbIfDue`, runs on the existing `*/10`
+cron (no dedicated cron of its own). The owner's own spec: spawn interval =
+1440 minutes ÷ credits-funded-that-day, so orbs spawn spread evenly across
+the day rather than in a burst. Real per-generation cost isn't tracked
+anywhere in this codebase yet, so the credits-per-day figure is a named,
+adjustable placeholder (`CREDIT_ORB_BUDGET_CENTS_PER_DAY` / 500 cents,
+`CREDIT_ORB_COST_CENTS_PER_GENERATION` / 25 cents) rather than derived from
+live cost data — a conservative $0.25/generation (the mid-point of #1617's
+own ~$0.20–0.30 research) against the $5/day budget funds **20 credits/day**
+by default, not the owner's own original "5/day" illustrative example (that
+used a hypothetical $1/generation). Raise or lower
+`CREDIT_ORB_COST_CENTS_PER_GENERATION` once real Tripo per-generation
+billing is confirmed.
+
+`spawnCreditOrbIfDue` folds the "is one due" check and the spawn itself into
+one atomic `INSERT ... SELECT ... WHERE NOT EXISTS` statement — the same
+race-proofing idiom `reserveVideoGenerationJob`/`reserveDiditSession` already
+use for their own concurrent-caller races. It reuses `credit_orbs`' own most
+recent `spawned_at` (across every orb, collected or not) as the "last spawn
+time" anchor rather than a separate single-row state table; a random
+eligible landlet (`status = 'greenbelt'`, via `ORDER BY RANDOM() LIMIT 1` —
+no prior precedent for this in the codebase) is picked at the same time,
+inside the same statement, so no greenbelt landlet to spawn into is simply a
+0-row no-op rather than a separate branch. The spawned position is a random
+point inside the landlet's own buildable footprint
+(`LANDLET_SIDE_M`, #789), scaled by `CREDIT_ORB_SPAWN_MARGIN_FACTOR` (0.8) to
+keep it off the very edge.
+
+### `GET /api/credit-orbs`
+
+Unauthenticated/unsession-gated — an active orb's existence and position are
+the same kind of public, visible-in-the-3D-scene information
+`GET /api/instances` already serves for ordinary placed items, not a
+builder-specific secret. Returns every currently-active (uncollected) orb:
+
+```json
+{
+  "orbs": [
+    { "orbId": "orb-<uuid>", "landletId": "landlet-1", "x": 3.1, "y": -2.4, "z": 0, "spawnedAt": "2026-10-13T23:30:00.000Z" }
+  ]
+}
+```
+
+Optional `?landletId=` scopes the result to one landlet, for the frontend to
+poll only the landlet currently in view rather than every active orb
+world-wide.
+
 ## Product pricing
 
 `catalog_templates.price_cents` (`priceCents` in the API) existed in the

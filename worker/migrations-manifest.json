@@ -123,5 +123,6 @@
   "0123_auction_bids_bidder_builder_id_no_cascade.sql",
   "0124_auctions_seller_builder_id_no_cascade.sql",
   "0125_sign_posts_user_id.sql",
-  "0126_catalog_template_test_model.sql"
+  "0126_catalog_template_test_model.sql",
+  "0127_credit_orbs.sql"
 ]
