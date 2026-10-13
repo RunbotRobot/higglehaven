@@ -6259,6 +6259,15 @@ async function renderRedeemHigglesField() {
   const formField = document.createElement('div');
   formField.className = 'settings-field';
   settingsSectionEl.appendChild(formField);
+  // #1912: exposes this call's own formField so a test can tell a fixed
+  // early-return (no children ever appended to it) apart from the
+  // pre-fix behavior (the form still gets built and appended onto this
+  // now-detached node after a superseded tab switch) -- there's no
+  // DOM-visible difference to check otherwise, since this appendChild
+  // above (unlike renderSellSettingsSection's later, gated
+  // settingsSectionEl.appendChild(payoutsField)) is the last direct
+  // append to the live settingsSectionEl either way.
+  window.__testLastRedeemFormField = formField;
 
   let redeemStatus;
   try {
@@ -6268,6 +6277,10 @@ async function renderRedeemHigglesField() {
     statusNote.classList.add('error');
     return;
   }
+  // #1912: a tab switch (or modal reopen) during that await already tore
+  // down and rebuilt settingsSectionEl for a different tab — same #1732/#905
+  // guard renderSellSettingsSection already has after its own second await.
+  if (myToken !== settingsRenderToken) return;
 
   function describeAccountStatus() {
     if (!redeemStatus.configured) {
@@ -7160,6 +7173,7 @@ async function renderAuctionSection() {
     const durationInput = document.createElement('input');
     durationInput.type = 'number';
     durationInput.min = '1';
+    durationInput.max = '8760';
     durationInput.step = '1';
     durationInput.value = '24';
     durationLabel.appendChild(durationInput);
@@ -7178,6 +7192,15 @@ async function renderAuctionSection() {
       }
       if (!Number.isFinite(hours) || hours < 1) {
         startStatus.textContent = 'Duration must be at least 1 hour.';
+        startStatus.classList.add('error');
+        return;
+      }
+      // #1922: mirrors the server's own cap (worker/index.js's handleAuctions
+      // POST, "durationHours must be 8760 (one year) or fewer") -- without
+      // this, an unusually large value passes client validation and
+      // surfaces that raw server message instead of a friendly one.
+      if (hours > 8760) {
+        startStatus.textContent = 'Duration must be 8760 hours (one year) or fewer.';
         startStatus.classList.add('error');
         return;
       }
@@ -7440,9 +7463,14 @@ async function renderAuctionSection() {
           alert('Enter a bid amount of zero or more.');
           return;
         }
+        const amountCents = Math.round(dollars * 100);
+        if (amountCents < minCents) {
+          alert(`Enter a bid of at least ${formatHiggles(minCents)}.`);
+          return;
+        }
         bidBtn.disabled = true;
         try {
-          await placeBid(auction.auctionId, { amountCents: Math.round(dollars * 100) });
+          await placeBid(auction.auctionId, { amountCents });
           await renderAuctionList();
           await renderStartSection();
         } catch (err) {
@@ -12506,6 +12534,7 @@ let shopLastReportedLandletId; // undefined until the first report ever goes out
 // the latest poll landed, for timing the lerp against) }.
 const shopOtherAvatars = new Map();
 let shopLastPresencePollAt = 0;
+let presencePollToken = 0; // #1911: guards pollNearbyPresenceIfNeeded against a stale out-of-order response
 const shopWorldObjects = []; // ground meshes + the wild backdrop — disposed together on exit
 // Every currently-loaded community-sign instance: { mesh, group, instanceId,
 // posts, sprites }. Populated/torn down alongside its landlet's own
@@ -14525,12 +14554,20 @@ async function pollNearbyPresenceIfNeeded(now) {
     despawnOtherShopAvatars();
     return;
   }
+  // #1911: called unawaited every frame, with no AbortController -- a
+  // slower, earlier-issued fetch landing after a faster, newer one would
+  // otherwise overwrite shopOtherAvatars with stale positions/headings and
+  // wrongly despawn avatars only missing from the stale response. Same
+  // monotonic-load-token guard every other async render/poll path in this
+  // file already uses (friendsLoadToken, dmLoadToken, etc.).
+  const myPresencePollToken = ++presencePollToken;
   let avatars;
   try {
     avatars = await fetchNearbyPresence(landletId);
   } catch {
     return; // best-effort -- try again next poll tick, same as a dropped report
   }
+  if (myPresencePollToken !== presencePollToken) return; // a newer poll already landed
   const seenBuilderIds = new Set();
   for (const avatar of avatars) {
     seenBuilderIds.add(avatar.builderId);

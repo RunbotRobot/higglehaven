@@ -187,6 +187,46 @@ await page.waitForFunction(() => !document.querySelector('#taxErr').hidden, { ti
 const taxConnectionErrorText = await page.textContent('#taxErr');
 console.log('connection test surfaces the unconfigured-vendor message (actual):', taxConnectionErrorText.trim());
 
+// #1918: loadForms() had no request-ordering guard -- a slower, overlapping
+// call's error path could land after a faster, newer call's success and
+// stomp the table/error line with the stale call's own failure. Delay and
+// force-fail a request for one year so it's still in flight when a second,
+// faster request for a different year resolves successfully first, same
+// delayed-route technique the roster panel's own #1877 regression test
+// above uses.
+let delayAndFailYear = null;
+await page.route('**/api/tax/admin-forms*', async (route) => {
+  const reqUrl = new URL(route.request().url());
+  if (delayAndFailYear && reqUrl.searchParams.get('year') === delayAndFailYear) {
+    delayAndFailYear = null;
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    await route.fulfill({
+      status: 500, contentType: 'application/json', body: JSON.stringify({ error: 'stale forced failure' }),
+    });
+    return;
+  }
+  await route.continue();
+});
+
+delayAndFailYear = '1999';
+await page.fill('#taxYearInput', '1999');
+await page.click('#taxLoadBtn'); // triggers the delayed, stale, failing call
+await page.waitForTimeout(300); // let it actually start before the second load
+await page.fill('#taxYearInput', String(new Date().getFullYear()));
+await page.click('#taxLoadBtn'); // triggers a second, faster, successful call
+await page.waitForFunction(
+  () => !document.querySelector('#taxTableWrap').textContent.includes('Loading'),
+  { timeout: 10000 },
+);
+const taxRaceErrHiddenAfterFastSuccess = await page.locator('#taxErr').isHidden();
+console.log('fast, newer Load succeeds and tax error stays hidden before the stale failure lands (should be true):', taxRaceErrHiddenAfterFastSuccess);
+
+// Wait out the delayed, forced-failure response too, and confirm it didn't
+// land late and overwrite the error line with its own stale failure.
+await page.waitForTimeout(2700);
+const taxRaceErrStillHiddenAfterStaleFailure = await page.locator('#taxErr').isHidden();
+console.log('tax error line still hidden after the stale, delayed failing Load also lands (should be true, not overwritten):', taxRaceErrStillHiddenAfterStaleFailure);
+
 // The connection-test click above deliberately triggers a real 503
 // (unconfigured e-filing vendor) — Chromium logs any non-2xx fetch
 // response as "Failed to load resource" independent of whether the app
@@ -222,12 +262,14 @@ const pass = anonStatus === 401 &&
   taxVisible &&
   taxNotPlaceholder &&
   taxLoadedWithoutError &&
+  taxRaceErrHiddenAfterFastSuccess &&
+  taxRaceErrStillHiddenAfterStaleFailure &&
   taxConnectionErrorText.toLowerCase().includes('not configured') &&
   controlRoomHref === '/admin/control-room' &&
   actionLogHref === '/admin/action-log' &&
   unexpectedErrors.length === 0;
 await finish(browser, {
   pass,
-  label: 'Admin Dashboard shell (#1818) + roster panel (#1819, #1877) + landlet override panel (#1822) + tax/1099 panel (#1823): gated for anon visitors, nav switches panels, roster lists/grants/revokes admins and survives a stale overlapping reload, landlet lookup renders real data, Test/Ops Fixtures clearly labeled, tax panel loads forms and surfaces the unconfigured e-filing vendor, external links to existing admin pages',
+  label: 'Admin Dashboard shell (#1818) + roster panel (#1819, #1877) + landlet override panel (#1822) + tax/1099 panel (#1823, #1918): gated for anon visitors, nav switches panels, roster lists/grants/revokes admins and survives a stale overlapping reload, landlet lookup renders real data, Test/Ops Fixtures clearly labeled, tax panel loads forms, survives a stale overlapping failed reload, and surfaces the unconfigured e-filing vendor, external links to existing admin pages',
   errors,
 });

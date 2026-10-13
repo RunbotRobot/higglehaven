@@ -512,6 +512,70 @@ console.log('Done tab does not show "Nothing here" after the stale response land
 console.log('the known-done task is still visible on the Done tab after the race (should be true):', doneTaskStillVisibleAfterDelay);
 await page.unroute('**/api/control-room/tasks*');
 
+// #1908 regression: loadReplies(taskId) had no stale-response guard, so an
+// older GET for a task's replies landing after a newer one (e.g. the 15s
+// poll's own refetch racing a reply-send's own refetch for the same task)
+// could overwrite repliesCache with stale data, hiding a reply that was
+// just posted. Reproduced here via two overlapping reply-sends on the same
+// `card` from the compose-form flow above, rather than waiting a real 15s
+// poll tick -- both paths call the exact same loadReplies(taskId) under the
+// exact same guard, so this exercises the fix precisely. Genuine staleness
+// (not just response-arrival-order) requires capturing the first GET's real
+// server response *before* the second reply is posted, then delivering it
+// to the page late -- route.fetch() + a delayed route.fulfill() does that;
+// a plain route.continue() delay would only delay when the request is
+// dispatched, and by the time it reached the server both replies would
+// already exist, so its response wouldn't actually differ from the second
+// GET's.
+//
+// The several page.reload()s between the original expand (way above) and
+// here reset the page's own in-memory `expanded` Set and `repliesCache`, so
+// `card` is no longer expanded and its reply textarea isn't even rendered --
+// re-expand it first (this triggers its own ordinary, non-intercepted
+// loadReplies(), since the route below isn't installed yet).
+await card.locator('.card-head').click();
+await card.locator('textarea[data-reply-text]').waitFor({ timeout: 10000 });
+
+let repliesGetCount = 0;
+await page.route('**/api/control-room/tasks/*/replies', async (route) => {
+  if (route.request().method() !== 'GET') {
+    await route.continue();
+    return;
+  }
+  repliesGetCount += 1;
+  if (repliesGetCount === 1) {
+    const response = await route.fetch();
+    const body = await response.text();
+    const status = response.status();
+    const headers = response.headers();
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await route.fulfill({ status, headers, body });
+  } else {
+    await route.continue();
+  }
+});
+
+await card.locator('textarea[data-reply-text]').fill('First reply — its own GET is captured now but delivered late.');
+await card.locator('button[data-action="reply"]').click();
+// Fire the second reply well before the first GET's artificial 2s delivery
+// delay elapses, so the second reply already exists server-side by the time
+// the first GET's response was captured, but its own (fast) GET still
+// resolves and renders first.
+await page.waitForTimeout(200);
+await card.locator('textarea[data-reply-text]').fill('Second reply — its GET resolves normally and should win.');
+await card.locator('button[data-action="reply"]').click();
+await card.locator('.msg-text', { hasText: 'Second reply — its GET resolves normally and should win.' }).waitFor({ timeout: 10000 });
+
+// Wait past the first GET's own delayed delivery -- pre-fix, this is
+// exactly when its stale (reply-2-less) response would land and overwrite
+// repliesCache, wiping the second reply from the rendered thread until the
+// next poll tick quietly self-corrected it.
+await page.waitForTimeout(2200);
+const firstRepliesRaceReplyStillVisible = await card.locator('.msg-text', { hasText: 'First reply — its own GET is captured now but delivered late.' }).isVisible();
+const secondRepliesRaceReplyStillVisible = await card.locator('.msg-text', { hasText: 'Second reply — its GET resolves normally and should win.' }).isVisible();
+console.log('both replies still visible after the delayed, stale GET resolves (should both be true):', firstRepliesRaceReplyStillVisible, secondRepliesRaceReplyStillVisible);
+await page.unroute('**/api/control-room/tasks/*/replies');
+
 const pass = anonStatus === 401 && anonSeesSignIn &&
   heading.includes('higglehaven Control Room') &&
   adminsListText.includes('@') &&
@@ -542,5 +606,7 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   stillOnDoneTabAfterDelay &&
   !doneTabShowsNothingHereAfterDelay &&
   doneTaskStillVisibleAfterDelay &&
+  firstRepliesRaceReplyStillVisible &&
+  secondRepliesRaceReplyStillVisible &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Control Room admin page (#N31 option 3): same-origin board at /admin/control-room', errors });
