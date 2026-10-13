@@ -412,6 +412,104 @@ describe('Product reviews', () => {
     expect(deleted.body).toEqual({ deleted: true });
   });
 
+  // #1712 (owner confirmed): an admin can remove any review outright --
+  // harassment, doxxing, other policy violations -- even though the
+  // template's own seller is reachable and active, unlike the dangling-
+  // seller admin fallback mark-shipped/refund already have. Logged via
+  // admin_action_log, same accountability convention as those.
+  it('lets an admin delete any review outright, even when the template has a reachable owning seller', async () => {
+    const seller = await signupSeller('review-admin-override-seller');
+    const shopper = await signupBuilder('review-admin-override-shopper');
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'review-admin-override-owned',
+        name: 'Admin-moderatable reviewable product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    const templateId = created.body.template.templateId;
+    await createPurchase(templateId, shopper);
+    const posted = await api(`/catalog/${templateId}/reviews`, shopper.session({
+      method: 'POST',
+      body: JSON.stringify({ rating: 1, text: 'Abusive/policy-violating text goes here.' }),
+    }));
+    expect(posted.response.status).toBe(201);
+    const reviewId = posted.body.review.reviewId;
+
+    const asAdmin = await api(`/catalog/${templateId}/reviews/${reviewId}`, adminSession({ method: 'DELETE' }));
+    expect(asAdmin.response.status).toBe(200);
+    expect(asAdmin.body).toEqual({ deleted: true });
+
+    const listedAfter = await api(`/catalog/${templateId}/reviews`);
+    expect(listedAfter.body.reviews).toHaveLength(0);
+
+    const adminUserId = (await api('/auth/me', adminSession())).body.user.userId;
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('delete_review_override', reviewId).first();
+    expect(logRow).not.toBeNull();
+    expect(logRow.admin_user_id).toBe(adminUserId);
+    expect(logRow.target_type).toBe('product_review');
+  });
+
+  // #1971: a concurrent delete can win the race against the admin's own
+  // DELETE before it runs (another admin's click, or the owning seller's
+  // own moderation path) — the loser's DELETE affects 0 rows, and must not
+  // write an admin_action_log row claiming it deleted something it didn't.
+  // Firing two concurrent admin DELETEs at the same review exercises this
+  // directly: exactly one of them actually removes the row, so exactly one
+  // admin_action_log row should ever exist for it, never two. The losing
+  // attempt's own status depends on interleaving and isn't itself the bug:
+  // if both existence-checks run before either DELETE, both see the row and
+  // both return 200 (the loser's DELETE just affects 0 rows); if the
+  // winner's full cycle finishes first, the loser's own existence check
+  // finds nothing and 404s instead. Either is a correct response — the one
+  // invariant this test actually guards is the log row count.
+  it('logs the admin delete-override exactly once, not once per losing racer, when two deletes race the same review', async () => {
+    const seller = await signupSeller('review-admin-race-seller');
+    const shopper = await signupBuilder('review-admin-race-shopper');
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'review-admin-race-owned',
+        name: 'Race-moderatable reviewable product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    const templateId = created.body.template.templateId;
+    await createPurchase(templateId, shopper);
+    const posted = await api(`/catalog/${templateId}/reviews`, shopper.session({
+      method: 'POST',
+      body: JSON.stringify({ rating: 1, text: 'Abusive/policy-violating text goes here.' }),
+    }));
+    expect(posted.response.status).toBe(201);
+    const reviewId = posted.body.review.reviewId;
+
+    const attempts = await Promise.all(
+      Array.from({ length: 2 }, () => api(`/catalog/${templateId}/reviews/${reviewId}`, adminSession({ method: 'DELETE' }))),
+    );
+    for (const attempt of attempts) {
+      expect([200, 404]).toContain(attempt.response.status);
+    }
+    const succeeded = attempts.filter((attempt) => attempt.response.status === 200);
+    expect(succeeded.length).toBeGreaterThanOrEqual(1);
+    for (const attempt of succeeded) {
+      expect(attempt.body).toEqual({ deleted: true });
+    }
+
+    const logRows = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('delete_review_override', reviewId).all();
+    expect(logRows.results).toHaveLength(1);
+  });
+
   // #1043: every other real "something happened that the other party
   // should passively learn about" event in this file/codebase fires a
   // notification (new auction bid, an auction selling, a sale, a friend
