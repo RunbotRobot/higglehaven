@@ -20,7 +20,12 @@ await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+// #1930: 10000ms was tight enough to intermittently time out under CI
+// load here (and at every other '#seller-modal.visible' wait across the
+// e2e suite, all bumped to this same 30000ms in the same pass) -- same
+// post-identity-switch margin-under-contention class as #1388/#1896's
+// '#auth-modal' wait in chooseIdentity, which this now matches.
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-model-btn');
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });

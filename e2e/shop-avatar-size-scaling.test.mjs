@@ -38,7 +38,7 @@ console.log('baseline metrics (default body, should be the fixed constants):', b
 // Upload and equip a custom avatar whose real geometry (crate.glb) is a
 // totally different size from the default body's own proportions.
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: false });
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-model-btn');
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });

@@ -669,17 +669,21 @@
   });
 
   const adminsListEl = document.getElementById('adminsList');
+  let adminsLoadToken = 0;
   async function loadAdmins() {
+    const myLoadToken = ++adminsLoadToken;
     try {
       const response = await fetch('/api/auth/admins');
       const body = await response.json().catch(() => null);
       if (!response.ok) throw new Error((body && body.error) || ('Request failed (' + response.status + ')'));
+      if (myLoadToken !== adminsLoadToken) return;
       adminsListEl.innerHTML = body.admins.map((a) =>
         '<div>' + escapeHtml(a.email) +
           (a.username ? ' (' + escapeHtml(a.username) + ')' : '') +
           ' <span class="meta">· admin since ' + relativeTime(a.adminGrantedAt || a.createdAt) + '</span></div>'
       ).join('') || 'No admins found.';
     } catch (error) {
+      if (myLoadToken !== adminsLoadToken) return;
       adminsListEl.textContent = 'Error: ' + error.message;
     }
   }

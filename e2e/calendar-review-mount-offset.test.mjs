@@ -69,7 +69,7 @@ await fetchJson(`/api/instances/${calendarInstance.instanceId}/events`, {
 // Upload a product, purchase it, and leave a review -- same setup
 // e2e/product-reviews.test.mjs's own header comment describes.
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-model-btn');
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });

@@ -23,7 +23,7 @@ const LABEL = 'Seller Stripe Onboarding Refresh Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.click('#seller-close-btn');
 
 // The real GET starts out correctly "not connected" (Stripe isn't

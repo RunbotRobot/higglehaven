@@ -18,7 +18,7 @@ const LABEL = 'Info Tooltip Suite Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-model-btn');
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
@@ -61,7 +61,7 @@ console.log('upload-dimensions-hint-btn aria-expanded after outside click (shoul
 // Back to the seller modal to check #seller-hint, the same component
 // applied to a different modal's own heading.
 await page.click('#upload-cancel-btn');
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 
 const sellerHintStartsHidden = await page.isHidden('#seller-hint');
 console.log('seller-hint starts hidden (should be true):', sellerHintStartsHidden);

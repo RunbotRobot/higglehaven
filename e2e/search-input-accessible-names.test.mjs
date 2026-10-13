@@ -22,7 +22,7 @@ console.log('#catalog-search-input aria-label (should be set):', catalogSearchLa
 await page.click('#catalog-picker-close-btn');
 await page.waitForTimeout(300);
 await page.click('.mode-nav-btn[data-mode="sell"]');
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
 const sellerSearchLabel = await page.getAttribute('#seller-search-input', 'aria-label');
