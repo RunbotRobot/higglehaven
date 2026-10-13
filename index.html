@@ -3615,6 +3615,29 @@
         font-size: 14px;
         color: var(--pill-text);
       }
+      /* #1812: the Buy/Review/Return-Policy actions migrated in from
+         #shop-buy-hint/#shop-review-hint/#shop-return-policy-link -- same
+         rounded-pill-button look as #sign-posts-unflag-btn's own rule
+         above, laid out in a row rather than stacked since all three can
+         be visible together. Hidden by default (no .visible) the same way
+         their originals are, toggled by the same updateReviewFade gating. */
+      #shop-product-preview-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      #shop-product-preview-actions button {
+        display: none;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #shop-product-preview-actions button.visible {
+        display: inline-block;
+      }
       /* #1150's "My Lands" list — same shell/reasoning as #calendar-events-modal
          and its rules just above, opened from the account-menu gear icon's
          own panel rather than a community sign/calendar flag. */
@@ -4068,7 +4091,7 @@
       <button id="delete-item" type="button">Delete</button>
     </div>
     <div id="level-controls">
-      <button id="level-menu-toggle" type="button"><span id="level-label">Ground</span></button>
+      <button id="level-menu-toggle" type="button" aria-expanded="false"><span id="level-label">Ground</span></button>
       <div id="level-menu-panel">
         <div id="level-nav">
           <button id="level-down-btn" type="button" aria-label="Level down">&#9660;</button>
@@ -4409,6 +4432,11 @@
         <button id="shop-product-preview-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <canvas id="shop-product-preview-canvas"></canvas>
         <div id="shop-product-preview-info"></div>
+        <div id="shop-product-preview-actions">
+          <button id="shop-product-preview-review-btn" type="button">Rate this Product</button>
+          <button id="shop-product-preview-buy-btn" type="button">Simulate Purchase</button>
+          <button id="shop-product-preview-return-policy-btn" type="button">Return Policy</button>
+        </div>
       </div>
     </div>
     <div id="settings-modal" role="dialog" aria-modal="true" tabindex="-1">

@@ -66,6 +66,22 @@
   .models-section-title { font-size: 15px; margin: 24px 0 4px; }
   .deletable-tag { color: #8a2a12; font-weight: 600; }
   .ref-ids { font: 12px/1.4 ui-monospace, monospace; color: #4a5941; }
+  .world-panel h2 { font-size: 15px; margin: 24px 0 10px; }
+  .world-panel h2:first-child { margin-top: 0; }
+  .world-panel h3 { font-size: 13px; margin: 0 0 8px; }
+  .world-panel .hint { color: #5a6b52; font-size: 12px; margin: 0 0 10px; }
+  .stat-grid { display: flex; gap: 16px; flex-wrap: wrap; background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; padding: 14px 18px; margin-bottom: 12px; }
+  .stat-grid .stat { min-width: 90px; }
+  .stat-grid .stat .n { font-size: 18px; font-weight: 700; }
+  .stat-grid .stat .l { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: #5a6b52; }
+  textarea {
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; border-radius: 8px; border: 1px solid #c7d3bd;
+    padding: 8px 10px; background: #fff; color: #16240a; width: 100%; min-height: 70px; display: block; margin-bottom: 8px;
+  }
+  details.edit-world { margin-bottom: 16px; }
+  details.edit-world summary { cursor: pointer; color: #3f6e1c; font-weight: 600; margin-bottom: 10px; }
+  .edit-wrap { background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; padding: 14px 16px; margin: 10px 0 20px; }
+  .mono { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
 </style>
 </head>
 <body>
@@ -119,12 +135,86 @@
     <p class="err" id="modelsCleanupErr" hidden></p>
     <div id="modelsCleanupResult"></div>
   </section>
-  <section class="panel" id="panel-world">
-    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
-    <div class="placeholder">
-      <p>Coming soon — world and land-candidate generation. Tracked in
-        <a href="https://github.com/RunbotRobot/higglehaven/issues/1821" target="_blank" rel="noopener">#1821</a>.</p>
+  <section class="panel world-panel" id="panel-world">
+    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a> / <a href="https://github.com/RunbotRobot/higglehaven/issues/1821" target="_blank" rel="noopener">#1821</a></p>
+    <p class="err" id="worldErr" hidden></p>
+
+    <h2>World settings</h2>
+    <div id="worldSummary"><p class="empty">Loading…</p></div>
+    <div class="toolbar">
+      <button class="secondary" id="worldRefreshBtn">Refresh</button>
+      <button id="worldExpandBtn">Expand world</button>
     </div>
+    <details class="edit-world">
+      <summary>Edit world settings</summary>
+      <div class="toolbar">
+        <input id="worldRadiusInput" placeholder="radiusM" aria-label="radiusM" />
+        <input id="worldIncrementInput" placeholder="expansionIncrementM" aria-label="expansionIncrementM" />
+        <input id="worldGreenbeltInput" placeholder="greenbeltMinRatio" aria-label="greenbeltMinRatio" />
+        <input id="worldRotationInput" placeholder="coordinateRotationDeg" aria-label="coordinateRotationDeg" />
+        <input id="worldDayCycleInput" placeholder="dayCycleHours" aria-label="dayCycleHours" />
+      </div>
+      <textarea id="worldMetadataInput" placeholder="metadata JSON, e.g. {}"></textarea>
+      <button id="worldSaveBtn">Save world settings</button>
+    </details>
+
+    <h2>Generate land</h2>
+    <p class="hint">Geometry/overlap validation is enforced server-side — these forms just call the existing admin endpoints.</p>
+    <div class="toolbar">
+      <input id="mosaicPrefixInput" placeholder="mosaic prefix" aria-label="mosaic prefix" />
+      <button id="mosaicGenerateBtn">Generate mosaic (16 cells)</button>
+    </div>
+    <div class="toolbar">
+      <input id="ringPrefixInput" placeholder="ring prefix" aria-label="ring prefix" />
+      <input id="ringCountInput" placeholder="count (3-100)" aria-label="ring count" style="flex: 0 0 110px;" />
+      <input id="ringInnerRadiusInput" placeholder="innerRadiusM (optional)" aria-label="innerRadiusM" />
+      <input id="ringStartAngleInput" placeholder="startAngleRad (optional)" aria-label="startAngleRad" />
+      <select id="ringDistributionSelect" aria-label="distribution">
+        <option value="">distribution: none</option>
+        <option value="power-law">power-law</option>
+      </select>
+      <input id="ringAdjacentInput" placeholder="adjacentToRingId (optional)" aria-label="adjacentToRingId" />
+      <button id="ringGenerateBtn">Generate ring</button>
+    </div>
+
+    <h2>Land candidate rings</h2>
+    <div class="toolbar">
+      <input id="ringsFilterAdjacentInput" placeholder="filter: adjacentToRingId" aria-label="filter adjacentToRingId" />
+      <button class="secondary" id="ringsRefreshBtn">Refresh</button>
+    </div>
+    <div id="ringsTableWrap"><p class="empty">Loading…</p></div>
+    <div class="toolbar"><button class="secondary" id="ringsLoadMoreBtn" hidden>Load more</button></div>
+    <div class="edit-wrap" id="ringDetailWrap" hidden>
+      <h3>Ring <span id="ringDetailId" class="mono"></span></h3>
+      <pre class="mono" id="ringDetailBody" style="white-space: pre-wrap; margin: 0 0 10px;"></pre>
+      <button class="secondary" id="ringDetailCloseBtn">Close</button>
+    </div>
+
+    <h2>Land candidates</h2>
+    <div class="toolbar">
+      <select id="candidatesStateSelect" aria-label="state filter">
+        <option value="">state: any</option>
+        <option value="pending">pending</option>
+        <option value="materialized">materialized</option>
+      </select>
+      <input id="candidatesRingIdInput" placeholder="filter: ringId" aria-label="filter ringId" />
+      <button class="secondary" id="candidatesRefreshBtn">Refresh</button>
+    </div>
+    <div id="candidatesTableWrap"><p class="empty">Loading…</p></div>
+    <div class="toolbar"><button class="secondary" id="candidatesLoadMoreBtn" hidden>Load more</button></div>
+    <div class="edit-wrap" id="candidateEditWrap" hidden>
+      <h3>Edit candidate <span id="candidateEditId" class="mono"></span></h3>
+      <textarea id="candidateEditInput" style="min-height: 110px;"></textarea>
+      <div class="toolbar">
+        <button id="candidateEditSaveBtn">Save</button>
+        <button class="secondary" id="candidateEditCancelBtn">Cancel</button>
+      </div>
+    </div>
+
+    <h2>Bulk-create candidates (batch)</h2>
+    <p class="hint">Paste a JSON array of 1-100 candidate objects (<code>landletId</code>, <code>name</code>, <code>areaM2</code>, <code>center</code>, <code>landClass</code>, <code>landType</code>, <code>polygon</code>, <code>metadata</code>). The batch is atomic — one overlap/conflict rejects the whole thing.</p>
+    <textarea id="batchInput" placeholder='[{"name": "Generated 001", "areaM2": 1000, "center": {"x": 50, "y": 0}}]'></textarea>
+    <button id="batchSubmitBtn">Submit batch</button>
   </section>
   <section class="panel" id="panel-landlets">
     <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
@@ -284,6 +374,438 @@
   grantEmailInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') grantAdmin(); });
 
   loadRoster();
+})();
+
+// #1821: world settings + land-candidate/ring generation and browse/CRUD
+// panel. Same apiFetch/escapeHtml shape as the roster panel's own script
+// above -- each panel script is a self-contained IIFE in this codebase (no
+// shared module), so these are redefined locally rather than imported.
+(function () {
+  const errLine = document.getElementById('worldErr');
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  function clearError() {
+    errLine.hidden = true;
+    errLine.textContent = '';
+  }
+
+  function showError(message) {
+    errLine.hidden = false;
+    errLine.textContent = message;
+  }
+
+  async function apiFetch(path, options) {
+    const response = await fetch(path, {
+      ...options,
+      headers: { 'content-type': 'application/json', ...(options && options.headers) },
+    });
+    let body = null;
+    try { body = await response.json(); } catch (_) { /* no body */ }
+    if (!response.ok) throw new Error((body && body.error) || ('Request failed (' + response.status + ')'));
+    return body;
+  }
+
+  // --- World settings ---
+
+  const worldSummaryEl = document.getElementById('worldSummary');
+  const worldRadiusInput = document.getElementById('worldRadiusInput');
+  const worldIncrementInput = document.getElementById('worldIncrementInput');
+  const worldGreenbeltInput = document.getElementById('worldGreenbeltInput');
+  const worldRotationInput = document.getElementById('worldRotationInput');
+  const worldDayCycleInput = document.getElementById('worldDayCycleInput');
+  const worldMetadataInput = document.getElementById('worldMetadataInput');
+
+  function renderWorld(world) {
+    const counts = world.landletCounts || {};
+    worldSummaryEl.innerHTML = `
+      <div class="stat-grid">
+        <div class="stat"><div class="n">${escapeHtml(world.radiusM)}</div><div class="l">radiusM</div></div>
+        <div class="stat"><div class="n">${escapeHtml(world.expansionIncrementM)}</div><div class="l">incrementM</div></div>
+        <div class="stat"><div class="n">${escapeHtml(world.greenbeltMinRatio)}</div><div class="l">greenbelt min ratio</div></div>
+        <div class="stat"><div class="n">${escapeHtml(counts.greenbeltRatio)}</div><div class="l">greenbelt ratio</div></div>
+        <div class="stat"><div class="n">${escapeHtml(counts.total)}</div><div class="l">total landlets</div></div>
+        <div class="stat"><div class="n">${escapeHtml(counts.claimed)}</div><div class="l">claimed</div></div>
+        <div class="stat"><div class="n">${escapeHtml(counts.generating)}</div><div class="l">generating</div></div>
+        <div class="stat"><div class="n">${escapeHtml(counts.greenbelt)}</div><div class="l">greenbelt</div></div>
+        <div class="stat"><div class="n">${escapeHtml(counts.water)}</div><div class="l">water</div></div>
+      </div>
+    `;
+    worldRadiusInput.value = world.radiusM;
+    worldIncrementInput.value = world.expansionIncrementM;
+    worldGreenbeltInput.value = world.greenbeltMinRatio;
+    worldRotationInput.value = world.coordinateRotationDeg;
+    worldDayCycleInput.value = world.dayCycleHours;
+    worldMetadataInput.value = JSON.stringify(world.metadata || {});
+  }
+
+  async function loadWorld() {
+    clearError();
+    try {
+      const body = await apiFetch('/api/world');
+      renderWorld(body.world);
+    } catch (error) {
+      showError(error.message);
+    }
+  }
+
+  async function saveWorld() {
+    clearError();
+    let metadata;
+    try {
+      metadata = worldMetadataInput.value.trim() ? JSON.parse(worldMetadataInput.value) : {};
+    } catch (_) {
+      showError('World metadata is not valid JSON');
+      return;
+    }
+    try {
+      const body = await apiFetch('/api/world', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          radiusM: Number(worldRadiusInput.value),
+          expansionIncrementM: Number(worldIncrementInput.value),
+          greenbeltMinRatio: Number(worldGreenbeltInput.value),
+          coordinateRotationDeg: Number(worldRotationInput.value),
+          dayCycleHours: Number(worldDayCycleInput.value),
+          metadata,
+        }),
+      });
+      renderWorld(body.world);
+    } catch (error) {
+      showError(error.message);
+    }
+  }
+
+  async function expandWorld() {
+    clearError();
+    try {
+      const body = await apiFetch('/api/world/expand', { method: 'POST' });
+      renderWorld(body.world);
+      const expansion = body.expansion;
+      alert(
+        'World expanded: ' + expansion.previousRadiusM + 'm → ' + expansion.newRadiusM + 'm.\n'
+        + 'Promoted to greenbelt: ' + expansion.promotedLandletIds.length + '\n'
+        + 'Started generating: ' + expansion.startedGeneratingLandletIds.length + '\n'
+        + 'Rings ready for generation-complete: ' + (expansion.readyRingIds.join(', ') || 'none'),
+      );
+    } catch (error) {
+      // A 409 here ("Greenbelt reserve is at or above the expansion
+      // threshold") is a normal, expected outcome, not a bug -- surfaced
+      // the same as any other error so the admin sees why nothing changed.
+      showError(error.message);
+    }
+  }
+
+  document.getElementById('worldRefreshBtn').addEventListener('click', loadWorld);
+  document.getElementById('worldSaveBtn').addEventListener('click', saveWorld);
+  document.getElementById('worldExpandBtn').addEventListener('click', expandWorld);
+
+  // --- Generate mosaic / ring ---
+
+  async function generateMosaic() {
+    clearError();
+    const prefix = document.getElementById('mosaicPrefixInput').value.trim();
+    if (!prefix) return;
+    try {
+      const body = await apiFetch('/api/land-candidates/generate-mosaic', {
+        method: 'POST',
+        body: JSON.stringify({ prefix, count: 16 }),
+      });
+      alert('Mosaic generated: ' + body.candidates.length + ' candidates, starter landlet ' + body.starterLandletId + '.');
+      loadCandidates();
+      loadWorld();
+    } catch (error) {
+      showError(error.message);
+    }
+  }
+
+  async function generateRing() {
+    clearError();
+    const prefix = document.getElementById('ringPrefixInput').value.trim();
+    const count = Number(document.getElementById('ringCountInput').value);
+    if (!prefix || !count) return;
+    const innerRadiusRaw = document.getElementById('ringInnerRadiusInput').value.trim();
+    const startAngleRaw = document.getElementById('ringStartAngleInput').value.trim();
+    const distribution = document.getElementById('ringDistributionSelect').value;
+    const adjacentToRingId = document.getElementById('ringAdjacentInput').value.trim();
+    const payload = { prefix, count };
+    if (adjacentToRingId) {
+      payload.adjacentToRingId = adjacentToRingId;
+    } else {
+      if (innerRadiusRaw) payload.innerRadiusM = Number(innerRadiusRaw);
+      if (startAngleRaw) payload.startAngleRad = Number(startAngleRaw);
+    }
+    if (distribution) payload.distribution = distribution;
+    try {
+      const body = await apiFetch('/api/land-candidates/generate-ring', { method: 'POST', body: JSON.stringify(payload) });
+      alert('Ring generated: ' + body.candidates.length + ' candidates (' + body.innerRadiusM + 'm – ' + body.outerRadiusM + 'm).');
+      loadRings();
+      loadCandidates();
+    } catch (error) {
+      showError(error.message);
+    }
+  }
+
+  document.getElementById('mosaicGenerateBtn').addEventListener('click', generateMosaic);
+  document.getElementById('ringGenerateBtn').addEventListener('click', generateRing);
+
+  // --- Land candidate rings ---
+
+  const ringsTableWrap = document.getElementById('ringsTableWrap');
+  const ringsLoadMoreBtn = document.getElementById('ringsLoadMoreBtn');
+  const ringDetailWrap = document.getElementById('ringDetailWrap');
+  let ringsRows = [];
+  let ringsNextCursor = null;
+
+  function renderRings() {
+    if (!ringsRows.length) {
+      ringsTableWrap.innerHTML = '<p class="empty">No rings.</p>';
+      ringsLoadMoreBtn.hidden = true;
+      return;
+    }
+    const rows = ringsRows.map((ring) => `
+      <tr>
+        <td class="mono">${escapeHtml(ring.ringId)}</td>
+        <td>${escapeHtml(ring.innerRadiusM)}</td>
+        <td>${escapeHtml(ring.outerRadiusM)}</td>
+        <td>${escapeHtml(ring.candidateCount)}</td>
+        <td>${escapeHtml(ring.distribution || '—')}</td>
+        <td>
+          <button class="secondary ring-view-btn" data-ring-id="${escapeHtml(ring.ringId)}">Details</button>
+          <button class="secondary ring-complete-btn" data-ring-id="${escapeHtml(ring.ringId)}">Generation complete</button>
+        </td>
+      </tr>
+    `).join('');
+    ringsTableWrap.innerHTML = `
+      <table>
+        <thead><tr><th>Ring ID</th><th>Inner m</th><th>Outer m</th><th>Count</th><th>Distribution</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+    ringsLoadMoreBtn.hidden = !ringsNextCursor;
+    ringsTableWrap.querySelectorAll('.ring-view-btn').forEach((btn) => {
+      btn.addEventListener('click', () => viewRing(btn.dataset.ringId));
+    });
+    ringsTableWrap.querySelectorAll('.ring-complete-btn').forEach((btn) => {
+      btn.addEventListener('click', () => completeRing(btn.dataset.ringId));
+    });
+  }
+
+  async function loadRings(append) {
+    clearError();
+    if (!append) {
+      ringsRows = [];
+      ringsTableWrap.innerHTML = '<p class="empty">Loading…</p>';
+    }
+    const params = new URLSearchParams();
+    const adjacentFilter = document.getElementById('ringsFilterAdjacentInput').value.trim();
+    if (adjacentFilter) params.set('adjacentToRingId', adjacentFilter);
+    if (append && ringsNextCursor) params.set('cursor', ringsNextCursor);
+    try {
+      const body = await apiFetch('/api/land-candidate-rings?' + params.toString());
+      ringsRows = append ? ringsRows.concat(body.rings) : body.rings;
+      ringsNextCursor = body.nextCursor;
+      renderRings();
+    } catch (error) {
+      showError(error.message);
+      if (!append) ringsTableWrap.innerHTML = '<p class="empty">Failed to load.</p>';
+    }
+  }
+
+  async function viewRing(ringId) {
+    clearError();
+    try {
+      const body = await apiFetch('/api/land-candidate-rings/' + encodeURIComponent(ringId));
+      document.getElementById('ringDetailId').textContent = body.ring.ringId;
+      document.getElementById('ringDetailBody').textContent = JSON.stringify(body.ring, null, 2);
+      ringDetailWrap.hidden = false;
+    } catch (error) {
+      showError(error.message);
+    }
+  }
+
+  async function completeRing(ringId) {
+    clearError();
+    try {
+      const body = await apiFetch('/api/land-candidate-rings/' + encodeURIComponent(ringId) + '/generation-complete', { method: 'POST' });
+      alert('Ring ' + ringId + ' marked complete: ' + body.landlets.length + ' landlet(s) completed.');
+      loadRings();
+    } catch (error) {
+      // A 409 here ("All ring candidates must be materialized...") is a
+      // normal, expected state while the ring is still generating, not a bug.
+      showError(error.message);
+    }
+  }
+
+  document.getElementById('ringsRefreshBtn').addEventListener('click', () => loadRings(false));
+  document.getElementById('ringsLoadMoreBtn').addEventListener('click', () => loadRings(true));
+  document.getElementById('ringDetailCloseBtn').addEventListener('click', () => { ringDetailWrap.hidden = true; });
+
+  // --- Land candidates browse/CRUD ---
+
+  const candidatesTableWrap = document.getElementById('candidatesTableWrap');
+  const candidatesLoadMoreBtn = document.getElementById('candidatesLoadMoreBtn');
+  const candidateEditWrap = document.getElementById('candidateEditWrap');
+  const candidateEditInput = document.getElementById('candidateEditInput');
+  let candidatesRows = [];
+  let candidatesNextCursor = null;
+  let editingCandidateId = null;
+
+  function renderCandidates() {
+    if (!candidatesRows.length) {
+      candidatesTableWrap.innerHTML = '<p class="empty">No land candidates.</p>';
+      candidatesLoadMoreBtn.hidden = true;
+      return;
+    }
+    const rows = candidatesRows.map((candidate) => `
+      <tr>
+        <td class="mono">${escapeHtml(candidate.landletId)}</td>
+        <td>${escapeHtml(candidate.name)}</td>
+        <td>${escapeHtml(candidate.areaM2)}</td>
+        <td>${escapeHtml(candidate.landClass)}</td>
+        <td>${escapeHtml(candidate.landType)}</td>
+        <td>${escapeHtml(candidate.ringId || '—')}</td>
+        <td>${escapeHtml(candidate.materializedAt || '—')}</td>
+        <td>
+          <button class="secondary candidate-edit-btn" data-id="${escapeHtml(candidate.landletId)}">Edit</button>
+          <button class="secondary candidate-delete-btn" data-id="${escapeHtml(candidate.landletId)}">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+    candidatesTableWrap.innerHTML = `
+      <table>
+        <thead><tr><th>ID</th><th>Name</th><th>Area m²</th><th>Class</th><th>Type</th><th>Ring</th><th>Materialized</th><th></th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+    candidatesLoadMoreBtn.hidden = !candidatesNextCursor;
+    candidatesTableWrap.querySelectorAll('.candidate-edit-btn').forEach((btn) => {
+      btn.addEventListener('click', () => startEditCandidate(btn.dataset.id));
+    });
+    candidatesTableWrap.querySelectorAll('.candidate-delete-btn').forEach((btn) => {
+      btn.addEventListener('click', () => deleteCandidate(btn.dataset.id));
+    });
+  }
+
+  async function loadCandidates(append) {
+    clearError();
+    if (!append) {
+      candidatesRows = [];
+      candidatesTableWrap.innerHTML = '<p class="empty">Loading…</p>';
+    }
+    const params = new URLSearchParams();
+    const state = document.getElementById('candidatesStateSelect').value;
+    if (state) params.set('state', state);
+    const ringId = document.getElementById('candidatesRingIdInput').value.trim();
+    if (ringId) params.set('ringId', ringId);
+    if (append && candidatesNextCursor) params.set('cursor', candidatesNextCursor);
+    try {
+      const body = await apiFetch('/api/land-candidates?' + params.toString());
+      candidatesRows = append ? candidatesRows.concat(body.candidates) : body.candidates;
+      candidatesNextCursor = body.nextCursor;
+      renderCandidates();
+    } catch (error) {
+      showError(error.message);
+      if (!append) candidatesTableWrap.innerHTML = '<p class="empty">Failed to load.</p>';
+    }
+  }
+
+  function startEditCandidate(landletId) {
+    const candidate = candidatesRows.find((c) => c.landletId === landletId);
+    if (!candidate) return;
+    editingCandidateId = landletId;
+    document.getElementById('candidateEditId').textContent = landletId;
+    candidateEditInput.value = JSON.stringify({
+      name: candidate.name,
+      areaM2: candidate.areaM2,
+      center: candidate.center,
+      landClass: candidate.landClass,
+      landType: candidate.landType,
+      polygon: candidate.polygon,
+      metadata: candidate.metadata,
+    }, null, 2);
+    candidateEditWrap.hidden = false;
+  }
+
+  async function saveCandidateEdit() {
+    clearError();
+    let patch;
+    try {
+      patch = JSON.parse(candidateEditInput.value);
+    } catch (_) {
+      showError('Candidate edit is not valid JSON');
+      return;
+    }
+    try {
+      await apiFetch('/api/land-candidates/' + encodeURIComponent(editingCandidateId), {
+        method: 'PATCH',
+        body: JSON.stringify(patch),
+      });
+      candidateEditWrap.hidden = true;
+      loadCandidates();
+    } catch (error) {
+      // A 409 here (materialized / ring-member immutability) is the
+      // server's own validation, not re-implemented client-side -- surfaced
+      // as-is per #1821's own scope note.
+      showError(error.message);
+    }
+  }
+
+  async function deleteCandidate(landletId) {
+    if (!confirm('Delete land candidate ' + landletId + '?')) return;
+    clearError();
+    try {
+      await apiFetch('/api/land-candidates/' + encodeURIComponent(landletId), { method: 'DELETE' });
+      loadCandidates();
+    } catch (error) {
+      showError(error.message);
+    }
+  }
+
+  document.getElementById('candidatesRefreshBtn').addEventListener('click', () => loadCandidates(false));
+  document.getElementById('candidatesLoadMoreBtn').addEventListener('click', () => loadCandidates(true));
+  document.getElementById('candidateEditSaveBtn').addEventListener('click', saveCandidateEdit);
+  document.getElementById('candidateEditCancelBtn').addEventListener('click', () => { candidateEditWrap.hidden = true; });
+
+  // --- Bulk-create (batch) ---
+
+  async function submitBatch() {
+    clearError();
+    let candidates;
+    try {
+      candidates = JSON.parse(document.getElementById('batchInput').value);
+    } catch (_) {
+      showError('Batch input is not valid JSON');
+      return;
+    }
+    if (!Array.isArray(candidates) || !candidates.length) {
+      showError('Batch input must be a non-empty JSON array');
+      return;
+    }
+    try {
+      const body = await apiFetch('/api/land-candidates/batch', {
+        method: 'POST',
+        body: JSON.stringify({ candidates }),
+      });
+      alert('Batch created: ' + body.candidates.length + ' candidate(s), ' + body.landlets.length + ' materialized immediately.');
+      document.getElementById('batchInput').value = '';
+      loadCandidates();
+    } catch (error) {
+      // Overlap-against-existing-or-each-other 409s are the server's own
+      // atomic validation (the whole batch rolls back) -- surfaced as-is.
+      showError(error.message);
+    }
+  }
+
+  document.getElementById('batchSubmitBtn').addEventListener('click', submitBatch);
+
+  loadWorld();
+  loadRings();
+  loadCandidates();
 })();
 </script>
 <script>
