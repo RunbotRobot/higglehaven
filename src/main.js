@@ -8610,7 +8610,12 @@ saveBundleBtn.addEventListener('click', async () => {
     // after and overwriting it — same guard rename/share/delete already use.
     ++bundlePickerLoadToken;
     myBundles.unshift(bundle);
-    if (shared) communityBundles.unshift(bundle);
+    // #1873: read the server's own `bundle.shared`, not the local `shared`
+    // variable this click computed -- on a same-key resubmit after a lost
+    // response with a different sharing answer, the server may have
+    // returned a stale row whose actual `shared` column disagrees with
+    // what this click just asked for.
+    if (bundle.shared) communityBundles.unshift(bundle);
     renderBundlePicker();
     const count = meshes.length;
     setProductInfo(`Saved "${bundle.name}" (${count} item${count === 1 ? '' : 's'})`);
