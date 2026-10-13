@@ -2678,12 +2678,6 @@ async function handleLandletVersions(request, db, route, url) {
     // writePurchaseRow's purchase_id -- a missing/malformed key just
     // degrades to no idempotency protection for this one request, same as
     // purchaseIdempotencyKey's own "degrades to no protection" behavior.
-    const idempotencyKey = versionIdempotencyKey(landletId, sessionBuilder.builder_id, input.idempotencyKey);
-    if (idempotencyKey) {
-      const existing = await getVersion(db, landletId, idempotencyKey);
-      if (existing) return json({ version: existing });
-    }
-    const versionId = idempotencyKey || crypto.randomUUID();
     // #480: same "optional user-facing short label, no upper bound" gap
     // #337/#358 already closed elsewhere — optionalLabelValue caps it
     // whenever a real value is given, same as absent-or-capped fields
@@ -2691,6 +2685,29 @@ async function handleLandletVersions(request, db, route, url) {
     const name = optionalLabelValue(input.name, 'name');
     const metadata = input.metadata || {};
     JSON.stringify(metadata);
+    const idempotencyKey = versionIdempotencyKey(landletId, sessionBuilder.builder_id, input.idempotencyKey);
+    let versionId = idempotencyKey || crypto.randomUUID();
+    if (idempotencyKey) {
+      const existing = await getVersion(db, landletId, idempotencyKey);
+      if (existing) {
+        // #1874: same "a client-supplied idempotency key reused for
+        // genuinely different content must not fabricate a stale success"
+        // fix already applied to direct messages (#1750), calendar events
+        // (#1751), and catalog templates (#1758) -- this endpoint's own
+        // version never got it. `name` defaults DB-side to `'Version ' ||
+        // version_number` when omitted (see the INSERT below), so the
+        // stored `existing.name` already has that default baked in --
+        // comparing against the SAME default recomputed at
+        // existing.versionNumber (rather than against `name` directly)
+        // correctly treats "omitted both times" as a match instead of a
+        // false mismatch against the auto-generated label.
+        const expectedName = name ?? `Version ${existing.versionNumber}`;
+        if (existing.name === expectedName && JSON.stringify(existing.metadata) === JSON.stringify(metadata)) {
+          return json({ version: existing });
+        }
+        versionId = crypto.randomUUID();
+      }
+    }
 
     // #415: same guarded-write idiom as handleLandletDraft's PUT below —
     // a leading no-op guard statement re-pinning owner_builder_id (its own
@@ -4806,11 +4823,23 @@ async function handleBundles(request, db, route, url) {
     const shared = input.shared === true;
     await assertReferencesExist(db, 'catalog_templates', 'template_id', items.map((item) => item.templateId), 'items[].templateId');
     const idempotencyKey = bundleIdempotencyKey(builderId, input.idempotencyKey);
+    let bundleId = idempotencyKey || `bundle-${crypto.randomUUID()}`;
+    // #1873: unlike a purchase (pinned to a fixed instance), the Save
+    // Bundle handler's own prompt()/confirm() pair can legitimately
+    // produce a different `shared` answer on a same-key resubmit after a
+    // lost response -- the client's own key is deliberately not
+    // namespaced by `shared` (see bundleIdempotencyKey's callers). Only
+    // honor the dedup hit when the content actually matches; on a
+    // mismatch this is a genuinely new attempt, so mint a fresh id
+    // rather than reusing the idempotency-derived one, which the stale
+    // row already occupies.
     if (idempotencyKey) {
       const existing = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(idempotencyKey).first();
-      if (existing) return json({ bundle: bundleFromRow(existing) });
+      if (existing) {
+        if (bundleContentMatches(existing, name, items, shared)) return json({ bundle: bundleFromRow(existing) });
+        bundleId = `bundle-${crypto.randomUUID()}`;
+      }
     }
-    const bundleId = idempotencyKey || `bundle-${crypto.randomUUID()}`;
     await db.prepare(`
       INSERT INTO bundles (bundle_id, builder_id, name, items_json, shared) VALUES (?, ?, ?, ?, ?)
     `).bind(bundleId, builderId, name, JSON.stringify(items), shared ? 1 : 0).run();
@@ -4890,6 +4919,14 @@ function validateBundleItems(input) {
     crop: validateCropShape(item.crop),
     scale: validateScale(item.scale),
   }));
+}
+
+// #1873: compares an existing row (raw DB shape) against this request's
+// own name/items/shared, mirroring #1758's templateContentMatches.
+function bundleContentMatches(existingRow, name, items, shared) {
+  return existingRow.name === name
+    && existingRow.items_json === JSON.stringify(items)
+    && Boolean(existingRow.shared) === shared;
 }
 
 function bundleFromRow(row) {

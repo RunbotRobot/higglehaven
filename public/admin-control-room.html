@@ -128,6 +128,13 @@
   let tasks = [];
   let totalTasks = 0;
   let filterStatus = '';
+  // #1858: same monotonic-token supersede-guard idiom used throughout
+  // src/main.js (friendsLoadToken, notificationsLoadToken, etc.) -- without
+  // it, a slow tab-switch request landing after a faster, more recent one
+  // overwrites tasks/totalTasks with results scoped to a filter that's no
+  // longer the active one, and render() then filters the freshly-assigned
+  // (wrong) tasks against the current filterStatus.
+  let tasksLoadToken = 0;
   let searchTerm = '';
   const expanded = new Set();
   const repliesCache = new Map(); // taskId -> replies array
@@ -475,6 +482,7 @@
   }
 
   async function loadTasks() {
+    const myLoadToken = ++tasksLoadToken;
     try {
       // #988: the server already validates and scopes both the row list and
       // `total` to this filter (controlRoomStatusValue, #915/#986) -- QUICK_LOOK
@@ -484,11 +492,13 @@
         ? '?status=' + encodeURIComponent(filterStatus)
         : '';
       const data = await apiCall('/tasks' + query);
+      if (myLoadToken !== tasksLoadToken) return; // superseded while loading — a newer call owns the board now
       tasks = data.tasks;
       totalTasks = data.total;
       clearError();
       render();
     } catch (error) {
+      if (myLoadToken !== tasksLoadToken) return; // superseded while loading — a newer call owns the board now
       showError('Could not load tasks: ' + error.message);
     }
   }
