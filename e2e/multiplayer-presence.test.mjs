@@ -163,9 +163,101 @@ const pass =
   !!aEntryInB && near(aEntryInB.x, aRowSeenByB.x) && near(aEntryInB.y, aRowSeenByB.y) &&
   errors.length === 0;
 
+// #1911: pollNearbyPresenceIfNeeded (A's own poll loop) had no stale-
+// response guard -- a slower, earlier-issued GET /api/presence landing
+// after a faster, newer one could overwrite shopOtherAvatars with a stale
+// position, or wrongly despawn an avatar only missing from the stale
+// result. Delays one of A's GET /api/presence calls so it's still in
+// flight when a second, faster one resolves first, same page.route-delay
+// technique e2e/admin-dashboard-page.test.mjs's own #1877 test uses.
+//
+// B switches out of Shop mode first so its own client-side report loop
+// (reportOwnPresenceIfNeeded, on a 3000ms heartbeat -- SHOP_PRESENCE_
+// HEARTBEAT_INTERVAL_MS) can't independently re-report B's real (frozen,
+// unchanged) position mid-test and clobber the position this block sets
+// directly. From here on B's row is driven entirely via direct
+// POST /api/presence calls, not B's own simulated movement.
+await pageB.click('.mode-nav-btn[data-mode="build"]');
+await pageB.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+
+const oldBPosition = { x: bRowSeenByA.x, y: bRowSeenByA.y, z: bRowSeenByA.z };
+const newBPosition = { x: oldBPosition.x + 2, y: oldBPosition.y, z: oldBPosition.z };
+
+let delayNextPresenceGet = false;
+let delayedPresenceGetStarted = false;
+let staleLandedSnapshot = null;
+await pageA.route('**/api/presence*', async (route) => {
+  if (route.request().method() === 'GET' && delayNextPresenceGet) {
+    delayNextPresenceGet = false;
+    const response = await route.fetch(); // the real call -- captures B's OLD position
+    const bodyText = await response.text();
+    // Only safe to signal "go ahead and move B" once the real network
+    // request above has actually completed against the server -- setting
+    // this any earlier (even synchronously, before the await) races the
+    // outer code's own POST ahead of this GET actually reaching the
+    // server, which would make the "delayed" response capture B's NEW
+    // position instead of the OLD one this block depends on.
+    delayedPresenceGetStarted = true;
+    await new Promise((resolve) => setTimeout(resolve, 1800));
+    await route.fulfill({ response, body: bodyText });
+    // A's natural, undelayed poll tick lands ~1000ms after this one was
+    // issued (shopLastPresencePollAt is bumped at issue time regardless of
+    // when the fetch actually resolves) -- so a THIRD real poll is already
+    // due again shortly after this 1800ms-delayed one finally lands, which
+    // would otherwise silently re-correct a reverted render before a
+    // fixed-delay check outside this handler got a chance to observe it.
+    // Snapshotting from right here, a short beat after this fulfill()
+    // call resolves (giving the page's own await just long enough to run
+    // its mutation), reliably lands inside that narrow window instead of
+    // guessing it from outside.
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    staleLandedSnapshot = await pageA.evaluate(() => window.__shopOtherAvatars);
+    return;
+  }
+  await route.continue();
+});
+
+delayNextPresenceGet = true;
+// Deterministic wait for the delayed GET to have actually been issued
+// (its real fetch already captured B's old position) rather than a fixed
+// guess at A's own poll throttle timing.
+while (!delayedPresenceGetStarted) {
+  await pageA.waitForTimeout(50);
+}
+
+// B's row moves to a new position only now -- strictly after the delayed
+// GET's own real fetch already ran, so only a GET issued after this point
+// can observe it.
+await fetchJson(pageB, '/api/presence', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ ...newBPosition, heading: 0, landletId: LANDLET_ID }),
+});
+
+// A's next, undelayed poll tick (next eligible ~1000ms after the delayed
+// one was issued) has time to fire and render the new position well
+// before the delayed response's own 1800ms elapses.
+await pageA.waitForTimeout(1300);
+const othersAfterMove = await pageA.evaluate(() => window.__shopOtherAvatars);
+const bEntryAfterMove = othersAfterMove?.find((a) => a.builderId === builderB.builderId);
+console.log('B\'s rendered position after moving, before the stale delayed response lands (should be the NEW position):', bEntryAfterMove);
+
+// Deterministic wait for the route handler's own snapshot (taken a short
+// beat after the stale response landed) rather than guessing its timing
+// from out here too.
+while (staleLandedSnapshot === null) {
+  await pageA.waitForTimeout(50);
+}
+const bEntryWhenStaleLanded = staleLandedSnapshot?.find((a) => a.builderId === builderB.builderId);
+console.log('B\'s rendered position just after the stale delayed response lands (should still be the NEW position, not reverted):', bEntryWhenStaleLanded);
+
+const racePass =
+  !!bEntryAfterMove && near(bEntryAfterMove.x, newBPosition.x) && near(bEntryAfterMove.y, newBPosition.y) &&
+  !!bEntryWhenStaleLanded && near(bEntryWhenStaleLanded.x, newBPosition.x) && near(bEntryWhenStaleLanded.y, newBPosition.y);
+
 await sessionB.browser.close();
 await finish(sessionA.browser, {
-  pass,
-  label: 'Multiplayer presence: report loop + poll loop + render other avatars (#1100)',
+  pass: pass && racePass,
+  label: 'Multiplayer presence: report loop + poll loop + render other avatars (#1100), poll loop survives a stale overlapping response (#1911)',
   errors,
 });
