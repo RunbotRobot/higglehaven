@@ -193,6 +193,53 @@ describe('Simulated purchases', () => {
     expect(retriedByA.body.purchase.purchaseId).toBe(purchasedByA.body.purchase.purchaseId);
   });
 
+  // #1903: the client caches its idempotencyKey in localStorage for up to
+  // 30 minutes and only clears it once a purchase finalizes client-side —
+  // a resubmit of the same key after a lost response can legitimately carry
+  // a different quantity (e.g. the buyer changed the quantity selector).
+  // That must be treated as a genuinely new purchase, not silently
+  // collapsed onto the stale row.
+  it('treats a same-key resubmit with a different quantity as a genuinely new purchase', async () => {
+    const seller = await signupBuilder('purchase-idempotency-mismatch-seller');
+    await createGreenbeltLandletWithArea('purchase-idempotency-mismatch-landlet', 1000);
+    await claim('purchase-idempotency-mismatch-landlet', seller);
+    await createTemplate('purchase-idempotency-mismatch-template', { priceCents: 750 });
+    await placeInstance(
+      'purchase-idempotency-mismatch-instance', 'purchase-idempotency-mismatch-landlet',
+      'purchase-idempotency-mismatch-template', seller,
+    );
+
+    const first = await api('/instances/purchase-idempotency-mismatch-instance/purchase', seller.session({
+      method: 'POST', body: JSON.stringify({ idempotencyKey: 'mismatch-test-key', quantity: 1 }),
+    }));
+    expect(first.response.status).toBe(201);
+    expect(first.body.purchase.quantity).toBe(1);
+
+    const resubmittedWithDifferentQuantity = await api(
+      '/instances/purchase-idempotency-mismatch-instance/purchase', seller.session({
+        method: 'POST', body: JSON.stringify({ idempotencyKey: 'mismatch-test-key', quantity: 5 }),
+      }),
+    );
+    expect(resubmittedWithDifferentQuantity.response.status).toBe(201);
+    expect(resubmittedWithDifferentQuantity.body.purchase.quantity).toBe(5);
+    expect(resubmittedWithDifferentQuantity.body.purchase.purchaseId).not.toBe(first.body.purchase.purchaseId);
+
+    const purchaseCount = await env.DB.prepare('SELECT COUNT(*) AS n FROM purchases WHERE instance_id = ?')
+      .bind('purchase-idempotency-mismatch-instance').first();
+    expect(purchaseCount.n).toBe(2);
+    const after = await builderRow(seller.builderId);
+    expect(after.higgles_balance_cents).toBe(first.body.purchase.builderShareCents + resubmittedWithDifferentQuantity.body.purchase.builderShareCents);
+
+    // The original, unedited retry (same key, same quantity) must still
+    // dedup onto the first row -- this isn't a regression to "no dedup at
+    // all", only to "dedup requires matching content".
+    const unmodifiedRetry = await api('/instances/purchase-idempotency-mismatch-instance/purchase', seller.session({
+      method: 'POST', body: JSON.stringify({ idempotencyKey: 'mismatch-test-key', quantity: 1 }),
+    }));
+    expect(unmodifiedRetry.response.status).toBe(200);
+    expect(unmodifiedRetry.body.purchase.purchaseId).toBe(first.body.purchase.purchaseId);
+  });
+
   it('400s purchasing an unpriced product', async () => {
     const seller = await signupBuilder('purchase-unpriced-seller');
     await createGreenbeltLandletWithArea('purchase-unpriced-landlet', 1000);

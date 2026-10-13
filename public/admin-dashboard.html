@@ -59,6 +59,15 @@
   button.danger:hover { background: #8a2a12; }
   button:disabled { opacity: 0.5; cursor: not-allowed; }
   .err { color: #8a2a12; font-size: 13px; margin: 0 0 12px; }
+  /* #1823 */
+  .ok { color: #3f6e1c; font-size: 13px; margin: 0 0 12px; }
+  .status-pill {
+    display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.03em; padding: 2px 7px; border-radius: 5px; background: #eef3e6; color: #4a5941;
+  }
+  .status-pill.status-approved { background: #e3efd6; color: #3f6e1c; }
+  .status-pill.status-filing, .status-pill.status-filed { background: #dce9f5; color: #1d4e7a; }
+  .status-pill.status-voided { background: #f1e5e5; color: #7a1d1d; }
   table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; overflow: hidden; margin-bottom: 16px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eef1e8; font-size: 13px; vertical-align: top; }
   th { background: #eef3e6; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: #4a5941; }
@@ -286,11 +295,15 @@
     </div>
   </section>
   <section class="panel" id="panel-tax">
-    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
-    <div class="placeholder">
-      <p>Coming soon — tax / 1099 e-filing review, approve, file, void. Tracked in
-        <a href="https://github.com/RunbotRobot/higglehaven/issues/1823" target="_blank" rel="noopener">#1823</a>.</p>
+    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a> (<a href="https://github.com/RunbotRobot/higglehaven/issues/1823" target="_blank" rel="noopener">#1823</a>)</p>
+    <p class="err" id="taxErr" hidden></p>
+    <p class="ok" id="taxOk" hidden></p>
+    <div class="toolbar">
+      <input id="taxYearInput" type="number" placeholder="Year" aria-label="Tax year" />
+      <button id="taxLoadBtn">Load</button>
+      <button class="secondary" id="taxConnectionTestBtn">Test e-filing connection</button>
     </div>
+    <div id="taxTableWrap"><p class="empty">Loading…</p></div>
   </section>
   <section class="panel" id="panel-purchases">
     <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a> ·
@@ -708,6 +721,7 @@
       alert('Ring generated: ' + body.candidates.length + ' candidates (' + body.innerRadiusM + 'm – ' + body.outerRadiusM + 'm).');
       loadRings();
       loadCandidates();
+      loadWorld();
     } catch (error) {
       showError(error.message);
     }
@@ -797,6 +811,7 @@
       const body = await apiFetch('/api/land-candidate-rings/' + encodeURIComponent(ringId) + '/generation-complete', { method: 'POST' });
       alert('Ring ' + ringId + ' marked complete: ' + body.landlets.length + ' landlet(s) completed.');
       loadRings();
+      loadWorld();
     } catch (error) {
       // A 409 here ("All ring candidates must be materialized...") is a
       // normal, expected state while the ring is still generating, not a bug.
@@ -957,6 +972,7 @@
       alert('Batch created: ' + body.candidates.length + ' candidate(s), ' + body.landlets.length + ' materialized immediately.');
       document.getElementById('batchInput').value = '';
       loadCandidates();
+      loadWorld();
     } catch (error) {
       // Overlap-against-existing-or-each-other 409s are the server's own
       // atomic validation (the whole batch rolls back) -- surfaced as-is.
@@ -969,6 +985,152 @@
   loadWorld();
   loadRings();
   loadCandidates();
+})();
+
+// #1823: tax / 1099 e-filing panel -- review/approve/file/void, plus the
+// vendor connection test. Same fetch/render/escapeHtml shape as the roster
+// panel's own script just above.
+(function () {
+  const errLine = document.getElementById('taxErr');
+  const okLine = document.getElementById('taxOk');
+  const tableWrap = document.getElementById('taxTableWrap');
+  const yearInput = document.getElementById('taxYearInput');
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  function clearMessages() {
+    errLine.hidden = true;
+    errLine.textContent = '';
+    okLine.hidden = true;
+    okLine.textContent = '';
+  }
+
+  function showError(message) {
+    okLine.hidden = true;
+    errLine.hidden = false;
+    errLine.textContent = message;
+  }
+
+  function showOk(message) {
+    errLine.hidden = true;
+    okLine.hidden = false;
+    okLine.textContent = message;
+  }
+
+  async function apiFetch(path, options) {
+    const response = await fetch(path, {
+      ...options,
+      headers: { 'content-type': 'application/json', ...(options && options.headers) },
+    });
+    let body = null;
+    try { body = await response.json(); } catch (_) { /* no body */ }
+    if (!response.ok) throw new Error((body && body.error) || ('Request failed (' + response.status + ')'));
+    return body;
+  }
+
+  async function loadForms() {
+    clearMessages();
+    tableWrap.innerHTML = '<p class="empty">Loading…</p>';
+    const year = yearInput.value.trim();
+    const query = year ? ('?year=' + encodeURIComponent(year)) : '';
+    let body;
+    try {
+      body = await apiFetch('/api/tax/admin-forms' + query);
+    } catch (error) {
+      showError(error.message);
+      tableWrap.innerHTML = '<p class="empty">Failed to load.</p>';
+      return;
+    }
+    if (!yearInput.value) yearInput.value = body.year;
+    renderForms(body.forms || []);
+  }
+
+  // Which action buttons a form's current status allows -- mirrors the
+  // server's own transition guards (handleTax in worker/index.js) exactly,
+  // so a disabled-looking action here never contradicts the 409 the server
+  // would otherwise return for it.
+  function actionsForStatus(status) {
+    const actions = [];
+    if (status === 'draft') actions.push('approve', 'void');
+    if (status === 'approved') actions.push('file', 'void');
+    return actions;
+  }
+
+  function renderForms(forms) {
+    if (!forms.length) {
+      tableWrap.innerHTML = '<p class="empty">No 1099 forms for this year.</p>';
+      return;
+    }
+    const rows = forms.map((form) => {
+      const buttons = actionsForStatus(form.status).map((action) => {
+        const label = action === 'approve' ? 'Approve' : action === 'file' ? 'File' : 'Void';
+        const cls = action === 'file' ? 'danger' : 'secondary';
+        return `<button class="${cls} form-action-btn" data-form-id="${escapeHtml(form.formId)}" data-action="${action}">${label}</button>`;
+      }).join(' ');
+      return `
+        <tr>
+          <td>${escapeHtml(form.email || '—')}</td>
+          <td>${escapeHtml(form.formType)}</td>
+          <td><span class="status-pill status-${escapeHtml(form.status)}">${escapeHtml(form.status)}</span></td>
+          <td>$${(form.grossIncomeCents / 100).toFixed(2)}</td>
+          <td>${form.taxPaperworkOnFile ? 'Yes' : 'No'}</td>
+          <td>${escapeHtml(form.filingReference || '—')}</td>
+          <td>${buttons}</td>
+        </tr>
+      `;
+    }).join('');
+    tableWrap.innerHTML = `
+      <table>
+        <thead><tr>
+          <th>Payee</th><th>Form</th><th>Status</th><th>Gross income</th>
+          <th>Paperwork on file</th><th>Filing reference</th><th></th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+    tableWrap.querySelectorAll('.form-action-btn').forEach((btn) => {
+      btn.addEventListener('click', () => runAction(btn.dataset.formId, btn.dataset.action));
+    });
+  }
+
+  async function runAction(formId, action) {
+    // #1823: /file is a real, irreversible transmission to the e-filing
+    // vendor -- its own confirmation wording says so explicitly, separate
+    // from approve/void's lighter-weight confirms.
+    const prompt = action === 'file'
+      ? 'File this form with the e-filing vendor? This transmits a real submission and cannot be undone here.'
+      : (action === 'void' ? 'Void this form?' : 'Approve this form?');
+    if (!confirm(prompt)) return;
+    clearMessages();
+    try {
+      await apiFetch('/api/tax/admin-forms/' + formId + '/' + action, { method: 'POST' });
+    } catch (error) {
+      showError(error.message);
+      return;
+    }
+    loadForms();
+  }
+
+  async function testConnection() {
+    clearMessages();
+    try {
+      await apiFetch('/api/tax/efiling-connection-test');
+    } catch (error) {
+      showError(error.message);
+      return;
+    }
+    showOk('Connected.');
+  }
+
+  document.getElementById('taxLoadBtn').addEventListener('click', loadForms);
+  document.getElementById('taxConnectionTestBtn').addEventListener('click', testConnection);
+  yearInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') loadForms(); });
+
+  loadForms();
 })();
 </script>
 <script>

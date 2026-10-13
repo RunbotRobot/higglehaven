@@ -3189,16 +3189,19 @@ async function handleBuilders(request, env, db, route, url) {
           -- in-flight request, with the eventual webhook finding nothing
           -- to apply its result to and silently no-opping.
           --
-          -- #1890: scoped to status = 'processing', not the broader
-          -- processed_at IS NULL this used to check -- a still-'pending'
-          -- row (reserved locally, Tripo never actually called yet) is
-          -- exactly the state VIDEO_GENERATION_RESERVATION_TIMEOUT_MS's own
-          -- comment already calls costless ("no real Didit/Tripo cost is
-          -- ever in flight during this specific window"), the same line
-          -- expireStaleVideoGenerationJobs already draws for this identical
-          -- table. Blocking self-delete on it protected nothing real.
+          -- #1899: #1890/PR #1891 narrowed this to status = 'processing' on
+          -- the premise that a still-'pending' row is never billed yet --
+          -- false. handleVideoGenerationJobCreate calls Tripo's real,
+          -- billed generation/multiview-to-model endpoint *while the row is
+          -- still 'pending'*, only flipping to 'processing' after that call
+          -- already succeeded. Narrowing this guard let a concurrent self-
+          -- delete cascade away a 'pending' row mid-flight, so the request's
+          -- own later UPDATE (status -> 'processing') would silently match
+          -- zero rows and the real Tripo task would go permanently
+          -- untracked -- exactly the data loss #1702 added this guard to
+          -- prevent. Reverted back to the broader processed_at IS NULL.
           AND NOT EXISTS (
-            SELECT 1 FROM video_generation_jobs WHERE builder_id = ? AND status = 'processing'
+            SELECT 1 FROM video_generation_jobs WHERE builder_id = ? AND processed_at IS NULL
           )
       `).bind(route[1], route[1], route[1], route[1], route[1], route[1], route[1], route[1], route[1]),
       // #879: each of these is scoped by ${ownedLandletsSql}/its own live
@@ -3306,10 +3309,11 @@ async function handleBuilders(request, env, db, route, url) {
       if (redemptionInFlight) {
         throw new HttpError('Cannot delete this builder while a higgles redemption is still being paid out', 409);
       }
-      // #1890: same status = 'processing' scoping as the batch guard above
-      // -- a still-'pending' reservation carries no real cost to protect.
+      // #1899: same processed_at IS NULL scoping as the batch guard above --
+      // see its own comment for why status = 'processing' alone (#1890/#1891)
+      // isn't sufficient.
       const videoJobInFlight = await db.prepare(`
-        SELECT job_id FROM video_generation_jobs WHERE builder_id = ? AND status = 'processing' LIMIT 1
+        SELECT job_id FROM video_generation_jobs WHERE builder_id = ? AND processed_at IS NULL LIMIT 1
       `).bind(route[1]).first();
       if (videoJobInFlight) {
         throw new HttpError('Cannot delete this builder while a video-to-3D generation job is still running', 409);
@@ -7766,10 +7770,17 @@ const MAX_VIDEO_GENERATION_FRAME_BYTES = 10 * 1024 * 1024;
 // eviction -- not a thrown JS exception). A legitimate pending->processing
 // transition happens within the same request, well under a minute even
 // with the frame uploads ahead of it, so this stays well clear of that
-// while still being far shorter than DIDIT_RESERVATION_TIMEOUT_MS -- no
-// real Didit/Tripo cost is ever in flight during this specific window
-// (the row is still 'pending', not yet billed), so there's no reason to
-// wait as long before clearing it.
+// while still being far shorter than DIDIT_RESERVATION_TIMEOUT_MS.
+// #1899/#1886: earlier wording here claimed "no real Didit/Tripo cost is
+// ever in flight during this specific window (the row is still 'pending',
+// not yet billed)" -- false. handleVideoGenerationJobCreate's own billed
+// tripoUploadFile/tripoRequest calls happen *while* the row is still
+// 'pending'; it only flips to 'processing' after Tripo has already been
+// called and billed. A crash landing in that exact sub-window (the row
+// genuinely is 'pending' with a real Tripo task already in flight) still
+// gets swept by this timeout like any other stale 'pending' row -- a real,
+// known residual gap, tracked separately at #1886 (which needs a durable
+// task_id-persistence design, not a one-line fix) rather than solved here.
 const VIDEO_GENERATION_RESERVATION_TIMEOUT_MS = 2 * 60 * 1000;
 
 // Shared by handleVideoGenerationJobCreate (dedup an already-in-flight
@@ -13858,6 +13869,19 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
 // needed updating regardless (see their own call sites), and appending
 // at the end leaves every shorter positional call (every direct test in
 // worker/avatar-ownership.test.js included) completely unaffected.
+// #1903: compares an existing row (raw DB shape) against this request's own
+// derived amounts and template, mirroring #1873's bundleContentMatches.
+// instanceId/buyerBuilderId are deliberately excluded: they're already
+// baked into the idempotency key's own namespace (see
+// purchaseIdempotencyKey), so two rows reaching this comparison under the
+// same key already share them.
+function purchaseContentMatches(existingRow, templateId, amounts) {
+  return existingRow.template_id === templateId
+    && existingRow.quantity === amounts.quantity
+    && existingRow.buyer_label === amounts.buyerLabel
+    && existingRow.total_cents === amounts.totalCents;
+}
+
 export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null, isAnimationCategory = template.category === 'animation') {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
@@ -13870,11 +13894,24 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
   // path has no Stripe-issued id to dedupe against. idempotencyKey is only
   // ever undefined/null here for a malformed or missing client key
   // (purchaseIdempotencyKey's own "degrades to no protection" behavior).
+  //
+  // #1903: unlike handlePurchaseFinalize's own dedup (keyed off Stripe's
+  // payment_intent_id, which is minted once per checkout session and can
+  // never legitimately disagree with itself on a retry), this simulated
+  // path's key is client-minted and cached in localStorage for up to 30
+  // minutes (see PURCHASE_IDEMPOTENCY_TTL_MS) -- a resubmit of the same key
+  // after a lost response can carry a genuinely different quantity. Only
+  // honor the dedup hit when the content actually matches; on a mismatch
+  // this is a new attempt, so mint a fresh id rather than reusing the
+  // idempotency-derived one, which the stale row already occupies.
+  let purchaseId = idempotencyKey || `purchase-${crypto.randomUUID()}`;
   if (idempotencyKey) {
     const existing = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(idempotencyKey).first();
-    if (existing) return json({ purchase: purchaseFromRow(existing) });
+    if (existing) {
+      if (purchaseContentMatches(existing, template.template_id, amounts)) return json({ purchase: purchaseFromRow(existing) });
+      purchaseId = `purchase-${crypto.randomUUID()}`;
+    }
   }
-  const purchaseId = idempotencyKey || `purchase-${crypto.randomUUID()}`;
   // #1717: landlet.owner_builder_id was read by the caller before several
   // more awaited round-trips ran (the seller/Stripe lookup, this function's
   // own idempotency check) — the same staleness risk buyerBuilderId already

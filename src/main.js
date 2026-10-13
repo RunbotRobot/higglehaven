@@ -2450,7 +2450,10 @@ catalogSearchInputEl.addEventListener('input', updateCatalogSearchPanel);
 for (const btn of searchScopeButtons) {
   btn.addEventListener('click', () => {
     catalogSearchScope = btn.dataset.searchScope;
-    for (const b of searchScopeButtons) b.classList.toggle('active', b === btn);
+    for (const b of searchScopeButtons) {
+      b.classList.toggle('active', b === btn);
+      b.setAttribute('aria-pressed', String(b === btn));
+    }
     updateCatalogSearchPanel();
   });
 }
@@ -2629,6 +2632,7 @@ function renderBundlePicker() {
 
   for (const btn of bundleTabButtons) {
     btn.classList.toggle('active', btn.dataset.bundleTab === activeBundleTab);
+    btn.setAttribute('aria-pressed', String(btn.dataset.bundleTab === activeBundleTab));
   }
 
   const bundles = currentBundleTabList();
@@ -2820,7 +2824,10 @@ addItemBtn.addEventListener('click', () => {
   // with no query typed to explain why.
   catalogSearchInputEl.value = '';
   catalogSearchScope = 'both';
-  for (const b of searchScopeButtons) b.classList.toggle('active', b.dataset.searchScope === 'both');
+  for (const b of searchScopeButtons) {
+    b.classList.toggle('active', b.dataset.searchScope === 'both');
+    b.setAttribute('aria-pressed', String(b.dataset.searchScope === 'both'));
+  }
   updateCatalogSearchPanel();
   openModalA11y(catalogPickerEl, closeCatalogPicker);
 });
@@ -3862,6 +3869,16 @@ function mountPreviewInto(container) {
 }
 
 function disposeAxisPreview() {
+  // #1893: bumped on every call (even when there's nothing to dispose yet),
+  // so a showAxisPreview() call still in flight at the time this runs from
+  // one of its other callers (the Sell modal closing, a row collapsing,
+  // renderSellerList() tearing down row DOM) correctly detects it's been
+  // superseded once its own model load resolves, instead of finishing and
+  // installing a WebGLRenderer/OrbitControls bound to an already-detached
+  // canvas that never gets disposed. showAxisPreview's own call to this
+  // function (its very next line) relies on this: it captures its load
+  // token right after, not before, calling this.
+  axisPreviewLoadToken++;
   sellerPreviewCanvas.remove();
   sellerPreviewHintEl.remove();
   if (!axisPreview) return;
@@ -3911,8 +3928,13 @@ function makeAxisLabelSprite(text, colorHex) {
 // X/Y/Z legend (nothing checked yet); a non-empty one turns those axes
 // bright yellow and mutes the rest to gray.
 async function showAxisPreview(template, container, highlightAxes) {
-  const myLoadToken = ++axisPreviewLoadToken;
+  // disposeAxisPreview() now bumps axisPreviewLoadToken itself (#1893), so
+  // this captures the token right after calling it, not before -- the same
+  // value either way for this call's own purposes, but capturing before
+  // would make every call see itself as already-superseded the instant
+  // disposeAxisPreview() ran.
   disposeAxisPreview();
+  const myLoadToken = axisPreviewLoadToken;
   mountPreviewInto(container);
 
   const scene = new THREE.Scene();
@@ -3921,6 +3943,12 @@ async function showAxisPreview(template, container, highlightAxes) {
   sun.position.set(2, -3, 4);
   scene.add(sun);
 
+  // #1893: lets an e2e test simulate a slow load deterministically, same
+  // reasoning as window.__testUploadPreviewLoadDelayMs (#1465). Always
+  // undefined outside of that one test.
+  if (window.__testAxisPreviewLoadDelayMs) {
+    await new Promise((resolve) => setTimeout(resolve, window.__testAxisPreviewLoadDelayMs));
+  }
   // Same instance shape addInstanceToScene builds, at the origin and with
   // no crop, so this shows the product's real full-size geometry (and, for
   // a real uploaded model, its real material/texture) exactly as it would
@@ -3937,6 +3965,9 @@ async function showAxisPreview(template, container, highlightAxes) {
     // this it leaks the exact same way #1426/#1427 did for their own
     // superseded in-flight loads.
     if (previewObject) disposeObject(previewObject);
+    // Exposed purely so an e2e test can confirm the dispose above actually
+    // ran, same reasoning as window.__supersededUploadPreviewDisposals (#1465).
+    window.__supersededAxisPreviewDisposals = (window.__supersededAxisPreviewDisposals ?? 0) + 1;
     return;
   }
   if (!previewObject) return;
@@ -5514,6 +5545,7 @@ function renderSettingsSection() {
   settingsSectionEl.innerHTML = '';
   for (const btn of settingsTabsEl.querySelectorAll('.settings-tab-btn')) {
     btn.classList.toggle('active', btn.dataset.section === activeSettingsTab);
+    btn.setAttribute('aria-pressed', String(btn.dataset.section === activeSettingsTab));
   }
 
   if (activeSettingsTab === 'general') {
@@ -8151,6 +8183,18 @@ function endMeasureMarkerDrag() {
 window.addEventListener('pointerup', endMeasureMarkerDrag);
 window.addEventListener('pointercancel', endMeasureMarkerDrag);
 
+// #1894: lets an e2e test force the exact "mid-drag, interrupted before
+// pointerup" state exitMeasureMode's own defensive cleanup guards against,
+// without needing to raycast a real hit on a marker's 3D hitbox (the
+// position hitTestMeasureMarkerAt needs is impractical to target reliably
+// from a test) -- same reasoning as window.__testDragGroupMoveZ and this
+// file's other window.__test* hooks elsewhere.
+window.__testStartMeasureMarkerDrag = () => {
+  draggingMeasureMarker = 'A';
+  controls.enableRotate = false;
+};
+window.__testControlsEnableRotate = () => controls.enableRotate;
+
 // Multi-Select and Move/Rotate are sibling tools that can't both be active
 // (see updateSelectionUI's multiSelectMode branch) — pressing either gizmo
 // button while multi-select is on exits multi-select first, without
@@ -8175,11 +8219,15 @@ function exitMeasureMode() {
   clearMeasurement();
   // Defensive, not expected in normal single-pointer use (releasing a drag
   // always fires pointerup first, which already restores this via
-  // endMeasureMarkerDrag) — but leaving controls disabled if this were
-  // ever reached mid-drag would strand the camera with no way to move it.
+  // endMeasureMarkerDrag) — but leaving controls.enableRotate disabled if
+  // this were ever reached mid-drag would strand one-finger camera rotate
+  // with nothing left to re-enable it (#1894: this used to reset
+  // controls.enabled, a stale leftover from the pre-#1593 approach the drag
+  // handler itself no longer uses -- dragging only ever touches enableRotate,
+  // per endMeasureMarkerDrag's own restore just above).
   if (draggingMeasureMarker) {
     draggingMeasureMarker = null;
-    controls.enabled = true;
+    controls.enableRotate = true;
   }
   updateSelectionUI();
 }
@@ -10963,7 +11011,10 @@ const AUTH_VIEW_TITLES = {
 // never something a user taps into on their own.
 function showAuthView(view) {
   for (const [name, form] of Object.entries(authForms)) form.hidden = name !== view;
-  for (const btn of authTabBtns) btn.classList.toggle('active', btn.dataset.authView === view);
+  for (const btn of authTabBtns) {
+    btn.classList.toggle('active', btn.dataset.authView === view);
+    btn.setAttribute('aria-pressed', String(btn.dataset.authView === view));
+  }
   authModalTitle.textContent = AUTH_VIEW_TITLES[view];
   setAuthStatus('');
   // Back to masked every time this view is (re)entered — form.reset()
