@@ -82,6 +82,51 @@ await grantedRow.waitFor({ state: 'detached', timeout: 10000 });
 const grantedRowGoneAfterRevoke = await page.locator('#rosterTableWrap', { hasText: grantEmail }).count() === 0;
 console.log('revoking that admin removes it from the roster list (should be true):', grantedRowGoneAfterRevoke);
 
+// #1877: loadRoster() had no request-ordering guard -- a slower,
+// overlapping call (e.g. a manual Refresh still in flight) could land
+// after a faster, newer one (grantAdmin's own success-path reload) and
+// silently overwrite the table with stale rows. Delay only the Refresh
+// click's own GET /api/auth/admins so it's still in flight when
+// grantAdmin's reload resolves first, same technique admin-action-log-
+// page.test.mjs's own #1857 regression test uses.
+let delayNextAdminsGet = false;
+await page.route('**/api/auth/admins', async (route) => {
+  if (delayNextAdminsGet) {
+    delayNextAdminsGet = false;
+    const response = await route.fetch();
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    await route.fulfill({ response });
+    return;
+  }
+  await route.continue();
+});
+
+const raceGrantEmail = `e2e-roster-race-${crypto.randomUUID()}@e2e.test`;
+await fetch(`${BASE_URL}/api/auth/signup`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    email: raceGrantEmail, password: 'e2e-roster-race-password-123',
+    username: `e2e-roster-race-${crypto.randomUUID().slice(0, 8)}`, ageAttested: true,
+  }),
+});
+
+delayNextAdminsGet = true;
+await page.click('#rosterRefreshBtn'); // triggers the delayed, stale call
+await page.waitForTimeout(300); // let it actually start before granting
+await page.fill('#grantEmailInput', raceGrantEmail);
+await page.click('#grantBtn'); // triggers a second, undelayed call
+const raceGrantedRow = page.locator('#rosterTableWrap tr', { has: page.locator('td', { hasText: raceGrantEmail }) });
+await raceGrantedRow.waitFor({ timeout: 10000 });
+const raceGrantedRowVisibleBeforeStaleResponse = await raceGrantedRow.isVisible();
+console.log('granting lands before the delayed Refresh call resolves, so the table already shows it (should be true):', raceGrantedRowVisibleBeforeStaleResponse);
+
+// Wait out the delayed Refresh response too, and confirm it didn't land
+// late and silently revert the table to its own stale (pre-grant) list.
+await page.waitForTimeout(2700);
+const raceGrantedRowStillVisibleAfterStaleResponse = await page.locator('#rosterTableWrap', { hasText: raceGrantEmail }).isVisible();
+console.log('newly granted admin still shown after the stale delayed Refresh response also lands (should be true, not overwritten):', raceGrantedRowStillVisibleAfterStaleResponse);
+
 // Clicking a nav item switches the visible panel.
 await page.click('button[data-panel="models"]');
 const modelsVisibleAfterClick = await page.locator('#panel-models').isVisible();
@@ -134,6 +179,8 @@ const pass = anonStatus === 401 &&
   ownRowVisible &&
   grantedRowVisible &&
   grantedRowGoneAfterRevoke &&
+  raceGrantedRowVisibleBeforeStaleResponse &&
+  raceGrantedRowStillVisibleAfterStaleResponse &&
   modelsVisibleAfterClick &&
   !rosterHiddenAfterClick &&
   modelsNavActive &&
@@ -148,6 +195,6 @@ const pass = anonStatus === 401 &&
   errors.length === 0;
 await finish(browser, {
   pass,
-  label: 'Admin Dashboard shell (#1818) + roster panel (#1819) + landlet override panel (#1822): gated for anon visitors, nav switches panels, roster lists/grants/revokes admins, landlet lookup renders real data, Test/Ops Fixtures clearly labeled, external links to existing admin pages',
+  label: 'Admin Dashboard shell (#1818) + roster panel (#1819, #1877) + landlet override panel (#1822): gated for anon visitors, nav switches panels, roster lists/grants/revokes admins and survives a stale overlapping reload, landlet lookup renders real data, Test/Ops Fixtures clearly labeled, external links to existing admin pages',
   errors,
 });

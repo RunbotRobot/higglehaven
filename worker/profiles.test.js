@@ -763,13 +763,13 @@ describe('Builders', () => {
 
   // #1702: same "real, in-flight, billed external operation" shape as the
   // higgles-redemption guard just above, just for a video-to-3D generation
-  // job (migrations/0119) instead of a payout — processed_at IS NULL means
+  // job (migrations/0119) instead of a payout — status = 'processing' means
   // Tripo is still working (and billing) on it right now.
   it('rejects deleting a builder while their video-to-3D generation job is still running', async () => {
-    const builder = await signupBuilder('video-job-pending-builder');
+    const builder = await signupBuilder('video-job-processing-builder');
     await env.DB.prepare(`
       INSERT INTO video_generation_jobs (job_id, builder_id, status)
-      VALUES ('video-job-pending-test', ?, 'processing')
+      VALUES ('video-job-processing-test', ?, 'processing')
     `).bind(builder.builderId).run();
 
     const deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
@@ -781,12 +781,30 @@ describe('Builders', () => {
       .bind(builder.builderId).first();
     expect(stillThere).not.toBeNull();
 
-    // Once the job actually finishes (processed_at set), deletion is
+    // Once the job actually finishes (status flips to a terminal value,
+    // same as the real webhook completion/failure paths), deletion is
     // allowed again.
-    await env.DB.prepare('UPDATE video_generation_jobs SET processed_at = ? WHERE job_id = ?')
-      .bind(new Date().toISOString(), 'video-job-pending-test').run();
+    await env.DB.prepare('UPDATE video_generation_jobs SET status = ?, processed_at = ? WHERE job_id = ?')
+      .bind('complete', new Date().toISOString(), 'video-job-processing-test').run();
     const deletedAfterComplete = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
     expect(deletedAfterComplete.response.status).toBe(200);
+  });
+
+  // #1890: a still-'pending' job (reserved locally, Tripo's task-create call
+  // never actually confirmed yet) is explicitly costless per
+  // VIDEO_GENERATION_RESERVATION_TIMEOUT_MS's own comment ("no real Didit/
+  // Tripo cost is ever in flight during this specific window") -- the guard
+  // above used to block on the broader processed_at IS NULL, catching this
+  // state identically to a real, billed 'processing' job. It shouldn't.
+  it('allows deleting a builder whose video-to-3D job is still pending (not yet billed)', async () => {
+    const builder = await signupBuilder('video-job-pending-builder');
+    await env.DB.prepare(`
+      INSERT INTO video_generation_jobs (job_id, builder_id, status)
+      VALUES ('video-job-pending-test', ?, 'pending')
+    `).bind(builder.builderId).run();
+
+    const deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
   });
 
   // #279's guard has to catch a bid on *any* of a seller's active auctions,
