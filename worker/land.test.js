@@ -995,14 +995,22 @@ describe('Community signs', () => {
   // instances they place — placing/toggling/deleting an instance now
   // requires session-authenticated ownership of the landlet it sits on
   // (see requireOwnedLandlet's own comment), so every mutation here goes
-  // through this landlet's owning builder's session. Posting to (but not
-  // moderating) a sign stays unauthenticated by design, so those calls are
-  // left as plain, session-less requests.
+  // through this landlet's owning builder's session.
+  //
+  // #1830: posting (and now editing) a sign post requires a session too --
+  // signsShopper is a deliberately SEPARATE account from signsBuilder (the
+  // landlet's own owner) for exactly that reason: using the same account
+  // for both would silently exercise the post's own author-delete path
+  // wherever a test means to exercise the landlet owner's moderation path
+  // instead (or vice versa), since #1830 made those two different people
+  // in the common case.
   let signsLandlet;
   let signsBuilder;
+  let signsShopper;
 
   beforeAll(async () => {
     signsBuilder = await signupBuilder('community-signs-builder');
+    signsShopper = await signupBuilder('community-signs-shopper');
     await createGreenbeltLandlet('community-signs-landlet');
     const claimed = await api('/landlets/community-signs-landlet/claim', signsBuilder.session({ method: 'POST' }));
     expect(claimed.response.status).toBe(200);
@@ -1051,9 +1059,9 @@ describe('Community signs', () => {
         isCommunitySign: true,
       }),
     }));
-    const posted = await api('/instances/sign-unflag-reflag-instance/posts', {
-      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'First post' }),
-    });
+    const posted = await api('/instances/sign-unflag-reflag-instance/posts', signsShopper.session({
+      method: 'POST', body: JSON.stringify({ text: 'First post' }),
+    }));
     expect(posted.response.status).toBe(201);
 
     const unflagged = await api('/instances/sign-unflag-reflag-instance', signsBuilder.session({
@@ -1093,9 +1101,9 @@ describe('Community signs', () => {
         }],
       }),
     }));
-    const posted = await api('/instances/sign-batch-unflag-reflag-instance/posts', {
-      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Batch-path post' }),
-    });
+    const posted = await api('/instances/sign-batch-unflag-reflag-instance/posts', signsShopper.session({
+      method: 'POST', body: JSON.stringify({ text: 'Batch-path post' }),
+    }));
     expect(posted.response.status).toBe(201);
 
     const unflagged = await api('/instances/batch', signsBuilder.session({
@@ -1164,9 +1172,9 @@ describe('Community signs', () => {
       body: JSON.stringify({ instances: [draftInstance] }),
     }));
     expect(createdDraft.response.status).toBe(200);
-    const posted = await api('/instances/sign-draft-unflag-reflag-instance/posts', {
-      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Draft-path post' }),
-    });
+    const posted = await api('/instances/sign-draft-unflag-reflag-instance/posts', signsShopper.session({
+      method: 'POST', body: JSON.stringify({ text: 'Draft-path post' }),
+    }));
     expect(posted.response.status).toBe(201);
 
     const unflagged = await api(`/landlets/${draftLandlet}/draft`, draftBuilder.session({
@@ -1271,9 +1279,12 @@ describe('Community signs', () => {
       }),
     }));
 
+    // #1830: no session here either -- the instance/flag check still runs
+    // (and still 400s) before the now-required auth check, same ordering
+    // as handleCalendarEvents' own structurally identical POST branch.
     const rejected = await api('/instances/not-a-sign-instance/posts', {
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Hello!' }),
+      body: JSON.stringify({ text: 'Hello!' }),
     });
     expect(rejected.response.status).toBe(400);
     expect(rejected.body.error).toMatch(/not marked as a community sign/);
@@ -1311,10 +1322,10 @@ describe('Community signs', () => {
     };
     let rejected;
     try {
-      rejected = await api('/instances/sign-post-flag-race-instance/posts', {
+      rejected = await api('/instances/sign-post-flag-race-instance/posts', signsShopper.session({
         method: 'POST',
-        body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Too late' }),
-      });
+        body: JSON.stringify({ text: 'Too late' }),
+      }));
     } finally {
       env.DB.prepare = originalPrepare;
     }
@@ -1343,33 +1354,35 @@ describe('Community signs', () => {
     expect(emptyList.response.status).toBe(200);
     expect(emptyList.body.posts).toEqual([]);
 
-    const missingText = await api('/instances/sign-with-posts/posts', {
+    // #1830: posting now requires a real, verified session.
+    const unauthenticatedPost = await api('/instances/sign-with-posts/posts', {
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper' }),
+      body: JSON.stringify({ text: 'Hello!' }),
     });
+    expect(unauthenticatedPost.response.status).toBe(401);
+
+    const missingText = await api('/instances/sign-with-posts/posts', signsShopper.session({
+      method: 'POST',
+      body: JSON.stringify({}),
+    }));
     expect(missingText.response.status).toBe(400);
 
-    const tooLong = await api('/instances/sign-with-posts/posts', {
+    const tooLong = await api('/instances/sign-with-posts/posts', signsShopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', text: 'x'.repeat(281) }),
-    });
+      body: JSON.stringify({ text: 'x'.repeat(281) }),
+    }));
     expect(tooLong.response.status).toBe(400);
 
-    // Found via backlog audit (#337): authorLabel had no length cap at all.
-    const authorLabelTooLong = await api('/instances/sign-with-posts/posts', {
+    // #1830: authorLabel is no longer client-supplied at all -- always the
+    // posting user's own username, derived server-side.
+    const posted = await api('/instances/sign-with-posts/posts', signsShopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'x'.repeat(101), text: 'Hello!' }),
-    });
-    expect(authorLabelTooLong.response.status).toBe(400);
-
-    const posted = await api('/instances/sign-with-posts/posts', {
-      method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Great little shop!' }),
-    });
+      body: JSON.stringify({ text: 'Great little shop!' }),
+    }));
     expect(posted.response.status).toBe(201);
     expect(posted.body.post).toMatchObject({
       instanceId: 'sign-with-posts',
-      authorLabel: 'A Shopper',
+      authorLabel: signsShopper.builder.label,
       text: 'Great little shop!',
     });
     expect(posted.body.post.postId).toMatch(/^post-/);
@@ -1393,6 +1406,119 @@ describe('Community signs', () => {
     expect(deleteMissing.response.status).toBe(404);
   });
 
+  // #1830: a post's own author can now remove it directly -- a shopper who
+  // doesn't own (or even build on) the sign's hosting landlet at all.
+  it('lets a post\'s own author delete it directly, without owning the hosting landlet', async () => {
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-author-delete-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 2, y: 6, isCommunitySign: true,
+      }),
+    }));
+    const posted = await api('/instances/sign-author-delete-instance/posts', signsShopper.session({
+      method: 'POST', body: JSON.stringify({ text: 'My own note' }),
+    }));
+    expect(posted.response.status).toBe(201);
+
+    const deleted = await api(`/instances/sign-author-delete-instance/posts/${posted.body.post.postId}`, signsShopper.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true });
+
+    const listed = await api('/instances/sign-author-delete-instance/posts');
+    expect(listed.body.posts).toEqual([]);
+  });
+
+  // #1830: the new PATCH branch -- author-only, no moderation equivalent.
+  it('lets a post\'s own author edit it, and rejects anyone else', async () => {
+    const otherAccount = await signupBuilder('sign-edit-other-account');
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-author-edit-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 3, y: 6, isCommunitySign: true,
+      }),
+    }));
+    const posted = await api('/instances/sign-author-edit-instance/posts', signsShopper.session({
+      method: 'POST', body: JSON.stringify({ text: 'Original text' }),
+    }));
+    expect(posted.response.status).toBe(201);
+    const postId = posted.body.post.postId;
+
+    const unauthenticatedEdit = await api(`/instances/sign-author-edit-instance/posts/${postId}`, {
+      method: 'PATCH', body: JSON.stringify({ text: 'Sneaky edit' }),
+    });
+    expect(unauthenticatedEdit.response.status).toBe(401);
+
+    // Neither the sign's hosting landlet's own owner (signsBuilder) nor an
+    // unrelated third account (otherAccount) is the post's author -- PATCH
+    // has no moderation equivalent the way DELETE does, so both are
+    // rejected the same way.
+    const ownerEdit = await api(`/instances/sign-author-edit-instance/posts/${postId}`, signsBuilder.session({
+      method: 'PATCH', body: JSON.stringify({ text: 'Moderator edit' }),
+    }));
+    expect(ownerEdit.response.status).toBe(403);
+
+    const otherEdit = await api(`/instances/sign-author-edit-instance/posts/${postId}`, otherAccount.session({
+      method: 'PATCH', body: JSON.stringify({ text: 'Stranger edit' }),
+    }));
+    expect(otherEdit.response.status).toBe(403);
+
+    const tooLongEdit = await api(`/instances/sign-author-edit-instance/posts/${postId}`, signsShopper.session({
+      method: 'PATCH', body: JSON.stringify({ text: 'x'.repeat(281) }),
+    }));
+    expect(tooLongEdit.response.status).toBe(400);
+
+    const edited = await api(`/instances/sign-author-edit-instance/posts/${postId}`, signsShopper.session({
+      method: 'PATCH', body: JSON.stringify({ text: 'Edited text' }),
+    }));
+    expect(edited.response.status).toBe(200);
+    expect(edited.body.post).toMatchObject({ postId, text: 'Edited text', authorLabel: signsShopper.builder.label });
+
+    const listed = await api('/instances/sign-author-edit-instance/posts');
+    expect(listed.body.posts[0].text).toBe('Edited text');
+
+    const editMissing = await api(`/instances/sign-author-edit-instance/posts/${crypto.randomUUID()}`, signsShopper.session({
+      method: 'PATCH', body: JSON.stringify({ text: 'Edited text' }),
+    }));
+    expect(editMissing.response.status).toBe(404);
+  });
+
+  // #944-shaped gap, found the same way for the new PATCH branch -- no
+  // rate limit at all would let an authenticated author rewrite their own
+  // post in an unthrottled loop.
+  it('rate-limits repeated edits from the same account', async () => {
+    const editRateLimitPoster = await signupBuilder('sign-edit-rate-limit-poster');
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-edit-rate-limit-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 4, y: 6, isCommunitySign: true,
+      }),
+    }));
+    const posted = await api('/instances/sign-edit-rate-limit-instance/posts', editRateLimitPoster.session({
+      method: 'POST', body: JSON.stringify({ text: 'Original text' }),
+    }));
+    const postId = posted.body.post.postId;
+
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api(`/instances/sign-edit-rate-limit-instance/posts/${postId}`, editRateLimitPoster.session({
+        method: 'PATCH', body: JSON.stringify({ text: `Edit ${i}` }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api(`/instances/sign-edit-rate-limit-instance/posts/${postId}`, editRateLimitPoster.session({
+      method: 'PATCH', body: JSON.stringify({ text: 'One too many' }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
   it('cascades post deletion when the sign instance itself is deleted', async () => {
     await api('/instances', signsBuilder.session({
       method: 'POST',
@@ -1405,10 +1531,10 @@ describe('Community signs', () => {
         isCommunitySign: true,
       }),
     }));
-    await api('/instances/sign-to-delete/posts', {
+    await api('/instances/sign-to-delete/posts', signsShopper.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Nice place' }),
-    });
+      body: JSON.stringify({ text: 'Nice place' }),
+    }));
     await api('/instances/sign-to-delete', signsBuilder.session({ method: 'DELETE' }));
 
     const afterDelete = await api('/instances/sign-to-delete/posts');
@@ -1417,10 +1543,13 @@ describe('Community signs', () => {
 
   // Found via backlog audit (#337): unlike every other public, repeatable
   // mutation in this file, posting to a community sign requires no
-  // session and had no rate limit at all. Synthetic cf-connecting-ip per
-  // the purchase rate-limit test's own approach, so this test's bucket
-  // doesn't collide with any other sign-post test above.
-  it('rate-limits repeated posts from the same client', async () => {
+  // session and had no rate limit at all.
+  // #1830: posting now requires a session, so the bucket key moved from
+  // clientIp to the poster's own user_id -- a dedicated account, not
+  // signsShopper, so this test's own bucket can't collide with the much
+  // smaller number of posts every other sign-post test above makes.
+  it('rate-limits repeated posts from the same account', async () => {
+    const rateLimitPoster = await signupBuilder('sign-post-rate-limit-poster');
     await api('/instances', signsBuilder.session({
       method: 'POST',
       body: JSON.stringify({
@@ -1433,16 +1562,15 @@ describe('Community signs', () => {
       }),
     }));
 
-    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
     for (let i = 0; i < 20; i++) {
-      const attempt = await api('/instances/sign-rate-limit-instance/posts', {
-        method: 'POST', headers, body: JSON.stringify({ authorLabel: 'A Shopper', text: `Post ${i}` }),
-      });
+      const attempt = await api('/instances/sign-rate-limit-instance/posts', rateLimitPoster.session({
+        method: 'POST', body: JSON.stringify({ text: `Post ${i}` }),
+      }));
       expect(attempt.response.status).not.toBe(429);
     }
-    const limited = await api('/instances/sign-rate-limit-instance/posts', {
-      method: 'POST', headers, body: JSON.stringify({ authorLabel: 'A Shopper', text: 'One too many' }),
-    });
+    const limited = await api('/instances/sign-rate-limit-instance/posts', rateLimitPoster.session({
+      method: 'POST', body: JSON.stringify({ text: 'One too many' }),
+    }));
     expect(limited.response.status).toBe(429);
   });
 
@@ -1455,6 +1583,11 @@ describe('Community signs', () => {
   it('does not delete a sign post on a landlet that was transferred to a new owner mid-request', async () => {
     const owner = await signupBuilder('sign-delete-ownership-race-owner');
     const newOwner = await signupBuilder('sign-delete-ownership-race-new-owner');
+    // #1830: a poster distinct from both owner/newOwner -- this test means
+    // to exercise the DELETE branch's moderation path specifically (the
+    // landlet owner removing someone else's post), which only fires when
+    // the deleter isn't also the post's own author.
+    const poster = await signupBuilder('sign-delete-ownership-race-poster');
     await createGreenbeltLandlet('sign-delete-ownership-race-landlet');
     await api('/landlets/sign-delete-ownership-race-landlet/claim', owner.session({ method: 'POST' }));
     await api('/instances', owner.session({
@@ -1466,9 +1599,9 @@ describe('Community signs', () => {
         x: 1, y: 1, isCommunitySign: true,
       }),
     }));
-    const posted = await api('/instances/sign-delete-ownership-race-instance/posts', {
-      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Hello!' }),
-    });
+    const posted = await api('/instances/sign-delete-ownership-race-instance/posts', poster.session({
+      method: 'POST', body: JSON.stringify({ text: 'Hello!' }),
+    }));
     const postId = posted.body.post.postId;
 
     const originalPrepare = env.DB.prepare.bind(env.DB);
@@ -1535,6 +1668,7 @@ describe('Community signs', () => {
   // idempotency-key protection as the calendar flow's own #1716 fix and the
   // purchase flow's original #473 fix.
   it('does not create a duplicate post when the same idempotencyKey is retried', async () => {
+    const idempotencyPoster = await signupBuilder('sign-post-idempotency-poster');
     await api('/instances', signsBuilder.session({
       method: 'POST',
       body: JSON.stringify({
@@ -1547,14 +1681,14 @@ describe('Community signs', () => {
       }),
     }));
 
-    const first = await api('/instances/sign-post-idempotency-instance/posts', {
-      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Great sale today!', idempotencyKey: 'sign-retry-test-key' }),
-    });
+    const first = await api('/instances/sign-post-idempotency-instance/posts', idempotencyPoster.session({
+      method: 'POST', body: JSON.stringify({ text: 'Great sale today!', idempotencyKey: 'sign-retry-test-key' }),
+    }));
     expect(first.response.status).toBe(201);
 
-    const retried = await api('/instances/sign-post-idempotency-instance/posts', {
-      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Great sale today!', idempotencyKey: 'sign-retry-test-key' }),
-    });
+    const retried = await api('/instances/sign-post-idempotency-instance/posts', idempotencyPoster.session({
+      method: 'POST', body: JSON.stringify({ text: 'Great sale today!', idempotencyKey: 'sign-retry-test-key' }),
+    }));
     expect(retried.response.status).toBe(200);
     expect(retried.body.post.postId).toBe(first.body.post.postId);
 
@@ -1565,9 +1699,9 @@ describe('Community signs', () => {
     // A different idempotencyKey (or none at all) is a genuinely separate
     // post, still created normally — this isn't a dedup-everything guard,
     // only same-key retries.
-    const separate = await api('/instances/sign-post-idempotency-instance/posts', {
-      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'A second, different post' }),
-    });
+    const separate = await api('/instances/sign-post-idempotency-instance/posts', idempotencyPoster.session({
+      method: 'POST', body: JSON.stringify({ text: 'A second, different post' }),
+    }));
     expect(separate.response.status).toBe(201);
     expect(separate.body.post.postId).not.toBe(first.body.post.postId);
     const countAfterSeparate = await env.DB.prepare('SELECT COUNT(*) AS n FROM sign_posts WHERE instance_id = ?')
@@ -1581,6 +1715,7 @@ describe('Community signs', () => {
   // the FIRST post's content as if it were the new one, dropping the second
   // note entirely with no error.
   it('creates a genuinely new post, not a silent dupe of the stale one, when the same idempotencyKey is reused for different content', async () => {
+    const mismatchPoster = await signupBuilder('sign-post-idempotency-mismatch-poster');
     await api('/instances', signsBuilder.session({
       method: 'POST',
       body: JSON.stringify({
@@ -1593,16 +1728,16 @@ describe('Community signs', () => {
       }),
     }));
 
-    const first = await api('/instances/sign-post-idempotency-mismatch-instance/posts', {
-      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Great sale today!', idempotencyKey: 'mismatch-test-key' }),
-    });
+    const first = await api('/instances/sign-post-idempotency-mismatch-instance/posts', mismatchPoster.session({
+      method: 'POST', body: JSON.stringify({ text: 'Great sale today!', idempotencyKey: 'mismatch-test-key' }),
+    }));
     expect(first.response.status).toBe(201);
 
     // Same cached key, but genuinely different text -- the stale key must
     // not cause this to be silently swallowed as the first post.
-    const second = await api('/instances/sign-post-idempotency-mismatch-instance/posts', {
-      method: 'POST', body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Actually, sale ends tonight!', idempotencyKey: 'mismatch-test-key' }),
-    });
+    const second = await api('/instances/sign-post-idempotency-mismatch-instance/posts', mismatchPoster.session({
+      method: 'POST', body: JSON.stringify({ text: 'Actually, sale ends tonight!', idempotencyKey: 'mismatch-test-key' }),
+    }));
     expect(second.response.status).toBe(201);
     expect(second.body.post.postId).not.toBe(first.body.post.postId);
     expect(second.body.post.text).toBe('Actually, sale ends tonight!');
