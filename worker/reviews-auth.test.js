@@ -412,6 +412,50 @@ describe('Product reviews', () => {
     expect(deleted.body).toEqual({ deleted: true });
   });
 
+  // #1712 (owner confirmed): an admin can remove any review outright --
+  // harassment, doxxing, other policy violations -- even though the
+  // template's own seller is reachable and active, unlike the dangling-
+  // seller admin fallback mark-shipped/refund already have. Logged via
+  // admin_action_log, same accountability convention as those.
+  it('lets an admin delete any review outright, even when the template has a reachable owning seller', async () => {
+    const seller = await signupSeller('review-admin-override-seller');
+    const shopper = await signupBuilder('review-admin-override-shopper');
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'review-admin-override-owned',
+        name: 'Admin-moderatable reviewable product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    const templateId = created.body.template.templateId;
+    await createPurchase(templateId, shopper);
+    const posted = await api(`/catalog/${templateId}/reviews`, shopper.session({
+      method: 'POST',
+      body: JSON.stringify({ rating: 1, text: 'Abusive/policy-violating text goes here.' }),
+    }));
+    expect(posted.response.status).toBe(201);
+    const reviewId = posted.body.review.reviewId;
+
+    const asAdmin = await api(`/catalog/${templateId}/reviews/${reviewId}`, adminSession({ method: 'DELETE' }));
+    expect(asAdmin.response.status).toBe(200);
+    expect(asAdmin.body).toEqual({ deleted: true });
+
+    const listedAfter = await api(`/catalog/${templateId}/reviews`);
+    expect(listedAfter.body.reviews).toHaveLength(0);
+
+    const adminUserId = (await api('/auth/me', adminSession())).body.user.userId;
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('delete_review_override', reviewId).first();
+    expect(logRow).not.toBeNull();
+    expect(logRow.admin_user_id).toBe(adminUserId);
+    expect(logRow.target_type).toBe('product_review');
+  });
+
   // #1043: every other real "something happened that the other party
   // should passively learn about" event in this file/codebase fires a
   // notification (new auction bid, an auction selling, a sale, a friend

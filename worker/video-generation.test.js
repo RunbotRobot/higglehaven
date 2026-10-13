@@ -372,6 +372,59 @@ describe('Video-to-3D job creation (#1619)', () => {
       env.TRIPO_API_KEY = 'test-tripo-api-key';
     }
   });
+
+  // #1886 (piece 1 -- making the failure loud, not the still-open retry/
+  // cost policy, which stays owner-judgment): the billed tripoRequest call
+  // can succeed and still have its result lost if persisting task_id then
+  // fails (a transient D1 write error) -- same env.DB.prepare-wrapping
+  // technique worker/auctions.test.js's own #1693 test uses to force one
+  // specific statement's .run() to throw. Confirms that gets logged
+  // durably before the reservation is deleted, rather than silently
+  // discarded.
+  it('#1886: logs durably when the billed call succeeds but persisting its task_id then fails', async () => {
+    const builder = await signupBuilder('video-gen-task-id-lost');
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    env.DB.prepare = (sql) => {
+      const stmt = originalPrepare(sql);
+      if (!sql.includes('SET provider_task_id')) return stmt;
+      return {
+        bind: (...args) => {
+          const bound = stmt.bind(...args);
+          return new Proxy(bound, {
+            get(target, prop) {
+              if (prop === 'run') return async () => { throw new Error('simulated transient D1 failure'); };
+              const value = target[prop];
+              return typeof value === 'function' ? value.bind(target) : value;
+            },
+          });
+        },
+      };
+    };
+    let created;
+    try {
+      created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(created.status).toBeGreaterThanOrEqual(500);
+
+    // The reservation itself was released (so this builder isn't
+    // permanently blocked from starting a new job)...
+    const rows = await env.DB.prepare('SELECT * FROM video_generation_jobs WHERE builder_id = ?').bind(builder.builderId).all();
+    expect(rows.results).toHaveLength(0);
+
+    // ...but the billed, now-untracked task_id was recorded durably first.
+    const lostLog = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_type = ? ORDER BY created_at DESC LIMIT 1',
+    ).bind('video_generation_task_id_lost', 'video_generation_job').first();
+    expect(lostLog).toBeTruthy();
+    expect(lostLog.admin_user_id).toBeNull();
+    const detail = JSON.parse(lostLog.detail_json);
+    expect(detail.builderId).toBe(builder.builderId);
+    expect(detail.providerTaskId).toMatch(/^task-/);
+    expect(detail.error).toMatch(/simulated transient D1 failure/);
+  });
 });
 
 describe('reserveVideoGenerationJob (#1619)', () => {
@@ -441,6 +494,19 @@ describe('reserveVideoGenerationJob (#1619)', () => {
     const rows = await env.DB.prepare('SELECT * FROM video_generation_jobs WHERE builder_id = ?').bind(builder.builderId).all();
     expect(rows.results).toHaveLength(1);
     expect(rows.results[0].job_id).toBe(second.reservationId);
+
+    // #1886 (piece 1): this sweep can't tell whether the row it just
+    // deleted was a real, billed-but-never-persisted Tripo task or just an
+    // abandoned, never-submitted reservation -- so it logs every sweep
+    // that actually removes a row, durably, rather than only ever being
+    // reconstructable by reading code.
+    const sweepLog = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ? ORDER BY created_at DESC LIMIT 1',
+    ).bind('video_generation_stale_reservation_swept', builder.builderId).first();
+    expect(sweepLog).toBeTruthy();
+    expect(sweepLog.admin_user_id).toBeNull();
+    expect(sweepLog.target_type).toBe('builder');
+    expect(JSON.parse(sweepLog.detail_json)).toMatchObject({ rowsDeleted: 1 });
   });
 
   it('does not clear a still-fresh pending reservation -- only one that is actually past the timeout', async () => {
@@ -450,6 +516,13 @@ describe('reserveVideoGenerationJob (#1619)', () => {
     const second = await reserveVideoGenerationJob(env.DB, builder.builderId);
     expect(second.reservationId).toBeNull();
     expect(second.existing.job_id).toBe(first.reservationId);
+
+    // Nothing was actually swept, so no sweep log either (#1886 piece 1
+    // only logs when staleCleanup.meta.changes is actually nonzero).
+    const sweepLog = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('video_generation_stale_reservation_swept', builder.builderId).first();
+    expect(sweepLog).toBeFalsy();
   });
 });
 

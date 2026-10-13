@@ -96,6 +96,7 @@ import {
   fetchSignPosts,
   createSignPost,
   deleteSignPost,
+  editSignPost,
   fetchCalendarEvents,
   createCalendarEvent,
   deleteCalendarEvent,
@@ -6331,6 +6332,17 @@ async function renderRedeemHigglesField() {
     form.appendChild(label);
     inputs[key] = input;
   }
+  // #1940: dobDay's own max (31) never accounted for which month was
+  // entered -- keep it in sync so the browser's own number-input
+  // clamping/invalid-state catches Feb 30 etc. before submit does.
+  function refreshDobDayMax() {
+    const month = parseInt(inputs.dobMonth.value, 10);
+    const year = parseInt(inputs.dobYear.value, 10);
+    if (!Number.isFinite(month) || month < 1 || month > 12) return;
+    inputs.dobDay.max = String(daysInMonth(Number.isFinite(year) ? year : new Date().getUTCFullYear(), month));
+  }
+  inputs.dobMonth.addEventListener('input', refreshDobDayMax);
+  inputs.dobYear.addEventListener('input', refreshDobDayMax);
   const submitBtn = document.createElement('button');
   submitBtn.type = 'button';
   submitBtn.className = 'version-action-btn';
@@ -6893,6 +6905,15 @@ async function renderSellSettingsSection() {
     form.appendChild(label);
     inputs[key] = input;
   }
+  // #1940: same dobDay/dobMonth sync as the sibling seller-payout form.
+  function refreshDobDayMax() {
+    const month = parseInt(inputs.dobMonth.value, 10);
+    const year = parseInt(inputs.dobYear.value, 10);
+    if (!Number.isFinite(month) || month < 1 || month > 12) return;
+    inputs.dobDay.max = String(daysInMonth(Number.isFinite(year) ? year : new Date().getUTCFullYear(), month));
+  }
+  inputs.dobMonth.addEventListener('input', refreshDobDayMax);
+  inputs.dobYear.addEventListener('input', refreshDobDayMax);
   const submitBtn = document.createElement('button');
   submitBtn.type = 'button';
   submitBtn.className = 'version-action-btn';
@@ -7000,6 +7021,14 @@ async function renderSellSettingsSection() {
 
     await refreshPayouts();
   }
+}
+
+// #1940: the Stripe-onboarding dobDay input's own max was a fixed 31
+// regardless of dobMonth -- Feb 30, Apr 31, etc. passed client validation.
+// new Date(Date.UTC(year, month, 0)) is day 0 of the following month, i.e.
+// the last real day of `month` (1-indexed, matching dobMonth's own values).
+function daysInMonth(year, month) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
 // #1492: used to build the string manually via a template literal, which
@@ -12142,7 +12171,6 @@ const SIGN_FADE_NEAR_M = 4; // fully opaque at/within this distance
 const SIGN_FADE_FAR_M = 20; // fully transparent at/beyond this distance
 const SIGN_INTERACT_RADIUS_M = 8;
 const SIGN_MAX_VISIBLE_POSTS = 5;
-const SHOPPER_LABEL_KEY = 'higglehaven.shopperLabel';
 // Community calendar (docs/SPEC.md §6, docs/API.md's "Community
 // calendar") reuses the SIGN_FADE_NEAR_M/SIGN_FADE_FAR_M/
 // SIGN_INTERACT_RADIUS_M/SIGN_MAX_VISIBLE_POSTS constants above directly
@@ -15290,24 +15318,60 @@ function updateConfettiBursts(dt) {
   }
 }
 
-// Remembered across visits (but not required — a fresh prompt() with no
-// stored value just asks each time) so a shopper leaving several notes in
-// one session, or returning later, isn't re-asked their name every time —
-// the same lightweight "no real accounts" convention as everything else in
-// this dev-mode identity story.
-function shopperLabel() {
-  const existing = localStorage.getItem(SHOPPER_LABEL_KEY);
-  const label = prompt('Your name (shown on the sign):', existing || '');
-  if (!label || !label.trim()) return null;
-  localStorage.setItem(SHOPPER_LABEL_KEY, label.trim());
-  return label.trim();
-}
-
+// #1830 (owner correction, 2026-10-13): sign posts used to be genuinely
+// anonymous (a free-text name prompt, no account behind it) — stale since
+// Shop mode's own entry gate (ensureShopperIdentity) started requiring a
+// real logged-in, verified account; currentAuthUser.username is always
+// available by the time this can be clicked at all. The one exception is
+// the accountRecoveryFlowActive branch of enterShopMode, which deliberately
+// skips that gate — createSignPost/editSignPost/deleteSignPost below just
+// 401 in that edge case, same as any other authenticated action attempted
+// mid-recovery.
 shopSignHintEl.addEventListener('click', async () => {
   const sign = nearestActiveSign;
   if (!sign) return;
-  const authorLabel = shopperLabel();
-  if (!authorLabel) return;
+  // A shopper who already has a post on this particular sign edits or
+  // removes that one instead of being offered an unrelated second slot —
+  // this mirrors the one-note-per-sign feel the old shopperLabel() prompt
+  // already had in practice (nothing stopped multiple posts before, but
+  // nothing invited them either), while actually using the real ownership
+  // #1830 adds (sign.posts' own userId, populated from signPostFromRow).
+  const myPost = currentAuthUser && sign.posts.find((post) => post.userId === currentAuthUser.userId);
+  if (myPost) {
+    const choice = (prompt(
+      `Your note on this sign: "${myPost.text}"\n\nType "edit" to change it, or "delete" to remove it. Leave blank to cancel.`,
+      '',
+    ) || '').trim().toLowerCase();
+    if (choice === 'delete') {
+      shopSignHintEl.disabled = true;
+      try {
+        await deleteSignPost(sign.instanceId, myPost.postId);
+        if (!shopSigns.includes(sign)) return;
+        sign.posts = sign.posts.filter((post) => post.postId !== myPost.postId);
+        rebuildSignSprites(sign);
+      } catch (err) {
+        alert(err.message || 'Could not delete this note.');
+      } finally {
+        shopSignHintEl.disabled = false;
+      }
+    } else if (choice === 'edit') {
+      const text = prompt('Your note (up to 280 characters):', myPost.text);
+      if (!text || !text.trim()) return;
+      shopSignHintEl.disabled = true;
+      try {
+        const updated = await editSignPost(sign.instanceId, myPost.postId, { text: text.trim() });
+        if (!shopSigns.includes(sign)) return;
+        const index = sign.posts.findIndex((post) => post.postId === myPost.postId);
+        if (index !== -1) sign.posts[index] = updated;
+        rebuildSignSprites(sign);
+      } catch (err) {
+        alert(err.message || 'Could not update this note.');
+      } finally {
+        shopSignHintEl.disabled = false;
+      }
+    }
+    return;
+  }
   const text = prompt('Your note (up to 280 characters):', '');
   if (!text || !text.trim()) return;
   // #1920: prompt() shows no live character count, and unlike the DM
@@ -15322,7 +15386,7 @@ shopSignHintEl.addEventListener('click', async () => {
   }
   shopSignHintEl.disabled = true;
   try {
-    const post = await createSignPost(sign.instanceId, { authorLabel, text: text.trim() });
+    const post = await createSignPost(sign.instanceId, { text: text.trim() });
     // The landlet this sign belongs to can unload while the request above
     // was in flight (registerShopSign's own fetch has the same guard, for
     // the same reason — see its own comment) — without this, a post that
@@ -15341,10 +15405,11 @@ shopSignHintEl.addEventListener('click', async () => {
 shopCalendarHintEl.addEventListener('click', async () => {
   const calendar = nearestActiveCalendar;
   if (!calendar) return;
-  // Unlike signs (anonymous shopperLabel()), docs/SPEC.md §6 calls calendar
-  // events "builder-authored" — the server now derives authorLabel from a
-  // real logged-in builder and rejects anyone but the hosting landlet's own
-  // owner, so this needs a real identity, not a free-text name prompt.
+  // Unlike signs (a real logged-in shopper, since #1830), docs/SPEC.md §6
+  // calls calendar events "builder-authored" — the server derives
+  // authorLabel from a real logged-in builder and rejects anyone but the
+  // hosting landlet's own owner, so this needs a builder identity
+  // specifically, not just any logged-in shopper.
   const builder = await ensureBuilderIdentity();
   if (!builder) return;
   const text = prompt('Event details (up to 280 characters):', '');

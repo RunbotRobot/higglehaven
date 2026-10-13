@@ -2348,10 +2348,11 @@ describe('Worker API', () => {
     expect(firstSave.response.status).toBe(200);
     expect(firstSave.body.instances[0].isCommunitySign).toBe(true);
 
-    const posted = await api('/instances/draft-sign-a/posts', {
+    // #1830: posting now requires a session.
+    const posted = await api('/instances/draft-sign-a/posts', draftSignBuilder.session({
       method: 'POST',
-      body: JSON.stringify({ authorLabel: 'A Shopper', text: 'Great spot!' }),
-    });
+      body: JSON.stringify({ text: 'Great spot!' }),
+    }));
     expect(posted.response.status).toBe(201);
 
     // Re-save the same instance (still flagged) alongside a new one.

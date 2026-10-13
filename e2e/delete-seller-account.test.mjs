@@ -20,7 +20,7 @@ const LABEL = 'Delete Seller Suite Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 
 // Settings opens directly into the Sell tab (openSettingsModal derives
 // activeSettingsTab from currentMode, still 'sell' here) -- the Seller

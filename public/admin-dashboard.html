@@ -1193,7 +1193,10 @@
     errLine.textContent = '';
   }
 
+  let purchasesLoadToken = 0;
+
   async function load() {
+    const myLoadToken = ++purchasesLoadToken;
     clearError();
     statusLine.textContent = 'Loading…';
     let body;
@@ -1204,11 +1207,13 @@
       try { body = await response.json(); } catch (_) { body = null; }
       if (!response.ok) throw new Error((body && body.error) || ('Request failed (' + response.status + ')'));
     } catch (error) {
+      if (myLoadToken !== purchasesLoadToken) return;
       errLine.hidden = false;
       errLine.textContent = error.message;
       statusLine.textContent = 'Failed to load.';
       return;
     }
+    if (myLoadToken !== purchasesLoadToken) return;
     purchases = body.purchases || [];
     statusLine.textContent = purchases.length + ' shown · ' + body.totalCount + ' total';
     render();

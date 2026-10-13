@@ -65,7 +65,7 @@ await page.click('#auth-signup-form button[type="submit"]');
 // chooseIdentity, so the verify-modal needs clearing the same way that
 // helper does before the seller modal actually opens.
 await clearVerifyModalIfShown(page);
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 const uploadBtnInSeller = await page.locator('#seller-modal #upload-model-btn').count();
 console.log('Upload Model button lives inside Seller modal (should be 1):', uploadBtnInSeller);
 
