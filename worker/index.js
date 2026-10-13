@@ -7376,11 +7376,20 @@ function validateTaxIdForm(input) {
   const addressLine1 = taxFormTextValue(input.addressLine1, 'addressLine1');
   const city = labelValue(input.city, 'city');
   if (formType === 'w9') {
+    const taxIdNumber = labelValue(input.taxIdNumber, 'taxIdNumber');
+    // #1972: a US SSN/EIN is always 9 digits, optionally dash-formatted
+    // (NNN-NN-NNNN for an SSN, NN-NNNNNNN for an EIN) -- stripping dashes
+    // and requiring exactly 9 digits covers both without needing to tell
+    // which one this is, same shape as individual.ssnLast4's own regex
+    // check elsewhere in this file.
+    if (!/^\d{9}$/.test(taxIdNumber.replace(/-/g, ''))) {
+      throw new HttpError('taxIdNumber must be 9 digits (an SSN or EIN), optionally dash-formatted', 400);
+    }
     return {
       formType, legalName, addressLine1, city,
       state: labelValue(input.state, 'state'),
       postalCode: labelValue(input.postalCode, 'postalCode'),
-      taxIdNumber: labelValue(input.taxIdNumber, 'taxIdNumber'),
+      taxIdNumber,
     };
   }
   return {
