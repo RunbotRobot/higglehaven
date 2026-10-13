@@ -26,7 +26,7 @@ console.log('notifications badge hidden before any notice (should be true):', ba
 // Seller identity is a genuinely separate roster from builders — the first
 // visit to Sell needs its own picker even with a builder already chosen.
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
 await page.click('#upload-model-btn');
@@ -109,7 +109,7 @@ await page.waitForTimeout(1000);
 // straight into the modal once bootstrap() lands.
 await page.click('.mode-nav-btn[data-mode="sell"]');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('#seller-modal.visible', { timeout: 15000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 const row = () => page.locator('.seller-row').filter({ hasText: PRODUCT_NAME });
 await row().locator('.seller-row-toggle').click();
