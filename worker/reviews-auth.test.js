@@ -1167,6 +1167,112 @@ describe('Authentication', () => {
     expect(listed.adminGrantedAt).not.toBe('2099-01-01T00:00:00.000Z');
   });
 
+  // #1819: the missing inverse of grant-admin (#1481) -- same auth gating
+  // (401/403) as grant-admin's own test above, plus the one invariant
+  // #1819 asked this endpoint to enforce: an admin can revoke their own
+  // access as long as another admin remains, leaving an audit-log trail
+  // the same way grant_admin does.
+  it('revoke-admin lets an existing admin demote another account by email, but nobody else', async () => {
+    const admin = await signupBuilder('revoke-admin-admin');
+    await api('/auth/admin-bootstrap', admin.session({
+      method: 'POST', body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    }));
+    const target = await signupBuilder('revoke-admin-target');
+    await api('/auth/grant-admin', admin.session({
+      method: 'POST', body: JSON.stringify({ email: target.email }),
+    }));
+    const meBefore = await api('/auth/me', target.session());
+    expect(meBefore.body.user.isAdmin).toBe(true);
+
+    const noSession = await api('/auth/revoke-admin', {
+      method: 'POST', body: JSON.stringify({ email: target.email }),
+    });
+    expect(noSession.response.status).toBe(401);
+
+    const neverAdmin = await signupBuilder('revoke-admin-never-admin');
+    const nonAdmin = await api('/auth/revoke-admin', neverAdmin.session({
+      method: 'POST', body: JSON.stringify({ email: target.email }),
+    }));
+    expect(nonAdmin.response.status).toBe(403);
+
+    const notFound = await api('/auth/revoke-admin', admin.session({
+      method: 'POST', body: JSON.stringify({ email: 'nobody-here@example.com' }),
+    }));
+    expect(notFound.response.status).toBe(404);
+
+    const notAnAdmin = await signupBuilder('revoke-admin-not-admin');
+    const alreadyNotAdmin = await api('/auth/revoke-admin', admin.session({
+      method: 'POST', body: JSON.stringify({ email: notAnAdmin.email }),
+    }));
+    expect(alreadyNotAdmin.response.status).toBe(400);
+
+    const revoked = await api('/auth/revoke-admin', admin.session({
+      method: 'POST', body: JSON.stringify({ email: target.email.toUpperCase() }),
+    }));
+    expect(revoked.response.status).toBe(200);
+    expect(revoked.body.user.isAdmin).toBe(false);
+    expect(revoked.body.user.email).toBe(target.email);
+
+    const meAfter = await api('/auth/me', target.session());
+    expect(meAfter.body.user.isAdmin).toBe(false);
+
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('revoke_admin', revoked.body.user.userId).first();
+    const adminUserId = (await api('/auth/me', admin.session())).body.user.userId;
+    expect(logRow.admin_user_id).toBe(adminUserId);
+    expect(logRow.target_type).toBe('user');
+    expect(JSON.parse(logRow.detail_json)).toEqual({ granteeEmail: target.email });
+  });
+
+  // #1819: the one invariant this sub-issue asked to be enforced server-
+  // side -- this app must never end up with zero admins and no API path
+  // back in. Exercises both the general "last admin" guard and its
+  // self-revoke special case in one pass, since the guard applies to
+  // either caller identically.
+  //
+  // The revoke-admin UPDATE's own guard counts every is_admin=1 row in the
+  // whole table, not just the accounts this test creates -- and this test
+  // file's own storage isn't reset between `it`s (every earlier test's
+  // admin-bootstrap/grant-admin calls in this describe block leave their
+  // own admins behind), so without the reset below this test's "solo"
+  // account would never actually be the last admin and the 409 below would
+  // never fire. Safe to clear here: nothing later in this file reads an
+  // earlier test's admin status back.
+  it('refuses to revoke the last remaining admin, including via self-revoke', async () => {
+    await env.DB.prepare('UPDATE users SET is_admin = 0 WHERE is_admin = 1').run();
+    const solo = await signupBuilder('revoke-admin-solo');
+    await api('/auth/admin-bootstrap', solo.session({
+      method: 'POST', body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    }));
+
+    const blocked = await api('/auth/revoke-admin', solo.session({
+      method: 'POST', body: JSON.stringify({ email: solo.email }),
+    }));
+    expect(blocked.response.status).toBe(409);
+
+    const stillAdmin = await api('/auth/me', solo.session());
+    expect(stillAdmin.body.user.isAdmin).toBe(true);
+
+    // Promoting a second admin lifts the guard -- now either account can
+    // revoke the other (or themselves) without hitting the floor.
+    const second = await signupBuilder('revoke-admin-second');
+    await api('/auth/grant-admin', solo.session({
+      method: 'POST', body: JSON.stringify({ email: second.email }),
+    }));
+    const selfRevoke = await api('/auth/revoke-admin', solo.session({
+      method: 'POST', body: JSON.stringify({ email: solo.email }),
+    }));
+    expect(selfRevoke.response.status).toBe(200);
+    expect(selfRevoke.body.user.isAdmin).toBe(false);
+
+    // Back down to one admin (second) -- the floor applies to them now too.
+    const blockedAgain = await api('/auth/revoke-admin', second.session({
+      method: 'POST', body: JSON.stringify({ email: second.email }),
+    }));
+    expect(blockedAgain.response.status).toBe(409);
+  });
+
   it('rejects signup with an already-registered email, case-insensitively', async () => {
     const email = `auth-dupe-${crypto.randomUUID()}@example.com`;
     await signup(email, 'first password here');

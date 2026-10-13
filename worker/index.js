@@ -9477,6 +9477,9 @@ async function handleAuth(request, env, db, route, url, ctx) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'grant-admin') {
     return handleGrantAdmin(request, db);
   }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'revoke-admin') {
+    return handleRevokeAdmin(request, db);
+  }
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admins') {
     return handleListAdmins(request, db);
   }
@@ -9737,6 +9740,38 @@ async function handleGrantAdmin(request, db) {
       .bind(row.user_id),
     adminActionLogStatement(db, admin.user_id, 'grant_admin', 'user', row.user_id, { granteeEmail: email }),
   ]);
+  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(row.user_id).first();
+  return json({ user: userFromRow(updated) });
+}
+
+// #1819 (sub-issue of #1817): the missing inverse of handleGrantAdmin that
+// #1481 flagged as a product decision -- that issue's own scope has since
+// decided it: revocation is allowed (including an admin revoking their own
+// access), with the one invariant the Admin Dashboard roster panel needs
+// enforced server-side, not just hinted at in the UI: this app must never
+// end up with zero admins and no way back in short of direct D1 access.
+// The UPDATE's own "> 1 admins left" guard (not a separate SELECT-then-
+// UPDATE) is the same atomic check-then-act idiom approve_1099_form's own
+// status='draft' guard already uses above -- a second concurrent revoke
+// racing the same count can't both succeed and leave zero admins, since
+// each UPDATE re-evaluates the live COUNT at the moment it runs.
+async function handleRevokeAdmin(request, db) {
+  const admin = await requireAdmin(request, db);
+  const input = await readJson(request);
+  const email = normalizeEmail(input.email);
+  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  if (!row) throw new HttpError('No account with that email', 404);
+  if (row.is_admin !== 1) throw new HttpError('That account is not currently an admin', 400);
+  const result = await db.prepare(`
+    UPDATE users SET is_admin = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE user_id = ? AND is_admin = 1
+      AND (SELECT COUNT(*) FROM users WHERE is_admin = 1) > 1
+  `).bind(row.user_id).run();
+  if (result.meta.changes === 0) throw new HttpError('Cannot revoke the last remaining admin', 409);
+  // Logged only after confirmed (same reasoning as approve_1099_form's own
+  // comment above) -- batching this with the UPDATE would commit a log row
+  // for a revoke that the guard above actually blocked.
+  await adminActionLogStatement(db, admin.user_id, 'revoke_admin', 'user', row.user_id, { granteeEmail: email }).run();
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(row.user_id).first();
   return json({ user: userFromRow(updated) });
 }
