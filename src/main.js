@@ -11722,6 +11722,9 @@ const shopProductPreviewModalEl = document.getElementById('shop-product-preview-
 const shopProductPreviewCloseBtn = document.getElementById('shop-product-preview-close-btn');
 const shopProductPreviewCanvas = document.getElementById('shop-product-preview-canvas');
 const shopProductPreviewInfoEl = document.getElementById('shop-product-preview-info');
+const shopProductPreviewReviewBtn = document.getElementById('shop-product-preview-review-btn');
+const shopProductPreviewBuyBtn = document.getElementById('shop-product-preview-buy-btn');
+const shopProductPreviewReturnPolicyBtn = document.getElementById('shop-product-preview-return-policy-btn');
 const accountMenuLandletInfoEl = document.getElementById('account-menu-landlet-info');
 const refundPolicyModalEl = document.getElementById('refund-policy-modal');
 const refundPolicyCloseBtn = document.getElementById('refund-policy-close-btn');
@@ -14893,14 +14896,20 @@ function updateReviewFade() {
     shopReviewHintsVisible = tappedInRange;
     shopReviewHintsProduct = shopTappedProduct;
     shopReviewHintEl.classList.toggle('visible', tappedInRange);
+    // #1812: same gate, mirrored onto the migrated copy inside the preview
+    // modal -- both the floating pill-era hint and the modal's own button
+    // stay in lockstep until #1813 removes the former.
+    shopProductPreviewReviewBtn.classList.toggle('visible', tappedInRange);
     // Only a priced product has anything to "buy" — an unpriced one (the
     // common case for most placeholder catalog items) shows no buy hint at
     // all rather than one that would just 400 on click.
     const canBuy = tappedInRange && shopTappedProduct.mesh.userData.template.priceCents != null;
     shopBuyHintEl.classList.toggle('visible', canBuy);
+    shopProductPreviewBuyBtn.classList.toggle('visible', canBuy);
     // #659: same gate as the Buy hint just above — a return policy only
     // matters for something with a price to actually refund.
     shopReturnPolicyLinkEl.classList.toggle('visible', canBuy);
+    shopProductPreviewReturnPolicyBtn.classList.toggle('visible', canBuy);
   }
 }
 
@@ -15274,7 +15283,11 @@ shopCalendarHintEl.addEventListener('click', async () => {
   }
 });
 
-shopReviewHintEl.addEventListener('click', async () => {
+// #1812: shared by both #shop-review-hint (the pill-era floating button)
+// and #shop-product-preview-review-btn (its migrated copy inside the new
+// preview modal) — one function so the two can never drift apart while
+// both exist, right up until #1813 removes the former.
+async function handleShopProductReviewClick() {
   const review = shopTappedProduct;
   if (!review) return;
   // #1113: the server now derives authorship from a real logged-in builder
@@ -15296,6 +15309,7 @@ shopReviewHintEl.addEventListener('click', async () => {
   // step above.
   const text = prompt('Add a comment (up to 280 characters), or leave blank:', '');
   shopReviewHintEl.disabled = true;
+  shopProductPreviewReviewBtn.disabled = true;
   try {
     const posted = await createProductReview(review.templateId, { rating, text: text?.trim() || undefined });
     // Same unloaded-landlet guard as the sign-post and calendar handlers
@@ -15307,8 +15321,11 @@ shopReviewHintEl.addEventListener('click', async () => {
     alert(err.message || 'Could not review this product.');
   } finally {
     shopReviewHintEl.disabled = false;
+    shopProductPreviewReviewBtn.disabled = false;
   }
-});
+}
+shopReviewHintEl.addEventListener('click', handleShopProductReviewClick);
+shopProductPreviewReviewBtn.addEventListener('click', handleShopProductReviewClick);
 
 // #453: Stripe.js is loaded lazily, only the first time a real-money
 // checkout is actually needed — the overwhelming majority of purchases in
@@ -15433,10 +15450,14 @@ function closeRefundPolicyModal() {
   refundPolicyModalEl.classList.remove('visible');
   closeModalA11y(refundPolicyModalEl);
 }
-shopReturnPolicyLinkEl.addEventListener('click', () => {
+// #1812: shared by #shop-return-policy-link and its migrated copy inside
+// the preview modal, same reasoning as handleShopProductReviewClick above.
+function handleShopReturnPolicyClick() {
   refundPolicyModalEl.classList.add('visible');
   openModalA11y(refundPolicyModalEl, closeRefundPolicyModal);
-});
+}
+shopReturnPolicyLinkEl.addEventListener('click', handleShopReturnPolicyClick);
+shopProductPreviewReturnPolicyBtn.addEventListener('click', handleShopReturnPolicyClick);
 refundPolicyCloseBtn.addEventListener('click', closeRefundPolicyModal);
 
 // #1096: distinct from shopReviewHintEl's product review above — this
@@ -15465,7 +15486,9 @@ async function promptSellerFeedback(purchase) {
   }
 }
 
-shopBuyHintEl.addEventListener('click', async () => {
+// #1812: shared by #shop-buy-hint and its migrated copy inside the
+// preview modal, same reasoning as handleShopProductReviewClick above.
+async function handleShopProductBuyClick() {
   const review = shopTappedProduct;
   if (!review) return;
   const { name, priceCents } = review.mesh.userData.template;
@@ -15478,6 +15501,7 @@ shopBuyHintEl.addEventListener('click', async () => {
   const confirmed = confirm(`Buy "${name}" for ${formatPriceCents(priceCents)}? (Refunds return 99% — see Return Policy.)`);
   if (!confirmed) return;
   shopBuyHintEl.disabled = true;
+  shopProductPreviewBuyBtn.disabled = true;
   const instanceId = review.mesh.userData.instanceId;
   try {
     const result = await purchaseInstance(instanceId);
@@ -15519,8 +15543,11 @@ shopBuyHintEl.addEventListener('click', async () => {
     if (err.message !== 'Checkout cancelled.') alert(err.message || 'Could not complete this purchase.');
   } finally {
     shopBuyHintEl.disabled = false;
+    shopProductPreviewBuyBtn.disabled = false;
   }
-});
+}
+shopBuyHintEl.addEventListener('click', handleShopProductBuyClick);
+shopProductPreviewBuyBtn.addEventListener('click', handleShopProductBuyClick);
 
 // #1358: the renderer's own live (i.e. still-referenced, not-yet-disposed)
 // GPU resource counts — exposed on `window` the same way __shopAvatarModelUrl

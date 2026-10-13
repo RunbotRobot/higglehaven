@@ -70,7 +70,15 @@
     errLine.textContent = '';
   }
 
+  // #1857: a slower, overlapping load() (e.g. an earlier filter whose
+  // request is still in flight) could otherwise land after a faster, newer
+  // one and silently overwrite the table with stale rows -- same
+  // monotonic-token guard src/main.js already uses everywhere a refetch can
+  // race another one (bundlePickerLoadToken, dmLoadToken, friendsLoadToken).
+  let loadToken = 0;
+
   async function load() {
+    const myLoadToken = ++loadToken;
     clearError();
     statusLine.textContent = 'Loading…';
     const params = new URLSearchParams();
@@ -87,11 +95,13 @@
       try { body = await response.json(); } catch (_) { body = null; }
       if (!response.ok) throw new Error((body && body.error) || ('Request failed (' + response.status + ')'));
     } catch (error) {
+      if (myLoadToken !== loadToken) return;
       errLine.hidden = false;
       errLine.textContent = error.message;
       statusLine.textContent = 'Failed to load.';
       return;
     }
+    if (myLoadToken !== loadToken) return;
     render(body);
   }
 
