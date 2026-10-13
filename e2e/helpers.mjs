@@ -265,9 +265,12 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   // #1388: 10000ms was tight enough to intermittently time out under CI
   // load -- seen tripping two completely unrelated test files (friends.test.mjs,
   // friends-map.test.mjs) at this exact call site, not a bug in either
-  // feature. 20000ms matches the margin waitForLoadState('networkidle')
-  // just below already uses for its own slower post-action wait.
-  await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 20000 });
+  // feature. 20000ms matched the margin waitForLoadState('networkidle')
+  // just below already used for its own slower post-action wait.
+  // #1896: CI-wide contention has since grown past even that 20000ms
+  // margin (seen tripping simulated-purchases.test.mjs, twice in a row, with
+  // no change anywhere near this call site) -- bumped again to 30000ms.
+  await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 30000 });
   await clearVerifyModalIfShown(page);
 
   // N44: an already-showing modal (the branch above that skipped the
@@ -299,7 +302,11 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
 // age-step branch below only matters for a session that reached this
 // modal without ever attesting.
 export async function clearVerifyModalIfShown(page) {
-  const verifyModalShown = await page.waitForSelector('#verify-modal.visible', { timeout: 8000 }).then(() => true).catch(() => false);
+  // #1896: called immediately after chooseIdentity's own just-bumped
+  // 30000ms wait, under the same signup round-trip and the same CI-wide
+  // contention -- bumped these two alongside it rather than leaving them on
+  // the older, tighter margins.
+  const verifyModalShown = await page.waitForSelector('#verify-modal.visible', { timeout: 15000 }).then(() => true).catch(() => false);
   if (!verifyModalShown) return;
   if (await page.locator('#verify-age-step').isVisible()) {
     await page.check('#verify-age-attest');
@@ -308,7 +315,7 @@ export async function clearVerifyModalIfShown(page) {
   if (await page.locator('#verify-modal.visible').count() > 0) {
     await page.click('#verify-continue-btn');
   }
-  await page.waitForSelector('#verify-modal:not(.visible)', { state: 'attached', timeout: 10000 });
+  await page.waitForSelector('#verify-modal:not(.visible)', { state: 'attached', timeout: 15000 });
 }
 
 // Claims whatever landlet the claim-modal's overhead map offers first —
