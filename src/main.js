@@ -2534,7 +2534,9 @@ function renderCatalogMode() {
   catalogManualModeEl.hidden = promptActive;
   catalogPromptModeEl.hidden = !promptActive;
   for (const btn of catalogModeTabButtons) {
-    btn.classList.toggle('active', btn.dataset.catalogMode === activeCatalogMode);
+    const isActive = btn.dataset.catalogMode === activeCatalogMode;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
   }
 }
 for (const btn of catalogModeTabButtons) {
@@ -2543,6 +2545,15 @@ for (const btn of catalogModeTabButtons) {
     renderCatalogMode();
   });
 }
+// #1965: unlike its sibling toggle groups in this same modal (e.g.
+// searchScopeButtons, re-synced every time the picker opens via
+// updateCatalogSearchPanel), renderCatalogMode() was previously only ever
+// invoked from its own click handler above -- so aria-pressed would never
+// get set at all until a builder's first click on either tab. One eager
+// call here gives both buttons a correct initial aria-pressed from page
+// load, matching the already-correct initial .active/hidden state the
+// static markup provides.
+renderCatalogMode();
 
 function setPromptModeStatus(text) {
   promptModeStatusEl.textContent = text;
