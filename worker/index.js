@@ -11559,6 +11559,7 @@ async function handleLandCandidates(request, db, route, url) {
   }
 
   if (request.method === 'GET' && route.length === 1) {
+    await requireAdmin(request, db);
     const state = url.searchParams.get('state');
     if (state !== null && state !== 'pending' && state !== 'materialized') {
       throw new HttpError('state must be pending or materialized', 400);
@@ -11592,6 +11593,7 @@ async function handleLandCandidates(request, db, route, url) {
   }
 
   if (request.method === 'GET' && route.length === 2) {
+    await requireAdmin(request, db);
     const row = await db.prepare('SELECT * FROM landlet_candidates WHERE landlet_id = ?').bind(route[1]).first();
     return row ? json({ candidate: candidateFromRow(row) }) : json({ error: 'Land candidate not found' }, 404);
   }
@@ -11719,6 +11721,7 @@ async function handleLandCandidates(request, db, route, url) {
 
 async function handleLandCandidateRings(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
+    await requireAdmin(request, db);
     const limit = queryLimit(url.searchParams.get('limit'), 100);
     const cursor = decodeCursor(url.searchParams.get('cursor'));
     const conditions = [];
@@ -11747,6 +11750,7 @@ async function handleLandCandidateRings(request, db, route, url) {
   }
 
   if (request.method === 'GET' && route.length === 2) {
+    await requireAdmin(request, db);
     const row = await getLandCandidateRingWithLifecycle(db, route[1]);
     return row
       ? json({ ring: landCandidateRingFromRow(row) })
