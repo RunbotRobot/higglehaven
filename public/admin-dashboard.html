@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>higglehaven Admin Dashboard</title>
+<style>
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0; background: #f4f7ef; color: #16240a;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex; min-height: 100vh;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #5a6b52; margin: 0 0 20px; font-size: 13px; }
+  nav {
+    width: 240px; flex: 0 0 240px; background: #eef3e6; border-right: 1px solid #dbe4d0;
+    padding: 20px 12px; overflow-y: auto;
+  }
+  nav .nav-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; color: #4a5941; margin: 16px 8px 6px; }
+  nav .nav-title:first-child { margin-top: 0; }
+  nav button.nav-item, nav a.nav-item {
+    display: block; width: 100%; text-align: left; background: none; border: none; border-radius: 8px;
+    padding: 8px 10px; font: inherit; color: #16240a; cursor: pointer; text-decoration: none; margin-bottom: 2px;
+  }
+  nav button.nav-item:hover, nav a.nav-item:hover { background: #dbe4d0; }
+  nav button.nav-item.active { background: #6ca42e; color: #fff; font-weight: 600; }
+  nav .nav-item .ext-arrow { float: right; color: #5a6b52; }
+  main { flex: 1 1 auto; padding: 24px 32px; min-width: 0; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .placeholder {
+    background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; padding: 24px; color: #4a5941;
+  }
+  .placeholder a { color: #3f6e1c; }
+  .fixtures-badge {
+    display: inline-block; background: #f4d35e; color: #5a3d00; font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.03em; padding: 3px 8px; border-radius: 6px; margin-bottom: 8px;
+  }
+  .fixtures-panel .placeholder { border-color: #f4d35e; background: #fffaf0; }
+</style>
+</head>
+<body>
+<nav>
+  <h1 style="padding: 0 8px;">Admin Dashboard</h1>
+  <div class="nav-title">Panels</div>
+  <button class="nav-item active" data-panel="roster">Admin roster &amp; access</button>
+  <button class="nav-item" data-panel="models">R2 model storage</button>
+  <button class="nav-item" data-panel="world">World &amp; land candidates</button>
+  <button class="nav-item" data-panel="landlets">Landlet overrides</button>
+  <button class="nav-item" data-panel="tax">Tax / 1099 e-filing</button>
+  <button class="nav-item" data-panel="purchases">Purchases (admin fallback)</button>
+  <button class="nav-item" data-panel="fixtures">Test/Ops Fixtures</button>
+  <div class="nav-title">Other admin pages</div>
+  <a class="nav-item" href="/admin/control-room">Control Room <span class="ext-arrow">&#8599;</span></a>
+  <a class="nav-item" href="/admin/action-log">Action Log <span class="ext-arrow">&#8599;</span></a>
+</nav>
+<main>
+  <section class="panel active" id="panel-roster">
+    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
+    <div class="placeholder">
+      <p>Coming soon — list/grant/revoke admins. Tracked in
+        <a href="https://github.com/RunbotRobot/higglehaven/issues/1819" target="_blank" rel="noopener">#1819</a>.</p>
+    </div>
+  </section>
+  <section class="panel" id="panel-models">
+    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
+    <div class="placeholder">
+      <p>Coming soon — R2 model storage: list, usage, cleanup. Tracked in
+        <a href="https://github.com/RunbotRobot/higglehaven/issues/1820" target="_blank" rel="noopener">#1820</a>.</p>
+    </div>
+  </section>
+  <section class="panel" id="panel-world">
+    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
+    <div class="placeholder">
+      <p>Coming soon — world and land-candidate generation. Tracked in
+        <a href="https://github.com/RunbotRobot/higglehaven/issues/1821" target="_blank" rel="noopener">#1821</a>.</p>
+    </div>
+  </section>
+  <section class="panel" id="panel-landlets">
+    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
+    <div class="placeholder">
+      <p>Coming soon — landlet overrides: force-complete, reassign owner. Tracked in
+        <a href="https://github.com/RunbotRobot/higglehaven/issues/1822" target="_blank" rel="noopener">#1822</a>.</p>
+    </div>
+  </section>
+  <section class="panel" id="panel-tax">
+    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
+    <div class="placeholder">
+      <p>Coming soon — tax / 1099 e-filing review, approve, file, void. Tracked in
+        <a href="https://github.com/RunbotRobot/higglehaven/issues/1823" target="_blank" rel="noopener">#1823</a>.</p>
+    </div>
+  </section>
+  <section class="panel" id="panel-purchases">
+    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
+    <div class="placeholder">
+      <p>Coming soon — refund/ship fallback for purchases with a deleted seller. Tracked in
+        <a href="https://github.com/RunbotRobot/higglehaven/issues/1824" target="_blank" rel="noopener">#1824</a>.</p>
+    </div>
+  </section>
+  <section class="panel fixtures-panel" id="panel-fixtures">
+    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
+    <div class="placeholder">
+      <span class="fixtures-badge">Test/Ops only — not a real transaction</span>
+      <p>Coming soon — land-cap-grants/higgles-grants fixtures for setting up test scenarios. Tracked in
+        <a href="https://github.com/RunbotRobot/higglehaven/issues/1826" target="_blank" rel="noopener">#1826</a>.</p>
+    </div>
+  </section>
+</main>
+<script>
+(function () {
+  const buttons = [...document.querySelectorAll('nav button.nav-item')];
+  const panels = [...document.querySelectorAll('main .panel')];
+  function activate(name) {
+    buttons.forEach((btn) => btn.classList.toggle('active', btn.dataset.panel === name));
+    panels.forEach((panel) => panel.classList.toggle('active', panel.id === 'panel-' + name));
+  }
+  buttons.forEach((btn) => btn.addEventListener('click', () => activate(btn.dataset.panel)));
+})();
+</script>
+</body>
+</html>

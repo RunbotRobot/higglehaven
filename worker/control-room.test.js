@@ -886,3 +886,36 @@ describe('Control Room admin page (/admin/control-room, #N31 option 3)', () => {
     expect(response.status).toBe(404);
   });
 });
+
+// #1818 (sub-issue of #1817): same gate/serve shape as the Control Room and
+// Action Log admin pages above, just a different static file behind it.
+describe('Admin Dashboard page (/admin/dashboard, #1818)', () => {
+  it('requires sign-in for a caller with no session at all', async () => {
+    const response = await SELF.fetch('https://higglehaven.test/admin/dashboard');
+    expect(response.status).toBe(401);
+    expect(response.headers.get('content-type')).toMatch(/text\/html/);
+  });
+
+  it('rejects a signed-in non-admin session', async () => {
+    const builder = await signupBuilder('admin-dashboard-non-admin');
+    const response = await SELF.fetch('https://higglehaven.test/admin/dashboard', builder.session());
+    expect(response.status).toBe(403);
+  });
+
+  // Same reasoning as the Control Room page's own equivalent test above —
+  // this pool's ASSETS binding points at dist/, which this suite never
+  // builds, so only the requireAdmin gate itself is exercised here (a real
+  // 200 vs. a pre-build 404 for the missing static asset both count as
+  // "past the gate"). The real page's content is covered end-to-end by
+  // e2e/admin-dashboard-page.test.mjs, which runs against a real build.
+  it("lets the owner's own admin session past the access gate", async () => {
+    const response = await SELF.fetch('https://higglehaven.test/admin/dashboard', adminSession());
+    expect(response.status).not.toBe(401);
+    expect(response.status).not.toBe(403);
+  });
+
+  it('404s a non-GET request to the admin page route', async () => {
+    const response = await SELF.fetch('https://higglehaven.test/admin/dashboard', { ...adminSession(), method: 'POST' });
+    expect(response.status).toBe(404);
+  });
+});
