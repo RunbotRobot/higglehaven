@@ -4784,6 +4784,7 @@ function renderSellerList() {
     flooringToggleBtn.className = 'seller-row-action-btn metadata-save-btn';
     flooringToggleBtn.type = 'button';
     flooringToggleBtn.classList.toggle('active', isFlooringTemplate(template));
+    flooringToggleBtn.setAttribute('aria-pressed', String(isFlooringTemplate(template)));
     flooringToggleBtn.textContent = isFlooringTemplate(template) ? 'Flooring ✓' : 'Flooring';
     metadataSaveButtons.push(flooringToggleBtn);
     flooringToggleBtn.addEventListener('click', async () => {
@@ -4798,6 +4799,7 @@ function renderSellerList() {
         const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
         Object.assign(template, updated);
         flooringToggleBtn.classList.toggle('active', isFlooringTemplate(template));
+        flooringToggleBtn.setAttribute('aria-pressed', String(isFlooringTemplate(template)));
         flooringToggleBtn.textContent = isFlooringTemplate(template) ? 'Flooring ✓' : 'Flooring';
         buildCatalogPickerButtons();
       } catch (err) {
@@ -8156,6 +8158,7 @@ function exitMultiSelectMode() {
   if (!multiSelectMode) return;
   multiSelectMode = false;
   multiSelectBtn.classList.remove('active');
+  multiSelectBtn.setAttribute('aria-pressed', 'false');
   controls.enableRotate = true;
 }
 // Measure is its own sibling tool too — taps while it's on place ruler
@@ -8166,6 +8169,7 @@ function exitMeasureMode() {
   if (!measureMode) return;
   measureMode = false;
   measureBtn.classList.remove('active');
+  measureBtn.setAttribute('aria-pressed', 'false');
   clearMeasurement();
   // Defensive, not expected in normal single-pointer use (releasing a drag
   // always fires pointerup first, which already restores this via
@@ -8262,9 +8266,11 @@ for (const field of trimAxisFieldEls) {
 // off skips collision resolution entirely, letting the selected item
 // overlap anything freely until it's switched back on.
 snapToggleBtn.classList.add('active');
+snapToggleBtn.setAttribute('aria-pressed', 'true');
 snapToggleBtn.addEventListener('click', () => {
   snapToSurfaces = !snapToSurfaces;
   snapToggleBtn.classList.toggle('active', snapToSurfaces);
+  snapToggleBtn.setAttribute('aria-pressed', String(snapToSurfaces));
 });
 
 const raycaster = new THREE.Raycaster();
@@ -8385,7 +8391,9 @@ function updateSelectionUI() {
   // disabled (not hidden) for a multi-item selection so the button row
   // doesn't reflow.
   communitySignBtn.disabled = !singleMesh;
-  communitySignBtn.classList.toggle('active', !!singleMesh?.userData.isCommunitySign);
+  const isCommunitySign = !!singleMesh?.userData.isCommunitySign;
+  communitySignBtn.classList.toggle('active', isCommunitySign);
+  communitySignBtn.setAttribute('aria-pressed', String(isCommunitySign));
   // Once flagged, this same button opens the Manage Posts panel instead of
   // un-flagging directly (see its own click handler) — the label makes
   // that click destination explicit rather than reading like a second
@@ -8395,7 +8403,9 @@ function updateSelectionUI() {
   // reasoning and same toggle-then-manage button design as Community Sign
   // just above, independent of it.
   communityCalendarBtn.disabled = !singleMesh;
-  communityCalendarBtn.classList.toggle('active', !!singleMesh?.userData.isCommunityCalendar);
+  const isCommunityCalendar = !!singleMesh?.userData.isCommunityCalendar;
+  communityCalendarBtn.classList.toggle('active', isCommunityCalendar);
+  communityCalendarBtn.setAttribute('aria-pressed', String(isCommunityCalendar));
   communityCalendarBtn.textContent = singleMesh?.userData.isCommunityCalendar ? 'Community Calendar ✓ (Manage)' : 'Community Calendar';
   if (multiSelectMode) {
     // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
@@ -8471,6 +8481,7 @@ multiSelectBtn.addEventListener('click', () => {
   exitMeasureMode();
   multiSelectMode = !multiSelectMode;
   multiSelectBtn.classList.toggle('active', multiSelectMode);
+  multiSelectBtn.setAttribute('aria-pressed', String(multiSelectMode));
   // One-finger drag is repurposed as a selection swipe while multi-select
   // is on (see the swipe-select handlers below) instead of orbiting the
   // camera — two-finger pan/pinch-zoom are untouched.
@@ -8490,6 +8501,7 @@ measureBtn.addEventListener('click', () => {
   exitMultiSelectMode();
   measureMode = !measureMode;
   measureBtn.classList.toggle('active', measureMode);
+  measureBtn.setAttribute('aria-pressed', String(measureMode));
   if (measureMode) {
     // Same swallowed-tap problem as enterPlacementMode's own exitMeasureMode
     // call above, reached from the other direction (#422): a placement
@@ -13510,6 +13522,7 @@ const SHOP_FLY_BTN_ICON_FLYING_ORIGIN = '60% 40%'; // in-flight bird: shift down
 function setShopFlyBtnFlying(flying) {
   document.body.classList.toggle('shop-flying', flying);
   shopFlyBtn.classList.toggle('active', flying);
+  shopFlyBtn.setAttribute('aria-pressed', String(flying));
   // #1589: the icon shows the action a press performs, not the current
   // state — a standing bird (press to take off) while grounded, a flying
   // bird (press to land) while flying, i.e. the inverse of `flying`.
