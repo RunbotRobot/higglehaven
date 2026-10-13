@@ -7562,6 +7562,28 @@ as well (N42), so all three are now tap-gated rather than just
 `#shop-product-info`. It sits one slot higher than `#shop-review-hint`
 (`bottom: 330px` vs. `280px`) so both can show together without colliding.
 
+### Shop-side: highlighting the tapped product
+
+#1809/#1810: a tapped product's own mesh gets a visual highlight for as
+long as it stays the tapped, in-range product — reusing Build mode's
+existing `addSelectionOutline`/`removeSelectionOutline` (a `THREE.BoxHelper`
+plus a translucent fill mesh) rather than an emissive-material tint, for
+the same reason that function's own comment already gives: builder-uploaded
+models commonly use glTF's `KHR_materials_unlit`, which `GLTFLoader` turns
+into a `MeshBasicMaterial` with no `emissive` property at all, so a tint-
+based highlight silently does nothing on them. `updateReviewFade` tracks
+which product currently carries the highlight (`shopHighlightedProduct`)
+and adds/removes it exactly alongside the same `tappedInRange` check that
+already gates `#shop-buy-hint`/`#shop-review-hint` — so it appears the
+moment a product is tapped while in `SIGN_INTERACT_RADIUS_M`, and clears
+either on a follow-up tap elsewhere or on walking out of range, without
+needing its own separate state machine. The landlet-unload cleanup path
+(`unloadShopLandletInstances`) also removes the outline immediately when
+the highlighted product's own instance is disposed, the same reasoning
+that path already applies to `shopTappedProduct` itself (the outline's
+`BoxHelper`/fill reference the mesh directly, which can't wait for the
+next `updateReviewFade` tick to notice it's gone).
+
 ### Testing note
 
 `e2e/product-pricing.test.mjs` covers the seller-side contract end to end
@@ -7576,6 +7598,19 @@ note) — verified manually instead, using temporary `window.__debugSetCameraPos
 via `grep`) to aim the camera at a placed instance and simulate a tap at
 its on-screen position, confirming the info appears only after that tap
 and clears on a follow-up tap at empty sky.
+
+#1810's mesh highlight was verified the same way, but isolating its own
+logic from the raycast tap itself (already covered by the manual pass
+above) rather than re-proving that mechanism: temporary hooks exposed
+`shopReviews`, a direct `shopTappedProduct` setter, the current
+`shopHighlightedProduct.mesh`, and a way to force `shopFlightState` to
+`'grounded'` (a fresh Shop-mode entry otherwise spends real wall-clock
+time airborne in the spawn-orbit intro, which `window.__testTeleportShopAvatar`
+alone doesn't skip). Confirmed, against a real placed instance and the
+actual `updateReviewFade`/`addSelectionOutline` code path: the highlight
+appears once `shopTappedProduct` is set to an in-range product, clears on
+a direct deselect, and clears again on walking out of `SIGN_INTERACT_RADIUS_M`
+— all hooks removed before committing, confirmed via `grep`.
 
 ## Prohibited categories and digital goods
 
