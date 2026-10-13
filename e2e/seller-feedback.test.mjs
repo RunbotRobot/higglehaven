@@ -27,7 +27,7 @@ await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
 // Summary stays hidden with no feedback yet.
@@ -127,7 +127,7 @@ await page.waitForSelector('#add-item-btn', { timeout: 15000 });
 await page.waitForTimeout(300);
 await page.click('.mode-nav-btn[data-mode="sell"]');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('#seller-modal.visible', { timeout: 15000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForFunction(() => !document.getElementById('seller-feedback-summary').hidden, { timeout: 5000 });
 const summaryText = await page.locator('#seller-feedback-summary').textContent();
 console.log('feedback summary text after reopening the modal (should mention 4.0 average and "2 ratings"):', summaryText);

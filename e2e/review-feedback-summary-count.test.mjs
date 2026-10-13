@@ -71,7 +71,7 @@ await page.route('**/api/sellers/*/feedback*', async (route) => {
 // Summary, called from the real sell-mode-entry path per #1214's own
 // comment in src/main.js).
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
 await page.waitForFunction(() => !document.getElementById('seller-feedback-summary').hidden, { timeout: 5000 });

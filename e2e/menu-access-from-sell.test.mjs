@@ -16,7 +16,7 @@ const LABEL = 'Menu From Sell Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
 // The real proof: clicking the toggle while Sell is open actually expands

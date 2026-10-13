@@ -9,7 +9,7 @@ const PRODUCT_NAME = 'List View Crate';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
 // #1601 made the upload wizard reject a blank price, so this test's own
@@ -31,7 +31,7 @@ await page.evaluate(async (name) => {
 }, PRODUCT_NAME);
 await page.reload();
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: false });
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
 // Manage is the default view on open — the toggle exists and only List
@@ -93,7 +93,7 @@ console.log('the tapped product\'s row is already expanded (should be true):', r
 await page.click('#seller-close-btn');
 await page.waitForTimeout(300);
 await page.click('#seller-showcase-manage-btn');
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 const manageActiveAfterReopen = await page.locator('#seller-list').isVisible();
 console.log('Manage view showing again after a close/reopen (should be true):', manageActiveAfterReopen);

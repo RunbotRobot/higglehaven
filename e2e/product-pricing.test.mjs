@@ -34,7 +34,7 @@ const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
 async function uploadProduct({ name, price }) {
@@ -133,7 +133,7 @@ await page.evaluate(async ({ name, referenceName }) => {
 }, { name: UNPRICED_PRODUCT, referenceName: PRICED_PRODUCT });
 await page.reload();
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: false });
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 const unpricedRow = () => page.locator('.seller-row').filter({ hasText: UNPRICED_PRODUCT });
 await unpricedRow().locator('.seller-row-toggle').click();

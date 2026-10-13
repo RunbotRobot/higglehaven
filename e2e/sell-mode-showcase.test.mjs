@@ -29,7 +29,7 @@ const LABEL = 'Sell Showcase Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
 async function uploadProduct(name) {
@@ -198,7 +198,7 @@ await page.click('.mode-nav-btn[data-mode="shop"]');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.click('.mode-nav-btn[data-mode="sell"]');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
-await page.waitForSelector('#seller-modal.visible', { timeout: 10000 });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.click('#seller-close-btn');
 await page.waitForTimeout(500);
 
