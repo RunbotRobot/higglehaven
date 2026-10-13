@@ -84,6 +84,21 @@ describe('Seller Stripe Connect account', () => {
       body: JSON.stringify(validPayload({ individual: { dobMonth: 13 } })),
     }));
     expect(badDob.response.status).toBe(400);
+
+    // #1940: dobDay (1-31) and dobMonth (1-12) used to validate
+    // independently, so Feb 30 (and Apr 31, etc.) passed straight through.
+    const febThirtieth = await api('/sellers/me/stripe-account', seller.session({
+      method: 'POST',
+      body: JSON.stringify(validPayload({ individual: { dobMonth: 2, dobDay: 30 } })),
+    }));
+    expect(febThirtieth.response.status).toBe(400);
+
+    // Feb 29 on a real leap year is a valid date and must still pass.
+    const leapDayValid = await api('/sellers/me/stripe-account', seller.session({
+      method: 'POST',
+      body: JSON.stringify(validPayload({ individual: { dobMonth: 2, dobDay: 29, dobYear: 1992 } })),
+    }));
+    expect(leapDayValid.response.status).not.toBe(400);
   });
 
   it('returns 503 once the payload is valid but Stripe is not configured', async () => {

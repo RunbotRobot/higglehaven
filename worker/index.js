@@ -8207,6 +8207,14 @@ function buildStripeIndividualParams(input, userEmail, request, productDescripti
   const ssnLast4 = stringValue(individual.ssnLast4, 'individual.ssnLast4');
   if (!/^\d{4}$/.test(ssnLast4)) throw new HttpError('individual.ssnLast4 must be exactly 4 digits', 400);
 
+  const dobMonth = boundedIntegerValue(individual.dobMonth, 'individual.dobMonth', 1, 12);
+  const dobYear = boundedIntegerValue(individual.dobYear, 'individual.dobYear', 1900, new Date().getUTCFullYear());
+  // #1940: 1-31 alone accepts e.g. Feb 30 or Apr 31 -- day 0 of the
+  // following month is the last real day of dobMonth (UTC avoids any
+  // local-timezone shift landing on the wrong side of midnight).
+  const daysInDobMonth = new Date(Date.UTC(dobYear, dobMonth, 0)).getUTCDate();
+  const dobDay = boundedIntegerValue(individual.dobDay, 'individual.dobDay', 1, daysInDobMonth);
+
   return {
     country,
     email: userEmail,
@@ -8217,11 +8225,7 @@ function buildStripeIndividualParams(input, userEmail, request, productDescripti
       first_name: stringValue(individual.firstName, 'individual.firstName'),
       last_name: stringValue(individual.lastName, 'individual.lastName'),
       email: userEmail,
-      dob: {
-        day: boundedIntegerValue(individual.dobDay, 'individual.dobDay', 1, 31),
-        month: boundedIntegerValue(individual.dobMonth, 'individual.dobMonth', 1, 12),
-        year: boundedIntegerValue(individual.dobYear, 'individual.dobYear', 1900, new Date().getUTCFullYear()),
-      },
+      dob: { day: dobDay, month: dobMonth, year: dobYear },
       ssn_last_4: ssnLast4,
       address: {
         line1: stringValue(individual.addressLine1, 'individual.addressLine1'),
