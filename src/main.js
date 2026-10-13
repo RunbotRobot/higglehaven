@@ -13411,6 +13411,34 @@ function clampShopRadius(position, maxRadius) {
   }
 }
 
+// #1828: shopMaxRadiusM/shopAvatarMaxRadiusM above are each one flat
+// radius regardless of height, which only matches the world's real
+// boundary down at ground level -- the wall is a true vertical cylinder
+// there, but above the wall's rim the boundary is shopDomeMesh's own
+// curved dome (an ellipsoid cap: horizontal radius shopWorldRadiusM,
+// vertical rise shopDomeRiseM -- see its own scale.set() call), which
+// narrows in radius as height increases. Clamping to the flat radius at
+// every height let the avatar/camera sit inside the cylindrical bounding
+// box those two flat clamps (this one and clampShopCameraHeight) form
+// together while already outside the dome's actual curved surface, worst
+// right at the top. Derives the dome's own real cross-section radius at a
+// given world z from the same ellipse equation the mesh's own non-uniform
+// scale encodes, then applies the caller's existing clearance
+// (baseMaxRadiusM is already shopWorldRadiusM minus whatever clearance
+// that caller wants) by subtracting that same clearance from the dome
+// radius instead of from the flat shopWorldRadiusM -- continuous with the
+// flat formula right at the wall's own rim (heightAboveDomeBaseM <= 0),
+// where it returns baseMaxRadiusM unchanged.
+function shopMaxRadiusAtWorldZM(worldZ, baseMaxRadiusM) {
+  if (shopWorldRadiusM === null) return 0;
+  const heightAboveDomeBaseM = worldZ - (SHOP_WALL_HEIGHT_M - curvatureDropM(shopWorldRadiusM));
+  if (heightAboveDomeBaseM <= 0) return baseMaxRadiusM;
+  const clearanceM = shopWorldRadiusM - baseMaxRadiusM;
+  const domeRadiusAtHeightM = shopWorldRadiusM *
+    Math.sqrt(Math.max(0, 1 - (heightAboveDomeBaseM / shopDomeRiseM) ** 2));
+  return Math.max(0, domeRadiusAtHeightM - clearanceM);
+}
+
 // docs/SPEC.md §2's altitude/speed curve — the actual math (a power law
 // clamped to the spec's own [1x, 100x] range) now lives in flight.js as a
 // pure, directly-unit-tested function (src/flight.test.js); this call site
@@ -13734,7 +13762,7 @@ function positionShopCamera() {
   shopCameraAnchor.z += shopCameraAnchorHeightM();
   camera.position.copy(shopCameraAnchor).addScaledVector(shopViewDirection, -SHOP_CAMERA_FOLLOW_DISTANCE_M);
   clampShopCameraHeight();
-  clampShopRadius(camera.position, shopMaxRadiusM());
+  clampShopRadius(camera.position, shopMaxRadiusAtWorldZM(camera.position.z, shopMaxRadiusM()));
   // #1631: e2e-only hook (same "expose computed state purely for
   // verification" convention as window.__shopInstanceDisposedCount) --
   // lets a test confirm the avatar/camera's real world z stays under the
@@ -13745,6 +13773,15 @@ function positionShopCamera() {
     avatarZ: shopAvatarPosition.z,
     cameraZ: camera.position.z,
     domeApexWorldZ: (shopDomeMesh?.position.z ?? 0) + shopDomeRiseM,
+    // #1828: lets a test independently verify the avatar/camera stay
+    // inside the dome's actual curved cross-section at their own height,
+    // not just under its flat apex (which the fields above alone can't
+    // distinguish from poking through the dome's curved side lower down).
+    avatarRadiusM: Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y),
+    cameraRadiusM: Math.hypot(camera.position.x, camera.position.y),
+    domeBaseWorldZ: shopDomeMesh?.position.z ?? 0,
+    domeRadiusM: shopWorldRadiusM,
+    domeRiseM: shopDomeRiseM,
   };
 }
 
@@ -13938,7 +13975,7 @@ function updateShopMovement(now) {
       );
       shopAvatarFacing += turnDelta * Math.min(1, SHOP_AVATAR_TURN_EASE_PER_S * dt);
     }
-    clampShopRadius(shopAvatarPosition, shopAvatarMaxRadiusM());
+    clampShopRadius(shopAvatarPosition, shopMaxRadiusAtWorldZM(shopAvatarPosition.z, shopAvatarMaxRadiusM()));
   }
 
   // #1588: with the setting on, and only while the shopper isn't actively
