@@ -6251,6 +6251,15 @@ async function renderRedeemHigglesField() {
   const formField = document.createElement('div');
   formField.className = 'settings-field';
   settingsSectionEl.appendChild(formField);
+  // #1912: exposes this call's own formField so a test can tell a fixed
+  // early-return (no children ever appended to it) apart from the
+  // pre-fix behavior (the form still gets built and appended onto this
+  // now-detached node after a superseded tab switch) -- there's no
+  // DOM-visible difference to check otherwise, since this appendChild
+  // above (unlike renderSellSettingsSection's later, gated
+  // settingsSectionEl.appendChild(payoutsField)) is the last direct
+  // append to the live settingsSectionEl either way.
+  window.__testLastRedeemFormField = formField;
 
   let redeemStatus;
   try {
@@ -6260,6 +6269,10 @@ async function renderRedeemHigglesField() {
     statusNote.classList.add('error');
     return;
   }
+  // #1912: a tab switch (or modal reopen) during that await already tore
+  // down and rebuilt settingsSectionEl for a different tab — same #1732/#905
+  // guard renderSellSettingsSection already has after its own second await.
+  if (myToken !== settingsRenderToken) return;
 
   function describeAccountStatus() {
     if (!redeemStatus.configured) {
