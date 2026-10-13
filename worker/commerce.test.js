@@ -3557,6 +3557,14 @@ describe('Simulated purchases', () => {
     );
   });
 
+  // #1824: see worker/land.test.js's own "GET /purchases?danglingSeller=1"
+  // test for the sibling filter this endpoint also gained — moved there
+  // rather than here (its natural home, alongside the tests just above)
+  // because this file is already at the #385/#390-established per-file
+  // test-count ceiling (vitest-pool-workers/workerd's own V8 stack limit
+  // for one isolate) -- any 205th test here, this one included, tipped it
+  // into a RangeError. See #1853.
+
   // Owner (Control Room, 2026-09-10, on #651): a refund must never be
   // blocked just because a builder already redeemed their commission —
   // "a shopper should not be punished for the chance occurrence of a

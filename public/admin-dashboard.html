@@ -39,6 +39,31 @@
     text-transform: uppercase; letter-spacing: 0.03em; padding: 3px 8px; border-radius: 6px; margin-bottom: 8px;
   }
   .fixtures-panel .placeholder { border-color: #f4d35e; background: #fffaf0; }
+  /* #1824: same toolbar/table/err vocabulary admin-action-log.html already
+     established -- copied rather than shared, same "no shared JS/CSS file
+     between these admin pages" convention that file and admin-control-
+     room.html already both follow. */
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+  input, button {
+    font: inherit; border-radius: 8px; border: 1px solid #c7d3bd; padding: 8px 10px;
+    background: #fff; color: #16240a;
+  }
+  input { flex: 0 0 220px; }
+  button { cursor: pointer; background: #6ca42e; color: #16240a; border-color: #5a8e24; font-weight: 600; }
+  button:hover { background: #5a8e24; }
+  button.secondary { background: #fff; color: #16240a; font-weight: 500; }
+  button.secondary:hover { background: #eef3e6; }
+  button.danger { background: #b3402c; color: #fff; border-color: #8a2a12; }
+  button.danger:hover { background: #8a2a12; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .err { color: #8a2a12; font-size: 13px; margin: 0 0 12px; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; overflow: hidden; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eef1e8; font-size: 13px; vertical-align: top; }
+  th { background: #eef3e6; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: #4a5941; }
+  tr:last-child td { border-bottom: none; }
+  .empty { color: #6a7a60; padding: 30px; text-align: center; }
+  .row-status { font-size: 12px; color: #5a6b52; margin-top: 4px; }
+  .row-status.error { color: #8a2a12; }
 </style>
 </head>
 <body>
@@ -93,11 +118,17 @@
     </div>
   </section>
   <section class="panel" id="panel-purchases">
-    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
-    <div class="placeholder">
-      <p>Coming soon — refund/ship fallback for purchases with a deleted seller. Tracked in
-        <a href="https://github.com/RunbotRobot/higglehaven/issues/1824" target="_blank" rel="noopener">#1824</a>.</p>
+    <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a> ·
+      <a href="https://github.com/RunbotRobot/higglehaven/issues/1824" target="_blank" rel="noopener">#1824</a></p>
+    <p class="sub">Purchases whose seller has deleted their account — the only case these admin-fallback
+      refund/ship actions exist for. Ordinary seller-initiated refund/ship has its own seller-facing UI and isn't here.</p>
+    <p class="sub" id="purchasesStatusLine">Loading…</p>
+    <p class="err" id="purchasesErrLine" hidden></p>
+    <div class="toolbar">
+      <input id="purchasesFilterInput" placeholder="Filter by purchase id" aria-label="Filter loaded purchases by id" />
+      <button class="secondary" id="purchasesRefreshBtn">Refresh</button>
     </div>
+    <div id="purchasesTableWrap"></div>
   </section>
   <section class="panel fixtures-panel" id="panel-fixtures">
     <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
@@ -117,6 +148,132 @@
     panels.forEach((panel) => panel.classList.toggle('active', panel.id === 'panel-' + name));
   }
   buttons.forEach((btn) => btn.addEventListener('click', () => activate(btn.dataset.panel)));
+})();
+</script>
+<script>
+// #1824: Purchases (admin fallback) panel -- refund/mark-shipped for a
+// purchase whose seller_id is dangling (the seller deleted their
+// account). Loads the full list up front (danglingSeller is a narrow,
+// rare case in practice -- a deleted-seller purchase, not an everyday
+// one -- so there's no pagination here, same as admin-action-log.html's
+// own single-page-of-results posture) and filters client-side by
+// purchase id, rather than round-tripping per keystroke.
+(function () {
+  const statusLine = document.getElementById('purchasesStatusLine');
+  const errLine = document.getElementById('purchasesErrLine');
+  const tableWrap = document.getElementById('purchasesTableWrap');
+  const filterInput = document.getElementById('purchasesFilterInput');
+  let purchases = [];
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  function formatCents(cents) {
+    return '$' + (cents / 100).toFixed(2);
+  }
+
+  function clearError() {
+    errLine.hidden = true;
+    errLine.textContent = '';
+  }
+
+  async function load() {
+    clearError();
+    statusLine.textContent = 'Loading…';
+    let body;
+    try {
+      const response = await fetch('/api/purchases?danglingSeller=1', {
+        headers: { 'content-type': 'application/json' },
+      });
+      try { body = await response.json(); } catch (_) { body = null; }
+      if (!response.ok) throw new Error((body && body.error) || ('Request failed (' + response.status + ')'));
+    } catch (error) {
+      errLine.hidden = false;
+      errLine.textContent = error.message;
+      statusLine.textContent = 'Failed to load.';
+      return;
+    }
+    purchases = body.purchases || [];
+    statusLine.textContent = purchases.length + ' shown · ' + body.totalCount + ' total';
+    render();
+  }
+
+  // Mirrors the server's own validation on each action (handleMarkShipped/
+  // handlePurchaseRefund in worker/index.js) just enough to disable a
+  // button that would otherwise only ever 400 -- the server is still the
+  // real source of truth either way, this is purely a UX nicety.
+  function canRefund(purchase) {
+    return !purchase.refundedAt;
+  }
+  function canMarkShipped(purchase) {
+    return !purchase.refundedAt && !purchase.shippedAt && !purchase.isDigitalGood && !!purchase.paymentIntentId;
+  }
+
+  async function act(purchaseId, action, statusEl) {
+    statusEl.textContent = 'Working…';
+    statusEl.classList.remove('error');
+    try {
+      const response = await fetch('/api/purchases/' + encodeURIComponent(purchaseId) + '/' + action, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+      });
+      let body;
+      try { body = await response.json(); } catch (_) { body = null; }
+      if (!response.ok) throw new Error((body && body.error) || ('Request failed (' + response.status + ')'));
+      statusEl.textContent = action === 'refund' ? 'Refunded.' : 'Marked shipped.';
+      await load();
+    } catch (error) {
+      statusEl.classList.add('error');
+      statusEl.textContent = error.message;
+    }
+  }
+
+  function render() {
+    const filter = filterInput.value.trim();
+    const filtered = filter ? purchases.filter((p) => p.purchaseId.includes(filter)) : purchases;
+    if (!filtered.length) {
+      tableWrap.innerHTML = '<p class="empty">No matching purchases.</p>';
+      return;
+    }
+    const rows = filtered.map((p) => `
+      <tr data-purchase-id="${escapeHtml(p.purchaseId)}">
+        <td>${escapeHtml(p.createdAt)}</td>
+        <td>${escapeHtml(p.purchaseId)}</td>
+        <td>${escapeHtml(p.templateId)}</td>
+        <td>${escapeHtml(p.sellerId)} (deleted)</td>
+        <td>${escapeHtml(p.buyerLabel || '—')}</td>
+        <td>${formatCents(p.totalCents)}</td>
+        <td>${p.refundedAt ? 'Refunded ' + escapeHtml(p.refundedAt) : (p.shippedAt ? 'Shipped ' + escapeHtml(p.shippedAt) : '—')}</td>
+        <td>
+          <button class="danger action-refund" ${canRefund(p) ? '' : 'disabled'}>Refund</button>
+          <button class="secondary action-ship" ${canMarkShipped(p) ? '' : 'disabled'}>Mark Shipped</button>
+          <div class="row-status"></div>
+        </td>
+      </tr>
+    `).join('');
+    tableWrap.innerHTML = `
+      <table>
+        <thead>
+          <tr><th>When</th><th>Purchase id</th><th>Template</th><th>Seller</th><th>Buyer</th><th>Total</th><th>Status</th><th>Actions</th></tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+    tableWrap.querySelectorAll('tr[data-purchase-id]').forEach((row) => {
+      const purchaseId = row.dataset.purchaseId;
+      const statusEl = row.querySelector('.row-status');
+      row.querySelector('.action-refund').addEventListener('click', () => act(purchaseId, 'refund', statusEl));
+      row.querySelector('.action-ship').addEventListener('click', () => act(purchaseId, 'mark-shipped', statusEl));
+    });
+  }
+
+  document.getElementById('purchasesRefreshBtn').addEventListener('click', load);
+  filterInput.addEventListener('input', render);
+
+  load();
 })();
 </script>
 </body>

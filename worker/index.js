@@ -13714,6 +13714,27 @@ async function handlePurchases(request, env, route, url) {
   if (request.method === 'GET' && route.length === 1) {
     const builderId = url.searchParams.get('builderId');
     const templateId = url.searchParams.get('templateId');
+    const danglingSeller = url.searchParams.get('danglingSeller');
+    // #1824: the admin dashboard's purchases-fallback panel needs a way to
+    // find the purchases its own refund/mark-shipped admin-override
+    // branches exist for (a seller_id that's non-null but no longer in
+    // `sellers` -- see sellerExists' own comment) -- there was no way to
+    // list those before this, only the two session-scoped filters below.
+    // Admin-only since, unlike builderId/templateId above, nothing here is
+    // scoped back to the caller's own session at all.
+    if (danglingSeller) {
+      await requireAdmin(request, db);
+      const { results } = await db.prepare(`
+        SELECT * FROM purchases
+        WHERE seller_id IS NOT NULL AND seller_id NOT IN (SELECT seller_id FROM sellers)
+        ORDER BY created_at DESC LIMIT 100
+      `).all();
+      const total = await db.prepare(`
+        SELECT COUNT(*) AS count FROM purchases
+        WHERE seller_id IS NOT NULL AND seller_id NOT IN (SELECT seller_id FROM sellers)
+      `).first();
+      return json({ purchases: results.map(purchaseFromRow), totalCount: total.count });
+    }
     // builderId lists everything hosted on that builder's own land (their
     // "did I earn commission" view); templateId lists every sale of one
     // product across every builder who happens to host an instance of it
@@ -13758,7 +13779,7 @@ async function handlePurchases(request, env, route, url) {
       const total = await db.prepare('SELECT COUNT(*) AS count FROM purchases WHERE template_id = ?').bind(id).first();
       return json({ purchases: results.map(purchaseFromRow), totalCount: total.count });
     }
-    throw new HttpError('builderId or templateId is required', 400);
+    throw new HttpError('builderId, templateId, or danglingSeller is required', 400);
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'refund') {
