@@ -479,6 +479,39 @@ console.log('reply thread entry shows an image for its own imageUrl (actual):', 
 // this suite's catch-all zero-console-errors bar below.
 errors.splice(0, errors.length, ...errors.filter((e) => !e.includes('Failed to load resource')));
 
+// #1858: a slow tab-switch request (e.g. Queued) that resolves *after* a
+// faster, more recently clicked tab (Done) used to overwrite tasks/
+// totalTasks with the stale response anyway, then re-filter those wrong
+// rows against whatever tab is now active -- showing "Nothing here" even
+// though Done tasks genuinely exist, until the next poll tick happened to
+// correct it. Same page.route delay technique as
+// settings-tab-switch-race.test.mjs (#905). `title` (the first compose-form
+// message above) was marked done earlier in this file, so it's a known-good
+// anchor to confirm the Done tab's real content survives the race.
+await page.route('**/api/control-room/tasks*', async (route) => {
+  if (route.request().url().includes('status=queued')) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  await route.continue();
+});
+await page.click('.tabs button[data-status="queued"]');
+await page.waitForTimeout(200); // let the delayed Queued request actually start before switching away
+await page.click('.tabs button[data-status="done"]');
+const doneTabActiveRightAfterSwitch = await page.locator('.tabs button[data-status="done"]').evaluate((el) => el.classList.contains('active'));
+console.log('Done tab marked active right after switching away from the slow Queued click (should be true):', doneTabActiveRightAfterSwitch);
+
+// Wait past the delayed Queued response's own delay -- pre-fix, this is
+// exactly when the stale response would land and overwrite the Done tab's
+// content with "Nothing here."
+await page.waitForTimeout(2200);
+const stillOnDoneTabAfterDelay = await page.locator('.tabs button[data-status="done"]').evaluate((el) => el.classList.contains('active'));
+const doneTabShowsNothingHereAfterDelay = (await page.textContent('#list')).includes('Nothing here');
+const doneTaskStillVisibleAfterDelay = await page.locator('.card', { has: page.locator('.title', { hasText: title }) }).count() === 1;
+console.log('still on the Done tab after the delayed Queued response lands (should be true):', stillOnDoneTabAfterDelay);
+console.log('Done tab does not show "Nothing here" after the stale response lands (should be false):', doneTabShowsNothingHereAfterDelay);
+console.log('the known-done task is still visible on the Done tab after the race (should be true):', doneTaskStillVisibleAfterDelay);
+await page.unroute('**/api/control-room/tasks*');
+
 const pass = anonStatus === 401 && anonSeesSignIn &&
   heading.includes('higglehaven Control Room') &&
   adminsListText.includes('@') &&
@@ -505,5 +538,9 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   !needsAnswerPillGoneOnceDone &&
   cardThumbSrc === taskImageUrl &&
   replyImgSrc === replyImageUrl &&
+  doneTabActiveRightAfterSwitch &&
+  stillOnDoneTabAfterDelay &&
+  !doneTabShowsNothingHereAfterDelay &&
+  doneTaskStillVisibleAfterDelay &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Control Room admin page (#N31 option 3): same-origin board at /admin/control-room', errors });
