@@ -10181,15 +10181,17 @@ function appendNotificationRow(notification) {
   // separate per-row dismiss button, and "Mark all read" still exists
   // for clearing the whole list at once.
   if (!notification.readAt) {
-    row.addEventListener('click', async () => {
+    const markReadOnClick = async () => {
       try {
         await markNotificationRead(notification.notificationId);
         row.classList.remove('unread');
+        row.removeEventListener('click', markReadOnClick);
         refreshNotificationsBadge();
       } catch (err) {
         console.warn('Could not mark notification read:', err);
       }
-    });
+    };
+    row.addEventListener('click', markReadOnClick);
   }
   notificationsListEl.appendChild(row);
 }
