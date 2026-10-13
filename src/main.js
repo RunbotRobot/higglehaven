@@ -12468,6 +12468,11 @@ let shopReviewHintsVisible = false;
 // SIGN_INTERACT_RADIUS_M (two nearby items on the same shelf, say) left
 // the Buy/Return-Policy hints showing the previous product's priced state.
 let shopReviewHintsProduct = null;
+// #1810: which product's mesh currently carries addSelectionOutline's
+// highlight -- mirrors shopReviewHintsProduct's own "last computed for"
+// role, so updateReviewFade can tell a highlight change from a no-op on
+// the same product it's already applied to.
+let shopHighlightedProduct = null;
 
 // Sustained view-attention tracking (#215, sub-issue of #207 — docs/SPEC.md
 // §2's item-handling animations trigger "on sustained view-attention," not
@@ -14708,6 +14713,16 @@ function updateReviewFade() {
     if (review === shopTappedProduct) tappedDistance = distance;
   }
   const tappedInRange = !!shopTappedProduct && tappedDistance <= SIGN_INTERACT_RADIUS_M;
+  // #1810: the mesh highlight shares the Buy/Review hints' own range gate —
+  // walking out of SIGN_INTERACT_RADIUS_M clears it the same way it hides
+  // those buttons, rather than leaving a highlight glowing on a product the
+  // shopper is no longer actually standing next to.
+  const desiredHighlight = tappedInRange ? shopTappedProduct : null;
+  if (desiredHighlight !== shopHighlightedProduct) {
+    if (shopHighlightedProduct) removeSelectionOutline(shopHighlightedProduct.mesh);
+    if (desiredHighlight) addSelectionOutline(desiredHighlight.mesh);
+    shopHighlightedProduct = desiredHighlight;
+  }
   // #994: recompute on a tapped-product change too, not just a tappedInRange
   // flip -- two nearby in-range products can be tapped one after another
   // without tappedInRange ever toggling, which used to leave the hints
@@ -15352,6 +15367,14 @@ function unloadShopLandletInstances(entry) {
       shopReviewHintEl.classList.remove('visible');
       shopBuyHintEl.classList.remove('visible');
       shopReturnPolicyLinkEl.classList.remove('visible');
+    }
+    // #1810: same reasoning as the hints just above -- the highlight's own
+    // BoxHelper/fill reference this review's mesh directly, which is about
+    // to be disposed below, so it can't wait for the next updateReviewFade
+    // tick to notice the tapped product is gone.
+    if (shopHighlightedProduct === review) {
+      removeSelectionOutline(review.mesh);
+      shopHighlightedProduct = null;
     }
   }
   // Any confetti burst still mid-flight on this landlet would otherwise
