@@ -4686,9 +4686,12 @@ async function handleDirectMessages(request, db, route, url) {
     // received messages read in one call, mirroring POST
     // /api/notifications/mark-all-read's own bulk shape.
     const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+    // #1889: session -> rate limit -> readJson -> validate, matching the
+    // dominant order this file's other mutating endpoints use (e.g.
+    // friendships' PATCH/DELETE, calendar events, sign posts).
+    await checkRateLimit(db, `direct-message-mutate:${sessionBuilder.builder_id}`, DIRECT_MESSAGE_MUTATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const withBuilderId = stringValue(input.withBuilderId, 'withBuilderId');
-    await checkRateLimit(db, `direct-message-mutate:${sessionBuilder.builder_id}`, DIRECT_MESSAGE_MUTATE_RATE_LIMIT_MAX);
     await db.prepare(`
       UPDATE direct_messages SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE recipient_builder_id = ? AND sender_builder_id = ? AND read_at IS NULL
