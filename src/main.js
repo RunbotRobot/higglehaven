@@ -14997,6 +14997,12 @@ async function showShopProductPreview(template) {
   sun.position.set(2, -3, 4);
   scene.add(sun);
 
+  // #1876: lets an e2e test simulate a slow load deterministically, same
+  // reasoning as window.__testUploadPreviewLoadDelayMs (#1465). Always
+  // undefined outside of that one test.
+  if (window.__testShopProductPreviewLoadDelayMs) {
+    await new Promise((resolve) => setTimeout(resolve, window.__testShopProductPreviewLoadDelayMs));
+  }
   // At the origin and with no crop, same as showAxisPreview — shows the
   // product's real full-size geometry, not the specific crop any one
   // placed instance of it happens to have in the world.
@@ -15011,6 +15017,9 @@ async function showShopProductPreview(template) {
     // showAxisPreview uses: this object was never added to any scene the
     // dispose function above knows about.
     if (previewObject) disposeObject(previewObject);
+    // Exposed purely so an e2e test can confirm the dispose above actually
+    // ran, same reasoning as window.__supersededUploadPreviewDisposals (#1465).
+    window.__supersededShopProductPreviewDisposals = (window.__supersededShopProductPreviewDisposals ?? 0) + 1;
     return;
   }
   if (!previewObject) return;
@@ -15053,6 +15062,13 @@ function openShopProductPreviewModal(review) {
 
 function closeShopProductPreviewModal() {
   shopProductPreviewModalEl.classList.remove('visible');
+  // #1876: bump the token even though there's nothing to dispose yet if a
+  // showShopProductPreview() call is still in flight -- without this, that
+  // call's own stale-load check (myLoadToken !== shopProductPreviewLoadToken)
+  // never fires, so it finishes building a full scene/renderer/controls
+  // after the modal is already closed and assigns it as the live
+  // shopProductPreview, leaking a WebGL context until the next preview open.
+  shopProductPreviewLoadToken++;
   disposeShopProductPreview();
   closeModalA11y(shopProductPreviewModalEl);
 }
