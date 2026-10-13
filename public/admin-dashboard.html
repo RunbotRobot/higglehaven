@@ -322,17 +322,28 @@
     return body;
   }
 
+  // #1877: same monotonic-token guard #1857/PR #1861 already shipped for
+  // admin-action-log.html's own load() -- loadRoster() is called from four
+  // places that can overlap (initial load, Refresh, and grantAdmin/
+  // revokeAdmin's own success paths), so a slower, earlier call landing
+  // after a faster, newer one could otherwise silently overwrite the table
+  // with stale rows.
+  let loadRosterToken = 0;
+
   async function loadRoster() {
+    const myLoadRosterToken = ++loadRosterToken;
     clearError();
     tableWrap.innerHTML = '<p class="empty">Loading…</p>';
     let body;
     try {
       body = await apiFetch('/api/auth/admins');
     } catch (error) {
+      if (myLoadRosterToken !== loadRosterToken) return;
       showError(error.message);
       tableWrap.innerHTML = '<p class="empty">Failed to load.</p>';
       return;
     }
+    if (myLoadRosterToken !== loadRosterToken) return;
     renderRoster(body.admins || []);
   }
 
