@@ -8590,6 +8590,11 @@ saveBundleBtn.addEventListener('click', async () => {
   saveBundleBtn.disabled = true;
   try {
     const bundle = await createBundle({ name: name.trim(), items: relativeItemsForMeshes(meshes), shared });
+    // #1831: bumps bundlePickerLoadToken so this local, already-up-to-date
+    // mutation can't later be clobbered by a slower, now-stale concurrent
+    // fetch (e.g. Build mode's own deferred initial bundles load) landing
+    // after and overwriting it — same guard rename/share/delete already use.
+    ++bundlePickerLoadToken;
     myBundles.unshift(bundle);
     if (shared) communityBundles.unshift(bundle);
     renderBundlePicker();
@@ -17062,6 +17067,11 @@ async function bootstrap() {
 
   currentMode = 'build';
   updateModeNavUI();
+  // #1831: fetchCatalog needs no builderId (unlike resolveLandletId just
+  // below, which filters by it) -- firing it alongside ensureBuilderIdentity
+  // rather than after overlaps that round trip with this one instead of
+  // paying for both in serial.
+  const catalogPromise = fetchCatalog();
   builderId = await ensureBuilderIdentity();
   if (!builderId) {
     // Declined to log in (closed #auth-modal without signing in/up) —
@@ -17069,6 +17079,7 @@ async function bootstrap() {
     // "Authentication"), so there's nothing left to build on. N44: lands
     // on showShopAccessGate's shared end state, not a full enterShopMode()
     // call — see that function's own comment for why.
+    catalogPromise.catch(() => {}); // abandoning it here -- avoid an unhandled-rejection warning if it fails
     currentMode = 'shop';
     updateModeNavUI();
     showShopAccessGate();
@@ -17080,19 +17091,44 @@ async function bootstrap() {
   let instances;
   try {
     currentLandletId = await resolveLandletId();
-    const [catalog, remoteInstances, landletRecord, bundles, shared, levels, allLandlets] = await Promise.all([
-      fetchCatalog(), fetchInstances(currentLandletId), fetchLandlet(currentLandletId), fetchBundles(), fetchSharedBundles(),
-      fetchLandletLevels(currentLandletId), fetchAllLandlets(),
+    const [catalog, remoteInstances, landletRecord, levels] = await Promise.all([
+      catalogPromise, fetchInstances(currentLandletId), fetchLandlet(currentLandletId),
+      fetchLandletLevels(currentLandletId),
     ]);
     activeCatalog = catalog;
     instances = remoteInstances;
-    myBundles = bundles;
-    communityBundles = shared;
+    myBundles = [];
+    communityBundles = [];
     applyLandletShape(landletRecord);
     currentLandletAreaM2 = landletRecord.areaM2;
     currentLandletLevels = levels;
     currentLevelIndex = 0;
-    addBuildModeNeighborOutlines(landletRecord, allLandlets);
+    // #1831: neighbor outlines are a decorative, non-interactive visual-only
+    // addition (see addBuildModeNeighborOutlines's own comment: "[n]ever
+    // used as a raycast target... no interactivity guard is needed") -- not
+    // something the builder needs before the scene itself becomes usable,
+    // so this fetch moves off Build's blocking critical path.
+    fetchAllLandlets()
+      .then((allLandlets) => addBuildModeNeighborOutlines(landletRecord, allLandlets))
+      .catch((err) => console.warn('Could not load neighboring landlet outlines:', err));
+    // #1831: the bundle browser isn't needed until the builder actually
+    // opens the catalog picker -- deferring this pair off the critical
+    // path too, re-rendering the (already-safe-to-redraw) picker once it
+    // resolves instead of blocking the whole scene on it. Shares
+    // bundlePickerLoadToken with Save Bundle and the rename/share/delete
+    // handlers below (#1349/#1787's own guard) -- this fetch was already
+    // in flight by the time Build mode's scene renders, so a builder who
+    // saves a new bundle before it resolves must not have it clobbered by
+    // this slower, now-stale snapshot landing after.
+    const bundlesLoadToken = ++bundlePickerLoadToken;
+    Promise.all([fetchBundles(), fetchSharedBundles()])
+      .then(([bundles, shared]) => {
+        if (bundlesLoadToken !== bundlePickerLoadToken) return; // superseded while loading -- a newer bundle-picker action owns the picker now
+        myBundles = bundles;
+        communityBundles = shared;
+        renderBundlePicker();
+      })
+      .catch((err) => console.warn('Could not load bundles:', err));
   } catch (err) {
     console.warn('Backend unreachable, falling back to local/placeholder data:', err);
     activeCatalog = FALLBACK_CATALOG;
