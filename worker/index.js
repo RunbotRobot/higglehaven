@@ -2829,6 +2829,16 @@ const SELLER_CREATE_RATE_LIMIT_MAX = 20;
 const BUILDER_RENAME_RATE_LIMIT_MAX = 20;
 const SELLER_RENAME_RATE_LIMIT_MAX = 20;
 
+// #1844: all three GET branches below (ids=, label=, and the plain
+// paginated list) call recomputeLandCapsBatch, which runs three full-table
+// GROUP BY aggregate scans plus a batch of UPDATEs -- unscoped to the
+// requested page/batch, so an unauthenticated caller hitting any of them
+// repeatedly forces unbounded real work. Same shape and same fix as
+// AUCTION_LIST_RATE_LIMIT_MAX's own comment describes for GET /api/auctions
+// (#1790/#1791) -- a generous bucket sized for real interactive browsing,
+// not the tight budget a rare authenticated write gets.
+const BUILDER_LIST_RATE_LIMIT_MAX = 200;
+
 async function handleBuilders(request, env, db, route, url) {
   // Ahead of the generic POST/PUT/PATCH/DELETE-by-id branches below, not
   // because of a routing conflict (this is GET, those are other methods)
@@ -2888,6 +2898,7 @@ async function handleBuilders(request, env, db, route, url) {
   }
 
   if (request.method === 'GET' && route.length === 1) {
+    await checkRateLimit(db, `builder-list:${clientIp(request)}`, BUILDER_LIST_RATE_LIMIT_MAX);
     const idsParam = url.searchParams.get('ids');
     // #717 (sub-issue of #711): a bounded batch-by-ids lookup, for a
     // caller (Shop mode's per-landlet owner-label map) that only needs
