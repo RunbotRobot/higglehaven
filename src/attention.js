@@ -29,6 +29,31 @@ export function isWithinAttentionRange(distanceM, dot, { radiusM, fovCos }) {
 // main.js passes as `anchor` — the camera's trailing offset never enters
 // into it) instead of the camera's own position avoids that: an item
 // behind the shopper always reports a negative dot, full stop.
+// #1814: owner decision -- sustained attention (and so item-handling) must
+// gate on the avatar's own body facing (shopAvatarFacing), not the camera's
+// look direction, so a camera-only glance (right-stick free-look without
+// the avatar's body turning that way) never triggers the reach animation.
+// shopAvatarFacing and the camera's own yaw (shopYaw) already share the
+// same global Z-axis rotation convention in main.js -- confirmed by the
+// atan2(sin(a-b), cos(a-b)) comparisons that mix the two directly -- but
+// only the camera's horizontal forward vector is readily computed each
+// frame (via camera.getWorldDirection()); there's no separate "avatar rig's
+// own local-forward axis" constant available to rotate by instead. Since a
+// fixed Z-axis rotation is linear, rotating the camera's already-correct
+// horizontal forward by the angular difference between the two yaws
+// produces the equally-correct body forward, without needing that local-
+// forward convention at all.
+export function yawRotatedForward(forward, fromYaw, toYaw) {
+  const delta = toYaw - fromYaw;
+  const cosDelta = Math.cos(delta);
+  const sinDelta = Math.sin(delta);
+  return {
+    x: forward.x * cosDelta - forward.y * sinDelta,
+    y: forward.x * sinDelta + forward.y * cosDelta,
+    z: forward.z,
+  };
+}
+
 export function attentionDistanceAndDot(anchor, forward, itemWorldPosition) {
   const dx = itemWorldPosition.x - anchor.x;
   const dy = itemWorldPosition.y - anchor.y;

@@ -318,6 +318,10 @@ async function routeRequest(request, env, ctx) {
     return handleAdminActionLogPage(request, env);
   }
 
+  if (url.pathname === '/admin/dashboard') {
+    return handleAdminDashboardPage(request, env);
+  }
+
   if (url.pathname.startsWith('/api/')) {
     return handleApi(request, env, url, ctx).catch((error) => {
       const httpError = error instanceof HttpError ? error : databaseHttpError(error);
@@ -883,6 +887,21 @@ async function handleAdminActionLogPage(request, env) {
     return htmlResponse(controlRoomSignInPage(error, 'higglehaven Admin Action Log'), error.status);
   }
   return env.ASSETS.fetch(new Request(new URL('/admin-action-log.html', request.url), request));
+}
+
+// #1818 (sub-issue of #1817): same "gate, then hand off to a plain static
+// file over the ASSETS binding" shape as the two admin pages above — this
+// one is just the shell/nav other #1817 sub-issues plug their own panel
+// content into, not a page with real business logic of its own yet.
+async function handleAdminDashboardPage(request, env) {
+  if (request.method !== 'GET') return json({ error: 'Not found' }, 404);
+  try {
+    await requireAdmin(request, env.DB);
+  } catch (error) {
+    if (!(error instanceof HttpError)) throw error;
+    return htmlResponse(controlRoomSignInPage(error, 'higglehaven Admin Dashboard'), error.status);
+  }
+  return env.ASSETS.fetch(new Request(new URL('/admin-dashboard.html', request.url), request));
 }
 
 async function handleControlRoom(request, env, route, url) {
