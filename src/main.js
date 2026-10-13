@@ -16660,6 +16660,15 @@ async function enterLayoutPreviewMode() {
     showShopAccessGate();
     return;
   }
+  // #1958: notifications/friends/DM stay reachable from this mode (see
+  // SELL_HIDDEN_BUILDER_UI_IDS's own comment below), same as Sell/Build --
+  // enterSellMode and bootstrap()'s own Build branch both refresh these
+  // three badges right after resolving builderId; this mode-entry path
+  // resolved it the same way but never did, leaving the bell/friends/DM
+  // badges stuck at their stale default while fully visible and clickable.
+  refreshNotificationsBadge();
+  refreshFriendsBadge();
+  refreshDmBadge();
   populateLayoutPreviewPasteTarget();
 
   let layout;

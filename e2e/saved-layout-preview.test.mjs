@@ -14,6 +14,19 @@ import {
 
 const LABEL = 'Saved Layout Preview Suite Tester';
 const LEVEL_HEIGHT_M = 10;
+const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
+
+// #1958: plain Node-side fetch, not page.evaluate(fetch(...)) -- same
+// "don't clobber the real player identity's own cookie jar" reasoning
+// e2e/helpers.mjs's own adminApi uses. Needs a second, genuinely separate
+// builder identity (not the page's own LABEL one) to send a real friend
+// request, which is the simplest existing action that fires a
+// fireNotification() at a specific recipientBuilderId.
+function extractSessionCookie(response) {
+  const setCookie = response.headers.get('set-cookie');
+  const match = setCookie?.match(/hh_session=([^;]+)/);
+  return match ? `hh_session=${match[1]}` : null;
+}
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
@@ -30,6 +43,32 @@ async function fetchJson(pathAndQuery, options) {
 const { builders } = (await fetchJson('/api/builders')).body;
 const me = builders.find((b) => b.label === LABEL);
 await grantLandCapHeadroomAsAdmin(me.builderId);
+
+// #1958: a real unread notification for `me`, created before ever
+// entering layout-preview mode below, so the badge-refresh assertion
+// there has a real nonzero count to check against.
+const friendSenderEmail = `e2e-layout-preview-friend-${crypto.randomUUID()}@e2e.test`;
+const friendSenderSignup = await fetch(`${BASE_URL}/api/auth/signup`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    email: friendSenderEmail, password: 'e2e-layout-preview-friend-password-123',
+    username: `e2e-layout-preview-friend-${crypto.randomUUID().slice(0, 8)}`, ageAttested: true,
+  }),
+});
+const friendSenderCookie = extractSessionCookie(friendSenderSignup);
+// Sending a friend request needs a verified session (requireSessionBuilder
+// -> assertVerified) -- signup already age-attests, so only the credit-
+// card/ID tier is missing. No Stripe secret is configured for this suite,
+// so confirm-card's own simulated fallback grants it directly, no real
+// card/SetupIntent needed.
+await fetch(`${BASE_URL}/api/auth/confirm-card`, { method: 'POST', headers: { cookie: friendSenderCookie } });
+const friendRequestSent = await fetch(`${BASE_URL}/api/friendships`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', cookie: friendSenderCookie },
+  body: JSON.stringify({ recipientBuilderId: me.builderId }),
+});
+console.log('friend request sent to the preview-mode builder (status should be 201):', friendRequestSent.status);
 
 const { landlets } = (await fetchJson(`/api/landlets?status=claimed&ownerBuilderId=${me.builderId}&limit=100`)).body;
 const landletId = landlets[0].landletId;
@@ -73,6 +112,23 @@ await page.waitForTimeout(1000); // let the model actually load/render before in
 const previewNameShown = await page.locator('#layout-preview-name').textContent();
 console.log('preview toolbar name (should mention Level 1):', previewNameShown);
 
+// #1958: the notifications bell stays visible/clickable in this mode
+// (SELL_HIDDEN_BUILDER_UI_IDS doesn't hide it), so its badge should
+// reflect the real unread friend-request notification sent above, not
+// the stale/default hidden state. Same "open the account menu first" step
+// e2e/seller-upload-and-resize.test.mjs's own badge check uses -- the
+// badge span itself only renders inside the expanded account-menu panel.
+await openAccountMenu(page);
+const previewBadgeVisible = await page.locator('#notifications-badge').isVisible();
+const previewBadgeText = await page.locator('#notifications-badge').textContent();
+console.log('notifications badge in layout-preview mode (should be visible, count 1):', previewBadgeVisible, previewBadgeText);
+await page.click('#account-menu-toggle'); // collapse the panel back out before the marquee-drag step below needs the canvas clear
+// state: 'attached', not the default 'visible' -- same reasoning
+// chooseIdentity's own auth-modal wait documents: the collapsed panel is
+// still attached to the DOM, just hidden, which Playwright's default
+// "wait for visible" can never satisfy.
+await page.waitForSelector('#account-menu-panel:not(.expanded)', { state: 'attached', timeout: 5000 });
+
 // Marquee-select the whole visible canvas — coordinate-agnostic way to
 // catch whatever's on screen without needing to know the exact projected
 // pixel position of the one placed instance.
@@ -114,11 +170,17 @@ console.log('saved layouts after delete (should be 0):', savedLayoutsAfterDelete
 
 const pass = levelAdded.status === 201 &&
   placed.status === 201 &&
+  friendRequestSent.status === 201 &&
   levelRemoved.status === 200 &&
   rowTextCorrect &&
   /Level 1/.test(previewNameShown) &&
+  previewBadgeVisible && previewBadgeText.trim() === '1' &&
   selectionAfterDrag.includes('1 selected') &&
   selectionAfterClick.trim() === '' &&
   savedLayoutsAfterDelete.length === 0 &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Saved Layouts panel + faux-layout preview + marquee select (#634/#635)', errors });
+await finish(browser, {
+  pass,
+  label: 'Saved Layouts panel + faux-layout preview + marquee select (#634/#635), notifications badge refreshes in layout-preview mode (#1958)',
+  errors,
+});
