@@ -410,6 +410,12 @@ export default {
     ctx.waitUntil(expireStaleVideoGenerationJobs(env.DB).catch((error) => {
       console.error('expireStaleVideoGenerationJobs failed', error);
     }));
+    // #2033 (sub-issue of #1201): without this, an unreversed admin
+    // suspension's own grace_period_ends_at passing silently does nothing
+    // -- nothing else ever acts on it.
+    ctx.waitUntil(escalateExpiredSuspensions(env.DB).catch((error) => {
+      console.error('escalateExpiredSuspensions failed', error);
+    }));
     // #1994: without this, no credit orb ever spawns at all -- this is
     // the only mechanism that creates one.
     ctx.waitUntil(spawnCreditOrbIfDue(env.DB).catch((error) => {
@@ -1720,7 +1726,6 @@ async function handleCatalog(request, db, route, url, models, env) {
     }
     const sellerIds = templates.map((template) => template.sellerId).filter((id) => id);
     if (sellerIds.length > 0) await assertReferencesExist(db, 'sellers', 'seller_id', sellerIds, 'sellerId');
-    await Promise.all(templates.map((template) => assertUploadedModelExists(models, template.modelUrl)));
     const existingOwnerRows = await db.prepare(`
       SELECT template_id, seller_id, width_m, depth_m, height_m, metadata_json FROM catalog_templates WHERE template_id IN (${[...ids].map(() => '?').join(', ')})
     `).bind(...ids).all();
@@ -1751,6 +1756,16 @@ async function handleCatalog(request, db, route, url, models, env) {
     if (request.method === 'PUT') {
       await checkRateLimit(db, sessionSeller ? `catalog-patch:${sessionSeller.seller_id}` : `catalog-patch:${clientIp(request)}`, CATALOG_PATCH_RATE_LIMIT_MAX);
     }
+    // #2075: moved below the rate-limit check above (and the ownership/
+    // session resolution it depends on) -- this Promise.all is up to 100
+    // real R2 bucket.head() calls, the one genuinely expensive step in this
+    // handler, and used to run before checkRateLimit ever got a chance to
+    // reject the request, so a caller already over the limit still paid
+    // the full R2 cost on every rejected call. The single-item PUT/PATCH
+    // sibling (worker/index.js's own handler for /catalog/:templateId)
+    // already rate-limits before its own assertUploadedModelExists call;
+    // this brings the batch endpoint in line with that ordering.
+    await Promise.all(templates.map((template) => assertUploadedModelExists(models, template.modelUrl)));
     const conflictClause = request.method === 'PUT' ? `
       ON CONFLICT(template_id) DO UPDATE SET
         name = excluded.name, category = excluded.category, subcategory = excluded.subcategory,
@@ -11042,15 +11057,14 @@ async function handleLogout(request, db, url) {
 // check itself can't be used to brute-force the real password.
 const DELETE_ACCOUNT_RATE_LIMIT_MAX = 5;
 
-async function handleDeleteAccount(request, db, url) {
-  const user = await requireCurrentUser(request, db);
-  await checkRateLimit(db, `delete-account:${user.user_id}`, DELETE_ACCOUNT_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const password = typeof input.password === 'string' ? input.password : '';
-  if (!(await verifyPassword(password, user.password_hash))) {
-    throw new HttpError('Incorrect password', 401);
-  }
-
+// #2033 (sub-issue of #1201): the actual row-mutating cascade, split out
+// of handleDeleteAccount so the 30-day grace-period auto-escalation (see
+// escalateExpiredSuspensions near scheduled()'s other cron jobs) can run
+// the exact same deletion against a suspended account that never got
+// lifted, rather than re-deriving a second, potentially-divergent
+// implementation -- the whole point of building suspension on top of
+// this existing shape in the first place, per #1201's own owner comment.
+async function cascadeDeleteAccount(db, userId) {
   // Freed rather than hard-deleted, per #1145's "email/username freed ...
   // per the owner's chosen approach" -- rewritten to a placeholder unique
   // to this user_id so the real email/username are available again for a
@@ -11062,7 +11076,7 @@ async function handleDeleteAccount(request, db, url) {
   // since nothing ever looks it up again once it's gone, and leaving it
   // set would needlessly keep blocking a future signup under some other
   // address that happens to canonicalize the same way.
-  const suffix = user.user_id.slice(-8);
+  const suffix = userId.slice(-8);
   const deletedEmail = `deleted-${suffix}@deleted.invalid`;
   const deletedUsername = `deleted-${suffix}`;
   // Hashing a random, immediately-discarded password (rather than, say,
@@ -11079,14 +11093,61 @@ async function handleDeleteAccount(request, db, url) {
         deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE user_id = ?
-    `).bind(deletedEmail, deletedUsername, revokedPasswordHash, user.user_id),
+    `).bind(deletedEmail, deletedUsername, revokedPasswordHash, userId),
     // Same "sign out every device" reasoning handleResetPassword's own
     // session wipe already uses -- there is no more final an account
     // action than this one to leave a live session riding on.
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(user.user_id),
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId),
   ]);
+}
+
+async function handleDeleteAccount(request, db, url) {
+  const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `delete-account:${user.user_id}`, DELETE_ACCOUNT_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const password = typeof input.password === 'string' ? input.password : '';
+  if (!(await verifyPassword(password, user.password_hash))) {
+    throw new HttpError('Incorrect password', 401);
+  }
+
+  await cascadeDeleteAccount(db, user.user_id);
 
   return json({ accountDeleted: true }, 200, { 'set-cookie': clearSessionCookieHeader(url) });
+}
+
+// #2033 (sub-issue of #1201): an admin-initiated suspension (#2029) that
+// nobody lifts within its own grace_period_ends_at auto-escalates into
+// this same real account deletion -- the owner's own confirmed scope for
+// #1201 ("Build suspension only" as the admin-facing tool, with an
+// unreversed one eventually becoming permanent rather than sitting
+// suspended forever). The UPDATE ... RETURNING below is this function's
+// own atomic idempotency guard (escalated_at IS NULL), the same
+// "claim committed before the fallible step; re-arm on failure" shape
+// warnInactiveLandletOwners above already uses -- a transient failure
+// partway through one account's cascade can't leave it stuck
+// unprocessed forever, and a second concurrent run of this same cron
+// can't double-escalate the same suspension.
+export async function escalateExpiredSuspensions(db) {
+  const due = await db.prepare(`
+    UPDATE account_suspensions
+    SET escalated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE grace_period_ends_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      AND lifted_at IS NULL AND escalated_at IS NULL
+    RETURNING suspension_id, user_id, admin_user_id
+  `).run();
+  for (const row of due.results) {
+    try {
+      await cascadeDeleteAccount(db, row.user_id);
+      await adminActionLogStatement(db, null, 'auto_escalate_suspension', 'user', row.user_id, {
+        suspensionId: row.suspension_id, originalAdminUserId: row.admin_user_id,
+      }).run();
+    } catch (error) {
+      console.error('escalateExpiredSuspensions: failed to escalate suspension, re-arming for a future retry', row.suspension_id, error);
+      await db.prepare(
+        'UPDATE account_suspensions SET escalated_at = NULL WHERE suspension_id = ?',
+      ).bind(row.suspension_id).run();
+    }
+  }
 }
 
 // #1181 (sub-issue of #1126, owner decision via its own GitHub comment):
@@ -14112,8 +14173,128 @@ async function handleInstances(request, env, route, url) {
     return handleCalendarEvents(request, db, route);
   }
 
+  if (route.length >= 3 && route[2] === 'backups') {
+    return handleInstanceBackups(request, db, route);
+  }
+
   if (request.method === 'POST' && route.length === 3 && route[2] === 'purchase') {
     return handleInstancePurchase(request, env, route[1]);
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+// #2050 (sub-issue of #1952): a placed instance's own configured backup/
+// replacement chain -- nested under /instances/:id/backups for the same
+// "never exists independent of its instance" reasoning handleSignPosts/
+// handleCalendarEvents already use. Every op here is gated to the
+// instance's own hosting landlet's owner (builder-facing configuration,
+// not shopper-facing content) -- there's no moderation/admin path the way
+// sign posts have, since nobody but the owner has any business touching
+// their own backup chain.
+const INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX = 200;
+
+function backupFromRow(row) {
+  return {
+    backupId: row.backup_id,
+    instanceId: row.instance_id,
+    position: row.position,
+    templateId: row.template_id,
+    createdAt: row.created_at,
+  };
+}
+
+async function handleInstanceBackups(request, db, route) {
+  const instanceId = route[1];
+  const instance = await db.prepare('SELECT instance_id, landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
+  if (!instance) return json({ error: 'Instance not found' }, 404);
+  const sessionBuilder = await requireSessionBuilder(request, db);
+  await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
+
+  if (request.method === 'GET' && route.length === 3) {
+    const { results } = await db.prepare(
+      'SELECT * FROM placed_instance_backups WHERE instance_id = ? ORDER BY position',
+    ).bind(instanceId).all();
+    return json({ backups: results.map(backupFromRow) });
+  }
+
+  if (request.method === 'POST' && route.length === 3) {
+    await checkRateLimit(db, `instance-backup-write:${sessionBuilder.builder_id}`, INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX);
+    const input = await readJson(request);
+    const templateId = stringValue(input.templateId, 'templateId');
+    await assertReferenceExists(db, 'catalog_templates', 'template_id', templateId, 'templateId');
+    // Appends to the end of the chain -- the new entry's position is the
+    // chain's own current length, not a client-supplied index.
+    const tail = await db.prepare(
+      'SELECT COUNT(*) AS count FROM placed_instance_backups WHERE instance_id = ?',
+    ).bind(instanceId).first();
+    const backupId = `backup-${crypto.randomUUID()}`;
+    // #929/#960 idiom (see handleInstances' own POST above): requireOwnedLandlet
+    // above is a point-in-time check, and the awaits since then (readJson,
+    // assertReferenceExists, the COUNT) are real gaps a landlet transfer
+    // could land in -- fold the ownership re-check into the write itself.
+    const created = await db.prepare(`
+      INSERT INTO placed_instance_backups (backup_id, instance_id, position, template_id)
+      SELECT ?, ?, ?, ?
+      WHERE EXISTS (
+        SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
+        WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
+      )
+    `).bind(backupId, instanceId, tail.count, templateId, instanceId, sessionBuilder.builder_id).run();
+    if (created.meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
+    const row = await db.prepare('SELECT * FROM placed_instance_backups WHERE backup_id = ?').bind(backupId).first();
+    return json({ backup: backupFromRow(row) }, 201);
+  }
+
+  if (request.method === 'PUT' && route.length === 3) {
+    const input = await readJson(request);
+    if (!Array.isArray(input.order) || input.order.some((id) => typeof id !== 'string')) {
+      throw new HttpError('order must be an array of backupIds', 400);
+    }
+    const { results: existingRows } = await db.prepare(
+      'SELECT backup_id FROM placed_instance_backups WHERE instance_id = ?',
+    ).bind(instanceId).all();
+    const existingIds = new Set(existingRows.map((row) => row.backup_id));
+    // Requires the full current set, not a partial reorder -- a partial
+    // list would leave the omitted rows' own positions ambiguous (keep
+    // their old slot? shift to the end?), so the caller always resends
+    // every id it already has, same as src/main.js's own full-state resync
+    // idiom elsewhere in this file (e.g. handleInstances' PATCH).
+    if (input.order.length !== existingIds.size || new Set(input.order).size !== existingIds.size
+      || !input.order.every((id) => existingIds.has(id))) {
+      throw new HttpError("order must contain exactly this instance's current backup ids, each once", 400);
+    }
+    await checkRateLimit(db, `instance-backup-write:${sessionBuilder.builder_id}`, INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX);
+    await db.batch(input.order.map((backupId, position) => db.prepare(
+      'UPDATE placed_instance_backups SET position = ? WHERE backup_id = ? AND instance_id = ?',
+    ).bind(position, backupId, instanceId)));
+    const { results } = await db.prepare(
+      'SELECT * FROM placed_instance_backups WHERE instance_id = ? ORDER BY position',
+    ).bind(instanceId).all();
+    return json({ backups: results.map(backupFromRow) });
+  }
+
+  if (request.method === 'DELETE' && route.length === 4) {
+    const backupId = route[3];
+    const existing = await db.prepare(
+      'SELECT position FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ?',
+    ).bind(backupId, instanceId).first();
+    if (!existing) return json({ error: 'Backup not found' }, 404);
+    await checkRateLimit(db, `instance-backup-write:${sessionBuilder.builder_id}`, INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX);
+    const deleted = await db.prepare(
+      'DELETE FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ?',
+    ).bind(backupId, instanceId).run();
+    if (deleted.meta.changes === 0) return json({ error: 'Backup not found' }, 404);
+    // Closes the gap left behind rather than leaving positions sparse --
+    // every position strictly greater than the removed one shifts down by
+    // one, keeping the chain contiguous for the next append (which relies
+    // on COUNT(*) above, not MAX(position), to pick its own tail slot).
+    await db.prepare(
+      'UPDATE placed_instance_backups SET position = position - 1 WHERE instance_id = ? AND position > ?',
+    ).bind(instanceId, existing.position).run();
+    return json({ deleted: true });
   }
 
   return json({ error: 'Not found' }, 404);
@@ -15512,27 +15693,75 @@ async function handleSelfDealingFlags(request, db, route) {
   return json({ error: 'Not found' }, 404);
 }
 
-// #1948: every placed_instance of a template that just hit zero stock loses
-// its listing instantly -- the same hard-delete-no-archive treatment an
-// owning builder's own self-deletion already gives every instance on their
-// landlets (see the several bare `DELETE FROM placed_instances WHERE
-// landlet_id = ?` call sites elsewhere in this file). There's no backup/
-// replacement-product concept yet (that's #1952's separate scope, per
-// #1947), so "the last unit just sold" is, for now, treated the same as any
-// other case where a placed instance's own backing listing disappears out
-// from under it. Reuses notifyBuildersOfDimensionChange's own
-// per-builder-grouped query shape to fan out exactly one notification per
-// affected builder, however many instances of this template they placed.
+// #1948, reworked by #2050: every placed_instance of a template that just
+// hit zero stock used to lose its listing instantly, no exceptions -- the
+// same hard-delete-no-archive treatment an owning builder's own
+// self-deletion already gives every instance on their landlets. Now each
+// affected instance first gets a chance to survive via its own configured
+// placed_instance_backups chain (#1952): walk the chain in position order,
+// skipping past (and discarding) any entry whose own template is *also*
+// already at stock_quantity === 0, and activate the first one that still
+// has stock (NULL stock_quantity, same as everywhere else in this file,
+// means unlimited) by swapping it into that instance's own template_id and
+// removing the now-consumed entries -- a later sell-out of the newly
+// active product naturally walks whatever's left of the chain again next
+// time. Only once an instance's own chain is exhausted with nothing viable
+// does it fall back to the original delete+notify behavior exactly as
+// before.
 async function sweepSoldOutTemplateInstances(db, template) {
-  const { results: affected } = await db.prepare(`
-    SELECT l.owner_builder_id AS builderId, COUNT(*) AS count
+  const { results: affectedInstances } = await db.prepare(`
+    SELECT pi.instance_id AS instanceId, l.owner_builder_id AS builderId
     FROM placed_instances pi
     JOIN landlets l ON l.landlet_id = pi.landlet_id
-    WHERE pi.template_id = ? AND l.owner_builder_id IS NOT NULL
-    GROUP BY l.owner_builder_id
+    WHERE pi.template_id = ?
   `).bind(template.template_id).all();
-  await db.prepare('DELETE FROM placed_instances WHERE template_id = ?').bind(template.template_id).run();
-  for (const { builderId, count } of affected) {
+
+  const deletedCountByBuilder = new Map();
+  for (const { instanceId, builderId } of affectedInstances) {
+    const { results: chain } = await db.prepare(`
+      SELECT pib.backup_id AS backupId, pib.template_id AS templateId, ct.stock_quantity AS stockQuantity
+      FROM placed_instance_backups pib
+      JOIN catalog_templates ct ON ct.template_id = pib.template_id
+      WHERE pib.instance_id = ?
+      ORDER BY pib.position
+    `).bind(instanceId).all();
+    const consumedBackupIds = [];
+    const viable = chain.find((entry) => {
+      consumedBackupIds.push(entry.backupId);
+      return entry.stockQuantity !== 0;
+    });
+    if (viable) {
+      await db.batch([
+        db.prepare(
+          "UPDATE placed_instances SET template_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE instance_id = ?",
+        ).bind(viable.templateId, instanceId),
+        db.prepare(
+          `DELETE FROM placed_instance_backups WHERE instance_id = ? AND backup_id IN (${consumedBackupIds.map(() => '?').join(', ')})`,
+        ).bind(instanceId, ...consumedBackupIds),
+        // consumedBackupIds is always the chain's own leading prefix (every
+        // entry up to and including the activated one), so whatever's left
+        // sits at position >= consumedBackupIds.length -- shift it down by
+        // that same count to close the gap. Without this, the surviving
+        // tail would keep its old, now-non-contiguous positions, and the
+        // POST handler's own COUNT(*)-based "append at the tail" logic
+        // would collide with one of them on the next add.
+        db.prepare(
+          'UPDATE placed_instance_backups SET position = position - ? WHERE instance_id = ? AND position >= ?',
+        ).bind(consumedBackupIds.length, instanceId, consumedBackupIds.length),
+      ]);
+      continue;
+    }
+    // Chain exhausted (or empty) with nothing viable -- cascades away this
+    // instance's own now-moot placed_instance_backups rows automatically
+    // (migrations/0137's ON DELETE CASCADE), unlike the activation branch
+    // above, which must remove only the consumed prefix by hand since the
+    // instance itself survives.
+    await db.prepare('DELETE FROM placed_instances WHERE instance_id = ?').bind(instanceId).run();
+    if (builderId) {
+      deletedCountByBuilder.set(builderId, (deletedCountByBuilder.get(builderId) || 0) + 1);
+    }
+  }
+  for (const [builderId, count] of deletedCountByBuilder) {
     await fireNotification(db, builderId,
       `"${template.name}" just sold out — ${count} placed ${count === 1 ? 'instance has' : 'instances have'} been removed from your land.`);
   }
@@ -16561,10 +16790,15 @@ export async function assertReferencesExist(db, table, column, values, field) {
 // all, so the single most common blocker (a template still actually placed
 // somewhere) fell straight through to the same generic 409 this function
 // otherwise exists to avoid.
+// #2050: placed_instance_backups.template_id (migrations/0137) is the same
+// ON DELETE RESTRICT shape again — a template still queued as someone's
+// configured backup, even if nothing currently placed uses it, needs its
+// own specific message here too, same reasoning as saved_layout_instances/
+// version_instances above.
 async function assertCatalogTemplatesDeletable(db, templateIds) {
   const uniqueValues = [...new Set(templateIds)];
   const placeholders = uniqueValues.map(() => '?').join(', ');
-  const [inPlacedInstances, inSavedLayouts, inVersions] = await Promise.all([
+  const [inPlacedInstances, inSavedLayouts, inVersions, inBackups] = await Promise.all([
     db.prepare(
       `SELECT DISTINCT template_id FROM placed_instances WHERE template_id IN (${placeholders})`,
     ).bind(...uniqueValues).all(),
@@ -16574,10 +16808,14 @@ async function assertCatalogTemplatesDeletable(db, templateIds) {
     db.prepare(
       `SELECT DISTINCT template_id FROM version_instances WHERE template_id IN (${placeholders})`,
     ).bind(...uniqueValues).all(),
+    db.prepare(
+      `SELECT DISTINCT template_id FROM placed_instance_backups WHERE template_id IN (${placeholders})`,
+    ).bind(...uniqueValues).all(),
   ]);
   const blockedByPlacedInstance = new Set(inPlacedInstances.results.map((row) => row.template_id));
   const blockedBySavedLayout = new Set(inSavedLayouts.results.map((row) => row.template_id));
   const blockedByVersion = new Set(inVersions.results.map((row) => row.template_id));
+  const blockedByBackup = new Set(inBackups.results.map((row) => row.template_id));
   for (const templateId of uniqueValues) {
     if (blockedByPlacedInstance.has(templateId)) {
       throw new HttpError(
@@ -16597,6 +16835,13 @@ async function assertCatalogTemplatesDeletable(db, templateIds) {
       throw new HttpError(
         `Catalog template "${templateId}" cannot be deleted: it is still referenced by a landlet's version history `
         + '(a past published version snapshot used it, even if the current layout does not)',
+        409,
+      );
+    }
+    if (blockedByBackup.has(templateId)) {
+      throw new HttpError(
+        `Catalog template "${templateId}" cannot be deleted: it is still configured as a placed instance's backup `
+        + '(remove it from every backup chain first)',
         409,
       );
     }
