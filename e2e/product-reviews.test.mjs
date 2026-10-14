@@ -11,7 +11,12 @@
 // in-world Shop-mode "Rate this Product" hint isn't reachable without real
 // camera movement — see docs/API.md's own testing note for this feature);
 // this test covers the Seller modal's display/moderation of reviews and
-// the backend contract those routes rely on.
+// the backend contract those routes rely on. Same reasoning for #1975's
+// own author self-edit/delete addition to that same in-world hint — this
+// exercises its underlying PATCH call directly instead (further author/
+// cross-account/history-table coverage lives in
+// worker/reviews-auth.test.js's own "Author self-edit/delete (#1975)"
+// describe block).
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
@@ -126,9 +131,32 @@ console.log('rows shown after deleting one via the panel (should be 1):', rowCou
 const afterDelete = (await fetchJson(`/api/catalog/${template.templateId}/reviews`)).body;
 console.log('reviews persisted server-side after the panel delete (should be 1, the surviving one with text "Lovely product!"):', afterDelete.reviews.map((r) => r.text));
 
-// (Rating-bounds validation, the optional text field, average computation,
-// and cascade-on-template-delete are covered by worker/reviews-auth.test.js's own
-// "Product reviews" describe block instead of here.)
+// #1975: the surviving review now records who actually wrote it, and its
+// own author can PATCH it directly. The in-world "Rate this Product" hint
+// this now also drives (handleShopProductReviewClick's own edit/delete
+// offer, same shape as #1830's sign-post hint) isn't reachable here for
+// the same real-camera-movement reason noted at the top of this file — this
+// exercises the same PATCH call directly instead, same as this file's own
+// create/list calls above.
+const survivingReviewId = afterDelete.reviews[0].reviewId;
+console.log('surviving review records the real session as its own author (should be true):', afterDelete.reviews[0].userId != null);
+
+const edited = await fetchJson(`/api/catalog/${template.templateId}/reviews/${survivingReviewId}`, {
+  method: 'PATCH',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ rating: 2, text: 'Changed my mind.' }),
+});
+console.log('PATCH by the review\'s own author succeeds (should be 200):', edited.status);
+
+// Re-open the panel (closed and reopened, same as this file's own earlier
+// toggle) to confirm the edit is reflected through the real GET path the
+// Seller-modal panel itself uses, not just the raw PATCH response.
+await row().locator('.seller-review-toggle').click();
+await page.waitForTimeout(300);
+await row().locator('.seller-review-toggle').click();
+await page.waitForTimeout(500);
+const rowTextAfterEdit = await row().locator('.product-review-row').first().textContent();
+console.log('panel reflects the author\'s own edit after reopening (should mention "Changed my mind"):', rowTextAfterEdit);
 
 const pass = !!template &&
   reviewToggleBefore.trim() === 'Reviews ▾' &&
@@ -142,5 +170,8 @@ const pass = !!template &&
   summaryText.includes('4.0') && summaryText.includes('2 reviews') &&
   rowCountAfterDelete === 1 &&
   afterDelete.reviews.length === 1 && afterDelete.reviews[0].text === 'Lovely product!' &&
+  afterDelete.reviews[0].userId != null &&
+  edited.status === 200 &&
+  rowTextAfterEdit.includes('Changed my mind') &&
   errors.length === 0;
-await finish(browser, { pass, label: 'Product Reviews: Seller-modal moderation panel + reviews API', errors });
+await finish(browser, { pass, label: 'Product Reviews: Seller-modal moderation panel + reviews API + author self-edit (#1975)', errors });

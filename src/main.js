@@ -104,6 +104,7 @@ import {
   triggerCalendarEvent,
   fetchProductReviews,
   createProductReview,
+  editProductReview,
   deleteProductReview,
   fetchSellerFeedback,
   createSellerFeedback,
@@ -15513,6 +15514,14 @@ shopSignHintEl.addEventListener('click', async () => {
     } else if (choice === 'edit') {
       const text = prompt('Your note (up to 280 characters):', myPost.text);
       if (!text || !text.trim()) return;
+      // #2015: same #1920 guard as the sibling create path below -- prompt()
+      // shows no live character count, and without this an over-length edit
+      // reaches the server's own 280-char check, throws, and the retyped note
+      // is lost since the prompt isn't reopened with the text prefilled.
+      if (text.trim().length > 280) {
+        alert('Keep it to 280 characters or fewer.');
+        return;
+      }
       shopSignHintEl.disabled = true;
       try {
         const updated = await editSignPost(sign.instanceId, myPost.postId, { text: text.trim() });
@@ -15624,6 +15633,60 @@ async function handleShopProductReviewClick() {
   // uses, replacing this handler's own former shopperLabel() name prompt.
   const builder = await ensureBuilderIdentity();
   if (!builder) return;
+  // #1975 (owner decision): a shopper who already reviewed this product
+  // edits or removes that one review instead of being offered an unrelated
+  // second slot — mirrors the sign-post hint's own myPost pattern (#1830)
+  // exactly, using review.userId (reviewFromRow, populated server-side from
+  // the posting session) rather than a free-text author match.
+  const myReview = currentAuthUser && review.reviews.find((r) => r.userId === currentAuthUser.userId);
+  if (myReview) {
+    const stars = '★'.repeat(myReview.rating) + '☆'.repeat(5 - myReview.rating);
+    const choice = (prompt(
+      `Your review: ${stars}${myReview.text ? ` "${myReview.text}"` : ''}\n\nType "edit" to change it, or "delete" to remove it. Leave blank to cancel.`,
+      '',
+    ) || '').trim().toLowerCase();
+    if (choice === 'delete') {
+      shopProductPreviewReviewBtn.disabled = true;
+      try {
+        await deleteProductReview(review.templateId, myReview.reviewId);
+        if (!shopReviews.includes(review)) return;
+        review.reviews = review.reviews.filter((r) => r.reviewId !== myReview.reviewId);
+        rebuildReviewSprites(review);
+      } catch (err) {
+        alert(err.message || 'Could not delete this review.');
+      } finally {
+        shopProductPreviewReviewBtn.disabled = false;
+      }
+    } else if (choice === 'edit') {
+      const ratingInput = prompt('Rate this product 1-5 stars:', String(myReview.rating));
+      if (!ratingInput || !ratingInput.trim()) return;
+      const rating = Number(ratingInput.trim());
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        alert('Please enter a whole number from 1 to 5.');
+        return;
+      }
+      const text = prompt('Add a comment (up to 280 characters), or leave blank:', myReview.text || '');
+      shopProductPreviewReviewBtn.disabled = true;
+      try {
+        // Cancelling (null) omits `text` entirely so the server keeps the
+        // existing value — an explicit empty string (OK clicked with the
+        // field cleared) is sent as-is, clearing it, same distinction
+        // editProductReview's own `text !== undefined` check preserves.
+        const updated = await editProductReview(review.templateId, myReview.reviewId, {
+          rating, text: text === null ? undefined : text.trim(),
+        });
+        if (!shopReviews.includes(review)) return;
+        const index = review.reviews.findIndex((r) => r.reviewId === myReview.reviewId);
+        if (index !== -1) review.reviews[index] = updated;
+        rebuildReviewSprites(review);
+      } catch (err) {
+        alert(err.message || 'Could not update this review.');
+      } finally {
+        shopProductPreviewReviewBtn.disabled = false;
+      }
+    }
+    return;
+  }
   const ratingInput = prompt('Rate this product 1-5 stars:', '5');
   if (!ratingInput || !ratingInput.trim()) return;
   const rating = Number(ratingInput.trim());
@@ -15635,6 +15698,14 @@ async function handleShopProductReviewClick() {
   // prompt is an optional extra, same as the calendar hint's own scheduling
   // step above.
   const text = prompt('Add a comment (up to 280 characters), or leave blank:', '');
+  // #2005: same missing client-side check #1920 already added to the
+  // sign-post/calendar-event prompts above -- prompt() gives no live
+  // character count, and an over-length submission loses the whole typed
+  // comment on the server's own 280-char rejection.
+  if (text && text.trim().length > 280) {
+    alert('Keep it to 280 characters or fewer.');
+    return;
+  }
   shopProductPreviewReviewBtn.disabled = true;
   try {
     const posted = await createProductReview(review.templateId, { rating, text: text?.trim() || undefined });
@@ -15800,6 +15871,12 @@ async function promptSellerFeedback(purchase) {
     return;
   }
   const text = prompt('Add a comment (up to 280 characters), or leave blank:', '');
+  // #2005: same missing client-side check as the product review prompt
+  // above -- see its own comment for why this matters.
+  if (text && text.trim().length > 280) {
+    alert('Keep it to 280 characters or fewer.');
+    return;
+  }
   try {
     await createSellerFeedback(purchase.purchaseId, { rating, text: text?.trim() || undefined });
   } catch (err) {
@@ -17040,7 +17117,11 @@ for (const btn of modeNavButtons) {
     // longer than a frame — network + document parsing — so the browser
     // still gets a chance to paint this highlight on the outgoing page
     // first.
-    for (const b of modeNavButtons) b.classList.toggle('active', b.dataset.mode === target);
+    for (const b of modeNavButtons) {
+      const isTarget = b.dataset.mode === target;
+      b.classList.toggle('active', isTarget);
+      b.setAttribute('aria-pressed', String(isTarget));
+    }
     sessionStorage.setItem(START_MODE_KEY, target);
     location.reload();
   });
