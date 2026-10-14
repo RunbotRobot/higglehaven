@@ -6146,6 +6146,21 @@ succeed.
   `POST /api/instances/:instanceId/purchase` itself, before a real-money
   purchase is even sent to checkout.
 
+#### Stock indicator in the catalog picker (#1951)
+
+The Add Item catalog picker (`src/main.js`'s `buildCatalogTemplateTile` —
+shared with Prompt mode's own result grid) shows each tile's already-
+present `stockQuantity` so a builder can weigh risk before placing, not
+just before buying: `null` (unlimited, the common/default case) shows no
+indicator at all; `0` shows "Sold out" in `--danger`; any other value
+shows "`N` left" in a muted tone. Placement itself is never blocked by a
+sold-out template (only purchase is — see above), so this is purely
+informational. Deliberately does not attempt a sales-velocity/"days
+remaining" estimate — no such computation exists anywhere in this
+codebase yet, and #1947's own tracking issue flags the shape of that
+math (trailing window, no-sales-history behavior) as still undecided by
+the owner.
+
 `GET /api/purchases?builderId=...` requires a session logged in as that
 builder (`403` otherwise); lists everything hosted on that builder's own
 land, most recent first — their "did I earn commission" view.

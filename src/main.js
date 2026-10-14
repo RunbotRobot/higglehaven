@@ -2502,6 +2502,28 @@ function buildCatalogTemplateTile(template) {
   name.textContent = template.name;
   tile.appendChild(name);
 
+  // #1951: stockQuantity is already in every template object #1948 put
+  // there (null means unlimited, the default/common case -- no indicator
+  // at all, so an ordinary tile stays uncluttered). A finite, nonzero
+  // value is the real signal the issue asks for: enough to let a builder
+  // weigh risk before placing (a one-off "antique lamp" vs. a bottomless
+  // "cottage bricks" restock) without needing a sales-velocity/"days
+  // remaining" estimate -- that math doesn't exist anywhere in this
+  // codebase yet, and #1947's own tracking issue already flags it as an
+  // undecided owner question (what trailing window, what to show with no
+  // sales history), so it's deliberately not built here.
+  if (template.stockQuantity != null) {
+    const stock = document.createElement('span');
+    stock.className = 'catalog-tile-stock';
+    if (template.stockQuantity === 0) {
+      stock.classList.add('catalog-tile-stock-sold-out');
+      stock.textContent = 'Sold out';
+    } else {
+      stock.textContent = `${template.stockQuantity} left`;
+    }
+    tile.appendChild(stock);
+  }
+
   tile.addEventListener('click', () => {
     closeCatalogPicker();
     enterPlacementMode({ type: 'template', template }, `Tap a spot to place ${template.name}`);
