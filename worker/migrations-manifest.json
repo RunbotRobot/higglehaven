@@ -132,5 +132,6 @@
   "0132_self_dealing_flags.sql",
   "0133_catalog_template_stock_quantity.sql",
   "0134_account_suspensions.sql",
-  "0135_calendar_events_user_id.sql"
+  "0135_calendar_events_user_id.sql",
+  "0136_credit_orbs.sql"
 ]

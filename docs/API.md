@@ -5155,7 +5155,7 @@ spoofing gap here: anyone who knew a `purchaseId` and the buyer's public
 display label, neither requiring a session or an account, could `POST`
 feedback as if they were that buyer.
 
-### `GET /api/sellers/:sellerId/feedback`, `POST /api/purchases/:purchaseId/feedback`, `DELETE /api/purchases/:purchaseId/feedback`
+### `GET /api/sellers/:sellerId/feedback`, `POST /api/purchases/:purchaseId/feedback`, `PATCH /api/purchases/:purchaseId/feedback`, `DELETE /api/purchases/:purchaseId/feedback`
 
 ```json
 POST /api/purchases/:purchaseId/feedback
@@ -5167,7 +5167,7 @@ POST /api/purchases/:purchaseId/feedback
 `averageRating`/`count` aggregate so no caller needs to recompute it:
 
 ```json
-{ "feedback": [ { "feedbackId": "seller-feedback-...", "purchaseId": "...", "sellerId": "...", "authorLabel": "...", "rating": 5, "text": "...", "createdAt": "..." } ], "averageRating": 4.5, "count": 2 }
+{ "feedback": [ { "feedbackId": "seller-feedback-...", "purchaseId": "...", "sellerId": "...", "authorLabel": "...", "rating": 5, "text": "...", "createdAt": "...", "userId": "..." } ], "averageRating": 4.5, "count": 2 }
 ```
 
 `averageRating` is `null` with zero feedback, never `0`, same reasoning as
@@ -5177,22 +5177,62 @@ themself; the only UI surfacing it today (below) happens to be the
 Seller modal, which reads as "seller-facing" in practice without the API
 itself needing to restrict who can ask.
 
-`DELETE` (#1738, owner-confirmed) is **admin-only** (`401` with no
-session, `403` for anyone else — including the rated seller themself,
-`404` for a purchase with no feedback) — deliberately different from
-product reviews' own `DELETE`, where the product's own seller has a
-legitimate stake in moderating what's said about their listing: letting a
-seller delete feedback about their *own conduct* would let them scrub
-legitimate negative feedback, a materially different risk than scrubbing
-a product review. Keyed by `purchaseId` rather than a separate
-`feedbackId`, since `migrations/0098_seller_feedback.sql`'s own `UNIQUE`
-constraint on `purchase_id` already makes it a 1-to-1 resource — the same
-path `POST` uses. Rate-limited (20 per 15-minute window, `429` past that)
-per admin user (`seller-feedback-delete:<adminUserId>`), and logs
-`delete_seller_feedback` to `admin_action_log` (target type
-`seller_feedback`, target id the feedback's own `feedbackId`). Whether
-sellers should also get a self-delete/appeal path of their own is a
-separate, explicitly still-open question — not resolved by this.
+**`userId` (#1975) and why it's a join, not a column:** unlike sign posts/
+product reviews/calendar events, `seller_feedback` got no new `user_id`
+column of its own — the feedback's real author (the purchase's buyer) was
+already permanently on record via `purchases.buyer_builder_id`
+(`migrations/0099`), the same column the `POST` eligibility check above
+already matches against, and that column is 1:1 with a `user_id` via
+`builders`' own unique index on `builders.user_id`. So `userId` here is
+resolved with a `LEFT JOIN` through `purchases`/`builders` at read time
+(`SELLER_FEEDBACK_SELECT_WITH_BUYER`, `worker/index.js`) instead of a
+migration — `null` for a purchase whose `buyer_builder_id` is itself
+`null` (predates `#1123`, or the buyer's account has since been
+self-deleted — `ON DELETE SET NULL`), the same "legacy content, nobody on
+record to own it" case the other three resources' own `user_id IS NULL`
+represents.
+
+**`PATCH` (#1975/#1738) is author-only** — the feedback's own author (the
+purchase's buyer, matched via `userId` above against the session's own
+`user_id`) can edit `rating`/`text` directly (`403 Not your feedback` for
+anyone else, including the rated seller themself — see below). Partial-
+field semantics mirror `PATCH .../reviews` exactly: an omitted key keeps
+the existing value, `text` explicitly set to `null`/`""` clears it. There
+is no moderation equivalent for `PATCH`, same reasoning as reviews/
+calendar events — rewriting someone else's feedback under their own name
+isn't a kind of moderation action this app has anywhere else. Rate-limited
+20 per 15 minutes (`seller-feedback-edit:<userId>`), and the pre-edit row
+is snapshotted into `user_content_edit_history` (`migrations/0129`, see
+"Product reviews"' own `#1975` writeup) before the `UPDATE`, atomically
+re-verified against the same buyer join so a buyer whose account is
+deleted mid-request can't still win the race (`409` on zero rows changed,
+same "changed concurrently — refetch and retry" shape every other
+author-direct mutation in this file uses).
+
+`DELETE` keeps its pre-#1975 **admin-only** path for the rated seller's
+own side — `#1738` (owner-confirmed) drew a hard, deliberate line here
+unlike product reviews' own `DELETE`: the product's own seller has a
+legitimate stake in moderating what's said about their *listing*, but
+letting the rated seller delete feedback about their own *conduct* would
+let them scrub legitimate negative feedback, a materially different risk.
+That path is unchanged (`401` with no session, `403` for anyone else who
+isn't the feedback's own author either, `404` for a purchase with no
+feedback, rate-limited per admin user, logs `delete_seller_feedback` to
+`admin_action_log`). **New alongside it (#1975):** the feedback's own
+author — the buyer who actually wrote it, a different person from the
+rated seller — gets the ordinary author-direct removal every other
+self-authored content type in this file already has, checked before the
+admin-only fallback (so the author never needs to *be* an admin), rate-
+limited on the same shared `seller-feedback-delete:<userId>`-shaped bucket,
+and snapshotted into `user_content_edit_history` before the delete
+(moderation deletes deliberately are not). Keyed by `purchaseId` rather
+than a separate `feedbackId`, since `migrations/0098_seller_feedback.sql`'s
+own `UNIQUE` constraint on `purchase_id` already makes it a 1-to-1
+resource — the same path `POST`/`PATCH` use. Whether sellers should also
+get a self-delete/appeal path of their own remains the one explicitly
+still-open question from `#1738` — not resolved by this (and, per that
+issue's own resolution, not going to be: the owner confirmed the rated
+seller gets none, ever).
 
 ### Frontend wiring
 
@@ -5216,6 +5256,18 @@ below `#seller-hint` — is fetched fresh on every modal open
 (`renderSellerFeedbackSummary`) and stays hidden entirely until that
 seller has at least one real rating, same "nothing to show yet stays
 invisible" convention the preview modal's own info text documents.
+
+**#1975's `PATCH`/author-`DELETE` above are API-only for the same reason —
+no frontend wiring in this PR.** The structural gap this section's own
+first paragraph already describes (no "my orders" page, no receipt to come
+back to) applies just as much to editing/deleting feedback already left as
+it does to leaving it in the first place: `promptSellerFeedback` fires
+exactly once, immediately after a purchase, with no later re-entry point
+the way the preview modal's Review button offers for product reviews
+(tap the same in-world product again any time). Exposing this to buyers
+for real needs a genuine "my purchases"/order-history view to revisit —
+a separate, larger piece of frontend work this issue doesn't scope, flagged
+as its own backlog item rather than built here.
 
 ## Scheduled calendar events + creative-tool trigger
 
@@ -8279,6 +8331,74 @@ Collision math (client-side) deliberately still only reads `rotationZ` — see
 `src/main.js`'s `footprintCorners` — so a tilted item's on-ground footprint is
 approximated as its untilted bounding rectangle; this is an accepted
 simplification, not an oversight, since 3D OBB collision isn't implemented.
+
+## Credit orbs
+
+#1994 (sub-issue of #1976 — "Orb-collection mechanic to ration free
+video-to-3D generation credits within a hard $5/day budget", one of three
+independently-mergeable sub-issues alongside #1993's credit-balance work and
+#1995's rendering/collection work): the data model, spawn cadence, and read
+endpoint for a server-spawned "credit orb" — a visible object with no
+builder action behind it, appearing in a random greenbelt landlet, that
+whichever builder collects first (#1995's own scope) gets credited one
+video-generation credit (#1993) for. This sub-issue covers only the spawn
+side; consuming a credit at upload time and the out-of-credits messaging
+are #1993's, and the frontend rendering/proximity-collection mechanic is
+#1995's.
+
+`credit_orbs` (migrations/0136): `orb_id`, `landlet_id`, a position
+(`x_m`/`y_m`/`z_m`, matching `placed_instances`' own position shape),
+`spawned_at`, and `collected_at`/`collected_by_builder_id` (both nullable,
+always set together — #1995's own atomic collect endpoint).
+
+### Spawn cadence
+
+A new `scheduled()` entry, `spawnCreditOrbIfDue`, runs on the existing `*/10`
+cron (no dedicated cron of its own). The owner's own spec: spawn interval =
+1440 minutes ÷ credits-funded-that-day, so orbs spawn spread evenly across
+the day rather than in a burst. Real per-generation cost isn't tracked
+anywhere in this codebase yet, so the credits-per-day figure is a named,
+adjustable placeholder (`CREDIT_ORB_BUDGET_CENTS_PER_DAY` / 500 cents,
+`CREDIT_ORB_COST_CENTS_PER_GENERATION` / 25 cents) rather than derived from
+live cost data — a conservative $0.25/generation (the mid-point of #1617's
+own ~$0.20–0.30 research) against the $5/day budget funds **20 credits/day**
+by default, not the owner's own original "5/day" illustrative example (that
+used a hypothetical $1/generation). Raise or lower
+`CREDIT_ORB_COST_CENTS_PER_GENERATION` once real Tripo per-generation
+billing is confirmed.
+
+`spawnCreditOrbIfDue` folds the "is one due" check and the spawn itself into
+one atomic `INSERT ... SELECT ... WHERE NOT EXISTS` statement — the same
+race-proofing idiom `reserveVideoGenerationJob`/`reserveDiditSession` already
+use for their own concurrent-caller races. It reuses `credit_orbs`' own most
+recent `spawned_at` (across every orb, collected or not) as the "last spawn
+time" anchor rather than a separate single-row state table; a random
+eligible landlet (`status = 'greenbelt'`, via `ORDER BY RANDOM() LIMIT 1` —
+no prior precedent for this in the codebase) is picked at the same time,
+inside the same statement, so no greenbelt landlet to spawn into is simply a
+0-row no-op rather than a separate branch. The spawned position is a random
+point inside the landlet's own buildable footprint
+(`LANDLET_SIDE_M`, #789), scaled by `CREDIT_ORB_SPAWN_MARGIN_FACTOR` (0.8) to
+keep it off the very edge.
+
+### `GET /api/credit-orbs`
+
+Unauthenticated/unsession-gated — an active orb's existence and position are
+the same kind of public, visible-in-the-3D-scene information
+`GET /api/instances` already serves for ordinary placed items, not a
+builder-specific secret. Returns every currently-active (uncollected) orb:
+
+```json
+{
+  "orbs": [
+    { "orbId": "orb-<uuid>", "landletId": "landlet-1", "x": 3.1, "y": -2.4, "z": 0, "spawnedAt": "2026-10-13T23:30:00.000Z" }
+  ]
+}
+```
+
+Optional `?landletId=` scopes the result to one landlet, for the frontend to
+poll only the landlet currently in view rather than every active orb
+world-wide.
 
 ## Product pricing
 

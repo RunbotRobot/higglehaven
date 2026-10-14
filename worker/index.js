@@ -410,6 +410,11 @@ export default {
     ctx.waitUntil(expireStaleVideoGenerationJobs(env.DB).catch((error) => {
       console.error('expireStaleVideoGenerationJobs failed', error);
     }));
+    // #1994: without this, no credit orb ever spawns at all -- this is
+    // the only mechanism that creates one.
+    ctx.waitUntil(spawnCreditOrbIfDue(env.DB).catch((error) => {
+      console.error('spawnCreditOrbIfDue failed', error);
+    }));
     // #1135: only on the once-daily cron (see wrangler.jsonc's own comment
     // on DB_BACKUP_CRON_EXPRESSION) -- a full-table dump has no reason to
     // run on every */10 tick the other jobs above share.
@@ -715,6 +720,10 @@ async function handleApi(request, env, url, ctx) {
   }
   if (request.method === 'GET' && route[0] === 'video-generation-jobs' && route.length === 2) {
     return handleVideoGenerationJobStatus(request, env, env.DB, route[1]);
+  }
+
+  if (route[0] === 'credit-orbs') {
+    return handleCreditOrbs(request, env.DB, route, url);
   }
 
   if (route[0] === 'control-room') {
@@ -7401,6 +7410,20 @@ async function currentUser(request, db) {
 async function requireCurrentUser(request, db) {
   const user = await currentUser(request, db);
   if (!user) throw new HttpError('Not authenticated', 401);
+  // #2030 (sub-issue of #1201): the single join point every authenticated
+  // request goes through -- enforcing the check here, rather than in
+  // currentUser() itself, is what lets this throw a distinct, client-
+  // actionable error instead of the generic 401 a plain null would produce
+  // (a suspended user's session is still valid; it's their standing that's
+  // revoked, not their login). #2029's own admin endpoints read a TARGET
+  // account's suspension state via a direct SELECT on account_suspensions,
+  // never through currentUser/requireCurrentUser, so they're unaffected by
+  // this -- only the CALLING admin's own session goes through this check,
+  // the same as any other authenticated action.
+  const activeSuspension = await db.prepare(`
+    SELECT 1 FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+  `).bind(user.user_id).first();
+  if (activeSuspension) throw new HttpError('Your account is suspended', 403, { suspended: true });
   return user;
 }
 
@@ -8651,6 +8674,95 @@ async function handleVideoGenerationWebhook(request, env, db) {
   if (!job || job.processed_at !== null) return json({ received: true });
   await applyTripoTaskResult(db, env, job.job_id, payload.data);
   return json({ received: true });
+}
+
+// #1994 (sub-issue of #1976, "Orb-collection mechanic to ration free
+// video-to-3D generation credits within a hard $5/day budget"): the real
+// per-generation cost isn't tracked anywhere in this codebase yet (see
+// VIDEO_GENERATION_RATE_LIMIT_MAX's own comment above), so this is a
+// named, adjustable placeholder rather than derived from live cost data.
+// #1617's own research cites ~$0.20-0.30/generation -- a conservative
+// $0.25 mid-point (CREDIT_ORB_COST_CENTS_PER_GENERATION below) against a
+// $5/day budget funds 20 credits/day, not the owner's own original "5/day"
+// illustrative example (that used a hypothetical $1/generation). Raise or
+// lower CREDIT_ORB_COST_CENTS_PER_GENERATION once real Tripo billing is
+// confirmed -- neither constant is load-bearing beyond this feature.
+const CREDIT_ORB_BUDGET_CENTS_PER_DAY = 500;
+const CREDIT_ORB_COST_CENTS_PER_GENERATION = 25;
+const CREDIT_ORBS_PER_DAY = Math.floor(CREDIT_ORB_BUDGET_CENTS_PER_DAY / CREDIT_ORB_COST_CENTS_PER_GENERATION);
+// Owner's own spec: interval = 1440 minutes ÷ credits-funded-that-day, so
+// orbs spawn spread evenly across the day rather than in a burst.
+const CREDIT_ORB_SPAWN_INTERVAL_MS = (24 * 60 * 60 * 1000) / CREDIT_ORBS_PER_DAY;
+
+// Keeps a spawned orb's center comfortably inside the buildable footprint
+// landlets.live/handleInstances already enforce (LANDLET_SIDE_M, #789) --
+// an 0.8 margin so it never spawns flush against the very edge, which
+// would read as half-buried in a neighboring landlet once rendered.
+const CREDIT_ORB_SPAWN_MARGIN_FACTOR = 0.8;
+
+// Called from scheduled() on the existing */10 cron (no dedicated cron of
+// its own needed -- the 10-minute granularity is well under
+// CREDIT_ORB_SPAWN_INTERVAL_MS at any plausible CREDIT_ORBS_PER_DAY, so the
+// actual cadence this produces stays close to even). Reuses credit_orbs'
+// own most recent spawned_at (across every orb, collected or not) as the
+// "last spawn time" anchor rather than a separate single-row state table
+// -- there's already exactly one row to read it from once any orb exists,
+// and the INSERT...WHERE NOT EXISTS below folds the "is one due" check and
+// the spawn into one atomic statement, the same race-proofing idiom
+// reserveVideoGenerationJob/reserveDiditSession already use for their own
+// concurrent-caller races: two overlapping cron ticks can never both spawn
+// one, because D1/SQLite serializes writes and the second caller's own
+// NOT EXISTS subquery sees the first caller's already-committed INSERT.
+export async function spawnCreditOrbIfDue(db) {
+  const cutoff = new Date(Date.now() - CREDIT_ORB_SPAWN_INTERVAL_MS).toISOString();
+  const halfSpan = (LANDLET_SIDE_M / 2) * CREDIT_ORB_SPAWN_MARGIN_FACTOR;
+  const x = (Math.random() * 2 - 1) * halfSpan;
+  const y = (Math.random() * 2 - 1) * halfSpan;
+  const orbId = `orb-${crypto.randomUUID()}`;
+  await db.prepare(`
+    INSERT INTO credit_orbs (orb_id, landlet_id, x_m, y_m, z_m)
+    SELECT ?, landlet_id, ?, ?, 0 FROM landlets
+    WHERE status = 'greenbelt'
+      AND NOT EXISTS (SELECT 1 FROM credit_orbs WHERE spawned_at > ?)
+    ORDER BY RANDOM() LIMIT 1
+  `).bind(orbId, x, y, cutoff).run();
+}
+
+function creditOrbFromRow(row) {
+  return {
+    orbId: row.orb_id,
+    landletId: row.landlet_id,
+    x: row.x_m,
+    y: row.y_m,
+    z: row.z_m,
+    spawnedAt: row.spawned_at,
+  };
+}
+
+// GET /api/credit-orbs (optionally ?landletId=... to scope to one landlet,
+// per #1994's own "or scoped by landlet" note) -- the frontend's read path
+// for #1995's own rendering/collection sub-issue. Deliberately
+// unauthenticated/unsession-gated: an active orb's existence and position
+// are the same kind of public, visible-in-the-3D-scene information
+// GET /api/instances already serves for ordinary placed items, not a
+// builder-specific secret.
+async function handleCreditOrbs(request, db, route, url) {
+  if (request.method === 'GET' && route.length === 1) {
+    const landletId = url.searchParams.get('landletId');
+    const conditions = ['collected_at IS NULL'];
+    const bindings = [];
+    if (landletId !== null) {
+      conditions.push('landlet_id = ?');
+      bindings.push(stringValue(landletId, 'landletId'));
+    }
+    const { results } = await db.prepare(`
+      SELECT orb_id, landlet_id, x_m, y_m, z_m, spawned_at FROM credit_orbs
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY spawned_at
+    `).bind(...bindings).all();
+    return json({ orbs: results.map(creditOrbFromRow) });
+  }
+  return json({ error: 'Not found' }, 404);
 }
 
 function boundedIntegerValue(value, field, min, max) {
@@ -15432,6 +15544,10 @@ async function handlePurchases(request, env, route, url) {
     return handleSellerFeedbackCreate(request, env, route[1]);
   }
 
+  if (request.method === 'PATCH' && route.length === 3 && route[2] === 'feedback') {
+    return handleSellerFeedbackEdit(request, env, route[1]);
+  }
+
   if (request.method === 'DELETE' && route.length === 3 && route[2] === 'feedback') {
     return handleSellerFeedbackDelete(request, env, route[1]);
   }
@@ -15545,6 +15661,24 @@ async function handleMarkShipped(request, env, purchaseId) {
 // eligibility check #1113/#1116 already brought to product reviews.
 const SELLER_FEEDBACK_CREATE_RATE_LIMIT_MAX = 20;
 
+// #1975 (owner decision via #1738, 2026-10-13): the feedback's own author
+// (the purchase's buyer) gets the same self-edit/delete #1975 already gave
+// sign posts/product reviews/calendar events. Unlike those three,
+// seller_feedback gets no new user_id column for it — the buyer's identity
+// is already permanently on record via purchases.buyer_builder_id
+// (migrations/0099), the same real, session-verified, never-reassigned
+// identity handleSellerFeedbackCreate's own eligibility check already
+// uses, so authorization and this row shape's own userId field both
+// resolve it with a join instead. A purchase whose buyer later self-
+// deletes their account nulls buyer_builder_id (ON DELETE SET NULL) —
+// same as every other precedent's "legacy/no author on record" case, such
+// a row can never be claimed by anyone as their own.
+const SELLER_FEEDBACK_SELECT_WITH_BUYER = `
+  SELECT f.*, bld.user_id AS buyer_user_id FROM seller_feedback f
+  JOIN purchases p ON p.purchase_id = f.purchase_id
+  LEFT JOIN builders bld ON bld.builder_id = p.buyer_builder_id
+`;
+
 function sellerFeedbackFromRow(row) {
   return {
     feedbackId: row.feedback_id,
@@ -15554,6 +15688,7 @@ function sellerFeedbackFromRow(row) {
     rating: row.rating,
     text: row.text,
     createdAt: row.created_at,
+    userId: row.buyer_user_id ?? null,
   };
 }
 
@@ -15628,18 +15763,78 @@ async function handleSellerFeedbackCreate(request, env, purchaseId) {
     await fireNotification(db, owner.builder_id,
       `"${authorLabel}" left ${rating}-star feedback on a purchase from you.`);
   }
-  const row = await db.prepare('SELECT * FROM seller_feedback WHERE feedback_id = ?').bind(feedbackId).first();
+  const row = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.feedback_id = ?`).bind(feedbackId).first();
   return json({ feedback: sellerFeedbackFromRow(row) }, 201);
+}
+
+// #1975/#1738: author-only edit for the feedback's own author (the
+// purchase's buyer) — mirrors product_reviews'/calendar_events' own PATCH
+// shape exactly (see SELLER_FEEDBACK_SELECT_WITH_BUYER's own comment above
+// for why this is gated via a join instead of a native user_id column).
+// No moderation equivalent for PATCH, same reasoning as those two:
+// rewriting someone else's feedback under their own name isn't a kind of
+// moderation action that exists anywhere else in this file.
+const SELLER_FEEDBACK_EDIT_RATE_LIMIT_MAX = 20;
+
+async function handleSellerFeedbackEdit(request, env, purchaseId) {
+  const db = env.DB;
+  const existing = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
+  if (!existing) return json({ error: 'Feedback not found' }, 404);
+  const sessionBuilder = await requireSessionBuilder(request, db);
+  if (existing.buyer_user_id === null || existing.buyer_user_id !== sessionBuilder.user_id) {
+    throw new HttpError('Not your feedback', 403);
+  }
+  await checkRateLimit(db, `seller-feedback-edit:${sessionBuilder.user_id}`, SELLER_FEEDBACK_EDIT_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  let rating = existing.rating;
+  if (input.rating !== undefined) {
+    rating = Number(input.rating);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      throw new HttpError('rating must be an integer from 1 to 5', 400);
+    }
+  }
+  // Same omitted-vs-explicitly-cleared distinction product_reviews' own
+  // PATCH already makes — an absent `text` key keeps the existing value, an
+  // explicit null/empty string clears it.
+  let text = existing.text;
+  if ('text' in input) {
+    text = (input.text === null || input.text === '') ? null : stringValue(input.text, 'text');
+  }
+  if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+  // #1975: snapshot the pre-edit row for disputes before overwriting it.
+  await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'edit', existing, sessionBuilder.user_id);
+  // Same "point-in-time read, real awaited gaps after it" race this file's
+  // other author-direct mutations guard against — re-verified atomically via
+  // the same join authorization used above, not just the eager read.
+  const updated = await db.prepare(`
+    UPDATE seller_feedback SET rating = ?, text = ? WHERE purchase_id = ? AND EXISTS (
+      SELECT 1 FROM purchases p JOIN builders bld ON bld.builder_id = p.buyer_builder_id
+      WHERE p.purchase_id = seller_feedback.purchase_id AND bld.user_id = ?
+    )
+  `).bind(rating, text, purchaseId, sessionBuilder.user_id).run();
+  if (updated.meta.changes === 0) {
+    throw new HttpError('Feedback changed concurrently — refetch and retry', 409);
+  }
+  const row = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
+  return json({ feedback: sellerFeedbackFromRow(row) });
 }
 
 // #1738 (owner confirmed, 2026-10-13): seller_feedback rates a person's own
 // conduct on a transaction, not a product -- unlike product_reviews' own
 // DELETE branch, which lets the reviewed template's seller self-delete,
 // self-delete here would let a seller scrub legitimate negative feedback
-// about their own conduct. Admin-only removal is the deliberate, owner-
-// confirmed bar, not a placeholder pending a seller-facing path; whether
-// sellers also get their own appeal/self-delete path is a separate,
-// explicitly-still-open question per the issue's own comment thread.
+// about their own conduct. Admin-only removal remains the sole moderation
+// route for the rated seller's side — there is deliberately no third,
+// seller-moderation branch the way product_reviews has one, since #1738's
+// own resolution confirmed the rated seller never gets to remove feedback
+// about themselves, ever. #1975 (same thread): the feedback's own author
+// (the buyer who actually wrote it) is a different person from the rated
+// seller and gets the ordinary author-direct removal every other
+// self-authored content type in this file already has — ON DELETE SET
+// NULL on purchases.buyer_builder_id means a buyer who later self-deletes
+// their account can never come back and claim it (same "legacy/no author
+// on record" case SELLER_FEEDBACK_SELECT_WITH_BUYER's own comment
+// describes), so it falls through to admin-only exactly as it always has.
 // Keyed by purchaseId (not a separate feedbackId) since migrations/0097's
 // own UNIQUE constraint on purchase_id already makes it a 1-to-1 resource,
 // the same shape POST .../feedback above already uses.
@@ -15647,10 +15842,26 @@ const SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX = 20;
 
 async function handleSellerFeedbackDelete(request, env, purchaseId) {
   const db = env.DB;
-  const existing = await db.prepare('SELECT * FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).first();
+  const existing = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
   if (!existing) return json({ error: 'Feedback not found' }, 404);
-  const admin = await requireAdmin(request, db);
-  await checkRateLimit(db, `seller-feedback-delete:${admin.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
+  const requester = await currentUser(request, db);
+  const admin = requester && requester.is_admin ? requester : null;
+  if (!admin && requester && existing.buyer_user_id !== null && existing.buyer_user_id === requester.user_id) {
+    await checkRateLimit(db, `seller-feedback-delete:${requester.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
+    await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'delete', existing, requester.user_id);
+    const deletedByAuthor = await db.prepare(`
+      DELETE FROM seller_feedback WHERE purchase_id = ? AND EXISTS (
+        SELECT 1 FROM purchases p JOIN builders bld ON bld.builder_id = p.buyer_builder_id
+        WHERE p.purchase_id = seller_feedback.purchase_id AND bld.user_id = ?
+      )
+    `).bind(purchaseId, requester.user_id).run();
+    if (deletedByAuthor.meta.changes === 0) {
+      throw new HttpError('Feedback changed concurrently — refetch and retry', 409);
+    }
+    return json({ deleted: true });
+  }
+  const resolvedAdmin = admin || await requireAdmin(request, db);
+  await checkRateLimit(db, `seller-feedback-delete:${resolvedAdmin.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
   const result = await db.prepare('DELETE FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).run();
   // #2003: the existence check above and this DELETE aren't atomic, so a
   // concurrent delete (another admin retrying, say) can win the race
@@ -15659,7 +15870,7 @@ async function handleSellerFeedbackDelete(request, env, purchaseId) {
   // delete_land_candidate already use, so a deletion that didn't happen
   // is never misattributed to this admin.
   if (result.meta.changes === 1) {
-    await adminActionLogStatement(db, admin.user_id, 'delete_seller_feedback', 'seller_feedback', existing.feedback_id).run();
+    await adminActionLogStatement(db, resolvedAdmin.user_id, 'delete_seller_feedback', 'seller_feedback', existing.feedback_id).run();
   }
   return json({ deleted: true });
 }
@@ -15672,7 +15883,7 @@ async function handleSellerFeedbackList(db, sellerId) {
   // it read as "seller-facing" in practice without the API itself needing
   // to restrict who can ask.
   const { results } = await db.prepare(`
-    SELECT * FROM seller_feedback WHERE seller_id = ? ORDER BY created_at DESC LIMIT 200
+    ${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.seller_id = ? ORDER BY f.created_at DESC LIMIT 200
   `).bind(sellerId).all();
   const feedback = results.reverse().map(sellerFeedbackFromRow);
   // averageRating/count are the seller's real, all-time summary, not

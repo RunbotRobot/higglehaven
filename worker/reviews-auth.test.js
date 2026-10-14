@@ -1970,6 +1970,52 @@ describe('Authentication', () => {
         expect(postsAfter.body.posts.map((p) => p.text)).toEqual(['Still here']);
       });
     });
+
+    // #2030: requireCurrentUser is the single join point every
+    // authenticated request goes through -- a suspended account's own
+    // session is still genuinely valid (the cookie resolves to a real
+    // user), so this must be a distinct 403, not the generic 401
+    // "Not authenticated" an expired/missing session would get.
+    it('blocks a suspended account from any authenticated action with a distinct 403, restored once lifted', async () => {
+      const admin = await makeAdmin('suspend-enforce-admin');
+      const target = await signupBuilder('suspend-enforce-target');
+
+      const beforeSuspend = await api('/auth/me', target.session());
+      expect(beforeSuspend.response.status).toBe(200);
+      expect(beforeSuspend.body.user).toBeTruthy();
+
+      await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'x' }),
+      }));
+
+      // requireCurrentUser-gated endpoints reject outright, distinctly from
+      // a missing/expired session (401) -- builders/me is an arbitrary,
+      // representative example of the many endpoints that go through it.
+      const blocked = await api('/builders/me', target.session());
+      expect(blocked.response.status).toBe(403);
+      expect(blocked.body.suspended).toBe(true);
+
+      // currentUser() itself (used by the plain, non-throwing /auth/me)
+      // is deliberately untouched -- a suspended user's session still
+      // resolves to their real account, it's just not authorized to act.
+      const meWhileSuspended = await api('/auth/me', target.session());
+      expect(meWhileSuspended.response.status).toBe(200);
+      expect(meWhileSuspended.body.user).toBeTruthy();
+
+      // Lifting the suspension restores normal access immediately.
+      await api('/auth/unsuspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email }),
+      }));
+      const restored = await api('/builders/me', target.session());
+      expect(restored.response.status).toBe(200);
+
+      // logout never requires authentication at all (it only reads the
+      // session cookie directly, deleting it outright), so a suspended
+      // account can always log out regardless of this gate -- checked last
+      // since it destroys the session this test has been reusing above.
+      const loggedOut = await api('/auth/logout', target.session({ method: 'POST' }));
+      expect(loggedOut.response.status).toBe(200);
+    });
   });
 
   it('rejects signup with an already-registered email, case-insensitively', async () => {
