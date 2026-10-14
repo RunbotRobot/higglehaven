@@ -2693,6 +2693,11 @@ should use it instead of the legacy annular endpoint below. Larger land classes
 remain a future extension; this first version deliberately emits only exact
 1,000 m² class-1 lands.
 
+Each generated cell's `landType` (#2014) is `water` instead of the usual
+`buildable` default when its center falls near a real pre-1916 water cell
+ingested into `geo_water_cells` (`scripts/ingest-geo-data.mjs`,
+migrations/0128) — forward-generation only, never retroactive.
+
 ### `POST /api/land-candidates/generate-ring`
 
 Procedurally creates one gap-free band of class-1, 1,000 m² land candidates.
@@ -2740,6 +2745,12 @@ power-law boundaries match exactly. Do not send `innerRadiusM` or
 Each accepted band is also stored as a single ring reservation. A D1 trigger
 enforces the same exclusion rule atomically, so concurrent requests cannot both
 create overlapping rings after passing their application-level preflight.
+
+Same real water-cell classification as `generate-mosaic` above (#2014): a
+plot's `landType` becomes `water` instead of `buildable` when its center
+falls near a real ingested water cell, regardless of `distribution` or any
+explicit `landType` already set via `adjacentToRingId`-derived plots (this
+only ever upgrades toward `water`, never downgrades one already requested).
 
 ## Land candidate rings
 
@@ -2871,10 +2882,13 @@ contains both `candidate` and `landlet`; `landlet` is null if it remains queued.
 Queues a candidate using the same `name`, `areaM2`, `center`, `landClass`,
 `landType`, `polygon`, and `metadata` fields as a landlet. `landType`
 defaults to `buildable` and must be `buildable` or `water` (same
-`landletLandType` validation as the landlet endpoint above, and the same
-"nothing produces a `water` candidate yet — this just makes the data model
-capable of representing one" scope cut). If it already overlaps the
-current world circle, the API immediately creates its generating landlet,
+`landletLandType` validation as the landlet endpoint above). Unlike
+`generate-ring`/`generate-mosaic` above (#2014), this endpoint never
+auto-classifies anything from real geo data — it only ever stores whatever
+`landType` the caller explicitly passes, since it takes arbitrary admin
+input rather than a self-consistent generator's own output. If it already
+overlaps the current world circle, the API immediately creates its
+generating landlet,
 carrying the candidate's own `landType` into it rather than defaulting the
 materialized landlet to `buildable` regardless of the candidate's type.
 Otherwise it remains lightweight until a later expansion first overlaps it.
@@ -6485,6 +6499,72 @@ low-value auto-resolve path (refund, clawback, admin-log entry), a new
 buyer's first-ever purchase (not established, no prior purchase to count),
 a buyer with refund history (not established), a high-value purchase from
 an established buyer (no auto-resolve), and the no-returns override.
+
+### Self-dealing flags (#2019, sub-issue of #1212)
+
+A lighter, non-fingerprinting self-dealing signal: every real purchase
+(`writePurchaseRow`, both the dev-mode-simulated and real-money paths)
+checks whether the buyer's and the listing's seller's own on-file email
+match — the same account, or two accounts sharing one real inbox, buying
+from itself. A match writes a row to `self_dealing_flags`
+(`migrations/0132`) for admin review; it never blocks or affects the
+purchase itself (false positives — roommates, family buying from each
+other legitimately — are real, per the owner's own direction). Fails open
+whenever either side's email can't be resolved at all (a builder with no
+linked `user_id`, or a seller never linked to a real account) — that's
+"nothing to compare," not "cleared."
+
+**Not implemented**, despite being in this sub-issue's original scope:
+
+- **Shipping address matching** — this codebase never captures a buyer
+  shipping address anywhere, for any purpose (confirmed by a direct
+  schema/code search). Split into its own new sub-issue, since capturing
+  one at all is a real new data-capture/privacy decision, not a one-line
+  addition here.
+- **Same Stripe customer ID on both sides** — this integration never
+  creates a Stripe `Customer` object on either side of a transaction, only
+  a seller's Connect *account* id (`sellers.stripe_account_id`) and a card
+  fingerprint keyed to whichever account first confirmed that physical
+  card (`card_fingerprints`, #1072). The issue's own wording already
+  hedged this signal ("if accessible through the existing Stripe Connect
+  integration"), so it's dropped rather than built against data that
+  doesn't exist.
+
+```
+GET /api/self-dealing-flags
+```
+
+Admin-only. Lists every `pending` flag, newest first (capped at 200),
+joined against its own purchase for context:
+
+```json
+{
+  "flags": [
+    {
+      "flagId": "self-dealing-flag-...",
+      "purchaseId": "purchase-...",
+      "matchedSignals": ["email"],
+      "createdAt": "...",
+      "templateId": "...",
+      "buyerBuilderId": "...",
+      "builderId": "...",
+      "totalCents": 500
+    }
+  ]
+}
+```
+
+```
+POST /api/self-dealing-flags/:flagId/review
+{ "notes": "Confirmed roommates, no action needed" }   // optional, ≤280 chars
+```
+
+Admin-only. Marks the flag `reviewed` (404s if it's already reviewed or
+doesn't exist) and writes an `admin_action_log` entry. Unlike #2017's
+product-flag resolve action, there is no "approve"/"reject" consequence
+here — a flag is a soft signal, not an accusation, so reviewing one is
+just acknowledgment, optionally with a note for the admin's own record;
+nothing else in this app reacts to a flag's status.
 
 ## Tax reporting
 
