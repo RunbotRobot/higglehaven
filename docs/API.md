@@ -801,6 +801,22 @@ operations; the day-to-day mechanism that actually keeps land claimable
 schedule — see "Automatic world growth" under "World settings" below —
 rather than through any HTTP request a session could gate at all.
 
+**A suspended account's session is valid but not authorized to act**
+(#2030, sub-issue of #1201 — see "Account suspension" under "Authentication"
+below for the suspend/unsuspend endpoints themselves).
+`requireCurrentUser` — the single join point nearly every endpoint below
+that requires a session goes through, directly or via `requireSessionBuilder`/
+`requireSessionSeller`/`requireAdmin` — rejects a currently-active suspension
+with a distinct `403` and `{ "suspended": true }` in the body, instead of the
+generic `401` a missing/expired session gets. This is deliberately *not* the
+same as not being logged in: the session cookie still resolves to a real
+account, it's just not currently allowed to act. Two things keep working
+regardless: `GET /api/auth/me` (`currentUser()`, the plain non-throwing
+lookup it uses, is untouched — a client can still identify *who* is
+suspended) and `POST /api/auth/logout` (never required authentication at
+all). An admin's own session is gated the same way — a suspended admin
+can't use admin-only endpoints either.
+
 Every endpoint section below notes its own specific rule inline; this
 section is just the shared vocabulary for reading those notes.
 
@@ -870,12 +886,12 @@ and greater detail" preserved across possibly-multiple suspend/lift cycles
 on the same account. A suspension is **reversible, not a deletion** — the
 owner explicitly ruled out a separate admin-initiated hard-delete path;
 real deletion stays reserved for the account-holder's own self-service
-`delete-account` request. (Enforcing suspension against login/actions, the
-automated notice to the suspended user, and the 30-day grace-period
-auto-escalation to a full deletion are each their own separate,
-not-yet-landed sub-issue — #2030/#2031/#2033 respectively. The optional
-sign-post/calendar-event removal cascade is #2032, documented on
-`suspend-account` below.)
+`delete-account` request, up to the 30-day grace period described below.
+`requireCurrentUser` (#2030) rejects a currently-active suspension outright
+with a distinct `403`/`suspended: true` — see "Authorization model" above.
+The optional sign-post/calendar-event removal cascade is #2032, documented
+on `suspend-account` below. (The automated notice to the suspended user is
+its own separate, not-yet-landed sub-issue — #2031.)
 
 ### `POST /api/auth/suspend-account`
 
@@ -890,7 +906,7 @@ expiry (the owner's own instruction: minors-access cases in particular
 should keep *more* detail, not less). `graceDays` defaults to `30` (the
 owner's confirmed default) and must be an integer in `[1, 365]` (`400`
 otherwise) — this becomes `gracePeriodEndsAt` in the response, the point
-#2033's eventual auto-escalation job will act on. `409` if the account
+#2033's auto-escalation job (below) acts on. `409` if the account
 already has an active (not lifted, not escalated) suspension — lift it via
 `unsuspend-account` first before suspending again. On success, returns
 `{ "suspension": { "suspensionId", "userId", "adminUserId", "reason", "evidenceNote", "suspendedAt", "gracePeriodEndsAt" } }`.
@@ -940,6 +956,26 @@ suspension, or
 otherwise — the same shape `suspend-account`'s own response returns, so a
 caller can check status first without needing two different response
 shapes.
+
+### 30-day grace-period auto-escalation (#2033, sub-issue of #1201)
+
+`escalateExpiredSuspensions` runs on the same Cloudflare Cron Trigger as
+every other periodic job described under "Automatic world growth" (World
+settings, below) — no HTTP endpoint, no session. Each tick, it finds every
+`account_suspensions` row whose `gracePeriodEndsAt` has passed with no
+admin ever lifting it (`liftedAt IS NULL`) and not already escalated
+(`escalatedAt IS NULL`), then runs the exact same account-deletion cascade
+`POST /api/auth/delete-account` uses for a real self-delete (anonymized
+email/username, password revoked, every session signed out) — reusing that
+same shared cascade function rather than a second, divergent
+implementation, per the owner's own reasoning for building suspension on
+top of that shape in the first place. Each escalation is recorded in
+`admin_action_log` (`action_type: "auto_escalate_suspension"`,
+`adminUserId: null` — no human admin acted, it's automated) referencing the
+original suspending admin and the suspension itself, so the audit trail
+stays complete even though the final step wasn't a person's direct action.
+A suspension lifted before its grace period passes is never escalated,
+regardless of how long it's been lifted.
 
 ## Builders
 

@@ -410,6 +410,12 @@ export default {
     ctx.waitUntil(expireStaleVideoGenerationJobs(env.DB).catch((error) => {
       console.error('expireStaleVideoGenerationJobs failed', error);
     }));
+    // #2033 (sub-issue of #1201): without this, an unreversed admin
+    // suspension's own grace_period_ends_at passing silently does nothing
+    // -- nothing else ever acts on it.
+    ctx.waitUntil(escalateExpiredSuspensions(env.DB).catch((error) => {
+      console.error('escalateExpiredSuspensions failed', error);
+    }));
     // #1994: without this, no credit orb ever spawns at all -- this is
     // the only mechanism that creates one.
     ctx.waitUntil(spawnCreditOrbIfDue(env.DB).catch((error) => {
@@ -10977,15 +10983,14 @@ async function handleLogout(request, db, url) {
 // check itself can't be used to brute-force the real password.
 const DELETE_ACCOUNT_RATE_LIMIT_MAX = 5;
 
-async function handleDeleteAccount(request, db, url) {
-  const user = await requireCurrentUser(request, db);
-  await checkRateLimit(db, `delete-account:${user.user_id}`, DELETE_ACCOUNT_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const password = typeof input.password === 'string' ? input.password : '';
-  if (!(await verifyPassword(password, user.password_hash))) {
-    throw new HttpError('Incorrect password', 401);
-  }
-
+// #2033 (sub-issue of #1201): the actual row-mutating cascade, split out
+// of handleDeleteAccount so the 30-day grace-period auto-escalation (see
+// escalateExpiredSuspensions near scheduled()'s other cron jobs) can run
+// the exact same deletion against a suspended account that never got
+// lifted, rather than re-deriving a second, potentially-divergent
+// implementation -- the whole point of building suspension on top of
+// this existing shape in the first place, per #1201's own owner comment.
+async function cascadeDeleteAccount(db, userId) {
   // Freed rather than hard-deleted, per #1145's "email/username freed ...
   // per the owner's chosen approach" -- rewritten to a placeholder unique
   // to this user_id so the real email/username are available again for a
@@ -10997,7 +11002,7 @@ async function handleDeleteAccount(request, db, url) {
   // since nothing ever looks it up again once it's gone, and leaving it
   // set would needlessly keep blocking a future signup under some other
   // address that happens to canonicalize the same way.
-  const suffix = user.user_id.slice(-8);
+  const suffix = userId.slice(-8);
   const deletedEmail = `deleted-${suffix}@deleted.invalid`;
   const deletedUsername = `deleted-${suffix}`;
   // Hashing a random, immediately-discarded password (rather than, say,
@@ -11014,14 +11019,61 @@ async function handleDeleteAccount(request, db, url) {
         deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE user_id = ?
-    `).bind(deletedEmail, deletedUsername, revokedPasswordHash, user.user_id),
+    `).bind(deletedEmail, deletedUsername, revokedPasswordHash, userId),
     // Same "sign out every device" reasoning handleResetPassword's own
     // session wipe already uses -- there is no more final an account
     // action than this one to leave a live session riding on.
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(user.user_id),
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId),
   ]);
+}
+
+async function handleDeleteAccount(request, db, url) {
+  const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `delete-account:${user.user_id}`, DELETE_ACCOUNT_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const password = typeof input.password === 'string' ? input.password : '';
+  if (!(await verifyPassword(password, user.password_hash))) {
+    throw new HttpError('Incorrect password', 401);
+  }
+
+  await cascadeDeleteAccount(db, user.user_id);
 
   return json({ accountDeleted: true }, 200, { 'set-cookie': clearSessionCookieHeader(url) });
+}
+
+// #2033 (sub-issue of #1201): an admin-initiated suspension (#2029) that
+// nobody lifts within its own grace_period_ends_at auto-escalates into
+// this same real account deletion -- the owner's own confirmed scope for
+// #1201 ("Build suspension only" as the admin-facing tool, with an
+// unreversed one eventually becoming permanent rather than sitting
+// suspended forever). The UPDATE ... RETURNING below is this function's
+// own atomic idempotency guard (escalated_at IS NULL), the same
+// "claim committed before the fallible step; re-arm on failure" shape
+// warnInactiveLandletOwners above already uses -- a transient failure
+// partway through one account's cascade can't leave it stuck
+// unprocessed forever, and a second concurrent run of this same cron
+// can't double-escalate the same suspension.
+export async function escalateExpiredSuspensions(db) {
+  const due = await db.prepare(`
+    UPDATE account_suspensions
+    SET escalated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE grace_period_ends_at < strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      AND lifted_at IS NULL AND escalated_at IS NULL
+    RETURNING suspension_id, user_id, admin_user_id
+  `).run();
+  for (const row of due.results) {
+    try {
+      await cascadeDeleteAccount(db, row.user_id);
+      await adminActionLogStatement(db, null, 'auto_escalate_suspension', 'user', row.user_id, {
+        suspensionId: row.suspension_id, originalAdminUserId: row.admin_user_id,
+      }).run();
+    } catch (error) {
+      console.error('escalateExpiredSuspensions: failed to escalate suspension, re-arming for a future retry', row.suspension_id, error);
+      await db.prepare(
+        'UPDATE account_suspensions SET escalated_at = NULL WHERE suspension_id = ?',
+      ).bind(row.suspension_id).run();
+    }
+  }
 }
 
 // #1181 (sub-issue of #1126, owner decision via its own GitHub comment):
