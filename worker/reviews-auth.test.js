@@ -975,7 +975,7 @@ describe('Product reviews', () => {
   });
 
   // #1975 (owner decision): a review now records who actually wrote it
-  // (user_id, migrations/0128), the same sign_posts.user_id pattern
+  // (user_id, migrations/0130), the same sign_posts.user_id pattern
   // (#1830) -- POST's own response/GET listing should surface it.
   it('records the posting session\'s own userId on a new review', async () => {
     const templateId = await createTemplate('review-userid-recorded');
@@ -1166,7 +1166,7 @@ describe('Product reviews', () => {
     // #1975: "Maybe we should keep a record of the original content
     // internally in case of disputes" -- every author-initiated edit/
     // delete should snapshot the pre-change row into
-    // user_content_edit_history (migrations/0127) first.
+    // user_content_edit_history (migrations/0129) first.
     it('snapshots the pre-edit review into user_content_edit_history before applying an author edit', async () => {
       const templateId = await createTemplate('review-history-edit');
       const shopper = await signupBuilder('review-history-edit-shopper');

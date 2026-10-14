@@ -53,6 +53,15 @@ export async function deleteAccount(password) {
   });
 }
 
+// #1987 (sub-issue of #1983): GDPR/CCPA "right to access" -- the
+// requesting account's own data as a single JSON bundle (see
+// worker/index.js's handleExportData for exactly what it contains).
+// Read-only, so unlike deleteAccount/changePassword above this needs no
+// password confirmation, just the existing session.
+export async function exportMyData() {
+  return requestJson('/auth/export-data');
+}
+
 // GET /auth/me always returns 200 with `user: null` when nobody's logged
 // in (see handleMe's own comment on why) — called unconditionally on every
 // page load, so a 4xx here for the common "nobody's logged in" case would
