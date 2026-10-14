@@ -10,6 +10,7 @@ import {
   logIn,
   logOut,
   deleteAccount,
+  exportMyData,
   changePassword,
   fetchCurrentUser,
   requestPasswordReset,
@@ -11652,6 +11653,32 @@ authChangeEmailForm.addEventListener('submit', async (event) => {
     setAuthStatus(err.message || 'Could not change your email.', 'error');
   } finally {
     submitBtn.disabled = false;
+  }
+});
+
+// #1987 (sub-issue of #1983): triggers a browser download of the
+// GET /auth/export-data JSON bundle via a Blob/URL.createObjectURL link
+// -- no server-side file storage needed, same as extractVideoFrames'
+// own createObjectURL usage above, just for a download instead of
+// playback.
+const authExportDataBtn = document.getElementById('auth-export-data-btn');
+authExportDataBtn.addEventListener('click', async () => {
+  authExportDataBtn.disabled = true;
+  setAuthStatus('Preparing your data…');
+  try {
+    const data = await exportMyData();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `higglehaven-data-export-${data.exportedAt.slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setAuthStatus('Your data export has started downloading.', 'success');
+  } catch (err) {
+    setAuthStatus(err.message || 'Could not export your data.', 'error');
+  } finally {
+    authExportDataBtn.disabled = false;
   }
 });
 
