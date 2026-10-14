@@ -759,6 +759,12 @@
   // overlapping Refresh clicks) can apply out of order, duplicating or
   // reverting rows with no ordering protection.
   let ringsLoadToken = 0;
+  // #2073: same monotonic-token guard as ringsLoadToken just above --
+  // viewRing() has no re-entrancy protection of its own, so an admin
+  // clicking "Details" on one ring and then another before the first
+  // response lands can have the slower response overwrite the faster
+  // one, showing a ring that doesn't match the admin's last click.
+  let ringDetailLoadToken = 0;
 
   function renderRings() {
     if (!ringsRows.length) {
@@ -819,13 +825,16 @@
   }
 
   async function viewRing(ringId) {
+    const myDetailLoadToken = ++ringDetailLoadToken;
     clearError();
     try {
       const body = await apiFetch('/api/land-candidate-rings/' + encodeURIComponent(ringId));
+      if (myDetailLoadToken !== ringDetailLoadToken) return;
       document.getElementById('ringDetailId').textContent = body.ring.ringId;
       document.getElementById('ringDetailBody').textContent = JSON.stringify(body.ring, null, 2);
       ringDetailWrap.hidden = false;
     } catch (error) {
+      if (myDetailLoadToken !== ringDetailLoadToken) return;
       showError(error.message);
     }
   }
