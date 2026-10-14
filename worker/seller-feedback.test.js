@@ -179,14 +179,22 @@ describe('Seller feedback', () => {
     expect(second.response.status).toBe(409);
   });
 
-  // #1738 (owner confirmed, 2026-10-13): admin-only removal, deliberately --
-  // unlike product reviews, a seller can't self-delete feedback about their
-  // own conduct. Covers: 401 with no session, 403 for a non-admin session
-  // (including the purchase's own seller), 404 for a purchase with no
-  // feedback, and a real admin delete logged to admin_action_log.
-  it('lets only an admin delete seller feedback, never the rated seller themself', async () => {
+  // #1738 (owner confirmed, 2026-10-13): the rated seller can never
+  // self-delete feedback about their own conduct, unlike product reviews'
+  // own seller-moderation path -- admin-only removal is the sole
+  // moderation route for the seller's side. #1975 (same thread): the
+  // feedback's own author (the buyer who actually wrote it) is a
+  // different person from the rated seller and gets their own
+  // author-direct removal instead -- covered by the "Author self-edit/
+  // delete (#1975)" describe block below, not here. Covers: 401 with no
+  // session, 403 for a non-admin, non-author session (an ordinary
+  // stranger and the purchase's own rated seller alike), 404 for a
+  // purchase with no feedback, and a real admin delete logged to
+  // admin_action_log.
+  it('lets only an admin (or the feedback\'s own author) delete seller feedback, never the rated seller themself', async () => {
     const buyer = await signupBuilder('feedback-delete-buyer');
     const seller = await signupSeller('feedback-delete-seller');
+    const stranger = await signupBuilder('feedback-delete-stranger');
     const purchaseId = await createPurchase(buyer, { sellerId: seller.sellerId });
     const posted = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
       method: 'POST',
@@ -200,8 +208,8 @@ describe('Seller feedback', () => {
     const asTheRatedSeller = await api(`/purchases/${purchaseId}/feedback`, seller.session({ method: 'DELETE' }));
     expect(asTheRatedSeller.response.status).toBe(403);
 
-    const asOrdinaryBuilder = await api(`/purchases/${purchaseId}/feedback`, buyer.session({ method: 'DELETE' }));
-    expect(asOrdinaryBuilder.response.status).toBe(403);
+    const asAnOrdinaryStranger = await api(`/purchases/${purchaseId}/feedback`, stranger.session({ method: 'DELETE' }));
+    expect(asAnOrdinaryStranger.response.status).toBe(403);
 
     const admin = await signupAdmin('feedback-delete-admin');
     const missingPurchaseFeedback = await createPurchase(buyer);
@@ -407,5 +415,226 @@ describe('Seller feedback', () => {
       body: JSON.stringify({ rating: 5 }),
     }));
     expect(limited.response.status).toBe(429);
+  });
+
+  describe('Author self-edit/delete (#1975)', () => {
+    async function postFeedback(purchaseId, buyer, { rating = 4, text = 'Pretty good.' } = {}) {
+      const posted = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
+        method: 'POST', body: JSON.stringify({ rating, text }),
+      }));
+      expect(posted.response.status).toBe(201);
+      return posted.body.feedback.feedbackId;
+    }
+
+    it('lets the feedback\'s own author (the buyer) edit it directly, with no admin involvement', async () => {
+      const buyer = await signupBuilder('feedback-author-edit-buyer');
+      const seller = await signupSeller('feedback-author-edit-seller');
+      const purchaseId = await createPurchase(buyer, { sellerId: seller.sellerId });
+      await postFeedback(purchaseId, buyer);
+
+      const edited = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
+        method: 'PATCH', body: JSON.stringify({ rating: 2, text: 'Changed my mind.' }),
+      }));
+      expect(edited.response.status).toBe(200);
+      expect(edited.body.feedback).toMatchObject({ rating: 2, text: 'Changed my mind.' });
+
+      const listed = await api(`/sellers/${seller.sellerId}/feedback`);
+      expect(listed.body.feedback[0]).toMatchObject({ rating: 2, text: 'Changed my mind.' });
+    });
+
+    // #1738: the rated seller never gets to edit feedback about themselves
+    // either -- there's no moderation equivalent for PATCH the way DELETE
+    // has one, the same reasoning product_reviews'/calendar_events' own
+    // PATCH already settled, just with an extra "including the rated
+    // seller" case specific to this resource's own #1738 restriction.
+    it('rejects an edit from anyone other than the feedback\'s own author, including the rated seller', async () => {
+      const buyer = await signupBuilder('feedback-edit-cross-account-buyer');
+      const seller = await signupSeller('feedback-edit-cross-account-seller');
+      const stranger = await signupBuilder('feedback-edit-cross-account-stranger');
+      const purchaseId = await createPurchase(buyer, { sellerId: seller.sellerId });
+      await postFeedback(purchaseId, buyer);
+
+      const unauthenticated = await api(`/purchases/${purchaseId}/feedback`, {
+        method: 'PATCH', body: JSON.stringify({ rating: 1 }),
+      });
+      expect(unauthenticated.response.status).toBe(401);
+
+      const wrongAccount = await api(`/purchases/${purchaseId}/feedback`, stranger.session({
+        method: 'PATCH', body: JSON.stringify({ rating: 1 }),
+      }));
+      expect(wrongAccount.response.status).toBe(403);
+
+      const asTheRatedSeller = await api(`/purchases/${purchaseId}/feedback`, seller.session({
+        method: 'PATCH', body: JSON.stringify({ rating: 1 }),
+      }));
+      expect(asTheRatedSeller.response.status).toBe(403);
+
+      const unchanged = await api(`/sellers/${seller.sellerId}/feedback`);
+      expect(unchanged.body.feedback[0].rating).toBe(4);
+    });
+
+    it('keeps an omitted field as-is on edit, but clears text when explicitly set empty', async () => {
+      const buyer = await signupBuilder('feedback-edit-partial-buyer');
+      const purchaseId = await createPurchase(buyer);
+      await postFeedback(purchaseId, buyer, { rating: 3, text: 'Original text.' });
+
+      const ratingOnly = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
+        method: 'PATCH', body: JSON.stringify({ rating: 5 }),
+      }));
+      expect(ratingOnly.response.status).toBe(200);
+      expect(ratingOnly.body.feedback).toMatchObject({ rating: 5, text: 'Original text.' });
+
+      const clearText = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
+        method: 'PATCH', body: JSON.stringify({ text: '' }),
+      }));
+      expect(clearText.response.status).toBe(200);
+      expect(clearText.body.feedback).toMatchObject({ rating: 5, text: null });
+    });
+
+    it('rejects an edit with an out-of-range rating', async () => {
+      const buyer = await signupBuilder('feedback-edit-bad-rating-buyer');
+      const purchaseId = await createPurchase(buyer);
+      await postFeedback(purchaseId, buyer);
+
+      const rejected = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
+        method: 'PATCH', body: JSON.stringify({ rating: 6 }),
+      }));
+      expect(rejected.response.status).toBe(400);
+    });
+
+    it('rejects an edit with text over the 280 character cap', async () => {
+      const buyer = await signupBuilder('feedback-edit-too-long-buyer');
+      const purchaseId = await createPurchase(buyer);
+      await postFeedback(purchaseId, buyer);
+
+      const rejected = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
+        method: 'PATCH', body: JSON.stringify({ text: 'x'.repeat(281) }),
+      }));
+      expect(rejected.response.status).toBe(400);
+    });
+
+    it('lets the feedback\'s own author (the buyer) delete it directly, with no admin involvement', async () => {
+      const buyer = await signupBuilder('feedback-author-delete-buyer');
+      const seller = await signupSeller('feedback-author-delete-seller');
+      const purchaseId = await createPurchase(buyer, { sellerId: seller.sellerId });
+      await postFeedback(purchaseId, buyer);
+
+      const deleted = await api(`/purchases/${purchaseId}/feedback`, buyer.session({ method: 'DELETE' }));
+      expect(deleted.response.status).toBe(200);
+      expect(deleted.body).toEqual({ deleted: true });
+
+      const listed = await api(`/sellers/${seller.sellerId}/feedback`);
+      expect(listed.body.feedback).toHaveLength(0);
+    });
+
+    // A purchase with no buyer_builder_id (legacy/pre-#1123 row, or the
+    // buyer's account since self-deleted -- ON DELETE SET NULL) has nobody
+    // on record to own it -- the author-direct branches must never match
+    // it, falling straight through to the existing admin-only path exactly
+    // as before (same "legacy row" shape reviews-auth.test.js's own
+    // equivalent test covers for product_reviews).
+    it('never lets feedback on a purchase with no recorded buyer_builder_id be claimed as anyone\'s own', async () => {
+      const seller = await signupSeller('feedback-legacy-no-buyer-seller');
+      const shopper = await signupBuilder('feedback-legacy-no-buyer-shopper');
+      const purchaseId = await createPurchase(null, { sellerId: seller.sellerId });
+      const feedbackId = `seller-feedback-legacy-${crypto.randomUUID()}`;
+      await env.DB.prepare(`
+        INSERT INTO seller_feedback (feedback_id, purchase_id, seller_id, author_label, rating, text)
+        VALUES (?, ?, ?, 'Legacy Reviewer', 3, 'Pre-#1975 feedback.')
+      `).bind(feedbackId, purchaseId, seller.sellerId).run();
+
+      const editRejected = await api(`/purchases/${purchaseId}/feedback`, shopper.session({
+        method: 'PATCH', body: JSON.stringify({ rating: 1 }),
+      }));
+      expect(editRejected.response.status).toBe(403);
+
+      const deleteRejectedByShopper = await api(`/purchases/${purchaseId}/feedback`, shopper.session({ method: 'DELETE' }));
+      expect(deleteRejectedByShopper.response.status).toBe(403);
+
+      const admin = await signupAdmin('feedback-legacy-no-buyer-admin');
+      const deletedByAdmin = await api(`/purchases/${purchaseId}/feedback`, admin.session({ method: 'DELETE' }));
+      expect(deletedByAdmin.response.status).toBe(200);
+    });
+
+    it('rate-limits repeated feedback edits from the same account', async () => {
+      const buyer = await signupBuilder('feedback-edit-rate-limit-buyer');
+      const purchaseId = await createPurchase(buyer);
+      await postFeedback(purchaseId, buyer);
+
+      for (let i = 0; i < 20; i++) {
+        const attempt = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
+          method: 'PATCH', body: JSON.stringify({ rating: (i % 5) + 1 }),
+        }));
+        expect(attempt.response.status).not.toBe(429);
+      }
+      const limited = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
+        method: 'PATCH', body: JSON.stringify({ rating: 1 }),
+      }));
+      expect(limited.response.status).toBe(429);
+    });
+
+    // #1975: "Maybe we should keep a record of the original content
+    // internally in case of disputes" -- every author-initiated edit/
+    // delete should snapshot the pre-change row into
+    // user_content_edit_history (migrations/0129) first.
+    it('snapshots the pre-edit feedback into user_content_edit_history before applying an author edit', async () => {
+      const buyer = await signupBuilder('feedback-history-edit-buyer');
+      const purchaseId = await createPurchase(buyer);
+      const feedbackId = await postFeedback(purchaseId, buyer, { rating: 4, text: 'Before the edit.' });
+      const buyerUserId = (await api('/auth/me', buyer.session())).body.user.userId;
+
+      const edited = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
+        method: 'PATCH', body: JSON.stringify({ rating: 1, text: 'After the edit.' }),
+      }));
+      expect(edited.response.status).toBe(200);
+
+      const history = await env.DB.prepare(
+        'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+      ).bind('seller_feedback', feedbackId).all();
+      expect(history.results).toHaveLength(1);
+      expect(history.results[0]).toMatchObject({ action: 'edit', actor_user_id: buyerUserId });
+      const snapshot = JSON.parse(history.results[0].snapshot_json);
+      expect(snapshot).toMatchObject({ feedback_id: feedbackId, rating: 4, text: 'Before the edit.' });
+    });
+
+    it('snapshots the pre-delete feedback into user_content_edit_history before an author delete', async () => {
+      const buyer = await signupBuilder('feedback-history-delete-buyer');
+      const purchaseId = await createPurchase(buyer);
+      const feedbackId = await postFeedback(purchaseId, buyer, { rating: 5, text: 'About to be deleted.' });
+      const buyerUserId = (await api('/auth/me', buyer.session())).body.user.userId;
+
+      const deleted = await api(`/purchases/${purchaseId}/feedback`, buyer.session({ method: 'DELETE' }));
+      expect(deleted.response.status).toBe(200);
+
+      const history = await env.DB.prepare(
+        'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+      ).bind('seller_feedback', feedbackId).all();
+      expect(history.results).toHaveLength(1);
+      expect(history.results[0]).toMatchObject({ action: 'delete', actor_user_id: buyerUserId });
+      const snapshot = JSON.parse(history.results[0].snapshot_json);
+      expect(snapshot).toMatchObject({ feedback_id: feedbackId, rating: 5, text: 'About to be deleted.' });
+    });
+
+    // Moderation deletes (admin override) are not the user editing/
+    // deleting their own content -- the owner's own framing was
+    // specifically about self-service, so these must not write to the
+    // history table. There's no seller-moderation equivalent to check here
+    // (unlike product_reviews' own version of this test) since #1738
+    // confirmed the rated seller has no self-service removal path at all.
+    it('does not snapshot to user_content_edit_history on an admin moderation delete', async () => {
+      const buyer = await signupBuilder('feedback-history-moderation-buyer');
+      const seller = await signupSeller('feedback-history-moderation-seller');
+      const purchaseId = await createPurchase(buyer, { sellerId: seller.sellerId });
+      const feedbackId = await postFeedback(purchaseId, buyer);
+
+      const admin = await signupAdmin('feedback-history-moderation-admin');
+      const deletedByAdmin = await api(`/purchases/${purchaseId}/feedback`, admin.session({ method: 'DELETE' }));
+      expect(deletedByAdmin.response.status).toBe(200);
+
+      const history = await env.DB.prepare(
+        'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+      ).bind('seller_feedback', feedbackId).all();
+      expect(history.results).toHaveLength(0);
+    });
   });
 });

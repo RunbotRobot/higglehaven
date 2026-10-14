@@ -5132,7 +5132,7 @@ spoofing gap here: anyone who knew a `purchaseId` and the buyer's public
 display label, neither requiring a session or an account, could `POST`
 feedback as if they were that buyer.
 
-### `GET /api/sellers/:sellerId/feedback`, `POST /api/purchases/:purchaseId/feedback`, `DELETE /api/purchases/:purchaseId/feedback`
+### `GET /api/sellers/:sellerId/feedback`, `POST /api/purchases/:purchaseId/feedback`, `PATCH /api/purchases/:purchaseId/feedback`, `DELETE /api/purchases/:purchaseId/feedback`
 
 ```json
 POST /api/purchases/:purchaseId/feedback
@@ -5144,7 +5144,7 @@ POST /api/purchases/:purchaseId/feedback
 `averageRating`/`count` aggregate so no caller needs to recompute it:
 
 ```json
-{ "feedback": [ { "feedbackId": "seller-feedback-...", "purchaseId": "...", "sellerId": "...", "authorLabel": "...", "rating": 5, "text": "...", "createdAt": "..." } ], "averageRating": 4.5, "count": 2 }
+{ "feedback": [ { "feedbackId": "seller-feedback-...", "purchaseId": "...", "sellerId": "...", "authorLabel": "...", "rating": 5, "text": "...", "createdAt": "...", "userId": "..." } ], "averageRating": 4.5, "count": 2 }
 ```
 
 `averageRating` is `null` with zero feedback, never `0`, same reasoning as
@@ -5154,22 +5154,62 @@ themself; the only UI surfacing it today (below) happens to be the
 Seller modal, which reads as "seller-facing" in practice without the API
 itself needing to restrict who can ask.
 
-`DELETE` (#1738, owner-confirmed) is **admin-only** (`401` with no
-session, `403` for anyone else — including the rated seller themself,
-`404` for a purchase with no feedback) — deliberately different from
-product reviews' own `DELETE`, where the product's own seller has a
-legitimate stake in moderating what's said about their listing: letting a
-seller delete feedback about their *own conduct* would let them scrub
-legitimate negative feedback, a materially different risk than scrubbing
-a product review. Keyed by `purchaseId` rather than a separate
-`feedbackId`, since `migrations/0098_seller_feedback.sql`'s own `UNIQUE`
-constraint on `purchase_id` already makes it a 1-to-1 resource — the same
-path `POST` uses. Rate-limited (20 per 15-minute window, `429` past that)
-per admin user (`seller-feedback-delete:<adminUserId>`), and logs
-`delete_seller_feedback` to `admin_action_log` (target type
-`seller_feedback`, target id the feedback's own `feedbackId`). Whether
-sellers should also get a self-delete/appeal path of their own is a
-separate, explicitly still-open question — not resolved by this.
+**`userId` (#1975) and why it's a join, not a column:** unlike sign posts/
+product reviews/calendar events, `seller_feedback` got no new `user_id`
+column of its own — the feedback's real author (the purchase's buyer) was
+already permanently on record via `purchases.buyer_builder_id`
+(`migrations/0099`), the same column the `POST` eligibility check above
+already matches against, and that column is 1:1 with a `user_id` via
+`builders`' own unique index on `builders.user_id`. So `userId` here is
+resolved with a `LEFT JOIN` through `purchases`/`builders` at read time
+(`SELLER_FEEDBACK_SELECT_WITH_BUYER`, `worker/index.js`) instead of a
+migration — `null` for a purchase whose `buyer_builder_id` is itself
+`null` (predates `#1123`, or the buyer's account has since been
+self-deleted — `ON DELETE SET NULL`), the same "legacy content, nobody on
+record to own it" case the other three resources' own `user_id IS NULL`
+represents.
+
+**`PATCH` (#1975/#1738) is author-only** — the feedback's own author (the
+purchase's buyer, matched via `userId` above against the session's own
+`user_id`) can edit `rating`/`text` directly (`403 Not your feedback` for
+anyone else, including the rated seller themself — see below). Partial-
+field semantics mirror `PATCH .../reviews` exactly: an omitted key keeps
+the existing value, `text` explicitly set to `null`/`""` clears it. There
+is no moderation equivalent for `PATCH`, same reasoning as reviews/
+calendar events — rewriting someone else's feedback under their own name
+isn't a kind of moderation action this app has anywhere else. Rate-limited
+20 per 15 minutes (`seller-feedback-edit:<userId>`), and the pre-edit row
+is snapshotted into `user_content_edit_history` (`migrations/0129`, see
+"Product reviews"' own `#1975` writeup) before the `UPDATE`, atomically
+re-verified against the same buyer join so a buyer whose account is
+deleted mid-request can't still win the race (`409` on zero rows changed,
+same "changed concurrently — refetch and retry" shape every other
+author-direct mutation in this file uses).
+
+`DELETE` keeps its pre-#1975 **admin-only** path for the rated seller's
+own side — `#1738` (owner-confirmed) drew a hard, deliberate line here
+unlike product reviews' own `DELETE`: the product's own seller has a
+legitimate stake in moderating what's said about their *listing*, but
+letting the rated seller delete feedback about their own *conduct* would
+let them scrub legitimate negative feedback, a materially different risk.
+That path is unchanged (`401` with no session, `403` for anyone else who
+isn't the feedback's own author either, `404` for a purchase with no
+feedback, rate-limited per admin user, logs `delete_seller_feedback` to
+`admin_action_log`). **New alongside it (#1975):** the feedback's own
+author — the buyer who actually wrote it, a different person from the
+rated seller — gets the ordinary author-direct removal every other
+self-authored content type in this file already has, checked before the
+admin-only fallback (so the author never needs to *be* an admin), rate-
+limited on the same shared `seller-feedback-delete:<userId>`-shaped bucket,
+and snapshotted into `user_content_edit_history` before the delete
+(moderation deletes deliberately are not). Keyed by `purchaseId` rather
+than a separate `feedbackId`, since `migrations/0098_seller_feedback.sql`'s
+own `UNIQUE` constraint on `purchase_id` already makes it a 1-to-1
+resource — the same path `POST`/`PATCH` use. Whether sellers should also
+get a self-delete/appeal path of their own remains the one explicitly
+still-open question from `#1738` — not resolved by this (and, per that
+issue's own resolution, not going to be: the owner confirmed the rated
+seller gets none, ever).
 
 ### Frontend wiring
 
@@ -5193,6 +5233,18 @@ below `#seller-hint` — is fetched fresh on every modal open
 (`renderSellerFeedbackSummary`) and stays hidden entirely until that
 seller has at least one real rating, same "nothing to show yet stays
 invisible" convention the preview modal's own info text documents.
+
+**#1975's `PATCH`/author-`DELETE` above are API-only for the same reason —
+no frontend wiring in this PR.** The structural gap this section's own
+first paragraph already describes (no "my orders" page, no receipt to come
+back to) applies just as much to editing/deleting feedback already left as
+it does to leaving it in the first place: `promptSellerFeedback` fires
+exactly once, immediately after a purchase, with no later re-entry point
+the way the preview modal's Review button offers for product reviews
+(tap the same in-world product again any time). Exposing this to buyers
+for real needs a genuine "my purchases"/order-history view to revisit —
+a separate, larger piece of frontend work this issue doesn't scope, flagged
+as its own backlog item rather than built here.
 
 ## Scheduled calendar events + creative-tool trigger
 
