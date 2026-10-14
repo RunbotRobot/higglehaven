@@ -223,6 +223,50 @@ describe('Seller feedback', () => {
     expect(logRow.admin_user_id).toBe(adminUserId);
   });
 
+  // #2003: the existence check and the DELETE aren't atomic, so a second
+  // concurrent delete attempt can lose the race -- its own DELETE affects
+  // 0 rows, and must not write a second admin_action_log row claiming it
+  // deleted something it didn't. Same race-regression shape as
+  // reviews-auth.test.js's own "logs the admin delete-override exactly
+  // once, not once per losing racer" test for the sibling product-review
+  // handler: fire two concurrent admin DELETEs at the same feedback row
+  // and assert exactly one log row results, whatever each attempt's own
+  // status turns out to be.
+  it('logs the admin delete exactly once, not once per losing racer, when two deletes race the same feedback', async () => {
+    const buyer = await signupBuilder('feedback-delete-race-buyer');
+    const seller = await signupSeller('feedback-delete-race-seller');
+    const purchaseId = await createPurchase(buyer, { sellerId: seller.sellerId });
+    const posted = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
+      method: 'POST',
+      body: JSON.stringify({ rating: 1, text: 'Abusive/policy-violating text goes here.' }),
+    }));
+    expect(posted.response.status).toBe(201);
+
+    const feedbackId = (await env.DB.prepare('SELECT feedback_id FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).first()).feedback_id;
+
+    const admin = await signupAdmin('feedback-delete-race-admin');
+    const attempts = await Promise.all(
+      Array.from({ length: 2 }, () => api(`/purchases/${purchaseId}/feedback`, admin.session({ method: 'DELETE' }))),
+    );
+    for (const attempt of attempts) {
+      expect([200, 404]).toContain(attempt.response.status);
+    }
+    const succeeded = attempts.filter((attempt) => attempt.response.status === 200);
+    expect(succeeded.length).toBeGreaterThanOrEqual(1);
+    for (const attempt of succeeded) {
+      expect(attempt.body).toEqual({ deleted: true });
+    }
+
+    // Scoped by target_id (not just action_type/target_type), the same
+    // reviews-auth.test.js's own race test scopes its own query -- the
+    // admin_action_log table is shared across every test in this file, so
+    // an unscoped count would also catch the earlier delete test's own row.
+    const logRows = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('delete_seller_feedback', feedbackId).all();
+    expect(logRows.results).toHaveLength(1);
+  });
+
   // A separate SELECT-then-INSERT for the one-per-purchase check would be a
   // check-then-act race — see handleSellerFeedbackCreate's own comment and
   // reviews-auth.test.js's identically-shaped regression test for the
