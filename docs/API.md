@@ -1778,6 +1778,7 @@ landlet. They are not production commerce listings yet.
     "placeholder": true
   },
   "isTestModel": false,
+  "stockQuantity": null,
   "createdAt": "2026-07-29T07:30:06.519Z",
   "updatedAt": "2026-07-29T07:30:06.519Z"
 }
@@ -1786,6 +1787,19 @@ landlet. They are not production commerce listings yet.
 `imageUrl` and `imageEmbedding` are `null` until set via `POST
 /api/catalog/:templateId/thumbnail` below — every other endpoint on this
 object (create, update, batch) leaves them untouched.
+
+`stockQuantity` (#1948) is `null` by default, meaning unlimited stock — the
+unchanged behavior for every template unless a seller opts in. A set value
+is remaining stock (1 = one-of-a-kind), not a fixed "original quantity": it
+decrements by the purchased quantity each time a purchase for this template
+is finalized (see `POST /api/instances/:instanceId/purchase` below), and a
+`PATCH`/`PUT` that sets it directly overwrites whatever remained, the same
+as any other seller-settable field. Unlike `isTestModel`, it **is** an
+ordinary, freely seller-settable value through `POST`/`PUT`/`PATCH
+/api/catalog` and its batch siblings. Once it reaches `0`, further purchases
+of this template are rejected (`400`) and every `placed_instances` row
+referencing it is removed — see "Sold-out templates" under the purchase
+endpoint below.
 
 `isTestModel` (#1946) marks a downloaded/demo model that isn't a real
 for-sale product — a different concept than `category: "placeholder"`
@@ -1962,6 +1976,10 @@ value large enough to lose precision past `Number.isSafeInteger` once
 persisted, or to mint an outsized `higgles_balance_cents` credit through a
 self-purchase or auction win. `name`, `category`, `subcategory`, and `color`
 are each capped at 100 characters, same as `label` elsewhere in this API.
+`stockQuantity` (#1948), when present, must be a non-negative integer no
+greater than 1,000,000; omit it (or pass `null`) for the default unlimited
+behavior — see "Catalog template object" above and "Sold-out templates"
+below "Commission math".
 
 Deliberately **not** rate-limited (#362 flagged the gap, same as
 builders/sellers below, but an IP-keyed limit isn't safe to add here at
@@ -4638,7 +4656,7 @@ via `admin_action_log` (`action_type: 'delete_calendar_event_override'`).
 
 **`#1975` (owner decision, 2026-10-13): an event's own author can also edit
 or delete it directly, independent of who currently owns the hosting
-landlet.** `userId` (new, `migrations/0133`) records the session that
+landlet.** `userId` (new, `migrations/0134`) records the session that
 created the event — populated server-side at `POST` time from
 `requireSessionBuilder`'s own resolved user, the same "derive authorship
 server-side" discipline this endpoint's `authorLabel` already uses. Unlike
@@ -6113,13 +6131,56 @@ just this endpoint — see `src/main.js`'s `ensureShopperIdentity`.
 `400` if the template has no price set (`priceCents == null` — nothing to
 buy), the template is marked `isTestModel` (#1946 — a downloaded/demo
 model, never a real listing, placeable in Build mode by an admin account
-but never purchasable, real money or simulated alike), the instance sits
-on an unclaimed lándlet (no builder to credit), or `quantity` exceeds
-`1000` — a sanity bound (not a spec requirement, same reasoning as
-auctions' `durationHours` cap above) against one request turning into an
-unbounded `higgles_balance_cents`/land-cap credit. `429` past 30 calls per
-15 minutes from one account (see "Rate limiting" above) closes the other
-half of that gap — repeated smaller requests instead of one large one.
+but never purchasable, real money or simulated alike), the template's
+`stockQuantity` is `0` (#1948 — sold out; see "Sold-out templates" below),
+the instance sits on an unclaimed lándlet (no builder to credit), or
+`quantity` exceeds `1000` — a sanity bound (not a spec requirement, same
+reasoning as auctions' `durationHours` cap above) against one request
+turning into an unbounded `higgles_balance_cents`/land-cap credit. `429`
+past 30 calls per 15 minutes from one account (see "Rate limiting" above)
+closes the other half of that gap — repeated smaller requests instead of
+one large one.
+
+### Sold-out templates (#1948)
+
+A template's `stockQuantity` (see "Catalog template object" above) is
+`null` by default (unlimited, unaffected by any of this). When a seller
+sets a finite quantity, each purchase of that template — simulated or
+real-money, decided at the same point both paths already share
+(`writePurchaseRow` in `worker/index.js`) — atomically decrements it by
+the purchased quantity, using the same claim-before-act, guarded-`UPDATE`
+idiom (`WHERE stock_quantity >= ?`, checked via the write's own
+`meta.changes`) this file already uses for `higgles_balance_cents` debits
+elsewhere, so two near-simultaneous buyers of the last unit can't both
+succeed.
+
+- On the **simulated** path, a request that would take `stockQuantity`
+  below zero is rejected outright with `400` ("This product is sold out")
+  — no purchase is written, nothing is charged (simulated purchases never
+  charge real money regardless).
+- On the **real-money** path, the same oversell case cannot be rejected at
+  finalize time: the buyer has already been charged and the seller's
+  connected Stripe account has already received its transfer by the time
+  `POST /api/purchases/finalize` runs (same reasoning as the orphaned-
+  purchase fallback below). Instead, remaining stock is floored at zero
+  and the purchase is completed and recorded normally.
+- Either way, the moment `stockQuantity` reaches exactly `0`, every
+  `placed_instances` row referencing that template is removed outright —
+  no archive, no "flagged sold-out but still placed" state — and each
+  affected landlet owner gets one notification naming how many of their
+  placed instances were removed. This is the same hard-delete-no-archive
+  treatment an owning builder's own self-deletion already gives every
+  instance on their landlets; there is no backup/replacement-product
+  concept yet (that's a separate, later sub-issue of #1947's own tracking
+  issue).
+- A `PATCH`/`PUT /api/catalog/:templateId` (or its batch sibling) that sets
+  a fresh `stockQuantity` directly overwrites whatever remained — restocking
+  a sold-out template, for instance, is just a normal update setting it back
+  above zero.
+- A simple non-atomic pre-check (not the race-safe enforcement above, just
+  a quick rejection for an obviously sold-out item) also runs earlier, in
+  `POST /api/instances/:instanceId/purchase` itself, before a real-money
+  purchase is even sent to checkout.
 
 `GET /api/purchases?builderId=...` requires a session logged in as that
 builder (`403` otherwise); lists everything hosted on that builder's own
