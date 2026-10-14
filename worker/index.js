@@ -8754,6 +8754,13 @@ function creditOrbFromRow(row) {
   };
 }
 
+// #2092: every other authenticated, repeatable-write endpoint in this file
+// rate-limits itself -- the collect branch below never did, letting a
+// scripted caller drive unbounded D1 load via repeated claim attempts
+// (including against bogus/already-collected orb ids, which 404 cheaply but
+// still cost a full batch round-trip).
+const CREDIT_ORB_COLLECT_RATE_LIMIT_MAX = 20;
+
 // GET /api/credit-orbs (optionally ?landletId=... to scope to one landlet,
 // per #1994's own "or scoped by landlet" note) -- the frontend's read path
 // for #1995's own rendering/collection sub-issue. Deliberately
@@ -8811,6 +8818,7 @@ async function handleCreditOrbs(request, db, route, url) {
   // themselves a credit for it.
   if (request.method === 'POST' && route.length === 3 && route[2] === 'collect') {
     const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `credit-orb-collect:${sessionBuilder.builder_id}`, CREDIT_ORB_COLLECT_RATE_LIMIT_MAX);
     const orbId = stringValue(route[1], 'orbId');
     const [claim] = await db.batch([
       db.prepare(`

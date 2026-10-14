@@ -245,4 +245,19 @@ describe('POST /api/credit-orbs/:orbId/collect (#1995)', () => {
     const { response } = await api('/credit-orbs/not-a-real-orb/collect', builder.session({ method: 'POST' }));
     expect(response.status).toBe(404);
   });
+
+  it('rate-limits repeated collect attempts by the same builder (#2092)', async () => {
+    const builder = await signupBuilder('orb-rate-limited');
+
+    for (let i = 0; i < 20; i += 1) {
+      // Each attempt targets a nonexistent orb id -- a 404 still counts
+      // against the rate limit (it's a cost/load gap, not specifically a
+      // double-collect one), and keeps this test from needing 21 real rows.
+      const { response } = await api('/credit-orbs/not-a-real-orb/collect', builder.session({ method: 'POST' }));
+      expect(response.status).toBe(404);
+    }
+
+    const { response } = await api('/credit-orbs/not-a-real-orb/collect', builder.session({ method: 'POST' }));
+    expect(response.status).toBe(429);
+  });
 });

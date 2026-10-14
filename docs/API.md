@@ -8595,6 +8595,11 @@ shoppers racing the same orb can never both be credited for it. Returns
 `{ "collected": true }` on success. `404` if the orb doesn't exist, or
 already has a `collected_at` (someone else got there first — the frontend
 reads this as "it's already gone," not an error to surface loudly).
+Rate-limited (`CREDIT_ORB_COLLECT_RATE_LIMIT_MAX`, 20 per builder) like
+every other authenticated repeatable-write endpoint in this file (#2092) —
+a bogus or already-collected orb id still 404s cheaply but counts against
+the limit, since the cost is the D1 batch round-trip, not a successful
+collect specifically.
 
 ## Product pricing
 
