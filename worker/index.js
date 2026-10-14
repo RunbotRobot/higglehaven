@@ -10390,7 +10390,102 @@ async function handleExportData(request, db) {
         processedAt: row.processed_at,
       })),
     },
+    commerce: await exportCommerceData(db, builderRow),
   });
+}
+
+// #1985 (sub-issue of #1983): every one of these tables scopes by
+// builder_id, not user_id or seller_id -- bundles/purchases(as buyer)/
+// owned_avatars/owned_animations/video_generation_jobs/higgles_redemptions/
+// higgles_earnings_events have no seller_id FK at all, so a builder-less
+// account (never created a builder profile) has nothing to export here.
+// Deliberately excludes tax_1099_forms -- #1983's own "Real judgment calls"
+// section flags the raw taxIdNumber/foreignTaxId inclusion as the owner's
+// call, still open; this ships everything else in #1985's scope now and
+// leaves tax forms as a follow-up once that's answered, per #1985's own
+// explicit "build everything except the tax-forms piece now" allowance.
+// Also deliberately excludes owned_avatar_purchases/owned_animation_purchases
+// -- internal bookkeeping tables (idempotency/cascade-delete plumbing for the
+// purchase-grants-ownership flow), not independent user-facing data: every
+// field either of them carries (purchase_id, template_id) is already present
+// on the corresponding owned_avatars/owned_animations row itself.
+async function exportCommerceData(db, builderRow) {
+  if (!builderRow) {
+    return {
+      purchasesAsBuyer: [],
+      ownedAvatars: [],
+      ownedAnimations: [],
+      videoGenerationJobs: [],
+      higglesRedemptions: [],
+      higglesEarningsEvents: [],
+      bundles: [],
+    };
+  }
+  const builderId = builderRow.builder_id;
+
+  const purchasesAsBuyer = await db.prepare(`
+    SELECT * FROM purchases WHERE buyer_builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+
+  const ownedAvatars = await db.prepare(`
+    SELECT catalog_templates.*, owned_avatars.purchased_at AS owned_purchased_at
+    FROM owned_avatars
+    JOIN catalog_templates ON catalog_templates.template_id = owned_avatars.template_id
+    WHERE owned_avatars.builder_id = ?
+    ORDER BY owned_avatars.purchased_at DESC
+  `).bind(builderId).all();
+
+  const ownedAnimations = await db.prepare(`
+    SELECT catalog_templates.*, owned_animations.purchased_at AS owned_purchased_at
+    FROM owned_animations
+    JOIN catalog_templates ON catalog_templates.template_id = owned_animations.template_id
+    WHERE owned_animations.builder_id = ?
+    ORDER BY owned_animations.purchased_at DESC
+  `).bind(builderId).all();
+
+  const videoGenerationJobs = await db.prepare(`
+    SELECT * FROM video_generation_jobs WHERE builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+
+  const higglesRedemptions = await db.prepare(`
+    SELECT * FROM higgles_redemptions WHERE builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+
+  const higglesEarningsEvents = await db.prepare(`
+    SELECT * FROM higgles_earnings_events WHERE builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+
+  const bundles = await db.prepare(`
+    SELECT * FROM bundles WHERE builder_id = ? ORDER BY created_at DESC, bundle_id DESC
+  `).bind(builderId).all();
+
+  return {
+    purchasesAsBuyer: purchasesAsBuyer.results.map(purchaseFromRow),
+    ownedAvatars: ownedAvatars.results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
+    ownedAnimations: ownedAnimations.results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
+    videoGenerationJobs: videoGenerationJobs.results.map((row) => ({
+      jobId: row.job_id,
+      providerTaskId: row.provider_task_id,
+      status: row.status,
+      modelUrl: row.model_url,
+      error: row.error_message,
+      createdAt: row.created_at,
+      processedAt: row.processed_at,
+    })),
+    higglesRedemptions: higglesRedemptions.results.map((row) => ({
+      redemptionId: row.redemption_id,
+      amountCents: row.amount_cents,
+      stripeTransferId: row.stripe_transfer_id,
+      stripePayoutId: row.stripe_payout_id,
+      createdAt: row.created_at,
+    })),
+    higglesEarningsEvents: higglesEarningsEvents.results.map((row) => ({
+      eventId: row.event_id,
+      amountCents: row.amount_cents,
+      createdAt: row.created_at,
+    })),
+    bundles: bundles.results.map(bundleFromRow),
+  };
 }
 
 // #1323: handleResendVerification (the token-issuing side) already
