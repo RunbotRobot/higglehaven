@@ -15514,6 +15514,14 @@ shopSignHintEl.addEventListener('click', async () => {
     } else if (choice === 'edit') {
       const text = prompt('Your note (up to 280 characters):', myPost.text);
       if (!text || !text.trim()) return;
+      // #2015: same #1920 guard as the sibling create path below -- prompt()
+      // shows no live character count, and without this an over-length edit
+      // reaches the server's own 280-char check, throws, and the retyped note
+      // is lost since the prompt isn't reopened with the text prefilled.
+      if (text.trim().length > 280) {
+        alert('Keep it to 280 characters or fewer.');
+        return;
+      }
       shopSignHintEl.disabled = true;
       try {
         const updated = await editSignPost(sign.instanceId, myPost.postId, { text: text.trim() });
