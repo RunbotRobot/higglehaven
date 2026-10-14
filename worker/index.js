@@ -721,6 +721,10 @@ async function handleApi(request, env, url, ctx) {
     return handleAdminActionLogList(request, env.DB, url);
   }
 
+  if (request.method === 'GET' && route.length === 1 && route[0] === 'product-flags') {
+    return handleProductFlagsList(request, env.DB, url);
+  }
+
   return json({ error: 'Not found' }, 404);
 }
 
@@ -2307,6 +2311,10 @@ async function handleCatalog(request, db, route, url, models, env) {
     return handleProductReviews(request, db, route);
   }
 
+  if (route.length >= 3 && route[2] === 'flags') {
+    return handleProductFlags(request, db, route);
+  }
+
   return json({ error: 'Not found' }, 404);
 }
 
@@ -2583,6 +2591,148 @@ async function handleProductReviews(request, db, route) {
   }
 
   return json({ error: 'Not found' }, 404);
+}
+
+// #2017 (sub-issue of #1212, owner-settled shape 2026-10-13): a shopper-
+// facing counterfeit-flag endpoint plus the admin resolve action on the
+// same listing. Zero-cost/consequence-free for the flagger by design (the
+// owner's own words: "don't punish good-faith reports") -- no rate limit
+// beyond the ordinary anti-spam one below, and no visible penalty to the
+// flagger's own account regardless of outcome.
+const PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX = 20;
+// Auto-hide threshold: once this many *distinct* flaggers (migrations/0131's
+// own UNIQUE constraint is what makes this actually distinct) are pending
+// against one template, new purchases of it block automatically pending
+// admin review -- see handleInstancePurchase's own flagged_hidden_at guard.
+const PRODUCT_FLAG_AUTO_HIDE_THRESHOLD = 3;
+
+async function handleProductFlags(request, db, route) {
+  const templateId = route[1];
+
+  if (request.method === 'POST' && route.length === 3) {
+    const template = await db.prepare('SELECT template_id, flagged_hidden_at FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    if (!template) return json({ error: 'Catalog template not found' }, 404);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `product-flag-create:${sessionBuilder.builder_id}`, PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX);
+    const input = await readJson(request);
+    const reason = input.reason === undefined || input.reason === null || input.reason === ''
+      ? null
+      : stringValue(input.reason, 'reason');
+    if (reason && reason.length > 280) throw new HttpError('reason must be 280 characters or fewer', 400);
+    // migrations/0131's own UNIQUE(template_id, flagger_builder_id) is the
+    // real guard against the same builder inflating their own listing's
+    // distinct-flagger count -- a second flag from the same builder on the
+    // same template hits that constraint and surfaces as a clean 409 via
+    // this file's own top-level databaseHttpError fallback, same as every
+    // other unhandled UNIQUE violation in this file.
+    const flagId = `product-flag-${crypto.randomUUID()}`;
+    await db.prepare(`
+      INSERT INTO product_flags (flag_id, template_id, flagger_builder_id, reason)
+      VALUES (?, ?, ?, ?)
+    `).bind(flagId, templateId, sessionBuilder.builder_id, reason).run();
+    // Re-checked after the insert (not a cached count from before it) so a
+    // concurrent flag from a different builder landing in between is never
+    // silently lost from the threshold decision.
+    const { pendingCount } = await db.prepare(`
+      SELECT COUNT(*) AS pendingCount FROM product_flags WHERE template_id = ? AND status = 'pending'
+    `).bind(templateId).first();
+    let autoHidden = false;
+    if (!template.flagged_hidden_at && pendingCount >= PRODUCT_FLAG_AUTO_HIDE_THRESHOLD) {
+      const hideResult = await db.prepare(`
+        UPDATE catalog_templates SET flagged_hidden_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE template_id = ? AND flagged_hidden_at IS NULL
+      `).bind(templateId).run();
+      autoHidden = hideResult.meta.changes === 1;
+    }
+    return json({ flagId, pendingCount, autoHidden }, 201);
+  }
+
+  if (request.method === 'POST' && route.length === 4 && route[3] === 'resolve') {
+    const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `product-flag-resolve:${admin.user_id}`, PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX);
+    const input = await readJson(request);
+    const action = stringValue(input.action, 'action');
+    if (action !== 'approve' && action !== 'reject') {
+      throw new HttpError("action must be 'approve' or 'reject'", 400);
+    }
+    const template = await db.prepare('SELECT template_id, seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    if (!template) return json({ error: 'Catalog template not found' }, 404);
+    // Resolves every still-pending flag on this listing at once -- a flag is
+    // a report against the *listing*, not an individually-adjudicated claim,
+    // matching the owner's own "approve = remove listing" framing (one
+    // decision per listing, not one per flag).
+    const resolvedStatus = action === 'approve' ? 'approved' : 'rejected';
+    const resolved = await db.prepare(`
+      UPDATE product_flags SET status = ?, resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), resolved_by_admin_user_id = ?
+      WHERE template_id = ? AND status = 'pending'
+    `).bind(resolvedStatus, admin.user_id, templateId).run();
+    if (resolved.meta.changes === 0) {
+      throw new HttpError('No pending flags on this listing to resolve', 400);
+    }
+    if (action === 'approve') {
+      // Stays hidden permanently (this UPDATE is a no-op if auto-hide
+      // already set it) -- approving confirms the listing should no longer
+      // be purchasable, it does not hard-delete catalog_templates itself
+      // (that would trip assertCatalogTemplatesDeletable for any template
+      // still saved into someone's layout library, a real, if rare, edge
+      // case not worth forcing through here).
+      await db.prepare(`
+        UPDATE catalog_templates SET flagged_hidden_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE template_id = ? AND flagged_hidden_at IS NULL
+      `).bind(templateId).run();
+      if (template.seller_id) {
+        await db.prepare('UPDATE sellers SET strike_count = strike_count + 1 WHERE seller_id = ?').bind(template.seller_id).run();
+        // Best-effort notification, same seller-resolved-via-shared-user_id
+        // join handleSellerFeedbackCreate's own notification already uses.
+        const owner = await db.prepare(`
+          SELECT b.builder_id AS builder_id FROM sellers s
+          JOIN builders b ON b.user_id = s.user_id
+          WHERE s.seller_id = ?
+        `).bind(template.seller_id).first();
+        if (owner) {
+          await fireNotification(db, owner.builder_id,
+            'A product listing of yours was removed after an admin-confirmed counterfeit/policy-violation flag. A strike was added to your account.');
+        }
+      }
+    } else {
+      // Reject restores purchasability if auto-hide had already kicked in
+      // for this listing -- never touched if an admin escalated straight to
+      // removal without auto-hide ever firing.
+      await db.prepare('UPDATE catalog_templates SET flagged_hidden_at = NULL WHERE template_id = ?').bind(templateId).run();
+    }
+    await adminActionLogStatement(db, admin.user_id, `${resolvedStatus}_product_flags`, 'catalog_template', templateId, {
+      flagsResolved: resolved.meta.changes,
+    }).run();
+    return json({ resolvedStatus, flagsResolved: resolved.meta.changes });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+async function handleProductFlagsList(request, db, url) {
+  await requireAdmin(request, db);
+  // One row per *listing* with pending flags, not one per flag -- an admin
+  // resolves a listing's whole pending set in one action (see
+  // handleProductFlags' own POST .../resolve above), so the queue should
+  // read the same way, with the per-flag detail (reasons, flagger history)
+  // available via a follow-up fetch if ever needed rather than cluttering
+  // this summary view.
+  const { results } = await db.prepare(`
+    SELECT
+      pf.template_id AS templateId,
+      ct.name AS templateName,
+      ct.seller_id AS sellerId,
+      COUNT(*) AS pendingCount,
+      MIN(pf.created_at) AS firstFlaggedAt,
+      MAX(pf.created_at) AS lastFlaggedAt
+    FROM product_flags pf
+    JOIN catalog_templates ct ON ct.template_id = pf.template_id
+    WHERE pf.status = 'pending'
+    GROUP BY pf.template_id
+    ORDER BY lastFlaggedAt DESC
+    LIMIT 200
+  `).all();
+  return json({ listings: results });
 }
 
 function reviewFromRow(row) {
@@ -13956,6 +14106,13 @@ async function handleInstancePurchase(request, env, instanceId) {
   if (template.is_test_model) {
     throw new HttpError('This is a test/demo product and cannot be purchased', 400);
   }
+  // #2017: a listing with enough distinct counterfeit flags (or an admin
+  // escalation) is blocked from new purchases while under review, without
+  // touching GET /api/catalog's own list/detail endpoints -- see this
+  // column's own migration comment for why hiding it there isn't safe.
+  if (template.flagged_hidden_at) {
+    throw new HttpError('This product is temporarily unavailable pending review', 400);
+  }
   const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
   if (!landlet?.owner_builder_id) {
     throw new HttpError('This instance is not on a claimed landlet, so there is no builder to credit', 400);
@@ -16077,6 +16234,11 @@ function templateFromRow(row) {
     // write this column) -- same "not ordinary-self-service-settable"
     // treatment as is_admin.
     isTestModel: Boolean(row.is_test_model),
+    // #2017: set once this template's distinct-flag count (or an admin
+    // escalation) blocks new purchases pending review -- see
+    // handleInstancePurchase's own guard and this column's migration
+    // comment for why it never affects browse/picker visibility.
+    flaggedHiddenAt: row.flagged_hidden_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
