@@ -83,8 +83,19 @@ await page.waitForFunction(
 const hiddenAfter5s = !(await lastLocationVisible());
 
 // --- Phase 3: clicking it fades, teleports, lands at the seeded spot ---
-const targetX = 31;
-const targetY = -18;
+// #2080: landing now clamps to the world boundary (shopAvatarMaxRadiusM) --
+// correctly, since this same fade/teleport/land sequence hands off to the
+// ordinary 'landing' flight state (see updateGoToLastLocation's own
+// comment), the exact code path that clamp lives in. A fresh account's
+// only landlet is the single starter-landlet (1000 m², migrations/
+// 0001_initial.sql), giving a real avatarMaxRadiusM of roughly 13.7m here --
+// (31, -18) (radius ~35.8) sat outside that boundary all along and only
+// ever "worked" because landing didn't enforce the boundary yet (the exact
+// gap #2080 closed). A safely in-bounds target keeps this test's actual
+// subject -- landing exactly at the seeded last-reported position --
+// meaningful instead of exercising the boundary clamp by accident.
+const targetX = 8;
+const targetY = -5;
 const seedStatusB = await seedPresence(targetX, targetY, 1.1);
 await reenterShop();
 const visibleAfterSeedB = await lastLocationVisible();
@@ -124,7 +135,7 @@ const finalPresence = await page.evaluate(async () => {
   const res = await fetch('/api/presence/me');
   return (await res.json()).presence;
 });
-console.log('presence after the Go to Last Location sequence (should be near x:31 y:-18):', finalPresence);
+console.log(`presence after the Go to Last Location sequence (should be near x:${targetX} y:${targetY}):`, finalPresence);
 
 console.log('no button on a genuinely fresh account (should be true):', noButtonOnFreshAccount);
 console.log('seed presence A status (should be 200):', seedStatusA);
