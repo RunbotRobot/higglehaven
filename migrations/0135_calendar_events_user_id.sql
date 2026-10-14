@@ -1,17 +1,14 @@
--- #2032 (sub-issue of #1201): implementing the suspend action's optional
--- sign-post/calendar-event removal cascade surfaced a real gap -- unlike
--- sign_posts (migrations/0125, #1830), calendar_events was never given a
--- user_id column, so there is no way to find "this suspended user's own
--- calendar events" at all. calendar_events.author_label is free display
--- text (the posting builder's own label at post time), not a real
--- attribution column -- using it to match a suspended user would be both
--- unreliable (two different users can share a label) and unauthenticated
--- (nothing enforces it stays in sync with the account that posted it).
+-- #1975 (owner decision, 2026-10-13): lets a calendar event's own author
+-- edit or delete it directly, the same pattern migrations/0125 (sign
+-- posts, #1830) and migrations/0130 (product reviews) already added --
+-- POST .../events already requires a real, verified session (the hosting
+-- landlet's own owner, via requireSessionBuilder+requireOwnedLandlet), so
+-- this just records who that session actually was, independent of
+-- whatever happens to the landlet's ownership later (auction, admin
+-- reassignment).
 --
--- Same shape and same ON DELETE SET NULL reasoning as 0125's own comment:
--- a user row is never hard-deleted, so this only governs a pre-existing
--- row referencing a user_id that predates this column. A calendar event
--- created before this migration lands keeps user_id NULL permanently --
--- same "nobody on record to own it" limitation 0125 already accepted for
--- pre-#1830 sign posts, not a new one introduced here.
+-- ON DELETE SET NULL, not CASCADE: same reasoning as 0125/0130's own
+-- comments -- a user row is never hard-deleted (migrations/0102), so this
+-- only governs a pre-existing row referencing a user_id that predates this
+-- column.
 ALTER TABLE calendar_events ADD COLUMN user_id TEXT REFERENCES users(user_id) ON DELETE SET NULL;

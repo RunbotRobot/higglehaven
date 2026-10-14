@@ -10987,8 +10987,9 @@ async function exportSocialSection(db, builderId, userId) {
   const signPosts = await db.prepare(`
     SELECT * FROM sign_posts WHERE user_id = ? ORDER BY created_at ASC
   `).bind(userId).all();
-  // #2032's own migrations/0135_calendar_events_user_id.sql closes the gap
-  // this used to work around with an author_label match (see this
+  // migrations/0135_calendar_events_user_id.sql (#1975, landed independently
+  // of and just ahead of #2032's own need for the identical column) closes
+  // the gap this used to work around with an author_label match (see this
   // function's own doc comment history) -- a real user_id FK now exists,
   // same shape as sign_posts just above. A calendar event created before
   // that migration landed still has no attribution at all and is correctly
@@ -14183,6 +14184,9 @@ const CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX = 20;
 // route is unauthenticated like sign posts, not owner-gated like the POST
 // above.
 const EVENT_TRIGGER_RATE_LIMIT_MAX = 20;
+// #1975: same missing-rate-limit gap as CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX,
+// for the new author-only edit branch below.
+const CALENDAR_EVENT_EDIT_RATE_LIMIT_MAX = 20;
 
 // #1716: same "a lost response looks, from here, identical to the request
 // never having reached us at all" protection as the purchase flow's own
@@ -14284,6 +14288,53 @@ async function handleCalendarEvents(request, db, route) {
     return json({ event: calendarEventFromRow(row) }, 201);
   }
 
+  if (request.method === 'PATCH' && route.length === 4) {
+    const eventId = route[3];
+    const existing = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ? AND instance_id = ?').bind(eventId, instanceId).first();
+    if (!existing) return json({ error: 'Event not found' }, 404);
+    // #1975: editing is author-only -- same reasoning as sign posts' own
+    // PATCH (#1830): there's no moderation equivalent for rewriting
+    // someone else's words under their own name. In the ordinary case the
+    // event's author already IS the hosting landlet's current owner (POST
+    // requires it), but this uses the event's own recorded user_id rather
+    // than re-checking landlet ownership, so the original author keeps
+    // editing rights even after the landlet changes hands (auction, admin
+    // reassignment) -- the same guarantee sign posts/product reviews give.
+    // A pre-#1975 event with no user_id at all (user_id IS NULL) can never
+    // match here, same as DELETE's own author-path below.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    if (existing.user_id === null || existing.user_id !== sessionBuilder.user_id) {
+      throw new HttpError('Not your event', 403);
+    }
+    await checkRateLimit(db, `calendar-event-edit:${sessionBuilder.user_id}`, CALENDAR_EVENT_EDIT_RATE_LIMIT_MAX);
+    const input = await readJson(request);
+    let text = existing.text;
+    if (input.text !== undefined) {
+      text = stringValue(input.text, 'text');
+      if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    }
+    let scheduledAt = existing.scheduled_at;
+    if ('scheduledAt' in input) {
+      scheduledAt = input.scheduledAt === undefined || input.scheduledAt === null
+        ? null
+        : isoDateString(input.scheduledAt, 'scheduledAt');
+    }
+    // A changed scheduledAt re-arms the one-shot trigger (#270) -- this is
+    // logically a different scheduled moment, the same "genuinely
+    // different event" distinction #1751's own idempotency-key content
+    // match already draws, so it shouldn't stay permanently inert just
+    // because some earlier scheduledAt on this same row already fired.
+    const triggeredAt = scheduledAt === existing.scheduled_at ? existing.triggered_at : null;
+    await recordContentEditHistory(db, 'calendar_events', eventId, 'edit', existing, sessionBuilder.user_id);
+    const updated = await db.prepare('UPDATE calendar_events SET text = ?, scheduled_at = ?, triggered_at = ? WHERE event_id = ? AND user_id = ?')
+      .bind(text, scheduledAt, triggeredAt, eventId, sessionBuilder.user_id).run();
+    if (updated.meta.changes === 0) {
+      throw new HttpError('Event changed concurrently — refetch and retry', 409);
+    }
+    const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
+    return json({ event: calendarEventFromRow(row) });
+  }
+
   if (request.method === 'DELETE' && route.length === 4) {
     const eventId = route[3];
     const existing = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ? AND instance_id = ?').bind(eventId, instanceId).first();
@@ -14306,6 +14357,21 @@ async function handleCalendarEvents(request, db, route) {
     const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
+    // #1975: the event's own author can remove it directly, independent of
+    // current landlet ownership -- same reasoning as the new PATCH branch
+    // above. A pre-#1975 event with no user_id at all (user_id IS NULL)
+    // can never match here, so it falls through to the moderation path
+    // exactly as it always has.
+    if (existing.user_id !== null && existing.user_id === sessionBuilder.user_id) {
+      await checkRateLimit(db, `calendar-event-delete:${sessionBuilder.user_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
+      await recordContentEditHistory(db, 'calendar_events', eventId, 'delete', existing, sessionBuilder.user_id);
+      const deletedByAuthor = await db.prepare('DELETE FROM calendar_events WHERE event_id = ? AND user_id = ?')
+        .bind(eventId, sessionBuilder.user_id).run();
+      if (deletedByAuthor.meta.changes === 0) {
+        throw new HttpError('Event changed concurrently — refetch and retry', 409);
+      }
+      return json({ deleted: true });
+    }
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
     await checkRateLimit(db, `calendar-event-delete:${sessionBuilder.builder_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
     // #960: same #929 idiom as the sign-posts DELETE above -- see its own
@@ -14373,8 +14439,8 @@ function calendarEventFromRow(row) {
     text: row.text,
     scheduledAt: row.scheduled_at,
     triggeredAt: row.triggered_at,
-    userId: row.user_id,
     createdAt: row.created_at,
+    userId: row.user_id,
   };
 }
 
