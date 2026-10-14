@@ -103,6 +103,10 @@ import {
   deleteCalendarEvent,
   editCalendarEvent,
   triggerCalendarEvent,
+  fetchInstanceBackups,
+  addInstanceBackup,
+  reorderInstanceBackups,
+  deleteInstanceBackup,
   fetchProductReviews,
   createProductReview,
   editProductReview,
@@ -132,6 +136,8 @@ import {
   reportPresence,
   fetchNearbyPresence,
   fetchOwnLastPresence,
+  fetchCreditOrbs,
+  collectCreditOrb,
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
@@ -2229,6 +2235,7 @@ const bundleTabButtons = [...document.querySelectorAll('.bundle-tab-btn')];
 // "search products" behavior is unchanged until a builder deliberately
 // narrows it.
 const searchScopeButtons = [...document.querySelectorAll('.search-scope-btn')];
+const catalogSearchScopeTabsEl = document.getElementById('catalog-search-scope-tabs');
 let catalogSearchScope = 'both'; // 'products' | 'bundles' | 'both'
 
 // #329/#330: "Prompt mode" — a second way into the exact same
@@ -2542,7 +2549,16 @@ function buildCatalogTemplateTile(template) {
   }
 
   tile.addEventListener('click', () => {
+    // #2051: when set, the Backup Chain panel's "+ Add Backup" wants the
+    // chosen template handed back to it instead of an ordinary world
+    // placement -- captured before closeCatalogPicker() below, which
+    // clears it as part of leaving pick mode.
+    const onPick = catalogPickerPickCallback;
     closeCatalogPicker();
+    if (onPick) {
+      onPick(template);
+      return;
+    }
     enterPlacementMode({ type: 'template', template }, `Tap a spot to place ${template.name}`);
   });
   return { tile, thumb };
@@ -2854,9 +2870,55 @@ for (const btn of bundleTabButtons) {
 // #1554: shared modal keyboard accessibility (#1316) missed this panel —
 // open/close now go through openModalA11y/closeModalA11y like every other
 // real modal dialog in this file.
+//
+// #2051: when the picker was opened via openCatalogPickerForPick (the
+// Backup Chain panel's "+ Add Backup" button), closing it by any route —
+// a tile pick, the close button, Escape, or a backdrop click via
+// openModalA11y — must also leave pick mode: clear the callbacks, restore
+// the ordinary scope-tab row that mode hides, drop the low-opacity
+// reference mesh it showed, and (via the stored "done" callback) hand
+// control back to whatever opened the picker for a pick. One choke point
+// here rather than duplicating this at every close trigger. onDone fires
+// exactly once per pick session, whether the picker closed via an actual
+// pick (see buildCatalogTemplateTile's tile click, which calls
+// closeCatalogPicker before invoking the picked template's own callback)
+// or a plain cancel — openModalA11y only ever tracks one modal at a time
+// (see its own comment above), so the Backup Chain panel closes itself
+// before opening this picker and relies on onDone to reopen+re-render
+// itself afterward, rather than both staying visible at once.
+let catalogPickerPickCallback = null;
+let catalogPickerPickDoneCallback = null;
 function closeCatalogPicker() {
   catalogPickerEl.classList.remove('visible');
   closeModalA11y(catalogPickerEl);
+  if (catalogPickerPickCallback) {
+    catalogPickerPickCallback = null;
+    const onDone = catalogPickerPickDoneCallback;
+    catalogPickerPickDoneCallback = null;
+    catalogSearchScopeTabsEl.hidden = false;
+    hideBackupReferenceMesh();
+    if (onDone) onDone();
+  }
+}
+// A backup must be a single catalog product, not a bundle — forces
+// Products-only scope and hides the scope-tab row for the duration of the
+// pick so there's nothing tappable that wouldn't do anything (a bundle
+// tile calls its own multi-item placement flow, never this callback).
+// Reuses the exact same picker UI/search/thumbnails as the ordinary
+// "+ Add Item" flow below rather than building a second one.
+function openCatalogPickerForPick(onPick, onDone) {
+  catalogPickerPickCallback = onPick;
+  catalogPickerPickDoneCallback = onDone;
+  catalogPickerEl.classList.add('visible');
+  catalogSearchInputEl.value = '';
+  catalogSearchScope = 'products';
+  for (const b of searchScopeButtons) {
+    b.classList.toggle('active', b.dataset.searchScope === 'products');
+    b.setAttribute('aria-pressed', String(b.dataset.searchScope === 'products'));
+  }
+  catalogSearchScopeTabsEl.hidden = true;
+  updateCatalogSearchPanel();
+  openModalA11y(catalogPickerEl, closeCatalogPicker);
 }
 addItemBtn.addEventListener('click', () => {
   if (pendingPlacement) {
@@ -7777,6 +7839,7 @@ const copyBtn = document.getElementById('copy-item');
 const saveBundleBtn = document.getElementById('save-bundle-item');
 const communitySignBtn = document.getElementById('toggle-community-sign');
 const communityCalendarBtn = document.getElementById('toggle-community-calendar');
+const backupChainBtn = document.getElementById('toggle-backup-chain');
 const deleteBtn = document.getElementById('delete-item');
 const multiSelectBtn = document.getElementById('toggle-multiselect');
 const measureBtn = document.getElementById('toggle-measure');
@@ -8840,6 +8903,11 @@ function updateSelectionUI() {
   communityCalendarBtn.classList.toggle('active', isCommunityCalendar);
   communityCalendarBtn.setAttribute('aria-pressed', String(isCommunityCalendar));
   communityCalendarBtn.textContent = singleMesh?.userData.isCommunityCalendar ? 'Community Calendar ✓ (Manage)' : 'Community Calendar';
+  // Backup Chain (#2050/#2051): every placed instance can have one, not
+  // just flagged ones, so this is a plain "open the manage panel" button —
+  // same single-selection-only gating as Trim/Community Sign/Calendar
+  // above, but no toggle/active state of its own to reflect.
+  backupChainBtn.disabled = !singleMesh;
   if (multiSelectMode) {
     // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
     // — the gizmo stays hidden the whole time multi-select is on, so it
@@ -9368,6 +9436,198 @@ calendarEventsUnflagBtn.addEventListener('click', async () => {
   updateSelectionUI();
   persistLayout();
   await syncUpdate(mesh);
+});
+
+// Backup Chain (#2050/#2051, docs/API.md's "Placed instance backup
+// chains") — an ordered, per-instance list of replacement products,
+// auto-activated server-side the moment the active one sells out. Unlike
+// Community Sign/Calendar above, every placed instance can have one (it's
+// not gated behind some other flag), so this button always opens the same
+// manage panel directly rather than toggling a flag first — see
+// backupChainBtn's own disabled-only (no active state) line in
+// updateSelectionUI.
+const backupChainModalEl = document.getElementById('backup-chain-modal');
+const backupChainCloseBtn = document.getElementById('backup-chain-close-btn');
+const backupChainListEl = document.getElementById('backup-chain-list');
+const backupChainEmptyEl = document.getElementById('backup-chain-empty');
+const backupChainAddBtn = document.getElementById('backup-chain-add-btn');
+let backupChainTargetMesh = null;
+// Same stale-fetch guard idiom as signPostsLoadToken/calendarEventsLoadToken
+// above.
+let backupChainLoadToken = 0;
+
+// #2051: the low-opacity placement/alignment reference the owner
+// explicitly asked for ("when placing a backup product, the existing
+// product should be visible in low opacity") — a second, independent
+// rebuild of the currently-selected instance's own mesh at its own
+// position, shown only while the catalog picker is open for a backup
+// pick. Never added to productMeshes, so it's automatically never a
+// raycast target for selection or the placement-click handler (both only
+// ever check that array) — no separate "non-interactive" flag needed,
+// same reasoning addBuildModeNeighborOutlines' own low-opacity overlay
+// already relies on.
+const BACKUP_REFERENCE_OPACITY = 0.35;
+let backupReferenceMesh = null;
+
+async function showBackupReferenceMesh(mesh) {
+  hideBackupReferenceMesh();
+  const reference = await createMeshForInstance({
+    templateId: mesh.userData.template.templateId,
+    x: mesh.position.x,
+    y: mesh.position.y,
+    z: mesh.position.z,
+    rotationX: mesh.rotation.x,
+    rotationY: mesh.rotation.y,
+    rotationZ: mesh.rotation.z,
+    crop: mesh.userData.crop,
+    scale: mesh.userData.scale,
+    label: mesh.userData.label,
+  });
+  if (!reference) return;
+  // Same "traverse every part's material(s), including a multi-mesh
+  // loaded GLTF" idiom as setShopAvatarOpacity — a product mesh can have
+  // arbitrarily many parts, unlike a simple procedural box.
+  reference.traverse((object) => {
+    if (!object.material) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      material.transparent = true;
+      material.opacity = BACKUP_REFERENCE_OPACITY;
+    }
+  });
+  scene.add(reference);
+  backupReferenceMesh = reference;
+}
+
+function hideBackupReferenceMesh() {
+  if (!backupReferenceMesh) return;
+  scene.remove(backupReferenceMesh);
+  disposeObject(backupReferenceMesh);
+  backupReferenceMesh = null;
+}
+// #2051: e2e-only hook (same window.__test* convention as
+// window.__testShopAvatarHasTransparentMaterial above) -- lets a test
+// confirm the low-opacity placement reference actually appears while the
+// catalog picker is open for a backup pick, and is gone again once it
+// closes, without needing to read raw WebGL pixels. Always inert unless a
+// test calls it.
+window.__testBackupReferenceMeshVisible = () => backupReferenceMesh !== null;
+
+function formatInstanceBackupTemplateName(templateId) {
+  return findTemplate(templateId)?.name ?? templateId;
+}
+
+async function renderBackupChain() {
+  backupChainListEl.innerHTML = '';
+  if (!backupChainTargetMesh) return;
+  const myLoadToken = ++backupChainLoadToken;
+  const instanceId = backupChainTargetMesh.userData.instanceId;
+  let backups;
+  try {
+    ({ backups } = await fetchInstanceBackups(instanceId));
+  } catch (err) {
+    if (myLoadToken !== backupChainLoadToken) return; // superseded while fetching
+    backupChainEmptyEl.textContent = err.message || 'Could not load the backup chain.';
+    backupChainEmptyEl.hidden = false;
+    return;
+  }
+  if (myLoadToken !== backupChainLoadToken) return; // superseded — a newer call owns the list now
+  // #1128-style reset-on-success: without this, a past fetch failure
+  // leaves this stuck on its error message forever, even once a later
+  // load succeeds with an empty (but genuinely empty) chain.
+  backupChainEmptyEl.textContent = 'No backups configured yet.';
+  backupChainEmptyEl.hidden = backups.length > 0;
+  backups.forEach((backup, index) => {
+    const row = document.createElement('div');
+    row.className = 'backup-chain-row';
+    const name = document.createElement('span');
+    name.className = 'backup-chain-row-name';
+    name.textContent = `${index + 1}. ${formatInstanceBackupTemplateName(backup.templateId)}`;
+    row.appendChild(name);
+    const upBtn = document.createElement('button');
+    upBtn.type = 'button';
+    upBtn.className = 'backup-chain-row-up';
+    upBtn.textContent = '▲';
+    upBtn.setAttribute('aria-label', 'Move up in the chain');
+    upBtn.disabled = index === 0;
+    upBtn.addEventListener('click', () => reorderBackupChainRow(backups, index, index - 1));
+    row.appendChild(upBtn);
+    const downBtn = document.createElement('button');
+    downBtn.type = 'button';
+    downBtn.className = 'backup-chain-row-down';
+    downBtn.textContent = '▼';
+    downBtn.setAttribute('aria-label', 'Move down in the chain');
+    downBtn.disabled = index === backups.length - 1;
+    downBtn.addEventListener('click', () => reorderBackupChainRow(backups, index, index + 1));
+    row.appendChild(downBtn);
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'backup-chain-row-remove';
+    removeBtn.textContent = '×';
+    removeBtn.setAttribute('aria-label', 'Remove backup');
+    removeBtn.addEventListener('click', async () => {
+      removeBtn.disabled = true;
+      try {
+        await deleteInstanceBackup(instanceId, backup.backupId);
+        await renderBackupChain();
+      } catch (err) {
+        alert(err.message || 'Could not remove this backup.');
+        removeBtn.disabled = false;
+      }
+    });
+    row.appendChild(removeBtn);
+    backupChainListEl.appendChild(row);
+  });
+}
+
+async function reorderBackupChainRow(backups, fromIndex, toIndex) {
+  const reordered = [...backups];
+  const [moved] = reordered.splice(fromIndex, 1);
+  reordered.splice(toIndex, 0, moved);
+  const instanceId = backupChainTargetMesh.userData.instanceId;
+  try {
+    await reorderInstanceBackups(instanceId, reordered.map((backup) => backup.backupId));
+    await renderBackupChain();
+  } catch (err) {
+    alert(err.message || 'Could not reorder the backup chain.');
+  }
+}
+
+function openBackupChainModal(mesh) {
+  backupChainTargetMesh = mesh;
+  backupChainModalEl.classList.add('visible');
+  openModalA11y(backupChainModalEl, closeBackupChainModal);
+  renderBackupChain();
+}
+function closeBackupChainModal() {
+  backupChainModalEl.classList.remove('visible');
+  backupChainTargetMesh = null;
+  hideBackupReferenceMesh();
+  closeModalA11y(backupChainModalEl);
+}
+backupChainCloseBtn.addEventListener('click', closeBackupChainModal);
+backupChainBtn.addEventListener('click', () => {
+  if (selectedMeshes.size !== 1) return;
+  const [mesh] = selectedMeshes;
+  openBackupChainModal(mesh);
+});
+backupChainAddBtn.addEventListener('click', async () => {
+  if (!backupChainTargetMesh) return;
+  const mesh = backupChainTargetMesh;
+  const instanceId = mesh.userData.instanceId;
+  closeBackupChainModal();
+  await showBackupReferenceMesh(mesh);
+  openCatalogPickerForPick(
+    async (template) => {
+      try {
+        await addInstanceBackup(instanceId, { templateId: template.templateId });
+        await renderBackupChain();
+      } catch (err) {
+        alert(err.message || 'Could not add this backup.');
+      }
+    },
+    () => openBackupChainModal(mesh),
+  );
 });
 
 // Placement-pending state: set by tapping a catalog item, the upload
@@ -12273,6 +12533,7 @@ const shopUpBtn = document.getElementById('shop-up-btn');
 const shopDownBtn = document.getElementById('shop-down-btn');
 const shopSignHintEl = document.getElementById('shop-sign-hint');
 const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
+const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
 const shopProductPreviewModalEl = document.getElementById('shop-product-preview-modal');
 const shopProductPreviewCloseBtn = document.getElementById('shop-product-preview-close-btn');
 const shopProductPreviewCanvas = document.getElementById('shop-product-preview-canvas');
@@ -12625,6 +12886,28 @@ const SIGN_MAX_VISIBLE_POSTS = 5;
 // specific to signs, so there's nothing calendar-specific to tune
 // separately (unlike the backend's own deliberately-separate table/flag —
 // see migrations/0042's comment on why that split is real).
+// Credit orbs (#1995, sub-issue of #1976) — a much tighter radius than
+// SIGN_INTERACT_RADIUS_M, since collection is automatic on proximity alone
+// (the owner's own spec: "the orb stays there until an avatar collects
+// it" — no tap required), not a hint a shopper opts into by tapping.
+// Floats at a fixed height above the spawned ground position (#1994's own
+// z_m is always 0) purely for visual legibility — walking "through" it at
+// avatar height is the intended collection gesture, not a bug.
+const CREDIT_ORB_COLLECT_RADIUS_M = 1.5;
+const CREDIT_ORB_FLOAT_HEIGHT_M = 1.2;
+const CREDIT_ORB_RADIUS_M = 0.25;
+const CREDIT_ORB_ROTATION_SPEED_RAD_S = 1.4;
+// Shimmer: emissiveIntensity oscillates between these two bounds rather
+// than sitting at one fixed brightness — "shimmery" per the owner's own
+// spec, not just "glowing."
+const CREDIT_ORB_SHIMMER_SPEED_RAD_S = 3.2;
+const CREDIT_ORB_SHIMMER_MIN = 0.6;
+const CREDIT_ORB_SHIMMER_MAX = 1.8;
+// How long the "+1 free model-generation credit!" toast stays visible
+// after a successful collect, matching #shop-last-location-btn's own
+// opacity-transition show/auto-hide shape (see its CSS comment in
+// index.html) rather than a hard show/hide cutoff.
+const CREDIT_ORB_TOAST_VISIBLE_MS = 3000;
 // The world wall: an opaque ring standing at exactly the current world
 // radius, tall enough that nothing generating out beyond it (still
 // unclaimable — see the availability circle in docs/SPEC.md) is visible
@@ -13021,6 +13304,13 @@ let nearestActiveSign = null; // whichever sign #shop-sign-hint currently target
 // Same shape/lifecycle as shopSigns above, for community-calendar instances.
 const shopCalendars = [];
 let nearestActiveCalendar = null;
+// #1995: every currently-loaded credit orb: { mesh, group, orbId, landletId }.
+// Unlike shopSigns/shopCalendars above, an orb isn't a placed instance at
+// all (#1994's own data model, a separate credit_orbs table keyed only by
+// landlet) — so it's fetched and added alongside a landlet's own instances
+// in loadShopLandletInstances rather than discovered via any instance's
+// userData, but torn down the identical way in unloadShopLandletInstances.
+const shopCreditOrbs = [];
 // Same shape/lifecycle as shopSigns above, for every placed instance's
 // reviews (no opt-in flag — see registerShopReview) — a
 // {mesh, group, templateId, reviews, sprites} entry per loaded one, with
@@ -14792,6 +15082,7 @@ function updateShopMovement(now) {
   updateSignFade();
   updateCalendarFade();
   updateReviewFade();
+  updateCreditOrbs(dt);
   if (now - lastScheduledEventCheck >= SCHEDULED_EVENT_CHECK_INTERVAL_MS) {
     lastScheduledEventCheck = now;
     checkScheduledCalendarEvents();
@@ -14901,16 +15192,32 @@ function updateShopItemHandling(dt, moveMagnitude, airborne) {
 
 function updateShopProximity() {
   for (const entry of shopLandlets.values()) {
-    if (entry.record.status !== 'claimed') continue; // nothing built to show for anything else
     const distance = Math.hypot(entry.record.center.x - camera.position.x, entry.record.center.y - camera.position.y);
-    if (!entry.loaded && distance < SHOP_LOAD_RADIUS_M) {
-      entry.loaded = true; // set before awaiting so a second tick can't double-load
-      // Each load gets its own token (see loadShopLandletInstances) so a
-      // fast unload-then-reload cycle can't let an earlier, still in-flight
-      // fetch resurrect itself once entry.loaded flips back to true.
-      loadShopLandletInstances(entry, ++entry.loadToken);
-    } else if (entry.loaded && distance > SHOP_UNLOAD_RADIUS_M) {
-      unloadShopLandletInstances(entry);
+    if (entry.record.status === 'claimed') {
+      if (!entry.loaded && distance < SHOP_LOAD_RADIUS_M) {
+        entry.loaded = true; // set before awaiting so a second tick can't double-load
+        // Each load gets its own token (see loadShopLandletInstances) so a
+        // fast unload-then-reload cycle can't let an earlier, still in-flight
+        // fetch resurrect itself once entry.loaded flips back to true.
+        loadShopLandletInstances(entry, ++entry.loadToken);
+      } else if (entry.loaded && distance > SHOP_UNLOAD_RADIUS_M) {
+        unloadShopLandletInstances(entry);
+      }
+    } else if (entry.record.status === 'greenbelt') {
+      // #1995: credit orbs only ever spawn into greenbelt landlets
+      // (spawnCreditOrbIfDue's own `WHERE status = 'greenbelt'`) -- an
+      // unclaimed plot otherwise has nothing built on it to load at all
+      // (see the claimed-only branch above, and its own "nothing built to
+      // show for anything else" precedent), so this is a separate, narrower
+      // load/unload decision scoped to orbs alone, independent of
+      // entry.loaded/entry.objects (which stay permanently empty/false for
+      // every greenbelt landlet).
+      if (!entry.orbsLoaded && distance < SHOP_LOAD_RADIUS_M) {
+        entry.orbsLoaded = true;
+        loadCreditOrbsForLandlet(entry, ++entry.orbLoadToken);
+      } else if (entry.orbsLoaded && distance > SHOP_UNLOAD_RADIUS_M) {
+        unloadCreditOrbsForLandlet(entry);
+      }
     }
   }
 }
@@ -15251,6 +15558,131 @@ async function loadShopLandletInstances(entry, myToken) {
     registerShopReview(object, entry);
   }
 }
+
+// Unlike signs/calendars/reviews above, a credit orb isn't a placed
+// instance at all (#1994's own data model — a separate credit_orbs table
+// keyed only by landlet), and unlike those, it only ever loads for a
+// greenbelt landlet (see updateShopProximity's own comment on why that's a
+// separate load/unload decision from loadShopLandletInstances' claimed-only
+// one) — so its mesh is never added to entry.objects; it's tracked solely
+// in shopCreditOrbs, and disposed either here-ish (on collect, see
+// updateCreditOrbs) or in unloadCreditOrbsForLandlet below, not via
+// entry.objects' own generic disposal loop. Fetched once, right as the
+// landlet enters load range — same "not kept in sync afterward" tradeoff
+// registerShopSign's own posts fetch already accepts; an orb collected by
+// another shopper while this one is still nearby just lingers visually
+// until the next reload, exactly like registerShopSign's own stale-posts
+// case.
+async function loadCreditOrbsForLandlet(entry, myToken) {
+  let orbs;
+  try {
+    orbs = await fetchCreditOrbs(entry.record.landletId);
+  } catch {
+    return;
+  }
+  if (myToken !== entry.orbLoadToken) return; // superseded while this was in flight
+  for (const orb of orbs) {
+    const mesh = createCreditOrbMesh();
+    mesh.position.set(orb.x, orb.y, orb.z + CREDIT_ORB_FLOAT_HEIGHT_M);
+    entry.group.add(mesh);
+    shopCreditOrbs.push({ mesh, group: entry.group, orbId: orb.orbId, collecting: false });
+  }
+}
+
+// updateShopProximity's own greenbelt-landlet unload branch — mirrors
+// unloadShopLandletInstances' shape for the claimed-only path, but only
+// ever needs to clean up shopCreditOrbs (entry.objects/loaded/loadToken
+// stay permanently empty/false/0 for a greenbelt landlet, since nothing
+// else ever loads for one).
+function unloadCreditOrbsForLandlet(entry) {
+  entry.orbsLoaded = false;
+  entry.orbLoadToken++; // invalidate any in-flight loadCreditOrbsForLandlet call
+  for (const orb of [...shopCreditOrbs]) {
+    if (orb.group !== entry.group) continue;
+    shopCreditOrbs.splice(shopCreditOrbs.indexOf(orb), 1);
+    orb.group.remove(orb.mesh);
+    disposeObject3D(orb.mesh);
+  }
+}
+
+// A small shimmering sphere — emissiveIntensity is animated per-frame in
+// updateCreditOrbs (the "shimmer"), rotation.y likewise (the "rotating"),
+// per the owner's own spec phrase "a shimmery, rotating orb."
+function createCreditOrbMesh() {
+  const geometry = new THREE.SphereGeometry(CREDIT_ORB_RADIUS_M, 16, 16);
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xfff176,
+    emissive: 0xffe066,
+    emissiveIntensity: CREDIT_ORB_SHIMMER_MIN,
+    metalness: 0.2,
+    roughness: 0.25,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.userData.isCreditOrb = true;
+  return mesh;
+}
+
+let creditOrbShimmerElapsedS = 0;
+const scratchCreditOrbWorldPos = new THREE.Vector3();
+
+// Called every Shop-mode frame, unthrottled like updateSignFade/
+// updateCalendarFade — the shimmer needs to read as continuous, and
+// collection should feel immediate, not stepped to SHOP_PROXIMITY_INTERVAL_MS.
+function updateCreditOrbs(dt) {
+  creditOrbShimmerElapsedS += dt;
+  const shimmer = CREDIT_ORB_SHIMMER_MIN + (CREDIT_ORB_SHIMMER_MAX - CREDIT_ORB_SHIMMER_MIN)
+    * (0.5 + 0.5 * Math.sin(creditOrbShimmerElapsedS * CREDIT_ORB_SHIMMER_SPEED_RAD_S));
+  for (const orb of shopCreditOrbs) {
+    orb.mesh.rotation.y += CREDIT_ORB_ROTATION_SPEED_RAD_S * dt;
+    orb.mesh.material.emissiveIntensity = shimmer;
+    // Already mid-collect-request — avoid firing a second one every frame
+    // while the first is still in flight (walking stays within the radius
+    // for several frames, not just one).
+    if (orb.collecting) continue;
+    // Deliberately the avatar's own position, not camera.position (unlike
+    // updateSignFade/updateCalendarFade's fade distance) -- positionShopCamera
+    // holds the third-person camera SHOP_CAMERA_FOLLOW_DISTANCE_M (4.2m)
+    // behind the avatar, well outside CREDIT_ORB_COLLECT_RADIUS_M on its
+    // own, so camera.position would never read as "standing on it" at this
+    // tight a radius the way it still works for signs/calendars' much wider
+    // SIGN_INTERACT_RADIUS_M (8m). Horizontal-only (x/y), ignoring z, since
+    // CREDIT_ORB_FLOAT_HEIGHT_M's own float-above-ground offset shouldn't
+    // count against "walked into it."
+    const world = orb.mesh.getWorldPosition(scratchCreditOrbWorldPos);
+    const dx = world.x - shopAvatarPosition.x;
+    const dy = world.y - shopAvatarPosition.y;
+    if (Math.hypot(dx, dy) > CREDIT_ORB_COLLECT_RADIUS_M) continue;
+    orb.collecting = true;
+    collectCreditOrb(orb.orbId).then(() => {
+      removeCreditOrb(orb);
+      showCreditOrbToast();
+    }).catch(() => {
+      // The server's own atomic claim is authoritative (docs/API.md's
+      // "Credit orbs" section) — a 404 here just means another shopper
+      // collected it first, not a real error, so this quietly drops the
+      // now-stale orb from the scene instead of surfacing anything to the
+      // shopper or retrying.
+      removeCreditOrb(orb);
+    });
+  }
+}
+
+function removeCreditOrb(orb) {
+  const index = shopCreditOrbs.indexOf(orb);
+  if (index === -1) return; // already removed (e.g. its landlet was unloaded while the request was in flight)
+  shopCreditOrbs.splice(index, 1);
+  orb.group.remove(orb.mesh);
+  disposeObject3D(orb.mesh);
+}
+
+function showCreditOrbToast() {
+  shopCreditOrbToastEl.classList.add('visible');
+  clearTimeout(creditOrbToastHideTimer);
+  creditOrbToastHideTimer = setTimeout(() => {
+    shopCreditOrbToastEl.classList.remove('visible');
+  }, CREDIT_ORB_TOAST_VISIBLE_MS);
+}
+let creditOrbToastHideTimer = null;
 
 // A sign starts with no posts loaded — fetched once, here, right as it
 // enters the world (rather than re-fetched on every proximity tick), then
@@ -16415,6 +16847,10 @@ function unloadShopLandletInstances(entry) {
       shopCalendarHintEl.classList.remove('visible');
     }
   }
+  // #1995: credit orbs never load for a claimed landlet at all (see
+  // updateShopProximity's own comment — only ever greenbelt, torn down by
+  // unloadCreditOrbsForLandlet instead), so there's nothing of theirs to
+  // clean up here.
   for (const review of [...shopReviews]) {
     if (review.group !== entry.group) continue;
     disposeReviewSprites(review);
@@ -16774,7 +17210,12 @@ async function enterShopMode() {
     groundMesh.position.z = 0.02;
     group.add(groundMesh);
     scene.add(group);
-    shopLandlets.set(record.landletId, { record, group, loaded: false, loadToken: 0, objects: [] });
+    shopLandlets.set(record.landletId, {
+      record, group, loaded: false, loadToken: 0, objects: [],
+      // #1995: orbs' own load state, independent of loaded/loadToken/
+      // objects above -- see updateShopProximity's own comment on why.
+      orbsLoaded: false, orbLoadToken: 0,
+    });
   }
 
   // Shop mode can be (re-)entered without a reload (see this function's own

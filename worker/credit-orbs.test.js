@@ -7,7 +7,7 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { spawnCreditOrbIfDue } from './index.js';
-import { api } from './test-helpers.js';
+import { api, signupAdmin, signupBuilder } from './test-helpers.js';
 
 beforeAll(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
@@ -127,6 +127,122 @@ describe('GET /api/credit-orbs (#1994)', () => {
 
   it('404s on an unrelated sub-path', async () => {
     const { response } = await api('/credit-orbs/not-a-real-path');
+    expect(response.status).toBe(404);
+  });
+});
+
+describe('POST /api/credit-orbs (admin seed fixture, #1995)', () => {
+  it('requires admin', async () => {
+    const landlet = await seedLandlet('greenbelt');
+    const builder = await signupBuilder('orb-seed-non-admin');
+    const { response } = await api('/credit-orbs', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ landletId: landlet }),
+    }));
+    expect(response.status).toBe(403);
+  });
+
+  it('seeds an orb into the given landlet at the given position, listed by GET', async () => {
+    const landlet = await seedLandlet('greenbelt');
+    const admin = await signupAdmin('orb-seed-admin');
+    const { response, body } = await api('/credit-orbs', admin.session({
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ landletId: landlet, x: 3.5, y: -1.5 }),
+    }));
+    expect(response.status).toBe(201);
+    expect(body.orbId).toBeTruthy();
+
+    const { body: listed } = await api(`/credit-orbs?landletId=${encodeURIComponent(landlet)}`);
+    const orb = listed.orbs.find((o) => o.orbId === body.orbId);
+    expect(orb).toBeTruthy();
+    expect(orb.x).toBe(3.5);
+    expect(orb.y).toBe(-1.5);
+  });
+
+  it('404s seeding into a landlet that does not exist', async () => {
+    const admin = await signupAdmin('orb-seed-missing-landlet');
+    const { response } = await api('/credit-orbs', admin.session({
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ landletId: 'not-a-real-landlet' }),
+    }));
+    expect(response.status).toBe(404);
+  });
+});
+
+describe('POST /api/credit-orbs/:orbId/collect (#1995)', () => {
+  it('requires a session', async () => {
+    const landlet = await seedLandlet('greenbelt');
+    const orbId = await seedOrb(landlet);
+
+    const { response } = await api(`/credit-orbs/${orbId}/collect`, { method: 'POST' });
+    expect(response.status).toBe(401);
+  });
+
+  it('marks the orb collected and grants the collecting builder one video-generation credit', async () => {
+    const landlet = await seedLandlet('greenbelt');
+    const orbId = await seedOrb(landlet);
+    const builder = await signupBuilder('orb-collector');
+
+    const { response, body } = await api(`/credit-orbs/${orbId}/collect`, builder.session({ method: 'POST' }));
+    expect(response.status).toBe(200);
+    expect(body.collected).toBe(true);
+
+    const orbRow = await env.DB.prepare('SELECT collected_at, collected_by_builder_id FROM credit_orbs WHERE orb_id = ?')
+      .bind(orbId).first();
+    expect(orbRow.collected_at).toBeTruthy();
+    expect(orbRow.collected_by_builder_id).toBe(builder.builderId);
+
+    const builderRow = await env.DB.prepare('SELECT video_generation_credits FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(builderRow.video_generation_credits).toBe(1);
+
+    const stillListed = await api('/credit-orbs');
+    expect(stillListed.body.orbs.map((orb) => orb.orbId)).not.toContain(orbId);
+  });
+
+  it('404s a second collect attempt on the same orb, and does not grant a second credit', async () => {
+    const landlet = await seedLandlet('greenbelt');
+    const orbId = await seedOrb(landlet);
+    const first = await signupBuilder('orb-first');
+    const second = await signupBuilder('orb-second');
+
+    const won = await api(`/credit-orbs/${orbId}/collect`, first.session({ method: 'POST' }));
+    expect(won.response.status).toBe(200);
+
+    const lost = await api(`/credit-orbs/${orbId}/collect`, second.session({ method: 'POST' }));
+    expect(lost.response.status).toBe(404);
+
+    const secondRow = await env.DB.prepare('SELECT video_generation_credits FROM builders WHERE builder_id = ?')
+      .bind(second.builderId).first();
+    expect(secondRow.video_generation_credits).toBe(0);
+  });
+
+  it('two concurrent collect attempts on the same orb: exactly one succeeds and exactly one credit is granted', async () => {
+    const landlet = await seedLandlet('greenbelt');
+    const orbId = await seedOrb(landlet);
+    const a = await signupBuilder('orb-race-a');
+    const b = await signupBuilder('orb-race-b');
+
+    const [resultA, resultB] = await Promise.all([
+      api(`/credit-orbs/${orbId}/collect`, a.session({ method: 'POST' })),
+      api(`/credit-orbs/${orbId}/collect`, b.session({ method: 'POST' })),
+    ]);
+    const statuses = [resultA.response.status, resultB.response.status].sort();
+    expect(statuses).toEqual([200, 404]);
+
+    const totalCredits = await env.DB.prepare(`
+      SELECT
+        (SELECT video_generation_credits FROM builders WHERE builder_id = ?) +
+        (SELECT video_generation_credits FROM builders WHERE builder_id = ?) AS total
+    `).bind(a.builderId, b.builderId).first();
+    expect(totalCredits.total).toBe(1);
+  });
+
+  it('404s collecting an orb that does not exist', async () => {
+    const builder = await signupBuilder('orb-missing');
+    const { response } = await api('/credit-orbs/not-a-real-orb/collect', builder.session({ method: 'POST' }));
     expect(response.status).toBe(404);
   });
 });
