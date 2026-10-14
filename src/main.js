@@ -17013,7 +17013,11 @@ for (const btn of modeNavButtons) {
     // longer than a frame — network + document parsing — so the browser
     // still gets a chance to paint this highlight on the outgoing page
     // first.
-    for (const b of modeNavButtons) b.classList.toggle('active', b.dataset.mode === target);
+    for (const b of modeNavButtons) {
+      const isTarget = b.dataset.mode === target;
+      b.classList.toggle('active', isTarget);
+      b.setAttribute('aria-pressed', String(isTarget));
+    }
     sessionStorage.setItem(START_MODE_KEY, target);
     location.reload();
   });
