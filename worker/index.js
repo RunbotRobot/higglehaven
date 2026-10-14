@@ -2140,6 +2140,17 @@ async function handleCatalog(request, db, route, url, models, env) {
       await assertReferenceExists(db, 'sellers', 'seller_id', template.sellerId, 'sellerId');
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(template.sellerId, sessionSeller.seller_id, 'Not your seller profile');
+      // #1601: the owner wants price required on a real seller listing (a
+      // free digital product is an explicit $0, not an omitted field) --
+      // scoped to sellerId's presence (a real listing) and to this create
+      // path specifically, not validateTemplate itself, since the PATCH/PUT
+      // sibling below intentionally still allows clearing a price back to
+      // null via the "Edit Price" panel. System/placeholder templates (no
+      // sellerId, this file's own primary test/seed-fixture shape) are
+      // unaffected.
+      if (template.priceCents == null) {
+        throw new HttpError('priceCents is required', 400);
+      }
     }
     await assertUploadedModelExists(models, template.modelUrl);
     await db.prepare(`

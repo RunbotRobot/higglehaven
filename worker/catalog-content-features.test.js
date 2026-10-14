@@ -738,6 +738,7 @@ describe('Product-image thumbnail (#327)', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
   }
@@ -968,6 +969,7 @@ describe('Embedding similarity search (#329)', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     if (embedding !== undefined) {
