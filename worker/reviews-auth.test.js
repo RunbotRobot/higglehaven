@@ -842,6 +842,38 @@ describe('Product reviews', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #2075: PUT /catalog/batch used to run assertUploadedModelExists (up to
+  // 100 real R2 bucket.head() calls) before checkRateLimit, so an
+  // already-rate-limited caller still paid that full cost on every rejected
+  // call. Proven here the same way the two tests above exhaust the limit,
+  // then the one-past-the-limit request also carries a modelUrl that would
+  // fail assertUploadedModelExists (a /uploads/models/ path nothing ever
+  // uploaded to) -- if the rate limit is genuinely checked first, this still
+  // 429s; if assertUploadedModelExists ran first again, it would 400 instead.
+  it('checks the rate limit before assertUploadedModelExists on an already-limited batch PUT', async () => {
+    const templateId = await createTemplate('catalog-batch-put-rate-limit-ordering');
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/catalog/batch', {
+        method: 'PUT', headers,
+        body: JSON.stringify({ templates: [{
+          templateId, name: 'Batch put rate limit ordering', color: '#123456',
+          dimensions: { width: 1 + i * 0.01, depth: 1, height: 1 },
+        }] }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/catalog/batch', {
+      method: 'PUT', headers,
+      body: JSON.stringify({ templates: [{
+        templateId, name: 'Batch put rate limit ordering', color: '#123456',
+        dimensions: { width: 9, depth: 1, height: 1 },
+        modelUrl: `/uploads/models/nonexistent-${crypto.randomUUID()}.glb`,
+      }] }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
+
   // Found via backlog audit: review moderation (DELETE) has the identical
   // permissive-when-orphaned shape as catalog template DELETE above (#520)
   // — a seller-less template's reviews stay unrestricted, but until now had
