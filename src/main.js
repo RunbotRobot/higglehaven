@@ -15635,6 +15635,14 @@ async function handleShopProductReviewClick() {
   // prompt is an optional extra, same as the calendar hint's own scheduling
   // step above.
   const text = prompt('Add a comment (up to 280 characters), or leave blank:', '');
+  // #2005: same missing client-side check #1920 already added to the
+  // sign-post/calendar-event prompts above -- prompt() gives no live
+  // character count, and an over-length submission loses the whole typed
+  // comment on the server's own 280-char rejection.
+  if (text && text.trim().length > 280) {
+    alert('Keep it to 280 characters or fewer.');
+    return;
+  }
   shopProductPreviewReviewBtn.disabled = true;
   try {
     const posted = await createProductReview(review.templateId, { rating, text: text?.trim() || undefined });
@@ -15800,6 +15808,12 @@ async function promptSellerFeedback(purchase) {
     return;
   }
   const text = prompt('Add a comment (up to 280 characters), or leave blank:', '');
+  // #2005: same missing client-side check as the product review prompt
+  // above -- see its own comment for why this matters.
+  if (text && text.trim().length > 280) {
+    alert('Keep it to 280 characters or fewer.');
+    return;
+  }
   try {
     await createSellerFeedback(purchase.purchaseId, { rating, text: text?.trim() || undefined });
   } catch (err) {
