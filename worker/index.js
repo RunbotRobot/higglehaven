@@ -7816,6 +7816,14 @@ const TRIPO_MODEL_VERSION = 'v3.0-20250812';
 // own research -- same reasoning as DIDIT_SESSION_RATE_LIMIT_MAX above,
 // bucketed per-builder since this is a session-gated seller action.
 const VIDEO_GENERATION_RATE_LIMIT_MAX = 10;
+
+// #1993 (sub-issue of #1976): the honest-budget message the owner asked
+// for directly, shown whenever a builder has no video_generation_credits
+// left (migrations/0127) -- not a bare cap, an explanation plus a real
+// free alternative that doesn't need a credit at all.
+const VIDEO_GENERATION_NO_CREDITS_MESSAGE = 'No free model-generation credits available right now — this platform is '
+  + 'bootstrapped from very little budget, so generations are rationed. Collect a credit orb in the world, or '
+  + 'generate a model for free elsewhere (e.g. Sketchfab) and upload it here directly — no credit needed for that.';
 // handleVideoGenerationJobStatus below reconciles against a live Tripo
 // status call whenever a job is still pending -- same cadence reasoning
 // as DIDIT_STATUS_RATE_LIMIT_MAX, generous enough to cover the frontend's
@@ -8110,10 +8118,27 @@ async function handleVideoGenerationJobCreate(request, env, db) {
     return json({ jobId: latest.job_id, status: latest.status });
   }
   await checkRateLimit(db, `video-generation:${sessionBuilder.builder_id}`, VIDEO_GENERATION_RATE_LIMIT_MAX);
+  // #1993: alongside (not instead of) the rate limit above -- the rate
+  // limit still guards against abuse of a large credit balance, this
+  // guards against spending credits the builder doesn't have. Folding the
+  // balance check into the UPDATE's own WHERE clause makes "is there a
+  // credit" and "spend it" one atomic statement, the same race-safe shape
+  // checkRateLimit's own INSERT...WHERE uses just above.
+  const creditSpent = await db.prepare(
+    'UPDATE builders SET video_generation_credits = video_generation_credits - 1 WHERE builder_id = ? AND video_generation_credits > 0',
+  ).bind(sessionBuilder.builder_id).run();
+  if (creditSpent.meta.changes === 0) {
+    throw new HttpError(VIDEO_GENERATION_NO_CREDITS_MESSAGE, 402);
+  }
   const { reservationId, existing } = await reserveVideoGenerationJob(db, sessionBuilder.builder_id);
   if (!reservationId) {
     // Lost a genuine concurrent race against another request for this
     // same builder -- hand back that one instead of ever calling Tripo.
+    // #1993: no new job actually started here, so the credit spent above
+    // was never really used -- refund it rather than charging a request
+    // that just relayed an already-in-flight job's own status.
+    await db.prepare('UPDATE builders SET video_generation_credits = video_generation_credits + 1 WHERE builder_id = ?')
+      .bind(sessionBuilder.builder_id).run();
     return json({ jobId: existing.job_id, status: existing.status });
   }
 
@@ -8164,6 +8189,15 @@ async function handleVideoGenerationJobCreate(request, env, db) {
     // doesn't permanently block this builder from ever starting a video-
     // to-3D job again.
     await db.prepare('DELETE FROM video_generation_jobs WHERE job_id = ?').bind(reservationId).run();
+    // #1993: if the billed call never went out (or never got a real
+    // task_id back), the credit spent above paid for nothing -- refund it.
+    // If it's already billed, the credit was legitimately spent regardless
+    // of what happened after (same "billed means billed" reasoning the
+    // #1886/#1935 durable-logging above already applies).
+    if (!billedTaskId) {
+      await db.prepare('UPDATE builders SET video_generation_credits = video_generation_credits + 1 WHERE builder_id = ?')
+        .bind(sessionBuilder.builder_id).run();
+    }
     throw err;
   }
 }
@@ -10464,6 +10498,105 @@ async function handleMe(request, db) {
 // this same shape rather than a new endpoint.
 const EXPORT_DATA_RATE_LIMIT_MAX = 10;
 
+// #1986 (sub-issue of #1983): the `social` section of handleExportData
+// below. Most of these tables genuinely key off builder_id/user_id, but
+// two don't, and this returns the best available approximation rather
+// than silently omitting them:
+// - calendar_events has no author column at all (unlike sign_posts, which
+//   got a real user_id in #1830/migrations/0125) -- only a free-text
+//   author_label stamped from the poster's label at post time (#289). A
+//   label match against this account's CURRENT label is the best signal
+//   available; it misses events posted under a since-changed label and
+//   could, in principle, catch another account that happens to share
+//   today's label with a past poster. Flagged here rather than guessed
+//   past silently -- a real author_id column is the actual fix, tracked
+//   separately from this export feature.
+// - landlet_versions/version_instances have no author column either --
+//   only landlet_id. "Authored by this builder" is approximated as
+//   "versions of landlets this builder currently owns," since landlet
+//   ownership itself can change hands (auction, admin reassignment) and
+//   nothing records who actually created a given version.
+async function exportSocialSection(db, builderId, builderLabel, userId) {
+  const friendships = await db.prepare(`
+    SELECT * FROM friendships WHERE requester_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
+  `).bind(builderId, builderId).all();
+  const directMessages = await db.prepare(`
+    SELECT * FROM direct_messages WHERE sender_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
+  `).bind(builderId, builderId).all();
+  const notifications = await db.prepare(`
+    SELECT * FROM notifications WHERE builder_id = ? ORDER BY created_at ASC
+  `).bind(builderId).all();
+  // product_reviews/seller_feedback are both "I am the buyer" joins --
+  // purchase_id is the real FK (#1101/#1123, closing the earlier
+  // spoofable author_label-only design), not a text match. A review/
+  // feedback row whose purchase_id is NULL (created before that FK
+  // existed, or its purchase was later deleted) can't be attributed and
+  // is correctly left out rather than guessed at.
+  const productReviews = await db.prepare(`
+    SELECT r.* FROM product_reviews r JOIN purchases p ON p.purchase_id = r.purchase_id
+    WHERE p.buyer_builder_id = ? ORDER BY r.created_at ASC
+  `).bind(builderId).all();
+  const sellerFeedback = await db.prepare(`
+    SELECT f.* FROM seller_feedback f JOIN purchases p ON p.purchase_id = f.purchase_id
+    WHERE p.buyer_builder_id = ? ORDER BY f.created_at ASC
+  `).bind(builderId).all();
+  const signPosts = await db.prepare(`
+    SELECT * FROM sign_posts WHERE user_id = ? ORDER BY created_at ASC
+  `).bind(userId).all();
+  const calendarEvents = await db.prepare(`
+    SELECT * FROM calendar_events WHERE author_label = ? ORDER BY created_at ASC
+  `).bind(builderLabel).all();
+  const savedLayouts = await db.prepare(`
+    SELECT * FROM saved_level_layouts WHERE builder_id = ? ORDER BY created_at ASC
+  `).bind(builderId).all();
+  const savedLayoutInstances = savedLayouts.results.length === 0 ? { results: [] } : await db.prepare(`
+    SELECT * FROM saved_layout_instances WHERE saved_layout_id IN (
+      SELECT saved_layout_id FROM saved_level_layouts WHERE builder_id = ?
+    )
+  `).bind(builderId).all();
+  const instancesBySavedLayoutId = new Map();
+  for (const row of savedLayoutInstances.results) {
+    const list = instancesBySavedLayoutId.get(row.saved_layout_id) ?? [];
+    list.push(savedLayoutInstanceFromRow(row));
+    instancesBySavedLayoutId.set(row.saved_layout_id, list);
+  }
+  const landletVersions = await db.prepare(`
+    SELECT v.* FROM landlet_versions v WHERE v.landlet_id IN (
+      SELECT landlet_id FROM landlets WHERE owner_builder_id = ?
+    ) ORDER BY v.landlet_id ASC, v.version_number ASC
+  `).bind(builderId).all();
+  const versionInstances = landletVersions.results.length === 0 ? { results: [] } : await db.prepare(`
+    SELECT * FROM version_instances WHERE version_id IN (
+      SELECT v.version_id FROM landlet_versions v WHERE v.landlet_id IN (
+        SELECT landlet_id FROM landlets WHERE owner_builder_id = ?
+      )
+    )
+  `).bind(builderId).all();
+  const instancesByVersionId = new Map();
+  for (const row of versionInstances.results) {
+    const list = instancesByVersionId.get(row.version_id) ?? [];
+    list.push(versionInstanceFromRow(row));
+    instancesByVersionId.set(row.version_id, list);
+  }
+  return {
+    friendships: friendships.results.map((row) => friendshipFromRow(row, builderId, new Map(), new Map())),
+    directMessages: directMessages.results.map(directMessageFromRow),
+    notifications: notifications.results.map(notificationFromRow),
+    productReviews: productReviews.results.map(reviewFromRow),
+    sellerFeedback: sellerFeedback.results.map(sellerFeedbackFromRow),
+    signPosts: signPosts.results.map(signPostFromRow),
+    calendarEvents: calendarEvents.results.map(calendarEventFromRow),
+    savedLevelLayouts: savedLayouts.results.map((row) => {
+      const instances = instancesBySavedLayoutId.get(row.saved_layout_id) ?? [];
+      return { ...savedLayoutFromRow(row), instanceCount: instances.length, instances };
+    }),
+    landletVersions: landletVersions.results.map((row) => {
+      const instances = instancesByVersionId.get(row.version_id) ?? [];
+      return { ...versionFromRow(row), instanceCount: instances.length, instances };
+    }),
+  };
+}
+
 async function handleExportData(request, db) {
   const user = await requireCurrentUser(request, db);
   await checkRateLimit(db, `export-data:${user.user_id}`, EXPORT_DATA_RATE_LIMIT_MAX);
@@ -10488,6 +10621,7 @@ async function handleExportData(request, db) {
         processedAt: row.processed_at,
       })),
     },
+    social: builderRow ? await exportSocialSection(db, builderRow.builder_id, builderRow.label, user.user_id) : null,
   });
 }
 
@@ -13327,6 +13461,22 @@ async function handleSignPosts(request, db, route) {
     if (!existing) return json({ error: 'Post not found' }, 404);
     const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
+    // #781: an admin can remove any sign post outright (harassment, doxxing,
+    // other policy violations) regardless of whether the hosting landlet's
+    // own owner ever acts on it -- same "checked first, via the non-throwing
+    // currentUser lookup" shape as #1712's product-review admin override,
+    // since an admin isn't necessarily the post's author or the landlet owner.
+    const requester = await currentUser(request, db);
+    const admin = requester && requester.is_admin ? requester : null;
+    if (admin) {
+      await checkRateLimit(db, `sign-post-delete:${admin.user_id}`, SIGN_POST_DELETE_RATE_LIMIT_MAX);
+      const deletedByAdmin = await db.prepare('DELETE FROM sign_posts WHERE post_id = ?').bind(postId).run();
+      if (deletedByAdmin.meta.changes === 0) {
+        throw new HttpError('Post changed concurrently — refetch and retry', 409);
+      }
+      await adminActionLogStatement(db, admin.user_id, 'delete_sign_post_override', 'sign_post', postId).run();
+      return json({ deleted: true });
+    }
     // #1830: requireSessionBuilder (not requireVerifiedSession) so this one
     // call resolves both the real user_id a post's own author needs below,
     // and the builder_id the moderation fallback below that already needs
@@ -13524,6 +13674,19 @@ async function handleCalendarEvents(request, db, route) {
     const eventId = route[3];
     const existing = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ? AND instance_id = ?').bind(eventId, instanceId).first();
     if (!existing) return json({ error: 'Event not found' }, 404);
+    // #781: an admin can remove any calendar event outright, same reasoning
+    // and shape as the sign-posts admin override above.
+    const requester = await currentUser(request, db);
+    const admin = requester && requester.is_admin ? requester : null;
+    if (admin) {
+      await checkRateLimit(db, `calendar-event-delete:${admin.user_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
+      const deletedByAdmin = await db.prepare('DELETE FROM calendar_events WHERE event_id = ?').bind(eventId).run();
+      if (deletedByAdmin.meta.changes === 0) {
+        throw new HttpError('Event changed concurrently — refetch and retry', 409);
+      }
+      await adminActionLogStatement(db, admin.user_id, 'delete_calendar_event_override', 'calendar_event', eventId).run();
+      return json({ deleted: true });
+    }
     // Same moderation gate as sign posts above — the calendar's own hosting
     // landlet's owner, not the event's free-text author.
     const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();

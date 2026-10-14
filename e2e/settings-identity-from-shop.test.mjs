@@ -72,15 +72,15 @@ console.log('Land Cap field text for a fresh, already-logged-in visitor (should 
 
 // Auction section: previously stuck on the dead-end identity message even
 // though this visitor is logged in — should now reach the real
-// "claim a landlet first" copy instead.
-const auctionSectionText = await waitForText(page, '#settings-section', 'Claim a landlet first to auction it off.');
+// "claim a lándlet first" copy instead.
+const auctionSectionText = await waitForText(page, '#settings-section', 'Claim a lándlet first to auction it off.');
 const stillShowsIdentityPrompt = auctionSectionText.includes('Choose a builder identity');
-console.log('Settings > Build section text (should mention "Claim a landlet first", must NOT still say "Choose a builder identity"):', auctionSectionText);
+console.log('Settings > Build section text (should mention "Claim a lándlet first", must NOT still say "Choose a builder identity"):', auctionSectionText);
 
 // formatArea comma-groups thousands by default (owner feedback) — see
 // land-cap.test.mjs's own comment on this — so a 1000m² cap reads "1,000m²".
 const pass = landCapText.includes('You own 0m²') && landCapText.includes('1,000m² cap') &&
-  auctionSectionText.includes('Claim a landlet first to auction it off.') &&
+  auctionSectionText.includes('Claim a lándlet first to auction it off.') &&
   !stillShowsIdentityPrompt &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Settings > Build tab establishes builder identity for an already-logged-in Shop-mode visitor', errors });

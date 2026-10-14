@@ -276,6 +276,7 @@
         <h3>Force-complete generation</h3>
         <p class="hint">Only for a landlet stuck in <code>generating</code> — immediately makes it greenbelt/claimable if the world circle already encloses it.</p>
         <button id="landletForceCompleteBtn">Force complete generation</button>
+        <p class="hint" id="landletForceCompleteNote" hidden></p>
       </div>
 
       <div id="landletReassignWrap" hidden>
@@ -1503,6 +1504,7 @@
     const detailWrap = document.getElementById('landletDetailWrap');
     const statGrid = document.getElementById('landletStatGrid');
     const forceCompleteWrap = document.getElementById('landletForceCompleteWrap');
+    const forceCompleteNote = document.getElementById('landletForceCompleteNote');
     const reassignWrap = document.getElementById('landletReassignWrap');
     const reassignTargetInput = document.getElementById('landletReassignTargetInput');
     const auctionConflictWrap = document.getElementById('landletAuctionConflictWrap');
@@ -1543,6 +1545,7 @@
       `;
       detailWrap.hidden = false;
       forceCompleteWrap.hidden = landlet.status !== 'generating';
+      forceCompleteNote.hidden = true;
       reassignWrap.hidden = landlet.status !== 'claimed';
       auctionConflictWrap.hidden = true;
       reassignTargetInput.value = '';
@@ -1570,6 +1573,15 @@
           { method: 'POST' },
         );
         renderLandlet(body.landlet);
+        // #1888: a landlet the world circle doesn't yet fully enclose stays
+        // "generating" even after this call succeeds (generatedAt is set,
+        // but expandWorldOnce promotes it to greenbelt later) -- without
+        // this, the button just stays visible with no sign anything
+        // happened, indistinguishable from a no-op.
+        if (body.landlet.status === 'generating') {
+          forceCompleteNote.hidden = false;
+          forceCompleteNote.textContent = 'Generation marked complete; this landlet will become greenbelt once a world expansion encloses it.';
+        }
       } catch (error) {
         showError(error.message);
       }
