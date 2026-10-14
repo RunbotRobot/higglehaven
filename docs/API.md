@@ -6430,6 +6430,62 @@ again, and that no console/page errors occurred anywhere in the flow. The
 verification script itself was a temporary scratch file, deleted before
 committing.
 
+### Disputes (#2020)
+
+docs/SPEC.md §5's "Fraud/dispute defense" bullet: "Low-value disputes from
+established accounts: auto-resolved in buyer's favor. Higher-value/new-
+account disputes: require actual evidence." Before this, no buyer-facing
+dispute/refund-request endpoint existed at all — every refund path above
+is seller- or admin-initiated (see "Refunding is seller-initiated, not
+shopper self-service" above); a shopper had no way to raise one themselves.
+
+`POST /api/purchases/:purchaseId/dispute` requires a session, and requires
+that session's own `builderId` match the purchase's `buyerBuilderId`
+(`400` otherwise — "Only the buyer of this purchase can dispute it"), the
+same real-buyer-session gate `POST .../feedback` uses (#1123). `404` if the
+purchase doesn't exist, `400` if already refunded, `409` if already paid
+out (same "contact support for manual reconciliation" case `.../refund`
+itself rejects).
+
+**Eligibility, evaluated entirely server-side — never a free-text claim:**
+- **Low-value**: `totalCents <= 2000` ($20 — the owner's own range was
+  "$15-25, exact value at implementer's discretion").
+- **Established buyer**: at least one *other* purchase by this same
+  `buyerBuilderId` that isn't refunded, **and** zero purchases by this
+  buyer that are refunded. There's no buyer-side strike/flag column in
+  this schema (unlike `sellers.strike_count`, migrations/0131, which is
+  seller-only) — refund/dispute history on `purchases.refundedAt` is the
+  only queryable signal for "has this buyer had a dispute before," so
+  that's what "established" actually checks.
+
+Both conditions must hold, **and** the product's own seller must not have
+opted into "no returns" (`metadata.noReturns`) — the same guard `.../refund`
+enforces; auto-resolving in the buyer's favor is a faster path to the same
+outcome a seller-initiated refund would reach, not a bypass of that
+seller's own policy choice. When all of that holds, this performs the
+exact same reversal `POST .../refund` does (the atomic `refundedAt` guard,
+the real Stripe reversal at the same 99% `REFUND_PAYOUT_RATE` for a
+real-money purchase, the higgle-commission clawback, the avatar/animation-
+ownership revocation) with no seller or admin action required, and logs an
+`admin_action_log` entry (`dispute_auto_resolved`, `adminUserId: null` —
+the established convention for a system/automated action with no human in
+the loop, same as the video-generation stale-reservation sweep) instead of
+the seller/admin-override log `.../refund` writes.
+
+Response shape is `{ autoResolved: boolean, purchase }` either way.
+**`autoResolved: false` is not an error** — a new/flagged buyer or a
+higher-value claim falls through to today's unchanged manual handling (no
+automated path exists for that case yet; this never fabricates a "pending
+review" state nothing else in this app reads). The purchase itself is left
+exactly as it was in that case.
+
+`worker/purchase-disputes.test.js` covers: auth required, buyer-ownership
+enforcement, 404/already-refunded/already-paid-out, the established+
+low-value auto-resolve path (refund, clawback, admin-log entry), a new
+buyer's first-ever purchase (not established, no prior purchase to count),
+a buyer with refund history (not established), a high-value purchase from
+an established buyer (no auto-resolve), and the no-returns override.
+
 ## Tax reporting
 
 docs/SPEC.md §7: 1099-NEC generation once a seller/builder crosses the
