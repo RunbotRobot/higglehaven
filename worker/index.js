@@ -4265,6 +4265,11 @@ async function handleSellers(request, env, db, route, url) {
   }
 
   if (request.method === 'GET' && route.length === 1) {
+    // #2095: GET /api/builders's identical GET route.length===1 branch
+    // above gates on this exact same check (added by #1844) before its
+    // own ids/label/cursor-list sub-cases -- this branch mirrors all
+    // three of those sub-cases but had never picked up the guard.
+    await checkRateLimit(db, `seller-list:${clientIp(request)}`, BUILDER_LIST_RATE_LIMIT_MAX);
     // #1213: same bounded-lookup shape as GET /api/builders's ids/label
     // filters above (#717/#716) — added once a real caller (seller-lookup
     // by name) existed, mirroring that endpoint's own reasoning exactly.
