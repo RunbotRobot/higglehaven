@@ -1551,6 +1551,21 @@ export async function fetchLowStock() {
   return templates;
 }
 
+// #2068 (leaf sub-issue of #1973/#1947): grayed-out sold-out markers for
+// one specific landlet -- landlet-scoped, not a cross-landlet "mine" list
+// like fetchLowStock above, since a marker's x/y are landlet-local
+// coordinates that only mean anything inside the one landlet's own scene.
+export async function fetchSoldOutMarkers(landletId) {
+  const { markers } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/sold-out-markers`);
+  return markers;
+}
+
+export async function dismissSoldOutMarker(landletId, markerId) {
+  return requestJson(`/landlets/${encodeURIComponent(landletId)}/sold-out-markers/${encodeURIComponent(markerId)}/dismiss`, {
+    method: 'POST',
+  });
+}
+
 // Refund + higgles-commission clawback (migrations/0052_purchase_refunds.sql).
 export async function refundPurchase(purchaseId) {
   const { purchase } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/refund`, { method: 'POST' });
@@ -1611,4 +1626,20 @@ export async function fetchNearbyPresence(landletId) {
 export async function fetchOwnLastPresence() {
   const { presence } = await requestJson('/presence/me');
   return presence;
+}
+
+// #1995 (sub-issue of #1976): every currently-active credit orb, optionally
+// scoped to one landlet — see docs/API.md's "Credit orbs" for the shape.
+// Unauthenticated, same as GET /api/instances.
+export async function fetchCreditOrbs(landletId) {
+  const { orbs } = await requestJson(`/credit-orbs?landletId=${encodeURIComponent(landletId)}`);
+  return orbs;
+}
+
+// #1995: claims an orb on proximity auto-collect. The server's own atomic
+// "first builder wins" check is authoritative — a 404 here just means
+// someone else got there first, not a real error, so callers should treat
+// it as a quiet no-op rather than surfacing it to the shopper.
+export async function collectCreditOrb(orbId) {
+  return requestJson(`/credit-orbs/${encodeURIComponent(orbId)}/collect`, { method: 'POST' });
 }

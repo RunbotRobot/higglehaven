@@ -8777,6 +8777,58 @@ async function handleCreditOrbs(request, db, route, url) {
     `).bind(...bindings).all();
     return json({ orbs: results.map(creditOrbFromRow) });
   }
+  // POST /api/credit-orbs -- admin-gated test/ops fixture, same escape-hatch
+  // reasoning as POST /api/landlets/.../land-cap-grants/higgles-grants: the
+  // real spawn cadence (spawnCreditOrbIfDue, ~70min apart by default) is far
+  // too slow for a test that only cares about what happens once an orb
+  // exists to self-time against reliably. Inserts directly into a caller-
+  // specified landlet (any status, not gated to 'greenbelt' -- a caller
+  // using this already knows exactly what it wants to seed).
+  if (request.method === 'POST' && route.length === 1) {
+    const admin = await requireAdmin(request, db);
+    const input = await readJson(request);
+    const landletId = stringValue(input.landletId, 'landletId');
+    const x = input.x === undefined ? 0 : finiteNumber(input.x, 'x');
+    const y = input.y === undefined ? 0 : finiteNumber(input.y, 'y');
+    const orbId = `orb-${crypto.randomUUID()}`;
+    const inserted = await db.prepare(`
+      INSERT INTO credit_orbs (orb_id, landlet_id, x_m, y_m, z_m)
+      SELECT ?, landlet_id, ?, ?, 0 FROM landlets WHERE landlet_id = ?
+    `).bind(orbId, x, y, landletId).run();
+    if (inserted.meta.changes === 0) throw new HttpError('Landlet not found', 404);
+    await adminActionLogStatement(db, admin.user_id, 'credit_orb_seed', 'landlet', landletId, { orbId }).run();
+    return json({ orbId }, 201);
+  }
+  // POST /api/credit-orbs/:orbId/collect (#1995) -- session-gated (unlike
+  // the GET above) since collecting actually credits the calling builder's
+  // own video_generation_credits. Race-safe the same way every other
+  // claim-before-act endpoint in this file already is: the UPDATE's own
+  // `WHERE collected_at IS NULL` is the atomic "first builder wins" claim,
+  // and the credit grant is batched in the same D1 transaction, gated on
+  // an EXISTS check against the row this same batch's first statement just
+  // committed -- so a crash between the two can never happen (they're one
+  // atomic unit), and two shoppers racing the same orb can never both grant
+  // themselves a credit for it.
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'collect') {
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const orbId = stringValue(route[1], 'orbId');
+    const [claim] = await db.batch([
+      db.prepare(`
+        UPDATE credit_orbs SET collected_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), collected_by_builder_id = ?
+        WHERE orb_id = ? AND collected_at IS NULL
+      `).bind(sessionBuilder.builder_id, orbId),
+      db.prepare(`
+        UPDATE builders SET video_generation_credits = video_generation_credits + 1
+        WHERE builder_id = ? AND EXISTS (
+          SELECT 1 FROM credit_orbs WHERE orb_id = ? AND collected_by_builder_id = ?
+        )
+      `).bind(sessionBuilder.builder_id, orbId, sessionBuilder.builder_id),
+    ]);
+    if (claim.meta.changes === 0) {
+      throw new HttpError('This credit orb is no longer available -- someone else may have already collected it.', 404);
+    }
+    return json({ collected: true });
+  }
   return json({ error: 'Not found' }, 404);
 }
 
@@ -9946,6 +9998,26 @@ async function transmitTax1099Form(env, { form, payeeEmail, payeeTaxId }) {
 // with a total" view #350's own Control Room direction asked for. A user
 // with no seller profile yet just gets sellerPayoutCents: 0, the same as
 // any other builder who's never sold anything.
+// #2082: the admin-forms approve/file/void trio fires real outbound
+// 1099-e-filing-vendor calls (/file, via transmitTax1099Form) on the shared
+// TAX_1099_EFILING credentials, the same "real outbound vendor call on a
+// shared key" shape STRIPE_RATE_LIMIT_MAX's own callers (handlePurchaseRefund
+// etc.) already guard — being requireAdmin-gated doesn't exempt it, same as
+// mark-shipped/self-dealing-flag-review/account-suspension are all
+// admin-gated and still rate-limited. NOT this file's usual 20 (the issue's
+// own text explicitly warns against reusing an existing constant "scoped to
+// a different caller shape" verbatim): unlike a single seller's own refund/
+// dispute actions, reviewing 1099s is a real, legitimate *batch* admin
+// workflow -- worker/seller-payouts-and-tax.test.js's own pre-existing
+// "1099 e-filing transmission" suite alone fires 22 real approve/void/file
+// calls from one shared admin well within any 15-minute window, and a human
+// admin clearing a tax-season backlog is realistically doing the same. 20
+// would make that workflow itself trip the guard it's meant to bound abuse
+// of, not the admin's own ordinary use of the feature. 100 still fully
+// closes the original gap (unbounded -> bounded) while leaving headroom for
+// a real bulk-review session.
+const TAX_1099_ADMIN_RATE_LIMIT_MAX = 100;
+
 async function handleTax(request, env, db, route, url) {
   const user = await requireCurrentUser(request, db);
   if (request.method === 'GET' && route.length === 2 && route[1] === 'summary') {
@@ -10030,6 +10102,7 @@ async function handleTax(request, env, db, route, url) {
   // of the same form is a no-op, not a double-approval.
   if (request.method === 'POST' && route.length === 4 && route[1] === 'admin-forms' && route[3] === 'approve') {
     if (!user.is_admin) throw new HttpError('Admin access required', 403);
+    await checkRateLimit(db, `tax-1099-admin:${user.user_id}`, TAX_1099_ADMIN_RATE_LIMIT_MAX);
     const formId = route[2];
     const form = await db.prepare('SELECT * FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
     if (!form) throw new HttpError('Tax form not found', 404);
@@ -10083,6 +10156,7 @@ async function handleTax(request, env, db, route, url) {
   // the form retryable rather than stranding it.
   if (request.method === 'POST' && route.length === 4 && route[1] === 'admin-forms' && route[3] === 'file') {
     if (!user.is_admin) throw new HttpError('Admin access required', 403);
+    await checkRateLimit(db, `tax-1099-admin:${user.user_id}`, TAX_1099_ADMIN_RATE_LIMIT_MAX);
     const formId = route[2];
     const form = await db.prepare('SELECT * FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
     if (!form) throw new HttpError('Tax form not found', 404);
@@ -10149,6 +10223,7 @@ async function handleTax(request, env, db, route, url) {
   // an actual corrected-1099 filing process, out of scope for this record.
   if (request.method === 'POST' && route.length === 4 && route[1] === 'admin-forms' && route[3] === 'void') {
     if (!user.is_admin) throw new HttpError('Admin access required', 403);
+    await checkRateLimit(db, `tax-1099-admin:${user.user_id}`, TAX_1099_ADMIN_RATE_LIMIT_MAX);
     const formId = route[2];
     const form = await db.prepare('SELECT * FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
     if (!form) throw new HttpError('Tax form not found', 404);
@@ -11582,6 +11657,16 @@ const LANDLET_DELETE_RATE_LIMIT_MAX = 20;
 async function handleLandlets(request, db, route, url) {
   if (route.length >= 3 && route[2] === 'versions') {
     return handleLandletVersions(request, db, route, url);
+  }
+
+  // #2068 (leaf sub-issue of #1973/#1947): grayed-out sold-out markers for
+  // the builder's own land -- landlet-scoped (not a cross-landlet "my
+  // markers" list like GET /builders/me/low-stock above) since a marker's
+  // x_m/y_m are landlet-local coordinates, same as placed_instances' own,
+  // and only make sense rendered inside the one landlet's scene they
+  // belong to.
+  if (route.length >= 3 && route[2] === 'sold-out-markers') {
+    return handleSoldOutMarkers(request, db, route);
   }
 
   if (route.length === 3 && route[2] === 'auction') {
@@ -15648,14 +15733,15 @@ async function handleSelfDealingFlags(request, db, route) {
 // before.
 async function sweepSoldOutTemplateInstances(db, template) {
   const { results: affectedInstances } = await db.prepare(`
-    SELECT pi.instance_id AS instanceId, l.owner_builder_id AS builderId
+    SELECT pi.instance_id AS instanceId, pi.landlet_id AS landletId, pi.x_m AS xM, pi.y_m AS yM, pi.z_m AS zM,
+           l.owner_builder_id AS builderId
     FROM placed_instances pi
     JOIN landlets l ON l.landlet_id = pi.landlet_id
     WHERE pi.template_id = ?
   `).bind(template.template_id).all();
 
   const deletedCountByBuilder = new Map();
-  for (const { instanceId, builderId } of affectedInstances) {
+  for (const { instanceId, landletId, xM, yM, zM, builderId } of affectedInstances) {
     const { results: chain } = await db.prepare(`
       SELECT pib.backup_id AS backupId, pib.template_id AS templateId, ct.stock_quantity AS stockQuantity
       FROM placed_instance_backups pib
@@ -15689,6 +15775,17 @@ async function sweepSoldOutTemplateInstances(db, template) {
       ]);
       continue;
     }
+    // #2068: snapshot this instance's own landlet/position (already fetched
+    // above) before deleting it -- lets Build mode later show "something
+    // used to be here" via a grayed-out marker, instead of the location
+    // simply vanishing with no trace. Only reached once the backup chain
+    // above is confirmed exhausted -- an instance reactivated onto a
+    // backup template in the branch above is not "sold out and gone," so
+    // it gets no marker.
+    await db.prepare(`
+      INSERT INTO sold_out_markers (marker_id, landlet_id, x_m, y_m, z_m, template_id, template_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(`sold-out-marker-${crypto.randomUUID()}`, landletId, xM, yM, zM, template.template_id, template.name).run();
     // Chain exhausted (or empty) with nothing viable -- cascades away this
     // instance's own now-moot placed_instance_backups rows automatically
     // (migrations/0137's ON DELETE CASCADE), unlike the activation branch
@@ -15703,6 +15800,55 @@ async function sweepSoldOutTemplateInstances(db, template) {
     await fireNotification(db, builderId,
       `"${template.name}" just sold out — ${count} placed ${count === 1 ? 'instance has' : 'instances have'} been removed from your land.`);
   }
+}
+
+function soldOutMarkerFromRow(row) {
+  return {
+    markerId: row.marker_id,
+    landletId: row.landlet_id,
+    x: row.x_m,
+    y: row.y_m,
+    z: row.z_m,
+    templateId: row.template_id,
+    templateName: row.template_name,
+    soldOutAt: row.sold_out_at,
+  };
+}
+
+// #2068: dismissing is a one-way action (clearing a marker permanently,
+// same "builder has acknowledged this, stop showing it" shape other
+// dismiss-style actions in this app use), not a delete-then-recreate --
+// shares a rate-limit bucket shape with every other per-account mutation
+// limit in this file.
+const SOLD_OUT_MARKER_DISMISS_RATE_LIMIT_MAX = 20;
+
+async function handleSoldOutMarkers(request, db, route) {
+  const landletId = route[1];
+
+  if (request.method === 'GET' && route.length === 3) {
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await requireOwnedLandlet(db, landletId, sessionBuilder.builder_id);
+    const { results } = await db.prepare(
+      'SELECT * FROM sold_out_markers WHERE landlet_id = ? AND dismissed_at IS NULL ORDER BY sold_out_at ASC',
+    ).bind(landletId).all();
+    return json({ markers: results.map(soldOutMarkerFromRow) });
+  }
+
+  if (request.method === 'POST' && route.length === 5 && route[4] === 'dismiss') {
+    const markerId = route[3];
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await requireOwnedLandlet(db, landletId, sessionBuilder.builder_id);
+    await checkRateLimit(db, `sold-out-marker-dismiss:${sessionBuilder.builder_id}`, SOLD_OUT_MARKER_DISMISS_RATE_LIMIT_MAX);
+    const result = await db.prepare(
+      'UPDATE sold_out_markers SET dismissed_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE marker_id = ? AND landlet_id = ? AND dismissed_at IS NULL',
+    ).bind(markerId, landletId).run();
+    if (result.meta.changes === 0) {
+      throw new HttpError('Marker not found or already dismissed', 404);
+    }
+    return json({ dismissed: true });
+  }
+
+  return json({ error: 'Not found' }, 404);
 }
 
 async function handlePurchases(request, env, route, url) {
