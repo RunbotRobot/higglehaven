@@ -659,6 +659,10 @@ async function handleApi(request, env, url, ctx) {
     return handlePurchases(request, env, route, url);
   }
 
+  if (route[0] === 'self-dealing-flags') {
+    return handleSelfDealingFlags(request, env.DB, route);
+  }
+
   if (route[0] === 'bundles') {
     return handleBundles(request, env.DB, route, url);
   }
@@ -14767,9 +14771,87 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
     await fireNotification(db, builderId,
       `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`);
   }
+  // #2019: soft self-dealing signal, never blocks or affects this purchase
+  // itself -- a side effect after the real write already committed, same
+  // "fired after the batch, not inside it" placement as the notification
+  // just above, for the same reason (never risk rolling back a real
+  // purchase record over a best-effort flag).
+  await flagSelfDealingIfMatched(db, purchaseId, buyerBuilderId, template.seller_id);
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(row), ...(deliveryConfirmUrl ? { deliveryConfirmUrl } : {}) }, 201);
+}
+
+// #2019 (sub-issue of #1212, owner-settled shape 2026-10-13): the one
+// signal from this sub-issue's original three-signal scope that this
+// codebase can actually compare -- see migrations/0132's own comment for
+// why shipping-address and Stripe-customer-ID matching aren't implemented
+// here. Fails open (never flags, never throws) whenever either side's
+// email can't be resolved at all -- a builder with no linked user_id
+// (pre-login/dev-mode) or a seller never linked to a real account is not
+// "cleared," it's simply "nothing to compare," same posture the rest of
+// this file already takes toward a dangling/unlinked id.
+async function flagSelfDealingIfMatched(db, purchaseId, buyerBuilderId, sellerId) {
+  if (!buyerBuilderId || !sellerId) return;
+  const buyer = await db.prepare(`
+    SELECT users.email AS email FROM builders JOIN users ON users.user_id = builders.user_id
+    WHERE builders.builder_id = ?
+  `).bind(buyerBuilderId).first();
+  const seller = await db.prepare(`
+    SELECT users.email AS email FROM sellers JOIN users ON users.user_id = sellers.user_id
+    WHERE sellers.seller_id = ?
+  `).bind(sellerId).first();
+  if (!buyer?.email || !seller?.email || buyer.email !== seller.email) return;
+  await db.prepare(`
+    INSERT INTO self_dealing_flags (flag_id, purchase_id, matched_signals) VALUES (?, ?, ?)
+  `).bind(`self-dealing-flag-${crypto.randomUUID()}`, purchaseId, JSON.stringify(['email'])).run();
+}
+
+const SELF_DEALING_FLAG_REVIEW_RATE_LIMIT_MAX = 20;
+
+// #2019: the admin-facing review queue over self_dealing_flags -- a flag
+// here is a soft signal, not an accusation, so there is no "approve"
+// action with its own consequence the way #2017's product-flags resolve
+// has (remove listing + strike seller). An admin reviewing one is just
+// acknowledging it (optionally with a note for their own record); nothing
+// else in this app reacts to a flag's status.
+async function handleSelfDealingFlags(request, db, route) {
+  if (request.method === 'GET' && route.length === 1) {
+    await requireAdmin(request, db);
+    const { results } = await db.prepare(`
+      SELECT sdf.flag_id AS flagId, sdf.purchase_id AS purchaseId, sdf.matched_signals AS matchedSignals, sdf.created_at AS createdAt,
+             p.template_id AS templateId, p.buyer_builder_id AS buyerBuilderId, p.builder_id AS builderId, p.total_cents AS totalCents
+      FROM self_dealing_flags sdf
+      JOIN purchases p ON p.purchase_id = sdf.purchase_id
+      WHERE sdf.status = 'pending'
+      ORDER BY sdf.created_at DESC
+      LIMIT 200
+    `).all();
+    return json({
+      flags: results.map((row) => ({ ...row, matchedSignals: JSON.parse(row.matchedSignals) })),
+    });
+  }
+
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'review') {
+    const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `self-dealing-flag-review:${admin.user_id}`, SELF_DEALING_FLAG_REVIEW_RATE_LIMIT_MAX);
+    const flagId = route[1];
+    const input = await readJson(request);
+    const notes = input.notes === undefined || input.notes === null || input.notes === ''
+      ? null
+      : stringValue(input.notes, 'notes');
+    if (notes && notes.length > 280) throw new HttpError('notes must be 280 characters or fewer', 400);
+    const result = await db.prepare(`
+      UPDATE self_dealing_flags SET status = 'reviewed', reviewed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        reviewed_by_admin_user_id = ?, review_notes = ?
+      WHERE flag_id = ? AND status = 'pending'
+    `).bind(admin.user_id, notes, flagId).run();
+    if (result.meta.changes === 0) throw new HttpError('Flag not found or already reviewed', 404);
+    await adminActionLogStatement(db, admin.user_id, 'reviewed_self_dealing_flag', 'self_dealing_flag', flagId, { notes }).run();
+    return json({ reviewed: true });
+  }
+
+  return json({ error: 'Not found' }, 404);
 }
 
 async function handlePurchases(request, env, route, url) {
