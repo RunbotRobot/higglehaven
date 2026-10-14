@@ -78,10 +78,13 @@ console.log('scope tabs hidden during a backup pick (should be true):', scopeTab
 console.log('Products scope forced active during a backup pick (should be true):', productsScopeForced);
 console.log('low-opacity placement reference mesh shown while picking (should be true):', referenceMeshShown);
 
-// Pick the tree as the first backup.
+// Pick the tree as the first backup. The modal's own .visible class is set
+// synchronously by openBackupChainModal, well before its awaited
+// renderBackupChain() call actually lands -- waiting on visibility alone
+// races the real DOM update, so wait for the row count itself instead.
 await page.locator('#catalog-picker-grid button').filter({ hasText: 'Tree' }).click();
 await page.waitForSelector('#backup-chain-modal.visible', { timeout: 5000 });
-await page.waitForTimeout(300);
+await page.waitForFunction(() => document.querySelectorAll('.backup-chain-row').length === 1, { timeout: 5000 });
 const referenceMeshHiddenAfterPick = await page.evaluate(() => window.__testBackupReferenceMeshVisible());
 const rowsAfterFirstAdd = await page.locator('.backup-chain-row').count();
 const firstRowText = await page.locator('.backup-chain-row').first().textContent();
@@ -98,7 +101,7 @@ await page.click('#backup-chain-add-btn');
 await page.waitForSelector('#catalog-picker.visible', { timeout: 5000 });
 await page.locator('#catalog-picker-grid button').filter({ hasText: 'Table' }).click();
 await page.waitForSelector('#backup-chain-modal.visible', { timeout: 5000 });
-await page.waitForTimeout(300);
+await page.waitForFunction(() => document.querySelectorAll('.backup-chain-row').length === 2, { timeout: 5000 });
 const rowsAfterSecondAdd = await page.locator('.backup-chain-row').count();
 console.log('rows shown after adding a second backup (should be 2):', rowsAfterSecondAdd);
 
@@ -132,7 +135,7 @@ await page.click('#backup-chain-add-btn');
 await page.waitForSelector('#catalog-picker.visible', { timeout: 5000 });
 await page.click('#catalog-picker-close-btn');
 await page.waitForSelector('#backup-chain-modal.visible', { timeout: 5000 });
-await page.waitForTimeout(300);
+await page.waitForFunction(() => document.querySelectorAll('.backup-chain-row').length === 1, { timeout: 5000 });
 const rowsAfterCancel = await page.locator('.backup-chain-row').count();
 const referenceMeshHiddenAfterCancel = await page.evaluate(() => window.__testBackupReferenceMeshVisible());
 console.log('#backup-chain-modal reopened after a plain cancel (should be visible already, implicit in the wait above)');
