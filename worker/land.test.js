@@ -4670,11 +4670,15 @@ describe('Landlet levels', () => {
     }
     const limited = await sweepOneLevel('levels-rate-limit-instance-final');
     expect(limited.response.status).toBe(429);
-  }, 45000); // #978: 20 iterations x 3 real HTTP requests each (add level,
-  // place instance, sweep-delete) reliably finishes in ~2s in isolation, but
-  // this file's 121 tests share one D1 instance, and late-file cumulative
-  // state occasionally pushes this specific test past the 20s default under
-  // CI load -- already blocked two separate unrelated PRs' CI runs.
+  }, 60000); // #978/#2060: 20 iterations x 3 real HTTP requests each (add
+  // level, place instance, sweep-delete) reliably finishes in ~2s in
+  // isolation, but this file shares one D1 instance across its whole,
+  // ever-growing test count, and late-file cumulative state occasionally
+  // pushes this specific test past its own timeout under CI load -- 20s
+  // (the global default) wasn't enough (#978, bumped to 45000ms), and
+  // #2060 found 45000ms itself no longer enough either, so this is the
+  // next step up, matching worker/commerce.test.js's own precedent for a
+  // comparable request volume.
 
   // #907: the sweep-specific rate limit just above (#794) only covers a
   // level removal that has an out-of-range instance to archive -- the

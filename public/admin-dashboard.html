@@ -1551,14 +1551,26 @@
       reassignTargetInput.value = '';
     }
 
+    // #2062: two overlapping lookups (e.g. a slow request for A still in
+    // flight when the admin looks up B instead) can resolve out of order --
+    // same race every other panel in this file already guards against
+    // (loadRosterToken, worldLoadToken, ringsLoadToken, etc.). Without this,
+    // A's stale response can land after B's and silently flip currentLandlet
+    // (and the stat grid) back to A, leaving Force Complete/Reassign Owner
+    // wired to the wrong landlet with no visual sign anything changed.
+    let landletLookupToken = 0;
+
     async function lookupLandlet() {
       clearError();
       const landletId = lookupInput.value.trim();
       if (!landletId) return;
+      const myLandletLookupToken = ++landletLookupToken;
       try {
         const body = await apiFetch('/api/landlets/' + encodeURIComponent(landletId));
+        if (myLandletLookupToken !== landletLookupToken) return;
         renderLandlet(body.landlet);
       } catch (error) {
+        if (myLandletLookupToken !== landletLookupToken) return;
         detailWrap.hidden = true;
         showError(error.message);
       }
