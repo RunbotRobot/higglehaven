@@ -14231,9 +14231,21 @@ async function handleInstanceBackups(request, db, route) {
       throw new HttpError("order must contain exactly this instance's current backup ids, each once", 400);
     }
     await checkRateLimit(db, `instance-backup-write:${sessionBuilder.builder_id}`, INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX);
-    await db.batch(input.order.map((backupId, position) => db.prepare(
-      'UPDATE placed_instance_backups SET position = ? WHERE backup_id = ? AND instance_id = ?',
-    ).bind(position, backupId, instanceId)));
+    // #2091: same #929/#960 idiom as this handler's own POST above --
+    // requireOwnedLandlet at the top is a point-in-time check, and readJson/
+    // the existingIds SELECT/checkRateLimit above are real awaited gaps a
+    // landlet transfer could land in. Fold the ownership re-check into each
+    // UPDATE itself rather than trusting the earlier check.
+    const updateResults = await db.batch(input.order.map((backupId, position) => db.prepare(`
+      UPDATE placed_instance_backups SET position = ?
+      WHERE backup_id = ? AND instance_id = ? AND EXISTS (
+        SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
+        WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
+      )
+    `).bind(position, backupId, instanceId, instanceId, sessionBuilder.builder_id)));
+    if (updateResults.some((result) => result.meta.changes === 0)) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     const { results } = await db.prepare(
       'SELECT * FROM placed_instance_backups WHERE instance_id = ? ORDER BY position',
     ).bind(instanceId).all();
@@ -14247,10 +14259,20 @@ async function handleInstanceBackups(request, db, route) {
     ).bind(backupId, instanceId).first();
     if (!existing) return json({ error: 'Backup not found' }, 404);
     await checkRateLimit(db, `instance-backup-write:${sessionBuilder.builder_id}`, INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX);
-    const deleted = await db.prepare(
-      'DELETE FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ?',
-    ).bind(backupId, instanceId).run();
-    if (deleted.meta.changes === 0) return json({ error: 'Backup not found' }, 404);
+    // #2091: same #929/#960 idiom as this handler's own POST above / the
+    // identical handleSignPosts moderation-DELETE guard -- fold the
+    // ownership re-check into the DELETE itself rather than trusting the
+    // top-of-handler requireOwnedLandlet, which is only a point-in-time
+    // check against the awaits (readJson/SELECT/checkRateLimit) since then.
+    const deleted = await db.prepare(`
+      DELETE FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ? AND EXISTS (
+        SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
+        WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
+      )
+    `).bind(backupId, instanceId, instanceId, sessionBuilder.builder_id).run();
+    if (deleted.meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     // Closes the gap left behind rather than leaving positions sparse --
     // every position strictly greater than the removed one shifts down by
     // one, keeping the chain contiguous for the next append (which relies

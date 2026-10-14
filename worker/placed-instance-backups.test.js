@@ -182,6 +182,97 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
     expect(appended.body.backup.position).toBe(2);
   });
 
+  // #2091: PUT (reorder) and DELETE each only checked requireOwnedLandlet
+  // once at the top of the handler, then did further awaited work
+  // (readJson/a SELECT/checkRateLimit) before their actual write, unlike
+  // this handler's own POST above (and handleSignPosts' DELETE), which
+  // already fold an ownership re-check into the write itself for exactly
+  // this reason. Same test idiom as land.test.js's own
+  // "rejects an event on a landlet that was transferred to a new owner
+  // mid-request" -- hijack env.DB.prepare to transfer ownership away right
+  // as checkRateLimit's own INSERT INTO rate_limit_events runs, simulating
+  // an auction resolving in the exact awaited gap this guards.
+  it('rejects a PUT reorder on a landlet that was transferred to a new owner mid-request', async () => {
+    const owner = await signupBuilder('backups-put-race-owner');
+    const newOwner = await signupBuilder('backups-put-race-new-owner');
+    await createLandletAndClaim('backups-put-race-landlet', owner);
+    await createTemplate('backups-put-race-template');
+    await createTemplate('backups-put-race-backup-1');
+    await createTemplate('backups-put-race-backup-2');
+    await placeInstance('backups-put-race-instance', 'backups-put-race-landlet', 'backups-put-race-template', owner);
+    const first = await api('/instances/backups-put-race-instance/backups', owner.session({
+      method: 'POST', body: JSON.stringify({ templateId: 'backups-put-race-backup-1' }),
+    }));
+    const second = await api('/instances/backups-put-race-instance/backups', owner.session({
+      method: 'POST', body: JSON.stringify({ templateId: 'backups-put-race-backup-2' }),
+    }));
+    const id1 = first.body.backup.backupId;
+    const id2 = second.body.backup.backupId;
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO rate_limit_events')) {
+        armed = false;
+        originalPrepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+          .bind(newOwner.builderId, 'backups-put-race-landlet').run();
+      }
+      return originalPrepare(sql);
+    };
+    let rejected;
+    try {
+      rejected = await api('/instances/backups-put-race-instance/backups', owner.session({
+        method: 'PUT', body: JSON.stringify({ order: [id2, id1] }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body.error).toMatch(/Landlet changed concurrently/);
+
+    const stillOriginalOrder = await env.DB.prepare(
+      'SELECT backup_id, position FROM placed_instance_backups WHERE instance_id = ? ORDER BY position',
+    ).bind('backups-put-race-instance').all();
+    expect(stillOriginalOrder.results.map((r) => r.backup_id)).toEqual([id1, id2]);
+  });
+
+  it('rejects a DELETE on a landlet that was transferred to a new owner mid-request', async () => {
+    const owner = await signupBuilder('backups-delete-race-owner');
+    const newOwner = await signupBuilder('backups-delete-race-new-owner');
+    await createLandletAndClaim('backups-delete-race-landlet', owner);
+    await createTemplate('backups-delete-race-template');
+    await createTemplate('backups-delete-race-backup');
+    await placeInstance('backups-delete-race-instance', 'backups-delete-race-landlet', 'backups-delete-race-template', owner);
+    const added = await api('/instances/backups-delete-race-instance/backups', owner.session({
+      method: 'POST', body: JSON.stringify({ templateId: 'backups-delete-race-backup' }),
+    }));
+    const backupId = added.body.backup.backupId;
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO rate_limit_events')) {
+        armed = false;
+        originalPrepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+          .bind(newOwner.builderId, 'backups-delete-race-landlet').run();
+      }
+      return originalPrepare(sql);
+    };
+    let rejected;
+    try {
+      rejected = await api(`/instances/backups-delete-race-instance/backups/${backupId}`, owner.session({ method: 'DELETE' }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body.error).toMatch(/Landlet changed concurrently/);
+
+    const stillThere = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM placed_instance_backups WHERE backup_id = ?',
+    ).bind(backupId).first();
+    expect(stillThere.count).toBe(1);
+  });
+
   it('blocks deleting a catalog template still configured as a backup', async () => {
     const builder = await signupBuilder('backups-delete-template-builder');
     await createLandletAndClaim('backups-delete-template-landlet', builder);
