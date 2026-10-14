@@ -9998,6 +9998,26 @@ async function transmitTax1099Form(env, { form, payeeEmail, payeeTaxId }) {
 // with a total" view #350's own Control Room direction asked for. A user
 // with no seller profile yet just gets sellerPayoutCents: 0, the same as
 // any other builder who's never sold anything.
+// #2082: the admin-forms approve/file/void trio fires real outbound
+// 1099-e-filing-vendor calls (/file, via transmitTax1099Form) on the shared
+// TAX_1099_EFILING credentials, the same "real outbound vendor call on a
+// shared key" shape STRIPE_RATE_LIMIT_MAX's own callers (handlePurchaseRefund
+// etc.) already guard — being requireAdmin-gated doesn't exempt it, same as
+// mark-shipped/self-dealing-flag-review/account-suspension are all
+// admin-gated and still rate-limited. NOT this file's usual 20 (the issue's
+// own text explicitly warns against reusing an existing constant "scoped to
+// a different caller shape" verbatim): unlike a single seller's own refund/
+// dispute actions, reviewing 1099s is a real, legitimate *batch* admin
+// workflow -- worker/seller-payouts-and-tax.test.js's own pre-existing
+// "1099 e-filing transmission" suite alone fires 22 real approve/void/file
+// calls from one shared admin well within any 15-minute window, and a human
+// admin clearing a tax-season backlog is realistically doing the same. 20
+// would make that workflow itself trip the guard it's meant to bound abuse
+// of, not the admin's own ordinary use of the feature. 100 still fully
+// closes the original gap (unbounded -> bounded) while leaving headroom for
+// a real bulk-review session.
+const TAX_1099_ADMIN_RATE_LIMIT_MAX = 100;
+
 async function handleTax(request, env, db, route, url) {
   const user = await requireCurrentUser(request, db);
   if (request.method === 'GET' && route.length === 2 && route[1] === 'summary') {
@@ -10082,6 +10102,7 @@ async function handleTax(request, env, db, route, url) {
   // of the same form is a no-op, not a double-approval.
   if (request.method === 'POST' && route.length === 4 && route[1] === 'admin-forms' && route[3] === 'approve') {
     if (!user.is_admin) throw new HttpError('Admin access required', 403);
+    await checkRateLimit(db, `tax-1099-admin:${user.user_id}`, TAX_1099_ADMIN_RATE_LIMIT_MAX);
     const formId = route[2];
     const form = await db.prepare('SELECT * FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
     if (!form) throw new HttpError('Tax form not found', 404);
@@ -10135,6 +10156,7 @@ async function handleTax(request, env, db, route, url) {
   // the form retryable rather than stranding it.
   if (request.method === 'POST' && route.length === 4 && route[1] === 'admin-forms' && route[3] === 'file') {
     if (!user.is_admin) throw new HttpError('Admin access required', 403);
+    await checkRateLimit(db, `tax-1099-admin:${user.user_id}`, TAX_1099_ADMIN_RATE_LIMIT_MAX);
     const formId = route[2];
     const form = await db.prepare('SELECT * FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
     if (!form) throw new HttpError('Tax form not found', 404);
@@ -10201,6 +10223,7 @@ async function handleTax(request, env, db, route, url) {
   // an actual corrected-1099 filing process, out of scope for this record.
   if (request.method === 'POST' && route.length === 4 && route[1] === 'admin-forms' && route[3] === 'void') {
     if (!user.is_admin) throw new HttpError('Admin access required', 403);
+    await checkRateLimit(db, `tax-1099-admin:${user.user_id}`, TAX_1099_ADMIN_RATE_LIMIT_MAX);
     const formId = route[2];
     const form = await db.prepare('SELECT * FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
     if (!form) throw new HttpError('Tax form not found', 404);
