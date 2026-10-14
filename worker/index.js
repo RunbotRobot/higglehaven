@@ -2628,7 +2628,7 @@ async function handleProductFlags(request, db, route) {
   const templateId = route[1];
 
   if (request.method === 'POST' && route.length === 3) {
-    const template = await db.prepare('SELECT template_id, flagged_hidden_at FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    const template = await db.prepare('SELECT template_id, flagged_hidden_at, seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     if (!template) return json({ error: 'Catalog template not found' }, 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
     await checkRateLimit(db, `product-flag-create:${sessionBuilder.builder_id}`, PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX);
@@ -2661,6 +2661,22 @@ async function handleProductFlags(request, db, route) {
         WHERE template_id = ? AND flagged_hidden_at IS NULL
       `).bind(templateId).run();
       autoHidden = hideResult.meta.changes === 1;
+      // #2056: auto-hide blocks every future purchase of this listing
+      // immediately, well before any admin reviews the flags -- the same
+      // practical effect on the seller as the admin-confirmed `approve`
+      // branch below, which already notifies. Best-effort, same seller-
+      // resolved-via-shared-user_id join that branch already uses.
+      if (autoHidden && template.seller_id) {
+        const owner = await db.prepare(`
+          SELECT b.builder_id AS builder_id FROM sellers s
+          JOIN builders b ON b.user_id = s.user_id
+          WHERE s.seller_id = ?
+        `).bind(template.seller_id).first();
+        if (owner) {
+          await fireNotification(db, owner.builder_id,
+            'A listing of yours was automatically hidden pending review after multiple counterfeit/policy flags. New purchases are blocked until an admin resolves it.');
+        }
+      }
     }
     return json({ flagId, pendingCount, autoHidden }, 201);
   }
