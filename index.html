@@ -1062,6 +1062,37 @@
         background: rgb(0 0 0 / 0.1);
         color: var(--pill-text);
       }
+      /* #1945: wider than the plain numeric fields above (a slider needs
+         real drag room, not just enough width to show a few digits) —
+         shown (via the shared .gizmo-numeric-control/.visible pair) only
+         while multi-select is on, toggled alongside #toggle-multiselect
+         itself rather than tied to a selection. */
+      #multiselect-brush-control input[type="range"] {
+        width: 90px;
+      }
+      /* The brush's own on-screen footprint while multi-select is active —
+         a plain fixed-position circle following the pointer, sized to match
+         the brush radius a drag actually sweeps (see
+         addEverythingInBrushAtClientPos). Not a 3D scene object: a screen-
+         space DOM circle is simpler and exactly matches the screen-space
+         hit-test it's representing. */
+      #multiselect-brush-indicator {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 0;
+        height: 0;
+        border-radius: 50%;
+        border: 2px solid var(--brand-green);
+        background: rgb(108 164 46 / 0.12);
+        pointer-events: none;
+        z-index: 11;
+        transform: translate(-50%, -50%);
+        display: none;
+      }
+      #multiselect-brush-indicator.visible {
+        display: block;
+      }
       /* Trim can apply to more than one axis at once (see docs/API.md) —
          each axis gets its own labeled field inside #trim-length-control,
          hidden until updateSelectionUI/setGizmoMode knows that particular
@@ -2895,7 +2926,8 @@
       }
       #auth-resend-verify-btn,
       #auth-logout-btn,
-      #auth-change-password-btn {
+      #auth-change-password-btn,
+      #auth-export-data-btn {
         padding: 8px 16px;
         border-radius: 999px;
         border: none;
@@ -3977,6 +4009,7 @@
       <button id="layout-preview-paste-btn" type="button" hidden>Paste onto Land</button>
     </div>
     <div id="layout-preview-marquee"></div>
+    <div id="multiselect-brush-indicator"></div>
     <div id="gizmo-mode-controls">
       <button id="mode-move" type="button">Move</button>
       <button id="mode-rotate" type="button">Rotate</button>
@@ -4018,6 +4051,11 @@
     <div id="add-item-panel">
       <button id="add-item-btn" type="button">+ Add Item</button>
       <button id="toggle-multiselect" type="button">Multi-Select</button>
+      <div id="multiselect-brush-control" class="gizmo-numeric-control">
+        <span>Brush</span>
+        <input id="multiselect-brush-size-input" type="range" min="10" max="150" step="5" value="40" aria-label="Multi-select brush size" />
+        <span id="multiselect-brush-size-label">40px</span>
+      </div>
       <button id="toggle-measure" type="button">Measure</button>
       <button id="paste-btn" type="button" disabled>Paste</button>
       <div id="catalog-picker" role="dialog" aria-modal="true" tabindex="-1">
@@ -4477,6 +4515,13 @@
             <button type="submit">Change Password</button>
             <button type="button" id="auth-change-password-cancel-btn" class="auth-link-btn">Cancel</button>
           </form>
+
+          <!-- #1987 (sub-issue of #1983): GDPR/CCPA "right to access" --
+               triggers a browser download of the GET /auth/export-data
+               JSON bundle. Read-only and immediate, unlike Change
+               Password/Delete Account below, so no collapsed
+               confirmation form of its own. -->
+          <button id="auth-export-data-btn" type="button">Download My Data</button>
 
           <!-- #1146/#1149: real account deletion, distinct from the
                builder/seller "reset" actions under Settings → Build/Sell

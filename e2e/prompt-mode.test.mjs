@@ -25,6 +25,15 @@ const promptHiddenInitially = await page.locator('#catalog-prompt-mode').isHidde
 console.log('manual mode visible by default (should be true):', manualVisibleInitially);
 console.log('prompt mode hidden by default (should be true):', promptHiddenInitially);
 
+// #1965: aria-pressed mirrors .active so the current tab is announced to a
+// screen reader, same idiom as #1503/#1760/#1842/#1901's own sibling toggle
+// groups -- checked before any click to confirm renderCatalogMode()'s own
+// eager initial call sets it, not just its click handler.
+const manualAriaPressedInitially = await page.locator('.catalog-mode-tab-btn[data-catalog-mode="manual"]').getAttribute('aria-pressed');
+const promptAriaPressedInitially = await page.locator('.catalog-mode-tab-btn[data-catalog-mode="prompt"]').getAttribute('aria-pressed');
+console.log('Manual tab aria-pressed before any click (should be "true"):', manualAriaPressedInitially);
+console.log('Prompt tab aria-pressed before any click (should be "false"):', promptAriaPressedInitially);
+
 // Switching tabs swaps which panel shows.
 await page.click('.catalog-mode-tab-btn[data-catalog-mode="prompt"]');
 await page.waitForTimeout(150);
@@ -35,6 +44,11 @@ console.log('manual mode hidden after switching to Prompt (should be true):', ma
 console.log('prompt mode visible after switching (should be true):', promptVisibleAfterSwitch);
 console.log('prompt tab shows active (should be true):', promptTabActive);
 
+const manualAriaPressedAfterSwitch = await page.locator('.catalog-mode-tab-btn[data-catalog-mode="manual"]').getAttribute('aria-pressed');
+const promptAriaPressedAfterSwitch = await page.locator('.catalog-mode-tab-btn[data-catalog-mode="prompt"]').getAttribute('aria-pressed');
+console.log('Manual tab aria-pressed after switching to Prompt (should be "false"):', manualAriaPressedAfterSwitch);
+console.log('Prompt tab aria-pressed after switching to Prompt (should be "true"):', promptAriaPressedAfterSwitch);
+
 // An empty prompt is rejected without ever reaching the server.
 await page.click('#prompt-mode-generate-btn');
 await page.waitForTimeout(150);
@@ -44,7 +58,9 @@ console.log('status after clicking Generate with no prompt (should ask for a des
 console.log('Generate button still enabled after the client-side rejection (should be true):', generateBtnStillEnabled);
 
 const pass = manualVisibleInitially && promptHiddenInitially &&
+  manualAriaPressedInitially === 'true' && promptAriaPressedInitially === 'false' &&
   manualHiddenAfterSwitch && promptVisibleAfterSwitch && promptTabActive &&
+  manualAriaPressedAfterSwitch === 'false' && promptAriaPressedAfterSwitch === 'true' &&
   emptyPromptStatus.toLowerCase().includes('describe') && generateBtnStillEnabled &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Add Item catalog picker Prompt mode tab', errors });

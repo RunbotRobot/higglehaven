@@ -11,7 +11,7 @@ import {
 import { beforeAll, describe, expect, it } from 'vitest';
 import worker from './index.js';
 import {
-  api, signupBuilder, signupSeller,
+  api, signupBuilder, signupSeller, signupAdmin,
 } from './test-helpers.js';
 
 beforeAll(async () => {
@@ -177,6 +177,94 @@ describe('Seller feedback', () => {
       body: JSON.stringify({ rating: 1 }),
     }));
     expect(second.response.status).toBe(409);
+  });
+
+  // #1738 (owner confirmed, 2026-10-13): admin-only removal, deliberately --
+  // unlike product reviews, a seller can't self-delete feedback about their
+  // own conduct. Covers: 401 with no session, 403 for a non-admin session
+  // (including the purchase's own seller), 404 for a purchase with no
+  // feedback, and a real admin delete logged to admin_action_log.
+  it('lets only an admin delete seller feedback, never the rated seller themself', async () => {
+    const buyer = await signupBuilder('feedback-delete-buyer');
+    const seller = await signupSeller('feedback-delete-seller');
+    const purchaseId = await createPurchase(buyer, { sellerId: seller.sellerId });
+    const posted = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
+      method: 'POST',
+      body: JSON.stringify({ rating: 1, text: 'Abusive/policy-violating text goes here.' }),
+    }));
+    expect(posted.response.status).toBe(201);
+
+    const unauthenticated = await api(`/purchases/${purchaseId}/feedback`, { method: 'DELETE' });
+    expect(unauthenticated.response.status).toBe(401);
+
+    const asTheRatedSeller = await api(`/purchases/${purchaseId}/feedback`, seller.session({ method: 'DELETE' }));
+    expect(asTheRatedSeller.response.status).toBe(403);
+
+    const asOrdinaryBuilder = await api(`/purchases/${purchaseId}/feedback`, buyer.session({ method: 'DELETE' }));
+    expect(asOrdinaryBuilder.response.status).toBe(403);
+
+    const admin = await signupAdmin('feedback-delete-admin');
+    const missingPurchaseFeedback = await createPurchase(buyer);
+    const notFound = await api(`/purchases/${missingPurchaseFeedback}/feedback`, admin.session({ method: 'DELETE' }));
+    expect(notFound.response.status).toBe(404);
+
+    const deleted = await api(`/purchases/${purchaseId}/feedback`, admin.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true });
+
+    const listedAfter = await api(`/sellers/${seller.sellerId}/feedback`);
+    expect(listedAfter.body.feedback).toHaveLength(0);
+
+    const adminUserId = (await api('/auth/me', admin.session())).body.user.userId;
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_type = ?',
+    ).bind('delete_seller_feedback', 'seller_feedback').first();
+    expect(logRow).not.toBeNull();
+    expect(logRow.admin_user_id).toBe(adminUserId);
+  });
+
+  // #2003: the existence check and the DELETE aren't atomic, so a second
+  // concurrent delete attempt can lose the race -- its own DELETE affects
+  // 0 rows, and must not write a second admin_action_log row claiming it
+  // deleted something it didn't. Same race-regression shape as
+  // reviews-auth.test.js's own "logs the admin delete-override exactly
+  // once, not once per losing racer" test for the sibling product-review
+  // handler: fire two concurrent admin DELETEs at the same feedback row
+  // and assert exactly one log row results, whatever each attempt's own
+  // status turns out to be.
+  it('logs the admin delete exactly once, not once per losing racer, when two deletes race the same feedback', async () => {
+    const buyer = await signupBuilder('feedback-delete-race-buyer');
+    const seller = await signupSeller('feedback-delete-race-seller');
+    const purchaseId = await createPurchase(buyer, { sellerId: seller.sellerId });
+    const posted = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
+      method: 'POST',
+      body: JSON.stringify({ rating: 1, text: 'Abusive/policy-violating text goes here.' }),
+    }));
+    expect(posted.response.status).toBe(201);
+
+    const feedbackId = (await env.DB.prepare('SELECT feedback_id FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).first()).feedback_id;
+
+    const admin = await signupAdmin('feedback-delete-race-admin');
+    const attempts = await Promise.all(
+      Array.from({ length: 2 }, () => api(`/purchases/${purchaseId}/feedback`, admin.session({ method: 'DELETE' }))),
+    );
+    for (const attempt of attempts) {
+      expect([200, 404]).toContain(attempt.response.status);
+    }
+    const succeeded = attempts.filter((attempt) => attempt.response.status === 200);
+    expect(succeeded.length).toBeGreaterThanOrEqual(1);
+    for (const attempt of succeeded) {
+      expect(attempt.body).toEqual({ deleted: true });
+    }
+
+    // Scoped by target_id (not just action_type/target_type), the same
+    // reviews-auth.test.js's own race test scopes its own query -- the
+    // admin_action_log table is shared across every test in this file, so
+    // an unscoped count would also catch the earlier delete test's own row.
+    const logRows = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('delete_seller_feedback', feedbackId).all();
+    expect(logRows.results).toHaveLength(1);
   });
 
   // A separate SELECT-then-INSERT for the one-per-purchase check would be a

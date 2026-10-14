@@ -3,7 +3,7 @@ import {
 } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
-  cosineSimilarity,
+  cosineSimilarity, writePurchaseRow,
 } from './index.js';
 import {
   api, signupBuilder, signupSeller, signupAdmin, glbFile,
@@ -81,7 +81,7 @@ describe('Bundles', () => {
     expect(limited.response.status).toBe(429);
   });
 
-  it('rejects an empty items array, more than 250 items, and a nonexistent templateId', async () => {
+  it('rejects an empty items array, more than 2000 items, and a nonexistent templateId', async () => {
     const builder = await signupBuilder('bundle-validate');
     const empty = await api('/bundles', builder.session({
       method: 'POST', body: JSON.stringify(bundleBody({ items: [] })),
@@ -91,7 +91,7 @@ describe('Bundles', () => {
     const tooMany = await api('/bundles', builder.session({
       method: 'POST',
       body: JSON.stringify(bundleBody({
-        items: Array.from({ length: 251 }, () => ({ templateId: 'placeholder-chair', dx: 0, dy: 0, dz: 0 })),
+        items: Array.from({ length: 2001 }, () => ({ templateId: 'placeholder-chair', dx: 0, dy: 0, dz: 0 })),
       })),
     }));
     expect(tooMany.response.status).toBe(400);
@@ -101,6 +101,23 @@ describe('Bundles', () => {
       body: JSON.stringify(bundleBody({ items: [{ templateId: 'template-does-not-exist', dx: 0, dy: 0, dz: 0 }] })),
     }));
     expect(badTemplate.response.status).toBe(400);
+  });
+
+  // #1974 (owner report): the old 250-item cap rejected a real, ordinary
+  // build (a 32-foot brick wall with a door) saved as one bundle -- well
+  // under the new 2000-item cap, but well over the old one, so this is the
+  // actual regression case for the bug report, not just a boundary probe.
+  it('accepts a large, legitimate bundle that the old 250-item cap would have rejected', async () => {
+    const builder = await signupBuilder('bundle-large-legitimate');
+    const wall = await api('/bundles', builder.session({
+      method: 'POST',
+      body: JSON.stringify(bundleBody({
+        name: 'Brick wall with door',
+        items: Array.from({ length: 400 }, (_, i) => ({ templateId: 'placeholder-chair', dx: i, dy: 0, dz: 0 })),
+      })),
+    }));
+    expect(wall.response.status).toBe(201);
+    expect(wall.body.bundle.items).toHaveLength(400);
   });
 
   // Found during a broader backlog-exploration pass (#358): name had no
@@ -721,6 +738,7 @@ describe('Product-image thumbnail (#327)', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
   }
@@ -951,6 +969,7 @@ describe('Embedding similarity search (#329)', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     if (embedding !== undefined) {
@@ -1124,5 +1143,318 @@ describe('Prompt-mode concept-image generation (#328)', () => {
       body: JSON.stringify({ prompt: 'one more' }),
     }));
     expect(limited.response.status).toBe(429);
+  });
+});
+
+// #1946: is_test_model has no ordinary self-service write path (same
+// "not folded into the generic create/update merge" treatment as
+// users.is_admin) -- these tests flip it directly via SQL, mirroring the
+// migration's own backfill, since there's no API call that can set it.
+describe('Test-model designation (#1946)', () => {
+  async function createTemplate(templateId, overrides = {}) {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId,
+        name: `Test-model fixture ${templateId}`,
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 500,
+        ...overrides,
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    return created.body.template;
+  }
+
+  async function markAsTestModel(templateId) {
+    await env.DB.prepare('UPDATE catalog_templates SET is_test_model = 1 WHERE template_id = ?').bind(templateId).run();
+  }
+
+  it('defaults a newly created template to isTestModel: false, not settable via POST', async () => {
+    const template = await createTemplate('test-model-create-ignores-flag', { isTestModel: true });
+    expect(template.isTestModel).toBe(false);
+  });
+
+  it('is not settable via PATCH either', async () => {
+    await createTemplate('test-model-patch-ignores-flag');
+    const patched = await api('/catalog/test-model-patch-ignores-flag', {
+      method: 'PATCH',
+      body: JSON.stringify({ isTestModel: true }),
+    });
+    expect(patched.response.status).toBe(200);
+    expect(patched.body.template.isTestModel).toBe(false);
+    const row = await env.DB.prepare('SELECT is_test_model FROM catalog_templates WHERE template_id = ?')
+      .bind('test-model-patch-ignores-flag').first();
+    expect(row.is_test_model).toBe(0);
+  });
+
+  // Tried hiding these rows from GET /api/catalog for a non-admin caller
+  // in an earlier version of this change -- reverted after CI caught it
+  // breaking ordinary (non-admin) Build mode's own "Add Item" picker,
+  // which fetches this exact same endpoint with no separate code path:
+  // every pre-existing template (including core, non-commerce feature
+  // fixtures like community-sign/calendar-event/flooring templates) got
+  // backfilled to isTestModel, so every ordinary builder lost Build-mode
+  // access to them. These tests lock in the corrected, non-filtering
+  // behavior so it doesn't regress back.
+  it('does not exclude a test-model row from GET /api/catalog for any caller', async () => {
+    await createTemplate('test-model-list-visibility');
+    await markAsTestModel('test-model-list-visibility');
+
+    const anonymous = await api('/catalog?limit=100');
+    expect(anonymous.response.status).toBe(200);
+    expect(anonymous.body.templates.map((t) => t.templateId)).toContain('test-model-list-visibility');
+
+    const builder = await signupBuilder('test-model-list-visibility-builder');
+    const nonAdmin = await api('/catalog?limit=100', builder.session());
+    expect(nonAdmin.response.status).toBe(200);
+    const nonAdminHit = nonAdmin.body.templates.find((t) => t.templateId === 'test-model-list-visibility');
+    expect(nonAdminHit).toBeTruthy();
+    expect(nonAdminHit.isTestModel).toBe(true);
+  });
+
+  it('does not 404 GET /api/catalog/:templateId for a test-model row for any caller', async () => {
+    await createTemplate('test-model-single-fetch-visibility');
+    await markAsTestModel('test-model-single-fetch-visibility');
+
+    const anonymous = await api('/catalog/test-model-single-fetch-visibility');
+    expect(anonymous.response.status).toBe(200);
+    expect(anonymous.body.template.isTestModel).toBe(true);
+  });
+
+  it('rejects purchasing an instance backed by a test-model template', async () => {
+    const builder = await signupBuilder('test-model-purchase-builder');
+    await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ landletId: 'test-model-purchase-landlet', name: 'Test-model purchase landlet', areaM2: 1000, status: 'greenbelt' }),
+    }));
+    await api('/landlets/test-model-purchase-landlet/claim', builder.session({ method: 'POST' }));
+    await createTemplate('test-model-purchase-template');
+    await markAsTestModel('test-model-purchase-template');
+    const placed = await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId: 'test-model-purchase-instance', landletId: 'test-model-purchase-landlet', templateId: 'test-model-purchase-template', x: 0, y: 0 }),
+    }));
+    expect(placed.response.status).toBe(201);
+
+    const purchased = await api('/instances/test-model-purchase-instance/purchase', builder.session({ method: 'POST' }));
+    expect(purchased.response.status).toBe(400);
+    expect(purchased.body.error).toMatch(/test\/demo product/);
+  });
+});
+
+describe('Finite stock tracking (#1948)', () => {
+  async function createTemplateWithStock(templateId, overrides = {}) {
+    return api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId,
+        name: `Finite-stock fixture ${templateId}`,
+        color: '#654321',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 500,
+        ...overrides,
+      }),
+    });
+  }
+
+  async function createLandletAndClaim(landletId, builder) {
+    await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ landletId, name: `Test ${landletId}`, areaM2: 1000, status: 'greenbelt' }),
+    }));
+    await api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
+  }
+
+  async function placeInstance(instanceId, landletId, templateId, builder) {
+    const placed = await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId, landletId, templateId, x: 0, y: 0 }),
+    }));
+    expect(placed.response.status).toBe(201);
+    return instanceId;
+  }
+
+  it('defaults to unlimited (null) and is a freely settable field via POST/PATCH, unlike isTestModel', async () => {
+    const defaultTemplate = await createTemplateWithStock('stock-default-template');
+    expect(defaultTemplate.response.status).toBe(201);
+    expect(defaultTemplate.body.template.stockQuantity).toBe(null);
+
+    const created = await createTemplateWithStock('stock-create-template', { stockQuantity: 5 });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.stockQuantity).toBe(5);
+
+    const patched = await api('/catalog/stock-create-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ stockQuantity: 10 }),
+    });
+    expect(patched.response.status).toBe(200);
+    expect(patched.body.template.stockQuantity).toBe(10);
+  });
+
+  it('rejects a negative or over-cap stockQuantity', async () => {
+    const negative = await createTemplateWithStock('stock-negative-template', { stockQuantity: -1 });
+    expect(negative.response.status).toBe(400);
+
+    const overCap = await createTemplateWithStock('stock-over-cap-template', { stockQuantity: 1_000_001 });
+    expect(overCap.response.status).toBe(400);
+  });
+
+  it('never touches stock_quantity for the default (unlimited) template', async () => {
+    const builder = await signupBuilder('stock-unlimited-builder');
+    await createLandletAndClaim('stock-unlimited-landlet', builder);
+    await createTemplateWithStock('stock-unlimited-template');
+    await placeInstance('stock-unlimited-instance', 'stock-unlimited-landlet', 'stock-unlimited-template', builder);
+
+    const purchased = await api('/instances/stock-unlimited-instance/purchase', builder.session({ method: 'POST' }));
+    expect(purchased.response.status).toBe(201);
+
+    const row = await env.DB.prepare('SELECT stock_quantity FROM catalog_templates WHERE template_id = ?')
+      .bind('stock-unlimited-template').first();
+    expect(row.stock_quantity).toBe(null);
+  });
+
+  it('decrements remaining stock by the purchased quantity without exhausting it', async () => {
+    const builder = await signupBuilder('stock-decrement-builder');
+    await createLandletAndClaim('stock-decrement-landlet', builder);
+    await createTemplateWithStock('stock-decrement-template', { stockQuantity: 5 });
+    await placeInstance('stock-decrement-instance', 'stock-decrement-landlet', 'stock-decrement-template', builder);
+
+    const purchased = await api('/instances/stock-decrement-instance/purchase', builder.session({
+      method: 'POST', body: JSON.stringify({ quantity: 2 }),
+    }));
+    expect(purchased.response.status).toBe(201);
+
+    const fetched = await api('/catalog/stock-decrement-template');
+    expect(fetched.body.template.stockQuantity).toBe(3);
+
+    // Stock isn't exhausted yet -- the instance must still be placed.
+    const listed = await api('/instances?landletId=stock-decrement-landlet');
+    expect(listed.body.instances.map((i) => i.instanceId)).toContain('stock-decrement-instance');
+  });
+
+  it('rejects a purchase once stock_quantity is exactly 0, via the pre-check', async () => {
+    const builder = await signupBuilder('stock-exhausted-builder');
+    await createLandletAndClaim('stock-exhausted-landlet', builder);
+    await createTemplateWithStock('stock-exhausted-template', { stockQuantity: 0 });
+    await placeInstance('stock-exhausted-instance', 'stock-exhausted-landlet', 'stock-exhausted-template', builder);
+
+    const purchased = await api('/instances/stock-exhausted-instance/purchase', builder.session({ method: 'POST' }));
+    expect(purchased.response.status).toBe(400);
+    expect(purchased.body.error).toMatch(/sold out/);
+  });
+
+  // The pre-check above only catches an already-zero template -- this
+  // exercises the real atomic guard instead, the one that actually matters
+  // once two near-simultaneous buyers could otherwise both succeed against
+  // the last unit: a request for more than what remains must be rejected
+  // without partially decrementing.
+  it('atomically rejects an over-quantity purchase without touching remaining stock', async () => {
+    const builder = await signupBuilder('stock-overbuy-builder');
+    await createLandletAndClaim('stock-overbuy-landlet', builder);
+    await createTemplateWithStock('stock-overbuy-template', { stockQuantity: 2 });
+    await placeInstance('stock-overbuy-instance', 'stock-overbuy-landlet', 'stock-overbuy-template', builder);
+
+    const purchased = await api('/instances/stock-overbuy-instance/purchase', builder.session({
+      method: 'POST', body: JSON.stringify({ quantity: 3 }),
+    }));
+    expect(purchased.response.status).toBe(400);
+    expect(purchased.body.error).toMatch(/sold out/);
+
+    const row = await env.DB.prepare('SELECT stock_quantity FROM catalog_templates WHERE template_id = ?')
+      .bind('stock-overbuy-template').first();
+    expect(row.stock_quantity).toBe(2);
+  });
+
+  it('on hitting exactly zero, removes every placed instance of the template and notifies each landlet owner', async () => {
+    const ownerA = await signupBuilder('stock-soldout-owner-a');
+    const ownerB = await signupBuilder('stock-soldout-owner-b');
+    await createLandletAndClaim('stock-soldout-landlet-a', ownerA);
+    await createLandletAndClaim('stock-soldout-landlet-b', ownerB);
+    await createTemplateWithStock('stock-soldout-template', { stockQuantity: 1 });
+    await placeInstance('stock-soldout-instance-a', 'stock-soldout-landlet-a', 'stock-soldout-template', ownerA);
+    await placeInstance('stock-soldout-instance-b', 'stock-soldout-landlet-b', 'stock-soldout-template', ownerB);
+
+    const purchased = await api('/instances/stock-soldout-instance-a/purchase', ownerA.session({ method: 'POST' }));
+    expect(purchased.response.status).toBe(201);
+
+    const fetched = await api('/catalog/stock-soldout-template');
+    expect(fetched.body.template.stockQuantity).toBe(0);
+
+    const listedA = await api('/instances?landletId=stock-soldout-landlet-a');
+    expect(listedA.body.instances).toEqual([]);
+    const listedB = await api('/instances?landletId=stock-soldout-landlet-b');
+    expect(listedB.body.instances).toEqual([]);
+
+    const noticesA = await api('/notifications', ownerA.session());
+    expect(noticesA.body.notifications.some((n) => n.message.includes('just sold out'))).toBe(true);
+    const noticesB = await api('/notifications', ownerB.session());
+    expect(noticesB.body.notifications.some((n) => n.message.includes('just sold out'))).toBe(true);
+  });
+
+  it('allows purchasing again after restocking a sold-out template via PATCH', async () => {
+    const builder = await signupBuilder('stock-restock-builder');
+    await createLandletAndClaim('stock-restock-landlet', builder);
+    await createTemplateWithStock('stock-restock-template', { stockQuantity: 1 });
+    await placeInstance('stock-restock-instance-1', 'stock-restock-landlet', 'stock-restock-template', builder);
+
+    const firstPurchase = await api('/instances/stock-restock-instance-1/purchase', builder.session({ method: 'POST' }));
+    expect(firstPurchase.response.status).toBe(201);
+
+    const patched = await api('/catalog/stock-restock-template', {
+      method: 'PATCH',
+      body: JSON.stringify({ stockQuantity: 2 }),
+    });
+    expect(patched.response.status).toBe(200);
+    expect(patched.body.template.stockQuantity).toBe(2);
+
+    // Restocking the template doesn't resurrect what the earlier sweep
+    // already removed -- a fresh instance is needed to purchase against.
+    await placeInstance('stock-restock-instance-2', 'stock-restock-landlet', 'stock-restock-template', builder);
+    const secondPurchase = await api('/instances/stock-restock-instance-2/purchase', builder.session({ method: 'POST' }));
+    expect(secondPurchase.response.status).toBe(201);
+
+    const fetched = await api('/catalog/stock-restock-template');
+    expect(fetched.body.template.stockQuantity).toBe(1);
+  });
+
+  // handlePurchaseFinalize's own real-money path can't be driven over HTTP
+  // in this suite (STRIPE_SECRET_KEY is never configured here -- see
+  // stripeConfigured's own comment), so this calls writePurchaseRow
+  // directly with allowOversell=true, the same way this file's sibling
+  // test files already unit-test other exported pieces of the purchase
+  // flow (resolveFinalizeBuilderId, refundIdempotencyKey) that are
+  // otherwise unreachable through the HTTP surface in this environment.
+  it('on the real-money path (allowOversell=true), floors remaining stock at zero instead of rejecting an oversell', async () => {
+    const builder = await signupBuilder('stock-oversell-floor-builder');
+    await createLandletAndClaim('stock-oversell-floor-landlet', builder);
+    await createTemplateWithStock('stock-oversell-floor-template', { stockQuantity: 2 });
+    await placeInstance('stock-oversell-floor-instance', 'stock-oversell-floor-landlet', 'stock-oversell-floor-template', builder);
+
+    const instance = await env.DB.prepare('SELECT * FROM placed_instances WHERE instance_id = ?')
+      .bind('stock-oversell-floor-instance').first();
+    const template = await env.DB.prepare('SELECT * FROM catalog_templates WHERE template_id = ?')
+      .bind('stock-oversell-floor-template').first();
+    const landlet = await env.DB.prepare('SELECT * FROM landlets WHERE landlet_id = ?')
+      .bind('stock-oversell-floor-landlet').first();
+
+    const amounts = {
+      quantity: 3, buyerLabel: 'Oversell tester', unitPriceCents: 500, totalCents: 1500,
+      commissionCents: 30, builderShareCents: 15, platformShareCents: 15,
+    };
+    const result = await writePurchaseRow(
+      { DB: env.DB }, instance, template, landlet, amounts,
+      'test-pi-oversell-floor', false, builder.builderId, false, undefined, false, true,
+    );
+    expect(result.status).toBe(201);
+
+    const fetched = await api('/catalog/stock-oversell-floor-template');
+    expect(fetched.body.template.stockQuantity).toBe(0);
+
+    // Hitting zero still sweeps every placed instance of the template, the
+    // same as the simulated path.
+    const listed = await api('/instances?landletId=stock-oversell-floor-landlet');
+    expect(listed.body.instances).toEqual([]);
   });
 });

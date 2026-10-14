@@ -10,6 +10,7 @@ import {
   logIn,
   logOut,
   deleteAccount,
+  exportMyData,
   changePassword,
   fetchCurrentUser,
   requestPasswordReset,
@@ -103,6 +104,7 @@ import {
   triggerCalendarEvent,
   fetchProductReviews,
   createProductReview,
+  editProductReview,
   deleteProductReview,
   fetchSellerFeedback,
   createSellerFeedback,
@@ -2534,7 +2536,9 @@ function renderCatalogMode() {
   catalogManualModeEl.hidden = promptActive;
   catalogPromptModeEl.hidden = !promptActive;
   for (const btn of catalogModeTabButtons) {
-    btn.classList.toggle('active', btn.dataset.catalogMode === activeCatalogMode);
+    const isActive = btn.dataset.catalogMode === activeCatalogMode;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-pressed', String(isActive));
   }
 }
 for (const btn of catalogModeTabButtons) {
@@ -2543,6 +2547,15 @@ for (const btn of catalogModeTabButtons) {
     renderCatalogMode();
   });
 }
+// #1965: unlike its sibling toggle groups in this same modal (e.g.
+// searchScopeButtons, re-synced every time the picker opens via
+// updateCatalogSearchPanel), renderCatalogMode() was previously only ever
+// invoked from its own click handler above -- so aria-pressed would never
+// get set at all until a builder's first click on either tab. One eager
+// call here gives both buttons a correct initial aria-pressed from page
+// load, matching the already-correct initial .active/hidden state the
+// static markup provides.
+renderCatalogMode();
 
 function setPromptModeStatus(text) {
   promptModeStatusEl.textContent = text;
@@ -4796,7 +4809,7 @@ function renderSellerList() {
         if (err.message?.includes('referenced by a saved layout')) {
           rowStatus.textContent = "Still saved in someone's layout library — it can't be deleted until that saved layout is removed or no longer references it.";
         } else if (err.message?.includes("referenced by a landlet's version history")) {
-          rowStatus.textContent = "Used in a landlet's past published version — it can't be deleted while that version history exists.";
+          rowStatus.textContent = "Used in a lándlet's past published version — it can't be deleted while that version history exists.";
         } else if (err.message?.includes('still in use')) {
           rowStatus.textContent = 'Still placed somewhere — remove those instances first, or Duplicate to edit a copy instead.';
         } else {
@@ -5538,6 +5551,9 @@ let settingsRenderToken = 0;
 function refreshUnitDisplays() {
   for (const el of trimUnitLabelEls) el.textContent = unitSuffix();
   updateTrimLengthInput();
+  // #1939: the Measure tool's own live readout is unit-dependent (formatLength)
+  // but was never covered here, unlike its sibling updateTrimLengthInput().
+  if (measurePointA && measurePointB) updateMeasureResultText();
   if (sellerModalEl.classList.contains('visible')) renderActiveSellerView();
 }
 
@@ -6332,6 +6348,17 @@ async function renderRedeemHigglesField() {
     form.appendChild(label);
     inputs[key] = input;
   }
+  // #1940: dobDay's own max (31) never accounted for which month was
+  // entered -- keep it in sync so the browser's own number-input
+  // clamping/invalid-state catches Feb 30 etc. before submit does.
+  function refreshDobDayMax() {
+    const month = parseInt(inputs.dobMonth.value, 10);
+    const year = parseInt(inputs.dobYear.value, 10);
+    if (!Number.isFinite(month) || month < 1 || month > 12) return;
+    inputs.dobDay.max = String(daysInMonth(Number.isFinite(year) ? year : new Date().getUTCFullYear(), month));
+  }
+  inputs.dobMonth.addEventListener('input', refreshDobDayMax);
+  inputs.dobYear.addEventListener('input', refreshDobDayMax);
   const submitBtn = document.createElement('button');
   submitBtn.type = 'button';
   submitBtn.className = 'version-action-btn';
@@ -6433,7 +6460,7 @@ function renderBuilderIdentityField() {
       const balanceNote = balanceCents > 0
         ? ` You'll also forfeit your ${formatHiggles(balanceCents)} higgles balance — it cannot be recovered.`
         : '';
-      return `Reset your builder profile? Any landlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.${balanceNote} Your login stays active either way; use Delete Account under Account above to delete that too.`;
+      return `Reset your builder profile? Any lándlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.${balanceNote} Your login stays active either way; use Delete Account under Account above to delete that too.`;
     },
     onDeleted: () => { builderId = null; },
     // #741: keep Shop mode's own "Built by X" attribution (populated once
@@ -6473,7 +6500,7 @@ function renderBuildSettingsSection() {
   if (currentMode !== 'build' || !currentLandletId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
-    note.textContent = 'Enter Build mode on a claimed landlet to publish or manage versions.';
+    note.textContent = 'Enter Build mode on a claimed lándlet to publish or manage versions.';
     settingsSectionEl.appendChild(note);
     return;
   }
@@ -6894,6 +6921,15 @@ async function renderSellSettingsSection() {
     form.appendChild(label);
     inputs[key] = input;
   }
+  // #1940: same dobDay/dobMonth sync as the sibling seller-payout form.
+  function refreshDobDayMax() {
+    const month = parseInt(inputs.dobMonth.value, 10);
+    const year = parseInt(inputs.dobYear.value, 10);
+    if (!Number.isFinite(month) || month < 1 || month > 12) return;
+    inputs.dobDay.max = String(daysInMonth(Number.isFinite(year) ? year : new Date().getUTCFullYear(), month));
+  }
+  inputs.dobMonth.addEventListener('input', refreshDobDayMax);
+  inputs.dobYear.addEventListener('input', refreshDobDayMax);
   const submitBtn = document.createElement('button');
   submitBtn.type = 'button';
   submitBtn.className = 'version-action-btn';
@@ -7001,6 +7037,14 @@ async function renderSellSettingsSection() {
 
     await refreshPayouts();
   }
+}
+
+// #1940: the Stripe-onboarding dobDay input's own max was a fixed 31
+// regardless of dobMonth -- Feb 30, Apr 31, etc. passed client validation.
+// new Date(Date.UTC(year, month, 0)) is day 0 of the following month, i.e.
+// the last real day of `month` (1-indexed, matching dobMonth's own values).
+function daysInMonth(year, month) {
+  return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
 // #1492: used to build the string manually via a template literal, which
@@ -7238,12 +7282,12 @@ async function renderAuctionSection() {
       // one owned landlet" is no longer a safe assumption (#249).
       owned = await fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId });
     } catch (err) {
-      startStatus.textContent = err.message || 'Could not check your landlets.';
+      startStatus.textContent = err.message || 'Could not check your lándlets.';
       startStatus.classList.add('error');
       return;
     }
     if (owned.length === 0) {
-      startStatus.textContent = 'Claim a landlet first to auction it off.';
+      startStatus.textContent = 'Claim a lándlet first to auction it off.';
       return;
     }
 
@@ -7260,7 +7304,7 @@ async function renderAuctionSection() {
       const pickerRow = document.createElement('div');
       pickerRow.className = 'landlet-picker';
       const pickerLabel = document.createElement('label');
-      pickerLabel.textContent = 'Landlet';
+      pickerLabel.textContent = 'Lándlet';
       const picker = document.createElement('select');
       for (const landlet of owned) {
         const option = document.createElement('option');
@@ -7281,7 +7325,19 @@ async function renderAuctionSection() {
     await renderForLandlet(selectedLandletId);
   }
 
+  // #2016: each row's own bid button only disables itself (see its click
+  // handler below), not the whole panel or any other row — so a bid on
+  // row A and a bid on row B can both be in flight at once, each
+  // triggering its own renderAuctionList() call. Without this guard,
+  // whichever fetchAllAuctions() round-trip happens to resolve last wins
+  // regardless of which bid was actually placed most recently, the same
+  // "slower, earlier-issued fetch lands after a faster, newer one" race
+  // landletRenderToken already guards against for renderForLandlet just
+  // above.
+  let auctionListLoadToken = 0;
+
   async function renderAuctionList() {
+    const myToken = ++auctionListLoadToken;
     auctionList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
     let auctions;
     try {
@@ -7290,6 +7346,7 @@ async function renderAuctionSection() {
       // simultaneously active auctions (#190, same shape as #186).
       auctions = await fetchAllAuctions({ status: 'active' });
     } catch (err) {
+      if (myToken !== auctionListLoadToken) return;
       auctionList.innerHTML = '';
       const errNote = document.createElement('div');
       errNote.className = 'settings-empty-note';
@@ -7297,6 +7354,7 @@ async function renderAuctionSection() {
       auctionList.appendChild(errNote);
       return;
     }
+    if (myToken !== auctionListLoadToken) return;
     auctionList.innerHTML = '';
     if (auctions.length === 0) {
       auctionList.innerHTML = '<div class="settings-empty-note">No active auctions right now.</div>';
@@ -8235,6 +8293,8 @@ function exitMultiSelectMode() {
   multiSelectBtn.classList.remove('active');
   multiSelectBtn.setAttribute('aria-pressed', 'false');
   controls.enableRotate = true;
+  multiselectBrushControlEl.classList.remove('visible');
+  multiselectBrushIndicatorEl.classList.remove('visible');
 }
 // Measure is its own sibling tool too — taps while it's on place ruler
 // points rather than selecting or swiping, so switching to any selection-
@@ -8363,6 +8423,48 @@ const pointerNdc = new THREE.Vector2();
 const selectedMeshes = new Set();
 let multiSelectMode = false;
 
+// #1945: an adjustable-size brush, shown only while multi-select is on,
+// lets a swipe sweep up every placed item within a screen-space radius of
+// the cursor rather than requiring the drag to pass exactly over each one
+// — the "mass-selecting bricks in a wall is difficult" ask. Screen-space
+// pixels (not a 3D-world radius) so the brush's own on-screen size (the
+// indicator below) always matches what it actually sweeps regardless of
+// zoom/distance, and the slider's range is a fixed, predictable pixel
+// scale rather than one that behaves differently depending on camera
+// distance from the current selection.
+const multiselectBrushControlEl = document.getElementById('multiselect-brush-control');
+const multiselectBrushSizeInput = document.getElementById('multiselect-brush-size-input');
+const multiselectBrushSizeLabelEl = document.getElementById('multiselect-brush-size-label');
+const multiselectBrushIndicatorEl = document.getElementById('multiselect-brush-indicator');
+let multiselectBrushRadiusPx = Number(multiselectBrushSizeInput.value);
+
+function updateBrushIndicatorSize() {
+  const diameter = multiselectBrushRadiusPx * 2;
+  multiselectBrushIndicatorEl.style.width = `${diameter}px`;
+  multiselectBrushIndicatorEl.style.height = `${diameter}px`;
+}
+updateBrushIndicatorSize();
+
+multiselectBrushSizeInput.addEventListener('input', () => {
+  multiselectBrushRadiusPx = Number(multiselectBrushSizeInput.value);
+  multiselectBrushSizeLabelEl.textContent = `${multiselectBrushRadiusPx}px`;
+  updateBrushIndicatorSize();
+});
+
+// Follows the cursor/finger across the canvas, visible the whole time
+// multi-select is on (not just mid-drag) — like an image editor's own
+// eraser/brush cursor, so the builder can see and judge the brush's reach
+// before committing to a drag, not just discover it after the fact.
+renderer.domElement.addEventListener('pointermove', (event) => {
+  if (!multiSelectMode) return;
+  multiselectBrushIndicatorEl.classList.add('visible');
+  multiselectBrushIndicatorEl.style.left = `${event.clientX}px`;
+  multiselectBrushIndicatorEl.style.top = `${event.clientY}px`;
+});
+renderer.domElement.addEventListener('pointerleave', () => {
+  multiselectBrushIndicatorEl.classList.remove('visible');
+});
+
 // Highlighting via emissive tint (an earlier approach) silently did nothing
 // on builder-uploaded models: RealityScan/Sketchfab-style exports commonly
 // bake lighting into the texture and mark the material unlit (glTF's
@@ -8451,7 +8553,17 @@ function updateSelectionUI() {
     trimControls.detach();
     return;
   }
-  setProductInfo(count === 1 ? [...selectedMeshes][0].userData.template.name : `${count} items selected`);
+  // #1946 (owner correction): a builder selecting a test/demo model needs
+  // the same "not a real product" disclosure a shopper gets from
+  // productInfoText's own isTestModel note — this pill only ever shows a
+  // bare name today (no price/metadata disclosures at all), so there's no
+  // existing multi-note pattern to extend, just this one flag.
+  let singleSelectionInfo = '';
+  if (count === 1) {
+    const template = [...selectedMeshes][0].userData.template;
+    singleSelectionInfo = template.isTestModel ? `${template.name} (Testing Model — not a real product)` : template.name;
+  }
+  setProductInfo(count === 1 ? singleSelectionInfo : `${count} items selected`);
   modeControlsEl.classList.add('visible');
   // Rotate has no group form (rotating several items around a shared pivot
   // while also spinning each one's own orientation is a much harder problem
@@ -8561,6 +8673,8 @@ multiSelectBtn.addEventListener('click', () => {
   multiSelectMode = !multiSelectMode;
   multiSelectBtn.classList.toggle('active', multiSelectMode);
   multiSelectBtn.setAttribute('aria-pressed', String(multiSelectMode));
+  multiselectBrushControlEl.classList.toggle('visible', multiSelectMode);
+  if (!multiSelectMode) multiselectBrushIndicatorEl.classList.remove('visible');
   // One-finger drag is repurposed as a selection swipe while multi-select
   // is on (see the swipe-select handlers below) instead of orbiting the
   // camera — two-finger pan/pinch-zoom are untouched.
@@ -9329,12 +9443,53 @@ function addToSelectionBySwipe(mesh) {
   updateSelectionUI();
 }
 
-function addWhateverIsAtClientPos(x, y) {
-  raycaster.setFromCamera(ndcFromEvent({ clientX: x, clientY: y }), camera);
-  const hits = raycaster.intersectObjects(productMeshes, true);
-  if (hits.length === 0) return;
-  addToSelectionBySwipe(findRootProduct(hits[0].object));
+// #1945: screen-space distance from each candidate's own projected
+// position, rather than a real raycast against its geometry (the
+// alternative the issue itself flags as an open, non-blocking
+// implementation choice) — this runs over every placed item on every
+// pointermove while a swipe is live, so the cheaper test matters, and an
+// item showing its highlight once any part of the brush circle nears its
+// own placement point is exactly the mass-selection behavior being asked
+// for here.
+const brushScratchVec = new THREE.Vector3();
+// Null for something behind the camera, whose projected x/y would
+// otherwise alias onto some unrelated on-screen pixel.
+function projectMeshToScreen(mesh) {
+  brushScratchVec.copy(mesh.position).project(camera);
+  if (brushScratchVec.z < -1 || brushScratchVec.z > 1) return null;
+  const rect = renderer.domElement.getBoundingClientRect();
+  return {
+    x: rect.left + (brushScratchVec.x * 0.5 + 0.5) * rect.width,
+    y: rect.top + (-brushScratchVec.y * 0.5 + 0.5) * rect.height,
+  };
 }
+
+function addEverythingInBrushAtClientPos(x, y) {
+  const radiusSq = multiselectBrushRadiusPx * multiselectBrushRadiusPx;
+  for (const mesh of productMeshes) {
+    if (selectedMeshes.has(mesh)) continue;
+    const screenPos = projectMeshToScreen(mesh);
+    if (!screenPos) continue;
+    const dx = screenPos.x - x;
+    const dy = screenPos.y - y;
+    if (dx * dx + dy * dy <= radiusSq) addToSelectionBySwipe(mesh);
+  }
+}
+
+// #1945: lets a test read back each placed item's own real current
+// screen-space position (the same projection addEverythingInBrushAtClientPos
+// uses to decide what a brush drag sweeps up) rather than assuming it
+// coincides with wherever it was originally clicked to place — a tall
+// model's own footprint renders well above its flat ground-click point
+// once the camera's perspective is applied (see handlePlacementClick and
+// e2e/bundles.test.mjs's own note on the same effect), so a test needs the
+// real value, not the click coordinates, to build a reliable brush-radius
+// assertion. Same "inert unless a test calls it" convention as this file's
+// other window.__test* hooks.
+window.__testProductScreenPositions = () => productMeshes.map((mesh) => ({
+  instanceId: mesh.userData.instanceId,
+  ...projectMeshToScreen(mesh),
+}));
 
 window.addEventListener('pointermove', (event) => {
   if (event.pointerId !== swipePointerId || !swipeStartPos) return;
@@ -9344,15 +9499,15 @@ window.addEventListener('pointermove', (event) => {
   if (!swipeArmed) {
     if (Math.hypot(dx, dy) <= CLICK_DRAG_THRESHOLD_PX) return;
     swipeArmed = true;
-    // A real swipe starts by touching down ON an item — without this, that
-    // first item (whatever the finger landed on, before crossing the
-    // tap-vs-drag threshold above) never gets a chance to be raycast at all
+    // A real swipe starts by touching down near an item — without this,
+    // whatever was already under/near the brush before crossing the
+    // tap-vs-drag threshold above never gets a chance to be swept at all
     // and silently drops out of the swipe, which is exactly wrong for
     // closely-packed items like a course of bricks where the threshold
     // alone can already cover the gap to the *next* one.
-    addWhateverIsAtClientPos(swipeStartPos.x, swipeStartPos.y);
+    addEverythingInBrushAtClientPos(swipeStartPos.x, swipeStartPos.y);
   }
-  addWhateverIsAtClientPos(event.clientX, event.clientY);
+  addEverythingInBrushAtClientPos(event.clientX, event.clientY);
 });
 
 function endSwipe(event) {
@@ -10153,15 +10308,17 @@ function appendNotificationRow(notification) {
   // separate per-row dismiss button, and "Mark all read" still exists
   // for clearing the whole list at once.
   if (!notification.readAt) {
-    row.addEventListener('click', async () => {
+    const markReadOnClick = async () => {
       try {
         await markNotificationRead(notification.notificationId);
         row.classList.remove('unread');
+        row.removeEventListener('click', markReadOnClick);
         refreshNotificationsBadge();
       } catch (err) {
         console.warn('Could not mark notification read:', err);
       }
-    });
+    };
+    row.addEventListener('click', markReadOnClick);
   }
   notificationsListEl.appendChild(row);
 }
@@ -11408,17 +11565,17 @@ function resetLocalSessionState() {
   sellerIdentityFlowPromise = null;
 }
 
-// Build and Sell both require a real, logged-in account
+// Build, Sell, and layout-preview all require a real, logged-in account
 // (ensureBuilderIdentity/ensureSellerIdentity's own login walls) — staying
-// on either once that account is gone would just immediately reprompt the
-// login modal over whatever was on screen (or, for Sell, strand the
-// now-stale showcase/modal with no identity behind it). A reload into Shop
-// instead is the same clean-slate escape hatch #mode-nav's own mode
-// switching already uses (see its own comment), and Shop needs no account
-// at all, so it's always a safe place to land. Returns whether it reloaded
-// (the caller's own post-logout/-deletion UI update is moot if so).
+// on any of them once that account is gone would just immediately reprompt
+// the login modal over whatever was on screen (or, for Sell/layout-preview,
+// strand the now-stale showcase/modal with no identity behind it). A reload
+// into Shop instead is the same clean-slate escape hatch #mode-nav's own
+// mode switching already uses (see its own comment), and Shop needs no
+// account at all, so it's always a safe place to land. Returns whether it
+// reloaded (the caller's own post-logout/-deletion UI update is moot if so).
 function leaveAccountScopedModeIfNeeded() {
-  if (currentMode === 'build' || currentMode === 'sell') {
+  if (currentMode === 'build' || currentMode === 'sell' || currentMode === 'layoutPreview') {
     sessionStorage.setItem(START_MODE_KEY, 'shop');
     location.reload();
     return true;
@@ -11511,6 +11668,32 @@ authChangeEmailForm.addEventListener('submit', async (event) => {
     setAuthStatus(err.message || 'Could not change your email.', 'error');
   } finally {
     submitBtn.disabled = false;
+  }
+});
+
+// #1987 (sub-issue of #1983): triggers a browser download of the
+// GET /auth/export-data JSON bundle via a Blob/URL.createObjectURL link
+// -- no server-side file storage needed, same as extractVideoFrames'
+// own createObjectURL usage above, just for a download instead of
+// playback.
+const authExportDataBtn = document.getElementById('auth-export-data-btn');
+authExportDataBtn.addEventListener('click', async () => {
+  authExportDataBtn.disabled = true;
+  setAuthStatus('Preparing your data…');
+  try {
+    const data = await exportMyData();
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `higglehaven-data-export-${data.exportedAt.slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setAuthStatus('Your data export has started downloading.', 'success');
+  } catch (err) {
+    setAuthStatus(err.message || 'Could not export your data.', 'error');
+  } finally {
+    authExportDataBtn.disabled = false;
   }
 });
 
@@ -11846,14 +12029,14 @@ const SHOP_WALK_SPEED_M_S = 1.8;
 const SHOP_RUN_SPEED_M_S = 2.7; // docs/SPEC.md §2 (v16): ~6 mph, a more noticeable gap from walking
 const SHOP_LOOK_SPEED_RAD_S = 1.8;
 const SHOP_MIN_HEIGHT_M = 1.5;
-// Flight (docs/SPEC.md §2) — see updateShopFlight/bindShopFlyToggle. Two
-// spec details are deliberately not built here, both because they're
-// inherently about *other* players seeing you, which this single-player-
-// only build has none of: "flying avatars are invisible to other users"
-// (so takeoff/landing here are pure altitude ramps, no fade — there's no
-// one else to fade for) and "occupied landing spots offset to nearest open
-// space" (nothing to occupy a spot with yet). Revisit both once real
-// multiplayer presence exists (spec §9's own phase-4, after this one).
+// Flight (docs/SPEC.md §2) — see updateShopFlight/bindShopFlyToggle.
+// "Occupied landing spots offset to nearest open space" is now built
+// (#2044, nearestOpenLandingSpot below) now that real multiplayer presence
+// (#1095) gives it another avatar to actually collide with. "Flying
+// avatars are invisible to other users" is still deliberately not built
+// here — a separate, still-open gap (#2043) about *other* players seeing
+// you, which takeoff/landing's own plain altitude ramps (no fade) don't
+// address.
 const SHOP_FLIGHT_TAKEOFF_DURATION_S = 1; // spec's "~1s lift"
 const SHOP_FLIGHT_LANDING_DURATION_S = 2; // spec's "~2s reverse"
 const SHOP_FLIGHT_HOVER_START_ALTITUDE_M = 3; // altitude reached at the end of takeoff, before the player climbs further
@@ -13862,7 +14045,17 @@ function updateShopFlight(dt) {
       shopFlightTransitionElapsedS, SHOP_FLIGHT_LANDING_DURATION_S, shopFlightLandingStartAltitudeM, minAltitudeM,
     );
     shopFlightAltitudeM = altitudeM;
-    if (landed) shopFlightState = 'grounded';
+    if (landed) {
+      // #2044: nudge away from another avatar occupying this exact spot,
+      // the same moment the vertical ramp above finishes -- mirrors #1090's
+      // item-collision handling (which already stopped the *descent* short
+      // of a solid object) but for the *landing spot itself*, against a
+      // live player instead of static geometry.
+      const openSpot = nearestOpenLandingSpot(shopAvatarPosition.x, shopAvatarPosition.y);
+      shopAvatarPosition.x = openSpot.x;
+      shopAvatarPosition.y = openSpot.y;
+      shopFlightState = 'grounded';
+    }
   } else if (shopFlightState === 'flying') {
     if (shopVerticalInput !== 0) {
       shopFlightAltitudeM += shopVerticalInput * SHOP_FLIGHT_VERTICAL_SPEED_M_S * dt;
@@ -14017,6 +14210,55 @@ function shopLandingObstructionTopZ(x, y) {
   }
   return topZ;
 }
+
+// #2044: the spec line SHOP_FLIGHT_TAKEOFF_DURATION_S's own comment above
+// flags as deferred ("occupied landing spots offset to nearest open
+// space... nothing to occupy a spot with yet") -- now actionable since
+// shopOtherAvatars (#1100) tracks other builders' live positions in this
+// same landlet. entry.group.position is each one's current interpolated
+// render position (updateOtherShopAvatars keeps it live every frame), not
+// just its last poll snapshot. Purely horizontal and purely a clearance
+// *radius* around each other avatar -- deliberately not reusing
+// shopPositionBlocked's rectangular-footprint/vertical-overlap machinery
+// (that's #1090's domain, solid placed items, already handled upstream of
+// this check), since a landing-spot nudge away from another player doesn't
+// need that precision.
+function landingSpotOccupiedByAvatar(x, y) {
+  const clearanceM = shopAvatarCollisionHalfM() + SHOP_AVATAR_COLLISION_HALF_M;
+  for (const entry of shopOtherAvatars.values()) {
+    if (Math.hypot(entry.group.position.x - x, entry.group.position.y - y) < clearanceM) return true;
+  }
+  return false;
+}
+
+// Ring search outward from the original landing spot -- kept deliberately
+// simple per #2044's own framing ("keep it simple... rather than
+// over-engineering") since this only ever needs to nudge a landing a few
+// meters, not solve general pathfinding. Gives up and returns the original
+// spot past LANDING_SPOT_SEARCH_MAX_RADIUS_M rather than searching forever;
+// landing on top of another avatar in that vanishingly unlikely case is no
+// worse than today's pre-#2044 behavior.
+const LANDING_SPOT_SEARCH_DIRECTIONS = 8;
+const LANDING_SPOT_SEARCH_STEP_M = 0.5;
+const LANDING_SPOT_SEARCH_MAX_RADIUS_M = 5;
+function nearestOpenLandingSpot(x, y) {
+  if (!landingSpotOccupiedByAvatar(x, y)) return { x, y };
+  for (let radius = LANDING_SPOT_SEARCH_STEP_M; radius <= LANDING_SPOT_SEARCH_MAX_RADIUS_M; radius += LANDING_SPOT_SEARCH_STEP_M) {
+    for (let i = 0; i < LANDING_SPOT_SEARCH_DIRECTIONS; i++) {
+      const angle = (i / LANDING_SPOT_SEARCH_DIRECTIONS) * Math.PI * 2;
+      const candidateX = x + radius * Math.cos(angle);
+      const candidateY = y + radius * Math.sin(angle);
+      if (!landingSpotOccupiedByAvatar(candidateX, candidateY)) return { x: candidateX, y: candidateY };
+    }
+  }
+  return { x, y };
+}
+// #2044: e2e-only hook, same convention as window.__testMoveShopAvatarWithCollision
+// below -- lets a test drive the search directly (against whatever
+// shopOtherAvatars a real second browser session's presence reports have
+// actually populated) without needing to choreograph exact flight-landing
+// timing against that second session.
+window.__testNearestOpenLandingSpot = (x, y) => nearestOpenLandingSpot(x, y);
 
 // Tries the full requested move first; if that's blocked, slides along
 // whichever single axis is still open (the same axis-separated collision
@@ -14987,8 +15229,16 @@ function updateReviewFade() {
     shopProductPreviewReviewBtn.classList.toggle('visible', tappedInRange);
     // Only a priced product has anything to "buy" — an unpriced one (the
     // common case for most placeholder catalog items) shows no buy button at
-    // all rather than one that would just 400 on click.
-    const canBuy = tappedInRange && shopTappedProduct.mesh.userData.template.priceCents != null;
+    // all rather than one that would just 400 on click. #1946 (owner
+    // correction): a test/demo model is never purchasable either, even on
+    // the rare chance it somehow carried a price — same "hide the
+    // affordance entirely" treatment as the unpriced case, not a disabled
+    // button. tappedInRange's own !!shopTappedProduct check (above) is what
+    // makes the short-circuit here safe -- shopTappedProduct can be null
+    // while tappedInRange is false.
+    const canBuy = tappedInRange
+      && shopTappedProduct.mesh.userData.template.priceCents != null
+      && !shopTappedProduct.mesh.userData.template.isTestModel;
     shopProductPreviewBuyBtn.classList.toggle('visible', canBuy);
     // #659: same gate as the Buy button just above — a return policy only
     // matters for something with a price to actually refund.
@@ -15000,8 +15250,16 @@ function updateReviewFade() {
 // "name — price (disclaimer)" line the preview modal (#shop-product-preview-info)
 // shows once tapped.
 function productInfoText(template) {
-  const { name, priceCents, metadata, category, skeletonSignature } = template;
+  const {
+    name, priceCents, metadata, category, skeletonSignature, isTestModel,
+  } = template;
   let text = priceCents == null ? name : `${name} — ${formatPriceCents(priceCents)}`;
+  // #1946 (owner correction): a test/demo model must read as obviously not
+  // a real product wherever a shopper sees it, same tap-to-inspect
+  // disclosure slot as the digital-goods/domestic-only/no-returns notes
+  // below -- shown first since it overrides the ordinary "is this for
+  // sale" assumption the rest of this text otherwise implies.
+  if (isTestModel) text += ' (Testing Model — not a real product, not for sale)';
   // The "clear higglehaven-controlled disclaimer" digital goods require
   // (docs/SPEC.md §4) — shown to the shopper right where they'd otherwise
   // assume every placed item is a physical one.
@@ -15329,6 +15587,14 @@ shopSignHintEl.addEventListener('click', async () => {
     } else if (choice === 'edit') {
       const text = prompt('Your note (up to 280 characters):', myPost.text);
       if (!text || !text.trim()) return;
+      // #2015: same #1920 guard as the sibling create path below -- prompt()
+      // shows no live character count, and without this an over-length edit
+      // reaches the server's own 280-char check, throws, and the retyped note
+      // is lost since the prompt isn't reopened with the text prefilled.
+      if (text.trim().length > 280) {
+        alert('Keep it to 280 characters or fewer.');
+        return;
+      }
       shopSignHintEl.disabled = true;
       try {
         const updated = await editSignPost(sign.instanceId, myPost.postId, { text: text.trim() });
@@ -15440,6 +15706,60 @@ async function handleShopProductReviewClick() {
   // uses, replacing this handler's own former shopperLabel() name prompt.
   const builder = await ensureBuilderIdentity();
   if (!builder) return;
+  // #1975 (owner decision): a shopper who already reviewed this product
+  // edits or removes that one review instead of being offered an unrelated
+  // second slot — mirrors the sign-post hint's own myPost pattern (#1830)
+  // exactly, using review.userId (reviewFromRow, populated server-side from
+  // the posting session) rather than a free-text author match.
+  const myReview = currentAuthUser && review.reviews.find((r) => r.userId === currentAuthUser.userId);
+  if (myReview) {
+    const stars = '★'.repeat(myReview.rating) + '☆'.repeat(5 - myReview.rating);
+    const choice = (prompt(
+      `Your review: ${stars}${myReview.text ? ` "${myReview.text}"` : ''}\n\nType "edit" to change it, or "delete" to remove it. Leave blank to cancel.`,
+      '',
+    ) || '').trim().toLowerCase();
+    if (choice === 'delete') {
+      shopProductPreviewReviewBtn.disabled = true;
+      try {
+        await deleteProductReview(review.templateId, myReview.reviewId);
+        if (!shopReviews.includes(review)) return;
+        review.reviews = review.reviews.filter((r) => r.reviewId !== myReview.reviewId);
+        rebuildReviewSprites(review);
+      } catch (err) {
+        alert(err.message || 'Could not delete this review.');
+      } finally {
+        shopProductPreviewReviewBtn.disabled = false;
+      }
+    } else if (choice === 'edit') {
+      const ratingInput = prompt('Rate this product 1-5 stars:', String(myReview.rating));
+      if (!ratingInput || !ratingInput.trim()) return;
+      const rating = Number(ratingInput.trim());
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        alert('Please enter a whole number from 1 to 5.');
+        return;
+      }
+      const text = prompt('Add a comment (up to 280 characters), or leave blank:', myReview.text || '');
+      shopProductPreviewReviewBtn.disabled = true;
+      try {
+        // Cancelling (null) omits `text` entirely so the server keeps the
+        // existing value — an explicit empty string (OK clicked with the
+        // field cleared) is sent as-is, clearing it, same distinction
+        // editProductReview's own `text !== undefined` check preserves.
+        const updated = await editProductReview(review.templateId, myReview.reviewId, {
+          rating, text: text === null ? undefined : text.trim(),
+        });
+        if (!shopReviews.includes(review)) return;
+        const index = review.reviews.findIndex((r) => r.reviewId === myReview.reviewId);
+        if (index !== -1) review.reviews[index] = updated;
+        rebuildReviewSprites(review);
+      } catch (err) {
+        alert(err.message || 'Could not update this review.');
+      } finally {
+        shopProductPreviewReviewBtn.disabled = false;
+      }
+    }
+    return;
+  }
   const ratingInput = prompt('Rate this product 1-5 stars:', '5');
   if (!ratingInput || !ratingInput.trim()) return;
   const rating = Number(ratingInput.trim());
@@ -15451,6 +15771,14 @@ async function handleShopProductReviewClick() {
   // prompt is an optional extra, same as the calendar hint's own scheduling
   // step above.
   const text = prompt('Add a comment (up to 280 characters), or leave blank:', '');
+  // #2005: same missing client-side check #1920 already added to the
+  // sign-post/calendar-event prompts above -- prompt() gives no live
+  // character count, and an over-length submission loses the whole typed
+  // comment on the server's own 280-char rejection.
+  if (text && text.trim().length > 280) {
+    alert('Keep it to 280 characters or fewer.');
+    return;
+  }
   shopProductPreviewReviewBtn.disabled = true;
   try {
     const posted = await createProductReview(review.templateId, { rating, text: text?.trim() || undefined });
@@ -15616,6 +15944,12 @@ async function promptSellerFeedback(purchase) {
     return;
   }
   const text = prompt('Add a comment (up to 280 characters), or leave blank:', '');
+  // #2005: same missing client-side check as the product review prompt
+  // above -- see its own comment for why this matters.
+  if (text && text.trim().length > 280) {
+    alert('Keep it to 280 characters or fewer.');
+    return;
+  }
   try {
     await createSellerFeedback(purchase.purchaseId, { rating, text: text?.trim() || undefined });
   } catch (err) {
@@ -15626,8 +15960,13 @@ async function promptSellerFeedback(purchase) {
 async function handleShopProductBuyClick() {
   const review = shopTappedProduct;
   if (!review) return;
-  const { name, priceCents } = review.mesh.userData.template;
+  const { name, priceCents, isTestModel } = review.mesh.userData.template;
   if (priceCents == null) return;
+  // #1946 (owner correction): defense in depth alongside the canBuy gate
+  // above (updateReviewFade) that already hides this button entirely for
+  // a test model -- same belt-and-suspenders relationship priceCents ==
+  // null already has with its own .visible toggle.
+  if (isTestModel) return;
   // #659: a one-line mention right at the moment of buying, alongside the
   // full Return Policy button this same tapped product already surfaces
   // (#shop-product-preview-return-policy-btn, above) — this dialog is a
@@ -16860,7 +17199,11 @@ for (const btn of modeNavButtons) {
     // longer than a frame — network + document parsing — so the browser
     // still gets a chance to paint this highlight on the outgoing page
     // first.
-    for (const b of modeNavButtons) b.classList.toggle('active', b.dataset.mode === target);
+    for (const b of modeNavButtons) {
+      const isTarget = b.dataset.mode === target;
+      b.classList.toggle('active', isTarget);
+      b.setAttribute('aria-pressed', String(isTarget));
+    }
     sessionStorage.setItem(START_MODE_KEY, target);
     location.reload();
   });
@@ -17365,7 +17708,7 @@ async function loadLandletMap(resolve) {
   // the brief window before the first automatic growth cycle runs.
   claimStatusEl.textContent = anyAvailable
     ? ''
-    : 'No landlets are ready to claim yet — check back again shortly.';
+    : 'No lándlets are ready to claim yet — check back again shortly.';
 }
 
 async function claimSelectedLandlet(landlet, resolve) {

@@ -872,6 +872,38 @@ describe('Admin landlet ownership reassignment (#1177)', () => {
     expect(JSON.parse(log.detail_json)).toMatchObject({ cancelledAuctionId: auctionId });
   });
 
+  // #1955: the new owner may have placed a losing-so-far bid on the exact
+  // auction being cancelled before the admin handed them the land outright
+  // -- without excluding them from cancelledAuctionBidderIds, they'd get a
+  // "your bid was cancelled, no winner" notification directly contradicting
+  // the "it's yours now" one, about the same landlet.
+  it('does not send the new owner a "bid cancelled" notification when they bid on the auction they are being handed', async () => {
+    const owner = await signupBuilder('reassign-auction-cancel-self-bid-owner');
+    const target = await signupBuilder('reassign-auction-cancel-self-bid-target');
+    await fundHiggles(target);
+    await createGreenbeltLandlet('reassign-auction-cancel-self-bid-landlet');
+    await api('/landlets/reassign-auction-cancel-self-bid-landlet/claim', owner.session({ method: 'POST' }));
+    const started = await api('/landlets/reassign-auction-cancel-self-bid-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({}),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, target.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 700 }),
+    }));
+
+    const result = await api('/landlets/reassign-auction-cancel-self-bid-landlet/reassign-owner', adminSession({
+      method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId, cancelActiveAuction: true }),
+    }));
+    expect(result.response.status).toBe(200);
+    expect(result.body.landlet.ownerBuilderId).toBe(target.builderId);
+
+    const { results: targetNotifications } = await env.DB.prepare(
+      'SELECT message FROM notifications WHERE builder_id = ? ORDER BY created_at',
+    ).bind(target.builderId).all();
+    expect(targetNotifications.some((n) => /reassigned to you by an admin/i.test(n.message))).toBe(true);
+    expect(targetNotifications.some((n) => /bid.*cancelled/i.test(n.message))).toBe(false);
+  });
+
   it('cancelActiveAuction is a harmless no-op when there is no active auction to cancel', async () => {
     const owner = await signupBuilder('reassign-auction-cancel-noop-owner');
     const target = await signupBuilder('reassign-auction-cancel-noop-target');
@@ -1429,6 +1461,41 @@ describe('Community signs', () => {
 
     const listed = await api('/instances/sign-author-delete-instance/posts');
     expect(listed.body.posts).toEqual([]);
+  });
+
+  // #781: an admin can remove any sign post outright, regardless of who
+  // posted it or who owns the hosting landlet -- same reasoning and shape
+  // as #1712's product-review admin override.
+  it('lets an admin delete any sign post outright, even when neither the author nor the hosting landlet owner is involved', async () => {
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-admin-override-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 5, y: 7, isCommunitySign: true,
+      }),
+    }));
+    const posted = await api('/instances/sign-admin-override-instance/posts', signsShopper.session({
+      method: 'POST', body: JSON.stringify({ text: 'Abusive/policy-violating text goes here.' }),
+    }));
+    expect(posted.response.status).toBe(201);
+    const postId = posted.body.post.postId;
+
+    const deleted = await api(`/instances/sign-admin-override-instance/posts/${postId}`, adminSession({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true });
+
+    const listed = await api('/instances/sign-admin-override-instance/posts');
+    expect(listed.body.posts).toEqual([]);
+
+    const adminUserId = (await api('/auth/me', adminSession())).body.user.userId;
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('delete_sign_post_override', postId).first();
+    expect(logRow).not.toBeNull();
+    expect(logRow.admin_user_id).toBe(adminUserId);
+    expect(logRow.target_type).toBe('sign_post');
   });
 
   // #1830: the new PATCH branch -- author-only, no moderation equivalent.
@@ -2132,6 +2199,41 @@ describe('Community calendar', () => {
 
     const deleteMissing = await api(`/instances/calendar-with-events/events/${posted.body.event.eventId}`, calendarBuilder.session({ method: 'DELETE' }));
     expect(deleteMissing.response.status).toBe(404);
+  });
+
+  // #781: an admin can remove any calendar event outright, regardless of who
+  // owns the hosting landlet -- same reasoning and shape as the sign-posts
+  // admin override above.
+  it('lets an admin delete any calendar event outright, even when the hosting landlet owner is uninvolved', async () => {
+    await api('/instances', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-admin-override-instance',
+        landletId: calendarLandlet,
+        templateId: 'placeholder-tree',
+        x: 9, y: 9, isCommunityCalendar: true,
+      }),
+    }));
+    const posted = await api('/instances/calendar-admin-override-instance/events', calendarBuilder.session({
+      method: 'POST', body: JSON.stringify({ text: 'Abusive/policy-violating text goes here.' }),
+    }));
+    expect(posted.response.status).toBe(201);
+    const eventId = posted.body.event.eventId;
+
+    const deleted = await api(`/instances/calendar-admin-override-instance/events/${eventId}`, adminSession({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true });
+
+    const listed = await api('/instances/calendar-admin-override-instance/events');
+    expect(listed.body.events).toEqual([]);
+
+    const adminUserId = (await api('/auth/me', adminSession())).body.user.userId;
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('delete_calendar_event_override', eventId).first();
+    expect(logRow).not.toBeNull();
+    expect(logRow.admin_user_id).toBe(adminUserId);
+    expect(logRow.target_type).toBe('calendar_event');
   });
 
   // #1716: a retried POST (a dropped response, not a double-click) used to

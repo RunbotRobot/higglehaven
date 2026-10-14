@@ -490,6 +490,96 @@ every single page load, regardless of whether the test has anything to do
 with auth. (This bit us for real — see this section's own Testing note.)
 Returns `{ "user": { ... } }` once actually logged in.
 
+### `GET /api/auth/export-data`
+
+Issue #1984 (sub-issue of #1983's "[Tracking] Build a user-data-export"
+issue, the feature itself owner-greenlit on #1480) — the GDPR/CCPA "right
+to access" companion to `delete-account`'s own "right to erasure." Returns
+the requesting account's own data as a single JSON bundle:
+
+```json
+{
+  "exportedAt": "2026-10-13T22:00:00.000Z",
+  "profile": {
+    "account": { "userId": "...", "email": "...", "username": "...", "...": "..." },
+    "builder": { "builderId": "...", "label": "...", "...": "..." },
+    "seller": null,
+    "diditVerificationSessions": []
+  }
+}
+```
+
+Session-gated via the plain `requireCurrentUser` bar (`401` without one) —
+unlike `delete-account`/`change-password`, this is read-only, so it doesn't
+need the extra "re-enter your password" step those destructive/sensitive
+actions require. Rate-limited per account (10 attempts per 15 minutes).
+
+`profile.account` reuses `userFromRow` — the same sanitized shape
+`GET /auth/me` returns, which already excludes `password_hash`.
+`profile.builder`/`profile.seller` reuse `builderFromRow`/`sellerFromRow`
+(`null` for `seller` if the account never created one — selling stays
+opt-in, see "Sellers" below). `profile.diditVerificationSessions` lists
+every ID-verification session this account started (`sessionId`, `status`,
+`createdAt`, `processedAt`) — status/timestamps only, deliberately never a
+raw Didit payload, since that's a third party's data about the account,
+not the account's own authored content.
+
+The response shape has one top-level key per data section — `profile`
+here, `social` as of #1986 below. A later sub-issue adds `commerce`
+(purchases, owned avatars/animations, video-generation jobs, higgles
+redemptions/earnings, bundles — blocked on an owner call about whether
+`tax_1099_forms` belongs in it, and in what form) to this same endpoint's
+response rather than introducing a separate endpoint, and a "Download my
+data" Settings UI (#1987) wires a browser download up to whatever sections
+exist once built.
+
+#### `social` (#1986)
+
+```json
+{
+  "social": {
+    "friendships": [{ "friendshipId": "...", "otherBuilderId": "...", "direction": "outgoing", "status": "accepted", "...": "..." }],
+    "directMessages": [{ "messageId": "...", "senderBuilderId": "...", "recipientBuilderId": "...", "text": "...", "...": "..." }],
+    "notifications": [{ "notificationId": "...", "message": "...", "...": "..." }],
+    "productReviews": [{ "reviewId": "...", "templateId": "...", "rating": 5, "...": "..." }],
+    "sellerFeedback": [{ "feedbackId": "...", "sellerId": "...", "rating": 4, "...": "..." }],
+    "signPosts": [{ "postId": "...", "text": "...", "...": "..." }],
+    "calendarEvents": [{ "eventId": "...", "text": "...", "...": "..." }],
+    "savedLevelLayouts": [{ "savedLayoutId": "...", "name": "...", "instanceCount": 1, "instances": [{ "...": "..." }] }],
+    "landletVersions": [{ "versionId": "...", "name": "...", "instanceCount": 1, "instances": [{ "...": "..." }] }]
+  }
+}
+```
+
+`null` instead of an object when the account has no builder profile at
+all (shouldn't happen in practice — every signup auto-provisions one —
+but defensive since `profile.builder` can itself be `null`).
+
+Most of these are straightforward `builder_id`/`user_id` filters, or (for
+`productReviews`/`sellerFeedback`) a real `purchase_id` join back to
+`purchases.buyer_builder_id` (#1101/#1123's own foreign key, not a
+free-text label match) — a review/feedback row created before that FK
+existed, or whose purchase was later deleted, is correctly left out of the
+export rather than guessed at. Two sections are a best-effort
+approximation rather than a real foreign-key filter, documented in
+`exportSocialSection`'s own comment in `worker/index.js`:
+
+- `calendarEvents` matches `calendar_events.author_label` against the
+  account's **current** builder label — unlike `sign_posts`, which got a
+  real `user_id` column in #1830/migrations/0125, `calendar_events` was
+  never given the equivalent treatment, so there's no durable author
+  reference to filter on. This misses an event posted under a since-
+  changed label, and could in principle include an event actually posted
+  by a different account that happens to share today's label with a past
+  poster. A real `author_id`/`user_id` column on `calendar_events` is the
+  actual fix for this gap; it's tracked separately from this export
+  feature, not solved here.
+- `landletVersions`/their `instances` are scoped to landlets this builder
+  **currently owns** (`landlets.owner_builder_id`), since neither
+  `landlet_versions` nor `version_instances` records who actually created
+  a version — only which landlet it belongs to — and landlet ownership
+  itself can change hands (auction, admin reassignment).
+
 ### `POST /api/auth/verify-email`
 
 ```json
@@ -616,7 +706,16 @@ rate-limits (6th attempt is `429`), and the full happy path — the
 session making the change stays logged in while a second session for the
 same account is signed out, the old password stops working, and the new
 one logs in. `worker/account-deletion.test.js` (#1146) is the equivalent
-file for `delete-account`.
+file for `delete-account`. `worker/export-data.test.js` (#1984/#1986)
+covers `export-data`: requires a session, the account/builder/seller/didit
+sections populate correctly (including the no-seller-yet and
+seller-exists cases), never leaks a raw Didit payload, rate-limits (11th
+attempt is `429`), and the `social` section's every collection — including
+the real-purchase-id join for reviews/feedback, the real-`user_id` filter
+for sign posts (and that it excludes another account's), the best-effort
+label match for calendar events, saved-layout/landlet-version instances
+nesting correctly under their parent, and an all-empty baseline for an
+account with none of this activity.
 
 Also covered by `e2e/auth.test.mjs`: the full real-UI signup → verify-email
 link → logout → login and forgot-password → reset link → reset → old-
@@ -763,6 +862,61 @@ at grant time (#814/#1074) — `createdAt` is still the account's original
 signup date, not when it became an admin; `adminGrantedAt` is `null` for an
 admin whose grant predates `admin_action_log` itself, the one case a caller
 should fall back to `createdAt` for.
+
+### Account suspension (#2029, sub-issue of #1201)
+
+`migrations/0132_account_suspensions.sql` adds `account_suspensions` — a
+dedicated, append-only history table (not columns on `users`), since the
+owner's own settled scope for #1201 wants "longer suspension log retention
+and greater detail" preserved across possibly-multiple suspend/lift cycles
+on the same account. A suspension is **reversible, not a deletion** — the
+owner explicitly ruled out a separate admin-initiated hard-delete path;
+real deletion stays reserved for the account-holder's own self-service
+`delete-account` request. (Enforcing suspension against login/actions, the
+automated notice to the suspended user, the optional sign-post/calendar-
+event removal cascade, and the 30-day grace-period auto-escalation to a
+full deletion are each their own separate, not-yet-landed sub-issue —
+#2030/#2031/#2032/#2033 respectively.)
+
+### `POST /api/auth/suspend-account`
+
+`requireAdmin`-gated (`401`/`403` the same way `grant-admin` is). Request
+body: `{ "email", "reason", "evidenceNote"?, "graceDays"? }`. `email` is
+looked up the same case-insensitive way `grant-admin` does; `404` if no
+account has it. `reason` is required (`400` if blank) — stored verbatim,
+along with the optional free-text `evidenceNote`, in both the new
+`account_suspensions` row and the `admin_action_log` entry this call writes
+(`action_type: "suspend_account"`), real detail retained with no auto-
+expiry (the owner's own instruction: minors-access cases in particular
+should keep *more* detail, not less). `graceDays` defaults to `30` (the
+owner's confirmed default) and must be an integer in `[1, 365]` (`400`
+otherwise) — this becomes `gracePeriodEndsAt` in the response, the point
+#2033's eventual auto-escalation job will act on. `409` if the account
+already has an active (not lifted, not escalated) suspension — lift it via
+`unsuspend-account` first before suspending again. On success, returns
+`{ "suspension": { "suspensionId", "userId", "adminUserId", "reason", "evidenceNote", "suspendedAt", "gracePeriodEndsAt" } }`.
+
+### `POST /api/auth/unsuspend-account`
+
+`requireAdmin`-gated. Request body: `{ "email" }`. `404` if no account has
+it, `409` if that account has no currently-active suspension to lift. On
+success, sets `liftedAt`/the lifting admin on the active
+`account_suspensions` row, logs via `admin_action_log`
+(`action_type: "unsuspend_account"`), and returns
+`{ "suspension": { "suspensionId", "userId", "liftedAt" } }`. The account
+can be suspended again afterward — lifting isn't a one-time, permanent
+clearing of the record, just of the currently-active hold.
+
+### `GET /api/auth/suspension-status?email=...`
+
+`requireAdmin`-gated. `400` with no `email` query parameter, `404` if no
+account has it. Returns
+`{ "suspension": null }` if the account has no currently-active
+suspension, or
+`{ "suspension": { "suspensionId", "userId", "adminUserId", "reason", "evidenceNote", "suspendedAt", "gracePeriodEndsAt" } }`
+otherwise — the same shape `suspend-account`'s own response returns, so a
+caller can check status first without needing two different response
+shapes.
 
 ## Builders
 
@@ -1678,6 +1832,8 @@ landlet. They are not production commerce listings yet.
   "metadata": {
     "placeholder": true
   },
+  "isTestModel": false,
+  "stockQuantity": null,
   "createdAt": "2026-07-29T07:30:06.519Z",
   "updatedAt": "2026-07-29T07:30:06.519Z"
 }
@@ -1687,6 +1843,31 @@ landlet. They are not production commerce listings yet.
 /api/catalog/:templateId/thumbnail` below — every other endpoint on this
 object (create, update, batch) leaves them untouched.
 
+`stockQuantity` (#1948) is `null` by default, meaning unlimited stock — the
+unchanged behavior for every template unless a seller opts in. A set value
+is remaining stock (1 = one-of-a-kind), not a fixed "original quantity": it
+decrements by the purchased quantity each time a purchase for this template
+is finalized (see `POST /api/instances/:instanceId/purchase` below), and a
+`PATCH`/`PUT` that sets it directly overwrites whatever remained, the same
+as any other seller-settable field. Unlike `isTestModel`, it **is** an
+ordinary, freely seller-settable value through `POST`/`PUT`/`PATCH
+/api/catalog` and its batch siblings. Once it reaches `0`, further purchases
+of this template are rejected (`400`) and every `placed_instances` row
+referencing it is removed — see "Sold-out templates" under the purchase
+endpoint below.
+
+`isTestModel` (#1946) marks a downloaded/demo model that isn't a real
+for-sale product — a different concept than `category: "placeholder"`
+above (that one only means "no real category was ever set"; it's an
+ordinary, freely seller-settable value). `isTestModel` is never settable
+through `POST`/`PUT`/`PATCH /api/catalog` or its batch siblings — like
+`users.is_admin`, it has no ordinary self-service write path. Every
+pre-existing row as of migration `0126` was backfilled to `true`; any row
+created afterward defaults to `false`. It does **not** affect `GET
+/api/catalog`'s own visibility — see that endpoint's own note on why an
+attempt to hide these rows there was tried and reverted — only
+purchasability (see `POST /api/instances/:instanceId/purchase` below).
+
 ### `GET /api/catalog`
 
 Lists catalog templates in stable name order. Results are cursor-paginated to
@@ -1694,12 +1875,15 @@ keep product discovery reads bounded as the catalog grows.
 
 Optional query parameters:
 
-- `category`: filters templates by exact category.
-- `subcategory`: filters templates by exact subcategory, independently or in
-  combination with `category`.
-- `sellerId`: filters templates by exact seller ID and can be combined with the
-  category, subcategory, and name-search filters.
-- `color`: filters templates by the exact stored color string.
+- `category`: filters templates by category, case-insensitively (#2006).
+- `subcategory`: filters templates by subcategory, case-insensitively (#2006),
+  independently or in combination with `category`.
+- `sellerId`: filters templates by exact (case-sensitive) seller ID and can be
+  combined with the category, subcategory, and name-search filters — unlike
+  `category`/`subcategory`/`color`, this is a machine-generated opaque id, not
+  user-typed free text, so case-sensitivity here is intentional.
+- `color`: filters templates by the stored color string, case-insensitively
+  (#2006).
 - `minPriceCents` / `maxPriceCents`: inclusive non-negative integer price bounds.
   Templates without a price are excluded whenever either bound is present.
 - `minWidthM` / `maxWidthM`, `minDepthM` / `maxDepthM`, and `minHeightM` /
@@ -1717,6 +1901,21 @@ Optional query parameters:
 The response includes `nextCursor`, which is `null` after the final page. Keep
 the same filters and `sort` mode while following a cursor; cursors are specific
 to their sort mode.
+
+A row with `isTestModel: true` (#1946) is listed here exactly like any
+other row — this endpoint does not filter by it. An earlier version of
+this endpoint hid those rows from a non-admin caller, but that broke
+ordinary (non-admin) Build mode's own "Add Item" picker (which fetches
+this same endpoint via `fetchCatalog()`, with no separate code path):
+every pre-existing template — including core, non-commerce feature
+fixtures like the community-sign/calendar-event/flooring/basic-furniture
+templates, none of which were ever real for-sale products — got
+backfilled to `isTestModel: true`, so every ordinary builder lost access
+to them in Build mode. There is no separate real shopper-facing
+marketplace browse surface to filter instead (Shop mode walks
+`placed_instances`, it never lists `catalog_templates` directly), so
+`isTestModel` is purchasability-only for now — see `POST
+/api/instances/:instanceId/purchase` below.
 
 Response:
 
@@ -1752,7 +1951,8 @@ Response:
 
 ### `GET /api/catalog/:templateId`
 
-Fetches one catalog template.
+Fetches one catalog template. No `isTestModel` visibility rule here
+either, matching the list endpoint above.
 
 ### `POST /api/catalog/batch`
 ### `PUT /api/catalog/batch`
@@ -1831,6 +2031,10 @@ value large enough to lose precision past `Number.isSafeInteger` once
 persisted, or to mint an outsized `higgles_balance_cents` credit through a
 self-purchase or auction win. `name`, `category`, `subcategory`, and `color`
 are each capped at 100 characters, same as `label` elsewhere in this API.
+`stockQuantity` (#1948), when present, must be a non-negative integer no
+greater than 1,000,000; omit it (or pass `null`) for the default unlimited
+behavior — see "Catalog template object" above and "Sold-out templates"
+below "Commission math".
 
 Deliberately **not** rate-limited (#362 flagged the gap, same as
 builders/sellers below, but an IP-keyed limit isn't safe to add here at
@@ -2562,6 +2766,11 @@ should use it instead of the legacy annular endpoint below. Larger land classes
 remain a future extension; this first version deliberately emits only exact
 1,000 m² class-1 lands.
 
+Each generated cell's `landType` (#2014) is `water` instead of the usual
+`buildable` default when its center falls near a real pre-1916 water cell
+ingested into `geo_water_cells` (`scripts/ingest-geo-data.mjs`,
+migrations/0128) — forward-generation only, never retroactive.
+
 ### `POST /api/land-candidates/generate-ring`
 
 Procedurally creates one gap-free band of class-1, 1,000 m² land candidates.
@@ -2609,6 +2818,12 @@ power-law boundaries match exactly. Do not send `innerRadiusM` or
 Each accepted band is also stored as a single ring reservation. A D1 trigger
 enforces the same exclusion rule atomically, so concurrent requests cannot both
 create overlapping rings after passing their application-level preflight.
+
+Same real water-cell classification as `generate-mosaic` above (#2014): a
+plot's `landType` becomes `water` instead of `buildable` when its center
+falls near a real ingested water cell, regardless of `distribution` or any
+explicit `landType` already set via `adjacentToRingId`-derived plots (this
+only ever upgrades toward `water`, never downgrades one already requested).
 
 ## Land candidate rings
 
@@ -2740,10 +2955,13 @@ contains both `candidate` and `landlet`; `landlet` is null if it remains queued.
 Queues a candidate using the same `name`, `areaM2`, `center`, `landClass`,
 `landType`, `polygon`, and `metadata` fields as a landlet. `landType`
 defaults to `buildable` and must be `buildable` or `water` (same
-`landletLandType` validation as the landlet endpoint above, and the same
-"nothing produces a `water` candidate yet — this just makes the data model
-capable of representing one" scope cut). If it already overlaps the
-current world circle, the API immediately creates its generating landlet,
+`landletLandType` validation as the landlet endpoint above). Unlike
+`generate-ring`/`generate-mosaic` above (#2014), this endpoint never
+auto-classifies anything from real geo data — it only ever stores whatever
+`landType` the caller explicitly passes, since it takes arbitrary admin
+input rather than a self-consistent generator's own output. If it already
+overlaps the current world circle, the API immediately creates its
+generating landlet,
 carrying the candidate's own `landType` into it rather than defaulting the
 materialized landlet to `buildable` regardless of the candidate's type.
 Otherwise it remains lightweight until a later expansion first overlaps it.
@@ -4295,8 +4513,13 @@ instance). Rate-limited per editing account, the same shape as `POST`/
 
 ### `DELETE /api/instances/:instanceId/posts/:postId`
 
-Two independent ways in, either sufficient on its own:
+Three independent ways in, either sufficient on its own:
 
+- **An admin**, outright — checked first (`#781`), regardless of who posted
+  it or who owns the hosting landlet. Rate-limited per admin (same
+  `SIGN_POST_DELETE_RATE_LIMIT_MAX` bucket as the other two paths) and
+  logged via `admin_action_log` (`action_type: 'delete_sign_post_override'`),
+  the same shape as the product-review (`#1712`) admin override.
 - **The post's own author**, directly — a verified session whose `userId`
   matches the post's `userId`. Added by #1830; a pre-#1830 post with
   `userId: null` can never match this path, so it falls through to
@@ -4480,6 +4703,14 @@ deleted. Both `POST` and `DELETE` are rate-limited per builder (20 per
 15-minute window, `429` past that, `#944`) — the same bucket shape as
 other per-account mutation limits in this file.
 
+Unlike sign posts, there's no author-delete path here (calendar events are
+builder-authored, not shopper-authored, so the hosting landlet's own owner
+already *is* the author in the ordinary case) — but `DELETE` does have the
+same admin-override path sign posts gained (`#781`): an admin can remove
+any calendar event outright, checked first, rate-limited per admin (same
+`CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX` bucket), and logged via
+`admin_action_log` (`action_type: 'delete_calendar_event_override'`).
+
 **`POST` requires a real session either way (since #1830, sign posts too)
 — the distinction is *whose*.** This endpoint requires a session logged
 in as the hosting landlet's own owning builder specifically (`401`/`403`
@@ -4613,28 +4844,71 @@ seller is the one with an actual stake in the product's reputation, and
 curated space) there's no reason a review would belong to a builder who
 merely bought/placed the item.
 
-### `GET /api/catalog/:templateId/reviews`, `POST .../reviews`, `DELETE .../reviews/:reviewId`
+### `GET /api/catalog/:templateId/reviews`, `POST .../reviews`, `PATCH .../reviews/:reviewId`, `DELETE .../reviews/:reviewId`
 
 Nested under the catalog template, same shape as sign posts/calendar
 events, with one addition: `rating`, a required integer from 1 to 5 (`400`
 outside that range or non-integer). `text` is genuinely optional here — a
 bare star rating is already a complete, useful review — capped at 280
-characters when present. `POST`/`DELETE` return `404` for a template that
-doesn't exist. `POST` requires a session and an eligible purchase (see the
-purchase-gating paragraph above) — `401` with no session, `400` with no
-eligible purchase, `409` if that purchase has already been reviewed.
-`DELETE`
-(moderation) requires a session (`401` without one) and is gated to the
-template's own seller once it has one — `403` for anyone else — the same
-`if (existing.seller_id)` ownership check the catalog template's own
-PATCH/DELETE handler uses; a template with no seller stays unrestricted,
-since there's no owner to check against.
+characters when present. `POST`/`PATCH`/`DELETE` return `404` for a
+template or review that doesn't exist. `POST` requires a session and an
+eligible purchase (see the purchase-gating paragraph above) — `401` with
+no session, `400` with no eligible purchase, `409` if that purchase has
+already been reviewed.
 
-Both `POST` and `DELETE` are rate-limited (20 per 15-minute window, `429`
-past that) — `POST` per builder (`product-review-create:<builderId>`),
-`DELETE` per seller when the template has one or per client IP otherwise
-(`product-review-delete:<sellerId|IP>`), same bucket shape as other
-per-account/per-IP mutation limits in this file.
+**`PATCH .../reviews/:reviewId` (#1975, owner decision — author self-edit,
+mirroring sign posts' own `PATCH`, #1830):** author-only, no moderation
+equivalent — `403` ("Not your review") for anyone but the review's own
+`user_id` (`migrations/0130`, populated from the posting session the same
+way `sign_posts.user_id` is), including `403` for a pre-#1975 review with
+`user_id IS NULL` (nobody on record to own it). Accepts `rating` and/or
+`text`; an omitted field keeps its existing value, an explicitly present
+`text` (including an empty string) clears it — the same "distinguish
+omitted from explicitly cleared" contract `PATCH /api/bundles/:id` already
+uses, just resolved in application code here since `text`'s own
+null-vs-empty-string rule doesn't map onto a plain SQL `COALESCE`
+directly. Rate-limited like `POST` (`product-review-edit:<userId>`).
+
+`DELETE`
+is gated, in order: (1) an admin session (`is_admin`) can delete any
+review outright regardless of the template's own seller (#1712,
+owner-confirmed) — for harassment, doxxing, or other policy-violating
+text the seller is unreachable or unwilling to act on; logged to
+`admin_action_log` (`delete_review_override`, target type
+`product_review`), the same accountability convention as the purchase
+refund/mark-shipped admin overrides; (2) **the review's own author
+(#1975)** — the same real-ownership direct-delete path sign posts already
+have, alongside this endpoint's pre-existing moderation path, not
+replacing it; (3) the template's own seller once it has one — `403` for
+anyone else — the same `if (existing.seller_id)` ownership check the
+catalog template's own `PATCH`/`DELETE` handler uses; a template with no
+seller stays unrestricted, since there's no owner to check against.
+
+Both `POST`/`PATCH`/`DELETE` are rate-limited (20 per 15-minute window,
+`429` past that) — `POST`/`PATCH` per builder/user
+(`product-review-create:<builderId>`/`product-review-edit:<userId>`),
+`DELETE` per user when the author is deleting their own review, per seller
+when the template has one, per admin user when an admin is acting, or per
+client IP otherwise
+(`product-review-delete:<userId|sellerId|adminUserId|IP>`), same bucket
+shape as other per-account/per-IP mutation limits in this file.
+
+**Retention for disputes (#1975, owner decision): "I want all users to be
+able to modify or delete any of their previous posts, comments, or
+feedback. Maybe we should keep a record of the original content internally
+in case of disputes."** Every author-initiated `PATCH`/`DELETE` above
+snapshots the review's pre-change row into `user_content_edit_history`
+(`migrations/0129`) first — a single table shared across every content
+type this same self-edit/delete pattern is extended to (not a bespoke
+history table per type), keyed by `(source_table, source_id)` with the
+full row JSON-serialized as `snapshot_json`, the mutation's own `action`
+(`'edit'`/`'delete'`), and `actor_user_id`. Nothing in this app currently
+reads this table back through any API — it exists purely as an internal
+record the owner can query directly if a dispute ever needs it, the same
+posture `admin_action_log` already has for admin actions. Moderation
+deletes (admin override, seller) do **not** write to this table — the
+owner's own framing was specifically about a user's edit/delete of *their
+own* entry, not every removal of that content.
 
 `POST` also notifies the template's own seller (#1043) — best-effort,
 fired after the insert succeeds, same "informational, never worth failing
@@ -4656,11 +4930,12 @@ POST /api/catalog/:templateId/reviews
 needs to re-derive it from the list itself:
 
 ```json
-{ "reviews": [ { "reviewId": "review-...", "templateId": "...", "authorLabel": "...", "rating": 5, "text": "Lovely product!", "purchaseId": "purchase-...", "createdAt": "..." } ], "averageRating": 4, "count": 2 }
+{ "reviews": [ { "reviewId": "review-...", "templateId": "...", "authorLabel": "...", "rating": 5, "text": "Lovely product!", "purchaseId": "purchase-...", "userId": "user-...", "createdAt": "..." } ], "averageRating": 4, "count": 2 }
 ```
 
 `purchaseId` is `null` for a review created before `migrations/0100` (the
-old label-matched design above).
+old label-matched design above). `userId` (#1975) is likewise `null` for a
+review created before `migrations/0130`.
 
 `averageRating` is `null` when there are no reviews yet (never `0`, which
 would misleadingly read as "rated, and rated at the bottom"). `reviews`
@@ -4821,7 +5096,7 @@ spoofing gap here: anyone who knew a `purchaseId` and the buyer's public
 display label, neither requiring a session or an account, could `POST`
 feedback as if they were that buyer.
 
-### `GET /api/sellers/:sellerId/feedback`, `POST /api/purchases/:purchaseId/feedback`
+### `GET /api/sellers/:sellerId/feedback`, `POST /api/purchases/:purchaseId/feedback`, `DELETE /api/purchases/:purchaseId/feedback`
 
 ```json
 POST /api/purchases/:purchaseId/feedback
@@ -4841,12 +5116,24 @@ reviews. `GET` is intentionally public/unauthenticated, same as
 `GET .../reviews` — a rating is meant to be seen, not gated to the seller
 themself; the only UI surfacing it today (below) happens to be the
 Seller modal, which reads as "seller-facing" in practice without the API
-itself needing to restrict who can ask. There is no `DELETE` — unlike
-product reviews, where the product's own seller has a legitimate stake in
-moderating what's said about their listing, letting a seller delete
-feedback about their *own service* would defeat the purpose entirely;
-moderation of this is deliberately left unbuilt rather than handed to the
-one party with a conflict of interest in it.
+itself needing to restrict who can ask.
+
+`DELETE` (#1738, owner-confirmed) is **admin-only** (`401` with no
+session, `403` for anyone else — including the rated seller themself,
+`404` for a purchase with no feedback) — deliberately different from
+product reviews' own `DELETE`, where the product's own seller has a
+legitimate stake in moderating what's said about their listing: letting a
+seller delete feedback about their *own conduct* would let them scrub
+legitimate negative feedback, a materially different risk than scrubbing
+a product review. Keyed by `purchaseId` rather than a separate
+`feedbackId`, since `migrations/0098_seller_feedback.sql`'s own `UNIQUE`
+constraint on `purchase_id` already makes it a 1-to-1 resource — the same
+path `POST` uses. Rate-limited (20 per 15-minute window, `429` past that)
+per admin user (`seller-feedback-delete:<adminUserId>`), and logs
+`delete_seller_feedback` to `admin_action_log` (target type
+`seller_feedback`, target id the feedback's own `feedbackId`). Whether
+sellers should also get a self-delete/appeal path of their own is a
+separate, explicitly still-open question — not resolved by this.
 
 ### Frontend wiring
 
@@ -5861,13 +6148,58 @@ just this endpoint — see `src/main.js`'s `ensureShopperIdentity`.
 
 `404` if the instance or its underlying catalog template doesn't exist,
 `400` if the template has no price set (`priceCents == null` — nothing to
-buy), the instance sits on an unclaimed lándlet (no builder to credit), or
+buy), the template is marked `isTestModel` (#1946 — a downloaded/demo
+model, never a real listing, placeable in Build mode by an admin account
+but never purchasable, real money or simulated alike), the template's
+`stockQuantity` is `0` (#1948 — sold out; see "Sold-out templates" below),
+the instance sits on an unclaimed lándlet (no builder to credit), or
 `quantity` exceeds `1000` — a sanity bound (not a spec requirement, same
 reasoning as auctions' `durationHours` cap above) against one request
 turning into an unbounded `higgles_balance_cents`/land-cap credit. `429`
 past 30 calls per 15 minutes from one account (see "Rate limiting" above)
 closes the other half of that gap — repeated smaller requests instead of
 one large one.
+
+### Sold-out templates (#1948)
+
+A template's `stockQuantity` (see "Catalog template object" above) is
+`null` by default (unlimited, unaffected by any of this). When a seller
+sets a finite quantity, each purchase of that template — simulated or
+real-money, decided at the same point both paths already share
+(`writePurchaseRow` in `worker/index.js`) — atomically decrements it by
+the purchased quantity, using the same claim-before-act, guarded-`UPDATE`
+idiom (`WHERE stock_quantity >= ?`, checked via the write's own
+`meta.changes`) this file already uses for `higgles_balance_cents` debits
+elsewhere, so two near-simultaneous buyers of the last unit can't both
+succeed.
+
+- On the **simulated** path, a request that would take `stockQuantity`
+  below zero is rejected outright with `400` ("This product is sold out")
+  — no purchase is written, nothing is charged (simulated purchases never
+  charge real money regardless).
+- On the **real-money** path, the same oversell case cannot be rejected at
+  finalize time: the buyer has already been charged and the seller's
+  connected Stripe account has already received its transfer by the time
+  `POST /api/purchases/finalize` runs (same reasoning as the orphaned-
+  purchase fallback below). Instead, remaining stock is floored at zero
+  and the purchase is completed and recorded normally.
+- Either way, the moment `stockQuantity` reaches exactly `0`, every
+  `placed_instances` row referencing that template is removed outright —
+  no archive, no "flagged sold-out but still placed" state — and each
+  affected landlet owner gets one notification naming how many of their
+  placed instances were removed. This is the same hard-delete-no-archive
+  treatment an owning builder's own self-deletion already gives every
+  instance on their landlets; there is no backup/replacement-product
+  concept yet (that's a separate, later sub-issue of #1947's own tracking
+  issue).
+- A `PATCH`/`PUT /api/catalog/:templateId` (or its batch sibling) that sets
+  a fresh `stockQuantity` directly overwrites whatever remained — restocking
+  a sold-out template, for instance, is just a normal update setting it back
+  above zero.
+- A simple non-atomic pre-check (not the race-safe enforcement above, just
+  a quick rejection for an obviously sold-out item) also runs earlier, in
+  `POST /api/instances/:instanceId/purchase` itself, before a real-money
+  purchase is even sent to checkout.
 
 `GET /api/purchases?builderId=...` requires a session logged in as that
 builder (`403` otherwise); lists everything hosted on that builder's own
@@ -6227,6 +6559,128 @@ heading and its 99%-mentioning copy, that the close button hides it
 again, and that no console/page errors occurred anywhere in the flow. The
 verification script itself was a temporary scratch file, deleted before
 committing.
+
+### Disputes (#2020)
+
+docs/SPEC.md §5's "Fraud/dispute defense" bullet: "Low-value disputes from
+established accounts: auto-resolved in buyer's favor. Higher-value/new-
+account disputes: require actual evidence." Before this, no buyer-facing
+dispute/refund-request endpoint existed at all — every refund path above
+is seller- or admin-initiated (see "Refunding is seller-initiated, not
+shopper self-service" above); a shopper had no way to raise one themselves.
+
+`POST /api/purchases/:purchaseId/dispute` requires a session, and requires
+that session's own `builderId` match the purchase's `buyerBuilderId`
+(`400` otherwise — "Only the buyer of this purchase can dispute it"), the
+same real-buyer-session gate `POST .../feedback` uses (#1123). `404` if the
+purchase doesn't exist, `400` if already refunded, `409` if already paid
+out (same "contact support for manual reconciliation" case `.../refund`
+itself rejects).
+
+**Eligibility, evaluated entirely server-side — never a free-text claim:**
+- **Low-value**: `totalCents <= 2000` ($20 — the owner's own range was
+  "$15-25, exact value at implementer's discretion").
+- **Established buyer**: at least one *other* purchase by this same
+  `buyerBuilderId` that isn't refunded, **and** zero purchases by this
+  buyer that are refunded. There's no buyer-side strike/flag column in
+  this schema (unlike `sellers.strike_count`, migrations/0131, which is
+  seller-only) — refund/dispute history on `purchases.refundedAt` is the
+  only queryable signal for "has this buyer had a dispute before," so
+  that's what "established" actually checks.
+
+Both conditions must hold, **and** the product's own seller must not have
+opted into "no returns" (`metadata.noReturns`) — the same guard `.../refund`
+enforces; auto-resolving in the buyer's favor is a faster path to the same
+outcome a seller-initiated refund would reach, not a bypass of that
+seller's own policy choice. When all of that holds, this performs the
+exact same reversal `POST .../refund` does (the atomic `refundedAt` guard,
+the real Stripe reversal at the same 99% `REFUND_PAYOUT_RATE` for a
+real-money purchase, the higgle-commission clawback, the avatar/animation-
+ownership revocation) with no seller or admin action required, and logs an
+`admin_action_log` entry (`dispute_auto_resolved`, `adminUserId: null` —
+the established convention for a system/automated action with no human in
+the loop, same as the video-generation stale-reservation sweep) instead of
+the seller/admin-override log `.../refund` writes.
+
+Response shape is `{ autoResolved: boolean, purchase }` either way.
+**`autoResolved: false` is not an error** — a new/flagged buyer or a
+higher-value claim falls through to today's unchanged manual handling (no
+automated path exists for that case yet; this never fabricates a "pending
+review" state nothing else in this app reads). The purchase itself is left
+exactly as it was in that case.
+
+`worker/purchase-disputes.test.js` covers: auth required, buyer-ownership
+enforcement, 404/already-refunded/already-paid-out, the established+
+low-value auto-resolve path (refund, clawback, admin-log entry), a new
+buyer's first-ever purchase (not established, no prior purchase to count),
+a buyer with refund history (not established), a high-value purchase from
+an established buyer (no auto-resolve), and the no-returns override.
+
+### Self-dealing flags (#2019, sub-issue of #1212)
+
+A lighter, non-fingerprinting self-dealing signal: every real purchase
+(`writePurchaseRow`, both the dev-mode-simulated and real-money paths)
+checks whether the buyer's and the listing's seller's own on-file email
+match — the same account, or two accounts sharing one real inbox, buying
+from itself. A match writes a row to `self_dealing_flags`
+(`migrations/0132`) for admin review; it never blocks or affects the
+purchase itself (false positives — roommates, family buying from each
+other legitimately — are real, per the owner's own direction). Fails open
+whenever either side's email can't be resolved at all (a builder with no
+linked `user_id`, or a seller never linked to a real account) — that's
+"nothing to compare," not "cleared."
+
+**Not implemented**, despite being in this sub-issue's original scope:
+
+- **Shipping address matching** — this codebase never captures a buyer
+  shipping address anywhere, for any purpose (confirmed by a direct
+  schema/code search). Split into its own new sub-issue, since capturing
+  one at all is a real new data-capture/privacy decision, not a one-line
+  addition here.
+- **Same Stripe customer ID on both sides** — this integration never
+  creates a Stripe `Customer` object on either side of a transaction, only
+  a seller's Connect *account* id (`sellers.stripe_account_id`) and a card
+  fingerprint keyed to whichever account first confirmed that physical
+  card (`card_fingerprints`, #1072). The issue's own wording already
+  hedged this signal ("if accessible through the existing Stripe Connect
+  integration"), so it's dropped rather than built against data that
+  doesn't exist.
+
+```
+GET /api/self-dealing-flags
+```
+
+Admin-only. Lists every `pending` flag, newest first (capped at 200),
+joined against its own purchase for context:
+
+```json
+{
+  "flags": [
+    {
+      "flagId": "self-dealing-flag-...",
+      "purchaseId": "purchase-...",
+      "matchedSignals": ["email"],
+      "createdAt": "...",
+      "templateId": "...",
+      "buyerBuilderId": "...",
+      "builderId": "...",
+      "totalCents": 500
+    }
+  ]
+}
+```
+
+```
+POST /api/self-dealing-flags/:flagId/review
+{ "notes": "Confirmed roommates, no action needed" }   // optional, ≤280 chars
+```
+
+Admin-only. Marks the flag `reviewed` (404s if it's already reviewed or
+doesn't exist) and writes an `admin_action_log` entry. Unlike #2017's
+product-flag resolve action, there is no "approve"/"reject" consequence
+here — a flag is a soft signal, not an accusation, so reviewing one is
+just acknowledgment, optionally with a note for the admin's own record;
+nothing else in this app reacts to a flag's status.
 
 ## Tax reporting
 

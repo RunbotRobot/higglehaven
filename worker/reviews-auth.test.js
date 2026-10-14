@@ -386,6 +386,7 @@ describe('Product reviews', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -412,6 +413,106 @@ describe('Product reviews', () => {
     expect(deleted.body).toEqual({ deleted: true });
   });
 
+  // #1712 (owner confirmed): an admin can remove any review outright --
+  // harassment, doxxing, other policy violations -- even though the
+  // template's own seller is reachable and active, unlike the dangling-
+  // seller admin fallback mark-shipped/refund already have. Logged via
+  // admin_action_log, same accountability convention as those.
+  it('lets an admin delete any review outright, even when the template has a reachable owning seller', async () => {
+    const seller = await signupSeller('review-admin-override-seller');
+    const shopper = await signupBuilder('review-admin-override-shopper');
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'review-admin-override-owned',
+        name: 'Admin-moderatable reviewable product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+        priceCents: 500,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    const templateId = created.body.template.templateId;
+    await createPurchase(templateId, shopper);
+    const posted = await api(`/catalog/${templateId}/reviews`, shopper.session({
+      method: 'POST',
+      body: JSON.stringify({ rating: 1, text: 'Abusive/policy-violating text goes here.' }),
+    }));
+    expect(posted.response.status).toBe(201);
+    const reviewId = posted.body.review.reviewId;
+
+    const asAdmin = await api(`/catalog/${templateId}/reviews/${reviewId}`, adminSession({ method: 'DELETE' }));
+    expect(asAdmin.response.status).toBe(200);
+    expect(asAdmin.body).toEqual({ deleted: true });
+
+    const listedAfter = await api(`/catalog/${templateId}/reviews`);
+    expect(listedAfter.body.reviews).toHaveLength(0);
+
+    const adminUserId = (await api('/auth/me', adminSession())).body.user.userId;
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('delete_review_override', reviewId).first();
+    expect(logRow).not.toBeNull();
+    expect(logRow.admin_user_id).toBe(adminUserId);
+    expect(logRow.target_type).toBe('product_review');
+  });
+
+  // #1971: a concurrent delete can win the race against the admin's own
+  // DELETE before it runs (another admin's click, or the owning seller's
+  // own moderation path) — the loser's DELETE affects 0 rows, and must not
+  // write an admin_action_log row claiming it deleted something it didn't.
+  // Firing two concurrent admin DELETEs at the same review exercises this
+  // directly: exactly one of them actually removes the row, so exactly one
+  // admin_action_log row should ever exist for it, never two. The losing
+  // attempt's own status depends on interleaving and isn't itself the bug:
+  // if both existence-checks run before either DELETE, both see the row and
+  // both return 200 (the loser's DELETE just affects 0 rows); if the
+  // winner's full cycle finishes first, the loser's own existence check
+  // finds nothing and 404s instead. Either is a correct response — the one
+  // invariant this test actually guards is the log row count.
+  it('logs the admin delete-override exactly once, not once per losing racer, when two deletes race the same review', async () => {
+    const seller = await signupSeller('review-admin-race-seller');
+    const shopper = await signupBuilder('review-admin-race-shopper');
+    const created = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'review-admin-race-owned',
+        name: 'Race-moderatable reviewable product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+        priceCents: 500,
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    const templateId = created.body.template.templateId;
+    await createPurchase(templateId, shopper);
+    const posted = await api(`/catalog/${templateId}/reviews`, shopper.session({
+      method: 'POST',
+      body: JSON.stringify({ rating: 1, text: 'Abusive/policy-violating text goes here.' }),
+    }));
+    expect(posted.response.status).toBe(201);
+    const reviewId = posted.body.review.reviewId;
+
+    const attempts = await Promise.all(
+      Array.from({ length: 2 }, () => api(`/catalog/${templateId}/reviews/${reviewId}`, adminSession({ method: 'DELETE' }))),
+    );
+    for (const attempt of attempts) {
+      expect([200, 404]).toContain(attempt.response.status);
+    }
+    const succeeded = attempts.filter((attempt) => attempt.response.status === 200);
+    expect(succeeded.length).toBeGreaterThanOrEqual(1);
+    for (const attempt of succeeded) {
+      expect(attempt.body).toEqual({ deleted: true });
+    }
+
+    const logRows = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('delete_review_override', reviewId).all();
+    expect(logRows.results).toHaveLength(1);
+  });
+
   // #1043: every other real "something happened that the other party
   // should passively learn about" event in this file/codebase fires a
   // notification (new auction bid, an auction selling, a sale, a friend
@@ -430,6 +531,7 @@ describe('Product reviews', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -483,6 +585,7 @@ describe('Product reviews', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -551,6 +654,7 @@ describe('Product reviews', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -601,6 +705,7 @@ describe('Product reviews', () => {
           color: '#123456',
           dimensions: { width: 1, depth: 1, height: 1 },
           sellerId: seller.sellerId,
+          priceCents: 500,
         }),
       }));
       expect(created.response.status).toBe(201);
@@ -650,6 +755,7 @@ describe('Product reviews', () => {
           color: '#123456',
           dimensions: { width: 1, depth: 1, height: 1 },
           sellerId: seller.sellerId,
+          priceCents: 500,
         }),
       }));
       expect(created.response.status).toBe(201);
@@ -710,6 +816,7 @@ describe('Product reviews', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -786,6 +893,7 @@ describe('Product reviews', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     const templateId = created.body.template.templateId;
@@ -874,6 +982,275 @@ describe('Product reviews', () => {
 
     const afterDelete = await api(`/catalog/${templateId}/reviews`);
     expect(afterDelete.response.status).toBe(404);
+  });
+
+  // #1975 (owner decision): a review now records who actually wrote it
+  // (user_id, migrations/0130), the same sign_posts.user_id pattern
+  // (#1830) -- POST's own response/GET listing should surface it.
+  it('records the posting session\'s own userId on a new review', async () => {
+    const templateId = await createTemplate('review-userid-recorded');
+    const shopper = await signupBuilder('review-userid-recorded-shopper');
+    await createPurchase(templateId, shopper);
+    const posted = await api(`/catalog/${templateId}/reviews`, shopper.session({
+      method: 'POST',
+      body: JSON.stringify({ rating: 5 }),
+    }));
+    expect(posted.response.status).toBe(201);
+    const shopperUserId = (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?')
+      .bind(shopper.builderId).first()).user_id;
+    expect(posted.body.review.userId).toBe(shopperUserId);
+
+    const listed = await api(`/catalog/${templateId}/reviews`);
+    expect(listed.body.reviews[0].userId).toBe(shopperUserId);
+  });
+
+  describe('Author self-edit/delete (#1975)', () => {
+    async function postReview(templateId, shopper, { rating = 4, text = 'Pretty good.' } = {}) {
+      const posted = await api(`/catalog/${templateId}/reviews`, shopper.session({
+        method: 'POST', body: JSON.stringify({ rating, text }),
+      }));
+      expect(posted.response.status).toBe(201);
+      return posted.body.review.reviewId;
+    }
+
+    it('lets the review\'s own author edit it directly, with no seller/admin involvement', async () => {
+      const templateId = await createTemplate('review-author-edit');
+      const shopper = await signupBuilder('review-author-edit-shopper');
+      await createPurchase(templateId, shopper);
+      const reviewId = await postReview(templateId, shopper);
+
+      const edited = await api(`/catalog/${templateId}/reviews/${reviewId}`, shopper.session({
+        method: 'PATCH', body: JSON.stringify({ rating: 2, text: 'Changed my mind.' }),
+      }));
+      expect(edited.response.status).toBe(200);
+      expect(edited.body.review).toMatchObject({ rating: 2, text: 'Changed my mind.' });
+
+      const listed = await api(`/catalog/${templateId}/reviews`);
+      expect(listed.body.reviews[0]).toMatchObject({ rating: 2, text: 'Changed my mind.' });
+    });
+
+    it('rejects an edit from anyone other than the review\'s own author', async () => {
+      const templateId = await createTemplate('review-edit-cross-account');
+      const shopper = await signupBuilder('review-edit-cross-account-shopper');
+      const stranger = await signupBuilder('review-edit-cross-account-stranger');
+      await createPurchase(templateId, shopper);
+      const reviewId = await postReview(templateId, shopper);
+
+      const unauthenticated = await api(`/catalog/${templateId}/reviews/${reviewId}`, {
+        method: 'PATCH', body: JSON.stringify({ rating: 1 }),
+      });
+      expect(unauthenticated.response.status).toBe(401);
+
+      const wrongAccount = await api(`/catalog/${templateId}/reviews/${reviewId}`, stranger.session({
+        method: 'PATCH', body: JSON.stringify({ rating: 1 }),
+      }));
+      expect(wrongAccount.response.status).toBe(403);
+
+      const unchanged = await api(`/catalog/${templateId}/reviews`);
+      expect(unchanged.body.reviews[0].rating).toBe(4);
+    });
+
+    // Omitting a field keeps its existing value; an explicitly empty
+    // string for `text` clears it -- the same distinction bundles' own
+    // PATCH (COALESCE-based) makes, resolved in application code here.
+    it('keeps an omitted field as-is on edit, but clears text when explicitly set empty', async () => {
+      const templateId = await createTemplate('review-edit-partial');
+      const shopper = await signupBuilder('review-edit-partial-shopper');
+      await createPurchase(templateId, shopper);
+      const reviewId = await postReview(templateId, shopper, { rating: 3, text: 'Original text.' });
+
+      const ratingOnly = await api(`/catalog/${templateId}/reviews/${reviewId}`, shopper.session({
+        method: 'PATCH', body: JSON.stringify({ rating: 5 }),
+      }));
+      expect(ratingOnly.response.status).toBe(200);
+      expect(ratingOnly.body.review).toMatchObject({ rating: 5, text: 'Original text.' });
+
+      const clearText = await api(`/catalog/${templateId}/reviews/${reviewId}`, shopper.session({
+        method: 'PATCH', body: JSON.stringify({ text: '' }),
+      }));
+      expect(clearText.response.status).toBe(200);
+      expect(clearText.body.review).toMatchObject({ rating: 5, text: null });
+    });
+
+    it('rejects an edit with an out-of-range rating', async () => {
+      const templateId = await createTemplate('review-edit-bad-rating');
+      const shopper = await signupBuilder('review-edit-bad-rating-shopper');
+      await createPurchase(templateId, shopper);
+      const reviewId = await postReview(templateId, shopper);
+
+      const rejected = await api(`/catalog/${templateId}/reviews/${reviewId}`, shopper.session({
+        method: 'PATCH', body: JSON.stringify({ rating: 6 }),
+      }));
+      expect(rejected.response.status).toBe(400);
+    });
+
+    it('lets the review\'s own author delete it directly, with no seller/admin involvement', async () => {
+      // A seller-owned template, not createTemplate's own unowned one --
+      // an unowned template's DELETE is deliberately wide open to anyone
+      // (moderation has no real owner to gate behind), which would make
+      // the "wrong account" assertion below pass for an unrelated reason.
+      const seller = await signupSeller('review-author-delete-seller');
+      const shopper = await signupBuilder('review-author-delete-shopper');
+      const stranger = await signupBuilder('review-author-delete-stranger');
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'review-author-delete-owned',
+          name: 'Author-delete reviewable product',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          sellerId: seller.sellerId,
+          priceCents: 500,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+      const templateId = created.body.template.templateId;
+      await createPurchase(templateId, shopper);
+      const reviewId = await postReview(templateId, shopper);
+
+      const wrongAccount = await api(`/catalog/${templateId}/reviews/${reviewId}`, stranger.session({ method: 'DELETE' }));
+      expect(wrongAccount.response.status).toBe(403);
+
+      const deleted = await api(`/catalog/${templateId}/reviews/${reviewId}`, shopper.session({ method: 'DELETE' }));
+      expect(deleted.response.status).toBe(200);
+      expect(deleted.body).toEqual({ deleted: true });
+
+      const listed = await api(`/catalog/${templateId}/reviews`);
+      expect(listed.body.reviews).toHaveLength(0);
+    });
+
+    // A pre-#1975 review (user_id IS NULL, seeded directly like
+    // createPurchase's own "legacy purchase" rows) has nobody on record to
+    // own it -- the author-direct branches must never match it, falling
+    // straight through to the existing moderation paths exactly as before.
+    it('never lets a legacy review with no recorded author be claimed as anyone\'s own', async () => {
+      const seller = await signupSeller('review-legacy-no-userid-seller');
+      const shopper = await signupBuilder('review-legacy-no-userid-shopper');
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'review-legacy-no-userid-owned',
+          name: 'Legacy-review product',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          sellerId: seller.sellerId,
+          priceCents: 500,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+      const templateId = created.body.template.templateId;
+      const reviewId = 'review-legacy-no-userid';
+      await env.DB.prepare(`
+        INSERT INTO product_reviews (review_id, template_id, author_label, rating, text, user_id)
+        VALUES (?, ?, 'Legacy Reviewer', 3, 'Pre-#1975 review.', NULL)
+      `).bind(reviewId, templateId).run();
+
+      const editRejected = await api(`/catalog/${templateId}/reviews/${reviewId}`, shopper.session({
+        method: 'PATCH', body: JSON.stringify({ rating: 1 }),
+      }));
+      expect(editRejected.response.status).toBe(403);
+
+      const deleteRejectedByShopper = await api(`/catalog/${templateId}/reviews/${reviewId}`, shopper.session({ method: 'DELETE' }));
+      expect(deleteRejectedByShopper.response.status).toBe(403);
+
+      const deletedBySeller = await api(`/catalog/${templateId}/reviews/${reviewId}`, seller.session({ method: 'DELETE' }));
+      expect(deletedBySeller.response.status).toBe(200);
+    });
+
+    it('rate-limits repeated review edits from the same account', async () => {
+      const templateId = await createTemplate('review-edit-rate-limit');
+      const shopper = await signupBuilder('review-edit-rate-limit-shopper');
+      await createPurchase(templateId, shopper);
+      const reviewId = await postReview(templateId, shopper);
+
+      for (let i = 0; i < 20; i++) {
+        const attempt = await api(`/catalog/${templateId}/reviews/${reviewId}`, shopper.session({
+          method: 'PATCH', body: JSON.stringify({ rating: (i % 5) + 1 }),
+        }));
+        expect(attempt.response.status).not.toBe(429);
+      }
+      const limited = await api(`/catalog/${templateId}/reviews/${reviewId}`, shopper.session({
+        method: 'PATCH', body: JSON.stringify({ rating: 1 }),
+      }));
+      expect(limited.response.status).toBe(429);
+    });
+
+    // #1975: "Maybe we should keep a record of the original content
+    // internally in case of disputes" -- every author-initiated edit/
+    // delete should snapshot the pre-change row into
+    // user_content_edit_history (migrations/0129) first.
+    it('snapshots the pre-edit review into user_content_edit_history before applying an author edit', async () => {
+      const templateId = await createTemplate('review-history-edit');
+      const shopper = await signupBuilder('review-history-edit-shopper');
+      await createPurchase(templateId, shopper);
+      const reviewId = await postReview(templateId, shopper, { rating: 4, text: 'Before the edit.' });
+      const shopperUserId = (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?')
+        .bind(shopper.builderId).first()).user_id;
+
+      const edited = await api(`/catalog/${templateId}/reviews/${reviewId}`, shopper.session({
+        method: 'PATCH', body: JSON.stringify({ rating: 1, text: 'After the edit.' }),
+      }));
+      expect(edited.response.status).toBe(200);
+
+      const history = await env.DB.prepare(
+        'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+      ).bind('product_reviews', reviewId).all();
+      expect(history.results).toHaveLength(1);
+      expect(history.results[0]).toMatchObject({ action: 'edit', actor_user_id: shopperUserId });
+      const snapshot = JSON.parse(history.results[0].snapshot_json);
+      expect(snapshot).toMatchObject({ review_id: reviewId, rating: 4, text: 'Before the edit.' });
+    });
+
+    it('snapshots the pre-delete review into user_content_edit_history before an author delete', async () => {
+      const templateId = await createTemplate('review-history-delete');
+      const shopper = await signupBuilder('review-history-delete-shopper');
+      await createPurchase(templateId, shopper);
+      const reviewId = await postReview(templateId, shopper, { rating: 5, text: 'About to be deleted.' });
+      const shopperUserId = (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?')
+        .bind(shopper.builderId).first()).user_id;
+
+      const deleted = await api(`/catalog/${templateId}/reviews/${reviewId}`, shopper.session({ method: 'DELETE' }));
+      expect(deleted.response.status).toBe(200);
+
+      const history = await env.DB.prepare(
+        'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+      ).bind('product_reviews', reviewId).all();
+      expect(history.results).toHaveLength(1);
+      expect(history.results[0]).toMatchObject({ action: 'delete', actor_user_id: shopperUserId });
+      const snapshot = JSON.parse(history.results[0].snapshot_json);
+      expect(snapshot).toMatchObject({ review_id: reviewId, rating: 5, text: 'About to be deleted.' });
+    });
+
+    // Moderation deletes (admin override, seller) are not the user editing/
+    // deleting their own content -- the owner's own framing was specifically
+    // about self-service, so these must not write to the history table.
+    it('does not snapshot to user_content_edit_history on a seller or admin moderation delete', async () => {
+      const seller = await signupSeller('review-history-moderation-seller');
+      const shopper = await signupBuilder('review-history-moderation-shopper');
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'review-history-moderation-owned',
+          name: 'Moderation-only reviewable product',
+          color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 },
+          sellerId: seller.sellerId,
+          priceCents: 500,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+      const templateId = created.body.template.templateId;
+      await createPurchase(templateId, shopper);
+      const reviewId = await postReview(templateId, shopper);
+
+      const deletedBySeller = await api(`/catalog/${templateId}/reviews/${reviewId}`, seller.session({ method: 'DELETE' }));
+      expect(deletedBySeller.response.status).toBe(200);
+
+      const history = await env.DB.prepare(
+        'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+      ).bind('product_reviews', reviewId).all();
+      expect(history.results).toHaveLength(0);
+    });
   });
 });
 
@@ -1271,6 +1648,163 @@ describe('Authentication', () => {
       method: 'POST', body: JSON.stringify({ email: second.email }),
     }));
     expect(blockedAgain.response.status).toBe(409);
+  });
+
+  // #2029 (sub-issue of #1201): an admin-initiated, reversible account
+  // suspension -- same email-addressed, admin_action_log-recorded shape as
+  // grant-admin/revoke-admin above.
+  describe('Account suspension (#2029)', () => {
+    async function makeAdmin(label) {
+      const admin = await signupBuilder(label);
+      await api('/auth/admin-bootstrap', admin.session({
+        method: 'POST', body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+      }));
+      return admin;
+    }
+
+    it('lets an admin suspend an account by email, but nobody else, with a detailed audit log entry', async () => {
+      const admin = await makeAdmin('suspend-account-admin');
+      const target = await signupBuilder('suspend-account-target');
+
+      const noSession = await api('/auth/suspend-account', {
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'harassment' }),
+      });
+      expect(noSession.response.status).toBe(401);
+
+      const nonAdmin = await api('/auth/suspend-account', target.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'harassment' }),
+      }));
+      expect(nonAdmin.response.status).toBe(403);
+
+      const missingReason = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email }),
+      }));
+      expect(missingReason.response.status).toBe(400);
+
+      const notFound = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: 'nobody-here@example.com', reason: 'harassment' }),
+      }));
+      expect(notFound.response.status).toBe(404);
+
+      const suspended = await api('/auth/suspend-account', admin.session({
+        method: 'POST',
+        body: JSON.stringify({
+          email: target.email.toUpperCase(), reason: 'harassment', evidenceNote: 'reported by 3 users',
+        }),
+      }));
+      expect(suspended.response.status).toBe(200);
+      expect(suspended.body.suspension.reason).toBe('harassment');
+      expect(suspended.body.suspension.evidenceNote).toBe('reported by 3 users');
+      const targetUserId = suspended.body.suspension.userId;
+
+      const adminUserId = (await api('/auth/me', admin.session())).body.user.userId;
+      const logRow = await env.DB.prepare(
+        'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+      ).bind('suspend_account', targetUserId).first();
+      expect(logRow.admin_user_id).toBe(adminUserId);
+      expect(logRow.target_type).toBe('user');
+      const detail = JSON.parse(logRow.detail_json);
+      expect(detail.reason).toBe('harassment');
+      expect(detail.evidenceNote).toBe('reported by 3 users');
+
+      // Suspending an already-suspended account is a 409, not a second,
+      // divergent active-suspension row.
+      const alreadySuspended = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'again' }),
+      }));
+      expect(alreadySuspended.response.status).toBe(409);
+    });
+
+    it('rejects graceDays outside 1-365, defaults to 30 when omitted', async () => {
+      const admin = await makeAdmin('suspend-grace-admin');
+      const target = await signupBuilder('suspend-grace-target');
+
+      const tooLow = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'x', graceDays: 0 }),
+      }));
+      expect(tooLow.response.status).toBe(400);
+
+      const tooHigh = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'x', graceDays: 400 }),
+      }));
+      expect(tooHigh.response.status).toBe(400);
+
+      const suspendedAt = new Date();
+      const suspended = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'x' }),
+      }));
+      expect(suspended.response.status).toBe(200);
+      const daysUntilGrace = (new Date(suspended.body.suspension.gracePeriodEndsAt) - suspendedAt)
+        / (24 * 60 * 60 * 1000);
+      expect(daysUntilGrace).toBeGreaterThan(29.9);
+      expect(daysUntilGrace).toBeLessThan(30.1);
+    });
+
+    it('lets an admin unsuspend an account, but nobody else, and 409s with no active suspension', async () => {
+      const admin = await makeAdmin('unsuspend-account-admin');
+      const target = await signupBuilder('unsuspend-account-target');
+
+      const noActive = await api('/auth/unsuspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email }),
+      }));
+      expect(noActive.response.status).toBe(409);
+
+      await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'x' }),
+      }));
+
+      const nonAdmin = await api('/auth/unsuspend-account', target.session({
+        method: 'POST', body: JSON.stringify({ email: target.email }),
+      }));
+      expect(nonAdmin.response.status).toBe(403);
+
+      const lifted = await api('/auth/unsuspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email }),
+      }));
+      expect(lifted.response.status).toBe(200);
+      expect(lifted.body.suspension.liftedAt).toBeTruthy();
+
+      const targetUserId = lifted.body.suspension.userId;
+      const adminUserId = (await api('/auth/me', admin.session())).body.user.userId;
+      const logRow = await env.DB.prepare(
+        'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+      ).bind('unsuspend_account', targetUserId).first();
+      expect(logRow.admin_user_id).toBe(adminUserId);
+
+      // Lifted -- suspending again now succeeds rather than 409ing.
+      const resuspended = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'repeat offense' }),
+      }));
+      expect(resuspended.response.status).toBe(200);
+    });
+
+    it('reports suspension status for any admin, but nobody else, null when not suspended', async () => {
+      const admin = await makeAdmin('suspension-status-admin');
+      const target = await signupBuilder('suspension-status-target');
+
+      const noSession = await api(`/auth/suspension-status?email=${encodeURIComponent(target.email)}`);
+      expect(noSession.response.status).toBe(401);
+
+      const nonAdmin = await api(
+        `/auth/suspension-status?email=${encodeURIComponent(target.email)}`, target.session(),
+      );
+      expect(nonAdmin.response.status).toBe(403);
+
+      const beforeSuspend = await api(
+        `/auth/suspension-status?email=${encodeURIComponent(target.email)}`, admin.session(),
+      );
+      expect(beforeSuspend.response.status).toBe(200);
+      expect(beforeSuspend.body.suspension).toBeNull();
+
+      await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'x' }),
+      }));
+      const afterSuspend = await api(
+        `/auth/suspension-status?email=${encodeURIComponent(target.email)}`, admin.session(),
+      );
+      expect(afterSuspend.response.status).toBe(200);
+      expect(afterSuspend.body.suspension.reason).toBe('x');
+    });
   });
 
   it('rejects signup with an already-registered email, case-insensitively', async () => {

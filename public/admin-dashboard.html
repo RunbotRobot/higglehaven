@@ -134,7 +134,7 @@
 <nav>
   <h1 style="padding: 0 8px;">Admin Dashboard</h1>
   <div class="nav-title">Panels</div>
-  <button class="nav-item active" data-panel="roster">Admin roster &amp; access</button>
+  <button class="nav-item active" data-panel="roster" aria-current="page">Admin roster &amp; access</button>
   <button class="nav-item" data-panel="models">R2 model storage</button>
   <button class="nav-item" data-panel="world">World &amp; land candidates</button>
   <button class="nav-item" data-panel="landlets">Landlet overrides</button>
@@ -276,6 +276,7 @@
         <h3>Force-complete generation</h3>
         <p class="hint">Only for a landlet stuck in <code>generating</code> — immediately makes it greenbelt/claimable if the world circle already encloses it.</p>
         <button id="landletForceCompleteBtn">Force complete generation</button>
+        <p class="hint" id="landletForceCompleteNote" hidden></p>
       </div>
 
       <div id="landletReassignWrap" hidden>
@@ -359,7 +360,15 @@
   const buttons = [...document.querySelectorAll('nav button.nav-item')];
   const panels = [...document.querySelectorAll('main .panel')];
   function activate(name) {
-    buttons.forEach((btn) => btn.classList.toggle('active', btn.dataset.panel === name));
+    // #1966: same aria-current gap already fixed for the main app's own
+    // toggle/tab groups (#1503/#1760/#1842/#1901) -- the .active class alone
+    // never told a screen reader which panel is current.
+    buttons.forEach((btn) => {
+      const isActive = btn.dataset.panel === name;
+      btn.classList.toggle('active', isActive);
+      if (isActive) btn.setAttribute('aria-current', 'page');
+      else btn.removeAttribute('aria-current');
+    });
     panels.forEach((panel) => panel.classList.toggle('active', panel.id === 'panel-' + name));
     if (!initialized.has(name) && window.__adminDashboardPanels[name]) {
       initialized.add(name);
@@ -1495,6 +1504,7 @@
     const detailWrap = document.getElementById('landletDetailWrap');
     const statGrid = document.getElementById('landletStatGrid');
     const forceCompleteWrap = document.getElementById('landletForceCompleteWrap');
+    const forceCompleteNote = document.getElementById('landletForceCompleteNote');
     const reassignWrap = document.getElementById('landletReassignWrap');
     const reassignTargetInput = document.getElementById('landletReassignTargetInput');
     const auctionConflictWrap = document.getElementById('landletAuctionConflictWrap');
@@ -1535,6 +1545,7 @@
       `;
       detailWrap.hidden = false;
       forceCompleteWrap.hidden = landlet.status !== 'generating';
+      forceCompleteNote.hidden = true;
       reassignWrap.hidden = landlet.status !== 'claimed';
       auctionConflictWrap.hidden = true;
       reassignTargetInput.value = '';
@@ -1562,6 +1573,15 @@
           { method: 'POST' },
         );
         renderLandlet(body.landlet);
+        // #1888: a landlet the world circle doesn't yet fully enclose stays
+        // "generating" even after this call succeeds (generatedAt is set,
+        // but expandWorldOnce promotes it to greenbelt later) -- without
+        // this, the button just stays visible with no sign anything
+        // happened, indistinguishable from a no-op.
+        if (body.landlet.status === 'generating') {
+          forceCompleteNote.hidden = false;
+          forceCompleteNote.textContent = 'Generation marked complete; this landlet will become greenbelt once a world expansion encloses it.';
+        }
       } catch (error) {
         showError(error.message);
       }

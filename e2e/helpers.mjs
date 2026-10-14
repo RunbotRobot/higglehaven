@@ -148,6 +148,24 @@ export async function createGreenbeltLandletAsAdmin(landletId, { areaM2 = 1000 }
   }
 }
 
+// Same admin-gated seeding shape as createGreenbeltLandletAsAdmin above, but
+// for a landlet stuck in 'generating' -- lets a test control whether the
+// world circle already encloses it (center near the origin) or not (a
+// center far enough out that landletMaxWorldRadius exceeds any real test
+// world's own radiusM, worker/geometry.js's own formula with no polygon:
+// hypot(center) + sameAreaRadius(areaM2)) without needing to drive the real
+// generate-ring/world-expand flow growWorldAsAdmin above already exercises.
+export async function createGeneratingLandletAsAdmin(landletId, { areaM2 = 1000, center = { x: 0, y: 0 } } = {}) {
+  const cookie = await ensureAdminSession();
+  const created = await adminApi('/landlets', cookie, {
+    method: 'POST',
+    body: JSON.stringify({ landletId, name: landletId, areaM2, status: 'generating', center }),
+  });
+  if (created.response.status !== 201) {
+    throw new Error(`createGeneratingLandletAsAdmin: create failed — ${created.body.error}`);
+  }
+}
+
 // #489: land cap now actually gates vertical construction and auction
 // bidding, and every fresh builder's owned area already equals their
 // default cap exactly — so a suite whose real point is something *else*
@@ -186,6 +204,48 @@ export async function grantHigglesAsAdmin(builderId, amountCents = 1000000) {
 // at the end) and window.prompt() dialogs (used throughout for naming a new
 // builder/seller identity — there's no real text-input modal for it) always
 // answered with `promptAnswer`.
+// #1916: same transient-dev-server-crash class as #1881 (ci.yml's own
+// shard-retry comment: GitHub's shared runners stalling under concurrent
+// load can push a request past workerd's own internal error threshold,
+// leaving a dead connection for everything after). #1881 fixed this one
+// test-script fetch() call at a time (multiplayer-presence.test.mjs's own
+// fetchJson wrapper) -- but most tests never call fetch() directly the way
+// that one does; they drive the real UI, whose OWN internal fetch calls
+// (login, claim, settings data, etc.) are just as exposed to the same
+// crash. Intercepting at the network layer here covers every API call any
+// test makes, from either source, in one place, matching the issue's own
+// suggestion of a shared helper rather than patching each affected file's
+// fetch calls one at a time as they turn up. Only a genuine failure (a
+// thrown network error, or a 5xx -- never a deliberate 4xx a test might be
+// asserting on) gets the one retry; a second failure propagates as the
+// real net::ERR_CONNECTION_REFUSED/500 a caller would otherwise have seen,
+// so a repeatable regression still fails loudly. Scoped to /api/* only, not
+// every static asset too -- routing every single request (JS bundle,
+// images, etc.) through route.fetch()/route.fulfill() measurably added
+// enough per-request overhead, under this suite's own CPU-constrained CI
+// load, to push an unrelated UI-timing assertion elsewhere in the suite
+// past its own timeout; API calls are both the actual failure mode
+// reported in #1881/#1916 and a small fraction of a page's total requests.
+async function installTransientFailureRetry(page) {
+  await page.route(`${BASE_URL}/api/**`, async (route) => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        const response = await route.fetch();
+        if (response.status() < 500 || attempt > 0) {
+          await route.fulfill({ response });
+          return;
+        }
+      } catch (err) {
+        if (attempt > 0) {
+          await route.abort();
+          return;
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  });
+}
+
 export async function launchPage({ promptAnswer = 'E2E Tester', viewport = { width: 420, height: 860 } } = {}) {
   const browser = await chromium.launch(CHROMIUM_PATH ? { executablePath: CHROMIUM_PATH } : {});
   const page = await browser.newPage({ viewport });
@@ -198,6 +258,7 @@ export async function launchPage({ promptAnswer = 'E2E Tester', viewport = { wid
     if (dialog.type() === 'prompt') await dialog.accept(promptAnswer);
     else await dialog.accept();
   });
+  await installTransientFailureRetry(page);
   await page.goto(BASE_URL, { waitUntil: 'networkidle' });
   await page.waitForTimeout(1500);
   return { browser, page, errors };
@@ -270,7 +331,12 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   // #1896: CI-wide contention has since grown past even that 20000ms
   // margin (seen tripping simulated-purchases.test.mjs, twice in a row, with
   // no change anywhere near this call site) -- bumped again to 30000ms.
-  await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 30000 });
+  // #2048: outpaced again within about a week (seen tripping five more
+  // unrelated files across one run's original attempt and two re-runs) --
+  // bumped by more than the prior two escalations this time, rather than
+  // just matching their size, since each matched bump has been outpaced
+  // this quickly.
+  await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 60000 });
   await clearVerifyModalIfShown(page);
 
   // N44: an already-showing modal (the branch above that skipped the

@@ -160,7 +160,7 @@ async function seedHeavyTemplate(name, modelUrl) {
     body: JSON.stringify({
       name, category: 'placeholder', color: '#887755',
       dimensions: { width: 1, depth: 1, height: 1 },
-      sellerId, modelUrl, modelSizeBytes: 7 * 1024 * 1024,
+      sellerId, modelUrl, modelSizeBytes: 7 * 1024 * 1024, priceCents: 500,
     }),
   });
   const body = await response.json();

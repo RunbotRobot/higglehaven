@@ -659,6 +659,10 @@ async function handleApi(request, env, url, ctx) {
     return handlePurchases(request, env, route, url);
   }
 
+  if (route[0] === 'self-dealing-flags') {
+    return handleSelfDealingFlags(request, env.DB, route);
+  }
+
   if (route[0] === 'bundles') {
     return handleBundles(request, env.DB, route, url);
   }
@@ -719,6 +723,10 @@ async function handleApi(request, env, url, ctx) {
 
   if (request.method === 'GET' && route.length === 1 && route[0] === 'admin-action-log') {
     return handleAdminActionLogList(request, env.DB, url);
+  }
+
+  if (request.method === 'GET' && route.length === 1 && route[0] === 'product-flags') {
+    return handleProductFlagsList(request, env.DB, url);
   }
 
   return json({ error: 'Not found' }, 404);
@@ -1743,6 +1751,7 @@ async function handleCatalog(request, db, route, url, models, env) {
         model_size_bytes = excluded.model_size_bytes,
         skeleton_signature = excluded.skeleton_signature,
         metadata_json = excluded.metadata_json,
+        stock_quantity = excluded.stock_quantity,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     ` : '';
     // #934: unlike the single-item PUT/PATCH sibling above (which forces
@@ -1756,8 +1765,8 @@ async function handleCatalog(request, db, route, url, models, env) {
     const existingSellerIdById = new Map(existingOwnerRows.results.map((row) => [row.template_id, row.seller_id]));
     await db.batch(templates.map((template) => db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...templateParams(existingSellerIdById.has(template.templateId)
       ? { ...template, sellerId: existingSellerIdById.get(template.templateId) }
@@ -1915,12 +1924,18 @@ async function handleCatalog(request, db, route, url, models, env) {
       : decodeCatalogPriceCursor(url.searchParams.get('cursor'));
     const conditions = [];
     const bindings = [];
+    // #2006: COLLATE NOCASE on category/subcategory/color -- matching the
+    // name/q filter's own established reasoning a few lines below (free-
+    // text/seller-supplied, no enforced casing convention at the schema
+    // level). sellerId stays plain case-sensitive, deliberately excluded:
+    // it's a machine-generated opaque id (crypto.randomUUID(), always
+    // lowercase hex), not user-typed free text.
     if (category) {
-      conditions.push('category = ?');
+      conditions.push('category = ? COLLATE NOCASE');
       bindings.push(category);
     }
     if (subcategory) {
-      conditions.push('subcategory = ?');
+      conditions.push('subcategory = ? COLLATE NOCASE');
       bindings.push(subcategory);
     }
     if (sellerId) {
@@ -1928,7 +1943,7 @@ async function handleCatalog(request, db, route, url, models, env) {
       bindings.push(sellerId);
     }
     if (color) {
-      conditions.push('color = ?');
+      conditions.push('color = ? COLLATE NOCASE');
       bindings.push(color);
     }
     if (minPriceCents !== null) {
@@ -1968,6 +1983,21 @@ async function handleCatalog(request, db, route, url, models, env) {
       bindings.push(`%${query.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`);
     }
     if (sort !== 'name') conditions.push('price_cents IS NOT NULL');
+    // #1946: is_test_model deliberately does NOT filter this list -- see
+    // that migration's own comment. This is the one endpoint Build mode's
+    // own "Add Item" picker (buildCatalogPickerButtons/fetchCatalog) uses
+    // for every ordinary builder, not just the owner's own account, and
+    // there's no separate real shopper-facing marketplace browse surface
+    // to filter instead (confirmed: Shop mode walks placed_instances, it
+    // never lists catalog_templates directly). Hiding here was tried and
+    // reverted after CI caught it breaking ordinary (non-admin) Build-mode
+    // placement of every pre-existing system/feature template (community
+    // signs, calendar events, flooring, basic furniture) that got
+    // backfilled to is_test_model the same as everything else -- those
+    // were never "real for-sale products" to begin with (no price, no
+    // real seller), so losing Build-mode access to them is a functional
+    // regression, not the intended effect. See handleInstancePurchase's
+    // own guard below for what is_test_model actually gates today.
     if (cursor && sort === 'name') {
       // #1015: COLLATE NOCASE on both comparisons, matching the ORDER BY
       // below and migrations/0092's own idx_catalog_templates_name_nocase
@@ -2008,6 +2038,8 @@ async function handleCatalog(request, db, route, url, models, env) {
 
   if (request.method === 'GET' && route.length === 2) {
     const row = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
+    // #1946: no admin-only visibility here either, same reasoning as the
+    // list endpoint above.
     return row ? json({ template: templateFromRow(row) }) : json({ error: 'Catalog template not found' }, 404);
   }
 
@@ -2113,12 +2145,23 @@ async function handleCatalog(request, db, route, url, models, env) {
       await assertReferenceExists(db, 'sellers', 'seller_id', template.sellerId, 'sellerId');
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(template.sellerId, sessionSeller.seller_id, 'Not your seller profile');
+      // #1601: the owner wants price required on a real seller listing (a
+      // free digital product is an explicit $0, not an omitted field) --
+      // scoped to sellerId's presence (a real listing) and to this create
+      // path specifically, not validateTemplate itself, since the PATCH/PUT
+      // sibling below intentionally still allows clearing a price back to
+      // null via the "Edit Price" panel. System/placeholder templates (no
+      // sellerId, this file's own primary test/seed-fixture shape) are
+      // unaffected.
+      if (template.priceCents == null) {
+        throw new HttpError('priceCents is required', 400);
+      }
     }
     await assertUploadedModelExists(models, template.modelUrl);
     await db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(...templateParams(template)).run();
     // #976: re-select and map through templateFromRow rather than handing
     // back the locally-constructed `template` object -- validateTemplate's
@@ -2215,6 +2258,7 @@ async function handleCatalog(request, db, route, url, models, env) {
           model_size_bytes = CASE WHEN ? = 1 THEN ? ELSE model_size_bytes END,
           skeleton_signature = CASE WHEN ? = 1 THEN ? ELSE skeleton_signature END,
           metadata_json = CASE WHEN ? = 1 THEN ? ELSE metadata_json END,
+          stock_quantity = CASE WHEN ? = 1 THEN ? ELSE stock_quantity END,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE template_id = ?
     `).bind(
@@ -2231,6 +2275,7 @@ async function handleCatalog(request, db, route, url, models, env) {
       input.modelSizeBytes === undefined ? 0 : 1, template.modelSizeBytes,
       input.skeletonSignature === undefined ? 0 : 1, template.skeletonSignature,
       input.metadata === undefined ? 0 : 1, JSON.stringify(template.metadata),
+      input.stockQuantity === undefined ? 0 : 1, template.stockQuantity,
       route[1],
     ).run();
     // #932: unlike every other single-item update handler on a comparably-
@@ -2284,6 +2329,10 @@ async function handleCatalog(request, db, route, url, models, env) {
     return handleProductReviews(request, db, route);
   }
 
+  if (route.length >= 3 && route[2] === 'flags') {
+    return handleProductFlags(request, db, route);
+  }
+
   return json({ error: 'Not found' }, 404);
 }
 
@@ -2314,6 +2363,11 @@ const PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX = 20;
 // this is keyed by builder_id like this file's other session-gated mutation
 // rate limits (e.g. FRIENDSHIP_MUTATE_RATE_LIMIT_MAX).
 const PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX = 20;
+
+// #1975: same missing-rate-limit gap this file's other owner-gated CRUD
+// mutations already closed (SIGN_POST_EDIT_RATE_LIMIT_MAX, #1830), for the
+// new author-only edit branch below.
+const PRODUCT_REVIEW_EDIT_RATE_LIMIT_MAX = 20;
 
 async function handleProductReviews(request, db, route) {
   const templateId = route[1];
@@ -2397,16 +2451,23 @@ async function handleProductReviews(request, db, route) {
     // already does. `changes === 0` means one of the two guards blocked
     // the insert; re-reading disambiguates which for a clearer error.
     const reviewId = `review-${crypto.randomUUID()}`;
+    // #1975: records who actually wrote this review (sessionBuilder.user_id),
+    // the same sign_posts.user_id pattern (#1830/migrations/0125) — lets the
+    // PATCH/DELETE branches below check real ownership instead of having no
+    // identity to check at all.
     const result = await db.prepare(`
-      INSERT INTO product_reviews (review_id, template_id, author_label, rating, text, purchase_id)
-      SELECT ?, ?, ?, ?, ?, ?
+      INSERT INTO product_reviews (review_id, template_id, author_label, rating, text, purchase_id, user_id)
+      SELECT ?, ?, ?, ?, ?, ?, ?
       WHERE NOT EXISTS (
         SELECT 1 FROM product_reviews WHERE purchase_id = ?
       )
       AND EXISTS (
         SELECT 1 FROM purchases WHERE purchase_id = ? AND refunded_at IS NULL
       )
-    `).bind(reviewId, templateId, authorLabel, rating, text, purchase.purchase_id, purchase.purchase_id, purchase.purchase_id).run();
+    `).bind(
+      reviewId, templateId, authorLabel, rating, text, purchase.purchase_id, sessionBuilder.user_id,
+      purchase.purchase_id, purchase.purchase_id,
+    ).run();
     if (result.meta.changes === 0) {
       const stillEligible = await db.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?')
         .bind(purchase.purchase_id).first();
@@ -2438,12 +2499,88 @@ async function handleProductReviews(request, db, route) {
     return json({ review: reviewFromRow(row) }, 201);
   }
 
+  if (request.method === 'PATCH' && route.length === 4) {
+    const reviewId = route[3];
+    const existing = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?').bind(reviewId, templateId).first();
+    if (!existing) return json({ error: 'Review not found' }, 404);
+    // #1975: editing is author-only -- there's no moderation equivalent for
+    // PATCH the way DELETE has one (a seller moderating an unwanted review
+    // removes it; rewriting someone else's review under their own name
+    // isn't the same kind of action), same reasoning sign_posts' own PATCH
+    // (#1830) already settled. A pre-#1975 review with no user_id at all
+    // (user_id IS NULL) can never match here, same as DELETE's own
+    // author-path below -- there's nobody on record to own it.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    if (existing.user_id === null || existing.user_id !== sessionBuilder.user_id) {
+      throw new HttpError('Not your review', 403);
+    }
+    await checkRateLimit(db, `product-review-edit:${sessionBuilder.user_id}`, PRODUCT_REVIEW_EDIT_RATE_LIMIT_MAX);
+    const input = await readJson(request);
+    let rating = existing.rating;
+    if (input.rating !== undefined) {
+      rating = Number(input.rating);
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        throw new HttpError('rating must be an integer from 1 to 5', 400);
+      }
+    }
+    // Only an explicitly-present `text` key changes it -- an omitted key
+    // keeps the review's existing text, the same "distinguish omitted from
+    // explicitly cleared" shape bundles' own PATCH (COALESCE-based) handles,
+    // just computed in JS here since text's own null-clearing rule (empty
+    // string also means "no text", matching POST's own rule above) doesn't
+    // map onto COALESCE's "null parameter means keep the old value" directly.
+    let text = existing.text;
+    if ('text' in input) {
+      text = (input.text === null || input.text === '') ? null : stringValue(input.text, 'text');
+    }
+    if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    // #1975: snapshot the pre-edit row for disputes before overwriting it.
+    await recordContentEditHistory(db, 'product_reviews', reviewId, 'edit', existing, sessionBuilder.user_id);
+    // Same "point-in-time read, real awaited gaps after it" race this file's
+    // other author-direct mutations guard against (sign_posts' own PATCH).
+    const updated = await db.prepare('UPDATE product_reviews SET rating = ?, text = ? WHERE review_id = ? AND user_id = ?')
+      .bind(rating, text, reviewId, sessionBuilder.user_id).run();
+    if (updated.meta.changes === 0) {
+      throw new HttpError('Review changed concurrently — refetch and retry', 409);
+    }
+    const row = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ?').bind(reviewId).first();
+    return json({ review: reviewFromRow(row) });
+  }
+
   if (request.method === 'DELETE' && route.length === 4) {
     const reviewId = route[3];
     const existing = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?').bind(reviewId, templateId).first();
     if (!existing) return json({ error: 'Review not found' }, 404);
     const template = await db.prepare('SELECT seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
-    if (template?.seller_id && await sellerExists(db, template.seller_id)) {
+    // #1712: an admin can remove any review outright (harassment, doxxing,
+    // other policy violations) regardless of whether the template's own
+    // seller is reachable or ever acts on it -- checked first, via the
+    // non-throwing currentUser lookup, since an admin isn't necessarily
+    // that seller and shouldn't be forced through the ownership check below.
+    const requester = await currentUser(request, db);
+    const admin = requester && requester.is_admin ? requester : null;
+    // #1975: the review's own author can remove it directly, alongside the
+    // existing admin/seller moderation paths below -- same "either should be
+    // able to remove it" shape sign_posts' own DELETE (#1830) already
+    // settled. Checked after the admin branch (an admin override always
+    // wins) but before seller moderation, since an author removing their
+    // own review is not moderation and shouldn't need a reachable seller at
+    // all. A pre-#1975 review with no user_id (user_id IS NULL) can never
+    // match here, so it falls through to the existing paths exactly as it
+    // always has.
+    if (!admin && requester && existing.user_id !== null && existing.user_id === requester.user_id) {
+      await checkRateLimit(db, `product-review-delete:${requester.user_id}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
+      await recordContentEditHistory(db, 'product_reviews', reviewId, 'delete', existing, requester.user_id);
+      const deletedByAuthor = await db.prepare('DELETE FROM product_reviews WHERE review_id = ? AND user_id = ?')
+        .bind(reviewId, requester.user_id).run();
+      if (deletedByAuthor.meta.changes === 0) {
+        throw new HttpError('Review changed concurrently — refetch and retry', 409);
+      }
+      return json({ deleted: true });
+    }
+    if (admin) {
+      await checkRateLimit(db, `product-review-delete:${admin.user_id}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
+    } else if (template?.seller_id && await sellerExists(db, template.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your catalog template');
       // #990: unlike the anonymous/orphaned-template branch below (#564),
@@ -2455,11 +2592,165 @@ async function handleProductReviews(request, db, route) {
     } else {
       await checkRateLimit(db, `product-review-delete:${clientIp(request)}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
     }
-    await db.prepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
+    const result = await db.prepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
+    // `admin` is only set on the admin-override branch above; an ordinary
+    // seller-initiated (or anonymous orphaned-template) delete logs nothing
+    // here, same convention as handlePurchaseRefund's/handleMarkShipped's
+    // own admin-override logging. Logged only after the delete is confirmed
+    // to have actually happened -- the existence check above and this DELETE
+    // aren't atomic, so a concurrent delete (another admin, or the owning
+    // seller's own moderation path) can win the race first; a log row for a
+    // deletion that didn't happen would misattribute it to this admin, same
+    // "logged only after confirmed" idiom delete_land_candidate already uses.
+    if (admin && result.meta.changes === 1) {
+      await adminActionLogStatement(db, admin.user_id, 'delete_review_override', 'product_review', reviewId).run();
+    }
     return json({ deleted: true });
   }
 
   return json({ error: 'Not found' }, 404);
+}
+
+// #2017 (sub-issue of #1212, owner-settled shape 2026-10-13): a shopper-
+// facing counterfeit-flag endpoint plus the admin resolve action on the
+// same listing. Zero-cost/consequence-free for the flagger by design (the
+// owner's own words: "don't punish good-faith reports") -- no rate limit
+// beyond the ordinary anti-spam one below, and no visible penalty to the
+// flagger's own account regardless of outcome.
+const PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX = 20;
+// Auto-hide threshold: once this many *distinct* flaggers (migrations/0131's
+// own UNIQUE constraint is what makes this actually distinct) are pending
+// against one template, new purchases of it block automatically pending
+// admin review -- see handleInstancePurchase's own flagged_hidden_at guard.
+const PRODUCT_FLAG_AUTO_HIDE_THRESHOLD = 3;
+
+async function handleProductFlags(request, db, route) {
+  const templateId = route[1];
+
+  if (request.method === 'POST' && route.length === 3) {
+    const template = await db.prepare('SELECT template_id, flagged_hidden_at FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    if (!template) return json({ error: 'Catalog template not found' }, 404);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `product-flag-create:${sessionBuilder.builder_id}`, PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX);
+    const input = await readJson(request);
+    const reason = input.reason === undefined || input.reason === null || input.reason === ''
+      ? null
+      : stringValue(input.reason, 'reason');
+    if (reason && reason.length > 280) throw new HttpError('reason must be 280 characters or fewer', 400);
+    // migrations/0131's own UNIQUE(template_id, flagger_builder_id) is the
+    // real guard against the same builder inflating their own listing's
+    // distinct-flagger count -- a second flag from the same builder on the
+    // same template hits that constraint and surfaces as a clean 409 via
+    // this file's own top-level databaseHttpError fallback, same as every
+    // other unhandled UNIQUE violation in this file.
+    const flagId = `product-flag-${crypto.randomUUID()}`;
+    await db.prepare(`
+      INSERT INTO product_flags (flag_id, template_id, flagger_builder_id, reason)
+      VALUES (?, ?, ?, ?)
+    `).bind(flagId, templateId, sessionBuilder.builder_id, reason).run();
+    // Re-checked after the insert (not a cached count from before it) so a
+    // concurrent flag from a different builder landing in between is never
+    // silently lost from the threshold decision.
+    const { pendingCount } = await db.prepare(`
+      SELECT COUNT(*) AS pendingCount FROM product_flags WHERE template_id = ? AND status = 'pending'
+    `).bind(templateId).first();
+    let autoHidden = false;
+    if (!template.flagged_hidden_at && pendingCount >= PRODUCT_FLAG_AUTO_HIDE_THRESHOLD) {
+      const hideResult = await db.prepare(`
+        UPDATE catalog_templates SET flagged_hidden_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE template_id = ? AND flagged_hidden_at IS NULL
+      `).bind(templateId).run();
+      autoHidden = hideResult.meta.changes === 1;
+    }
+    return json({ flagId, pendingCount, autoHidden }, 201);
+  }
+
+  if (request.method === 'POST' && route.length === 4 && route[3] === 'resolve') {
+    const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `product-flag-resolve:${admin.user_id}`, PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX);
+    const input = await readJson(request);
+    const action = stringValue(input.action, 'action');
+    if (action !== 'approve' && action !== 'reject') {
+      throw new HttpError("action must be 'approve' or 'reject'", 400);
+    }
+    const template = await db.prepare('SELECT template_id, seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    if (!template) return json({ error: 'Catalog template not found' }, 404);
+    // Resolves every still-pending flag on this listing at once -- a flag is
+    // a report against the *listing*, not an individually-adjudicated claim,
+    // matching the owner's own "approve = remove listing" framing (one
+    // decision per listing, not one per flag).
+    const resolvedStatus = action === 'approve' ? 'approved' : 'rejected';
+    const resolved = await db.prepare(`
+      UPDATE product_flags SET status = ?, resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), resolved_by_admin_user_id = ?
+      WHERE template_id = ? AND status = 'pending'
+    `).bind(resolvedStatus, admin.user_id, templateId).run();
+    if (resolved.meta.changes === 0) {
+      throw new HttpError('No pending flags on this listing to resolve', 400);
+    }
+    if (action === 'approve') {
+      // Stays hidden permanently (this UPDATE is a no-op if auto-hide
+      // already set it) -- approving confirms the listing should no longer
+      // be purchasable, it does not hard-delete catalog_templates itself
+      // (that would trip assertCatalogTemplatesDeletable for any template
+      // still saved into someone's layout library, a real, if rare, edge
+      // case not worth forcing through here).
+      await db.prepare(`
+        UPDATE catalog_templates SET flagged_hidden_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE template_id = ? AND flagged_hidden_at IS NULL
+      `).bind(templateId).run();
+      if (template.seller_id) {
+        await db.prepare('UPDATE sellers SET strike_count = strike_count + 1 WHERE seller_id = ?').bind(template.seller_id).run();
+        // Best-effort notification, same seller-resolved-via-shared-user_id
+        // join handleSellerFeedbackCreate's own notification already uses.
+        const owner = await db.prepare(`
+          SELECT b.builder_id AS builder_id FROM sellers s
+          JOIN builders b ON b.user_id = s.user_id
+          WHERE s.seller_id = ?
+        `).bind(template.seller_id).first();
+        if (owner) {
+          await fireNotification(db, owner.builder_id,
+            'A product listing of yours was removed after an admin-confirmed counterfeit/policy-violation flag. A strike was added to your account.');
+        }
+      }
+    } else {
+      // Reject restores purchasability if auto-hide had already kicked in
+      // for this listing -- never touched if an admin escalated straight to
+      // removal without auto-hide ever firing.
+      await db.prepare('UPDATE catalog_templates SET flagged_hidden_at = NULL WHERE template_id = ?').bind(templateId).run();
+    }
+    await adminActionLogStatement(db, admin.user_id, `${resolvedStatus}_product_flags`, 'catalog_template', templateId, {
+      flagsResolved: resolved.meta.changes,
+    }).run();
+    return json({ resolvedStatus, flagsResolved: resolved.meta.changes });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+async function handleProductFlagsList(request, db, url) {
+  await requireAdmin(request, db);
+  // One row per *listing* with pending flags, not one per flag -- an admin
+  // resolves a listing's whole pending set in one action (see
+  // handleProductFlags' own POST .../resolve above), so the queue should
+  // read the same way, with the per-flag detail (reasons, flagger history)
+  // available via a follow-up fetch if ever needed rather than cluttering
+  // this summary view.
+  const { results } = await db.prepare(`
+    SELECT
+      pf.template_id AS templateId,
+      ct.name AS templateName,
+      ct.seller_id AS sellerId,
+      COUNT(*) AS pendingCount,
+      MIN(pf.created_at) AS firstFlaggedAt,
+      MAX(pf.created_at) AS lastFlaggedAt
+    FROM product_flags pf
+    JOIN catalog_templates ct ON ct.template_id = pf.template_id
+    WHERE pf.status = 'pending'
+    GROUP BY pf.template_id
+    ORDER BY lastFlaggedAt DESC
+    LIMIT 200
+  `).all();
+  return json({ listings: results });
 }
 
 function reviewFromRow(row) {
@@ -2472,6 +2763,10 @@ function reviewFromRow(row) {
     // #1113: the real purchase this review is tied to. Null for a review
     // created before this column existed.
     purchaseId: row.purchase_id,
+    // #1975: the session user_id this review was actually written under —
+    // lets the frontend show its own edit/delete controls on a review the
+    // viewer wrote. Null for a review created before this column existed.
+    userId: row.user_id,
     createdAt: row.created_at,
   };
 }
@@ -2928,10 +3223,7 @@ async function handleBuilders(request, env, db, route, url) {
       const ids = [...new Set(idsParam.split(',').map((id) => id.trim()).filter((id) => id !== ''))];
       if (ids.length === 0) return json({ builders: [] });
       if (ids.length > 200) throw new HttpError('ids must contain at most 200 items', 400);
-      const placeholders = ids.map(() => '?').join(', ');
-      const { results } = await db.prepare(
-        `SELECT * FROM builders WHERE builder_id IN (${placeholders}) ORDER BY created_at, builder_id`,
-      ).bind(...ids).all();
+      const results = await selectRowsByIdsChunked(db, 'builders', 'builder_id', ids);
       await recomputeLandCapsBatch(db, results);
       return json({ builders: results.map(publicBuilderFromRow) });
     }
@@ -3818,10 +4110,7 @@ async function handleSellers(request, env, db, route, url) {
       const ids = [...new Set(idsParam.split(',').map((id) => id.trim()).filter((id) => id !== ''))];
       if (ids.length === 0) return json({ sellers: [] });
       if (ids.length > 200) throw new HttpError('ids must contain at most 200 items', 400);
-      const placeholders = ids.map(() => '?').join(', ');
-      const { results } = await db.prepare(
-        `SELECT * FROM sellers WHERE seller_id IN (${placeholders}) ORDER BY created_at, seller_id`,
-      ).bind(...ids).all();
+      const results = await selectRowsByIdsChunked(db, 'sellers', 'seller_id', ids);
       return json({ sellers: results.map(sellerFromRow) });
     }
 
@@ -4923,8 +5212,17 @@ function validateBundleItems(input) {
   if (!Array.isArray(input) || input.length === 0) {
     throw new HttpError('items must be a non-empty array', 400);
   }
-  if (input.length > 250) {
-    throw new HttpError('items cannot exceed 250 entries', 400);
+  // #1974 (owner report): 250 was blocking legitimate large builds (a
+  // 32-foot brick wall with a door, saved as one bundle) -- there's no
+  // per-item batch insert here to worry about (the whole thing is stored
+  // as one items_json blob below, a single row write), so the real ceiling
+  // is D1's own documented max string/BLOB/row size (2,000,000 bytes).
+  // Each item's JSON is on the order of a couple hundred bytes, so 2000
+  // items lands around half a megabyte -- comfortably inside that limit
+  // with room to spare, while still being a real sanity bound against a
+  // genuinely pathological payload.
+  if (input.length > 2000) {
+    throw new HttpError('items cannot exceed 2000 entries', 400);
   }
   return input.map((item, index) => ({
     templateId: stringValue(item.templateId, `items[${index}].templateId`),
@@ -7329,11 +7627,20 @@ function validateTaxIdForm(input) {
   const addressLine1 = taxFormTextValue(input.addressLine1, 'addressLine1');
   const city = labelValue(input.city, 'city');
   if (formType === 'w9') {
+    const taxIdNumber = labelValue(input.taxIdNumber, 'taxIdNumber');
+    // #1972: a US SSN/EIN is always 9 digits, optionally dash-formatted
+    // (NNN-NN-NNNN for an SSN, NN-NNNNNNN for an EIN) -- stripping dashes
+    // and requiring exactly 9 digits covers both without needing to tell
+    // which one this is, same shape as individual.ssnLast4's own regex
+    // check elsewhere in this file.
+    if (!/^\d{9}$/.test(taxIdNumber.replace(/-/g, ''))) {
+      throw new HttpError('taxIdNumber must be 9 digits (an SSN or EIN), optionally dash-formatted', 400);
+    }
     return {
       formType, legalName, addressLine1, city,
       state: labelValue(input.state, 'state'),
       postalCode: labelValue(input.postalCode, 'postalCode'),
-      taxIdNumber: labelValue(input.taxIdNumber, 'taxIdNumber'),
+      taxIdNumber,
     };
   }
   return {
@@ -7751,6 +8058,14 @@ const TRIPO_MODEL_VERSION = 'v3.0-20250812';
 // own research -- same reasoning as DIDIT_SESSION_RATE_LIMIT_MAX above,
 // bucketed per-builder since this is a session-gated seller action.
 const VIDEO_GENERATION_RATE_LIMIT_MAX = 10;
+
+// #1993 (sub-issue of #1976): the honest-budget message the owner asked
+// for directly, shown whenever a builder has no video_generation_credits
+// left (migrations/0127) -- not a bare cap, an explanation plus a real
+// free alternative that doesn't need a credit at all.
+const VIDEO_GENERATION_NO_CREDITS_MESSAGE = 'No free model-generation credits available right now — this platform is '
+  + 'bootstrapped from very little budget, so generations are rationed. Collect a credit orb in the world, or '
+  + 'generate a model for free elsewhere (e.g. Sketchfab) and upload it here directly — no credit needed for that.';
 // handleVideoGenerationJobStatus below reconciles against a live Tripo
 // status call whenever a job is still pending -- same cadence reasoning
 // as DIDIT_STATUS_RATE_LIMIT_MAX, generous enough to cover the frontend's
@@ -8045,10 +8360,27 @@ async function handleVideoGenerationJobCreate(request, env, db) {
     return json({ jobId: latest.job_id, status: latest.status });
   }
   await checkRateLimit(db, `video-generation:${sessionBuilder.builder_id}`, VIDEO_GENERATION_RATE_LIMIT_MAX);
+  // #1993: alongside (not instead of) the rate limit above -- the rate
+  // limit still guards against abuse of a large credit balance, this
+  // guards against spending credits the builder doesn't have. Folding the
+  // balance check into the UPDATE's own WHERE clause makes "is there a
+  // credit" and "spend it" one atomic statement, the same race-safe shape
+  // checkRateLimit's own INSERT...WHERE uses just above.
+  const creditSpent = await db.prepare(
+    'UPDATE builders SET video_generation_credits = video_generation_credits - 1 WHERE builder_id = ? AND video_generation_credits > 0',
+  ).bind(sessionBuilder.builder_id).run();
+  if (creditSpent.meta.changes === 0) {
+    throw new HttpError(VIDEO_GENERATION_NO_CREDITS_MESSAGE, 402);
+  }
   const { reservationId, existing } = await reserveVideoGenerationJob(db, sessionBuilder.builder_id);
   if (!reservationId) {
     // Lost a genuine concurrent race against another request for this
     // same builder -- hand back that one instead of ever calling Tripo.
+    // #1993: no new job actually started here, so the credit spent above
+    // was never really used -- refund it rather than charging a request
+    // that just relayed an already-in-flight job's own status.
+    await db.prepare('UPDATE builders SET video_generation_credits = video_generation_credits + 1 WHERE builder_id = ?')
+      .bind(sessionBuilder.builder_id).run();
     return json({ jobId: existing.job_id, status: existing.status });
   }
 
@@ -8099,6 +8431,15 @@ async function handleVideoGenerationJobCreate(request, env, db) {
     // doesn't permanently block this builder from ever starting a video-
     // to-3D job again.
     await db.prepare('DELETE FROM video_generation_jobs WHERE job_id = ?').bind(reservationId).run();
+    // #1993: if the billed call never went out (or never got a real
+    // task_id back), the credit spent above paid for nothing -- refund it.
+    // If it's already billed, the credit was legitimately spent regardless
+    // of what happened after (same "billed means billed" reasoning the
+    // #1886/#1935 durable-logging above already applies).
+    if (!billedTaskId) {
+      await db.prepare('UPDATE builders SET video_generation_credits = video_generation_credits + 1 WHERE builder_id = ?')
+        .bind(sessionBuilder.builder_id).run();
+    }
     throw err;
   }
 }
@@ -8191,6 +8532,14 @@ function buildStripeIndividualParams(input, userEmail, request, productDescripti
   const ssnLast4 = stringValue(individual.ssnLast4, 'individual.ssnLast4');
   if (!/^\d{4}$/.test(ssnLast4)) throw new HttpError('individual.ssnLast4 must be exactly 4 digits', 400);
 
+  const dobMonth = boundedIntegerValue(individual.dobMonth, 'individual.dobMonth', 1, 12);
+  const dobYear = boundedIntegerValue(individual.dobYear, 'individual.dobYear', 1900, new Date().getUTCFullYear());
+  // #1940: 1-31 alone accepts e.g. Feb 30 or Apr 31 -- day 0 of the
+  // following month is the last real day of dobMonth (UTC avoids any
+  // local-timezone shift landing on the wrong side of midnight).
+  const daysInDobMonth = new Date(Date.UTC(dobYear, dobMonth, 0)).getUTCDate();
+  const dobDay = boundedIntegerValue(individual.dobDay, 'individual.dobDay', 1, daysInDobMonth);
+
   return {
     country,
     email: userEmail,
@@ -8201,11 +8550,7 @@ function buildStripeIndividualParams(input, userEmail, request, productDescripti
       first_name: stringValue(individual.firstName, 'individual.firstName'),
       last_name: stringValue(individual.lastName, 'individual.lastName'),
       email: userEmail,
-      dob: {
-        day: boundedIntegerValue(individual.dobDay, 'individual.dobDay', 1, 31),
-        month: boundedIntegerValue(individual.dobMonth, 'individual.dobMonth', 1, 12),
-        year: boundedIntegerValue(individual.dobYear, 'individual.dobYear', 1900, new Date().getUTCFullYear()),
-      },
+      dob: { day: dobDay, month: dobMonth, year: dobYear },
       ssn_last_4: ssnLast4,
       address: {
         line1: stringValue(individual.addressLine1, 'individual.addressLine1'),
@@ -9572,6 +9917,7 @@ async function handleAuth(request, env, db, route, url, ctx) {
     return handleChangePassword(request, db);
   }
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') return handleMe(request, db);
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'export-data') return handleExportData(request, db);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'verify-email') return handleVerifyEmail(request, db);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'request-password-reset') {
     return handleRequestPasswordReset(request, env, db, ctx);
@@ -9594,6 +9940,15 @@ async function handleAuth(request, env, db, route, url, ctx) {
   }
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admins') {
     return handleListAdmins(request, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'suspend-account') {
+    return handleSuspendAccount(request, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'unsuspend-account') {
+    return handleUnsuspendAccount(request, db);
+  }
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'suspension-status') {
+    return handleSuspensionStatus(request, db, url);
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'card-setup-intent') {
     return handleCardSetupIntent(request, env, db);
@@ -9923,6 +10278,121 @@ async function handleListAdmins(request, db) {
       userId: row.user_id, email: row.email, username: row.username,
       createdAt: row.created_at, adminGrantedAt: row.admin_granted_at,
     })),
+  });
+}
+
+const ACCOUNT_SUSPENSION_RATE_LIMIT_MAX = 20;
+
+// #2029 (sub-issue of #1201): the foundational primitive for admin-
+// initiated account suspension -- email-addressed and admin_action_log-
+// recorded the same way grant-admin/revoke-admin above already are, since
+// this is the same kind of "one admin acting on another account" shape.
+// Deliberately reversible, not a hard delete (#1201's own owner-settled
+// scope: "I don't see a strong case for admin-initiated hard deletion
+// either... Build suspension only"). Guards against double-suspending the
+// same account via a single INSERT ... WHERE NOT EXISTS rather than a
+// separate SELECT-then-INSERT, so two concurrent suspend calls against the
+// same account can't both land a second, divergent active-suspension row.
+async function handleSuspendAccount(request, db) {
+  const admin = await requireAdmin(request, db);
+  await checkRateLimit(db, `suspend-account:${admin.user_id}`, ACCOUNT_SUSPENSION_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const email = normalizeEmail(input.email);
+  const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
+  if (!reason) throw new HttpError('reason is required', 400);
+  const evidenceNote = typeof input.evidenceNote === 'string' && input.evidenceNote.trim()
+    ? input.evidenceNote.trim() : null;
+  // Owner-confirmed default (#1201, 2026-10-07): 30 days. A caller may
+  // override it, but only within a sane range -- not unbounded, and not
+  // zero/negative (that would mean "already past its own grace period,"
+  // i.e. an immediate, unintended escalation on the very next #2033 run).
+  const graceDays = input.graceDays === undefined ? 30 : Number(input.graceDays);
+  if (!Number.isInteger(graceDays) || graceDays < 1 || graceDays > 365) {
+    throw new HttpError('graceDays must be an integer between 1 and 365', 400);
+  }
+
+  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  if (!row) throw new HttpError('No account with that email', 404);
+
+  const suspensionId = `suspension-${crypto.randomUUID()}`;
+  const gracePeriodEndsAt = new Date(Date.now() + graceDays * 24 * 60 * 60 * 1000).toISOString();
+  // Not batched with the log write below -- same reasoning as
+  // handleRevokeAdmin's own comment above ("Logged only after confirmed"):
+  // this INSERT's own WHERE NOT EXISTS can legitimately insert 0 rows, and
+  // a batched log statement would commit regardless, misrecording a
+  // suspension that never actually took effect.
+  const result = await db.prepare(`
+    INSERT INTO account_suspensions
+      (suspension_id, user_id, admin_user_id, reason, evidence_note, grace_period_ends_at)
+    SELECT ?, ?, ?, ?, ?, ?
+    WHERE NOT EXISTS (
+      SELECT 1 FROM account_suspensions
+      WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+    )
+  `).bind(suspensionId, row.user_id, admin.user_id, reason, evidenceNote, gracePeriodEndsAt, row.user_id).run();
+  if (result.meta.changes === 0) throw new HttpError('That account is already suspended', 409);
+  await adminActionLogStatement(db, admin.user_id, 'suspend_account', 'user', row.user_id, {
+    suspensionId, reason, evidenceNote, gracePeriodEndsAt,
+  }).run();
+
+  return json({
+    suspension: {
+      suspensionId, userId: row.user_id, adminUserId: admin.user_id, reason, evidenceNote,
+      suspendedAt: new Date().toISOString(), gracePeriodEndsAt,
+    },
+  });
+}
+
+// The inverse of handleSuspendAccount above -- lifts the currently-active
+// suspension (if any) for the given email. Same atomic check-then-act
+// shape as handleRevokeAdmin's own last-admin guard: the UPDATE's own
+// WHERE clause is what actually confirms there was something to lift,
+// rather than a separate SELECT racing a concurrent lift of the same row.
+async function handleUnsuspendAccount(request, db) {
+  const admin = await requireAdmin(request, db);
+  const input = await readJson(request);
+  const email = normalizeEmail(input.email);
+  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  if (!row) throw new HttpError('No account with that email', 404);
+
+  const liftedAt = new Date().toISOString();
+  const result = await db.prepare(`
+    UPDATE account_suspensions SET lifted_at = ?, lifted_by_admin_user_id = ?
+    WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+  `).bind(liftedAt, admin.user_id, row.user_id).run();
+  if (result.meta.changes === 0) throw new HttpError('That account has no active suspension', 409);
+  const suspension = await db.prepare(`
+    SELECT * FROM account_suspensions WHERE user_id = ? AND lifted_at = ? ORDER BY suspended_at DESC LIMIT 1
+  `).bind(row.user_id, liftedAt).first();
+  await adminActionLogStatement(db, admin.user_id, 'unsuspend_account', 'user', row.user_id, {
+    suspensionId: suspension.suspension_id,
+  }).run();
+
+  return json({ suspension: { suspensionId: suspension.suspension_id, userId: row.user_id, liftedAt } });
+}
+
+// Lets an admin check an account's current suspension state before acting
+// on it (or before #2030/#2031/#2032/#2033 each need to read it back for
+// their own purposes) without direct D1 access.
+async function handleSuspensionStatus(request, db, url) {
+  await requireAdmin(request, db);
+  const email = normalizeEmail(url.searchParams.get('email') || '');
+  if (!email) throw new HttpError('email query parameter is required', 400);
+  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  if (!row) throw new HttpError('No account with that email', 404);
+  const active = await db.prepare(`
+    SELECT * FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+  `).bind(row.user_id).first();
+  return json({
+    suspension: active ? {
+      suspensionId: active.suspension_id,
+      userId: active.user_id,
+      adminUserId: active.admin_user_id,
+      reason: active.reason,
+      evidenceNote: active.evidence_note,
+      suspendedAt: active.suspended_at,
+      gracePeriodEndsAt: active.grace_period_ends_at,
+    } : null,
   });
 }
 
@@ -10293,6 +10763,238 @@ async function handleChangePassword(request, db) {
 async function handleMe(request, db) {
   const user = await currentUser(request, db);
   return json({ user: user ? userFromRow(user) : null });
+}
+
+// #1984 (sub-issue of #1983, owner-greenlit on #1480): GDPR/CCPA "right to
+// access" companion to #1145's own "right to erasure" -- the requesting
+// account's own data as a single JSON bundle. Read-only, so unlike
+// delete-account/change-password this doesn't need the extra "re-enter
+// your password" bar, just an authenticated session (requireCurrentUser).
+// Response shape has one top-level key per data section -- `profile` here,
+// with `commerce`/`social` sections to be added by later sub-issues onto
+// this same shape rather than a new endpoint.
+const EXPORT_DATA_RATE_LIMIT_MAX = 10;
+
+// #1986 (sub-issue of #1983): the `social` section of handleExportData
+// below. Most of these tables genuinely key off builder_id/user_id, but
+// two don't, and this returns the best available approximation rather
+// than silently omitting them:
+// - calendar_events has no author column at all (unlike sign_posts, which
+//   got a real user_id in #1830/migrations/0125) -- only a free-text
+//   author_label stamped from the poster's label at post time (#289). A
+//   label match against this account's CURRENT label is the best signal
+//   available; it misses events posted under a since-changed label and
+//   could, in principle, catch another account that happens to share
+//   today's label with a past poster. Flagged here rather than guessed
+//   past silently -- a real author_id column is the actual fix, tracked
+//   separately from this export feature.
+// - landlet_versions/version_instances have no author column either --
+//   only landlet_id. "Authored by this builder" is approximated as
+//   "versions of landlets this builder currently owns," since landlet
+//   ownership itself can change hands (auction, admin reassignment) and
+//   nothing records who actually created a given version.
+async function exportSocialSection(db, builderId, builderLabel, userId) {
+  const friendships = await db.prepare(`
+    SELECT * FROM friendships WHERE requester_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
+  `).bind(builderId, builderId).all();
+  const directMessages = await db.prepare(`
+    SELECT * FROM direct_messages WHERE sender_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
+  `).bind(builderId, builderId).all();
+  const notifications = await db.prepare(`
+    SELECT * FROM notifications WHERE builder_id = ? ORDER BY created_at ASC
+  `).bind(builderId).all();
+  // product_reviews/seller_feedback are both "I am the buyer" joins --
+  // purchase_id is the real FK (#1101/#1123, closing the earlier
+  // spoofable author_label-only design), not a text match. A review/
+  // feedback row whose purchase_id is NULL (created before that FK
+  // existed, or its purchase was later deleted) can't be attributed and
+  // is correctly left out rather than guessed at.
+  const productReviews = await db.prepare(`
+    SELECT r.* FROM product_reviews r JOIN purchases p ON p.purchase_id = r.purchase_id
+    WHERE p.buyer_builder_id = ? ORDER BY r.created_at ASC
+  `).bind(builderId).all();
+  const sellerFeedback = await db.prepare(`
+    SELECT f.* FROM seller_feedback f JOIN purchases p ON p.purchase_id = f.purchase_id
+    WHERE p.buyer_builder_id = ? ORDER BY f.created_at ASC
+  `).bind(builderId).all();
+  const signPosts = await db.prepare(`
+    SELECT * FROM sign_posts WHERE user_id = ? ORDER BY created_at ASC
+  `).bind(userId).all();
+  const calendarEvents = await db.prepare(`
+    SELECT * FROM calendar_events WHERE author_label = ? ORDER BY created_at ASC
+  `).bind(builderLabel).all();
+  const savedLayouts = await db.prepare(`
+    SELECT * FROM saved_level_layouts WHERE builder_id = ? ORDER BY created_at ASC
+  `).bind(builderId).all();
+  const savedLayoutInstances = savedLayouts.results.length === 0 ? { results: [] } : await db.prepare(`
+    SELECT * FROM saved_layout_instances WHERE saved_layout_id IN (
+      SELECT saved_layout_id FROM saved_level_layouts WHERE builder_id = ?
+    )
+  `).bind(builderId).all();
+  const instancesBySavedLayoutId = new Map();
+  for (const row of savedLayoutInstances.results) {
+    const list = instancesBySavedLayoutId.get(row.saved_layout_id) ?? [];
+    list.push(savedLayoutInstanceFromRow(row));
+    instancesBySavedLayoutId.set(row.saved_layout_id, list);
+  }
+  const landletVersions = await db.prepare(`
+    SELECT v.* FROM landlet_versions v WHERE v.landlet_id IN (
+      SELECT landlet_id FROM landlets WHERE owner_builder_id = ?
+    ) ORDER BY v.landlet_id ASC, v.version_number ASC
+  `).bind(builderId).all();
+  const versionInstances = landletVersions.results.length === 0 ? { results: [] } : await db.prepare(`
+    SELECT * FROM version_instances WHERE version_id IN (
+      SELECT v.version_id FROM landlet_versions v WHERE v.landlet_id IN (
+        SELECT landlet_id FROM landlets WHERE owner_builder_id = ?
+      )
+    )
+  `).bind(builderId).all();
+  const instancesByVersionId = new Map();
+  for (const row of versionInstances.results) {
+    const list = instancesByVersionId.get(row.version_id) ?? [];
+    list.push(versionInstanceFromRow(row));
+    instancesByVersionId.set(row.version_id, list);
+  }
+  return {
+    friendships: friendships.results.map((row) => friendshipFromRow(row, builderId, new Map(), new Map())),
+    directMessages: directMessages.results.map(directMessageFromRow),
+    notifications: notifications.results.map(notificationFromRow),
+    productReviews: productReviews.results.map(reviewFromRow),
+    sellerFeedback: sellerFeedback.results.map(sellerFeedbackFromRow),
+    signPosts: signPosts.results.map(signPostFromRow),
+    calendarEvents: calendarEvents.results.map(calendarEventFromRow),
+    savedLevelLayouts: savedLayouts.results.map((row) => {
+      const instances = instancesBySavedLayoutId.get(row.saved_layout_id) ?? [];
+      return { ...savedLayoutFromRow(row), instanceCount: instances.length, instances };
+    }),
+    landletVersions: landletVersions.results.map((row) => {
+      const instances = instancesByVersionId.get(row.version_id) ?? [];
+      return { ...versionFromRow(row), instanceCount: instances.length, instances };
+    }),
+  };
+}
+
+async function handleExportData(request, db) {
+  const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `export-data:${user.user_id}`, EXPORT_DATA_RATE_LIMIT_MAX);
+  const builderRow = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(user.user_id).first();
+  const sellerRow = await db.prepare('SELECT * FROM sellers WHERE user_id = ?').bind(user.user_id).first();
+  // Status/timestamps only -- never a raw Didit payload, which is a third
+  // party's data about this account, not the account's own authored content.
+  const diditSessions = await db.prepare(`
+    SELECT session_id, status, created_at, processed_at FROM didit_verification_sessions
+    WHERE user_id = ? ORDER BY created_at ASC
+  `).bind(user.user_id).all();
+  return json({
+    exportedAt: new Date().toISOString(),
+    profile: {
+      account: userFromRow(user),
+      builder: builderRow ? builderFromRow(builderRow) : null,
+      seller: sellerRow ? sellerFromRow(sellerRow) : null,
+      diditVerificationSessions: diditSessions.results.map((row) => ({
+        sessionId: row.session_id,
+        status: row.status,
+        createdAt: row.created_at,
+        processedAt: row.processed_at,
+      })),
+    },
+    commerce: await exportCommerceData(db, builderRow),
+    social: builderRow ? await exportSocialSection(db, builderRow.builder_id, builderRow.label, user.user_id) : null,
+  });
+}
+
+// #1985 (sub-issue of #1983): every one of these tables scopes by
+// builder_id, not user_id or seller_id -- bundles/purchases(as buyer)/
+// owned_avatars/owned_animations/video_generation_jobs/higgles_redemptions/
+// higgles_earnings_events have no seller_id FK at all, so a builder-less
+// account (never created a builder profile) has nothing to export here.
+// Deliberately excludes tax_1099_forms -- #1983's own "Real judgment calls"
+// section flags the raw taxIdNumber/foreignTaxId inclusion as the owner's
+// call, still open; this ships everything else in #1985's scope now and
+// leaves tax forms as a follow-up once that's answered, per #1985's own
+// explicit "build everything except the tax-forms piece now" allowance.
+// Also deliberately excludes owned_avatar_purchases/owned_animation_purchases
+// -- internal bookkeeping tables (idempotency/cascade-delete plumbing for the
+// purchase-grants-ownership flow), not independent user-facing data: every
+// field either of them carries (purchase_id, template_id) is already present
+// on the corresponding owned_avatars/owned_animations row itself.
+async function exportCommerceData(db, builderRow) {
+  if (!builderRow) {
+    return {
+      purchasesAsBuyer: [],
+      ownedAvatars: [],
+      ownedAnimations: [],
+      videoGenerationJobs: [],
+      higglesRedemptions: [],
+      higglesEarningsEvents: [],
+      bundles: [],
+    };
+  }
+  const builderId = builderRow.builder_id;
+
+  const purchasesAsBuyer = await db.prepare(`
+    SELECT * FROM purchases WHERE buyer_builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+
+  const ownedAvatars = await db.prepare(`
+    SELECT catalog_templates.*, owned_avatars.purchased_at AS owned_purchased_at
+    FROM owned_avatars
+    JOIN catalog_templates ON catalog_templates.template_id = owned_avatars.template_id
+    WHERE owned_avatars.builder_id = ?
+    ORDER BY owned_avatars.purchased_at DESC
+  `).bind(builderId).all();
+
+  const ownedAnimations = await db.prepare(`
+    SELECT catalog_templates.*, owned_animations.purchased_at AS owned_purchased_at
+    FROM owned_animations
+    JOIN catalog_templates ON catalog_templates.template_id = owned_animations.template_id
+    WHERE owned_animations.builder_id = ?
+    ORDER BY owned_animations.purchased_at DESC
+  `).bind(builderId).all();
+
+  const videoGenerationJobs = await db.prepare(`
+    SELECT * FROM video_generation_jobs WHERE builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+
+  const higglesRedemptions = await db.prepare(`
+    SELECT * FROM higgles_redemptions WHERE builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+
+  const higglesEarningsEvents = await db.prepare(`
+    SELECT * FROM higgles_earnings_events WHERE builder_id = ? ORDER BY created_at DESC
+  `).bind(builderId).all();
+
+  const bundles = await db.prepare(`
+    SELECT * FROM bundles WHERE builder_id = ? ORDER BY created_at DESC, bundle_id DESC
+  `).bind(builderId).all();
+
+  return {
+    purchasesAsBuyer: purchasesAsBuyer.results.map(purchaseFromRow),
+    ownedAvatars: ownedAvatars.results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
+    ownedAnimations: ownedAnimations.results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
+    videoGenerationJobs: videoGenerationJobs.results.map((row) => ({
+      jobId: row.job_id,
+      providerTaskId: row.provider_task_id,
+      status: row.status,
+      modelUrl: row.model_url,
+      error: row.error_message,
+      createdAt: row.created_at,
+      processedAt: row.processed_at,
+    })),
+    higglesRedemptions: higglesRedemptions.results.map((row) => ({
+      redemptionId: row.redemption_id,
+      amountCents: row.amount_cents,
+      stripeTransferId: row.stripe_transfer_id,
+      stripePayoutId: row.stripe_payout_id,
+      createdAt: row.created_at,
+    })),
+    higglesEarningsEvents: higglesEarningsEvents.results.map((row) => ({
+      eventId: row.event_id,
+      amountCents: row.amount_cents,
+      createdAt: row.created_at,
+    })),
+    bundles: bundles.results.map(bundleFromRow),
+  };
 }
 
 // #1323: handleResendVerification (the token-issuing side) already
@@ -10830,9 +11532,17 @@ async function handleLandlets(request, db, route, url) {
     // currency in limbo to refund here, unlike the owner's comment on
     // #1711 anticipated as a general possibility -- just the courtesy
     // notification below that their bid no longer stands.
+    // #1955: exclude newOwnerBuilderId -- they may have placed a losing-so-
+    // far bid on this exact auction before the admin handed them the land
+    // outright, and would otherwise get a "your bid was cancelled, no
+    // winner" notification contradicting the "it's yours now" one just
+    // below (same bug class #966 already fixed for resolveAuction's own
+    // winner-who-also-lost-a-bid case).
     const cancelledAuctionBidderIds = auctionToCancel
       ? (await db.prepare('SELECT DISTINCT bidder_builder_id FROM auction_bids WHERE auction_id = ?')
-        .bind(auctionToCancel.auction_id).all()).results.map((row) => row.bidder_builder_id)
+        .bind(auctionToCancel.auction_id).all()).results
+        .map((row) => row.bidder_builder_id)
+        .filter((bidderBuilderId) => bidderBuilderId !== newOwnerBuilderId)
       : [];
     // #1280: these three deletes match the ones builder-deletion
     // (DELETE /api/builders/:id) and resolveAuction's own ownership-change
@@ -11432,6 +12142,45 @@ async function assertLandCandidatesDontOverlapEachOther(newRows, message) {
   if (conflict) throw new HttpError(message, 409);
 }
 
+// #2013 (sub-issue of #2012): whether a point falls near one of the real
+// pre-1916 water cells scripts/ingest-geo-data.mjs ingested into
+// geo_water_cells (migrations/0128). "Near" means within that cell's own
+// sampling spacing — cells that close together are effectively the same
+// continuous water region the ingestion script sampled, not an isolated
+// point. A full-table scan is fine at this dataset's size (at most a few
+// hundred rows for any radius this world will need for a long while); add
+// an index later only if that changes.
+export async function isNearWaterCell(db, x, y) {
+  const row = await db.prepare(`
+    SELECT 1 FROM geo_water_cells
+    WHERE (x_m - ?) * (x_m - ?) + (y_m - ?) * (y_m - ?) <= spacing_m * spacing_m
+    LIMIT 1
+  `).bind(x, x, y, y).first();
+  return !!row;
+}
+
+// #2014 (sub-issue of #2012): the one real consumer of isNearWaterCell.
+// Every freshly-generated plot/cell from either generator defaults to
+// 'buildable' today (generateOrganicMosaic never sets landType at all;
+// generateLandletRing's own plots never request 'water' either, since
+// powerLawPlots -- the only real caller feeding it -- doesn't set one).
+// This upgrades a candidate to 'water' when its center falls near a real
+// ingested water cell, and otherwise leaves it exactly as the generator
+// produced it -- including an already-'water' candidate (the admin-only
+// manual generate-ring caller can still request one explicitly via
+// `plots`; this only ever upgrades toward 'water', never downgrades back
+// to 'buildable'). Forward-only by construction: it mutates candidates
+// fresh out of a generator, before they ever become a stored
+// landlets/landlet_candidates row, and never touches an existing one.
+async function applyRealWaterClassification(db, candidates) {
+  await Promise.all(candidates.map(async (candidate) => {
+    if (candidate.landType === 'water') return;
+    if (await isNearWaterCell(db, candidate.center.x, candidate.center.y)) {
+      candidate.landType = 'water';
+    }
+  }));
+}
+
 // Split out from the generate-mosaic handler below so #1085's automatic
 // path (generateAutoMosaicIfFreshWorld) can reuse the exact same
 // generation/validation/overlap-guard logic without an admin session —
@@ -11439,7 +12188,9 @@ async function assertLandCandidatesDontOverlapEachOther(newRows, message) {
 // including the optional adminUserId (action log entry only written when
 // a real admin is the one calling it).
 async function generateLandletMosaicCandidates(db, { prefix, count }, adminUserId) {
-  const generated = generateOrganicMosaic({ prefix, count }).map((candidate) =>
+  const mosaicCells = generateOrganicMosaic({ prefix, count });
+  await applyRealWaterClassification(db, mosaicCells);
+  const generated = mosaicCells.map((candidate) =>
     validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
 
   // The mosaic template always covers the world origin as part of its
@@ -11798,11 +12549,18 @@ async function handleLandCandidateRings(request, db, route, url) {
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'generation-complete') {
     const admin = await requireAdmin(request, db);
-    const result = await completeRingGenerationInternal(db, route[1]);
+    const { changed, ...result } = await completeRingGenerationInternal(db, route[1]);
     // #829: unlike its landlet-level sibling (see that handler's own
     // adminActionLogStatement call), this endpoint never logged who
     // completed a ring's generation — missed by #817's own sweep.
-    await adminActionLogStatement(db, admin.user_id, 'ring_generation_complete', 'landlet_candidate_ring', route[1]).run();
+    // #2037: logging unconditionally missed the same race #1666 already
+    // fixed for the landlet-level sibling above — completeRingGeneration-
+    // Internal's own UPDATE can legitimately affect 0 rows (every member
+    // already enclosed by an earlier call, admin or automatic), and this
+    // handler still logged a completion that didn't happen on this call.
+    if (changed) {
+      await adminActionLogStatement(db, admin.user_id, 'ring_generation_complete', 'landlet_candidate_ring', route[1]).run();
+    }
     return json(result);
   }
 
@@ -11832,7 +12590,14 @@ async function completeRingGenerationInternal(db, ringId) {
   // #1055: same live-subquery fix as the single-landlet generation-complete
   // endpoint above -- a JS-read settings.radius_m here could go stale
   // against a concurrent expandWorldOnce.
-  await db.prepare(`
+  // #2037: added "AND generated_at IS NULL", matching the landlet-level
+  // sibling's own WHERE guard -- without it, a member that's already
+  // completed but not yet enclosed (still 'generating', COALESCE-preserved
+  // generated_at) keeps matching this UPDATE on every retry, since
+  // status = 'generating' alone stays true until enclosure. The SET clause
+  // was already a no-op for such a row either way; this only fixes what
+  // `changed` below actually measures.
+  const result = await db.prepare(`
     UPDATE landlets
     SET generated_at = COALESCE(generated_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
         status = CASE WHEN max_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN 'greenbelt' ELSE status END,
@@ -11842,7 +12607,7 @@ async function completeRingGenerationInternal(db, ringId) {
         END,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE landlet_id IN (SELECT landlet_id FROM landlet_candidates WHERE ring_id = ?)
-      AND status = 'generating'
+      AND status = 'generating' AND generated_at IS NULL
   `).bind(ringId).run();
   const completed = await db.prepare(`
     SELECT landlets.* FROM landlets
@@ -11853,6 +12618,11 @@ async function completeRingGenerationInternal(db, ringId) {
   return {
     ring: landCandidateRingFromRow(updatedRing),
     landlets: completed.results.map(landletFromRow),
+    // #2037: lets the HTTP handler log only when this call itself actually
+    // enclosed something, not just that the ring is (now, or already)
+    // fully complete -- same "logged only after confirmed" idiom as the
+    // landlet-level sibling handler above.
+    changed: result.meta.changes > 0,
   };
 }
 
@@ -11973,6 +12743,7 @@ async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, 
   if (radialConflict) {
     throw new HttpError('Generated ring would overlap existing land candidates', 409);
   }
+  await applyRealWaterClassification(db, generated.landlets);
   const landlets = generated.landlets.map((candidate) =>
     validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
   const rows = landlets.map((landlet) => ({ ...candidateRowFromLandlet(landlet), ring_id: prefix }));
@@ -13131,6 +13902,22 @@ async function handleSignPosts(request, db, route) {
     if (!existing) return json({ error: 'Post not found' }, 404);
     const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
+    // #781: an admin can remove any sign post outright (harassment, doxxing,
+    // other policy violations) regardless of whether the hosting landlet's
+    // own owner ever acts on it -- same "checked first, via the non-throwing
+    // currentUser lookup" shape as #1712's product-review admin override,
+    // since an admin isn't necessarily the post's author or the landlet owner.
+    const requester = await currentUser(request, db);
+    const admin = requester && requester.is_admin ? requester : null;
+    if (admin) {
+      await checkRateLimit(db, `sign-post-delete:${admin.user_id}`, SIGN_POST_DELETE_RATE_LIMIT_MAX);
+      const deletedByAdmin = await db.prepare('DELETE FROM sign_posts WHERE post_id = ?').bind(postId).run();
+      if (deletedByAdmin.meta.changes === 0) {
+        throw new HttpError('Post changed concurrently — refetch and retry', 409);
+      }
+      await adminActionLogStatement(db, admin.user_id, 'delete_sign_post_override', 'sign_post', postId).run();
+      return json({ deleted: true });
+    }
     // #1830: requireSessionBuilder (not requireVerifiedSession) so this one
     // call resolves both the real user_id a post's own author needs below,
     // and the builder_id the moderation fallback below that already needs
@@ -13328,6 +14115,19 @@ async function handleCalendarEvents(request, db, route) {
     const eventId = route[3];
     const existing = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ? AND instance_id = ?').bind(eventId, instanceId).first();
     if (!existing) return json({ error: 'Event not found' }, 404);
+    // #781: an admin can remove any calendar event outright, same reasoning
+    // and shape as the sign-posts admin override above.
+    const requester = await currentUser(request, db);
+    const admin = requester && requester.is_admin ? requester : null;
+    if (admin) {
+      await checkRateLimit(db, `calendar-event-delete:${admin.user_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
+      const deletedByAdmin = await db.prepare('DELETE FROM calendar_events WHERE event_id = ?').bind(eventId).run();
+      if (deletedByAdmin.meta.changes === 0) {
+        throw new HttpError('Event changed concurrently — refetch and retry', 409);
+      }
+      await adminActionLogStatement(db, admin.user_id, 'delete_calendar_event_override', 'calendar_event', eventId).run();
+      return json({ deleted: true });
+    }
     // Same moderation gate as sign posts above — the calendar's own hosting
     // landlet's owner, not the event's free-text author.
     const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
@@ -13437,6 +14237,11 @@ const PURCHASE_BUILDER_FLOOR_RATE = 0.005; // "0.5% floor protecting builders"
 // only if that policy itself changes, not silently drift if the
 // commission rate ever does.
 const REFUND_PAYOUT_RATE = 0.99;
+// #2020 (sub-issue of #1212, owner-settled shape 2026-10-13): "disputes/
+// refund requests at or below $15-25... exact value at implementer's
+// discretion within that range" — picked the midpoint.
+const DISPUTE_AUTO_RESOLVE_THRESHOLD_CENTS = 2000;
+const DISPUTE_RATE_LIMIT_MAX = 20;
 // quantity had no upper bound at all until this was added — a single
 // call with an absurd quantity could mint an arbitrary amount of a
 // builder's higgles_balance_cents and higgles_earnings_events credit in
@@ -13495,6 +14300,28 @@ async function handleInstancePurchase(request, env, instanceId) {
   if (!template) return json({ error: 'Catalog template not found' }, 404);
   if (template.price_cents == null) {
     throw new HttpError('This product has no price set and cannot be purchased', 400);
+  }
+  // #1946: a test/demo model -- never a real listing the owner intends to
+  // sell -- is still placeable (Build mode's own picker keeps showing it
+  // to an admin session) but must never actually be bought, real money or
+  // simulated alike.
+  if (template.is_test_model) {
+    throw new HttpError('This is a test/demo product and cannot be purchased', 400);
+  }
+  // #2017: a listing with enough distinct counterfeit flags (or an admin
+  // escalation) is blocked from new purchases while under review, without
+  // touching GET /api/catalog's own list/detail endpoints -- see this
+  // column's own migration comment for why hiding it there isn't safe.
+  if (template.flagged_hidden_at) {
+    throw new HttpError('This product is temporarily unavailable pending review', 400);
+  }
+  // #1948: a quick, non-atomic pre-check so an obviously sold-out item gets a
+  // clear rejection before a buyer goes through checkout (real-money) or the
+  // simulated write below -- the actual race-safe enforcement (the last unit
+  // bought by two near-simultaneous buyers) happens atomically in
+  // writePurchaseRow's own guarded decrement, not here.
+  if (template.stock_quantity === 0) {
+    throw new HttpError('This product is sold out', 400);
   }
   const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
   if (!landlet?.owner_builder_id) {
@@ -13813,7 +14640,16 @@ async function handlePurchaseFinalize(request, env) {
   const checkoutBuilderId = instance && template ? await resolveFinalizeBuilderId(db, meta) : null;
 
   if (instance && template && checkoutBuilderId) {
-    return writePurchaseRow(env, instance, template, { owner_builder_id: checkoutBuilderId }, amounts, paymentIntentId, isDigitalGood, buyerBuilderId, isAvatarCategory, undefined, isAnimationCategory);
+    // #1948: allowOversell=true -- real money has already moved by this
+    // point (Stripe already confirmed `succeeded` above), and the arbitrary
+    // wall-clock gap since checkout means other buyers may have exhausted
+    // the remaining stock in the meantime. Rejecting here would strand a
+    // real charge with no purchase record at all, the same risk #472's own
+    // writeOrphanedPurchaseRow fallback (just below) already exists to
+    // avoid -- so this floors remaining stock at zero and still completes
+    // the purchase, rather than the simulated path's reject-outright
+    // behavior.
+    return writePurchaseRow(env, instance, template, { owner_builder_id: checkoutBuilderId }, amounts, paymentIntentId, isDigitalGood, buyerBuilderId, isAvatarCategory, undefined, isAnimationCategory, true);
   }
 
   // #472: the buyer has already been charged and the seller's connected
@@ -14003,7 +14839,7 @@ function purchaseContentMatches(existingRow, templateId, amounts) {
     && existingRow.total_cents === amounts.totalCents;
 }
 
-export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null, isAnimationCategory = template.category === 'animation') {
+export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null, isAnimationCategory = template.category === 'animation', allowOversell = false) {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   // #877: a retry (network blip, double-tap) after this exact write already
@@ -14032,6 +14868,38 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
       if (purchaseContentMatches(existing, template.template_id, amounts)) return json({ purchase: purchaseFromRow(existing) });
       purchaseId = `purchase-${crypto.randomUUID()}`;
     }
+  }
+  // #1948: a plain, un-guarded UPDATE here would race two near-simultaneous
+  // buyers of the last unit -- folding the guard into the UPDATE's own WHERE
+  // clause (the same claim-before-act idiom this file already uses for
+  // higgles-balance debits elsewhere) makes the check-then-decrement atomic
+  // instead. Placed after the idempotency dedup-hit return above, not
+  // before: a retry that finds its own already-written row returns before
+  // ever reaching here, so a retry of the same purchase can never
+  // double-decrement.
+  let justSoldOut = false;
+  if (template.stock_quantity != null) {
+    const decremented = await db.prepare(`
+      UPDATE catalog_templates SET stock_quantity = stock_quantity - ?
+      WHERE template_id = ? AND stock_quantity >= ?
+    `).bind(quantity, template.template_id, quantity).run();
+    if (decremented.meta.changes === 0) {
+      if (!allowOversell) {
+        throw new HttpError('This product is sold out', 400);
+      }
+      // #1948: real money has already moved by the time
+      // handlePurchaseFinalize calls this with allowOversell=true (an
+      // arbitrary wall-clock gap sits between checkout and finalize, during
+      // which other buyers can exhaust the remaining stock) -- same
+      // "the purchase must still be recorded" reasoning as
+      // writeOrphanedPurchaseRow's own fallback. Floor remaining stock at
+      // zero (never negative) rather than reject outright, and still let
+      // the sold-out sweep below fire.
+      await db.prepare('UPDATE catalog_templates SET stock_quantity = 0 WHERE template_id = ? AND stock_quantity > 0')
+        .bind(template.template_id).run();
+    }
+    const after = await db.prepare('SELECT stock_quantity FROM catalog_templates WHERE template_id = ?').bind(template.template_id).first();
+    justSoldOut = after.stock_quantity === 0;
   }
   // #1717: landlet.owner_builder_id was read by the caller before several
   // more awaited round-trips ran (the seller/Stripe lookup, this function's
@@ -14097,9 +14965,121 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
     await fireNotification(db, builderId,
       `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`);
   }
+  // #2019: soft self-dealing signal, never blocks or affects this purchase
+  // itself -- a side effect after the real write already committed, same
+  // "fired after the batch, not inside it" placement as the notification
+  // just above, for the same reason (never risk rolling back a real
+  // purchase record over a best-effort flag).
+  await flagSelfDealingIfMatched(db, purchaseId, buyerBuilderId, template.seller_id);
+  // #1948: after the purchase itself is safely committed and notified, not
+  // before -- a self-delete race between the stock decrement above and this
+  // sweep must never roll back or block the purchase record itself, the
+  // same "fire outside the batch" reasoning as the seller-commission
+  // notification just above.
+  if (justSoldOut) {
+    await sweepSoldOutTemplateInstances(db, template);
+  }
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(row), ...(deliveryConfirmUrl ? { deliveryConfirmUrl } : {}) }, 201);
+}
+
+// #2019 (sub-issue of #1212, owner-settled shape 2026-10-13): the one
+// signal from this sub-issue's original three-signal scope that this
+// codebase can actually compare -- see migrations/0132's own comment for
+// why shipping-address and Stripe-customer-ID matching aren't implemented
+// here. Fails open (never flags, never throws) whenever either side's
+// email can't be resolved at all -- a builder with no linked user_id
+// (pre-login/dev-mode) or a seller never linked to a real account is not
+// "cleared," it's simply "nothing to compare," same posture the rest of
+// this file already takes toward a dangling/unlinked id.
+async function flagSelfDealingIfMatched(db, purchaseId, buyerBuilderId, sellerId) {
+  if (!buyerBuilderId || !sellerId) return;
+  const buyer = await db.prepare(`
+    SELECT users.email AS email FROM builders JOIN users ON users.user_id = builders.user_id
+    WHERE builders.builder_id = ?
+  `).bind(buyerBuilderId).first();
+  const seller = await db.prepare(`
+    SELECT users.email AS email FROM sellers JOIN users ON users.user_id = sellers.user_id
+    WHERE sellers.seller_id = ?
+  `).bind(sellerId).first();
+  if (!buyer?.email || !seller?.email || buyer.email !== seller.email) return;
+  await db.prepare(`
+    INSERT INTO self_dealing_flags (flag_id, purchase_id, matched_signals) VALUES (?, ?, ?)
+  `).bind(`self-dealing-flag-${crypto.randomUUID()}`, purchaseId, JSON.stringify(['email'])).run();
+}
+
+const SELF_DEALING_FLAG_REVIEW_RATE_LIMIT_MAX = 20;
+
+// #2019: the admin-facing review queue over self_dealing_flags -- a flag
+// here is a soft signal, not an accusation, so there is no "approve"
+// action with its own consequence the way #2017's product-flags resolve
+// has (remove listing + strike seller). An admin reviewing one is just
+// acknowledging it (optionally with a note for their own record); nothing
+// else in this app reacts to a flag's status.
+async function handleSelfDealingFlags(request, db, route) {
+  if (request.method === 'GET' && route.length === 1) {
+    await requireAdmin(request, db);
+    const { results } = await db.prepare(`
+      SELECT sdf.flag_id AS flagId, sdf.purchase_id AS purchaseId, sdf.matched_signals AS matchedSignals, sdf.created_at AS createdAt,
+             p.template_id AS templateId, p.buyer_builder_id AS buyerBuilderId, p.builder_id AS builderId, p.total_cents AS totalCents
+      FROM self_dealing_flags sdf
+      JOIN purchases p ON p.purchase_id = sdf.purchase_id
+      WHERE sdf.status = 'pending'
+      ORDER BY sdf.created_at DESC
+      LIMIT 200
+    `).all();
+    return json({
+      flags: results.map((row) => ({ ...row, matchedSignals: JSON.parse(row.matchedSignals) })),
+    });
+  }
+
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'review') {
+    const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `self-dealing-flag-review:${admin.user_id}`, SELF_DEALING_FLAG_REVIEW_RATE_LIMIT_MAX);
+    const flagId = route[1];
+    const input = await readJson(request);
+    const notes = input.notes === undefined || input.notes === null || input.notes === ''
+      ? null
+      : stringValue(input.notes, 'notes');
+    if (notes && notes.length > 280) throw new HttpError('notes must be 280 characters or fewer', 400);
+    const result = await db.prepare(`
+      UPDATE self_dealing_flags SET status = 'reviewed', reviewed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        reviewed_by_admin_user_id = ?, review_notes = ?
+      WHERE flag_id = ? AND status = 'pending'
+    `).bind(admin.user_id, notes, flagId).run();
+    if (result.meta.changes === 0) throw new HttpError('Flag not found or already reviewed', 404);
+    await adminActionLogStatement(db, admin.user_id, 'reviewed_self_dealing_flag', 'self_dealing_flag', flagId, { notes }).run();
+    return json({ reviewed: true });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+// #1948: every placed_instance of a template that just hit zero stock loses
+// its listing instantly -- the same hard-delete-no-archive treatment an
+// owning builder's own self-deletion already gives every instance on their
+// landlets (see the several bare `DELETE FROM placed_instances WHERE
+// landlet_id = ?` call sites elsewhere in this file). There's no backup/
+// replacement-product concept yet (that's #1952's separate scope, per
+// #1947), so "the last unit just sold" is, for now, treated the same as any
+// other case where a placed instance's own backing listing disappears out
+// from under it. Reuses notifyBuildersOfDimensionChange's own
+// per-builder-grouped query shape to fan out exactly one notification per
+// affected builder, however many instances of this template they placed.
+async function sweepSoldOutTemplateInstances(db, template) {
+  const { results: affected } = await db.prepare(`
+    SELECT l.owner_builder_id AS builderId, COUNT(*) AS count
+    FROM placed_instances pi
+    JOIN landlets l ON l.landlet_id = pi.landlet_id
+    WHERE pi.template_id = ? AND l.owner_builder_id IS NOT NULL
+    GROUP BY l.owner_builder_id
+  `).bind(template.template_id).all();
+  await db.prepare('DELETE FROM placed_instances WHERE template_id = ?').bind(template.template_id).run();
+  for (const { builderId, count } of affected) {
+    await fireNotification(db, builderId,
+      `"${template.name}" just sold out — ${count} placed ${count === 1 ? 'instance has' : 'instances have'} been removed from your land.`);
+  }
 }
 
 async function handlePurchases(request, env, route, url) {
@@ -14184,12 +15164,20 @@ async function handlePurchases(request, env, route, url) {
     return handlePurchaseRefund(request, env, route[1]);
   }
 
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'dispute') {
+    return handlePurchaseDispute(request, env, route[1]);
+  }
+
   if (request.method === 'POST' && route.length === 3 && route[2] === 'mark-shipped') {
     return handleMarkShipped(request, env, route[1]);
   }
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'feedback') {
     return handleSellerFeedbackCreate(request, env, route[1]);
+  }
+
+  if (request.method === 'DELETE' && route.length === 3 && route[2] === 'feedback') {
+    return handleSellerFeedbackDelete(request, env, route[1]);
   }
 
   // Unauthenticated on purpose — see buildDeliveryConfirmFields' own
@@ -14386,6 +15374,38 @@ async function handleSellerFeedbackCreate(request, env, purchaseId) {
   }
   const row = await db.prepare('SELECT * FROM seller_feedback WHERE feedback_id = ?').bind(feedbackId).first();
   return json({ feedback: sellerFeedbackFromRow(row) }, 201);
+}
+
+// #1738 (owner confirmed, 2026-10-13): seller_feedback rates a person's own
+// conduct on a transaction, not a product -- unlike product_reviews' own
+// DELETE branch, which lets the reviewed template's seller self-delete,
+// self-delete here would let a seller scrub legitimate negative feedback
+// about their own conduct. Admin-only removal is the deliberate, owner-
+// confirmed bar, not a placeholder pending a seller-facing path; whether
+// sellers also get their own appeal/self-delete path is a separate,
+// explicitly-still-open question per the issue's own comment thread.
+// Keyed by purchaseId (not a separate feedbackId) since migrations/0097's
+// own UNIQUE constraint on purchase_id already makes it a 1-to-1 resource,
+// the same shape POST .../feedback above already uses.
+const SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX = 20;
+
+async function handleSellerFeedbackDelete(request, env, purchaseId) {
+  const db = env.DB;
+  const existing = await db.prepare('SELECT * FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).first();
+  if (!existing) return json({ error: 'Feedback not found' }, 404);
+  const admin = await requireAdmin(request, db);
+  await checkRateLimit(db, `seller-feedback-delete:${admin.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
+  const result = await db.prepare('DELETE FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).run();
+  // #2003: the existence check above and this DELETE aren't atomic, so a
+  // concurrent delete (another admin retrying, say) can win the race
+  // first -- logged only after confirmed to have actually happened, same
+  // "logged only after confirmed" idiom delete_review_override/
+  // delete_land_candidate already use, so a deletion that didn't happen
+  // is never misattributed to this admin.
+  if (result.meta.changes === 1) {
+    await adminActionLogStatement(db, admin.user_id, 'delete_seller_feedback', 'seller_feedback', existing.feedback_id).run();
+  }
+  return json({ deleted: true });
 }
 
 async function handleSellerFeedbackList(db, sellerId) {
@@ -14592,6 +15612,70 @@ export async function clawBackPurchaseCommission(db, purchase, templateName) {
   }
 }
 
+// The atomic refunded_at guard and (for a real-money purchase) the actual
+// Stripe reversal — shared by handlePurchaseRefund (seller/admin-initiated)
+// and, as of #2020, the buyer-initiated auto-resolve dispute path below.
+// Extracted for the same reason #1086 already extracted
+// clawBackPurchaseCommission just above: two independent trigger paths
+// performing the identical money-moving step must never be free to drift
+// apart from each other. Returns false if a concurrent request (a refund,
+// a payout claim, or another dispute) already won the race; the caller is
+// responsible for re-reading the row to report why.
+async function finalizeRefundReversal(env, purchase) {
+  const db = env.DB;
+  // The refunded_at read at each caller's own top is a fast-path only — two
+  // concurrent reversal requests (a double-click, a client retry, or a
+  // buyer's dispute racing a seller's own refund) can both pass it before
+  // either write lands. This conditional UPDATE is the actual atomic guard.
+  // #1061: also re-checks paid_out_at IS NULL here, not just at each
+  // caller's own eager check above — a concurrent claimPurchasesForPayout
+  // (POST /sellers/me/payouts) landing in the window would otherwise still
+  // let a reversal through, pulling money that's supposed to be backing
+  // other, still-unpaid sales.
+  const guard = await db.prepare(
+    `UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE purchase_id = ? AND refunded_at IS NULL AND paid_out_at IS NULL`,
+  ).bind(purchase.purchase_id).run();
+  if (guard.meta.changes === 0) return false;
+
+  // #348: a real-money purchase (payment_intent_id set — see #453) needs its
+  // Stripe charge actually reversed, not just the local row flagged.
+  // reverse_transfer pulls the seller's own share back out of their
+  // connected-account balance; refund_application_fee reverses
+  // higglehaven's own cut too, proportional to the same capped amount. If
+  // Stripe's call fails, the guard above is released (refunded_at reset to
+  // NULL) and the error propagates before the builder's higgles balance is
+  // ever touched — a failed real-money reversal should never look like a
+  // successful refund, and should stay retryable.
+  //
+  // Owner (Control Room, 2026-09-10, on #651): REFUND_PAYOUT_RATE caps what
+  // actually comes back to the buyer at 99% of the original total rather
+  // than a full reversal, closing a fraud triangle where cashing out a
+  // builder's real commission then refunding the full price nets the
+  // cashed-out commission for free — see that constant's own comment. This
+  // protection applies identically no matter which path triggered the
+  // reversal.
+  if (purchase.payment_intent_id) {
+    if (!stripeConfigured(env)) {
+      await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchase.purchase_id).run();
+      throw new HttpError('Stripe payments are not configured on this server yet.', 503);
+    }
+    const refundAmountCents = Math.round(purchase.total_cents * REFUND_PAYOUT_RATE);
+    try {
+      await stripeRequest(env, 'POST', 'refunds', {
+        payment_intent: purchase.payment_intent_id,
+        amount: refundAmountCents,
+        reverse_transfer: true,
+        refund_application_fee: true,
+      }, refundIdempotencyKey(purchase.purchase_id));
+    } catch (err) {
+      await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchase.purchase_id).run();
+      throw err;
+    }
+  }
+  return true;
+}
+
 // Refund + higgles-commission clawback (migrations/0052_purchase_refunds.sql
 // — see its own comment for why only higgles_balance_cents is touched, not
 // higgles_earnings_events/land cap). Reachable from the Seller modal's own
@@ -14670,78 +15754,19 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   }
   const templateName = template?.name || 'A product';
 
-  // The refunded_at read above is a fast-path only — two concurrent refund
-  // requests (a double-click, or a client retry) can both pass it before
-  // either write lands. This conditional UPDATE is the actual atomic
-  // guard: run alone, not batched with the balance/notification statements
-  // below, since D1's db.batch doesn't support skipping later statements
-  // based on an earlier one's row count within the same call. Whichever
-  // request's UPDATE loses the race affects 0 rows and gets rejected here
-  // before it can touch the builder's balance at all.
-  //
-  // #1061: also re-checks paid_out_at IS NULL here, not just above — the
-  // eager paid_out_at check above is a fast-path only, same as the
-  // refunded_at read at the top of this function; a concurrent
-  // claimPurchasesForPayout (POST /sellers/me/payouts) landing in the
-  // window between that read and this write used to still let the refund
-  // through, reversing a Stripe transfer that's supposed to be backing
-  // other, still-unpaid sales.
-  const guard = await db.prepare(
-    `UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-     WHERE purchase_id = ? AND refunded_at IS NULL AND paid_out_at IS NULL`,
-  ).bind(purchaseId).run();
-  if (guard.meta.changes === 0) {
+  // Run alone, not batched with the balance/notification statements below,
+  // since D1's db.batch doesn't support skipping later statements based on
+  // an earlier one's row count within the same call. Whichever request's
+  // UPDATE loses the race (see finalizeRefundReversal's own comment on the
+  // guard it runs) affects 0 rows and gets rejected here before it can
+  // touch the builder's balance at all.
+  if (!(await finalizeRefundReversal(env, purchase))) {
     const current = await db.prepare('SELECT refunded_at, paid_out_at FROM purchases WHERE purchase_id = ?')
       .bind(purchaseId).first();
     if (current?.paid_out_at) {
       throw new HttpError('This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
     }
     throw new HttpError('This purchase has already been refunded', 400);
-  }
-
-  // #348: a real-money purchase (payment_intent_id set — see #453) needs
-  // its Stripe charge actually reversed, not just the local row flagged.
-  // reverse_transfer pulls the seller's own share back out of their
-  // connected-account balance (the same way the block below claws back
-  // the builder's higgles share); refund_application_fee reverses
-  // higglehaven's own cut too, proportional to the same capped amount. If
-  // Stripe's call fails, the guard above is released (refunded_at reset to
-  // NULL) and the error propagates before the builder's higgles balance is
-  // ever touched — a failed real-money reversal should never look like a
-  // successful refund, and should stay retryable.
-  //
-  // Owner (Control Room, 2026-09-10, on #651): removing the floor-guard
-  // above (never blocking a refund) opened a real fraud triangle —
-  // buy a fake sale, cash out the builder's real commission, then refund
-  // the full purchase price back, netting the cashed-out commission for
-  // free. REFUND_PAYOUT_RATE caps what actually comes back to the buyer at
-  // 99% of the original total instead of a full reversal: builderShareCents
-  // is deterministically 1% of totalCents at this codebase's actual
-  // PURCHASE_COMMISSION_RATE/PURCHASE_BUILDER_SPLIT (2% commission, 50/50
-  // split — the 0.5% floor never binds at that rate), so a 99% refund
-  // exactly zeroes out the triangle's profit rather than leaving it
-  // partially exploitable. The owner's own words: "unless you can think of
-  // a better solution, I want to use this... refund only 99%." Applies
-  // only to the money that actually reaches the buyer — the builder's own
-  // higgles clawback just below is unaffected, still the full
-  // builder_share_cents, allowed to go negative per the direction above.
-  if (purchase.payment_intent_id) {
-    if (!stripeConfigured(env)) {
-      await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchaseId).run();
-      throw new HttpError('Stripe payments are not configured on this server yet.', 503);
-    }
-    const refundAmountCents = Math.round(purchase.total_cents * REFUND_PAYOUT_RATE);
-    try {
-      await stripeRequest(env, 'POST', 'refunds', {
-        payment_intent: purchase.payment_intent_id,
-        amount: refundAmountCents,
-        reverse_transfer: true,
-        refund_application_fee: true,
-      }, refundIdempotencyKey(purchaseId));
-    } catch (err) {
-      await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchaseId).run();
-      throw err;
-    }
   }
 
   // #1086: the balance clawback, notification, and avatar-ownership
@@ -14765,6 +15790,76 @@ async function handlePurchaseRefund(request, env, purchaseId) {
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(row) });
+}
+
+// #2020 (sub-issue of #1212, owner-settled shape 2026-10-13, SPEC.md §5's
+// "Low-value disputes from established accounts: auto-resolved in buyer's
+// favor" bullet): unlike handlePurchaseRefund above (seller/admin-
+// initiated), this is the buyer's own self-service path — there was no
+// buyer-facing dispute/refund-request endpoint anywhere before this (see
+// that handler's own comment on why refunding has always been seller/
+// admin-only). Eligibility is derived entirely from this schema's existing
+// signals, since builders carry no strike/flag column of their own (unlike
+// sellers.strike_count, migrations/0131): "established" = at least one
+// OTHER completed (non-refunded) purchase and zero refunded/disputed ones
+// of this buyer's own. Anything that fails either test, or the dollar
+// threshold, falls through to today's unchanged (i.e. no automated) path —
+// this never fabricates a "pending review" state nothing else in this app
+// reads, it only ever actually moves money when the owner's own
+// auto-resolve conditions are met.
+async function handlePurchaseDispute(request, env, purchaseId) {
+  const db = env.DB;
+  const sessionBuilder = await requireSessionBuilder(request, db);
+  await checkRateLimit(db, `purchase-dispute:${sessionBuilder.builder_id}`, DISPUTE_RATE_LIMIT_MAX);
+  const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  if (!purchase) throw new HttpError('Purchase not found', 404);
+  // Same buyer-ownership gate handleSellerFeedbackCreate uses (#1123) — a
+  // dispute is the buyer's own standing to raise, not the seller's, the
+  // hosting builder's, or an onlooker's.
+  if (purchase.buyer_builder_id !== sessionBuilder.builder_id) {
+    throw new HttpError('Only the buyer of this purchase can dispute it', 400);
+  }
+  if (purchase.refunded_at) {
+    throw new HttpError('This purchase has already been refunded', 400);
+  }
+  if (purchase.paid_out_at) {
+    throw new HttpError('This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
+  }
+
+  const history = await db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM purchases WHERE buyer_builder_id = ? AND purchase_id != ? AND refunded_at IS NULL) AS completedCount,
+      (SELECT COUNT(*) FROM purchases WHERE buyer_builder_id = ? AND refunded_at IS NOT NULL) AS refundedCount
+  `).bind(sessionBuilder.builder_id, purchaseId, sessionBuilder.builder_id).first();
+  const established = history.completedCount > 0 && history.refundedCount === 0;
+  const lowValue = purchase.total_cents <= DISPUTE_AUTO_RESOLVE_THRESHOLD_CENTS;
+  if (!established || !lowValue) {
+    return json({ autoResolved: false, purchase: purchaseFromRow(purchase) });
+  }
+
+  const template = await db.prepare('SELECT name, metadata_json FROM catalog_templates WHERE template_id = ?')
+    .bind(purchase.template_id).first();
+  // #2020 only auto-resolves "in the buyer's favor" — a seller's own
+  // no-returns policy (the same guard handlePurchaseRefund enforces above)
+  // still applies; this isn't a bypass of that choice, just a faster path
+  // to the same outcome a seller-initiated refund would reach anyway.
+  if (template && JSON.parse(template.metadata_json || '{}').noReturns) {
+    return json({ autoResolved: false, purchase: purchaseFromRow(purchase) });
+  }
+  const templateName = template?.name || 'A product';
+
+  if (!(await finalizeRefundReversal(env, purchase))) {
+    const current = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    return json({ autoResolved: false, purchase: purchaseFromRow(current) });
+  }
+  await clawBackPurchaseCommission(db, purchase, templateName);
+  // null adminUserId, same convention adminActionLogStatement's own video-
+  // generation-sweep caller uses for a system/automated action with no
+  // human admin in the loop — this is exactly that: nobody reviewed it.
+  await adminActionLogStatement(db, null, 'dispute_auto_resolved', 'purchase', purchaseId, { templateName, totalCents: purchase.total_cents }).run();
+
+  const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  return json({ autoResolved: true, purchase: purchaseFromRow(row) });
 }
 
 function purchaseFromRow(row) {
@@ -14834,13 +15929,63 @@ async function assertReferenceExists(db, table, column, value, field) {
   if (!row) throw new HttpError(`${field} "${value}" does not exist`, 400);
 }
 
-async function assertReferencesExist(db, table, column, values, field) {
+// #1975: records a full snapshot of `row` (as it existed right before a
+// user edited/deleted their own content) into user_content_edit_history
+// (migrations/0129) — "in case of disputes," per the owner's own framing,
+// not an audit log of the action alone. Shared across every content type
+// this applies to, rather than a bespoke history table per type.
+async function recordContentEditHistory(db, sourceTable, sourceId, action, row, actorUserId) {
+  await db.prepare(`
+    INSERT INTO user_content_edit_history (history_id, source_table, source_id, action, snapshot_json, actor_user_id)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).bind(`history-${crypto.randomUUID()}`, sourceTable, sourceId, action, JSON.stringify(row), actorUserId).run();
+}
+
+// #1978: D1 caps a single query at 100 bound parameters
+// (developers.cloudflare.com/d1/platform/limits) -- a deduplicated value
+// set past that limit would otherwise throw a raw D1 error here instead
+// of this function's own clean "does not exist" message. Chunking fixes
+// every caller of assertReferencesExist at the source rather than
+// needing each one capped to this limit individually. Shared by
+// selectRowsByIdsChunked below for the same reason, for callers (GET
+// /api/builders?ids=.../sellers?ids=..., #2038) that query directly
+// rather than through assertReferencesExist.
+const D1_MAX_BOUND_PARAMETERS = 100;
+
+// #2038: GET /api/builders?ids=... and GET /api/sellers?ids=... accept up
+// to 200 ids but bound them in one unchunked IN (...) query -- the same
+// D1 100-bound-parameter hazard the comment above already warned about
+// for this exact endpoint, without actually fixing it. Chunks the lookup
+// and re-sorts the merged rows afterward, since each chunk's own query
+// only sorts within that chunk, not across all of them.
+async function selectRowsByIdsChunked(db, table, idColumn, ids) {
+  const rows = [];
+  for (let i = 0; i < ids.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = ids.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(
+      `SELECT * FROM ${table} WHERE ${idColumn} IN (${placeholders})`,
+    ).bind(...chunk).all();
+    rows.push(...results);
+  }
+  rows.sort((a, b) => {
+    if (a.created_at !== b.created_at) return a.created_at < b.created_at ? -1 : 1;
+    return a[idColumn] < b[idColumn] ? -1 : a[idColumn] > b[idColumn] ? 1 : 0;
+  });
+  return rows;
+}
+
+export async function assertReferencesExist(db, table, column, values, field) {
   const uniqueValues = [...new Set(values)];
-  const placeholders = uniqueValues.map(() => '?').join(', ');
-  const { results } = await db.prepare(
-    `SELECT ${column} AS value FROM ${table} WHERE ${column} IN (${placeholders})`,
-  ).bind(...uniqueValues).all();
-  const found = new Set(results.map((row) => row.value));
+  const found = new Set();
+  for (let i = 0; i < uniqueValues.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = uniqueValues.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(
+      `SELECT ${column} AS value FROM ${table} WHERE ${column} IN (${placeholders})`,
+    ).bind(...chunk).all();
+    for (const row of results) found.add(row.value);
+  }
   const missing = uniqueValues.find((value) => !found.has(value));
   if (missing !== undefined) throw new HttpError(`${field} "${missing}" does not exist`, 400);
 }
@@ -15336,6 +16481,14 @@ function validateTemplate(input, fallbackId) {
       height: positiveNumber(dimensions.height, 'dimensions.height'),
     },
     priceCents: optionalInteger(input.priceCents, 'priceCents'),
+    // #1948: NULL (the default, unless a seller opts in) means unlimited --
+    // today's unchanged behavior for every pre-existing and future template
+    // unless this is explicitly set. A set value is remaining stock, not a
+    // fixed "original quantity" -- it decrements at purchase-finalize time
+    // (writePurchaseRow) and a seller PATCHing a new value here directly
+    // overwrites whatever remained, the same as any other seller-settable
+    // field.
+    stockQuantity: optionalStockQuantity(input.stockQuantity),
     sellerId: optionalStringValue(input.sellerId, 'sellerId'),
     modelUrl: input.modelUrl || null,
     // #540: the seller's own "faux lándlet" 3D array paginates by a
@@ -15496,7 +16649,7 @@ function validateCropShape(input) {
 }
 
 function templateParams(template) {
-  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata)];
+  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata), template.stockQuantity];
 }
 
 // #1758: compares an existing row (raw DB shape) against a freshly
@@ -15516,7 +16669,8 @@ function templateContentMatches(existingRow, template) {
     && existingRow.depth_m === template.dimensions.depth
     && existingRow.height_m === template.dimensions.height
     && existingRow.price_cents === template.priceCents
-    && existingRow.metadata_json === JSON.stringify(template.metadata);
+    && existingRow.metadata_json === JSON.stringify(template.metadata)
+    && existingRow.stock_quantity === template.stockQuantity;
 }
 
 function instanceParams(instance) {
@@ -15551,6 +16705,19 @@ function templateFromRow(row) {
     imageUrl: row.image_url,
     imageEmbedding: row.image_embedding ? JSON.parse(row.image_embedding) : null,
     metadata: JSON.parse(row.metadata_json || '{}'),
+    // #1946: never settable through POST/PATCH's own generic field
+    // merge (validateTemplate/templateParams deliberately don't read or
+    // write this column) -- same "not ordinary-self-service-settable"
+    // treatment as is_admin.
+    isTestModel: Boolean(row.is_test_model),
+    // #2017: set once this template's distinct-flag count (or an admin
+    // escalation) blocks new purchases pending review -- see
+    // handleInstancePurchase's own guard and this column's migration
+    // comment for why it never affects browse/picker visibility.
+    flaggedHiddenAt: row.flagged_hidden_at,
+    // #1948: NULL = unlimited (the default); a set value is remaining
+    // stock, decremented atomically at purchase-finalize time.
+    stockQuantity: row.stock_quantity,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -15893,6 +17060,20 @@ function optionalModelSizeBytes(value) {
   const number = Number(value);
   if (!Number.isSafeInteger(number) || number < 0 || number > MAX_MODEL_BYTES) {
     throw new HttpError(`modelSizeBytes must be a non-negative integer no greater than ${MAX_MODEL_BYTES}`, 400);
+  }
+  return number;
+}
+
+// #1948: bounded generously -- this is a count of physical units, not money
+// or bytes, so MAX_MONEY_CENTS would be the wrong bound wearing the right
+// shape the same way optionalModelSizeBytes already explains above.
+const MAX_STOCK_QUANTITY = 1_000_000;
+
+function optionalStockQuantity(value) {
+  if (value === undefined || value === null) return null;
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 0 || number > MAX_STOCK_QUANTITY) {
+    throw new HttpError(`stockQuantity must be a non-negative integer no greater than ${MAX_STOCK_QUANTITY}`, 400);
   }
   return number;
 }

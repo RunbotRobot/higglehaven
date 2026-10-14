@@ -371,6 +371,54 @@ describe('Worker API', () => {
     expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(404);
   });
 
+  // #1601: the owner wants price required on a real seller listing (a free
+  // digital product is an explicit $0, not an omitted field) — scoped to
+  // POST /catalog (creation) with a sellerId present, allowing 0 but
+  // rejecting a missing/null priceCents; a sellerId-less (system/
+  // placeholder) template stays unaffected, matching every other test
+  // fixture in this file that creates one with no price at all.
+  it('requires priceCents on a seller-owned catalog template, but not on a sellerId-less one', async () => {
+    const seller = await signupSeller('catalog-price-required-seller');
+    const missingPrice = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'catalog-price-required-missing',
+        name: 'Missing price product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }),
+    }));
+    expect(missingPrice.response.status).toBe(400);
+    expect(missingPrice.body.error).toMatch(/priceCents/);
+
+    const freeProduct = await api('/catalog', seller.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'catalog-price-required-free',
+        name: 'Explicit free product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+        priceCents: 0,
+      }),
+    }));
+    expect(freeProduct.response.status).toBe(201);
+    expect(freeProduct.body.template.priceCents).toBe(0);
+
+    const systemTemplate = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'catalog-price-required-system',
+        name: 'System placeholder product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(systemTemplate.response.status).toBe(201);
+    expect(systemTemplate.body.template.priceCents).toBeNull();
+  });
+
   // #774: image_url (a product thumbnail, written by POST .../thumbnail)
   // shares this same bucket/URL scheme as model_url, but the listing/
   // cleanup/single-delete reference checks above only ever looked at
@@ -386,6 +434,7 @@ describe('Worker API', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: owner.sellerId,
+        priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -491,6 +540,7 @@ describe('Worker API', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: owner.sellerId,
+        priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -545,6 +595,7 @@ describe('Worker API', () => {
       dimensions: { width: 1, depth: 1, height: 1 },
       modelUrl: uploaded.modelUrl,
       sellerId: owner.sellerId,
+      priceCents: 500,
       idempotencyKey: 'retry-key-1',
     };
     const first = await api('/catalog', owner.session({ method: 'POST', body: JSON.stringify(payload) }));
@@ -1023,6 +1074,35 @@ describe('Worker API', () => {
     expect((await api(`/catalog?q=${'a'.repeat(101)}`)).response.status).toBe(400);
   });
 
+  // #2006: category/subcategory/color are free-text-ish fields with no
+  // enforced casing convention at the schema level, same reasoning the
+  // name/q filter's own COLLATE NOCASE already uses -- a caller whose
+  // casing doesn't match the stored value should still get a match, not
+  // silently zero results. sellerId stays case-sensitive on purpose (a
+  // machine-generated opaque id, not user-typed free text) -- not
+  // re-verified here since it's unchanged behavior.
+  it('matches category/subcategory/color filters case-insensitively', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'catalog-nocase-filter-template',
+        name: 'Case-insensitive filter test product',
+        category: 'Nocase-Filter-Test',
+        subcategory: 'Seating',
+        color: '#ABCDEF',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+
+    const byCategory = await api('/catalog?category=nocase-filter-test');
+    expect(byCategory.body.templates.map((t) => t.templateId)).toEqual(['catalog-nocase-filter-template']);
+    const bySubcategory = await api('/catalog?category=Nocase-Filter-Test&subcategory=SEATING');
+    expect(bySubcategory.body.templates.map((t) => t.templateId)).toEqual(['catalog-nocase-filter-template']);
+    const byColor = await api('/catalog?category=Nocase-Filter-Test&color=%23abcdef');
+    expect(byColor.body.templates.map((t) => t.templateId)).toEqual(['catalog-nocase-filter-template']);
+  });
+
   // #1015: the default sort=name used SQLite's BINARY collation, so a
   // mixed-case set of product names sorted by raw byte value (every
   // uppercase-initial name before every lowercase-initial one) instead of
@@ -1468,6 +1548,7 @@ describe('Worker API', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -2186,7 +2267,7 @@ describe('Worker API', () => {
       method: 'POST',
       body: JSON.stringify({
         templateId: 'model-url-thumbnail-source', name: 'Thumbnail source', color: '#123456',
-        dimensions: { width: 1, depth: 1, height: 1 }, sellerId: owner.sellerId,
+        dimensions: { width: 1, depth: 1, height: 1 }, sellerId: owner.sellerId, priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -3367,6 +3448,15 @@ describe('Worker API', () => {
     expect(retry.body.landlets.map((landlet) => landlet.generatedAt)).toEqual(
       completed.body.landlets.map((landlet) => landlet.generatedAt),
     );
+
+    // #2037: unlike its landlet-level sibling (#1666), this retry used to
+    // log a second ring_generation_complete row even though its own UPDATE
+    // affected 0 rows -- every member was already enclosed by the first
+    // call above.
+    const logsAfterRetry = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('ring_generation_complete', 'completion-ring').first();
+    expect(logsAfterRetry.count).toBe(1);
 
     // Restore before generating pending-completion-ring at its own
     // explicit innerRadiusM:1000 -- that call requires innerRadiusM to be
