@@ -11145,9 +11145,17 @@ async function handleLandlets(request, db, route, url) {
     // currency in limbo to refund here, unlike the owner's comment on
     // #1711 anticipated as a general possibility -- just the courtesy
     // notification below that their bid no longer stands.
+    // #1955: exclude newOwnerBuilderId -- they may have placed a losing-so-
+    // far bid on this exact auction before the admin handed them the land
+    // outright, and would otherwise get a "your bid was cancelled, no
+    // winner" notification contradicting the "it's yours now" one just
+    // below (same bug class #966 already fixed for resolveAuction's own
+    // winner-who-also-lost-a-bid case).
     const cancelledAuctionBidderIds = auctionToCancel
       ? (await db.prepare('SELECT DISTINCT bidder_builder_id FROM auction_bids WHERE auction_id = ?')
-        .bind(auctionToCancel.auction_id).all()).results.map((row) => row.bidder_builder_id)
+        .bind(auctionToCancel.auction_id).all()).results
+        .map((row) => row.bidder_builder_id)
+        .filter((bidderBuilderId) => bidderBuilderId !== newOwnerBuilderId)
       : [];
     // #1280: these three deletes match the ones builder-deletion
     // (DELETE /api/builders/:id) and resolveAuction's own ownership-change
