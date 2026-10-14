@@ -1284,6 +1284,40 @@ export async function triggerCalendarEvent(instanceId, eventId) {
   return requestJson(`/instances/${encodeURIComponent(instanceId)}/events/${encodeURIComponent(eventId)}/trigger`, { method: 'POST' });
 }
 
+// Placed instance backup chains (#2050/#2051, see docs/API.md's "Placed
+// instance backup chains") — an ordered list of replacement products for
+// one specific placed instance, consulted server-side the moment its
+// currently-active product sells out. Nested under the instance itself,
+// same reasoning as sign posts/calendar events just above.
+export async function fetchInstanceBackups(instanceId) {
+  return requestJson(`/instances/${encodeURIComponent(instanceId)}/backups`);
+}
+
+export async function addInstanceBackup(instanceId, { templateId }) {
+  const { backup } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/backups`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ templateId }),
+  });
+  return backup;
+}
+
+// order is the full, current set of this instance's own backupIds, in the
+// desired new order — the endpoint itself rejects anything else (a partial
+// list, a stray id) with a 400, so there's no partial-reorder call to
+// support here.
+export async function reorderInstanceBackups(instanceId, order) {
+  return requestJson(`/instances/${encodeURIComponent(instanceId)}/backups`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ order }),
+  });
+}
+
+export async function deleteInstanceBackup(instanceId, backupId) {
+  await requestJson(`/instances/${encodeURIComponent(instanceId)}/backups/${encodeURIComponent(backupId)}`, { method: 'DELETE' });
+}
+
 // Product reviews (see migrations/0048_product_reviews_on_template.sql) —
 // nested under the catalog *template* (the product itself), not under any
 // one placed instance of it, so the same review list is shared by every
@@ -1517,6 +1551,21 @@ export async function fetchLowStock() {
   return templates;
 }
 
+// #2068 (leaf sub-issue of #1973/#1947): grayed-out sold-out markers for
+// one specific landlet -- landlet-scoped, not a cross-landlet "mine" list
+// like fetchLowStock above, since a marker's x/y are landlet-local
+// coordinates that only mean anything inside the one landlet's own scene.
+export async function fetchSoldOutMarkers(landletId) {
+  const { markers } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/sold-out-markers`);
+  return markers;
+}
+
+export async function dismissSoldOutMarker(landletId, markerId) {
+  return requestJson(`/landlets/${encodeURIComponent(landletId)}/sold-out-markers/${encodeURIComponent(markerId)}/dismiss`, {
+    method: 'POST',
+  });
+}
+
 // Refund + higgles-commission clawback (migrations/0052_purchase_refunds.sql).
 export async function refundPurchase(purchaseId) {
   const { purchase } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/refund`, { method: 'POST' });
@@ -1577,4 +1626,20 @@ export async function fetchNearbyPresence(landletId) {
 export async function fetchOwnLastPresence() {
   const { presence } = await requestJson('/presence/me');
   return presence;
+}
+
+// #1995 (sub-issue of #1976): every currently-active credit orb, optionally
+// scoped to one landlet — see docs/API.md's "Credit orbs" for the shape.
+// Unauthenticated, same as GET /api/instances.
+export async function fetchCreditOrbs(landletId) {
+  const { orbs } = await requestJson(`/credit-orbs?landletId=${encodeURIComponent(landletId)}`);
+  return orbs;
+}
+
+// #1995: claims an orb on proximity auto-collect. The server's own atomic
+// "first builder wins" check is authoritative — a 404 here just means
+// someone else got there first, not a real error, so callers should treat
+// it as a quiet no-op rather than surfacing it to the shopper.
+export async function collectCreditOrb(orbId) {
+  return requestJson(`/credit-orbs/${encodeURIComponent(orbId)}/collect`, { method: 'POST' });
 }

@@ -801,6 +801,22 @@ operations; the day-to-day mechanism that actually keeps land claimable
 schedule — see "Automatic world growth" under "World settings" below —
 rather than through any HTTP request a session could gate at all.
 
+**A suspended account's session is valid but not authorized to act**
+(#2030, sub-issue of #1201 — see "Account suspension" under "Authentication"
+below for the suspend/unsuspend endpoints themselves).
+`requireCurrentUser` — the single join point nearly every endpoint below
+that requires a session goes through, directly or via `requireSessionBuilder`/
+`requireSessionSeller`/`requireAdmin` — rejects a currently-active suspension
+with a distinct `403` and `{ "suspended": true }` in the body, instead of the
+generic `401` a missing/expired session gets. This is deliberately *not* the
+same as not being logged in: the session cookie still resolves to a real
+account, it's just not currently allowed to act. Two things keep working
+regardless: `GET /api/auth/me` (`currentUser()`, the plain non-throwing
+lookup it uses, is untouched — a client can still identify *who* is
+suspended) and `POST /api/auth/logout` (never required authentication at
+all). An admin's own session is gated the same way — a suspended admin
+can't use admin-only endpoints either.
+
 Every endpoint section below notes its own specific rule inline; this
 section is just the shared vocabulary for reading those notes.
 
@@ -870,12 +886,12 @@ and greater detail" preserved across possibly-multiple suspend/lift cycles
 on the same account. A suspension is **reversible, not a deletion** — the
 owner explicitly ruled out a separate admin-initiated hard-delete path;
 real deletion stays reserved for the account-holder's own self-service
-`delete-account` request. (Enforcing suspension against login/actions, the
-automated notice to the suspended user, and the 30-day grace-period
-auto-escalation to a full deletion are each their own separate,
-not-yet-landed sub-issue — #2030/#2031/#2033 respectively. The optional
-sign-post/calendar-event removal cascade is #2032, documented on
-`suspend-account` below.)
+`delete-account` request, up to the 30-day grace period described below.
+`requireCurrentUser` (#2030) rejects a currently-active suspension outright
+with a distinct `403`/`suspended: true` — see "Authorization model" above.
+The optional sign-post/calendar-event removal cascade is #2032, documented
+on `suspend-account` below. (The automated notice to the suspended user is
+its own separate, not-yet-landed sub-issue — #2031.)
 
 ### `POST /api/auth/suspend-account`
 
@@ -890,7 +906,7 @@ expiry (the owner's own instruction: minors-access cases in particular
 should keep *more* detail, not less). `graceDays` defaults to `30` (the
 owner's confirmed default) and must be an integer in `[1, 365]` (`400`
 otherwise) — this becomes `gracePeriodEndsAt` in the response, the point
-#2033's eventual auto-escalation job will act on. `409` if the account
+#2033's auto-escalation job (below) acts on. `409` if the account
 already has an active (not lifted, not escalated) suspension — lift it via
 `unsuspend-account` first before suspending again. On success, returns
 `{ "suspension": { "suspensionId", "userId", "adminUserId", "reason", "evidenceNote", "suspendedAt", "gracePeriodEndsAt" } }`.
@@ -940,6 +956,26 @@ suspension, or
 otherwise — the same shape `suspend-account`'s own response returns, so a
 caller can check status first without needing two different response
 shapes.
+
+### 30-day grace-period auto-escalation (#2033, sub-issue of #1201)
+
+`escalateExpiredSuspensions` runs on the same Cloudflare Cron Trigger as
+every other periodic job described under "Automatic world growth" (World
+settings, below) — no HTTP endpoint, no session. Each tick, it finds every
+`account_suspensions` row whose `gracePeriodEndsAt` has passed with no
+admin ever lifting it (`liftedAt IS NULL`) and not already escalated
+(`escalatedAt IS NULL`), then runs the exact same account-deletion cascade
+`POST /api/auth/delete-account` uses for a real self-delete (anonymized
+email/username, password revoked, every session signed out) — reusing that
+same shared cascade function rather than a second, divergent
+implementation, per the owner's own reasoning for building suspension on
+top of that shape in the first place. Each escalation is recorded in
+`admin_action_log` (`action_type: "auto_escalate_suspension"`,
+`adminUserId: null` — no human admin acted, it's automated) referencing the
+original suspending admin and the suspension itself, so the audit trail
+stays complete even though the final step wasn't a person's direct action.
+A suspension lifted before its grace period passes is never escalated,
+regardless of how long it's been lifted.
 
 ## Builders
 
@@ -6934,6 +6970,95 @@ Settings > Build panel applies both thresholds client-side the same way
 the catalog picker's own search box filters already-rendered tiles
 (`filterCatalogTiles`) rather than re-fetching per keystroke.
 
+### Sold-out markers (#2068, leaf sub-issue of #1973/#1947)
+
+```
+GET /api/landlets/:landletId/sold-out-markers
+POST /api/landlets/:landletId/sold-out-markers/:markerId/dismiss
+```
+
+Owner requirement (captured on #1973 directly): "On the build screen
+looking at their land, they should be able to toggle on/off grayed-out
+items that have disappeared which they haven't dismissed yet."
+`sweepSoldOutTemplateInstances` (the same sweep #1948's "on hitting exactly
+zero, removes every placed instance" behavior already describes) used to
+just hard-delete every swept `placed_instances` row with nothing retained
+— this adds a `sold_out_markers` row (`migrations/0138`) per removed
+instance, snapshotting its own `landlet_id`/position/template **before**
+that delete runs, so Build mode can still show a builder where something
+used to be.
+
+**Landlet-scoped, not a cross-landlet "mine" list like `GET
+/builders/me/low-stock` above** — a marker's `x`/`y` are landlet-local
+coordinates (the same space `placed_instances.x_m`/`y_m` already use), so
+a marker only means anything rendered inside the one landlet's own scene
+it belongs to. Both routes require `requireSessionBuilder` +
+`requireOwnedLandlet` — only the landlet's own current owner can list or
+dismiss its markers (`401` with no session, `403` for anyone else, `404`
+for a landlet that doesn't exist).
+
+`template_id`/`template_name` are a **snapshot**, not a live join back to
+`catalog_templates` — same "a permanent record must survive the thing it
+references disappearing too" reasoning `purchases.seller_id`/
+`seller_feedback.seller_id` already use (the template that just sold out
+can itself be deleted later, and the marker should keep reading sensibly
+either way).
+
+```json
+GET /api/landlets/:landletId/sold-out-markers
+{
+  "markers": [
+    {
+      "markerId": "sold-out-marker-...",
+      "landletId": "...",
+      "x": 2, "y": 3, "z": 0.5,
+      "templateId": "antique-lamp",
+      "templateName": "Antique Brass Lamp",
+      "soldOutAt": "2026-10-14T..."
+    }
+  ]
+}
+```
+
+Only **un-dismissed** markers are listed (`dismissed_at IS NULL`), oldest
+first. Restocking the template afterward (`PATCH .../catalog/:templateId`)
+does **not** remove or resurrect any marker — a marker is a historical
+fact about an instance that was actually removed, independent of whatever
+the template's stock does later; a fresh placement against the restocked
+template is an unrelated new instance.
+
+`POST .../dismiss` clears a marker permanently (sets `dismissed_at`, never
+re-shown), rate-limited (20 per 15-minute window, `429` past that, bucket
+`sold-out-marker-dismiss:<builderId>`) and atomically re-verified against
+both `marker_id` **and** `landlet_id` together — dismissing a real marker
+id through the wrong landlet's own route 404s exactly like a marker that
+was already dismissed, rather than silently succeeding against the wrong
+owner's scope. `404 "Marker not found or already dismissed"` covers both
+cases identically (same "no distinguishing a race from a genuine miss"
+shape other dismiss/claim-style actions in this file already use).
+
+### Frontend wiring
+
+Settings > Build gets a new "Sold-out markers" panel (`renderSoldOutMarkersSection`,
+right below the existing Low Stock panel, #1949/#1950's own sibling) — a
+checkbox toggle (`#sold-out-marker-toggle`, defaults off) plus a list of
+this landlet's own un-dismissed markers, each with a `Dismiss` button.
+Unlike the Low Stock panel (which highlights an **already-placed, still-
+live** mesh — `addLowStockHighlight`), a sold-out marker has no live
+instance left to decorate, so checking the toggle instead spawns a
+standalone grayed-out ghost box (`THREE.MeshBasicMaterial`, 35% opacity,
+non-interactive) at each marker's own recorded position — cleared and
+re-applied via `applySoldOutMarkerVisibility` whenever the toggle flips or
+a fresh list loads. Same Build-mode-only lifecycle as the Low Stock
+panel's own `activeLowStockTemplateIds`: both the toggle state and the
+ghost boxes reset the moment Build mode is left (`enterShopMode`/
+`enterSellMode`), so re-entering Build later starts clean rather than
+silently reapplying a stale toggle with nothing behind it yet.
+`window.__testSoldOutMarkerMeshIds()` exposes which markers are currently
+rendered, the same `window.__test*` convention
+`window.__testLowStockHighlightedInstanceIds` already established for
+otherwise-unreachable 3D scene state.
+
 docs/SPEC.md §7: 1099-NEC generation once a seller/builder crosses the
 reporting threshold, W-8BEN/W-9 collection, and folding higgles-commission
 income into the same taxable-income framework as real-money seller
@@ -8442,6 +8567,34 @@ builder-specific secret. Returns every currently-active (uncollected) orb:
 Optional `?landletId=` scopes the result to one landlet, for the frontend to
 poll only the landlet currently in view rather than every active orb
 world-wide.
+
+### `POST /api/credit-orbs` (admin-only test/ops fixture)
+
+**Admin-only** (`requireAdmin`), same "escape hatch" reasoning as
+`POST /api/builders/:id/land-cap-grants`/`higgles-grants`: the real spawn
+cadence (`spawnCreditOrbIfDue`, ~70 minutes apart by default) is far too
+slow for a test that only cares about what happens once an orb exists to
+self-time against reliably. Takes `{ landletId, x?, y? }` (`x`/`y` default
+to `0`) and inserts a row directly into that landlet — any status, not
+gated to `greenbelt` — returning `{ orbId }` with `201`. `404` if the
+landlet doesn't exist.
+
+### `POST /api/credit-orbs/:orbId/collect`
+
+#1995's own collect endpoint — session-gated (`requireSessionBuilder`),
+unlike the `GET` above, since collecting actually credits the calling
+builder's `video_generation_credits` (#1993) by one. Race-safe the same way
+every other claim-before-act endpoint in this file already is: an atomic
+`UPDATE ... WHERE collected_at IS NULL` is the "first builder wins" claim,
+batched (`db.batch`) with the credit grant in the same D1 transaction — the
+grant statement's own `WHERE ... EXISTS (SELECT 1 FROM credit_orbs WHERE
+orb_id = ? AND collected_by_builder_id = ?)` only matches once the first
+statement in the same batch has actually committed that builder as the
+collector, so the two statements either both land or neither does, and two
+shoppers racing the same orb can never both be credited for it. Returns
+`{ "collected": true }` on success. `404` if the orb doesn't exist, or
+already has a `collected_at` (someone else got there first — the frontend
+reads this as "it's already gone," not an error to surface loudly).
 
 ## Product pricing
 
