@@ -1284,6 +1284,40 @@ export async function triggerCalendarEvent(instanceId, eventId) {
   return requestJson(`/instances/${encodeURIComponent(instanceId)}/events/${encodeURIComponent(eventId)}/trigger`, { method: 'POST' });
 }
 
+// Placed instance backup chains (#2050/#2051, see docs/API.md's "Placed
+// instance backup chains") — an ordered list of replacement products for
+// one specific placed instance, consulted server-side the moment its
+// currently-active product sells out. Nested under the instance itself,
+// same reasoning as sign posts/calendar events just above.
+export async function fetchInstanceBackups(instanceId) {
+  return requestJson(`/instances/${encodeURIComponent(instanceId)}/backups`);
+}
+
+export async function addInstanceBackup(instanceId, { templateId }) {
+  const { backup } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/backups`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ templateId }),
+  });
+  return backup;
+}
+
+// order is the full, current set of this instance's own backupIds, in the
+// desired new order — the endpoint itself rejects anything else (a partial
+// list, a stray id) with a 400, so there's no partial-reorder call to
+// support here.
+export async function reorderInstanceBackups(instanceId, order) {
+  return requestJson(`/instances/${encodeURIComponent(instanceId)}/backups`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ order }),
+  });
+}
+
+export async function deleteInstanceBackup(instanceId, backupId) {
+  await requestJson(`/instances/${encodeURIComponent(instanceId)}/backups/${encodeURIComponent(backupId)}`, { method: 'DELETE' });
+}
+
 // Product reviews (see migrations/0048_product_reviews_on_template.sql) —
 // nested under the catalog *template* (the product itself), not under any
 // one placed instance of it, so the same review list is shared by every
