@@ -1578,3 +1578,19 @@ export async function fetchOwnLastPresence() {
   const { presence } = await requestJson('/presence/me');
   return presence;
 }
+
+// #1995 (sub-issue of #1976): every currently-active credit orb, optionally
+// scoped to one landlet — see docs/API.md's "Credit orbs" for the shape.
+// Unauthenticated, same as GET /api/instances.
+export async function fetchCreditOrbs(landletId) {
+  const { orbs } = await requestJson(`/credit-orbs?landletId=${encodeURIComponent(landletId)}`);
+  return orbs;
+}
+
+// #1995: claims an orb on proximity auto-collect. The server's own atomic
+// "first builder wins" check is authoritative — a 404 here just means
+// someone else got there first, not a real error, so callers should treat
+// it as a quiet no-op rather than surfacing it to the shopper.
+export async function collectCreditOrb(orbId) {
+  return requestJson(`/credit-orbs/${encodeURIComponent(orbId)}/collect`, { method: 'POST' });
+}

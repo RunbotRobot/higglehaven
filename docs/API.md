@@ -8377,6 +8377,34 @@ Optional `?landletId=` scopes the result to one landlet, for the frontend to
 poll only the landlet currently in view rather than every active orb
 world-wide.
 
+### `POST /api/credit-orbs` (admin-only test/ops fixture)
+
+**Admin-only** (`requireAdmin`), same "escape hatch" reasoning as
+`POST /api/builders/:id/land-cap-grants`/`higgles-grants`: the real spawn
+cadence (`spawnCreditOrbIfDue`, ~70 minutes apart by default) is far too
+slow for a test that only cares about what happens once an orb exists to
+self-time against reliably. Takes `{ landletId, x?, y? }` (`x`/`y` default
+to `0`) and inserts a row directly into that landlet — any status, not
+gated to `greenbelt` — returning `{ orbId }` with `201`. `404` if the
+landlet doesn't exist.
+
+### `POST /api/credit-orbs/:orbId/collect`
+
+#1995's own collect endpoint — session-gated (`requireSessionBuilder`),
+unlike the `GET` above, since collecting actually credits the calling
+builder's `video_generation_credits` (#1993) by one. Race-safe the same way
+every other claim-before-act endpoint in this file already is: an atomic
+`UPDATE ... WHERE collected_at IS NULL` is the "first builder wins" claim,
+batched (`db.batch`) with the credit grant in the same D1 transaction — the
+grant statement's own `WHERE ... EXISTS (SELECT 1 FROM credit_orbs WHERE
+orb_id = ? AND collected_by_builder_id = ?)` only matches once the first
+statement in the same batch has actually committed that builder as the
+collector, so the two statements either both land or neither does, and two
+shoppers racing the same orb can never both be credited for it. Returns
+`{ "collected": true }` on success. `404` if the orb doesn't exist, or
+already has a `collected_at` (someone else got there first — the frontend
+reads this as "it's already gone," not an error to surface loudly).
+
 ## Product pricing
 
 `catalog_templates.price_cents` (`priceCents` in the API) existed in the
