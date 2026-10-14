@@ -327,8 +327,17 @@ describe('GET /auth/export-data -- social section (#1986)', () => {
     expect(authorExport.body.social.signPosts[0].text).toBe('My own sign post');
   });
 
-  it('includes calendar events matching the account\'s current label (best-effort, no real author FK)', async () => {
+  // #2032's own migrations/0135_calendar_events_user_id.sql gave
+  // calendar_events a real user_id FK (same shape sign_posts already got
+  // in #1830) -- this used to match on author_label alone, a spoofable
+  // approximation this test's own old title called out explicitly. A row
+  // with no user_id at all (predating that migration) is correctly left
+  // out, same as the sign-posts test above does for a stranger's post.
+  it('includes calendar events by this account\'s real user_id, not another account\'s or a legacy unattributed one', async () => {
     const author = await signupBuilder('export-social-calendar-author');
+    const stranger = await signupBuilder('export-social-calendar-stranger');
+    const authorUserId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(author.email).first()).user_id;
+    const strangerUserId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(stranger.email).first()).user_id;
     const templateId = await createTemplate('export-social-calendar-template');
     await env.DB.prepare(`
       INSERT INTO landlets (landlet_id, name, owner_builder_id, status) VALUES (?, ?, ?, 'claimed')
@@ -338,11 +347,16 @@ describe('GET /auth/export-data -- social section (#1986)', () => {
       VALUES (?, ?, ?, 0, 0, 1)
     `).bind('export-social-calendar-instance', 'export-social-calendar-landlet', templateId).run();
     await env.DB.prepare(`
-      INSERT INTO calendar_events (event_id, instance_id, author_label, text) VALUES (?, ?, ?, ?)
-    `).bind('export-social-calendar-event', 'export-social-calendar-instance', author.builder.label, 'My own calendar event').run();
+      INSERT INTO calendar_events (event_id, instance_id, author_label, text, user_id) VALUES (?, ?, ?, ?, ?)
+    `).bind('export-social-calendar-event', 'export-social-calendar-instance', author.builder.label, 'My own calendar event', authorUserId).run();
+    await env.DB.prepare(`
+      INSERT INTO calendar_events (event_id, instance_id, author_label, text, user_id) VALUES (?, ?, ?, ?, ?)
+    `).bind('export-social-calendar-event-other', 'export-social-calendar-instance', stranger.builder.label, 'Not my event', strangerUserId).run();
+    // A legacy row predating migrations/0135 — no user_id to attribute at
+    // all, even though its author_label happens to match today.
     await env.DB.prepare(`
       INSERT INTO calendar_events (event_id, instance_id, author_label, text) VALUES (?, ?, ?, ?)
-    `).bind('export-social-calendar-event-other', 'export-social-calendar-instance', 'Someone Else', 'Not my event').run();
+    `).bind('export-social-calendar-event-legacy', 'export-social-calendar-instance', author.builder.label, 'Pre-migration, unattributed').run();
 
     const result = await api('/auth/export-data', author.session());
     expect(result.body.social.calendarEvents).toHaveLength(1);
