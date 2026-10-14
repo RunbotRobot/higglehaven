@@ -1650,6 +1650,163 @@ describe('Authentication', () => {
     expect(blockedAgain.response.status).toBe(409);
   });
 
+  // #2029 (sub-issue of #1201): an admin-initiated, reversible account
+  // suspension -- same email-addressed, admin_action_log-recorded shape as
+  // grant-admin/revoke-admin above.
+  describe('Account suspension (#2029)', () => {
+    async function makeAdmin(label) {
+      const admin = await signupBuilder(label);
+      await api('/auth/admin-bootstrap', admin.session({
+        method: 'POST', body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+      }));
+      return admin;
+    }
+
+    it('lets an admin suspend an account by email, but nobody else, with a detailed audit log entry', async () => {
+      const admin = await makeAdmin('suspend-account-admin');
+      const target = await signupBuilder('suspend-account-target');
+
+      const noSession = await api('/auth/suspend-account', {
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'harassment' }),
+      });
+      expect(noSession.response.status).toBe(401);
+
+      const nonAdmin = await api('/auth/suspend-account', target.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'harassment' }),
+      }));
+      expect(nonAdmin.response.status).toBe(403);
+
+      const missingReason = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email }),
+      }));
+      expect(missingReason.response.status).toBe(400);
+
+      const notFound = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: 'nobody-here@example.com', reason: 'harassment' }),
+      }));
+      expect(notFound.response.status).toBe(404);
+
+      const suspended = await api('/auth/suspend-account', admin.session({
+        method: 'POST',
+        body: JSON.stringify({
+          email: target.email.toUpperCase(), reason: 'harassment', evidenceNote: 'reported by 3 users',
+        }),
+      }));
+      expect(suspended.response.status).toBe(200);
+      expect(suspended.body.suspension.reason).toBe('harassment');
+      expect(suspended.body.suspension.evidenceNote).toBe('reported by 3 users');
+      const targetUserId = suspended.body.suspension.userId;
+
+      const adminUserId = (await api('/auth/me', admin.session())).body.user.userId;
+      const logRow = await env.DB.prepare(
+        'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+      ).bind('suspend_account', targetUserId).first();
+      expect(logRow.admin_user_id).toBe(adminUserId);
+      expect(logRow.target_type).toBe('user');
+      const detail = JSON.parse(logRow.detail_json);
+      expect(detail.reason).toBe('harassment');
+      expect(detail.evidenceNote).toBe('reported by 3 users');
+
+      // Suspending an already-suspended account is a 409, not a second,
+      // divergent active-suspension row.
+      const alreadySuspended = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'again' }),
+      }));
+      expect(alreadySuspended.response.status).toBe(409);
+    });
+
+    it('rejects graceDays outside 1-365, defaults to 30 when omitted', async () => {
+      const admin = await makeAdmin('suspend-grace-admin');
+      const target = await signupBuilder('suspend-grace-target');
+
+      const tooLow = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'x', graceDays: 0 }),
+      }));
+      expect(tooLow.response.status).toBe(400);
+
+      const tooHigh = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'x', graceDays: 400 }),
+      }));
+      expect(tooHigh.response.status).toBe(400);
+
+      const suspendedAt = new Date();
+      const suspended = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'x' }),
+      }));
+      expect(suspended.response.status).toBe(200);
+      const daysUntilGrace = (new Date(suspended.body.suspension.gracePeriodEndsAt) - suspendedAt)
+        / (24 * 60 * 60 * 1000);
+      expect(daysUntilGrace).toBeGreaterThan(29.9);
+      expect(daysUntilGrace).toBeLessThan(30.1);
+    });
+
+    it('lets an admin unsuspend an account, but nobody else, and 409s with no active suspension', async () => {
+      const admin = await makeAdmin('unsuspend-account-admin');
+      const target = await signupBuilder('unsuspend-account-target');
+
+      const noActive = await api('/auth/unsuspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email }),
+      }));
+      expect(noActive.response.status).toBe(409);
+
+      await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'x' }),
+      }));
+
+      const nonAdmin = await api('/auth/unsuspend-account', target.session({
+        method: 'POST', body: JSON.stringify({ email: target.email }),
+      }));
+      expect(nonAdmin.response.status).toBe(403);
+
+      const lifted = await api('/auth/unsuspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email }),
+      }));
+      expect(lifted.response.status).toBe(200);
+      expect(lifted.body.suspension.liftedAt).toBeTruthy();
+
+      const targetUserId = lifted.body.suspension.userId;
+      const adminUserId = (await api('/auth/me', admin.session())).body.user.userId;
+      const logRow = await env.DB.prepare(
+        'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+      ).bind('unsuspend_account', targetUserId).first();
+      expect(logRow.admin_user_id).toBe(adminUserId);
+
+      // Lifted -- suspending again now succeeds rather than 409ing.
+      const resuspended = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'repeat offense' }),
+      }));
+      expect(resuspended.response.status).toBe(200);
+    });
+
+    it('reports suspension status for any admin, but nobody else, null when not suspended', async () => {
+      const admin = await makeAdmin('suspension-status-admin');
+      const target = await signupBuilder('suspension-status-target');
+
+      const noSession = await api(`/auth/suspension-status?email=${encodeURIComponent(target.email)}`);
+      expect(noSession.response.status).toBe(401);
+
+      const nonAdmin = await api(
+        `/auth/suspension-status?email=${encodeURIComponent(target.email)}`, target.session(),
+      );
+      expect(nonAdmin.response.status).toBe(403);
+
+      const beforeSuspend = await api(
+        `/auth/suspension-status?email=${encodeURIComponent(target.email)}`, admin.session(),
+      );
+      expect(beforeSuspend.response.status).toBe(200);
+      expect(beforeSuspend.body.suspension).toBeNull();
+
+      await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'x' }),
+      }));
+      const afterSuspend = await api(
+        `/auth/suspension-status?email=${encodeURIComponent(target.email)}`, admin.session(),
+      );
+      expect(afterSuspend.response.status).toBe(200);
+      expect(afterSuspend.body.suspension.reason).toBe('x');
+    });
+  });
+
   it('rejects signup with an already-registered email, case-insensitively', async () => {
     const email = `auth-dupe-${crypto.randomUUID()}@example.com`;
     await signup(email, 'first password here');

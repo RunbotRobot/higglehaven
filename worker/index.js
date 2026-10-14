@@ -10039,6 +10039,15 @@ async function handleAuth(request, env, db, route, url, ctx) {
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admins') {
     return handleListAdmins(request, db);
   }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'suspend-account') {
+    return handleSuspendAccount(request, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'unsuspend-account') {
+    return handleUnsuspendAccount(request, db);
+  }
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'suspension-status') {
+    return handleSuspensionStatus(request, db, url);
+  }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'card-setup-intent') {
     return handleCardSetupIntent(request, env, db);
   }
@@ -10367,6 +10376,121 @@ async function handleListAdmins(request, db) {
       userId: row.user_id, email: row.email, username: row.username,
       createdAt: row.created_at, adminGrantedAt: row.admin_granted_at,
     })),
+  });
+}
+
+const ACCOUNT_SUSPENSION_RATE_LIMIT_MAX = 20;
+
+// #2029 (sub-issue of #1201): the foundational primitive for admin-
+// initiated account suspension -- email-addressed and admin_action_log-
+// recorded the same way grant-admin/revoke-admin above already are, since
+// this is the same kind of "one admin acting on another account" shape.
+// Deliberately reversible, not a hard delete (#1201's own owner-settled
+// scope: "I don't see a strong case for admin-initiated hard deletion
+// either... Build suspension only"). Guards against double-suspending the
+// same account via a single INSERT ... WHERE NOT EXISTS rather than a
+// separate SELECT-then-INSERT, so two concurrent suspend calls against the
+// same account can't both land a second, divergent active-suspension row.
+async function handleSuspendAccount(request, db) {
+  const admin = await requireAdmin(request, db);
+  await checkRateLimit(db, `suspend-account:${admin.user_id}`, ACCOUNT_SUSPENSION_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const email = normalizeEmail(input.email);
+  const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
+  if (!reason) throw new HttpError('reason is required', 400);
+  const evidenceNote = typeof input.evidenceNote === 'string' && input.evidenceNote.trim()
+    ? input.evidenceNote.trim() : null;
+  // Owner-confirmed default (#1201, 2026-10-07): 30 days. A caller may
+  // override it, but only within a sane range -- not unbounded, and not
+  // zero/negative (that would mean "already past its own grace period,"
+  // i.e. an immediate, unintended escalation on the very next #2033 run).
+  const graceDays = input.graceDays === undefined ? 30 : Number(input.graceDays);
+  if (!Number.isInteger(graceDays) || graceDays < 1 || graceDays > 365) {
+    throw new HttpError('graceDays must be an integer between 1 and 365', 400);
+  }
+
+  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  if (!row) throw new HttpError('No account with that email', 404);
+
+  const suspensionId = `suspension-${crypto.randomUUID()}`;
+  const gracePeriodEndsAt = new Date(Date.now() + graceDays * 24 * 60 * 60 * 1000).toISOString();
+  // Not batched with the log write below -- same reasoning as
+  // handleRevokeAdmin's own comment above ("Logged only after confirmed"):
+  // this INSERT's own WHERE NOT EXISTS can legitimately insert 0 rows, and
+  // a batched log statement would commit regardless, misrecording a
+  // suspension that never actually took effect.
+  const result = await db.prepare(`
+    INSERT INTO account_suspensions
+      (suspension_id, user_id, admin_user_id, reason, evidence_note, grace_period_ends_at)
+    SELECT ?, ?, ?, ?, ?, ?
+    WHERE NOT EXISTS (
+      SELECT 1 FROM account_suspensions
+      WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+    )
+  `).bind(suspensionId, row.user_id, admin.user_id, reason, evidenceNote, gracePeriodEndsAt, row.user_id).run();
+  if (result.meta.changes === 0) throw new HttpError('That account is already suspended', 409);
+  await adminActionLogStatement(db, admin.user_id, 'suspend_account', 'user', row.user_id, {
+    suspensionId, reason, evidenceNote, gracePeriodEndsAt,
+  }).run();
+
+  return json({
+    suspension: {
+      suspensionId, userId: row.user_id, adminUserId: admin.user_id, reason, evidenceNote,
+      suspendedAt: new Date().toISOString(), gracePeriodEndsAt,
+    },
+  });
+}
+
+// The inverse of handleSuspendAccount above -- lifts the currently-active
+// suspension (if any) for the given email. Same atomic check-then-act
+// shape as handleRevokeAdmin's own last-admin guard: the UPDATE's own
+// WHERE clause is what actually confirms there was something to lift,
+// rather than a separate SELECT racing a concurrent lift of the same row.
+async function handleUnsuspendAccount(request, db) {
+  const admin = await requireAdmin(request, db);
+  const input = await readJson(request);
+  const email = normalizeEmail(input.email);
+  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  if (!row) throw new HttpError('No account with that email', 404);
+
+  const liftedAt = new Date().toISOString();
+  const result = await db.prepare(`
+    UPDATE account_suspensions SET lifted_at = ?, lifted_by_admin_user_id = ?
+    WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+  `).bind(liftedAt, admin.user_id, row.user_id).run();
+  if (result.meta.changes === 0) throw new HttpError('That account has no active suspension', 409);
+  const suspension = await db.prepare(`
+    SELECT * FROM account_suspensions WHERE user_id = ? AND lifted_at = ? ORDER BY suspended_at DESC LIMIT 1
+  `).bind(row.user_id, liftedAt).first();
+  await adminActionLogStatement(db, admin.user_id, 'unsuspend_account', 'user', row.user_id, {
+    suspensionId: suspension.suspension_id,
+  }).run();
+
+  return json({ suspension: { suspensionId: suspension.suspension_id, userId: row.user_id, liftedAt } });
+}
+
+// Lets an admin check an account's current suspension state before acting
+// on it (or before #2030/#2031/#2032/#2033 each need to read it back for
+// their own purposes) without direct D1 access.
+async function handleSuspensionStatus(request, db, url) {
+  await requireAdmin(request, db);
+  const email = normalizeEmail(url.searchParams.get('email') || '');
+  if (!email) throw new HttpError('email query parameter is required', 400);
+  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  if (!row) throw new HttpError('No account with that email', 404);
+  const active = await db.prepare(`
+    SELECT * FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+  `).bind(row.user_id).first();
+  return json({
+    suspension: active ? {
+      suspensionId: active.suspension_id,
+      userId: active.user_id,
+      adminUserId: active.admin_user_id,
+      reason: active.reason,
+      evidenceNote: active.evidence_note,
+      suspendedAt: active.suspended_at,
+      gracePeriodEndsAt: active.grace_period_ends_at,
+    } : null,
   });
 }
 
@@ -14211,6 +14335,11 @@ const PURCHASE_BUILDER_FLOOR_RATE = 0.005; // "0.5% floor protecting builders"
 // only if that policy itself changes, not silently drift if the
 // commission rate ever does.
 const REFUND_PAYOUT_RATE = 0.99;
+// #2020 (sub-issue of #1212, owner-settled shape 2026-10-13): "disputes/
+// refund requests at or below $15-25... exact value at implementer's
+// discretion within that range" — picked the midpoint.
+const DISPUTE_AUTO_RESOLVE_THRESHOLD_CENTS = 2000;
+const DISPUTE_RATE_LIMIT_MAX = 20;
 // quantity had no upper bound at all until this was added — a single
 // call with an absurd quantity could mint an arbitrary amount of a
 // builder's higgles_balance_cents and higgles_earnings_events credit in
@@ -15133,6 +15262,10 @@ async function handlePurchases(request, env, route, url) {
     return handlePurchaseRefund(request, env, route[1]);
   }
 
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'dispute') {
+    return handlePurchaseDispute(request, env, route[1]);
+  }
+
   if (request.method === 'POST' && route.length === 3 && route[2] === 'mark-shipped') {
     return handleMarkShipped(request, env, route[1]);
   }
@@ -15577,6 +15710,70 @@ export async function clawBackPurchaseCommission(db, purchase, templateName) {
   }
 }
 
+// The atomic refunded_at guard and (for a real-money purchase) the actual
+// Stripe reversal — shared by handlePurchaseRefund (seller/admin-initiated)
+// and, as of #2020, the buyer-initiated auto-resolve dispute path below.
+// Extracted for the same reason #1086 already extracted
+// clawBackPurchaseCommission just above: two independent trigger paths
+// performing the identical money-moving step must never be free to drift
+// apart from each other. Returns false if a concurrent request (a refund,
+// a payout claim, or another dispute) already won the race; the caller is
+// responsible for re-reading the row to report why.
+async function finalizeRefundReversal(env, purchase) {
+  const db = env.DB;
+  // The refunded_at read at each caller's own top is a fast-path only — two
+  // concurrent reversal requests (a double-click, a client retry, or a
+  // buyer's dispute racing a seller's own refund) can both pass it before
+  // either write lands. This conditional UPDATE is the actual atomic guard.
+  // #1061: also re-checks paid_out_at IS NULL here, not just at each
+  // caller's own eager check above — a concurrent claimPurchasesForPayout
+  // (POST /sellers/me/payouts) landing in the window would otherwise still
+  // let a reversal through, pulling money that's supposed to be backing
+  // other, still-unpaid sales.
+  const guard = await db.prepare(
+    `UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+     WHERE purchase_id = ? AND refunded_at IS NULL AND paid_out_at IS NULL`,
+  ).bind(purchase.purchase_id).run();
+  if (guard.meta.changes === 0) return false;
+
+  // #348: a real-money purchase (payment_intent_id set — see #453) needs its
+  // Stripe charge actually reversed, not just the local row flagged.
+  // reverse_transfer pulls the seller's own share back out of their
+  // connected-account balance; refund_application_fee reverses
+  // higglehaven's own cut too, proportional to the same capped amount. If
+  // Stripe's call fails, the guard above is released (refunded_at reset to
+  // NULL) and the error propagates before the builder's higgles balance is
+  // ever touched — a failed real-money reversal should never look like a
+  // successful refund, and should stay retryable.
+  //
+  // Owner (Control Room, 2026-09-10, on #651): REFUND_PAYOUT_RATE caps what
+  // actually comes back to the buyer at 99% of the original total rather
+  // than a full reversal, closing a fraud triangle where cashing out a
+  // builder's real commission then refunding the full price nets the
+  // cashed-out commission for free — see that constant's own comment. This
+  // protection applies identically no matter which path triggered the
+  // reversal.
+  if (purchase.payment_intent_id) {
+    if (!stripeConfigured(env)) {
+      await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchase.purchase_id).run();
+      throw new HttpError('Stripe payments are not configured on this server yet.', 503);
+    }
+    const refundAmountCents = Math.round(purchase.total_cents * REFUND_PAYOUT_RATE);
+    try {
+      await stripeRequest(env, 'POST', 'refunds', {
+        payment_intent: purchase.payment_intent_id,
+        amount: refundAmountCents,
+        reverse_transfer: true,
+        refund_application_fee: true,
+      }, refundIdempotencyKey(purchase.purchase_id));
+    } catch (err) {
+      await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchase.purchase_id).run();
+      throw err;
+    }
+  }
+  return true;
+}
+
 // Refund + higgles-commission clawback (migrations/0052_purchase_refunds.sql
 // — see its own comment for why only higgles_balance_cents is touched, not
 // higgles_earnings_events/land cap). Reachable from the Seller modal's own
@@ -15655,78 +15852,19 @@ async function handlePurchaseRefund(request, env, purchaseId) {
   }
   const templateName = template?.name || 'A product';
 
-  // The refunded_at read above is a fast-path only — two concurrent refund
-  // requests (a double-click, or a client retry) can both pass it before
-  // either write lands. This conditional UPDATE is the actual atomic
-  // guard: run alone, not batched with the balance/notification statements
-  // below, since D1's db.batch doesn't support skipping later statements
-  // based on an earlier one's row count within the same call. Whichever
-  // request's UPDATE loses the race affects 0 rows and gets rejected here
-  // before it can touch the builder's balance at all.
-  //
-  // #1061: also re-checks paid_out_at IS NULL here, not just above — the
-  // eager paid_out_at check above is a fast-path only, same as the
-  // refunded_at read at the top of this function; a concurrent
-  // claimPurchasesForPayout (POST /sellers/me/payouts) landing in the
-  // window between that read and this write used to still let the refund
-  // through, reversing a Stripe transfer that's supposed to be backing
-  // other, still-unpaid sales.
-  const guard = await db.prepare(
-    `UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-     WHERE purchase_id = ? AND refunded_at IS NULL AND paid_out_at IS NULL`,
-  ).bind(purchaseId).run();
-  if (guard.meta.changes === 0) {
+  // Run alone, not batched with the balance/notification statements below,
+  // since D1's db.batch doesn't support skipping later statements based on
+  // an earlier one's row count within the same call. Whichever request's
+  // UPDATE loses the race (see finalizeRefundReversal's own comment on the
+  // guard it runs) affects 0 rows and gets rejected here before it can
+  // touch the builder's balance at all.
+  if (!(await finalizeRefundReversal(env, purchase))) {
     const current = await db.prepare('SELECT refunded_at, paid_out_at FROM purchases WHERE purchase_id = ?')
       .bind(purchaseId).first();
     if (current?.paid_out_at) {
       throw new HttpError('This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
     }
     throw new HttpError('This purchase has already been refunded', 400);
-  }
-
-  // #348: a real-money purchase (payment_intent_id set — see #453) needs
-  // its Stripe charge actually reversed, not just the local row flagged.
-  // reverse_transfer pulls the seller's own share back out of their
-  // connected-account balance (the same way the block below claws back
-  // the builder's higgles share); refund_application_fee reverses
-  // higglehaven's own cut too, proportional to the same capped amount. If
-  // Stripe's call fails, the guard above is released (refunded_at reset to
-  // NULL) and the error propagates before the builder's higgles balance is
-  // ever touched — a failed real-money reversal should never look like a
-  // successful refund, and should stay retryable.
-  //
-  // Owner (Control Room, 2026-09-10, on #651): removing the floor-guard
-  // above (never blocking a refund) opened a real fraud triangle —
-  // buy a fake sale, cash out the builder's real commission, then refund
-  // the full purchase price back, netting the cashed-out commission for
-  // free. REFUND_PAYOUT_RATE caps what actually comes back to the buyer at
-  // 99% of the original total instead of a full reversal: builderShareCents
-  // is deterministically 1% of totalCents at this codebase's actual
-  // PURCHASE_COMMISSION_RATE/PURCHASE_BUILDER_SPLIT (2% commission, 50/50
-  // split — the 0.5% floor never binds at that rate), so a 99% refund
-  // exactly zeroes out the triangle's profit rather than leaving it
-  // partially exploitable. The owner's own words: "unless you can think of
-  // a better solution, I want to use this... refund only 99%." Applies
-  // only to the money that actually reaches the buyer — the builder's own
-  // higgles clawback just below is unaffected, still the full
-  // builder_share_cents, allowed to go negative per the direction above.
-  if (purchase.payment_intent_id) {
-    if (!stripeConfigured(env)) {
-      await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchaseId).run();
-      throw new HttpError('Stripe payments are not configured on this server yet.', 503);
-    }
-    const refundAmountCents = Math.round(purchase.total_cents * REFUND_PAYOUT_RATE);
-    try {
-      await stripeRequest(env, 'POST', 'refunds', {
-        payment_intent: purchase.payment_intent_id,
-        amount: refundAmountCents,
-        reverse_transfer: true,
-        refund_application_fee: true,
-      }, refundIdempotencyKey(purchaseId));
-    } catch (err) {
-      await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchaseId).run();
-      throw err;
-    }
   }
 
   // #1086: the balance clawback, notification, and avatar-ownership
@@ -15750,6 +15888,76 @@ async function handlePurchaseRefund(request, env, purchaseId) {
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(row) });
+}
+
+// #2020 (sub-issue of #1212, owner-settled shape 2026-10-13, SPEC.md §5's
+// "Low-value disputes from established accounts: auto-resolved in buyer's
+// favor" bullet): unlike handlePurchaseRefund above (seller/admin-
+// initiated), this is the buyer's own self-service path — there was no
+// buyer-facing dispute/refund-request endpoint anywhere before this (see
+// that handler's own comment on why refunding has always been seller/
+// admin-only). Eligibility is derived entirely from this schema's existing
+// signals, since builders carry no strike/flag column of their own (unlike
+// sellers.strike_count, migrations/0131): "established" = at least one
+// OTHER completed (non-refunded) purchase and zero refunded/disputed ones
+// of this buyer's own. Anything that fails either test, or the dollar
+// threshold, falls through to today's unchanged (i.e. no automated) path —
+// this never fabricates a "pending review" state nothing else in this app
+// reads, it only ever actually moves money when the owner's own
+// auto-resolve conditions are met.
+async function handlePurchaseDispute(request, env, purchaseId) {
+  const db = env.DB;
+  const sessionBuilder = await requireSessionBuilder(request, db);
+  await checkRateLimit(db, `purchase-dispute:${sessionBuilder.builder_id}`, DISPUTE_RATE_LIMIT_MAX);
+  const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  if (!purchase) throw new HttpError('Purchase not found', 404);
+  // Same buyer-ownership gate handleSellerFeedbackCreate uses (#1123) — a
+  // dispute is the buyer's own standing to raise, not the seller's, the
+  // hosting builder's, or an onlooker's.
+  if (purchase.buyer_builder_id !== sessionBuilder.builder_id) {
+    throw new HttpError('Only the buyer of this purchase can dispute it', 400);
+  }
+  if (purchase.refunded_at) {
+    throw new HttpError('This purchase has already been refunded', 400);
+  }
+  if (purchase.paid_out_at) {
+    throw new HttpError('This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
+  }
+
+  const history = await db.prepare(`
+    SELECT
+      (SELECT COUNT(*) FROM purchases WHERE buyer_builder_id = ? AND purchase_id != ? AND refunded_at IS NULL) AS completedCount,
+      (SELECT COUNT(*) FROM purchases WHERE buyer_builder_id = ? AND refunded_at IS NOT NULL) AS refundedCount
+  `).bind(sessionBuilder.builder_id, purchaseId, sessionBuilder.builder_id).first();
+  const established = history.completedCount > 0 && history.refundedCount === 0;
+  const lowValue = purchase.total_cents <= DISPUTE_AUTO_RESOLVE_THRESHOLD_CENTS;
+  if (!established || !lowValue) {
+    return json({ autoResolved: false, purchase: purchaseFromRow(purchase) });
+  }
+
+  const template = await db.prepare('SELECT name, metadata_json FROM catalog_templates WHERE template_id = ?')
+    .bind(purchase.template_id).first();
+  // #2020 only auto-resolves "in the buyer's favor" — a seller's own
+  // no-returns policy (the same guard handlePurchaseRefund enforces above)
+  // still applies; this isn't a bypass of that choice, just a faster path
+  // to the same outcome a seller-initiated refund would reach anyway.
+  if (template && JSON.parse(template.metadata_json || '{}').noReturns) {
+    return json({ autoResolved: false, purchase: purchaseFromRow(purchase) });
+  }
+  const templateName = template?.name || 'A product';
+
+  if (!(await finalizeRefundReversal(env, purchase))) {
+    const current = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    return json({ autoResolved: false, purchase: purchaseFromRow(current) });
+  }
+  await clawBackPurchaseCommission(db, purchase, templateName);
+  // null adminUserId, same convention adminActionLogStatement's own video-
+  // generation-sweep caller uses for a system/automated action with no
+  // human admin in the loop — this is exactly that: nobody reviewed it.
+  await adminActionLogStatement(db, null, 'dispute_auto_resolved', 'purchase', purchaseId, { templateName, totalCents: purchase.total_cents }).run();
+
+  const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+  return json({ autoResolved: true, purchase: purchaseFromRow(row) });
 }
 
 function purchaseFromRow(row) {
