@@ -32,7 +32,21 @@ async function openAuthModal(page) {
   // menu route itself would otherwise fail outright, blocked by the modal
   // overlay already sitting on top of #account-menu-toggle).
   if ((await page.locator('#auth-modal.visible').count()) > 0) return;
-  await page.click('#account-menu-toggle');
+  // #2087: the check above is a point-in-time snapshot, not a wait -- under
+  // CI load, N44's own ensureShopperIdentity gate can still open the modal
+  // in the brief window right after it, leaving the click below permanently
+  // intercepted by the modal's own overlay (same root-cause class as
+  // #1388/#1896/#2048's chooseIdentity margin, just a different call site
+  // this file keeps locally). Nothing auto-closes that modal the way a
+  // signup/login does, so Playwright's own click-retry just times out
+  // against it -- treat an intercepted click the same as the early-return
+  // above instead of waiting that out.
+  try {
+    await page.click('#account-menu-toggle', { timeout: 5000 });
+  } catch (error) {
+    if ((await page.locator('#auth-modal.visible').count()) > 0) return;
+    throw error;
+  }
   await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
   await page.click('#account-auth-btn');
   await page.waitForSelector('#auth-modal.visible', { timeout: 5000 });
