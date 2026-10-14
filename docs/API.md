@@ -4691,25 +4691,61 @@ An instance can be a sign and a calendar at once (independent flags,
 independently toggled and moderated) — nothing in the spec says a builder
 must choose one or the other for a given placed object.
 
-### `GET /api/instances/:instanceId/events`, `POST .../events`, `DELETE .../events/:eventId`
+### `GET /api/instances/:instanceId/events`, `POST .../events`, `PATCH`/`DELETE .../events/:eventId`
 
 Same shape as the sign posts endpoints above, with `event`/`events` in
 place of `post`/`posts` and `eventId` in place of `postId`:
-`{ eventId, instanceId, authorLabel, text, createdAt }`, `text` capped at
-280 characters, `GET` newest-200-plus-`totalCount` the same way (`#356`),
-`POST` rejected with `400` unless the target instance is currently flagged
-`isCommunityCalendar`, deletion cascades when the instance itself is
-deleted. Both `POST` and `DELETE` are rate-limited per builder (20 per
-15-minute window, `429` past that, `#944`) — the same bucket shape as
-other per-account mutation limits in this file.
+`{ eventId, instanceId, authorLabel, text, scheduledAt, triggeredAt,
+createdAt, userId }`, `text` capped at 280 characters, `GET`
+newest-200-plus-`totalCount` the same way (`#356`), `POST` rejected with
+`400` unless the target instance is currently flagged `isCommunityCalendar`,
+deletion cascades when the instance itself is deleted. `POST`, `PATCH`, and
+`DELETE` are all rate-limited per builder/user (20 per 15-minute window,
+`429` past that, `#944`/`#1975`) — the same bucket shape as other
+per-account mutation limits in this file.
 
-Unlike sign posts, there's no author-delete path here (calendar events are
-builder-authored, not shopper-authored, so the hosting landlet's own owner
-already *is* the author in the ordinary case) — but `DELETE` does have the
-same admin-override path sign posts gained (`#781`): an admin can remove
-any calendar event outright, checked first, rate-limited per admin (same
-`CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX` bucket), and logged via
-`admin_action_log` (`action_type: 'delete_calendar_event_override'`).
+`DELETE` has the same admin-override path sign posts gained (`#781`): an
+admin can remove any calendar event outright, checked first, rate-limited
+per admin (same `CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX` bucket), and logged
+via `admin_action_log` (`action_type: 'delete_calendar_event_override'`).
+
+**`#1975` (owner decision, 2026-10-13): an event's own author can also edit
+or delete it directly, independent of who currently owns the hosting
+landlet.** `userId` (new, `migrations/0135`) records the session that
+created the event — populated server-side at `POST` time from
+`requireSessionBuilder`'s own resolved user, the same "derive authorship
+server-side" discipline this endpoint's `authorLabel` already uses. Unlike
+the original design (calendar events are builder-authored, so the hosting
+landlet's own owner used to be the *only* way to manage one, making an
+explicit author-delete path redundant with moderation in the ordinary
+case), tracking the real author separately means it keeps working even
+after the landlet changes hands (auction, admin reassignment) — the same
+guarantee sign posts (`#1830`) and product reviews give their own authors.
+
+- `PATCH /api/instances/:instanceId/events/:eventId` — author-only, `403`
+  `"Not your event"` for anyone else (including the landlet's *current*
+  owner, if that's no longer the same account); there's no moderation
+  equivalent for `PATCH`, same as sign posts. Body accepts `text` and/or
+  `scheduledAt` (either field omitted keeps its existing value; `scheduledAt:
+  null` clears a previously-set schedule). Changing `scheduledAt` to a
+  genuinely different value re-arms `triggeredAt` back to `null` — the
+  same "is this actually a different event" distinction `#1751`'s own
+  idempotency-key content-match already draws — so editing a past-due,
+  already-triggered event's schedule doesn't leave it permanently inert.
+  A pre-`#1975` event with no `userId` at all can never be claimed via
+  this path. Rate-limited per user (`CALENDAR_EVENT_EDIT_RATE_LIMIT_MAX`).
+- `DELETE`'s author-direct path sits between the admin-override check and
+  the pre-existing landlet-owner moderation fallback: the event's own
+  author (by `userId`) can remove it directly; a pre-`#1975` event with no
+  `userId` falls through to the moderation path exactly as it always has.
+
+Both the `PATCH` and the author-direct `DELETE` write a full snapshot of
+the event (as it existed just before the change) into the same shared
+`user_content_edit_history` table product reviews use (`#1975`,
+`recordContentEditHistory`) — "in case of disputes," per the owner's own
+framing. The admin-override and landlet-owner moderation `DELETE` paths
+deliberately do **not** write to it; that table is for a genuine author's
+own edit/delete of their own content, not moderation.
 
 **`POST` requires a real session either way (since #1830, sign posts too)
 — the distinction is *whose*.** This endpoint requires a session logged
@@ -6201,6 +6237,21 @@ succeed.
   `POST /api/instances/:instanceId/purchase` itself, before a real-money
   purchase is even sent to checkout.
 
+#### Stock indicator in the catalog picker (#1951)
+
+The Add Item catalog picker (`src/main.js`'s `buildCatalogTemplateTile` —
+shared with Prompt mode's own result grid) shows each tile's already-
+present `stockQuantity` so a builder can weigh risk before placing, not
+just before buying: `null` (unlimited, the common/default case) shows no
+indicator at all; `0` shows "Sold out" in `--danger`; any other value
+shows "`N` left" in a muted tone. Placement itself is never blocked by a
+sold-out template (only purchase is — see above), so this is purely
+informational. Deliberately does not attempt a sales-velocity/"days
+remaining" estimate — no such computation exists anywhere in this
+codebase yet, and #1947's own tracking issue flags the shape of that
+math (trailing window, no-sales-history behavior) as still undecided by
+the owner.
+
 `GET /api/purchases?builderId=...` requires a session logged in as that
 builder (`403` otherwise); lists everything hosted on that builder's own
 land, most recent first — their "did I earn commission" view.
@@ -6682,7 +6733,88 @@ here — a flag is a soft signal, not an accusation, so reviewing one is
 just acknowledgment, optionally with a note for the admin's own record;
 nothing else in this app reacts to a flag's status.
 
-## Tax reporting
+### Low-stock / days-remaining list (#1949, sub-issue of #1947)
+
+```
+GET /api/builders/me/low-stock
+```
+
+Requires `requireCurrentUser` (same bar as `GET /api/builders/me/avatars`/
+`.../animations`, not the full verification gate). Lists every catalog
+template the session builder currently has placed anywhere on their own
+land (any landlet, not just one) that carries finite stock (#1948's own
+`stockQuantity`, not `null`) — the templates this builder's own placed
+products stand to disappear from under them for, per #1947's "expected,
+normal behavior" framing.
+
+```json
+{
+  "templates": [
+    {
+      "templateId": "antique-lamp",
+      "name": "Antique Brass Lamp",
+      "category": "decor",
+      "stockQuantity": 1,
+      "placedInstanceCount": 1,
+      "daysRemaining": null,
+      "predictability": "unpredictable"
+    },
+    {
+      "templateId": "cottage-brick",
+      "name": "Cottage Brick",
+      "category": "structural",
+      "stockQuantity": 40,
+      "placedInstanceCount": 3,
+      "daysRemaining": 56.5,
+      "predictability": "estimated"
+    }
+  ]
+}
+```
+
+`placedInstanceCount` is how many of this builder's own placed instances
+reference the template — a builder with several copies placed sees one
+row, not one per instance.
+
+`daysRemaining`/`predictability` together carry the owner's own direct
+guidance (2026-10-13, captured on issue #1949 itself) on how to estimate
+this, deliberately **not** a fixed trailing window: "please have the
+assigned session use its best judgment, probably using a more dynamic
+calculation rather than a static 30-days, particularly for new products.
+It could be beneficial to look at how quickly similar products have
+sold... for single-quantity items, the builder should understand that
+it's going to be very unpredictable how long it will take to sell."
+Concretely, `predictability` is one of:
+
+- `"unpredictable"` — `stockQuantity === 1` (one-of-a-kind). A single sale
+  event is not a queue being drawn down, so this is always reported
+  regardless of any sales data; `daysRemaining` is always `null` here.
+- `"estimated"` — the template has its own non-refunded sales history.
+  The rate is `totalUnitsSold / daysBetweenFirstAndLastSale` (floored at
+  1 day to avoid a divide-by-near-zero blowup on a single early sale) —
+  the span is whatever history actually exists, never an assumed window.
+  Computed across **every** builder who happens to host an instance of
+  the template (the same cross-builder query shape `GET
+  /api/purchases?templateId=` already uses), not just this one builder's
+  own sales, per #1947's own "shared stock pool" requirement.
+- `"estimatedFromCategory"` — the template has no sales history of its
+  own yet. Falls back to the average of that same per-template rate
+  across every *other* template sharing its `category` (regardless of
+  seller) that does have sales history — the owner-endorsed "how quickly
+  similar products have sold" fallback. `daysRemaining` here is `stock
+  Quantity / thatAverageRate`.
+- `"notEnoughData"` — neither the template itself nor any other template
+  in its category has any sales history yet. `daysRemaining` is `null`;
+  the UI shows an explicit "not enough data yet" state rather than a
+  number that could mislead, matching the single-quantity case's own
+  "don't fabricate a number" principle.
+
+**Filtering** (by remaining-quantity threshold and/or days-remaining
+threshold) is deliberately **not** a server-side query param — this
+endpoint returns the builder's full low-stock list in one call, and the
+Settings > Build panel applies both thresholds client-side the same way
+the catalog picker's own search box filters already-rendered tiles
+(`filterCatalogTiles`) rather than re-fetching per keystroke.
 
 docs/SPEC.md §7: 1099-NEC generation once a seller/builder crosses the
 reporting threshold, W-8BEN/W-9 collection, and folding higgles-commission
@@ -8139,7 +8271,7 @@ side; consuming a credit at upload time and the out-of-credits messaging
 are #1993's, and the frontend rendering/proximity-collection mechanic is
 #1995's.
 
-`credit_orbs` (migrations/0135): `orb_id`, `landlet_id`, a position
+`credit_orbs` (migrations/0136): `orb_id`, `landlet_id`, a position
 (`x_m`/`y_m`/`z_m`, matching `placed_instances`' own position shape),
 `spawned_at`, and `collected_at`/`collected_by_builder_id` (both nullable,
 always set together — #1995's own atomic collect endpoint).

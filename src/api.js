@@ -1258,6 +1258,24 @@ export async function deleteCalendarEvent(instanceId, eventId) {
   await requestJson(`/instances/${encodeURIComponent(instanceId)}/events/${encodeURIComponent(eventId)}`, { method: 'DELETE' });
 }
 
+// #1975: lets an event's own author edit it directly (gated author-only
+// server-side — see handleCalendarEvents' own PATCH branch), independent
+// of who currently owns the hosting landlet. Only sends the fields the
+// caller actually passed, same reasoning as editProductReview — an omitted
+// field keeps its existing value server-side rather than needing to be
+// resent; `scheduledAt: null` explicitly clears an existing schedule.
+export async function editCalendarEvent(instanceId, eventId, { text, scheduledAt } = {}) {
+  const body = {};
+  if (text !== undefined) body.text = text;
+  if (scheduledAt !== undefined) body.scheduledAt = scheduledAt;
+  const { event } = await requestJson(`/instances/${encodeURIComponent(instanceId)}/events/${encodeURIComponent(eventId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return event;
+}
+
 // The one-shot creative-tool trigger (docs/SPEC.md §6's own "scheduled
 // confetti-cannon" example) — see docs/API.md's "Community calendar" for
 // why this is idempotent and safe to call speculatively any time a
@@ -1488,6 +1506,15 @@ export async function fetchPurchases({ builderId, templateId } = {}) {
   if (templateId) params.set('templateId', templateId);
   const { purchases, totalCount } = await requestJson(`/purchases?${params.toString()}`);
   return { purchases, totalCount };
+}
+
+// #1949: every finite-stock template the session builder currently has
+// placed, each annotated with an estimated days-remaining figure -- see
+// handleBuilderLowStock's own comment in worker/index.js for how that's
+// computed.
+export async function fetchLowStock() {
+  const { templates } = await requestJson('/builders/me/low-stock');
+  return templates;
 }
 
 // Refund + higgles-commission clawback (migrations/0052_purchase_refunds.sql).

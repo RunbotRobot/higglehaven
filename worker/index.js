@@ -3218,6 +3218,14 @@ async function handleBuilders(request, env, db, route, url) {
     return handleMyAnimation(request, db);
   }
 
+  // #1949 (sub-issue of #1947): every finite-stock template this builder
+  // currently has placed on their own land, annotated with an estimated
+  // days-remaining figure -- see handleBuilderLowStock's own comment for
+  // how that's computed.
+  if (request.method === 'GET' && route.length === 3 && route[1] === 'me' && route[2] === 'low-stock') {
+    return handleBuilderLowStock(request, db);
+  }
+
   if (request.method === 'GET' && route.length === 1) {
     await checkRateLimit(db, `builder-list:${clientIp(request)}`, BUILDER_LIST_RATE_LIMIT_MAX);
     const idsParam = url.searchParams.get('ids');
@@ -3938,6 +3946,121 @@ async function handleMyOwnedAnimations(request, db) {
   return json({
     animations: results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
   });
+}
+
+// #1949 (sub-issue of #1947): a builder-facing view of every template they
+// currently have placed that carries finite stock (#1948's own
+// stock_quantity column), each annotated with an estimated days-remaining
+// figure -- lets a builder weigh which of their own placed products are at
+// risk of selling out and disappearing from their land (per #1947's own
+// framing, that's expected, normal behavior, not a bug to prevent).
+//
+// Owner guidance (direct conversation, 2026-10-13, captured on issue #1949
+// itself): no fixed trailing window -- "please have the assigned session
+// use its best judgment, probably using a more dynamic calculation rather
+// than a static 30-days, particularly for new products. It could be
+// beneficial to look at how quickly similar products have sold." A
+// one-of-a-kind item (stockQuantity === 1) is a single sale event, not a
+// queue being drawn down, so "for single-quantity items, the builder should
+// understand that it's going to be very unpredictable" -- it always gets an
+// explicit "unpredictable" state rather than a fabricated day count,
+// regardless of any sales data.
+async function handleBuilderLowStock(request, db) {
+  const user = await requireCurrentUser(request, db);
+  const builder = await getOrCreateBuilderForUser(db, user);
+  const { results: templates } = await db.prepare(`
+    SELECT ct.template_id AS templateId, ct.name AS name, ct.category AS category,
+           ct.stock_quantity AS stockQuantity, COUNT(*) AS placedInstanceCount
+    FROM placed_instances pi
+    JOIN landlets l ON l.landlet_id = pi.landlet_id
+    JOIN catalog_templates ct ON ct.template_id = pi.template_id
+    WHERE l.owner_builder_id = ? AND ct.stock_quantity IS NOT NULL
+    GROUP BY ct.template_id
+  `).bind(builder.builder_id).all();
+  if (templates.length === 0) return json({ templates: [] });
+
+  const templateIds = templates.map((t) => t.templateId);
+  const ownVelocityByTemplateId = await templateSalesVelocity(db, templateIds);
+  // Only the categories genuinely needed -- a template with sales history
+  // of its own never looks at this.
+  const categoriesNeedingFallback = [...new Set(
+    templates.filter((t) => !ownVelocityByTemplateId.has(t.templateId)).map((t) => t.category),
+  )];
+  const categoryVelocityByCategory = new Map(await Promise.all(
+    categoriesNeedingFallback.map(async (category) => [category, await categorySalesVelocityPerDay(db, category)]),
+  ));
+
+  return json({
+    templates: templates.map((t) => ({
+      templateId: t.templateId,
+      name: t.name,
+      category: t.category,
+      stockQuantity: t.stockQuantity,
+      placedInstanceCount: t.placedInstanceCount,
+      ...estimateDaysRemaining(t, ownVelocityByTemplateId.get(t.templateId), categoryVelocityByCategory.get(t.category)),
+    })),
+  });
+}
+
+function estimateDaysRemaining(template, ownUnitsPerDay, categoryUnitsPerDay) {
+  if (template.stockQuantity === 1) {
+    return { daysRemaining: null, predictability: 'unpredictable' };
+  }
+  const unitsPerDay = ownUnitsPerDay ?? categoryUnitsPerDay;
+  if (!unitsPerDay) {
+    return { daysRemaining: null, predictability: 'notEnoughData' };
+  }
+  return {
+    daysRemaining: Math.round((template.stockQuantity / unitsPerDay) * 10) / 10,
+    predictability: ownUnitsPerDay ? 'estimated' : 'estimatedFromCategory',
+  };
+}
+
+// One units-per-day rate per template, derived from every non-refunded sale
+// of that specific template across every builder who happens to host an
+// instance of it -- the same cross-builder, shared-stock-pool shape
+// GET /api/purchases?templateId= already uses, since #1947 itself requires
+// velocity to be "computed across every builder selling that same
+// template," not just this one builder's own sales.
+async function templateSalesVelocity(db, templateIds) {
+  const placeholders = templateIds.map(() => '?').join(', ');
+  const { results } = await db.prepare(`
+    SELECT template_id AS templateId, SUM(quantity) AS totalSold,
+           MIN(created_at) AS firstSaleAt, MAX(created_at) AS lastSaleAt
+    FROM purchases
+    WHERE template_id IN (${placeholders}) AND refunded_at IS NULL
+    GROUP BY template_id
+  `).bind(...templateIds).all();
+  return new Map(results.map((row) => [row.templateId, salesVelocityPerDay(row)]));
+}
+
+// #1949: the owner-endorsed fallback for a template with no sales history
+// of its own -- every other template in the same category, regardless of
+// seller, averaged into one rate. Deliberately not scoped to this builder's
+// own templates; "similar products" means the category as a whole, the
+// same freeform `category` column (indexed, always populated) every other
+// browse/filter feature in this file already groups by.
+async function categorySalesVelocityPerDay(db, category) {
+  const { results } = await db.prepare(`
+    SELECT p.template_id AS templateId, SUM(p.quantity) AS totalSold,
+           MIN(p.created_at) AS firstSaleAt, MAX(p.created_at) AS lastSaleAt
+    FROM purchases p
+    JOIN catalog_templates ct ON ct.template_id = p.template_id
+    WHERE ct.category = ? AND p.refunded_at IS NULL
+    GROUP BY p.template_id
+  `).bind(category).all();
+  if (results.length === 0) return null;
+  const rates = results.map(salesVelocityPerDay);
+  return rates.reduce((sum, rate) => sum + rate, 0) / rates.length;
+}
+
+// Spans however long this template has actually been selling (first sale to
+// last sale), never an assumed fixed window -- a single sale floors the
+// span at one day rather than dividing by zero, which is deliberately a
+// rough, early estimate (one data point) rather than a crash.
+function salesVelocityPerDay(row) {
+  const spanDays = Math.max(1, (new Date(row.lastSaleAt).getTime() - new Date(row.firstSaleAt).getTime()) / 86400000);
+  return row.totalSold / spanDays;
 }
 
 // #1057's own fix, mirrored for the new PUT below from day one rather than
@@ -14108,6 +14231,9 @@ const CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX = 20;
 // route is unauthenticated like sign posts, not owner-gated like the POST
 // above.
 const EVENT_TRIGGER_RATE_LIMIT_MAX = 20;
+// #1975: same missing-rate-limit gap as CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX,
+// for the new author-only edit branch below.
+const CALENDAR_EVENT_EDIT_RATE_LIMIT_MAX = 20;
 
 // #1716: same "a lost response looks, from here, identical to the request
 // never having reached us at all" protection as the purchase flow's own
@@ -14192,12 +14318,12 @@ async function handleCalendarEvents(request, db, route) {
     // INSERT land afterward. Same #929/#960 idiom as this handler's own
     // DELETE sibling below.
     const inserted = await db.prepare(`
-      INSERT INTO calendar_events (event_id, instance_id, author_label, text, scheduled_at)
-      SELECT ?, ?, ?, ?, ? WHERE EXISTS (
+      INSERT INTO calendar_events (event_id, instance_id, author_label, text, scheduled_at, user_id)
+      SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (
         SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
         WHERE pi.instance_id = ? AND pi.is_community_calendar = 1 AND l.owner_builder_id IS ?
       )
-    `).bind(eventId, instanceId, sessionBuilder.label, text, scheduledAt, instanceId, sessionBuilder.builder_id).run();
+    `).bind(eventId, instanceId, sessionBuilder.label, text, scheduledAt, sessionBuilder.user_id, instanceId, sessionBuilder.builder_id).run();
     if (inserted.meta.changes === 0) {
       const current = await db.prepare('SELECT is_community_calendar FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
       if (!current?.is_community_calendar) {
@@ -14207,6 +14333,53 @@ async function handleCalendarEvents(request, db, route) {
     }
     const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
     return json({ event: calendarEventFromRow(row) }, 201);
+  }
+
+  if (request.method === 'PATCH' && route.length === 4) {
+    const eventId = route[3];
+    const existing = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ? AND instance_id = ?').bind(eventId, instanceId).first();
+    if (!existing) return json({ error: 'Event not found' }, 404);
+    // #1975: editing is author-only -- same reasoning as sign posts' own
+    // PATCH (#1830): there's no moderation equivalent for rewriting
+    // someone else's words under their own name. In the ordinary case the
+    // event's author already IS the hosting landlet's current owner (POST
+    // requires it), but this uses the event's own recorded user_id rather
+    // than re-checking landlet ownership, so the original author keeps
+    // editing rights even after the landlet changes hands (auction, admin
+    // reassignment) -- the same guarantee sign posts/product reviews give.
+    // A pre-#1975 event with no user_id at all (user_id IS NULL) can never
+    // match here, same as DELETE's own author-path below.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    if (existing.user_id === null || existing.user_id !== sessionBuilder.user_id) {
+      throw new HttpError('Not your event', 403);
+    }
+    await checkRateLimit(db, `calendar-event-edit:${sessionBuilder.user_id}`, CALENDAR_EVENT_EDIT_RATE_LIMIT_MAX);
+    const input = await readJson(request);
+    let text = existing.text;
+    if (input.text !== undefined) {
+      text = stringValue(input.text, 'text');
+      if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    }
+    let scheduledAt = existing.scheduled_at;
+    if ('scheduledAt' in input) {
+      scheduledAt = input.scheduledAt === undefined || input.scheduledAt === null
+        ? null
+        : isoDateString(input.scheduledAt, 'scheduledAt');
+    }
+    // A changed scheduledAt re-arms the one-shot trigger (#270) -- this is
+    // logically a different scheduled moment, the same "genuinely
+    // different event" distinction #1751's own idempotency-key content
+    // match already draws, so it shouldn't stay permanently inert just
+    // because some earlier scheduledAt on this same row already fired.
+    const triggeredAt = scheduledAt === existing.scheduled_at ? existing.triggered_at : null;
+    await recordContentEditHistory(db, 'calendar_events', eventId, 'edit', existing, sessionBuilder.user_id);
+    const updated = await db.prepare('UPDATE calendar_events SET text = ?, scheduled_at = ?, triggered_at = ? WHERE event_id = ? AND user_id = ?')
+      .bind(text, scheduledAt, triggeredAt, eventId, sessionBuilder.user_id).run();
+    if (updated.meta.changes === 0) {
+      throw new HttpError('Event changed concurrently — refetch and retry', 409);
+    }
+    const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
+    return json({ event: calendarEventFromRow(row) });
   }
 
   if (request.method === 'DELETE' && route.length === 4) {
@@ -14231,6 +14404,21 @@ async function handleCalendarEvents(request, db, route) {
     const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
+    // #1975: the event's own author can remove it directly, independent of
+    // current landlet ownership -- same reasoning as the new PATCH branch
+    // above. A pre-#1975 event with no user_id at all (user_id IS NULL)
+    // can never match here, so it falls through to the moderation path
+    // exactly as it always has.
+    if (existing.user_id !== null && existing.user_id === sessionBuilder.user_id) {
+      await checkRateLimit(db, `calendar-event-delete:${sessionBuilder.user_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
+      await recordContentEditHistory(db, 'calendar_events', eventId, 'delete', existing, sessionBuilder.user_id);
+      const deletedByAuthor = await db.prepare('DELETE FROM calendar_events WHERE event_id = ? AND user_id = ?')
+        .bind(eventId, sessionBuilder.user_id).run();
+      if (deletedByAuthor.meta.changes === 0) {
+        throw new HttpError('Event changed concurrently — refetch and retry', 409);
+      }
+      return json({ deleted: true });
+    }
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
     await checkRateLimit(db, `calendar-event-delete:${sessionBuilder.builder_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
     // #960: same #929 idiom as the sign-posts DELETE above -- see its own
@@ -14299,6 +14487,7 @@ function calendarEventFromRow(row) {
     scheduledAt: row.scheduled_at,
     triggeredAt: row.triggered_at,
     createdAt: row.created_at,
+    userId: row.user_id,
   };
 }
 

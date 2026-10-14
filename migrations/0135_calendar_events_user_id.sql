@@ -1,0 +1,14 @@
+-- #1975 (owner decision, 2026-10-13): lets a calendar event's own author
+-- edit or delete it directly, the same pattern migrations/0125 (sign
+-- posts, #1830) and migrations/0130 (product reviews) already added --
+-- POST .../events already requires a real, verified session (the hosting
+-- landlet's own owner, via requireSessionBuilder+requireOwnedLandlet), so
+-- this just records who that session actually was, independent of
+-- whatever happens to the landlet's ownership later (auction, admin
+-- reassignment).
+--
+-- ON DELETE SET NULL, not CASCADE: same reasoning as 0125/0130's own
+-- comments -- a user row is never hard-deleted (migrations/0102), so this
+-- only governs a pre-existing row referencing a user_id that predates this
+-- column.
+ALTER TABLE calendar_events ADD COLUMN user_id TEXT REFERENCES users(user_id) ON DELETE SET NULL;
