@@ -129,5 +129,7 @@
   "0129_user_content_edit_history.sql",
   "0130_product_reviews_user_id.sql",
   "0131_product_flags_and_strike_count.sql",
-  "0132_credit_orbs.sql"
+  "0132_self_dealing_flags.sql",
+  "0133_catalog_template_stock_quantity.sql",
+  "0134_credit_orbs.sql"
 ]

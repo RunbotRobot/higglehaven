@@ -1778,6 +1778,7 @@ landlet. They are not production commerce listings yet.
     "placeholder": true
   },
   "isTestModel": false,
+  "stockQuantity": null,
   "createdAt": "2026-07-29T07:30:06.519Z",
   "updatedAt": "2026-07-29T07:30:06.519Z"
 }
@@ -1786,6 +1787,19 @@ landlet. They are not production commerce listings yet.
 `imageUrl` and `imageEmbedding` are `null` until set via `POST
 /api/catalog/:templateId/thumbnail` below — every other endpoint on this
 object (create, update, batch) leaves them untouched.
+
+`stockQuantity` (#1948) is `null` by default, meaning unlimited stock — the
+unchanged behavior for every template unless a seller opts in. A set value
+is remaining stock (1 = one-of-a-kind), not a fixed "original quantity": it
+decrements by the purchased quantity each time a purchase for this template
+is finalized (see `POST /api/instances/:instanceId/purchase` below), and a
+`PATCH`/`PUT` that sets it directly overwrites whatever remained, the same
+as any other seller-settable field. Unlike `isTestModel`, it **is** an
+ordinary, freely seller-settable value through `POST`/`PUT`/`PATCH
+/api/catalog` and its batch siblings. Once it reaches `0`, further purchases
+of this template are rejected (`400`) and every `placed_instances` row
+referencing it is removed — see "Sold-out templates" under the purchase
+endpoint below.
 
 `isTestModel` (#1946) marks a downloaded/demo model that isn't a real
 for-sale product — a different concept than `category: "placeholder"`
@@ -1962,6 +1976,10 @@ value large enough to lose precision past `Number.isSafeInteger` once
 persisted, or to mint an outsized `higgles_balance_cents` credit through a
 self-purchase or auction win. `name`, `category`, `subcategory`, and `color`
 are each capped at 100 characters, same as `label` elsewhere in this API.
+`stockQuantity` (#1948), when present, must be a non-negative integer no
+greater than 1,000,000; omit it (or pass `null`) for the default unlimited
+behavior — see "Catalog template object" above and "Sold-out templates"
+below "Commission math".
 
 Deliberately **not** rate-limited (#362 flagged the gap, same as
 builders/sellers below, but an IP-keyed limit isn't safe to add here at
@@ -2693,6 +2711,11 @@ should use it instead of the legacy annular endpoint below. Larger land classes
 remain a future extension; this first version deliberately emits only exact
 1,000 m² class-1 lands.
 
+Each generated cell's `landType` (#2014) is `water` instead of the usual
+`buildable` default when its center falls near a real pre-1916 water cell
+ingested into `geo_water_cells` (`scripts/ingest-geo-data.mjs`,
+migrations/0128) — forward-generation only, never retroactive.
+
 ### `POST /api/land-candidates/generate-ring`
 
 Procedurally creates one gap-free band of class-1, 1,000 m² land candidates.
@@ -2740,6 +2763,12 @@ power-law boundaries match exactly. Do not send `innerRadiusM` or
 Each accepted band is also stored as a single ring reservation. A D1 trigger
 enforces the same exclusion rule atomically, so concurrent requests cannot both
 create overlapping rings after passing their application-level preflight.
+
+Same real water-cell classification as `generate-mosaic` above (#2014): a
+plot's `landType` becomes `water` instead of `buildable` when its center
+falls near a real ingested water cell, regardless of `distribution` or any
+explicit `landType` already set via `adjacentToRingId`-derived plots (this
+only ever upgrades toward `water`, never downgrades one already requested).
 
 ## Land candidate rings
 
@@ -2871,10 +2900,13 @@ contains both `candidate` and `landlet`; `landlet` is null if it remains queued.
 Queues a candidate using the same `name`, `areaM2`, `center`, `landClass`,
 `landType`, `polygon`, and `metadata` fields as a landlet. `landType`
 defaults to `buildable` and must be `buildable` or `water` (same
-`landletLandType` validation as the landlet endpoint above, and the same
-"nothing produces a `water` candidate yet — this just makes the data model
-capable of representing one" scope cut). If it already overlaps the
-current world circle, the API immediately creates its generating landlet,
+`landletLandType` validation as the landlet endpoint above). Unlike
+`generate-ring`/`generate-mosaic` above (#2014), this endpoint never
+auto-classifies anything from real geo data — it only ever stores whatever
+`landType` the caller explicitly passes, since it takes arbitrary admin
+input rather than a self-consistent generator's own output. If it already
+overlaps the current world circle, the API immediately creates its
+generating landlet,
 carrying the candidate's own `landType` into it rather than defaulting the
 materialized landlet to `buildable` regardless of the candidate's type.
 Otherwise it remains lightweight until a later expansion first overlaps it.
@@ -6063,13 +6095,56 @@ just this endpoint — see `src/main.js`'s `ensureShopperIdentity`.
 `400` if the template has no price set (`priceCents == null` — nothing to
 buy), the template is marked `isTestModel` (#1946 — a downloaded/demo
 model, never a real listing, placeable in Build mode by an admin account
-but never purchasable, real money or simulated alike), the instance sits
-on an unclaimed lándlet (no builder to credit), or `quantity` exceeds
-`1000` — a sanity bound (not a spec requirement, same reasoning as
-auctions' `durationHours` cap above) against one request turning into an
-unbounded `higgles_balance_cents`/land-cap credit. `429` past 30 calls per
-15 minutes from one account (see "Rate limiting" above) closes the other
-half of that gap — repeated smaller requests instead of one large one.
+but never purchasable, real money or simulated alike), the template's
+`stockQuantity` is `0` (#1948 — sold out; see "Sold-out templates" below),
+the instance sits on an unclaimed lándlet (no builder to credit), or
+`quantity` exceeds `1000` — a sanity bound (not a spec requirement, same
+reasoning as auctions' `durationHours` cap above) against one request
+turning into an unbounded `higgles_balance_cents`/land-cap credit. `429`
+past 30 calls per 15 minutes from one account (see "Rate limiting" above)
+closes the other half of that gap — repeated smaller requests instead of
+one large one.
+
+### Sold-out templates (#1948)
+
+A template's `stockQuantity` (see "Catalog template object" above) is
+`null` by default (unlimited, unaffected by any of this). When a seller
+sets a finite quantity, each purchase of that template — simulated or
+real-money, decided at the same point both paths already share
+(`writePurchaseRow` in `worker/index.js`) — atomically decrements it by
+the purchased quantity, using the same claim-before-act, guarded-`UPDATE`
+idiom (`WHERE stock_quantity >= ?`, checked via the write's own
+`meta.changes`) this file already uses for `higgles_balance_cents` debits
+elsewhere, so two near-simultaneous buyers of the last unit can't both
+succeed.
+
+- On the **simulated** path, a request that would take `stockQuantity`
+  below zero is rejected outright with `400` ("This product is sold out")
+  — no purchase is written, nothing is charged (simulated purchases never
+  charge real money regardless).
+- On the **real-money** path, the same oversell case cannot be rejected at
+  finalize time: the buyer has already been charged and the seller's
+  connected Stripe account has already received its transfer by the time
+  `POST /api/purchases/finalize` runs (same reasoning as the orphaned-
+  purchase fallback below). Instead, remaining stock is floored at zero
+  and the purchase is completed and recorded normally.
+- Either way, the moment `stockQuantity` reaches exactly `0`, every
+  `placed_instances` row referencing that template is removed outright —
+  no archive, no "flagged sold-out but still placed" state — and each
+  affected landlet owner gets one notification naming how many of their
+  placed instances were removed. This is the same hard-delete-no-archive
+  treatment an owning builder's own self-deletion already gives every
+  instance on their landlets; there is no backup/replacement-product
+  concept yet (that's a separate, later sub-issue of #1947's own tracking
+  issue).
+- A `PATCH`/`PUT /api/catalog/:templateId` (or its batch sibling) that sets
+  a fresh `stockQuantity` directly overwrites whatever remained — restocking
+  a sold-out template, for instance, is just a normal update setting it back
+  above zero.
+- A simple non-atomic pre-check (not the race-safe enforcement above, just
+  a quick rejection for an obviously sold-out item) also runs earlier, in
+  `POST /api/instances/:instanceId/purchase` itself, before a real-money
+  purchase is even sent to checkout.
 
 `GET /api/purchases?builderId=...` requires a session logged in as that
 builder (`403` otherwise); lists everything hosted on that builder's own
@@ -6429,6 +6504,72 @@ heading and its 99%-mentioning copy, that the close button hides it
 again, and that no console/page errors occurred anywhere in the flow. The
 verification script itself was a temporary scratch file, deleted before
 committing.
+
+### Self-dealing flags (#2019, sub-issue of #1212)
+
+A lighter, non-fingerprinting self-dealing signal: every real purchase
+(`writePurchaseRow`, both the dev-mode-simulated and real-money paths)
+checks whether the buyer's and the listing's seller's own on-file email
+match — the same account, or two accounts sharing one real inbox, buying
+from itself. A match writes a row to `self_dealing_flags`
+(`migrations/0132`) for admin review; it never blocks or affects the
+purchase itself (false positives — roommates, family buying from each
+other legitimately — are real, per the owner's own direction). Fails open
+whenever either side's email can't be resolved at all (a builder with no
+linked `user_id`, or a seller never linked to a real account) — that's
+"nothing to compare," not "cleared."
+
+**Not implemented**, despite being in this sub-issue's original scope:
+
+- **Shipping address matching** — this codebase never captures a buyer
+  shipping address anywhere, for any purpose (confirmed by a direct
+  schema/code search). Split into its own new sub-issue, since capturing
+  one at all is a real new data-capture/privacy decision, not a one-line
+  addition here.
+- **Same Stripe customer ID on both sides** — this integration never
+  creates a Stripe `Customer` object on either side of a transaction, only
+  a seller's Connect *account* id (`sellers.stripe_account_id`) and a card
+  fingerprint keyed to whichever account first confirmed that physical
+  card (`card_fingerprints`, #1072). The issue's own wording already
+  hedged this signal ("if accessible through the existing Stripe Connect
+  integration"), so it's dropped rather than built against data that
+  doesn't exist.
+
+```
+GET /api/self-dealing-flags
+```
+
+Admin-only. Lists every `pending` flag, newest first (capped at 200),
+joined against its own purchase for context:
+
+```json
+{
+  "flags": [
+    {
+      "flagId": "self-dealing-flag-...",
+      "purchaseId": "purchase-...",
+      "matchedSignals": ["email"],
+      "createdAt": "...",
+      "templateId": "...",
+      "buyerBuilderId": "...",
+      "builderId": "...",
+      "totalCents": 500
+    }
+  ]
+}
+```
+
+```
+POST /api/self-dealing-flags/:flagId/review
+{ "notes": "Confirmed roommates, no action needed" }   // optional, ≤280 chars
+```
+
+Admin-only. Marks the flag `reviewed` (404s if it's already reviewed or
+doesn't exist) and writes an `admin_action_log` entry. Unlike #2017's
+product-flag resolve action, there is no "approve"/"reject" consequence
+here — a flag is a soft signal, not an accusation, so reviewing one is
+just acknowledgment, optionally with a note for the admin's own record;
+nothing else in this app reacts to a flag's status.
 
 ## Tax reporting
 
@@ -7887,7 +8028,7 @@ side; consuming a credit at upload time and the out-of-credits messaging
 are #1993's, and the frontend rendering/proximity-collection mechanic is
 #1995's.
 
-`credit_orbs` (migrations/0132): `orb_id`, `landlet_id`, a position
+`credit_orbs` (migrations/0134): `orb_id`, `landlet_id`, a position
 (`x_m`/`y_m`/`z_m`, matching `placed_instances`' own position shape),
 `spawned_at`, and `collected_at`/`collected_by_builder_id` (both nullable,
 always set together — #1995's own atomic collect endpoint).
