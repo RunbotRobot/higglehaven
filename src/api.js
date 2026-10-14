@@ -1490,6 +1490,15 @@ export async function fetchPurchases({ builderId, templateId } = {}) {
   return { purchases, totalCount };
 }
 
+// #1949: every finite-stock template the session builder currently has
+// placed, each annotated with an estimated days-remaining figure -- see
+// handleBuilderLowStock's own comment in worker/index.js for how that's
+// computed.
+export async function fetchLowStock() {
+  const { templates } = await requestJson('/builders/me/low-stock');
+  return templates;
+}
+
 // Refund + higgles-commission clawback (migrations/0052_purchase_refunds.sql).
 export async function refundPurchase(purchaseId) {
   const { purchase } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/refund`, { method: 'POST' });

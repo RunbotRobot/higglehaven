@@ -119,6 +119,7 @@ import {
   clearPurchaseIdempotencyKey,
   finalizePurchase,
   fetchPurchases,
+  fetchLowStock,
   refundPurchase,
   fetchSellerPayouts,
   requestSellerPayout,
@@ -2501,6 +2502,28 @@ function buildCatalogTemplateTile(template) {
   name.className = 'catalog-tile-name';
   name.textContent = template.name;
   tile.appendChild(name);
+
+  // #1951: stockQuantity is already in every template object #1948 put
+  // there (null means unlimited, the default/common case -- no indicator
+  // at all, so an ordinary tile stays uncluttered). A finite, nonzero
+  // value is the real signal the issue asks for: enough to let a builder
+  // weigh risk before placing (a one-off "antique lamp" vs. a bottomless
+  // "cottage bricks" restock) without needing a sales-velocity/"days
+  // remaining" estimate -- that math doesn't exist anywhere in this
+  // codebase yet, and #1947's own tracking issue already flags it as an
+  // undecided owner question (what trailing window, what to show with no
+  // sales history), so it's deliberately not built here.
+  if (template.stockQuantity != null) {
+    const stock = document.createElement('span');
+    stock.className = 'catalog-tile-stock';
+    if (template.stockQuantity === 0) {
+      stock.classList.add('catalog-tile-stock-sold-out');
+      stock.textContent = 'Sold out';
+    } else {
+      stock.textContent = `${template.stockQuantity} left`;
+    }
+    tile.appendChild(stock);
+  }
 
   tile.addEventListener('click', () => {
     closeCatalogPicker();
@@ -6497,6 +6520,7 @@ function renderBuildSettingsSection() {
   renderLandCapField();
   renderRedeemHigglesField();
   renderAuctionSection();
+  renderLowStockSection();
   if (currentMode !== 'build' || !currentLandletId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
@@ -7545,6 +7569,120 @@ async function renderAuctionSection() {
 
   renderStartSection();
   renderAuctionList();
+}
+
+// #1949 (sub-issue of #1947): a builder-wide list of their own placed
+// products carrying finite stock, each annotated with the server's own
+// estimated days-remaining figure -- same "builder-wide, independent of
+// which/any landlet is active" placement as renderAuctionSection just
+// above, filterable client-side by remaining quantity and/or days
+// remaining the same way the catalog picker's own search box filters
+// already-fetched tiles (filterCatalogTiles) rather than re-fetching per
+// keystroke.
+async function renderLowStockSection() {
+  const myToken = settingsRenderToken;
+  if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
+  if (myToken !== settingsRenderToken) return;
+  if (!builderId) {
+    const note = document.createElement('div');
+    note.className = 'settings-empty-note';
+    note.textContent = 'Choose a builder identity to see which of your placed products are low on stock.';
+    settingsSectionEl.appendChild(note);
+    return;
+  }
+
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const label = document.createElement('span');
+  label.textContent = 'Low Stock';
+  field.appendChild(label);
+
+  const filterRow = document.createElement('div');
+  filterRow.className = 'low-stock-filter-row';
+  const qtyLabel = document.createElement('label');
+  qtyLabel.textContent = 'Max remaining';
+  const qtyInput = document.createElement('input');
+  qtyInput.type = 'number';
+  qtyInput.min = '0';
+  qtyInput.placeholder = 'Any';
+  qtyInput.className = 'low-stock-filter-input';
+  qtyLabel.appendChild(qtyInput);
+  filterRow.appendChild(qtyLabel);
+  const daysLabel = document.createElement('label');
+  daysLabel.textContent = 'Max days remaining';
+  const daysInput = document.createElement('input');
+  daysInput.type = 'number';
+  daysInput.min = '0';
+  daysInput.placeholder = 'Any';
+  daysInput.className = 'low-stock-filter-input';
+  daysLabel.appendChild(daysInput);
+  filterRow.appendChild(daysLabel);
+  field.appendChild(filterRow);
+
+  const list = document.createElement('div');
+  list.className = 'low-stock-list';
+  field.appendChild(list);
+  const empty = document.createElement('div');
+  empty.className = 'settings-empty-note';
+  field.appendChild(empty);
+  settingsSectionEl.appendChild(field);
+
+  // A days-remaining threshold only ever excludes a row that actually has a
+  // number -- 'unpredictable'/'notEnoughData' rows (daysRemaining: null)
+  // have nothing to compare against a numeric threshold, so they stay
+  // filtered out once that threshold is set rather than matching by
+  // accident on a missing value.
+  function applyFilter() {
+    const maxQty = qtyInput.value === '' ? null : Number(qtyInput.value);
+    const maxDays = daysInput.value === '' ? null : Number(daysInput.value);
+    let anyVisible = false;
+    for (const row of list.children) {
+      const qty = Number(row.dataset.stockQuantity);
+      const days = row.dataset.daysRemaining === '' ? null : Number(row.dataset.daysRemaining);
+      const matchesQty = maxQty == null || qty <= maxQty;
+      const matchesDays = maxDays == null || (days != null && days <= maxDays);
+      const matches = matchesQty && matchesDays;
+      row.hidden = !matches;
+      if (matches) anyVisible = true;
+    }
+    empty.hidden = list.children.length === 0 || anyVisible;
+    empty.textContent = list.children.length === 0
+      ? 'None of your placed products carry finite stock yet.'
+      : 'No placed products match this filter.';
+  }
+  qtyInput.addEventListener('input', applyFilter);
+  daysInput.addEventListener('input', applyFilter);
+
+  let templates;
+  try {
+    templates = await fetchLowStock();
+  } catch (err) {
+    if (myToken !== settingsRenderToken) return;
+    empty.hidden = false;
+    empty.textContent = err.message || 'Could not load low-stock products.';
+    return;
+  }
+  if (myToken !== settingsRenderToken) return;
+
+  for (const t of templates) {
+    const row = document.createElement('div');
+    row.className = 'low-stock-row';
+    row.dataset.stockQuantity = String(t.stockQuantity);
+    row.dataset.daysRemaining = t.daysRemaining == null ? '' : String(t.daysRemaining);
+    const info = document.createElement('div');
+    info.className = 'low-stock-row-info';
+    const countLabel = t.placedInstanceCount === 1 ? '1 placed' : `${t.placedInstanceCount} placed`;
+    const stockLabel = t.stockQuantity === 1 ? '1 left (one-of-a-kind)' : `${t.stockQuantity} left`;
+    let estimateLabel;
+    if (t.predictability === 'unpredictable') estimateLabel = 'hard to predict';
+    else if (t.predictability === 'notEnoughData') estimateLabel = 'not enough data yet';
+    else if (t.predictability === 'estimatedFromCategory') estimateLabel = `~${t.daysRemaining}d left (est. from similar products)`;
+    else estimateLabel = `~${t.daysRemaining}d left`;
+    info.textContent = `"${t.name}" — ${stockLabel}, ${countLabel} — ${estimateLabel}`;
+    row.appendChild(info);
+    list.appendChild(row);
+  }
+  applyFilter();
 }
 
 for (const btn of settingsTabsEl.querySelectorAll('.settings-tab-btn')) {

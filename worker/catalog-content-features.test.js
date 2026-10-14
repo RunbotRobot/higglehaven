@@ -1458,3 +1458,193 @@ describe('Finite stock tracking (#1948)', () => {
     expect(listed.body.instances).toEqual([]);
   });
 });
+
+describe('Low-stock / days-remaining list (#1949)', () => {
+  async function createTemplateWithStock(templateId, overrides = {}) {
+    return api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId,
+        name: `Low-stock fixture ${templateId}`,
+        color: '#987654',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 500,
+        ...overrides,
+      }),
+    });
+  }
+
+  async function createLandletAndClaim(landletId, builder) {
+    await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ landletId, name: `Test ${landletId}`, areaM2: 1000, status: 'greenbelt' }),
+    }));
+    await api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
+  }
+
+  async function placeInstance(instanceId, landletId, templateId, builder) {
+    const placed = await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId, landletId, templateId, x: 0, y: 0 }),
+    }));
+    expect(placed.response.status).toBe(201);
+    return instanceId;
+  }
+
+  // Backdates a purchase's own created_at (no column in the public API ever
+  // sets this) so the sales-velocity math has a controlled, exact span to
+  // compute against instead of depending on real wall-clock time elapsing
+  // during the test run.
+  async function setPurchaseCreatedAt(purchaseId, isoTimestamp) {
+    await env.DB.prepare('UPDATE purchases SET created_at = ? WHERE purchase_id = ?')
+      .bind(isoTimestamp, purchaseId).run();
+  }
+
+  it('requires a session', async () => {
+    const rejected = await api('/builders/me/low-stock');
+    expect(rejected.response.status).toBe(401);
+  });
+
+  it('lists only the session builder\'s own placed templates with finite stock, excluding unlimited-stock ones', async () => {
+    const builder = await signupBuilder('low-stock-filter-builder');
+    await createLandletAndClaim('low-stock-filter-landlet', builder);
+    await createTemplateWithStock('low-stock-filter-finite', { stockQuantity: 10 });
+    await createTemplateWithStock('low-stock-filter-unlimited');
+    await placeInstance('low-stock-filter-finite-instance', 'low-stock-filter-landlet', 'low-stock-filter-finite', builder);
+    await placeInstance('low-stock-filter-unlimited-instance', 'low-stock-filter-landlet', 'low-stock-filter-unlimited', builder);
+
+    const listed = await api('/builders/me/low-stock', builder.session());
+    expect(listed.response.status).toBe(200);
+    expect(listed.body.templates.map((t) => t.templateId)).toEqual(['low-stock-filter-finite']);
+    expect(listed.body.templates[0]).toMatchObject({ stockQuantity: 10, placedInstanceCount: 1 });
+  });
+
+  it('counts multiple placed instances of the same template once, with the right placedInstanceCount', async () => {
+    const builder = await signupBuilder('low-stock-count-builder');
+    await createLandletAndClaim('low-stock-count-landlet', builder);
+    await createTemplateWithStock('low-stock-count-template', { stockQuantity: 10 });
+    await placeInstance('low-stock-count-instance-1', 'low-stock-count-landlet', 'low-stock-count-template', builder);
+    await placeInstance('low-stock-count-instance-2', 'low-stock-count-landlet', 'low-stock-count-template', builder);
+
+    const listed = await api('/builders/me/low-stock', builder.session());
+    expect(listed.body.templates).toHaveLength(1);
+    expect(listed.body.templates[0].placedInstanceCount).toBe(2);
+  });
+
+  it('reports "unpredictable" for a one-of-a-kind item regardless of its own sales history', async () => {
+    const builder = await signupBuilder('low-stock-unpredictable-builder');
+    await createLandletAndClaim('low-stock-unpredictable-landlet', builder);
+    // Starts at 5 so a purchase can bring it down to exactly 1 (the
+    // one-of-a-kind threshold) while the instance stays placed (only
+    // hitting exactly 0 triggers the sold-out sweep) -- this gives the
+    // template real sales history while it's still showing stockQuantity 1,
+    // confirming the "always unpredictable at 1" rule overrides any data.
+    await createTemplateWithStock('low-stock-unpredictable-template', { stockQuantity: 5 });
+    await placeInstance('low-stock-unpredictable-instance', 'low-stock-unpredictable-landlet', 'low-stock-unpredictable-template', builder);
+    const purchased = await api('/instances/low-stock-unpredictable-instance/purchase', builder.session({
+      method: 'POST', body: JSON.stringify({ quantity: 4 }),
+    }));
+    expect(purchased.response.status).toBe(201);
+
+    const listed = await api('/builders/me/low-stock', builder.session());
+    const row = listed.body.templates.find((t) => t.templateId === 'low-stock-unpredictable-template');
+    expect(row).toMatchObject({ stockQuantity: 1, daysRemaining: null, predictability: 'unpredictable' });
+  });
+
+  it('computes a dynamic days-remaining estimate from the template\'s own sales history', async () => {
+    const builder = await signupBuilder('low-stock-velocity-builder');
+    await createLandletAndClaim('low-stock-velocity-landlet', builder);
+    await createTemplateWithStock('low-stock-velocity-template', { stockQuantity: 30 });
+    await placeInstance('low-stock-velocity-instance', 'low-stock-velocity-landlet', 'low-stock-velocity-template', builder);
+
+    const firstPurchase = await api('/instances/low-stock-velocity-instance/purchase', builder.session({
+      method: 'POST', body: JSON.stringify({ quantity: 2 }),
+    }));
+    const secondPurchase = await api('/instances/low-stock-velocity-instance/purchase', builder.session({
+      method: 'POST', body: JSON.stringify({ quantity: 8 }),
+    }));
+    expect(firstPurchase.response.status).toBe(201);
+    expect(secondPurchase.response.status).toBe(201);
+
+    // Exact 10-day span, 10 total units sold -- 1 unit/day, so the
+    // remaining 20 units should read as exactly 20 days.
+    const t0 = new Date('2026-01-01T00:00:00.000Z');
+    const t1 = new Date(t0.getTime() + 10 * 24 * 60 * 60 * 1000);
+    await setPurchaseCreatedAt(firstPurchase.body.purchase.purchaseId, t0.toISOString());
+    await setPurchaseCreatedAt(secondPurchase.body.purchase.purchaseId, t1.toISOString());
+
+    const listed = await api('/builders/me/low-stock', builder.session());
+    const row = listed.body.templates.find((t) => t.templateId === 'low-stock-velocity-template');
+    expect(row).toMatchObject({ stockQuantity: 20, daysRemaining: 20, predictability: 'estimated' });
+  });
+
+  it('computes velocity across every builder selling the same template, not just the session builder\'s own sales', async () => {
+    const hostA = await signupBuilder('low-stock-shared-pool-host-a');
+    const hostB = await signupBuilder('low-stock-shared-pool-host-b');
+    await createLandletAndClaim('low-stock-shared-pool-landlet-a', hostA);
+    await createLandletAndClaim('low-stock-shared-pool-landlet-b', hostB);
+    await createTemplateWithStock('low-stock-shared-pool-template', { stockQuantity: 20 });
+    await placeInstance('low-stock-shared-pool-instance-a', 'low-stock-shared-pool-landlet-a', 'low-stock-shared-pool-template', hostA);
+    await placeInstance('low-stock-shared-pool-instance-b', 'low-stock-shared-pool-landlet-b', 'low-stock-shared-pool-template', hostB);
+
+    // hostB alone sells enough to establish a real rate -- hostA's own
+    // listing should still see that velocity, since it's the same shared
+    // stock pool.
+    const purchase = await api('/instances/low-stock-shared-pool-instance-b/purchase', hostB.session({
+      method: 'POST', body: JSON.stringify({ quantity: 10 }),
+    }));
+    expect(purchase.response.status).toBe(201);
+    const t0 = new Date('2026-02-01T00:00:00.000Z');
+    await setPurchaseCreatedAt(purchase.body.purchase.purchaseId, t0.toISOString());
+    // A single sale: span floors at 1 day, so the rate is 10 units/day.
+
+    const listedA = await api('/builders/me/low-stock', hostA.session());
+    const rowA = listedA.body.templates.find((t) => t.templateId === 'low-stock-shared-pool-template');
+    expect(rowA).toMatchObject({ predictability: 'estimated' });
+    // 10 remaining (20 - 10 sold) / 10 units-per-day = exactly 1 day.
+    expect(rowA.daysRemaining).toBe(1);
+  });
+
+  it('falls back to same-category velocity when the template has no sales history of its own', async () => {
+    const seedBuilder = await signupBuilder('low-stock-category-seed-builder');
+    await createLandletAndClaim('low-stock-category-seed-landlet', seedBuilder);
+    await createTemplateWithStock('low-stock-category-seed-template', { stockQuantity: 50, category: 'low-stock-test-category' });
+    await placeInstance('low-stock-category-seed-instance', 'low-stock-category-seed-landlet', 'low-stock-category-seed-template', seedBuilder);
+    const seedPurchase = await api('/instances/low-stock-category-seed-instance/purchase', seedBuilder.session({
+      method: 'POST', body: JSON.stringify({ quantity: 5 }),
+    }));
+    expect(seedPurchase.response.status).toBe(201);
+    const t0 = new Date('2026-03-01T00:00:00.000Z');
+    const t1 = new Date(t0.getTime() + 5 * 24 * 60 * 60 * 1000);
+    // A second, backdated purchase on the seed template to establish a real
+    // multi-point span (5 units over 5 days = 1 unit/day) for the category
+    // fallback to average.
+    await setPurchaseCreatedAt(seedPurchase.body.purchase.purchaseId, t0.toISOString());
+    await env.DB.prepare(`
+      INSERT INTO purchases (purchase_id, instance_id, template_id, builder_id, unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents, created_at)
+      VALUES (?, ?, ?, ?, 500, ?, 2500, 50, 25, 25, ?)
+    `).bind('low-stock-category-seed-purchase-2', 'low-stock-category-seed-instance', 'low-stock-category-seed-template', seedBuilder.builderId, 5, t1.toISOString()).run();
+
+    const builder = await signupBuilder('low-stock-category-builder');
+    await createLandletAndClaim('low-stock-category-landlet', builder);
+    await createTemplateWithStock('low-stock-category-template', { stockQuantity: 10, category: 'low-stock-test-category' });
+    await placeInstance('low-stock-category-instance', 'low-stock-category-landlet', 'low-stock-category-template', builder);
+
+    const listed = await api('/builders/me/low-stock', builder.session());
+    const row = listed.body.templates.find((t) => t.templateId === 'low-stock-category-template');
+    // Category rate is 2 units/day (5 + 5 = 10 units sold over the 5-day
+    // span above), so 10 remaining reads as exactly 5 days.
+    expect(row).toMatchObject({ stockQuantity: 10, daysRemaining: 5, predictability: 'estimatedFromCategory' });
+  });
+
+  it('reports "notEnoughData" when there is no sales history at all, for the template or its category', async () => {
+    const builder = await signupBuilder('low-stock-no-data-builder');
+    await createLandletAndClaim('low-stock-no-data-landlet', builder);
+    await createTemplateWithStock('low-stock-no-data-template', { stockQuantity: 15, category: 'low-stock-never-sold-category' });
+    await placeInstance('low-stock-no-data-instance', 'low-stock-no-data-landlet', 'low-stock-no-data-template', builder);
+
+    const listed = await api('/builders/me/low-stock', builder.session());
+    const row = listed.body.templates.find((t) => t.templateId === 'low-stock-no-data-template');
+    expect(row).toMatchObject({ stockQuantity: 15, daysRemaining: null, predictability: 'notEnoughData' });
+  });
+});
