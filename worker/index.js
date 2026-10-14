@@ -15395,6 +15395,10 @@ async function handlePurchases(request, env, route, url) {
     return handleSellerFeedbackCreate(request, env, route[1]);
   }
 
+  if (request.method === 'PATCH' && route.length === 3 && route[2] === 'feedback') {
+    return handleSellerFeedbackEdit(request, env, route[1]);
+  }
+
   if (request.method === 'DELETE' && route.length === 3 && route[2] === 'feedback') {
     return handleSellerFeedbackDelete(request, env, route[1]);
   }
@@ -15508,6 +15512,24 @@ async function handleMarkShipped(request, env, purchaseId) {
 // eligibility check #1113/#1116 already brought to product reviews.
 const SELLER_FEEDBACK_CREATE_RATE_LIMIT_MAX = 20;
 
+// #1975 (owner decision via #1738, 2026-10-13): the feedback's own author
+// (the purchase's buyer) gets the same self-edit/delete #1975 already gave
+// sign posts/product reviews/calendar events. Unlike those three,
+// seller_feedback gets no new user_id column for it — the buyer's identity
+// is already permanently on record via purchases.buyer_builder_id
+// (migrations/0099), the same real, session-verified, never-reassigned
+// identity handleSellerFeedbackCreate's own eligibility check already
+// uses, so authorization and this row shape's own userId field both
+// resolve it with a join instead. A purchase whose buyer later self-
+// deletes their account nulls buyer_builder_id (ON DELETE SET NULL) —
+// same as every other precedent's "legacy/no author on record" case, such
+// a row can never be claimed by anyone as their own.
+const SELLER_FEEDBACK_SELECT_WITH_BUYER = `
+  SELECT f.*, bld.user_id AS buyer_user_id FROM seller_feedback f
+  JOIN purchases p ON p.purchase_id = f.purchase_id
+  LEFT JOIN builders bld ON bld.builder_id = p.buyer_builder_id
+`;
+
 function sellerFeedbackFromRow(row) {
   return {
     feedbackId: row.feedback_id,
@@ -15517,6 +15539,7 @@ function sellerFeedbackFromRow(row) {
     rating: row.rating,
     text: row.text,
     createdAt: row.created_at,
+    userId: row.buyer_user_id ?? null,
   };
 }
 
@@ -15591,18 +15614,78 @@ async function handleSellerFeedbackCreate(request, env, purchaseId) {
     await fireNotification(db, owner.builder_id,
       `"${authorLabel}" left ${rating}-star feedback on a purchase from you.`);
   }
-  const row = await db.prepare('SELECT * FROM seller_feedback WHERE feedback_id = ?').bind(feedbackId).first();
+  const row = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.feedback_id = ?`).bind(feedbackId).first();
   return json({ feedback: sellerFeedbackFromRow(row) }, 201);
+}
+
+// #1975/#1738: author-only edit for the feedback's own author (the
+// purchase's buyer) — mirrors product_reviews'/calendar_events' own PATCH
+// shape exactly (see SELLER_FEEDBACK_SELECT_WITH_BUYER's own comment above
+// for why this is gated via a join instead of a native user_id column).
+// No moderation equivalent for PATCH, same reasoning as those two:
+// rewriting someone else's feedback under their own name isn't a kind of
+// moderation action that exists anywhere else in this file.
+const SELLER_FEEDBACK_EDIT_RATE_LIMIT_MAX = 20;
+
+async function handleSellerFeedbackEdit(request, env, purchaseId) {
+  const db = env.DB;
+  const existing = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
+  if (!existing) return json({ error: 'Feedback not found' }, 404);
+  const sessionBuilder = await requireSessionBuilder(request, db);
+  if (existing.buyer_user_id === null || existing.buyer_user_id !== sessionBuilder.user_id) {
+    throw new HttpError('Not your feedback', 403);
+  }
+  await checkRateLimit(db, `seller-feedback-edit:${sessionBuilder.user_id}`, SELLER_FEEDBACK_EDIT_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  let rating = existing.rating;
+  if (input.rating !== undefined) {
+    rating = Number(input.rating);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      throw new HttpError('rating must be an integer from 1 to 5', 400);
+    }
+  }
+  // Same omitted-vs-explicitly-cleared distinction product_reviews' own
+  // PATCH already makes — an absent `text` key keeps the existing value, an
+  // explicit null/empty string clears it.
+  let text = existing.text;
+  if ('text' in input) {
+    text = (input.text === null || input.text === '') ? null : stringValue(input.text, 'text');
+  }
+  if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+  // #1975: snapshot the pre-edit row for disputes before overwriting it.
+  await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'edit', existing, sessionBuilder.user_id);
+  // Same "point-in-time read, real awaited gaps after it" race this file's
+  // other author-direct mutations guard against — re-verified atomically via
+  // the same join authorization used above, not just the eager read.
+  const updated = await db.prepare(`
+    UPDATE seller_feedback SET rating = ?, text = ? WHERE purchase_id = ? AND EXISTS (
+      SELECT 1 FROM purchases p JOIN builders bld ON bld.builder_id = p.buyer_builder_id
+      WHERE p.purchase_id = seller_feedback.purchase_id AND bld.user_id = ?
+    )
+  `).bind(rating, text, purchaseId, sessionBuilder.user_id).run();
+  if (updated.meta.changes === 0) {
+    throw new HttpError('Feedback changed concurrently — refetch and retry', 409);
+  }
+  const row = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
+  return json({ feedback: sellerFeedbackFromRow(row) });
 }
 
 // #1738 (owner confirmed, 2026-10-13): seller_feedback rates a person's own
 // conduct on a transaction, not a product -- unlike product_reviews' own
 // DELETE branch, which lets the reviewed template's seller self-delete,
 // self-delete here would let a seller scrub legitimate negative feedback
-// about their own conduct. Admin-only removal is the deliberate, owner-
-// confirmed bar, not a placeholder pending a seller-facing path; whether
-// sellers also get their own appeal/self-delete path is a separate,
-// explicitly-still-open question per the issue's own comment thread.
+// about their own conduct. Admin-only removal remains the sole moderation
+// route for the rated seller's side — there is deliberately no third,
+// seller-moderation branch the way product_reviews has one, since #1738's
+// own resolution confirmed the rated seller never gets to remove feedback
+// about themselves, ever. #1975 (same thread): the feedback's own author
+// (the buyer who actually wrote it) is a different person from the rated
+// seller and gets the ordinary author-direct removal every other
+// self-authored content type in this file already has — ON DELETE SET
+// NULL on purchases.buyer_builder_id means a buyer who later self-deletes
+// their account can never come back and claim it (same "legacy/no author
+// on record" case SELLER_FEEDBACK_SELECT_WITH_BUYER's own comment
+// describes), so it falls through to admin-only exactly as it always has.
 // Keyed by purchaseId (not a separate feedbackId) since migrations/0097's
 // own UNIQUE constraint on purchase_id already makes it a 1-to-1 resource,
 // the same shape POST .../feedback above already uses.
@@ -15610,10 +15693,26 @@ const SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX = 20;
 
 async function handleSellerFeedbackDelete(request, env, purchaseId) {
   const db = env.DB;
-  const existing = await db.prepare('SELECT * FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).first();
+  const existing = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
   if (!existing) return json({ error: 'Feedback not found' }, 404);
-  const admin = await requireAdmin(request, db);
-  await checkRateLimit(db, `seller-feedback-delete:${admin.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
+  const requester = await currentUser(request, db);
+  const admin = requester && requester.is_admin ? requester : null;
+  if (!admin && requester && existing.buyer_user_id !== null && existing.buyer_user_id === requester.user_id) {
+    await checkRateLimit(db, `seller-feedback-delete:${requester.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
+    await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'delete', existing, requester.user_id);
+    const deletedByAuthor = await db.prepare(`
+      DELETE FROM seller_feedback WHERE purchase_id = ? AND EXISTS (
+        SELECT 1 FROM purchases p JOIN builders bld ON bld.builder_id = p.buyer_builder_id
+        WHERE p.purchase_id = seller_feedback.purchase_id AND bld.user_id = ?
+      )
+    `).bind(purchaseId, requester.user_id).run();
+    if (deletedByAuthor.meta.changes === 0) {
+      throw new HttpError('Feedback changed concurrently — refetch and retry', 409);
+    }
+    return json({ deleted: true });
+  }
+  const resolvedAdmin = admin || await requireAdmin(request, db);
+  await checkRateLimit(db, `seller-feedback-delete:${resolvedAdmin.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
   const result = await db.prepare('DELETE FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).run();
   // #2003: the existence check above and this DELETE aren't atomic, so a
   // concurrent delete (another admin retrying, say) can win the race
@@ -15622,7 +15721,7 @@ async function handleSellerFeedbackDelete(request, env, purchaseId) {
   // delete_land_candidate already use, so a deletion that didn't happen
   // is never misattributed to this admin.
   if (result.meta.changes === 1) {
-    await adminActionLogStatement(db, admin.user_id, 'delete_seller_feedback', 'seller_feedback', existing.feedback_id).run();
+    await adminActionLogStatement(db, resolvedAdmin.user_id, 'delete_seller_feedback', 'seller_feedback', existing.feedback_id).run();
   }
   return json({ deleted: true });
 }
@@ -15635,7 +15734,7 @@ async function handleSellerFeedbackList(db, sellerId) {
   // it read as "seller-facing" in practice without the API itself needing
   // to restrict who can ask.
   const { results } = await db.prepare(`
-    SELECT * FROM seller_feedback WHERE seller_id = ? ORDER BY created_at DESC LIMIT 200
+    ${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.seller_id = ? ORDER BY f.created_at DESC LIMIT 200
   `).bind(sellerId).all();
   const feedback = results.reverse().map(sellerFeedbackFromRow);
   // averageRating/count are the seller's real, all-time summary, not
