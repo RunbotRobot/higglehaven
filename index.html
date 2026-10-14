@@ -2767,6 +2767,48 @@
         font-size: 12px;
         color: rgb(var(--ink-rgb) / 0.85);
       }
+      /* Sold-out markers (#2068, leaf sub-issue of #1973/#1947), Build
+         settings tab — same list/row look as .low-stock-list/.low-stock-row
+         just above, own classes since each row carries a Dismiss action
+         the low-stock rows don't. */
+      .sold-out-marker-toggle-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.75);
+        margin-bottom: 8px;
+      }
+      .sold-out-marker-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        max-height: 260px;
+        overflow-y: auto;
+      }
+      .sold-out-marker-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: rgb(var(--ink-rgb) / 0.08);
+      }
+      .sold-out-marker-row-info {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      .sold-out-marker-row-dismiss {
+        flex-shrink: 0;
+        border: none;
+        border-radius: 4px;
+        padding: 4px 10px;
+        font: 12px/1.4 sans-serif;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        cursor: pointer;
+      }
       /* Sell Your Lándlet's landlet picker (#249) — only rendered when a
          builder owns more than one claimed landlet at once, so it's a
          one-off row rather than reusing .auction-start-form's row-of-

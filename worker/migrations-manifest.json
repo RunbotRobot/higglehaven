@@ -135,5 +135,6 @@
   "0135_calendar_events_user_id.sql",
   "0136_credit_orbs.sql",
   "0137_placed_instance_backups.sql",
-  "0138_avatar_presence_flying.sql"
+  "0138_sold_out_markers.sql",
+  "0139_avatar_presence_flying.sql"
 ]

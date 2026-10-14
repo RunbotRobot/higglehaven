@@ -6981,6 +6981,95 @@ Settings > Build panel applies both thresholds client-side the same way
 the catalog picker's own search box filters already-rendered tiles
 (`filterCatalogTiles`) rather than re-fetching per keystroke.
 
+### Sold-out markers (#2068, leaf sub-issue of #1973/#1947)
+
+```
+GET /api/landlets/:landletId/sold-out-markers
+POST /api/landlets/:landletId/sold-out-markers/:markerId/dismiss
+```
+
+Owner requirement (captured on #1973 directly): "On the build screen
+looking at their land, they should be able to toggle on/off grayed-out
+items that have disappeared which they haven't dismissed yet."
+`sweepSoldOutTemplateInstances` (the same sweep #1948's "on hitting exactly
+zero, removes every placed instance" behavior already describes) used to
+just hard-delete every swept `placed_instances` row with nothing retained
+— this adds a `sold_out_markers` row (`migrations/0138`) per removed
+instance, snapshotting its own `landlet_id`/position/template **before**
+that delete runs, so Build mode can still show a builder where something
+used to be.
+
+**Landlet-scoped, not a cross-landlet "mine" list like `GET
+/builders/me/low-stock` above** — a marker's `x`/`y` are landlet-local
+coordinates (the same space `placed_instances.x_m`/`y_m` already use), so
+a marker only means anything rendered inside the one landlet's own scene
+it belongs to. Both routes require `requireSessionBuilder` +
+`requireOwnedLandlet` — only the landlet's own current owner can list or
+dismiss its markers (`401` with no session, `403` for anyone else, `404`
+for a landlet that doesn't exist).
+
+`template_id`/`template_name` are a **snapshot**, not a live join back to
+`catalog_templates` — same "a permanent record must survive the thing it
+references disappearing too" reasoning `purchases.seller_id`/
+`seller_feedback.seller_id` already use (the template that just sold out
+can itself be deleted later, and the marker should keep reading sensibly
+either way).
+
+```json
+GET /api/landlets/:landletId/sold-out-markers
+{
+  "markers": [
+    {
+      "markerId": "sold-out-marker-...",
+      "landletId": "...",
+      "x": 2, "y": 3, "z": 0.5,
+      "templateId": "antique-lamp",
+      "templateName": "Antique Brass Lamp",
+      "soldOutAt": "2026-10-14T..."
+    }
+  ]
+}
+```
+
+Only **un-dismissed** markers are listed (`dismissed_at IS NULL`), oldest
+first. Restocking the template afterward (`PATCH .../catalog/:templateId`)
+does **not** remove or resurrect any marker — a marker is a historical
+fact about an instance that was actually removed, independent of whatever
+the template's stock does later; a fresh placement against the restocked
+template is an unrelated new instance.
+
+`POST .../dismiss` clears a marker permanently (sets `dismissed_at`, never
+re-shown), rate-limited (20 per 15-minute window, `429` past that, bucket
+`sold-out-marker-dismiss:<builderId>`) and atomically re-verified against
+both `marker_id` **and** `landlet_id` together — dismissing a real marker
+id through the wrong landlet's own route 404s exactly like a marker that
+was already dismissed, rather than silently succeeding against the wrong
+owner's scope. `404 "Marker not found or already dismissed"` covers both
+cases identically (same "no distinguishing a race from a genuine miss"
+shape other dismiss/claim-style actions in this file already use).
+
+### Frontend wiring
+
+Settings > Build gets a new "Sold-out markers" panel (`renderSoldOutMarkersSection`,
+right below the existing Low Stock panel, #1949/#1950's own sibling) — a
+checkbox toggle (`#sold-out-marker-toggle`, defaults off) plus a list of
+this landlet's own un-dismissed markers, each with a `Dismiss` button.
+Unlike the Low Stock panel (which highlights an **already-placed, still-
+live** mesh — `addLowStockHighlight`), a sold-out marker has no live
+instance left to decorate, so checking the toggle instead spawns a
+standalone grayed-out ghost box (`THREE.MeshBasicMaterial`, 35% opacity,
+non-interactive) at each marker's own recorded position — cleared and
+re-applied via `applySoldOutMarkerVisibility` whenever the toggle flips or
+a fresh list loads. Same Build-mode-only lifecycle as the Low Stock
+panel's own `activeLowStockTemplateIds`: both the toggle state and the
+ghost boxes reset the moment Build mode is left (`enterShopMode`/
+`enterSellMode`), so re-entering Build later starts clean rather than
+silently reapplying a stale toggle with nothing behind it yet.
+`window.__testSoldOutMarkerMeshIds()` exposes which markers are currently
+rendered, the same `window.__test*` convention
+`window.__testLowStockHighlightedInstanceIds` already established for
+otherwise-unreachable 3D scene state.
+
 docs/SPEC.md §7: 1099-NEC generation once a seller/builder crosses the
 reporting threshold, W-8BEN/W-9 collection, and folding higgles-commission
 income into the same taxable-income framework as real-money seller
