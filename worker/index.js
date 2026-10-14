@@ -12006,6 +12006,24 @@ async function assertLandCandidatesDontOverlapEachOther(newRows, message) {
   if (conflict) throw new HttpError(message, 409);
 }
 
+// #2013 (sub-issue of #2012): whether a point falls near one of the real
+// pre-1916 water cells scripts/ingest-geo-data.mjs ingested into
+// geo_water_cells (migrations/0128). "Near" means within that cell's own
+// sampling spacing — cells that close together are effectively the same
+// continuous water region the ingestion script sampled, not an isolated
+// point. A full-table scan is fine at this dataset's size (at most a few
+// hundred rows for any radius this world will need for a long while); add
+// an index later only if that changes. Not yet called anywhere — #2012's
+// second sub-issue is what actually consults this during generation.
+export async function isNearWaterCell(db, x, y) {
+  const row = await db.prepare(`
+    SELECT 1 FROM geo_water_cells
+    WHERE (x_m - ?) * (x_m - ?) + (y_m - ?) * (y_m - ?) <= spacing_m * spacing_m
+    LIMIT 1
+  `).bind(x, x, y, y).first();
+  return !!row;
+}
+
 // Split out from the generate-mosaic handler below so #1085's automatic
 // path (generateAutoMosaicIfFreshWorld) can reuse the exact same
 // generation/validation/overlap-guard logic without an admin session —
