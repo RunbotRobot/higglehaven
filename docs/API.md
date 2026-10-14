@@ -1806,12 +1806,15 @@ keep product discovery reads bounded as the catalog grows.
 
 Optional query parameters:
 
-- `category`: filters templates by exact category.
-- `subcategory`: filters templates by exact subcategory, independently or in
-  combination with `category`.
-- `sellerId`: filters templates by exact seller ID and can be combined with the
-  category, subcategory, and name-search filters.
-- `color`: filters templates by the exact stored color string.
+- `category`: filters templates by category, case-insensitively (#2006).
+- `subcategory`: filters templates by subcategory, case-insensitively (#2006),
+  independently or in combination with `category`.
+- `sellerId`: filters templates by exact (case-sensitive) seller ID and can be
+  combined with the category, subcategory, and name-search filters — unlike
+  `category`/`subcategory`/`color`, this is a machine-generated opaque id, not
+  user-typed free text, so case-sensitivity here is intentional.
+- `color`: filters templates by the stored color string, case-insensitively
+  (#2006).
 - `minPriceCents` / `maxPriceCents`: inclusive non-negative integer price bounds.
   Templates without a price are excluded whenever either bound is present.
 - `minWidthM` / `maxWidthM`, `minDepthM` / `maxDepthM`, and `minHeightM` /

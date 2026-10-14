@@ -1919,12 +1919,18 @@ async function handleCatalog(request, db, route, url, models, env) {
       : decodeCatalogPriceCursor(url.searchParams.get('cursor'));
     const conditions = [];
     const bindings = [];
+    // #2006: COLLATE NOCASE on category/subcategory/color -- matching the
+    // name/q filter's own established reasoning a few lines below (free-
+    // text/seller-supplied, no enforced casing convention at the schema
+    // level). sellerId stays plain case-sensitive, deliberately excluded:
+    // it's a machine-generated opaque id (crypto.randomUUID(), always
+    // lowercase hex), not user-typed free text.
     if (category) {
-      conditions.push('category = ?');
+      conditions.push('category = ? COLLATE NOCASE');
       bindings.push(category);
     }
     if (subcategory) {
-      conditions.push('subcategory = ?');
+      conditions.push('subcategory = ? COLLATE NOCASE');
       bindings.push(subcategory);
     }
     if (sellerId) {
@@ -1932,7 +1938,7 @@ async function handleCatalog(request, db, route, url, models, env) {
       bindings.push(sellerId);
     }
     if (color) {
-      conditions.push('color = ?');
+      conditions.push('color = ? COLLATE NOCASE');
       bindings.push(color);
     }
     if (minPriceCents !== null) {
