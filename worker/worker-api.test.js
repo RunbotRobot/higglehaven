@@ -1023,6 +1023,35 @@ describe('Worker API', () => {
     expect((await api(`/catalog?q=${'a'.repeat(101)}`)).response.status).toBe(400);
   });
 
+  // #2006: category/subcategory/color are free-text-ish fields with no
+  // enforced casing convention at the schema level, same reasoning the
+  // name/q filter's own COLLATE NOCASE already uses -- a caller whose
+  // casing doesn't match the stored value should still get a match, not
+  // silently zero results. sellerId stays case-sensitive on purpose (a
+  // machine-generated opaque id, not user-typed free text) -- not
+  // re-verified here since it's unchanged behavior.
+  it('matches category/subcategory/color filters case-insensitively', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'catalog-nocase-filter-template',
+        name: 'Case-insensitive filter test product',
+        category: 'Nocase-Filter-Test',
+        subcategory: 'Seating',
+        color: '#ABCDEF',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+
+    const byCategory = await api('/catalog?category=nocase-filter-test');
+    expect(byCategory.body.templates.map((t) => t.templateId)).toEqual(['catalog-nocase-filter-template']);
+    const bySubcategory = await api('/catalog?category=Nocase-Filter-Test&subcategory=SEATING');
+    expect(bySubcategory.body.templates.map((t) => t.templateId)).toEqual(['catalog-nocase-filter-template']);
+    const byColor = await api('/catalog?category=Nocase-Filter-Test&color=%23abcdef');
+    expect(byColor.body.templates.map((t) => t.templateId)).toEqual(['catalog-nocase-filter-template']);
+  });
+
   // #1015: the default sort=name used SQLite's BINARY collation, so a
   // mixed-case set of product names sorted by raw byte value (every
   // uppercase-initial name before every lowercase-initial one) instead of
