@@ -1720,7 +1720,6 @@ async function handleCatalog(request, db, route, url, models, env) {
     }
     const sellerIds = templates.map((template) => template.sellerId).filter((id) => id);
     if (sellerIds.length > 0) await assertReferencesExist(db, 'sellers', 'seller_id', sellerIds, 'sellerId');
-    await Promise.all(templates.map((template) => assertUploadedModelExists(models, template.modelUrl)));
     const existingOwnerRows = await db.prepare(`
       SELECT template_id, seller_id, width_m, depth_m, height_m, metadata_json FROM catalog_templates WHERE template_id IN (${[...ids].map(() => '?').join(', ')})
     `).bind(...ids).all();
@@ -1751,6 +1750,16 @@ async function handleCatalog(request, db, route, url, models, env) {
     if (request.method === 'PUT') {
       await checkRateLimit(db, sessionSeller ? `catalog-patch:${sessionSeller.seller_id}` : `catalog-patch:${clientIp(request)}`, CATALOG_PATCH_RATE_LIMIT_MAX);
     }
+    // #2075: moved below the rate-limit check above (and the ownership/
+    // session resolution it depends on) -- this Promise.all is up to 100
+    // real R2 bucket.head() calls, the one genuinely expensive step in this
+    // handler, and used to run before checkRateLimit ever got a chance to
+    // reject the request, so a caller already over the limit still paid
+    // the full R2 cost on every rejected call. The single-item PUT/PATCH
+    // sibling (worker/index.js's own handler for /catalog/:templateId)
+    // already rate-limits before its own assertUploadedModelExists call;
+    // this brings the batch endpoint in line with that ordering.
+    await Promise.all(templates.map((template) => assertUploadedModelExists(models, template.modelUrl)));
     const conflictClause = request.method === 'PUT' ? `
       ON CONFLICT(template_id) DO UPDATE SET
         name = excluded.name, category = excluded.category, subcategory = excluded.subcategory,
