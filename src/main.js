@@ -12710,6 +12710,7 @@ let shopLastPresenceReportAt = 0;
 let shopLastReportedPosition = null; // { x, y, z }, whatever was last actually sent
 let shopLastReportedHeading = null;
 let shopLastReportedLandletId; // undefined until the first report ever goes out — see reportOwnPresenceIfNeeded
+let shopLastReportedFlying; // #2043: same undefined-until-first-report shape as shopLastReportedLandletId above
 // #1100: the other-avatars poll loop's own throttle state and live set —
 // see pollNearbyPresenceIfNeeded/updateOtherShopAvatars. builderId -> {
 // group, fromX/Y/Z/Heading (previous poll's position, lerp start),
@@ -14681,11 +14682,16 @@ function reportOwnPresenceIfNeeded(now) {
   const { x, y, z } = shopAvatarPosition;
   const heading = shopAvatarFacing;
   const landletId = shopCurrentLandletEntry?.record.landletId ?? null;
+  // #2043: docs/SPEC.md's "Flying avatars are invisible to other users" --
+  // airborne covers takeoff/flying/landing, same boolean updateShopMovement
+  // already derives from this state for its own speed-multiplier logic.
+  const flying = shopFlightState !== 'grounded';
   const moved = !shopLastReportedPosition || Math.hypot(
     x - shopLastReportedPosition.x, y - shopLastReportedPosition.y, z - shopLastReportedPosition.z,
   ) >= SHOP_PRESENCE_MOVE_THRESHOLD_M;
   const turned = shopLastReportedHeading === null
     || Math.abs(shortestAngleDelta(shopLastReportedHeading, heading)) >= SHOP_PRESENCE_HEADING_THRESHOLD_RAD;
+  const flyingChanged = shopLastReportedFlying === undefined || flying !== shopLastReportedFlying;
   // shopLandlets is only populated once enterShopMode's own fetchAllLandlets
   // resolves, which races against this function's very first eligible
   // tick -- a player standing perfectly still (the common case right after
@@ -14698,12 +14704,13 @@ function reportOwnPresenceIfNeeded(now) {
   // once the real landlet resolves, even with zero movement in between.
   const landletChanged = shopLastReportedLandletId === undefined || landletId !== shopLastReportedLandletId;
   const heartbeatDue = sinceLastReport >= SHOP_PRESENCE_HEARTBEAT_INTERVAL_MS;
-  if (!moved && !turned && !landletChanged && !heartbeatDue) return;
+  if (!moved && !turned && !landletChanged && !flyingChanged && !heartbeatDue) return;
   shopLastPresenceReportAt = now;
   shopLastReportedPosition = { x, y, z };
   shopLastReportedHeading = heading;
   shopLastReportedLandletId = landletId;
-  reportPresence({ x, y, z, heading, landletId }).catch(() => {});
+  shopLastReportedFlying = flying;
+  reportPresence({ x, y, z, heading, landletId, flying }).catch(() => {});
 }
 
 // Shared by the report-throttle turn-check above and the other-avatars

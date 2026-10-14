@@ -1525,11 +1525,11 @@ export async function deleteSavedLayout(savedLayoutId) {
 // own live position. Server-side rate-limited — #1100's own client loop is
 // what keeps calls to this infrequent in practice, this is just the plain
 // request.
-export async function reportPresence({ x, y, z, heading, landletId }) {
+export async function reportPresence({ x, y, z, heading, landletId, flying }) {
   const { presence } = await requestJson('/presence', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ x, y, z, heading, landletId }),
+    body: JSON.stringify({ x, y, z, heading, landletId, flying }),
   });
   return presence;
 }
