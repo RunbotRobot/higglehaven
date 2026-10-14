@@ -1431,6 +1431,41 @@ describe('Community signs', () => {
     expect(listed.body.posts).toEqual([]);
   });
 
+  // #781: an admin can remove any sign post outright, regardless of who
+  // posted it or who owns the hosting landlet -- same reasoning and shape
+  // as #1712's product-review admin override.
+  it('lets an admin delete any sign post outright, even when neither the author nor the hosting landlet owner is involved', async () => {
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-admin-override-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 5, y: 7, isCommunitySign: true,
+      }),
+    }));
+    const posted = await api('/instances/sign-admin-override-instance/posts', signsShopper.session({
+      method: 'POST', body: JSON.stringify({ text: 'Abusive/policy-violating text goes here.' }),
+    }));
+    expect(posted.response.status).toBe(201);
+    const postId = posted.body.post.postId;
+
+    const deleted = await api(`/instances/sign-admin-override-instance/posts/${postId}`, adminSession({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true });
+
+    const listed = await api('/instances/sign-admin-override-instance/posts');
+    expect(listed.body.posts).toEqual([]);
+
+    const adminUserId = (await api('/auth/me', adminSession())).body.user.userId;
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('delete_sign_post_override', postId).first();
+    expect(logRow).not.toBeNull();
+    expect(logRow.admin_user_id).toBe(adminUserId);
+    expect(logRow.target_type).toBe('sign_post');
+  });
+
   // #1830: the new PATCH branch -- author-only, no moderation equivalent.
   it('lets a post\'s own author edit it, and rejects anyone else', async () => {
     const otherAccount = await signupBuilder('sign-edit-other-account');
@@ -2132,6 +2167,41 @@ describe('Community calendar', () => {
 
     const deleteMissing = await api(`/instances/calendar-with-events/events/${posted.body.event.eventId}`, calendarBuilder.session({ method: 'DELETE' }));
     expect(deleteMissing.response.status).toBe(404);
+  });
+
+  // #781: an admin can remove any calendar event outright, regardless of who
+  // owns the hosting landlet -- same reasoning and shape as the sign-posts
+  // admin override above.
+  it('lets an admin delete any calendar event outright, even when the hosting landlet owner is uninvolved', async () => {
+    await api('/instances', calendarBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'calendar-admin-override-instance',
+        landletId: calendarLandlet,
+        templateId: 'placeholder-tree',
+        x: 9, y: 9, isCommunityCalendar: true,
+      }),
+    }));
+    const posted = await api('/instances/calendar-admin-override-instance/events', calendarBuilder.session({
+      method: 'POST', body: JSON.stringify({ text: 'Abusive/policy-violating text goes here.' }),
+    }));
+    expect(posted.response.status).toBe(201);
+    const eventId = posted.body.event.eventId;
+
+    const deleted = await api(`/instances/calendar-admin-override-instance/events/${eventId}`, adminSession({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true });
+
+    const listed = await api('/instances/calendar-admin-override-instance/events');
+    expect(listed.body.events).toEqual([]);
+
+    const adminUserId = (await api('/auth/me', adminSession())).body.user.userId;
+    const logRow = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('delete_calendar_event_override', eventId).first();
+    expect(logRow).not.toBeNull();
+    expect(logRow.admin_user_id).toBe(adminUserId);
+    expect(logRow.target_type).toBe('calendar_event');
   });
 
   // #1716: a retried POST (a dropped response, not a double-click) used to

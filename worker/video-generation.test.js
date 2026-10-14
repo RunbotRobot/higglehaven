@@ -138,6 +138,28 @@ async function postJobCreate(form, { headers } = {}) {
   return SELF.fetch('https://higglehaven.test/api/video-generation-jobs', { method: 'POST', body: form, headers });
 }
 
+async function videoGenerationCredits(builderId) {
+  const row = await env.DB.prepare('SELECT video_generation_credits FROM builders WHERE builder_id = ?').bind(builderId).first();
+  return row.video_generation_credits;
+}
+
+// #1993: every test in this file below predates the credit gate
+// (`handleVideoGenerationJobCreate` now rejects with 402 at 0 credits,
+// see worker/index.js) and expects job creation to just work -- granting
+// a generous flat balance up front here, rather than tuning each test's
+// own exact credit need individually, keeps every existing scenario
+// (including the 10-attempt rate-limit test and the 15-repeat dedup
+// test, neither of which is about credits at all) passing unchanged.
+// The credit gate's own behavior (402 at zero, spend-one-per-create,
+// refund-on-lost-race, refund-on-never-billed-failure, no-refund-once-
+// billed) gets its own dedicated coverage further down instead.
+async function signupBuilderWithCredits(label, credits = 20) {
+  const builder = await signupBuilder(label);
+  await env.DB.prepare('UPDATE builders SET video_generation_credits = ? WHERE builder_id = ?')
+    .bind(credits, builder.builderId).run();
+  return builder;
+}
+
 async function signTripoPayload(timestamp, rawBody) {
   const key = await crypto.subtle.importKey(
     'raw', new TextEncoder().encode(env.TRIPO_WEBHOOK_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
@@ -165,7 +187,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   });
 
   it('rejects a missing front view before checking configuration or rate limits', async () => {
-    const builder = await signupBuilder('video-gen-missing-front');
+    const builder = await signupBuilderWithCredits('video-gen-missing-front');
     const rejected = await postJobCreate(
       jobCreateForm({ front: null, left: frameFile(), back: frameFile() }),
       { headers: { cookie: `hh_session=${builder.sessionToken}` } },
@@ -174,7 +196,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   });
 
   it('rejects fewer than 2 views', async () => {
-    const builder = await signupBuilder('video-gen-too-few-views');
+    const builder = await signupBuilderWithCredits('video-gen-too-few-views');
     const rejected = await postJobCreate(
       jobCreateForm({ front: frameFile(), left: null }),
       { headers: { cookie: `hh_session=${builder.sessionToken}` } },
@@ -183,7 +205,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   });
 
   it('rejects an oversized view image', async () => {
-    const builder = await signupBuilder('video-gen-oversized');
+    const builder = await signupBuilderWithCredits('video-gen-oversized');
     const rejected = await postJobCreate(
       jobCreateForm({ front: frameFile('front.png', 'image/png', 11 * 1024 * 1024) }),
       { headers: { cookie: `hh_session=${builder.sessionToken}` } },
@@ -192,7 +214,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   });
 
   it('rejects a view image with an unsupported content type', async () => {
-    const builder = await signupBuilder('video-gen-bad-type');
+    const builder = await signupBuilderWithCredits('video-gen-bad-type');
     const rejected = await postJobCreate(
       jobCreateForm({ front: frameFile('front.gif', 'image/gif') }),
       { headers: { cookie: `hh_session=${builder.sessionToken}` } },
@@ -201,7 +223,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   });
 
   it('rejects a view image whose bytes do not match its claimed content type (#1713)', async () => {
-    const builder = await signupBuilder('video-gen-fake-signature');
+    const builder = await signupBuilderWithCredits('video-gen-fake-signature');
     const fakeImage = new File([new Uint8Array(16)], 'front.png', { type: 'image/png' });
     const rejected = await postJobCreate(
       jobCreateForm({ front: fakeImage }),
@@ -211,7 +233,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   });
 
   it('accepts a real JPEG and a real WebP view image', async () => {
-    const builder = await signupBuilder('video-gen-jpeg-webp');
+    const builder = await signupBuilderWithCredits('video-gen-jpeg-webp');
     const created = await postJobCreate(
       jobCreateForm({
         front: frameFile('front.jpg', 'image/jpeg'),
@@ -223,7 +245,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   });
 
   it('kicks off a real job and the status endpoint reconciles it to complete', async () => {
-    const builder = await signupBuilder('video-gen-happy-path');
+    const builder = await signupBuilderWithCredits('video-gen-happy-path');
     const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
     expect(created.status).toBe(201);
     const createdBody = await created.json();
@@ -243,7 +265,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   });
 
   it('records a failed job when Tripo reports a terminal failure status', async () => {
-    const builder = await signupBuilder('video-gen-failure-path');
+    const builder = await signupBuilderWithCredits('video-gen-failure-path');
     const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
     const createdBody = await created.json();
 
@@ -255,7 +277,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   });
 
   it('#1673: fails the job immediately (not stuck processing) when Tripo reports success but the model download fails', async () => {
-    const builder = await signupBuilder('video-gen-broken-download');
+    const builder = await signupBuilderWithCredits('video-gen-broken-download');
     const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
     const createdBody = await created.json();
 
@@ -279,7 +301,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   // every direct upload is held to. Mirrors #1673's broken-download test
   // above, just for the oversized-output case.
   it('#1755: fails the job when the generated model exceeds MAX_MODEL_BYTES', async () => {
-    const builder = await signupBuilder('video-gen-oversized-model');
+    const builder = await signupBuilderWithCredits('video-gen-oversized-model');
     const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
     const createdBody = await created.json();
 
@@ -300,7 +322,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   });
 
   it('leaves a job processing on a non-terminal status like "running"', async () => {
-    const builder = await signupBuilder('video-gen-running');
+    const builder = await signupBuilderWithCredits('video-gen-running');
     const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
     const createdBody = await created.json();
 
@@ -312,7 +334,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   });
 
   it('hands back the already-in-flight job instead of starting a second one', async () => {
-    const builder = await signupBuilder('video-gen-dedup');
+    const builder = await signupBuilderWithCredits('video-gen-dedup');
     const first = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
     const firstBody = await first.json();
 
@@ -332,7 +354,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   // budget on pure no-ops, leaving no headroom for a genuinely new job
   // once the in-flight one finished.
   it('does not charge the real-cost rate limit on a dedup return', async () => {
-    const builder = await signupBuilder('video-gen-dedup-no-charge');
+    const builder = await signupBuilderWithCredits('video-gen-dedup-no-charge');
     const first = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
     expect(first.status).toBe(201);
     const firstBody = await first.json();
@@ -349,7 +371,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   });
 
   it('rate-limits repeated job-creation attempts from the same builder', async () => {
-    const builder = await signupBuilder('video-gen-rate-limit');
+    const builder = await signupBuilderWithCredits('video-gen-rate-limit');
     // Each attempt must land as a distinct job (not the dedup path above),
     // so each gets reconciled to a terminal state before the next fires.
     for (let i = 0; i < 10; i++) {
@@ -363,7 +385,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   });
 
   it('returns 503 once past validation when Tripo is not configured', async () => {
-    const builder = await signupBuilder('video-gen-503');
+    const builder = await signupBuilderWithCredits('video-gen-503');
     env.TRIPO_API_KEY = undefined;
     try {
       const rejected = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
@@ -382,7 +404,7 @@ describe('Video-to-3D job creation (#1619)', () => {
   // durably before the reservation is deleted, rather than silently
   // discarded.
   it('#1886: logs durably when the billed call succeeds but persisting its task_id then fails', async () => {
-    const builder = await signupBuilder('video-gen-task-id-lost');
+    const builder = await signupBuilderWithCredits('video-gen-task-id-lost', 3);
 
     const originalPrepare = env.DB.prepare.bind(env.DB);
     env.DB.prepare = (sql) => {
@@ -424,12 +446,89 @@ describe('Video-to-3D job creation (#1619)', () => {
     expect(detail.builderId).toBe(builder.builderId);
     expect(detail.providerTaskId).toMatch(/^task-/);
     expect(detail.error).toMatch(/simulated transient D1 failure/);
+
+    // #1993: the billed call did go out -- the credit was legitimately
+    // spent regardless of what happened after, so it's NOT refunded here
+    // (unlike an ordinary never-billed failure, covered separately below).
+    expect(await videoGenerationCredits(builder.builderId)).toBe(2);
+  });
+});
+
+describe('video_generation_credits (#1993)', () => {
+  it('rejects with the honest-budget message and spends nothing when the builder has no credits', async () => {
+    const builder = await signupBuilder('video-gen-no-credits');
+    expect(await videoGenerationCredits(builder.builderId)).toBe(0);
+
+    const rejected = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    expect(rejected.status).toBe(402);
+    const body = await rejected.json();
+    expect(body.error).toMatch(/bootstrapped from very little budget/);
+    expect(body.error).toMatch(/Sketchfab/);
+
+    expect(await videoGenerationCredits(builder.builderId)).toBe(0);
+    const rows = await env.DB.prepare('SELECT * FROM video_generation_jobs WHERE builder_id = ?').bind(builder.builderId).all();
+    expect(rows.results).toHaveLength(0);
+  });
+
+  it('spends exactly one credit per successful job creation', async () => {
+    const builder = await signupBuilderWithCredits('video-gen-credit-spend', 3);
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    expect(created.status).toBe(201);
+    expect(await videoGenerationCredits(builder.builderId)).toBe(2);
+  });
+
+  // Two concurrent requests from the same builder can each pass the
+  // in-flight pre-check before either reserves a row (the same genuine
+  // race reserveVideoGenerationJob's own "reserve-race" test below
+  // exercises directly) -- both spend a credit, but only one actually
+  // starts a job. The loser's spend must be refunded, or a builder could
+  // lose a real credit to pure bad luck with no job to show for it.
+  it('refunds the credit when losing the in-flight reservation race', async () => {
+    const builder = await signupBuilderWithCredits('video-gen-credit-race', 2);
+    const [first, second] = await Promise.all([
+      postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } }),
+      postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } }),
+    ]);
+    const statuses = [first.status, second.status].sort();
+    expect(statuses).toEqual([200, 201]);
+
+    const rows = await env.DB.prepare('SELECT * FROM video_generation_jobs WHERE builder_id = ?').bind(builder.builderId).all();
+    expect(rows.results).toHaveLength(1);
+    // Both spent a credit (2 -> 0), then the loser's was refunded (0 -> 1)
+    // -- net one credit spent for the one real job that actually started.
+    expect(await videoGenerationCredits(builder.builderId)).toBe(1);
+  });
+
+  it('refunds the credit on an ordinary never-billed failure (the upload call itself fails)', async () => {
+    const builder = await signupBuilderWithCredits('video-gen-credit-refund-never-billed', 3);
+
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://openapi.tripo3d.com/v3/files') {
+        return new Response(JSON.stringify({ code: 1, message: 'simulated upload failure' }), { status: 500 });
+      }
+      return originalFetch(input, init);
+    };
+    let created;
+    try {
+      created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+    expect(created.status).toBeGreaterThanOrEqual(500);
+
+    const rows = await env.DB.prepare('SELECT * FROM video_generation_jobs WHERE builder_id = ?').bind(builder.builderId).all();
+    expect(rows.results).toHaveLength(0);
+    // The billed call never actually went out -- the credit spent above
+    // is refunded, net zero change.
+    expect(await videoGenerationCredits(builder.builderId)).toBe(3);
   });
 });
 
 describe('reserveVideoGenerationJob (#1619)', () => {
   it('reserves a pending row for the first caller', async () => {
-    const builder = await signupBuilder('video-gen-reserve-first');
+    const builder = await signupBuilderWithCredits('video-gen-reserve-first');
     const result = await reserveVideoGenerationJob(env.DB, builder.builderId);
     expect(result.reservationId).not.toBeNull();
     expect(result.existing).toBeNull();
@@ -441,7 +540,7 @@ describe('reserveVideoGenerationJob (#1619)', () => {
   });
 
   it('hands the existing reservation back to a concurrent second caller instead of creating a duplicate', async () => {
-    const builder = await signupBuilder('video-gen-reserve-race');
+    const builder = await signupBuilderWithCredits('video-gen-reserve-race');
     const [first, second] = await Promise.all([
       reserveVideoGenerationJob(env.DB, builder.builderId),
       reserveVideoGenerationJob(env.DB, builder.builderId),
@@ -457,7 +556,7 @@ describe('reserveVideoGenerationJob (#1619)', () => {
   });
 
   it('allows a fresh reservation once the previous job is processed', async () => {
-    const builder = await signupBuilder('video-gen-reserve-reprocessed');
+    const builder = await signupBuilderWithCredits('video-gen-reserve-reprocessed');
     const first = await reserveVideoGenerationJob(env.DB, builder.builderId);
     await env.DB.prepare(`
       UPDATE video_generation_jobs SET status = 'failed', processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE job_id = ?
@@ -478,7 +577,7 @@ describe('reserveVideoGenerationJob (#1619)', () => {
   // this blocked the affected builder from ever starting a new video-to-3D
   // job again (and, per #1702, from self-deleting their own account).
   it('clears a stale pending reservation that never progressed past VIDEO_GENERATION_RESERVATION_TIMEOUT_MS, and allows a fresh one', async () => {
-    const builder = await signupBuilder('video-gen-reserve-stale-placeholder');
+    const builder = await signupBuilderWithCredits('video-gen-reserve-stale-placeholder');
 
     const first = await reserveVideoGenerationJob(env.DB, builder.builderId);
     await env.DB.prepare(`
@@ -510,7 +609,7 @@ describe('reserveVideoGenerationJob (#1619)', () => {
   });
 
   it('does not clear a still-fresh pending reservation -- only one that is actually past the timeout', async () => {
-    const builder = await signupBuilder('video-gen-reserve-fresh-placeholder');
+    const builder = await signupBuilderWithCredits('video-gen-reserve-fresh-placeholder');
 
     const first = await reserveVideoGenerationJob(env.DB, builder.builderId);
     const second = await reserveVideoGenerationJob(env.DB, builder.builderId);
@@ -533,14 +632,14 @@ describe('Video-to-3D job status polling (#1619)', () => {
   });
 
   it('returns 404 for a job that does not exist', async () => {
-    const builder = await signupBuilder('video-gen-status-404');
+    const builder = await signupBuilderWithCredits('video-gen-status-404');
     const rejected = await api('/video-generation-jobs/job-does-not-exist', builder.session());
     expect(rejected.response.status).toBe(404);
   });
 
   it('returns 403 for a job owned by a different builder', async () => {
-    const owner = await signupBuilder('video-gen-status-owner');
-    const intruder = await signupBuilder('video-gen-status-intruder');
+    const owner = await signupBuilderWithCredits('video-gen-status-owner');
+    const intruder = await signupBuilderWithCredits('video-gen-status-intruder');
     const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${owner.sessionToken}` } });
     const { jobId } = await created.json();
 
@@ -553,7 +652,7 @@ describe('Video-to-3D job status polling (#1619)', () => {
   // reconcileVideoGenerationJob (not after), so the limiter still fires
   // regardless of configuration.
   it('rate-limits repeated polls of a still-processing job', async () => {
-    const builder = await signupBuilder('video-gen-status-rate-limit');
+    const builder = await signupBuilderWithCredits('video-gen-status-rate-limit');
     const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
     const { jobId } = await created.json();
     nextTaskStatus = 'running';
@@ -590,7 +689,7 @@ describe('Video-to-3D webhook (#1619)', () => {
   // test.js's own "too old" case) -- a correctly-signed-but-stale delivery
   // must still be rejected, not just a wrong/missing signature.
   it('rejects a webhook whose signature is correctly signed but too old', async () => {
-    const builder = await signupBuilder('video-gen-webhook-stale-timestamp');
+    const builder = await signupBuilderWithCredits('video-gen-webhook-stale-timestamp');
     const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
     const { jobId } = await created.json();
     const row = await env.DB.prepare('SELECT provider_task_id FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
@@ -615,7 +714,7 @@ describe('Video-to-3D webhook (#1619)', () => {
   });
 
   it('applies a task.completed delivery by downloading and storing the model', async () => {
-    const builder = await signupBuilder('video-gen-webhook-completed');
+    const builder = await signupBuilderWithCredits('video-gen-webhook-completed');
     const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
     const { jobId } = await created.json();
     const row = await env.DB.prepare('SELECT provider_task_id FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
@@ -640,7 +739,7 @@ describe('Video-to-3D webhook (#1619)', () => {
   // generation completing. Same shape as the #774 image_url regression test
   // above, just for this second writer into the same bucket/scheme.
   it('treats a video-generation job\'s model_url as still referenced, not an orphan to sweep', async () => {
-    const builder = await signupBuilder('video-gen-cleanup-still-referenced');
+    const builder = await signupBuilderWithCredits('video-gen-cleanup-still-referenced');
     const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
     const { jobId } = await created.json();
     const row = await env.DB.prepare('SELECT provider_task_id FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
@@ -658,7 +757,7 @@ describe('Video-to-3D webhook (#1619)', () => {
   });
 
   it('applies a task.failed delivery', async () => {
-    const builder = await signupBuilder('video-gen-webhook-failed');
+    const builder = await signupBuilderWithCredits('video-gen-webhook-failed');
     const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
     const { jobId } = await created.json();
     const row = await env.DB.prepare('SELECT provider_task_id FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
@@ -677,7 +776,7 @@ describe('Video-to-3D webhook (#1619)', () => {
   // Guards against a duplicate webhook delivery (Tripo, like most webhook
   // senders, retries on a non-2xx response or timeout) double-applying.
   it('ignores a repeat delivery for an already-processed job', async () => {
-    const builder = await signupBuilder('video-gen-webhook-duplicate');
+    const builder = await signupBuilderWithCredits('video-gen-webhook-duplicate');
     const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
     const { jobId } = await created.json();
     const row = await env.DB.prepare('SELECT provider_task_id FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
@@ -721,7 +820,7 @@ describe('Video-to-3D webhook (#1619)', () => {
 // migration's own sibling migrations (0091/0093) touched.
 describe('video_generation_jobs cascades on builder deletion (#1645)', () => {
   it('cascades a deleted builder into its own video_generation_jobs', async () => {
-    const builder = await signupBuilder('video-gen-builder-delete-cascade');
+    const builder = await signupBuilderWithCredits('video-gen-builder-delete-cascade');
     const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
     const { jobId } = await created.json();
 

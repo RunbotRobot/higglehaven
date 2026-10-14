@@ -2926,7 +2926,8 @@
       }
       #auth-resend-verify-btn,
       #auth-logout-btn,
-      #auth-change-password-btn {
+      #auth-change-password-btn,
+      #auth-export-data-btn {
         padding: 8px 16px;
         border-radius: 999px;
         border: none;
@@ -4514,6 +4515,13 @@
             <button type="submit">Change Password</button>
             <button type="button" id="auth-change-password-cancel-btn" class="auth-link-btn">Cancel</button>
           </form>
+
+          <!-- #1987 (sub-issue of #1983): GDPR/CCPA "right to access" --
+               triggers a browser download of the GET /auth/export-data
+               JSON bundle. Read-only and immediate, unlike Change
+               Password/Delete Account below, so no collapsed
+               confirmation form of its own. -->
+          <button id="auth-export-data-btn" type="button">Download My Data</button>
 
           <!-- #1146/#1149: real account deletion, distinct from the
                builder/seller "reset" actions under Settings → Build/Sell
