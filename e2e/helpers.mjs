@@ -184,6 +184,27 @@ export async function grantLandCapHeadroomAsAdmin(builderId, amountCents = 10000
   }
 }
 
+// POST /api/credit-orbs is admin-gated the same "escape hatch" reasoning as
+// grantLandCapHeadroomAsAdmin above — the real spawn cadence
+// (spawnCreditOrbIfDue, ~70min apart by default) is far too slow for a
+// test that only cares about what happens once an orb exists. x/y are
+// landlet-local (matching placed_instances' own position shape, per
+// docs/API.md's "Credit orbs"), not world coordinates — add the landlet's
+// own center.x/y to get the world position window.__testTeleportShopAvatar
+// expects, the same conversion e2e/community-sign-edit-char-limit-guard.test.mjs
+// already does for a sign instance's own x/y.
+export async function seedCreditOrbAsAdmin(landletId, { x = 0, y = 0 } = {}) {
+  const cookie = await ensureAdminSession();
+  const seeded = await adminApi('/credit-orbs', cookie, {
+    method: 'POST',
+    body: JSON.stringify({ landletId, x, y }),
+  });
+  if (seeded.response.status !== 201) {
+    throw new Error(`seedCreditOrbAsAdmin: seed failed — ${seeded.body.error}`);
+  }
+  return seeded.body.orbId;
+}
+
 // #629: auction bidding now requires the bidder to actually hold enough
 // higgles_balance_cents to cover their bid — independent of land cap (see
 // grantLandCapHeadroomAsAdmin just above), so a suite whose real point is
