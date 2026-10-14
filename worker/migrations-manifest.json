@@ -131,5 +131,6 @@
   "0131_product_flags_and_strike_count.sql",
   "0132_self_dealing_flags.sql",
   "0133_catalog_template_stock_quantity.sql",
-  "0134_placed_instance_backups.sql"
+  "0134_account_suspensions.sql",
+  "0135_placed_instance_backups.sql"
 ]
