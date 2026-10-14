@@ -1292,6 +1292,22 @@ export async function deleteProductReview(templateId, reviewId) {
   await requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews/${encodeURIComponent(reviewId)}`, { method: 'DELETE' });
 }
 
+// #1975: author-only -- PATCH 403s with "Not your review" for anyone else's
+// review. Only sends the fields the caller actually passed, so a caller
+// fixing just the rating doesn't have to resend the existing text (and vice
+// versa) -- the server keeps an omitted field as-is.
+export async function editProductReview(templateId, reviewId, { rating, text } = {}) {
+  const body = {};
+  if (rating !== undefined) body.rating = rating;
+  if (text !== undefined) body.text = text;
+  const { review } = await requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews/${encodeURIComponent(reviewId)}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return review;
+}
+
 // Seller feedback (issue #1096) — distinct from product reviews above:
 // rates a specific seller's own service for one specific purchase from
 // them, rather than the product itself. GET's response carries

@@ -4754,36 +4754,71 @@ seller is the one with an actual stake in the product's reputation, and
 curated space) there's no reason a review would belong to a builder who
 merely bought/placed the item.
 
-### `GET /api/catalog/:templateId/reviews`, `POST .../reviews`, `DELETE .../reviews/:reviewId`
+### `GET /api/catalog/:templateId/reviews`, `POST .../reviews`, `PATCH .../reviews/:reviewId`, `DELETE .../reviews/:reviewId`
 
 Nested under the catalog template, same shape as sign posts/calendar
 events, with one addition: `rating`, a required integer from 1 to 5 (`400`
 outside that range or non-integer). `text` is genuinely optional here — a
 bare star rating is already a complete, useful review — capped at 280
-characters when present. `POST`/`DELETE` return `404` for a template that
-doesn't exist. `POST` requires a session and an eligible purchase (see the
-purchase-gating paragraph above) — `401` with no session, `400` with no
-eligible purchase, `409` if that purchase has already been reviewed.
-`DELETE`
-(moderation) requires a session (`401` without one) and is gated to the
-template's own seller once it has one — `403` for anyone else — the same
-`if (existing.seller_id)` ownership check the catalog template's own
-PATCH/DELETE handler uses; a template with no seller stays unrestricted,
-since there's no owner to check against. An admin session (`is_admin`)
-can delete any review outright regardless of the template's own seller
-(#1712, owner-confirmed) — checked first, before the ownership branch —
-for harassment, doxxing, or other policy-violating text the seller is
-unreachable or unwilling to act on; logged to `admin_action_log`
-(`delete_review_override`, target type `product_review`), the same
-accountability convention as the purchase refund/mark-shipped admin
-overrides.
+characters when present. `POST`/`PATCH`/`DELETE` return `404` for a
+template or review that doesn't exist. `POST` requires a session and an
+eligible purchase (see the purchase-gating paragraph above) — `401` with
+no session, `400` with no eligible purchase, `409` if that purchase has
+already been reviewed.
 
-Both `POST` and `DELETE` are rate-limited (20 per 15-minute window, `429`
-past that) — `POST` per builder (`product-review-create:<builderId>`),
-`DELETE` per seller when the template has one, per admin user when an
-admin is acting, or per client IP otherwise
-(`product-review-delete:<sellerId|adminUserId|IP>`), same bucket shape as
-other per-account/per-IP mutation limits in this file.
+**`PATCH .../reviews/:reviewId` (#1975, owner decision — author self-edit,
+mirroring sign posts' own `PATCH`, #1830):** author-only, no moderation
+equivalent — `403` ("Not your review") for anyone but the review's own
+`user_id` (`migrations/0130`, populated from the posting session the same
+way `sign_posts.user_id` is), including `403` for a pre-#1975 review with
+`user_id IS NULL` (nobody on record to own it). Accepts `rating` and/or
+`text`; an omitted field keeps its existing value, an explicitly present
+`text` (including an empty string) clears it — the same "distinguish
+omitted from explicitly cleared" contract `PATCH /api/bundles/:id` already
+uses, just resolved in application code here since `text`'s own
+null-vs-empty-string rule doesn't map onto a plain SQL `COALESCE`
+directly. Rate-limited like `POST` (`product-review-edit:<userId>`).
+
+`DELETE`
+is gated, in order: (1) an admin session (`is_admin`) can delete any
+review outright regardless of the template's own seller (#1712,
+owner-confirmed) — for harassment, doxxing, or other policy-violating
+text the seller is unreachable or unwilling to act on; logged to
+`admin_action_log` (`delete_review_override`, target type
+`product_review`), the same accountability convention as the purchase
+refund/mark-shipped admin overrides; (2) **the review's own author
+(#1975)** — the same real-ownership direct-delete path sign posts already
+have, alongside this endpoint's pre-existing moderation path, not
+replacing it; (3) the template's own seller once it has one — `403` for
+anyone else — the same `if (existing.seller_id)` ownership check the
+catalog template's own `PATCH`/`DELETE` handler uses; a template with no
+seller stays unrestricted, since there's no owner to check against.
+
+Both `POST`/`PATCH`/`DELETE` are rate-limited (20 per 15-minute window,
+`429` past that) — `POST`/`PATCH` per builder/user
+(`product-review-create:<builderId>`/`product-review-edit:<userId>`),
+`DELETE` per user when the author is deleting their own review, per seller
+when the template has one, per admin user when an admin is acting, or per
+client IP otherwise
+(`product-review-delete:<userId|sellerId|adminUserId|IP>`), same bucket
+shape as other per-account/per-IP mutation limits in this file.
+
+**Retention for disputes (#1975, owner decision): "I want all users to be
+able to modify or delete any of their previous posts, comments, or
+feedback. Maybe we should keep a record of the original content internally
+in case of disputes."** Every author-initiated `PATCH`/`DELETE` above
+snapshots the review's pre-change row into `user_content_edit_history`
+(`migrations/0129`) first — a single table shared across every content
+type this same self-edit/delete pattern is extended to (not a bespoke
+history table per type), keyed by `(source_table, source_id)` with the
+full row JSON-serialized as `snapshot_json`, the mutation's own `action`
+(`'edit'`/`'delete'`), and `actor_user_id`. Nothing in this app currently
+reads this table back through any API — it exists purely as an internal
+record the owner can query directly if a dispute ever needs it, the same
+posture `admin_action_log` already has for admin actions. Moderation
+deletes (admin override, seller) do **not** write to this table — the
+owner's own framing was specifically about a user's edit/delete of *their
+own* entry, not every removal of that content.
 
 `POST` also notifies the template's own seller (#1043) — best-effort,
 fired after the insert succeeds, same "informational, never worth failing
@@ -4805,11 +4840,12 @@ POST /api/catalog/:templateId/reviews
 needs to re-derive it from the list itself:
 
 ```json
-{ "reviews": [ { "reviewId": "review-...", "templateId": "...", "authorLabel": "...", "rating": 5, "text": "Lovely product!", "purchaseId": "purchase-...", "createdAt": "..." } ], "averageRating": 4, "count": 2 }
+{ "reviews": [ { "reviewId": "review-...", "templateId": "...", "authorLabel": "...", "rating": 5, "text": "Lovely product!", "purchaseId": "purchase-...", "userId": "user-...", "createdAt": "..." } ], "averageRating": 4, "count": 2 }
 ```
 
 `purchaseId` is `null` for a review created before `migrations/0100` (the
-old label-matched design above).
+old label-matched design above). `userId` (#1975) is likewise `null` for a
+review created before `migrations/0130`.
 
 `averageRating` is `null` when there are no reviews yet (never `0`, which
 would misleadingly read as "rated, and rated at the bottom"). `reviews`

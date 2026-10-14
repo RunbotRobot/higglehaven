@@ -2332,6 +2332,11 @@ const PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX = 20;
 // rate limits (e.g. FRIENDSHIP_MUTATE_RATE_LIMIT_MAX).
 const PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX = 20;
 
+// #1975: same missing-rate-limit gap this file's other owner-gated CRUD
+// mutations already closed (SIGN_POST_EDIT_RATE_LIMIT_MAX, #1830), for the
+// new author-only edit branch below.
+const PRODUCT_REVIEW_EDIT_RATE_LIMIT_MAX = 20;
+
 async function handleProductReviews(request, db, route) {
   const templateId = route[1];
 
@@ -2414,16 +2419,23 @@ async function handleProductReviews(request, db, route) {
     // already does. `changes === 0` means one of the two guards blocked
     // the insert; re-reading disambiguates which for a clearer error.
     const reviewId = `review-${crypto.randomUUID()}`;
+    // #1975: records who actually wrote this review (sessionBuilder.user_id),
+    // the same sign_posts.user_id pattern (#1830/migrations/0125) — lets the
+    // PATCH/DELETE branches below check real ownership instead of having no
+    // identity to check at all.
     const result = await db.prepare(`
-      INSERT INTO product_reviews (review_id, template_id, author_label, rating, text, purchase_id)
-      SELECT ?, ?, ?, ?, ?, ?
+      INSERT INTO product_reviews (review_id, template_id, author_label, rating, text, purchase_id, user_id)
+      SELECT ?, ?, ?, ?, ?, ?, ?
       WHERE NOT EXISTS (
         SELECT 1 FROM product_reviews WHERE purchase_id = ?
       )
       AND EXISTS (
         SELECT 1 FROM purchases WHERE purchase_id = ? AND refunded_at IS NULL
       )
-    `).bind(reviewId, templateId, authorLabel, rating, text, purchase.purchase_id, purchase.purchase_id, purchase.purchase_id).run();
+    `).bind(
+      reviewId, templateId, authorLabel, rating, text, purchase.purchase_id, sessionBuilder.user_id,
+      purchase.purchase_id, purchase.purchase_id,
+    ).run();
     if (result.meta.changes === 0) {
       const stillEligible = await db.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?')
         .bind(purchase.purchase_id).first();
@@ -2455,6 +2467,54 @@ async function handleProductReviews(request, db, route) {
     return json({ review: reviewFromRow(row) }, 201);
   }
 
+  if (request.method === 'PATCH' && route.length === 4) {
+    const reviewId = route[3];
+    const existing = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?').bind(reviewId, templateId).first();
+    if (!existing) return json({ error: 'Review not found' }, 404);
+    // #1975: editing is author-only -- there's no moderation equivalent for
+    // PATCH the way DELETE has one (a seller moderating an unwanted review
+    // removes it; rewriting someone else's review under their own name
+    // isn't the same kind of action), same reasoning sign_posts' own PATCH
+    // (#1830) already settled. A pre-#1975 review with no user_id at all
+    // (user_id IS NULL) can never match here, same as DELETE's own
+    // author-path below -- there's nobody on record to own it.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    if (existing.user_id === null || existing.user_id !== sessionBuilder.user_id) {
+      throw new HttpError('Not your review', 403);
+    }
+    await checkRateLimit(db, `product-review-edit:${sessionBuilder.user_id}`, PRODUCT_REVIEW_EDIT_RATE_LIMIT_MAX);
+    const input = await readJson(request);
+    let rating = existing.rating;
+    if (input.rating !== undefined) {
+      rating = Number(input.rating);
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        throw new HttpError('rating must be an integer from 1 to 5', 400);
+      }
+    }
+    // Only an explicitly-present `text` key changes it -- an omitted key
+    // keeps the review's existing text, the same "distinguish omitted from
+    // explicitly cleared" shape bundles' own PATCH (COALESCE-based) handles,
+    // just computed in JS here since text's own null-clearing rule (empty
+    // string also means "no text", matching POST's own rule above) doesn't
+    // map onto COALESCE's "null parameter means keep the old value" directly.
+    let text = existing.text;
+    if ('text' in input) {
+      text = (input.text === null || input.text === '') ? null : stringValue(input.text, 'text');
+    }
+    if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    // #1975: snapshot the pre-edit row for disputes before overwriting it.
+    await recordContentEditHistory(db, 'product_reviews', reviewId, 'edit', existing, sessionBuilder.user_id);
+    // Same "point-in-time read, real awaited gaps after it" race this file's
+    // other author-direct mutations guard against (sign_posts' own PATCH).
+    const updated = await db.prepare('UPDATE product_reviews SET rating = ?, text = ? WHERE review_id = ? AND user_id = ?')
+      .bind(rating, text, reviewId, sessionBuilder.user_id).run();
+    if (updated.meta.changes === 0) {
+      throw new HttpError('Review changed concurrently — refetch and retry', 409);
+    }
+    const row = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ?').bind(reviewId).first();
+    return json({ review: reviewFromRow(row) });
+  }
+
   if (request.method === 'DELETE' && route.length === 4) {
     const reviewId = route[3];
     const existing = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?').bind(reviewId, templateId).first();
@@ -2467,6 +2527,25 @@ async function handleProductReviews(request, db, route) {
     // that seller and shouldn't be forced through the ownership check below.
     const requester = await currentUser(request, db);
     const admin = requester && requester.is_admin ? requester : null;
+    // #1975: the review's own author can remove it directly, alongside the
+    // existing admin/seller moderation paths below -- same "either should be
+    // able to remove it" shape sign_posts' own DELETE (#1830) already
+    // settled. Checked after the admin branch (an admin override always
+    // wins) but before seller moderation, since an author removing their
+    // own review is not moderation and shouldn't need a reachable seller at
+    // all. A pre-#1975 review with no user_id (user_id IS NULL) can never
+    // match here, so it falls through to the existing paths exactly as it
+    // always has.
+    if (!admin && requester && existing.user_id !== null && existing.user_id === requester.user_id) {
+      await checkRateLimit(db, `product-review-delete:${requester.user_id}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
+      await recordContentEditHistory(db, 'product_reviews', reviewId, 'delete', existing, requester.user_id);
+      const deletedByAuthor = await db.prepare('DELETE FROM product_reviews WHERE review_id = ? AND user_id = ?')
+        .bind(reviewId, requester.user_id).run();
+      if (deletedByAuthor.meta.changes === 0) {
+        throw new HttpError('Review changed concurrently — refetch and retry', 409);
+      }
+      return json({ deleted: true });
+    }
     if (admin) {
       await checkRateLimit(db, `product-review-delete:${admin.user_id}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
     } else if (template?.seller_id && await sellerExists(db, template.seller_id)) {
@@ -2510,6 +2589,10 @@ function reviewFromRow(row) {
     // #1113: the real purchase this review is tied to. Null for a review
     // created before this column existed.
     purchaseId: row.purchase_id,
+    // #1975: the session user_id this review was actually written under —
+    // lets the frontend show its own edit/delete controls on a review the
+    // viewer wrote. Null for a review created before this column existed.
+    userId: row.user_id,
     createdAt: row.created_at,
   };
 }
@@ -15128,6 +15211,18 @@ async function readJson(request) {
 async function assertReferenceExists(db, table, column, value, field) {
   const row = await db.prepare(`SELECT 1 FROM ${table} WHERE ${column} = ?`).bind(value).first();
   if (!row) throw new HttpError(`${field} "${value}" does not exist`, 400);
+}
+
+// #1975: records a full snapshot of `row` (as it existed right before a
+// user edited/deleted their own content) into user_content_edit_history
+// (migrations/0129) — "in case of disputes," per the owner's own framing,
+// not an audit log of the action alone. Shared across every content type
+// this applies to, rather than a bespoke history table per type.
+async function recordContentEditHistory(db, sourceTable, sourceId, action, row, actorUserId) {
+  await db.prepare(`
+    INSERT INTO user_content_edit_history (history_id, source_table, source_id, action, snapshot_json, actor_user_id)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).bind(`history-${crypto.randomUUID()}`, sourceTable, sourceId, action, JSON.stringify(row), actorUserId).run();
 }
 
 // #1978: D1 caps a single query at 100 bound parameters

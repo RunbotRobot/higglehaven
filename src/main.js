@@ -104,6 +104,7 @@ import {
   triggerCalendarEvent,
   fetchProductReviews,
   createProductReview,
+  editProductReview,
   deleteProductReview,
   fetchSellerFeedback,
   createSellerFeedback,
@@ -15624,6 +15625,60 @@ async function handleShopProductReviewClick() {
   // uses, replacing this handler's own former shopperLabel() name prompt.
   const builder = await ensureBuilderIdentity();
   if (!builder) return;
+  // #1975 (owner decision): a shopper who already reviewed this product
+  // edits or removes that one review instead of being offered an unrelated
+  // second slot — mirrors the sign-post hint's own myPost pattern (#1830)
+  // exactly, using review.userId (reviewFromRow, populated server-side from
+  // the posting session) rather than a free-text author match.
+  const myReview = currentAuthUser && review.reviews.find((r) => r.userId === currentAuthUser.userId);
+  if (myReview) {
+    const stars = '★'.repeat(myReview.rating) + '☆'.repeat(5 - myReview.rating);
+    const choice = (prompt(
+      `Your review: ${stars}${myReview.text ? ` "${myReview.text}"` : ''}\n\nType "edit" to change it, or "delete" to remove it. Leave blank to cancel.`,
+      '',
+    ) || '').trim().toLowerCase();
+    if (choice === 'delete') {
+      shopProductPreviewReviewBtn.disabled = true;
+      try {
+        await deleteProductReview(review.templateId, myReview.reviewId);
+        if (!shopReviews.includes(review)) return;
+        review.reviews = review.reviews.filter((r) => r.reviewId !== myReview.reviewId);
+        rebuildReviewSprites(review);
+      } catch (err) {
+        alert(err.message || 'Could not delete this review.');
+      } finally {
+        shopProductPreviewReviewBtn.disabled = false;
+      }
+    } else if (choice === 'edit') {
+      const ratingInput = prompt('Rate this product 1-5 stars:', String(myReview.rating));
+      if (!ratingInput || !ratingInput.trim()) return;
+      const rating = Number(ratingInput.trim());
+      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+        alert('Please enter a whole number from 1 to 5.');
+        return;
+      }
+      const text = prompt('Add a comment (up to 280 characters), or leave blank:', myReview.text || '');
+      shopProductPreviewReviewBtn.disabled = true;
+      try {
+        // Cancelling (null) omits `text` entirely so the server keeps the
+        // existing value — an explicit empty string (OK clicked with the
+        // field cleared) is sent as-is, clearing it, same distinction
+        // editProductReview's own `text !== undefined` check preserves.
+        const updated = await editProductReview(review.templateId, myReview.reviewId, {
+          rating, text: text === null ? undefined : text.trim(),
+        });
+        if (!shopReviews.includes(review)) return;
+        const index = review.reviews.findIndex((r) => r.reviewId === myReview.reviewId);
+        if (index !== -1) review.reviews[index] = updated;
+        rebuildReviewSprites(review);
+      } catch (err) {
+        alert(err.message || 'Could not update this review.');
+      } finally {
+        shopProductPreviewReviewBtn.disabled = false;
+      }
+    }
+    return;
+  }
   const ratingInput = prompt('Rate this product 1-5 stars:', '5');
   if (!ratingInput || !ratingInput.trim()) return;
   const rating = Number(ratingInput.trim());

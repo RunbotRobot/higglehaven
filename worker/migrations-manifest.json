@@ -124,5 +124,7 @@
   "0124_auctions_seller_builder_id_no_cascade.sql",
   "0125_sign_posts_user_id.sql",
   "0126_catalog_template_test_model.sql",
-  "0127_video_generation_credits.sql"
+  "0127_video_generation_credits.sql",
+  "0129_user_content_edit_history.sql",
+  "0130_product_reviews_user_id.sql"
 ]

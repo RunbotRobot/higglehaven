@@ -1,0 +1,11 @@
+-- #1975 (owner decision, 2026-10-13): lets a review's own author edit or
+-- delete it directly, the same pattern migrations/0125 already added for
+-- sign_posts (#1830) -- a review already requires a real, verified
+-- session to create (handleProductReviews' own POST, #1113), so this just
+-- records who that session actually was.
+--
+-- ON DELETE SET NULL, not CASCADE: same reasoning as 0125's own comment --
+-- a user row is never hard-deleted (migrations/0102), so this only
+-- governs a pre-existing row referencing a user_id that predates this
+-- column.
+ALTER TABLE product_reviews ADD COLUMN user_id TEXT REFERENCES users(user_id) ON DELETE SET NULL;
