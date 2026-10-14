@@ -14679,8 +14679,16 @@ async function handleSellerFeedbackDelete(request, env, purchaseId) {
   if (!existing) return json({ error: 'Feedback not found' }, 404);
   const admin = await requireAdmin(request, db);
   await checkRateLimit(db, `seller-feedback-delete:${admin.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
-  await db.prepare('DELETE FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).run();
-  await adminActionLogStatement(db, admin.user_id, 'delete_seller_feedback', 'seller_feedback', existing.feedback_id).run();
+  const result = await db.prepare('DELETE FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).run();
+  // #2003: the existence check above and this DELETE aren't atomic, so a
+  // concurrent delete (another admin retrying, say) can win the race
+  // first -- logged only after confirmed to have actually happened, same
+  // "logged only after confirmed" idiom delete_review_override/
+  // delete_land_candidate already use, so a deletion that didn't happen
+  // is never misattributed to this admin.
+  if (result.meta.changes === 1) {
+    await adminActionLogStatement(db, admin.user_id, 'delete_seller_feedback', 'seller_feedback', existing.feedback_id).run();
+  }
   return json({ deleted: true });
 }
 
