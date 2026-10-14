@@ -1751,6 +1751,7 @@ async function handleCatalog(request, db, route, url, models, env) {
         model_size_bytes = excluded.model_size_bytes,
         skeleton_signature = excluded.skeleton_signature,
         metadata_json = excluded.metadata_json,
+        stock_quantity = excluded.stock_quantity,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     ` : '';
     // #934: unlike the single-item PUT/PATCH sibling above (which forces
@@ -1764,8 +1765,8 @@ async function handleCatalog(request, db, route, url, models, env) {
     const existingSellerIdById = new Map(existingOwnerRows.results.map((row) => [row.template_id, row.seller_id]));
     await db.batch(templates.map((template) => db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...templateParams(existingSellerIdById.has(template.templateId)
       ? { ...template, sellerId: existingSellerIdById.get(template.templateId) }
@@ -2159,8 +2160,8 @@ async function handleCatalog(request, db, route, url, models, env) {
     await assertUploadedModelExists(models, template.modelUrl);
     await db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(...templateParams(template)).run();
     // #976: re-select and map through templateFromRow rather than handing
     // back the locally-constructed `template` object -- validateTemplate's
@@ -2257,6 +2258,7 @@ async function handleCatalog(request, db, route, url, models, env) {
           model_size_bytes = CASE WHEN ? = 1 THEN ? ELSE model_size_bytes END,
           skeleton_signature = CASE WHEN ? = 1 THEN ? ELSE skeleton_signature END,
           metadata_json = CASE WHEN ? = 1 THEN ? ELSE metadata_json END,
+          stock_quantity = CASE WHEN ? = 1 THEN ? ELSE stock_quantity END,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE template_id = ?
     `).bind(
@@ -2273,6 +2275,7 @@ async function handleCatalog(request, db, route, url, models, env) {
       input.modelSizeBytes === undefined ? 0 : 1, template.modelSizeBytes,
       input.skeletonSignature === undefined ? 0 : 1, template.skeletonSignature,
       input.metadata === undefined ? 0 : 1, JSON.stringify(template.metadata),
+      input.stockQuantity === undefined ? 0 : 1, template.stockQuantity,
       route[1],
     ).run();
     // #932: unlike every other single-item update handler on a comparably-
@@ -3220,10 +3223,7 @@ async function handleBuilders(request, env, db, route, url) {
       const ids = [...new Set(idsParam.split(',').map((id) => id.trim()).filter((id) => id !== ''))];
       if (ids.length === 0) return json({ builders: [] });
       if (ids.length > 200) throw new HttpError('ids must contain at most 200 items', 400);
-      const placeholders = ids.map(() => '?').join(', ');
-      const { results } = await db.prepare(
-        `SELECT * FROM builders WHERE builder_id IN (${placeholders}) ORDER BY created_at, builder_id`,
-      ).bind(...ids).all();
+      const results = await selectRowsByIdsChunked(db, 'builders', 'builder_id', ids);
       await recomputeLandCapsBatch(db, results);
       return json({ builders: results.map(publicBuilderFromRow) });
     }
@@ -4110,10 +4110,7 @@ async function handleSellers(request, env, db, route, url) {
       const ids = [...new Set(idsParam.split(',').map((id) => id.trim()).filter((id) => id !== ''))];
       if (ids.length === 0) return json({ sellers: [] });
       if (ids.length > 200) throw new HttpError('ids must contain at most 200 items', 400);
-      const placeholders = ids.map(() => '?').join(', ');
-      const { results } = await db.prepare(
-        `SELECT * FROM sellers WHERE seller_id IN (${placeholders}) ORDER BY created_at, seller_id`,
-      ).bind(...ids).all();
+      const results = await selectRowsByIdsChunked(db, 'sellers', 'seller_id', ids);
       return json({ sellers: results.map(sellerFromRow) });
     }
 
@@ -12442,11 +12439,18 @@ async function handleLandCandidateRings(request, db, route, url) {
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'generation-complete') {
     const admin = await requireAdmin(request, db);
-    const result = await completeRingGenerationInternal(db, route[1]);
+    const { changed, ...result } = await completeRingGenerationInternal(db, route[1]);
     // #829: unlike its landlet-level sibling (see that handler's own
     // adminActionLogStatement call), this endpoint never logged who
     // completed a ring's generation — missed by #817's own sweep.
-    await adminActionLogStatement(db, admin.user_id, 'ring_generation_complete', 'landlet_candidate_ring', route[1]).run();
+    // #2037: logging unconditionally missed the same race #1666 already
+    // fixed for the landlet-level sibling above — completeRingGeneration-
+    // Internal's own UPDATE can legitimately affect 0 rows (every member
+    // already enclosed by an earlier call, admin or automatic), and this
+    // handler still logged a completion that didn't happen on this call.
+    if (changed) {
+      await adminActionLogStatement(db, admin.user_id, 'ring_generation_complete', 'landlet_candidate_ring', route[1]).run();
+    }
     return json(result);
   }
 
@@ -12476,7 +12480,14 @@ async function completeRingGenerationInternal(db, ringId) {
   // #1055: same live-subquery fix as the single-landlet generation-complete
   // endpoint above -- a JS-read settings.radius_m here could go stale
   // against a concurrent expandWorldOnce.
-  await db.prepare(`
+  // #2037: added "AND generated_at IS NULL", matching the landlet-level
+  // sibling's own WHERE guard -- without it, a member that's already
+  // completed but not yet enclosed (still 'generating', COALESCE-preserved
+  // generated_at) keeps matching this UPDATE on every retry, since
+  // status = 'generating' alone stays true until enclosure. The SET clause
+  // was already a no-op for such a row either way; this only fixes what
+  // `changed` below actually measures.
+  const result = await db.prepare(`
     UPDATE landlets
     SET generated_at = COALESCE(generated_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
         status = CASE WHEN max_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN 'greenbelt' ELSE status END,
@@ -12486,7 +12497,7 @@ async function completeRingGenerationInternal(db, ringId) {
         END,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE landlet_id IN (SELECT landlet_id FROM landlet_candidates WHERE ring_id = ?)
-      AND status = 'generating'
+      AND status = 'generating' AND generated_at IS NULL
   `).bind(ringId).run();
   const completed = await db.prepare(`
     SELECT landlets.* FROM landlets
@@ -12497,6 +12508,11 @@ async function completeRingGenerationInternal(db, ringId) {
   return {
     ring: landCandidateRingFromRow(updatedRing),
     landlets: completed.results.map(landletFromRow),
+    // #2037: lets the HTTP handler log only when this call itself actually
+    // enclosed something, not just that the ring is (now, or already)
+    // fully complete -- same "logged only after confirmed" idiom as the
+    // landlet-level sibling handler above.
+    changed: result.meta.changes > 0,
   };
 }
 
@@ -14184,6 +14200,14 @@ async function handleInstancePurchase(request, env, instanceId) {
   if (template.flagged_hidden_at) {
     throw new HttpError('This product is temporarily unavailable pending review', 400);
   }
+  // #1948: a quick, non-atomic pre-check so an obviously sold-out item gets a
+  // clear rejection before a buyer goes through checkout (real-money) or the
+  // simulated write below -- the actual race-safe enforcement (the last unit
+  // bought by two near-simultaneous buyers) happens atomically in
+  // writePurchaseRow's own guarded decrement, not here.
+  if (template.stock_quantity === 0) {
+    throw new HttpError('This product is sold out', 400);
+  }
   const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
   if (!landlet?.owner_builder_id) {
     throw new HttpError('This instance is not on a claimed landlet, so there is no builder to credit', 400);
@@ -14501,7 +14525,16 @@ async function handlePurchaseFinalize(request, env) {
   const checkoutBuilderId = instance && template ? await resolveFinalizeBuilderId(db, meta) : null;
 
   if (instance && template && checkoutBuilderId) {
-    return writePurchaseRow(env, instance, template, { owner_builder_id: checkoutBuilderId }, amounts, paymentIntentId, isDigitalGood, buyerBuilderId, isAvatarCategory, undefined, isAnimationCategory);
+    // #1948: allowOversell=true -- real money has already moved by this
+    // point (Stripe already confirmed `succeeded` above), and the arbitrary
+    // wall-clock gap since checkout means other buyers may have exhausted
+    // the remaining stock in the meantime. Rejecting here would strand a
+    // real charge with no purchase record at all, the same risk #472's own
+    // writeOrphanedPurchaseRow fallback (just below) already exists to
+    // avoid -- so this floors remaining stock at zero and still completes
+    // the purchase, rather than the simulated path's reject-outright
+    // behavior.
+    return writePurchaseRow(env, instance, template, { owner_builder_id: checkoutBuilderId }, amounts, paymentIntentId, isDigitalGood, buyerBuilderId, isAvatarCategory, undefined, isAnimationCategory, true);
   }
 
   // #472: the buyer has already been charged and the seller's connected
@@ -14691,7 +14724,7 @@ function purchaseContentMatches(existingRow, templateId, amounts) {
     && existingRow.total_cents === amounts.totalCents;
 }
 
-export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null, isAnimationCategory = template.category === 'animation') {
+export async function writePurchaseRow(env, instance, template, landlet, amounts, paymentIntentId = null, isDigitalGood = false, buyerBuilderId = null, isAvatarCategory = template.category === 'avatar', idempotencyKey = null, isAnimationCategory = template.category === 'animation', allowOversell = false) {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   // #877: a retry (network blip, double-tap) after this exact write already
@@ -14720,6 +14753,38 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
       if (purchaseContentMatches(existing, template.template_id, amounts)) return json({ purchase: purchaseFromRow(existing) });
       purchaseId = `purchase-${crypto.randomUUID()}`;
     }
+  }
+  // #1948: a plain, un-guarded UPDATE here would race two near-simultaneous
+  // buyers of the last unit -- folding the guard into the UPDATE's own WHERE
+  // clause (the same claim-before-act idiom this file already uses for
+  // higgles-balance debits elsewhere) makes the check-then-decrement atomic
+  // instead. Placed after the idempotency dedup-hit return above, not
+  // before: a retry that finds its own already-written row returns before
+  // ever reaching here, so a retry of the same purchase can never
+  // double-decrement.
+  let justSoldOut = false;
+  if (template.stock_quantity != null) {
+    const decremented = await db.prepare(`
+      UPDATE catalog_templates SET stock_quantity = stock_quantity - ?
+      WHERE template_id = ? AND stock_quantity >= ?
+    `).bind(quantity, template.template_id, quantity).run();
+    if (decremented.meta.changes === 0) {
+      if (!allowOversell) {
+        throw new HttpError('This product is sold out', 400);
+      }
+      // #1948: real money has already moved by the time
+      // handlePurchaseFinalize calls this with allowOversell=true (an
+      // arbitrary wall-clock gap sits between checkout and finalize, during
+      // which other buyers can exhaust the remaining stock) -- same
+      // "the purchase must still be recorded" reasoning as
+      // writeOrphanedPurchaseRow's own fallback. Floor remaining stock at
+      // zero (never negative) rather than reject outright, and still let
+      // the sold-out sweep below fire.
+      await db.prepare('UPDATE catalog_templates SET stock_quantity = 0 WHERE template_id = ? AND stock_quantity > 0')
+        .bind(template.template_id).run();
+    }
+    const after = await db.prepare('SELECT stock_quantity FROM catalog_templates WHERE template_id = ?').bind(template.template_id).first();
+    justSoldOut = after.stock_quantity === 0;
   }
   // #1717: landlet.owner_builder_id was read by the caller before several
   // more awaited round-trips ran (the seller/Stripe lookup, this function's
@@ -14791,6 +14856,14 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
   // just above, for the same reason (never risk rolling back a real
   // purchase record over a best-effort flag).
   await flagSelfDealingIfMatched(db, purchaseId, buyerBuilderId, template.seller_id);
+  // #1948: after the purchase itself is safely committed and notified, not
+  // before -- a self-delete race between the stock decrement above and this
+  // sweep must never roll back or block the purchase record itself, the
+  // same "fire outside the batch" reasoning as the seller-commission
+  // notification just above.
+  if (justSoldOut) {
+    await sweepSoldOutTemplateInstances(db, template);
+  }
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   return json({ purchase: purchaseFromRow(row), ...(deliveryConfirmUrl ? { deliveryConfirmUrl } : {}) }, 201);
@@ -14866,6 +14939,32 @@ async function handleSelfDealingFlags(request, db, route) {
   }
 
   return json({ error: 'Not found' }, 404);
+}
+
+// #1948: every placed_instance of a template that just hit zero stock loses
+// its listing instantly -- the same hard-delete-no-archive treatment an
+// owning builder's own self-deletion already gives every instance on their
+// landlets (see the several bare `DELETE FROM placed_instances WHERE
+// landlet_id = ?` call sites elsewhere in this file). There's no backup/
+// replacement-product concept yet (that's #1952's separate scope, per
+// #1947), so "the last unit just sold" is, for now, treated the same as any
+// other case where a placed instance's own backing listing disappears out
+// from under it. Reuses notifyBuildersOfDimensionChange's own
+// per-builder-grouped query shape to fan out exactly one notification per
+// affected builder, however many instances of this template they placed.
+async function sweepSoldOutTemplateInstances(db, template) {
+  const { results: affected } = await db.prepare(`
+    SELECT l.owner_builder_id AS builderId, COUNT(*) AS count
+    FROM placed_instances pi
+    JOIN landlets l ON l.landlet_id = pi.landlet_id
+    WHERE pi.template_id = ? AND l.owner_builder_id IS NOT NULL
+    GROUP BY l.owner_builder_id
+  `).bind(template.template_id).all();
+  await db.prepare('DELETE FROM placed_instances WHERE template_id = ?').bind(template.template_id).run();
+  for (const { builderId, count } of affected) {
+    await fireNotification(db, builderId,
+      `"${template.name}" just sold out — ${count} placed ${count === 1 ? 'instance has' : 'instances have'} been removed from your land.`);
+  }
 }
 
 async function handlePurchases(request, env, route, url) {
@@ -15650,12 +15749,37 @@ async function recordContentEditHistory(db, sourceTable, sourceId, action, row, 
 
 // #1978: D1 caps a single query at 100 bound parameters
 // (developers.cloudflare.com/d1/platform/limits) -- a deduplicated value
-// set past that limit (e.g. GET /api/sellers?ids=... allows up to 200
-// distinct ids) would otherwise throw a raw D1 error here instead of this
-// function's own clean "does not exist" message. Chunking fixes every
-// caller at the source rather than needing each one capped to this limit
-// individually.
+// set past that limit would otherwise throw a raw D1 error here instead
+// of this function's own clean "does not exist" message. Chunking fixes
+// every caller of assertReferencesExist at the source rather than
+// needing each one capped to this limit individually. Shared by
+// selectRowsByIdsChunked below for the same reason, for callers (GET
+// /api/builders?ids=.../sellers?ids=..., #2038) that query directly
+// rather than through assertReferencesExist.
 const D1_MAX_BOUND_PARAMETERS = 100;
+
+// #2038: GET /api/builders?ids=... and GET /api/sellers?ids=... accept up
+// to 200 ids but bound them in one unchunked IN (...) query -- the same
+// D1 100-bound-parameter hazard the comment above already warned about
+// for this exact endpoint, without actually fixing it. Chunks the lookup
+// and re-sorts the merged rows afterward, since each chunk's own query
+// only sorts within that chunk, not across all of them.
+async function selectRowsByIdsChunked(db, table, idColumn, ids) {
+  const rows = [];
+  for (let i = 0; i < ids.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = ids.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(
+      `SELECT * FROM ${table} WHERE ${idColumn} IN (${placeholders})`,
+    ).bind(...chunk).all();
+    rows.push(...results);
+  }
+  rows.sort((a, b) => {
+    if (a.created_at !== b.created_at) return a.created_at < b.created_at ? -1 : 1;
+    return a[idColumn] < b[idColumn] ? -1 : a[idColumn] > b[idColumn] ? 1 : 0;
+  });
+  return rows;
+}
 
 export async function assertReferencesExist(db, table, column, values, field) {
   const uniqueValues = [...new Set(values)];
@@ -16163,6 +16287,14 @@ function validateTemplate(input, fallbackId) {
       height: positiveNumber(dimensions.height, 'dimensions.height'),
     },
     priceCents: optionalInteger(input.priceCents, 'priceCents'),
+    // #1948: NULL (the default, unless a seller opts in) means unlimited --
+    // today's unchanged behavior for every pre-existing and future template
+    // unless this is explicitly set. A set value is remaining stock, not a
+    // fixed "original quantity" -- it decrements at purchase-finalize time
+    // (writePurchaseRow) and a seller PATCHing a new value here directly
+    // overwrites whatever remained, the same as any other seller-settable
+    // field.
+    stockQuantity: optionalStockQuantity(input.stockQuantity),
     sellerId: optionalStringValue(input.sellerId, 'sellerId'),
     modelUrl: input.modelUrl || null,
     // #540: the seller's own "faux lándlet" 3D array paginates by a
@@ -16323,7 +16455,7 @@ function validateCropShape(input) {
 }
 
 function templateParams(template) {
-  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata)];
+  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata), template.stockQuantity];
 }
 
 // #1758: compares an existing row (raw DB shape) against a freshly
@@ -16343,7 +16475,8 @@ function templateContentMatches(existingRow, template) {
     && existingRow.depth_m === template.dimensions.depth
     && existingRow.height_m === template.dimensions.height
     && existingRow.price_cents === template.priceCents
-    && existingRow.metadata_json === JSON.stringify(template.metadata);
+    && existingRow.metadata_json === JSON.stringify(template.metadata)
+    && existingRow.stock_quantity === template.stockQuantity;
 }
 
 function instanceParams(instance) {
@@ -16388,6 +16521,9 @@ function templateFromRow(row) {
     // handleInstancePurchase's own guard and this column's migration
     // comment for why it never affects browse/picker visibility.
     flaggedHiddenAt: row.flagged_hidden_at,
+    // #1948: NULL = unlimited (the default); a set value is remaining
+    // stock, decremented atomically at purchase-finalize time.
+    stockQuantity: row.stock_quantity,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -16730,6 +16866,20 @@ function optionalModelSizeBytes(value) {
   const number = Number(value);
   if (!Number.isSafeInteger(number) || number < 0 || number > MAX_MODEL_BYTES) {
     throw new HttpError(`modelSizeBytes must be a non-negative integer no greater than ${MAX_MODEL_BYTES}`, 400);
+  }
+  return number;
+}
+
+// #1948: bounded generously -- this is a count of physical units, not money
+// or bytes, so MAX_MONEY_CENTS would be the wrong bound wearing the right
+// shape the same way optionalModelSizeBytes already explains above.
+const MAX_STOCK_QUANTITY = 1_000_000;
+
+function optionalStockQuantity(value) {
+  if (value === undefined || value === null) return null;
+  const number = Number(value);
+  if (!Number.isSafeInteger(number) || number < 0 || number > MAX_STOCK_QUANTITY) {
+    throw new HttpError(`stockQuantity must be a non-negative integer no greater than ${MAX_STOCK_QUANTITY}`, 400);
   }
   return number;
 }
