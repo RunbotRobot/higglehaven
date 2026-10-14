@@ -386,6 +386,7 @@ describe('Product reviews', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -428,6 +429,7 @@ describe('Product reviews', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -480,6 +482,7 @@ describe('Product reviews', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -528,6 +531,7 @@ describe('Product reviews', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -581,6 +585,7 @@ describe('Product reviews', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -649,6 +654,7 @@ describe('Product reviews', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -699,6 +705,7 @@ describe('Product reviews', () => {
           color: '#123456',
           dimensions: { width: 1, depth: 1, height: 1 },
           sellerId: seller.sellerId,
+          priceCents: 500,
         }),
       }));
       expect(created.response.status).toBe(201);
@@ -748,6 +755,7 @@ describe('Product reviews', () => {
           color: '#123456',
           dimensions: { width: 1, depth: 1, height: 1 },
           sellerId: seller.sellerId,
+          priceCents: 500,
         }),
       }));
       expect(created.response.status).toBe(201);
@@ -808,6 +816,7 @@ describe('Product reviews', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     expect(created.response.status).toBe(201);
@@ -884,6 +893,7 @@ describe('Product reviews', () => {
         color: '#123456',
         dimensions: { width: 1, depth: 1, height: 1 },
         sellerId: seller.sellerId,
+        priceCents: 500,
       }),
     }));
     const templateId = created.body.template.templateId;
@@ -1090,6 +1100,7 @@ describe('Product reviews', () => {
           color: '#123456',
           dimensions: { width: 1, depth: 1, height: 1 },
           sellerId: seller.sellerId,
+          priceCents: 500,
         }),
       }));
       expect(created.response.status).toBe(201);
@@ -1123,6 +1134,7 @@ describe('Product reviews', () => {
           color: '#123456',
           dimensions: { width: 1, depth: 1, height: 1 },
           sellerId: seller.sellerId,
+          priceCents: 500,
         }),
       }));
       expect(created.response.status).toBe(201);
@@ -1223,6 +1235,7 @@ describe('Product reviews', () => {
           color: '#123456',
           dimensions: { width: 1, depth: 1, height: 1 },
           sellerId: seller.sellerId,
+          priceCents: 500,
         }),
       }));
       expect(created.response.status).toBe(201);

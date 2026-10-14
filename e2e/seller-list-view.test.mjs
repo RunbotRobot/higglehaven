@@ -15,10 +15,13 @@ await page.waitForTimeout(300);
 // #1601 made the upload wizard reject a blank price, so this test's own
 // "unpriced product" fixture (its card is specifically checked for the
 // "Not priced" text below) is created directly via the API instead of
-// through the wizard, the same way product-pricing.test.mjs's does.
+// through the wizard, the same way product-pricing.test.mjs's does. The
+// server itself now also requires a price on that same create path
+// (#1601), so this creates with a throwaway price and PATCHes it straight
+// back to null to land in the actual unpriced state.
 await page.evaluate(async (name) => {
   const { seller } = await (await fetch('/api/sellers/me')).json();
-  await fetch('/api/catalog', {
+  const created = await (await fetch('/api/catalog', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -26,7 +29,13 @@ await page.evaluate(async (name) => {
       color: '#999999',
       dimensions: { width: 1, depth: 1, height: 1 },
       sellerId: seller.sellerId,
+      priceCents: 1,
     }),
+  })).json();
+  await fetch(`/api/catalog/${created.template.templateId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ priceCents: null }),
   });
 }, PRODUCT_NAME);
 await page.reload();
