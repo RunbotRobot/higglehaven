@@ -525,12 +525,60 @@ raw Didit payload, since that's a third party's data about the account,
 not the account's own authored content.
 
 The response shape has one top-level key per data section — `profile`
-here. Later sub-issues of #1983 add their own top-level keys
-(`commerce`, `social`) to this same endpoint's response rather than
-introducing separate endpoints, and a "Download my data" Settings UI
-(#1987) wires a browser download up to whatever sections exist once
-built. As of this endpoint's initial ship, only `profile` exists — the
-commerce/economy and social/content sections are still open sub-issues.
+here, `social` as of #1986 below. A later sub-issue adds `commerce`
+(purchases, owned avatars/animations, video-generation jobs, higgles
+redemptions/earnings, bundles — blocked on an owner call about whether
+`tax_1099_forms` belongs in it, and in what form) to this same endpoint's
+response rather than introducing a separate endpoint, and a "Download my
+data" Settings UI (#1987) wires a browser download up to whatever sections
+exist once built.
+
+#### `social` (#1986)
+
+```json
+{
+  "social": {
+    "friendships": [{ "friendshipId": "...", "otherBuilderId": "...", "direction": "outgoing", "status": "accepted", "...": "..." }],
+    "directMessages": [{ "messageId": "...", "senderBuilderId": "...", "recipientBuilderId": "...", "text": "...", "...": "..." }],
+    "notifications": [{ "notificationId": "...", "message": "...", "...": "..." }],
+    "productReviews": [{ "reviewId": "...", "templateId": "...", "rating": 5, "...": "..." }],
+    "sellerFeedback": [{ "feedbackId": "...", "sellerId": "...", "rating": 4, "...": "..." }],
+    "signPosts": [{ "postId": "...", "text": "...", "...": "..." }],
+    "calendarEvents": [{ "eventId": "...", "text": "...", "...": "..." }],
+    "savedLevelLayouts": [{ "savedLayoutId": "...", "name": "...", "instanceCount": 1, "instances": [{ "...": "..." }] }],
+    "landletVersions": [{ "versionId": "...", "name": "...", "instanceCount": 1, "instances": [{ "...": "..." }] }]
+  }
+}
+```
+
+`null` instead of an object when the account has no builder profile at
+all (shouldn't happen in practice — every signup auto-provisions one —
+but defensive since `profile.builder` can itself be `null`).
+
+Most of these are straightforward `builder_id`/`user_id` filters, or (for
+`productReviews`/`sellerFeedback`) a real `purchase_id` join back to
+`purchases.buyer_builder_id` (#1101/#1123's own foreign key, not a
+free-text label match) — a review/feedback row created before that FK
+existed, or whose purchase was later deleted, is correctly left out of the
+export rather than guessed at. Two sections are a best-effort
+approximation rather than a real foreign-key filter, documented in
+`exportSocialSection`'s own comment in `worker/index.js`:
+
+- `calendarEvents` matches `calendar_events.author_label` against the
+  account's **current** builder label — unlike `sign_posts`, which got a
+  real `user_id` column in #1830/migrations/0125, `calendar_events` was
+  never given the equivalent treatment, so there's no durable author
+  reference to filter on. This misses an event posted under a since-
+  changed label, and could in principle include an event actually posted
+  by a different account that happens to share today's label with a past
+  poster. A real `author_id`/`user_id` column on `calendar_events` is the
+  actual fix for this gap; it's tracked separately from this export
+  feature, not solved here.
+- `landletVersions`/their `instances` are scoped to landlets this builder
+  **currently owns** (`landlets.owner_builder_id`), since neither
+  `landlet_versions` nor `version_instances` records who actually created
+  a version — only which landlet it belongs to — and landlet ownership
+  itself can change hands (auction, admin reassignment).
 
 ### `POST /api/auth/verify-email`
 
@@ -658,11 +706,16 @@ rate-limits (6th attempt is `429`), and the full happy path — the
 session making the change stays logged in while a second session for the
 same account is signed out, the old password stops working, and the new
 one logs in. `worker/account-deletion.test.js` (#1146) is the equivalent
-file for `delete-account`. `worker/export-data.test.js` (#1984) covers
-`export-data`: requires a session, the account/builder/seller/didit
+file for `delete-account`. `worker/export-data.test.js` (#1984/#1986)
+covers `export-data`: requires a session, the account/builder/seller/didit
 sections populate correctly (including the no-seller-yet and
-seller-exists cases), never leaks a raw Didit payload, and rate-limits
-(11th attempt is `429`).
+seller-exists cases), never leaks a raw Didit payload, rate-limits (11th
+attempt is `429`), and the `social` section's every collection — including
+the real-purchase-id join for reviews/feedback, the real-`user_id` filter
+for sign posts (and that it excludes another account's), the best-effort
+label match for calendar events, saved-layout/landlet-version instances
+nesting correctly under their parent, and an all-empty baseline for an
+account with none of this activity.
 
 Also covered by `e2e/auth.test.mjs`: the full real-UI signup → verify-email
 link → logout → login and forgot-password → reset link → reset → old-
