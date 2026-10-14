@@ -6503,7 +6503,16 @@ function renderBuilderIdentityField() {
         : '';
       return `Reset your builder profile? Any lándlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.${balanceNote} Your login stays active either way; use Delete Account under Account above to delete that too.`;
     },
-    onDeleted: () => { builderId = null; },
+    // #2068: Reset Profile releases any owned lándlet back to greenbelt
+    // server-side (see deleteWarning's own wording above) -- currentLandletId
+    // must be cleared alongside builderId, not left stale, since it's no
+    // longer a landlet this session owns. Previously harmless (nothing in
+    // Settings > Build auto-fetched anything landlet-ownership-gated), but
+    // renderSoldOutMarkersSection's own auto-fetch surfaced it: the very
+    // next full renderSettingsSection() redraw this same Reset Profile
+    // triggers would otherwise still query the old, just-released landlet
+    // and get a real 403 back.
+    onDeleted: () => { builderId = null; currentLandletId = null; },
     // #741: keep Shop mode's own "Built by X" attribution (populated once
     // in enterShopMode) from showing a stale pre-rename label for the rest
     // of this session.
