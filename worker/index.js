@@ -12013,8 +12013,7 @@ async function assertLandCandidatesDontOverlapEachOther(newRows, message) {
 // continuous water region the ingestion script sampled, not an isolated
 // point. A full-table scan is fine at this dataset's size (at most a few
 // hundred rows for any radius this world will need for a long while); add
-// an index later only if that changes. Not yet called anywhere — #2012's
-// second sub-issue is what actually consults this during generation.
+// an index later only if that changes.
 export async function isNearWaterCell(db, x, y) {
   const row = await db.prepare(`
     SELECT 1 FROM geo_water_cells
@@ -12024,6 +12023,28 @@ export async function isNearWaterCell(db, x, y) {
   return !!row;
 }
 
+// #2014 (sub-issue of #2012): the one real consumer of isNearWaterCell.
+// Every freshly-generated plot/cell from either generator defaults to
+// 'buildable' today (generateOrganicMosaic never sets landType at all;
+// generateLandletRing's own plots never request 'water' either, since
+// powerLawPlots -- the only real caller feeding it -- doesn't set one).
+// This upgrades a candidate to 'water' when its center falls near a real
+// ingested water cell, and otherwise leaves it exactly as the generator
+// produced it -- including an already-'water' candidate (the admin-only
+// manual generate-ring caller can still request one explicitly via
+// `plots`; this only ever upgrades toward 'water', never downgrades back
+// to 'buildable'). Forward-only by construction: it mutates candidates
+// fresh out of a generator, before they ever become a stored
+// landlets/landlet_candidates row, and never touches an existing one.
+async function applyRealWaterClassification(db, candidates) {
+  await Promise.all(candidates.map(async (candidate) => {
+    if (candidate.landType === 'water') return;
+    if (await isNearWaterCell(db, candidate.center.x, candidate.center.y)) {
+      candidate.landType = 'water';
+    }
+  }));
+}
+
 // Split out from the generate-mosaic handler below so #1085's automatic
 // path (generateAutoMosaicIfFreshWorld) can reuse the exact same
 // generation/validation/overlap-guard logic without an admin session —
@@ -12031,7 +12052,9 @@ export async function isNearWaterCell(db, x, y) {
 // including the optional adminUserId (action log entry only written when
 // a real admin is the one calling it).
 async function generateLandletMosaicCandidates(db, { prefix, count }, adminUserId) {
-  const generated = generateOrganicMosaic({ prefix, count }).map((candidate) =>
+  const mosaicCells = generateOrganicMosaic({ prefix, count });
+  await applyRealWaterClassification(db, mosaicCells);
+  const generated = mosaicCells.map((candidate) =>
     validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
 
   // The mosaic template always covers the world origin as part of its
@@ -12565,6 +12588,7 @@ async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, 
   if (radialConflict) {
     throw new HttpError('Generated ring would overlap existing land candidates', 409);
   }
+  await applyRealWaterClassification(db, generated.landlets);
   const landlets = generated.landlets.map((candidate) =>
     validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
   const rows = landlets.map((landlet) => ({ ...candidateRowFromLandlet(landlet), ring_id: prefix }));
