@@ -863,6 +863,61 @@ signup date, not when it became an admin; `adminGrantedAt` is `null` for an
 admin whose grant predates `admin_action_log` itself, the one case a caller
 should fall back to `createdAt` for.
 
+### Account suspension (#2029, sub-issue of #1201)
+
+`migrations/0132_account_suspensions.sql` adds `account_suspensions` — a
+dedicated, append-only history table (not columns on `users`), since the
+owner's own settled scope for #1201 wants "longer suspension log retention
+and greater detail" preserved across possibly-multiple suspend/lift cycles
+on the same account. A suspension is **reversible, not a deletion** — the
+owner explicitly ruled out a separate admin-initiated hard-delete path;
+real deletion stays reserved for the account-holder's own self-service
+`delete-account` request. (Enforcing suspension against login/actions, the
+automated notice to the suspended user, the optional sign-post/calendar-
+event removal cascade, and the 30-day grace-period auto-escalation to a
+full deletion are each their own separate, not-yet-landed sub-issue —
+#2030/#2031/#2032/#2033 respectively.)
+
+### `POST /api/auth/suspend-account`
+
+`requireAdmin`-gated (`401`/`403` the same way `grant-admin` is). Request
+body: `{ "email", "reason", "evidenceNote"?, "graceDays"? }`. `email` is
+looked up the same case-insensitive way `grant-admin` does; `404` if no
+account has it. `reason` is required (`400` if blank) — stored verbatim,
+along with the optional free-text `evidenceNote`, in both the new
+`account_suspensions` row and the `admin_action_log` entry this call writes
+(`action_type: "suspend_account"`), real detail retained with no auto-
+expiry (the owner's own instruction: minors-access cases in particular
+should keep *more* detail, not less). `graceDays` defaults to `30` (the
+owner's confirmed default) and must be an integer in `[1, 365]` (`400`
+otherwise) — this becomes `gracePeriodEndsAt` in the response, the point
+#2033's eventual auto-escalation job will act on. `409` if the account
+already has an active (not lifted, not escalated) suspension — lift it via
+`unsuspend-account` first before suspending again. On success, returns
+`{ "suspension": { "suspensionId", "userId", "adminUserId", "reason", "evidenceNote", "suspendedAt", "gracePeriodEndsAt" } }`.
+
+### `POST /api/auth/unsuspend-account`
+
+`requireAdmin`-gated. Request body: `{ "email" }`. `404` if no account has
+it, `409` if that account has no currently-active suspension to lift. On
+success, sets `liftedAt`/the lifting admin on the active
+`account_suspensions` row, logs via `admin_action_log`
+(`action_type: "unsuspend_account"`), and returns
+`{ "suspension": { "suspensionId", "userId", "liftedAt" } }`. The account
+can be suspended again afterward — lifting isn't a one-time, permanent
+clearing of the record, just of the currently-active hold.
+
+### `GET /api/auth/suspension-status?email=...`
+
+`requireAdmin`-gated. `400` with no `email` query parameter, `404` if no
+account has it. Returns
+`{ "suspension": null }` if the account has no currently-active
+suspension, or
+`{ "suspension": { "suspensionId", "userId", "adminUserId", "reason", "evidenceNote", "suspendedAt", "gracePeriodEndsAt" } }`
+otherwise — the same shape `suspend-account`'s own response returns, so a
+caller can check status first without needing two different response
+shapes.
+
 ## Builders
 
 A shared, cross-device roster of builder profiles. `GET`/`POST` below stay

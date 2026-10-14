@@ -9941,6 +9941,15 @@ async function handleAuth(request, env, db, route, url, ctx) {
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admins') {
     return handleListAdmins(request, db);
   }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'suspend-account') {
+    return handleSuspendAccount(request, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'unsuspend-account') {
+    return handleUnsuspendAccount(request, db);
+  }
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'suspension-status') {
+    return handleSuspensionStatus(request, db, url);
+  }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'card-setup-intent') {
     return handleCardSetupIntent(request, env, db);
   }
@@ -10269,6 +10278,121 @@ async function handleListAdmins(request, db) {
       userId: row.user_id, email: row.email, username: row.username,
       createdAt: row.created_at, adminGrantedAt: row.admin_granted_at,
     })),
+  });
+}
+
+const ACCOUNT_SUSPENSION_RATE_LIMIT_MAX = 20;
+
+// #2029 (sub-issue of #1201): the foundational primitive for admin-
+// initiated account suspension -- email-addressed and admin_action_log-
+// recorded the same way grant-admin/revoke-admin above already are, since
+// this is the same kind of "one admin acting on another account" shape.
+// Deliberately reversible, not a hard delete (#1201's own owner-settled
+// scope: "I don't see a strong case for admin-initiated hard deletion
+// either... Build suspension only"). Guards against double-suspending the
+// same account via a single INSERT ... WHERE NOT EXISTS rather than a
+// separate SELECT-then-INSERT, so two concurrent suspend calls against the
+// same account can't both land a second, divergent active-suspension row.
+async function handleSuspendAccount(request, db) {
+  const admin = await requireAdmin(request, db);
+  await checkRateLimit(db, `suspend-account:${admin.user_id}`, ACCOUNT_SUSPENSION_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const email = normalizeEmail(input.email);
+  const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
+  if (!reason) throw new HttpError('reason is required', 400);
+  const evidenceNote = typeof input.evidenceNote === 'string' && input.evidenceNote.trim()
+    ? input.evidenceNote.trim() : null;
+  // Owner-confirmed default (#1201, 2026-10-07): 30 days. A caller may
+  // override it, but only within a sane range -- not unbounded, and not
+  // zero/negative (that would mean "already past its own grace period,"
+  // i.e. an immediate, unintended escalation on the very next #2033 run).
+  const graceDays = input.graceDays === undefined ? 30 : Number(input.graceDays);
+  if (!Number.isInteger(graceDays) || graceDays < 1 || graceDays > 365) {
+    throw new HttpError('graceDays must be an integer between 1 and 365', 400);
+  }
+
+  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  if (!row) throw new HttpError('No account with that email', 404);
+
+  const suspensionId = `suspension-${crypto.randomUUID()}`;
+  const gracePeriodEndsAt = new Date(Date.now() + graceDays * 24 * 60 * 60 * 1000).toISOString();
+  // Not batched with the log write below -- same reasoning as
+  // handleRevokeAdmin's own comment above ("Logged only after confirmed"):
+  // this INSERT's own WHERE NOT EXISTS can legitimately insert 0 rows, and
+  // a batched log statement would commit regardless, misrecording a
+  // suspension that never actually took effect.
+  const result = await db.prepare(`
+    INSERT INTO account_suspensions
+      (suspension_id, user_id, admin_user_id, reason, evidence_note, grace_period_ends_at)
+    SELECT ?, ?, ?, ?, ?, ?
+    WHERE NOT EXISTS (
+      SELECT 1 FROM account_suspensions
+      WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+    )
+  `).bind(suspensionId, row.user_id, admin.user_id, reason, evidenceNote, gracePeriodEndsAt, row.user_id).run();
+  if (result.meta.changes === 0) throw new HttpError('That account is already suspended', 409);
+  await adminActionLogStatement(db, admin.user_id, 'suspend_account', 'user', row.user_id, {
+    suspensionId, reason, evidenceNote, gracePeriodEndsAt,
+  }).run();
+
+  return json({
+    suspension: {
+      suspensionId, userId: row.user_id, adminUserId: admin.user_id, reason, evidenceNote,
+      suspendedAt: new Date().toISOString(), gracePeriodEndsAt,
+    },
+  });
+}
+
+// The inverse of handleSuspendAccount above -- lifts the currently-active
+// suspension (if any) for the given email. Same atomic check-then-act
+// shape as handleRevokeAdmin's own last-admin guard: the UPDATE's own
+// WHERE clause is what actually confirms there was something to lift,
+// rather than a separate SELECT racing a concurrent lift of the same row.
+async function handleUnsuspendAccount(request, db) {
+  const admin = await requireAdmin(request, db);
+  const input = await readJson(request);
+  const email = normalizeEmail(input.email);
+  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  if (!row) throw new HttpError('No account with that email', 404);
+
+  const liftedAt = new Date().toISOString();
+  const result = await db.prepare(`
+    UPDATE account_suspensions SET lifted_at = ?, lifted_by_admin_user_id = ?
+    WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+  `).bind(liftedAt, admin.user_id, row.user_id).run();
+  if (result.meta.changes === 0) throw new HttpError('That account has no active suspension', 409);
+  const suspension = await db.prepare(`
+    SELECT * FROM account_suspensions WHERE user_id = ? AND lifted_at = ? ORDER BY suspended_at DESC LIMIT 1
+  `).bind(row.user_id, liftedAt).first();
+  await adminActionLogStatement(db, admin.user_id, 'unsuspend_account', 'user', row.user_id, {
+    suspensionId: suspension.suspension_id,
+  }).run();
+
+  return json({ suspension: { suspensionId: suspension.suspension_id, userId: row.user_id, liftedAt } });
+}
+
+// Lets an admin check an account's current suspension state before acting
+// on it (or before #2030/#2031/#2032/#2033 each need to read it back for
+// their own purposes) without direct D1 access.
+async function handleSuspensionStatus(request, db, url) {
+  await requireAdmin(request, db);
+  const email = normalizeEmail(url.searchParams.get('email') || '');
+  if (!email) throw new HttpError('email query parameter is required', 400);
+  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  if (!row) throw new HttpError('No account with that email', 404);
+  const active = await db.prepare(`
+    SELECT * FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+  `).bind(row.user_id).first();
+  return json({
+    suspension: active ? {
+      suspensionId: active.suspension_id,
+      userId: active.user_id,
+      adminUserId: active.admin_user_id,
+      reason: active.reason,
+      evidenceNote: active.evidence_note,
+      suspendedAt: active.suspended_at,
+      gracePeriodEndsAt: active.grace_period_ends_at,
+    } : null,
   });
 }
 
