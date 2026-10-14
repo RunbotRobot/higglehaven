@@ -122,7 +122,7 @@ await page.click('button[data-panel="purchases"]');
 await page.waitForFunction(
   (id) => document.querySelector(`tr[data-purchase-id="${id}"]`) != null,
   purchaseId,
-  { timeout: 10000 },
+  { timeout: 20000 },
 );
 
 const row = () => page.locator(`tr[data-purchase-id="${purchaseId}"]`);
@@ -135,15 +135,23 @@ const statusCell = () => row().locator('td').nth(6);
 // and the page's JS, since window.confirm() is synchronous -- hangs.)
 let dialogMessageSeen = null;
 page.once('dialog', (dialog) => { dialogMessageSeen = dialog.message(); dialog.dismiss(); });
-await row().locator('.action-refund').click();
-await page.waitForTimeout(500);
+await row().locator('.action-refund').click({ timeout: 30000 });
+await page.waitForTimeout(1000);
 console.log('confirm() dialog message on dismissed click (should mention "Refund" and this purchase id):', dialogMessageSeen);
 const statusTextAfterDismiss = await statusCell().textContent();
 console.log('status cell after dismissing the confirm (should still be the pre-refund dash):', JSON.stringify(statusTextAfterDismiss));
 
 // Second click: accept the confirm -- the refund should actually go through.
+// 30s/20s margins (vs. a plain 10s) match this suite's own established
+// precedent for this exact heavy-seeding-chain + admin-dashboard shape
+// (e.g. #978/#1224/#1469/#1511's land.test.js timeout bumps) -- this test's
+// own seed chain already does a real model upload, catalog create, instance
+// create, purchase, two separate `wrangler d1 execute` process spawns, and
+// a seller delete before ever reaching the dashboard, all of which get
+// slower, not just this click's own real backend refund round-trip, under
+// the shared-runner CI load this repo's CI visibly runs under.
 page.once('dialog', (dialog) => dialog.accept());
-await row().locator('.action-refund').click();
+await row().locator('.action-refund').click({ timeout: 30000 });
 await page.waitForFunction(
   (id) => {
     const r = document.querySelector(`tr[data-purchase-id="${id}"]`);
@@ -151,7 +159,7 @@ await page.waitForFunction(
     return !!cell && cell.textContent.includes('Refunded');
   },
   purchaseId,
-  { timeout: 10000 },
+  { timeout: 20000 },
 );
 const statusTextAfterAccept = await statusCell().textContent();
 console.log('status cell after accepting the confirm (should mention "Refunded"):', statusTextAfterAccept);
