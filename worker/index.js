@@ -7262,6 +7262,20 @@ async function currentUser(request, db) {
 async function requireCurrentUser(request, db) {
   const user = await currentUser(request, db);
   if (!user) throw new HttpError('Not authenticated', 401);
+  // #2030 (sub-issue of #1201): the single join point every authenticated
+  // request goes through -- enforcing the check here, rather than in
+  // currentUser() itself, is what lets this throw a distinct, client-
+  // actionable error instead of the generic 401 a plain null would produce
+  // (a suspended user's session is still valid; it's their standing that's
+  // revoked, not their login). #2029's own admin endpoints read a TARGET
+  // account's suspension state via a direct SELECT on account_suspensions,
+  // never through currentUser/requireCurrentUser, so they're unaffected by
+  // this -- only the CALLING admin's own session goes through this check,
+  // the same as any other authenticated action.
+  const activeSuspension = await db.prepare(`
+    SELECT 1 FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+  `).bind(user.user_id).first();
+  if (activeSuspension) throw new HttpError('Your account is suspended', 403, { suspended: true });
   return user;
 }
 
