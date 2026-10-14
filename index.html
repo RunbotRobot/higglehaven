@@ -1284,6 +1284,15 @@
         gap: 6px;
         margin-bottom: 8px;
       }
+      /* #2051: same [hidden]-vs-equal-specificity-author-rule gotcha as
+         #catalog-picker-grid[hidden] above -- openCatalogPickerForPick
+         hides this row for the duration of a backup pick (a backup must be
+         a single product, so there's nothing for it to switch between),
+         which the base rule's unconditional display: flex would otherwise
+         silently defeat. */
+      #catalog-search-scope-tabs[hidden] {
+        display: none;
+      }
       .search-scope-btn {
         padding: 5px 12px;
         border-radius: 999px;
@@ -3621,6 +3630,100 @@
         color: var(--pill-text);
         font: 13px/1.4 sans-serif;
       }
+      /* #2050/#2051: a builder's own config panel for one placed
+         instance's backup/replacement chain, opened from
+         #toggle-backup-chain. Same modal shell/reasoning as
+         #sign-posts-modal/#calendar-events-modal above, but every row's
+         own up/down/remove controls (ordering matters here, unlike those
+         two) rather than a single delete button. */
+      #backup-chain-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #backup-chain-modal.visible {
+        display: flex;
+      }
+      #backup-chain-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #backup-chain-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #backup-chain-intro {
+        margin: 0;
+        font-size: 13px;
+        color: var(--pill-text-soft);
+      }
+      #backup-chain-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .backup-chain-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.9);
+      }
+      .backup-chain-row-name {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .backup-chain-row-up,
+      .backup-chain-row-down,
+      .backup-chain-row-remove {
+        flex-shrink: 0;
+        border: none;
+        border-radius: 999px;
+        width: 24px;
+        height: 24px;
+        background: rgb(var(--ink-rgb) / 0.35);
+        color: #fff;
+        font-size: 12px;
+        line-height: 1;
+      }
+      .backup-chain-row-remove {
+        background: var(--danger);
+      }
+      #backup-chain-empty {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      #backup-chain-add-btn {
+        align-self: flex-start;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
       /* #1811 (sub-issue of #1809): isolated 3D preview + item info for a
          tapped product, same modal shell/reasoning as #sign-posts-modal
          above — replacing the old #shop-product-info/#shop-buy-hint/
@@ -4138,6 +4241,7 @@
       <button id="save-bundle-item" type="button">Save Bundle</button>
       <button id="toggle-community-sign" type="button">Community Sign</button>
       <button id="toggle-community-calendar" type="button">Community Calendar</button>
+      <button id="toggle-backup-chain" type="button">Backup Chain</button>
       <button id="delete-item" type="button">Delete</button>
     </div>
     <div id="level-controls">
@@ -4480,6 +4584,16 @@
         <div id="calendar-events-list"></div>
         <div id="calendar-events-empty">No events on this calendar yet.</div>
         <button id="calendar-events-unflag-btn" type="button">Remove Community Calendar</button>
+      </div>
+    </div>
+    <div id="backup-chain-modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div id="backup-chain-modal-content">
+        <button id="backup-chain-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2>Backup Chain</h2>
+        <p id="backup-chain-intro">If this item sells out, the next one in this list automatically takes its place.</p>
+        <div id="backup-chain-list"></div>
+        <div id="backup-chain-empty">No backups configured yet.</div>
+        <button id="backup-chain-add-btn" type="button">+ Add Backup</button>
       </div>
     </div>
     <div id="shop-product-preview-modal" role="dialog" aria-modal="true" tabindex="-1">

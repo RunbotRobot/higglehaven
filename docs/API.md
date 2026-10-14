@@ -560,20 +560,18 @@ Most of these are straightforward `builder_id`/`user_id` filters, or (for
 `purchases.buyer_builder_id` (#1101/#1123's own foreign key, not a
 free-text label match) — a review/feedback row created before that FK
 existed, or whose purchase was later deleted, is correctly left out of the
-export rather than guessed at. Two sections are a best-effort
-approximation rather than a real foreign-key filter, documented in
-`exportSocialSection`'s own comment in `worker/index.js`:
+export rather than guessed at. `calendarEvents` used to be a third,
+best-effort exception here (matching `calendar_events.author_label`
+against the account's current builder label, since `calendar_events` had
+no durable author reference at all) — `#1975`'s
+`migrations/0135_calendar_events_user_id.sql` added the real `user_id`
+column (same shape `sign_posts` already got in #1830/migrations/0125),
+which `#2032`'s own suspend-content-removal cascade (below) also depends
+on, so this is now a real foreign-key filter like the others. A calendar event
+created before that migration landed still has no attribution to check
+and is correctly left out of the export, rather than falling back to the
+old, spoofable label match. One remaining approximation:
 
-- `calendarEvents` matches `calendar_events.author_label` against the
-  account's **current** builder label — unlike `sign_posts`, which got a
-  real `user_id` column in #1830/migrations/0125, `calendar_events` was
-  never given the equivalent treatment, so there's no durable author
-  reference to filter on. This misses an event posted under a since-
-  changed label, and could in principle include an event actually posted
-  by a different account that happens to share today's label with a past
-  poster. A real `author_id`/`user_id` column on `calendar_events` is the
-  actual fix for this gap; it's tracked separately from this export
-  feature, not solved here.
 - `landletVersions`/their `instances` are scoped to landlets this builder
   **currently owns** (`landlets.owner_builder_id`), since neither
   `landlet_versions` nor `version_instances` records who actually created
@@ -803,6 +801,22 @@ operations; the day-to-day mechanism that actually keeps land claimable
 schedule — see "Automatic world growth" under "World settings" below —
 rather than through any HTTP request a session could gate at all.
 
+**A suspended account's session is valid but not authorized to act**
+(#2030, sub-issue of #1201 — see "Account suspension" under "Authentication"
+below for the suspend/unsuspend endpoints themselves).
+`requireCurrentUser` — the single join point nearly every endpoint below
+that requires a session goes through, directly or via `requireSessionBuilder`/
+`requireSessionSeller`/`requireAdmin` — rejects a currently-active suspension
+with a distinct `403` and `{ "suspended": true }` in the body, instead of the
+generic `401` a missing/expired session gets. This is deliberately *not* the
+same as not being logged in: the session cookie still resolves to a real
+account, it's just not currently allowed to act. Two things keep working
+regardless: `GET /api/auth/me` (`currentUser()`, the plain non-throwing
+lookup it uses, is untouched — a client can still identify *who* is
+suspended) and `POST /api/auth/logout` (never required authentication at
+all). An admin's own session is gated the same way — a suspended admin
+can't use admin-only endpoints either.
+
 Every endpoint section below notes its own specific rule inline; this
 section is just the shared vocabulary for reading those notes.
 
@@ -865,18 +879,19 @@ should fall back to `createdAt` for.
 
 ### Account suspension (#2029, sub-issue of #1201)
 
-`migrations/0132_account_suspensions.sql` adds `account_suspensions` — a
+`migrations/0134_account_suspensions.sql` adds `account_suspensions` — a
 dedicated, append-only history table (not columns on `users`), since the
 owner's own settled scope for #1201 wants "longer suspension log retention
 and greater detail" preserved across possibly-multiple suspend/lift cycles
 on the same account. A suspension is **reversible, not a deletion** — the
 owner explicitly ruled out a separate admin-initiated hard-delete path;
 real deletion stays reserved for the account-holder's own self-service
-`delete-account` request. (Enforcing suspension against login/actions, the
-automated notice to the suspended user, the optional sign-post/calendar-
-event removal cascade, and the 30-day grace-period auto-escalation to a
-full deletion are each their own separate, not-yet-landed sub-issue —
-#2030/#2031/#2032/#2033 respectively.)
+`delete-account` request, up to the 30-day grace period described below.
+`requireCurrentUser` (#2030) rejects a currently-active suspension outright
+with a distinct `403`/`suspended: true` — see "Authorization model" above.
+The optional sign-post/calendar-event removal cascade is #2032, documented
+on `suspend-account` below. (The automated notice to the suspended user is
+its own separate, not-yet-landed sub-issue — #2031.)
 
 ### `POST /api/auth/suspend-account`
 
@@ -891,10 +906,34 @@ expiry (the owner's own instruction: minors-access cases in particular
 should keep *more* detail, not less). `graceDays` defaults to `30` (the
 owner's confirmed default) and must be an integer in `[1, 365]` (`400`
 otherwise) — this becomes `gracePeriodEndsAt` in the response, the point
-#2033's eventual auto-escalation job will act on. `409` if the account
+#2033's auto-escalation job (below) acts on. `409` if the account
 already has an active (not lifted, not escalated) suspension — lift it via
 `unsuspend-account` first before suspending again. On success, returns
 `{ "suspension": { "suspensionId", "userId", "adminUserId", "reason", "evidenceNote", "suspendedAt", "gracePeriodEndsAt" } }`.
+
+An optional `"removeContent": true` in the request body (#2032) also
+removes every sign post and calendar event the suspended user themselves
+authored, across every landlet/instance — not just the one, if any, the
+admin happened to be looking at. This is opt-in per the owner's own
+resolved call on #781 ("not a fully separate, easy-to-forget manual step,
+but also not unconditionally automatic"), and only runs once the
+suspension insert above is confirmed to have actually landed (never on a
+`409`). Each removed row goes through the exact same admin-override DELETE
+path `DELETE /instances/:id/posts/:postId` / `.../events/:eventId` already
+use for a single post/event — one `admin_action_log` entry per row
+(`action_type: "delete_sign_post_override"`/`"delete_calendar_event_override"`),
+not a single bulk entry. **Known gap**: `calendar_events.user_id`
+(`migrations/0135_calendar_events_user_id.sql`) only exists going forward
+from that migration — unlike `sign_posts.user_id` (#1830), nothing
+previously recorded who authored a calendar event, so this cascade can
+only find and remove a long-suspended user's calendar events created
+*after* this migration landed; older ones have no attribution to check
+against at all and are silently left in place, the same limitation
+`sign_posts` already accepted for pre-#1830 posts. On success, the
+response also carries
+`"removedContent": { "signPostsRemoved", "calendarEventsRemoved" }` with
+the counts actually deleted — omitted entirely when `removeContent` isn't
+set.
 
 ### `POST /api/auth/unsuspend-account`
 
@@ -917,6 +956,26 @@ suspension, or
 otherwise — the same shape `suspend-account`'s own response returns, so a
 caller can check status first without needing two different response
 shapes.
+
+### 30-day grace-period auto-escalation (#2033, sub-issue of #1201)
+
+`escalateExpiredSuspensions` runs on the same Cloudflare Cron Trigger as
+every other periodic job described under "Automatic world growth" (World
+settings, below) — no HTTP endpoint, no session. Each tick, it finds every
+`account_suspensions` row whose `gracePeriodEndsAt` has passed with no
+admin ever lifting it (`liftedAt IS NULL`) and not already escalated
+(`escalatedAt IS NULL`), then runs the exact same account-deletion cascade
+`POST /api/auth/delete-account` uses for a real self-delete (anonymized
+email/username, password revoked, every session signed out) — reusing that
+same shared cascade function rather than a second, divergent
+implementation, per the owner's own reasoning for building suspension on
+top of that shape in the first place. Each escalation is recorded in
+`admin_action_log` (`action_type: "auto_escalate_suspension"`,
+`adminUserId: null` — no human admin acted, it's automated) referencing the
+original suspending admin and the suspension itself, so the audit trail
+stays complete even though the final step wasn't a person's direct action.
+A suspension lifted before its grace period passes is never escalated,
+regardless of how long it's been lifted.
 
 ## Builders
 
@@ -6272,14 +6331,18 @@ succeed.
   purchase fallback below). Instead, remaining stock is floored at zero
   and the purchase is completed and recorded normally.
 - Either way, the moment `stockQuantity` reaches exactly `0`, every
-  `placed_instances` row referencing that template is removed outright —
-  no archive, no "flagged sold-out but still placed" state — and each
-  affected landlet owner gets one notification naming how many of their
-  placed instances were removed. This is the same hard-delete-no-archive
-  treatment an owning builder's own self-deletion already gives every
-  instance on their landlets; there is no backup/replacement-product
-  concept yet (that's a separate, later sub-issue of #1947's own tracking
-  issue).
+  affected `placed_instances` row first gets a chance to survive via its
+  own configured backup chain (#2050 — see "Placed instance backup chains"
+  below): the first chain entry that isn't *also* already sold out is
+  activated in the instance's place, and the entries up to and including
+  it are removed from the chain. Only once an instance's own chain is
+  exhausted (or was never configured) is it removed outright — no
+  archive, no "flagged sold-out but still placed" state — with the
+  affected landlet owner getting one notification naming how many of
+  their placed instances were removed. This is the same hard-delete-no-
+  archive treatment an owning builder's own self-deletion already gives
+  every instance on their landlets, now reserved for instances that had
+  no viable backup to fall back on.
 - A `PATCH`/`PUT /api/catalog/:templateId` (or its batch sibling) that sets
   a fresh `stockQuantity` directly overwrites whatever remained — restocking
   a sold-out template, for instance, is just a normal update setting it back
@@ -6288,6 +6351,45 @@ succeed.
   a quick rejection for an obviously sold-out item) also runs earlier, in
   `POST /api/instances/:instanceId/purchase` itself, before a real-money
   purchase is even sent to checkout.
+
+### Placed instance backup chains (#2050)
+
+A sub-issue of #1952 (itself under #1947's tracking issue). Lets a
+builder configure an ordered list of backup/replacement products for one
+specific placed instance — per-*instance*, not per-template, so two
+different builders' placed instances of the same product each get their
+own independent chain. There's no footprint/dimension-matching
+requirement: a backup with different dimensions than the original is the
+builder's own problem to notice and fix (resolved on #1952's own comment
+thread). Every op below is gated to the instance's own hosting landlet's
+owner — `403` ("Not your landlet") for anyone else, `404` if the instance
+itself doesn't exist.
+
+- `GET /api/instances/:instanceId/backups` — lists the chain in order.
+  Returns `{ backups: [...] }`, each `{ backupId, instanceId, position,
+  templateId, createdAt }`.
+- `POST /api/instances/:instanceId/backups` — appends one entry. Body:
+  `{ templateId }`. `400` if `templateId` doesn't reference a real
+  catalog template. Always lands at the end of the chain — position is
+  never client-supplied.
+- `PUT /api/instances/:instanceId/backups` — reorders the whole chain in
+  one call. Body: `{ order: [backupId, ...] }`, which must contain
+  exactly the instance's current backup ids, each exactly once (`400`
+  otherwise — a partial reorder is rejected rather than guessing what to
+  do with the ids it omits).
+- `DELETE /api/instances/:instanceId/backups/:backupId` — removes one
+  entry and compacts every later entry's `position` down by one, so the
+  chain stays contiguous (the next `POST`'s own tail position is a plain
+  count of the chain, not a max).
+
+A catalog template still referenced by any `placed_instance_backups` row
+cannot be deleted (`409`, same `assertCatalogTemplatesDeletable` guard
+`saved_layout_instances`/`version_instances`/`placed_instances` already
+use) until it's removed from every chain that references it.
+
+See "Sold-out templates" above for how `sweepSoldOutTemplateInstances`
+consults this chain the moment a template it's placed against hits zero
+stock.
 
 #### Stock indicator in the catalog picker (#1951)
 
@@ -6881,7 +6983,7 @@ items that have disappeared which they haven't dismissed yet."
 `sweepSoldOutTemplateInstances` (the same sweep #1948's "on hitting exactly
 zero, removes every placed instance" behavior already describes) used to
 just hard-delete every swept `placed_instances` row with nothing retained
-— this adds a `sold_out_markers` row (`migrations/0137`) per removed
+— this adds a `sold_out_markers` row (`migrations/0138`) per removed
 instance, snapshotting its own `landlet_id`/position/template **before**
 that delete runs, so Build mode can still show a builder where something
 used to be.

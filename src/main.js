@@ -103,6 +103,10 @@ import {
   deleteCalendarEvent,
   editCalendarEvent,
   triggerCalendarEvent,
+  fetchInstanceBackups,
+  addInstanceBackup,
+  reorderInstanceBackups,
+  deleteInstanceBackup,
   fetchProductReviews,
   createProductReview,
   editProductReview,
@@ -2231,6 +2235,7 @@ const bundleTabButtons = [...document.querySelectorAll('.bundle-tab-btn')];
 // "search products" behavior is unchanged until a builder deliberately
 // narrows it.
 const searchScopeButtons = [...document.querySelectorAll('.search-scope-btn')];
+const catalogSearchScopeTabsEl = document.getElementById('catalog-search-scope-tabs');
 let catalogSearchScope = 'both'; // 'products' | 'bundles' | 'both'
 
 // #329/#330: "Prompt mode" — a second way into the exact same
@@ -2544,7 +2549,16 @@ function buildCatalogTemplateTile(template) {
   }
 
   tile.addEventListener('click', () => {
+    // #2051: when set, the Backup Chain panel's "+ Add Backup" wants the
+    // chosen template handed back to it instead of an ordinary world
+    // placement -- captured before closeCatalogPicker() below, which
+    // clears it as part of leaving pick mode.
+    const onPick = catalogPickerPickCallback;
     closeCatalogPicker();
+    if (onPick) {
+      onPick(template);
+      return;
+    }
     enterPlacementMode({ type: 'template', template }, `Tap a spot to place ${template.name}`);
   });
   return { tile, thumb };
@@ -2856,9 +2870,55 @@ for (const btn of bundleTabButtons) {
 // #1554: shared modal keyboard accessibility (#1316) missed this panel —
 // open/close now go through openModalA11y/closeModalA11y like every other
 // real modal dialog in this file.
+//
+// #2051: when the picker was opened via openCatalogPickerForPick (the
+// Backup Chain panel's "+ Add Backup" button), closing it by any route —
+// a tile pick, the close button, Escape, or a backdrop click via
+// openModalA11y — must also leave pick mode: clear the callbacks, restore
+// the ordinary scope-tab row that mode hides, drop the low-opacity
+// reference mesh it showed, and (via the stored "done" callback) hand
+// control back to whatever opened the picker for a pick. One choke point
+// here rather than duplicating this at every close trigger. onDone fires
+// exactly once per pick session, whether the picker closed via an actual
+// pick (see buildCatalogTemplateTile's tile click, which calls
+// closeCatalogPicker before invoking the picked template's own callback)
+// or a plain cancel — openModalA11y only ever tracks one modal at a time
+// (see its own comment above), so the Backup Chain panel closes itself
+// before opening this picker and relies on onDone to reopen+re-render
+// itself afterward, rather than both staying visible at once.
+let catalogPickerPickCallback = null;
+let catalogPickerPickDoneCallback = null;
 function closeCatalogPicker() {
   catalogPickerEl.classList.remove('visible');
   closeModalA11y(catalogPickerEl);
+  if (catalogPickerPickCallback) {
+    catalogPickerPickCallback = null;
+    const onDone = catalogPickerPickDoneCallback;
+    catalogPickerPickDoneCallback = null;
+    catalogSearchScopeTabsEl.hidden = false;
+    hideBackupReferenceMesh();
+    if (onDone) onDone();
+  }
+}
+// A backup must be a single catalog product, not a bundle — forces
+// Products-only scope and hides the scope-tab row for the duration of the
+// pick so there's nothing tappable that wouldn't do anything (a bundle
+// tile calls its own multi-item placement flow, never this callback).
+// Reuses the exact same picker UI/search/thumbnails as the ordinary
+// "+ Add Item" flow below rather than building a second one.
+function openCatalogPickerForPick(onPick, onDone) {
+  catalogPickerPickCallback = onPick;
+  catalogPickerPickDoneCallback = onDone;
+  catalogPickerEl.classList.add('visible');
+  catalogSearchInputEl.value = '';
+  catalogSearchScope = 'products';
+  for (const b of searchScopeButtons) {
+    b.classList.toggle('active', b.dataset.searchScope === 'products');
+    b.setAttribute('aria-pressed', String(b.dataset.searchScope === 'products'));
+  }
+  catalogSearchScopeTabsEl.hidden = true;
+  updateCatalogSearchPanel();
+  openModalA11y(catalogPickerEl, closeCatalogPicker);
 }
 addItemBtn.addEventListener('click', () => {
   if (pendingPlacement) {
@@ -7876,6 +7936,7 @@ const copyBtn = document.getElementById('copy-item');
 const saveBundleBtn = document.getElementById('save-bundle-item');
 const communitySignBtn = document.getElementById('toggle-community-sign');
 const communityCalendarBtn = document.getElementById('toggle-community-calendar');
+const backupChainBtn = document.getElementById('toggle-backup-chain');
 const deleteBtn = document.getElementById('delete-item');
 const multiSelectBtn = document.getElementById('toggle-multiselect');
 const measureBtn = document.getElementById('toggle-measure');
@@ -8993,6 +9054,11 @@ function updateSelectionUI() {
   communityCalendarBtn.classList.toggle('active', isCommunityCalendar);
   communityCalendarBtn.setAttribute('aria-pressed', String(isCommunityCalendar));
   communityCalendarBtn.textContent = singleMesh?.userData.isCommunityCalendar ? 'Community Calendar ✓ (Manage)' : 'Community Calendar';
+  // Backup Chain (#2050/#2051): every placed instance can have one, not
+  // just flagged ones, so this is a plain "open the manage panel" button —
+  // same single-selection-only gating as Trim/Community Sign/Calendar
+  // above, but no toggle/active state of its own to reflect.
+  backupChainBtn.disabled = !singleMesh;
   if (multiSelectMode) {
     // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
     // — the gizmo stays hidden the whole time multi-select is on, so it
@@ -9521,6 +9587,198 @@ calendarEventsUnflagBtn.addEventListener('click', async () => {
   updateSelectionUI();
   persistLayout();
   await syncUpdate(mesh);
+});
+
+// Backup Chain (#2050/#2051, docs/API.md's "Placed instance backup
+// chains") — an ordered, per-instance list of replacement products,
+// auto-activated server-side the moment the active one sells out. Unlike
+// Community Sign/Calendar above, every placed instance can have one (it's
+// not gated behind some other flag), so this button always opens the same
+// manage panel directly rather than toggling a flag first — see
+// backupChainBtn's own disabled-only (no active state) line in
+// updateSelectionUI.
+const backupChainModalEl = document.getElementById('backup-chain-modal');
+const backupChainCloseBtn = document.getElementById('backup-chain-close-btn');
+const backupChainListEl = document.getElementById('backup-chain-list');
+const backupChainEmptyEl = document.getElementById('backup-chain-empty');
+const backupChainAddBtn = document.getElementById('backup-chain-add-btn');
+let backupChainTargetMesh = null;
+// Same stale-fetch guard idiom as signPostsLoadToken/calendarEventsLoadToken
+// above.
+let backupChainLoadToken = 0;
+
+// #2051: the low-opacity placement/alignment reference the owner
+// explicitly asked for ("when placing a backup product, the existing
+// product should be visible in low opacity") — a second, independent
+// rebuild of the currently-selected instance's own mesh at its own
+// position, shown only while the catalog picker is open for a backup
+// pick. Never added to productMeshes, so it's automatically never a
+// raycast target for selection or the placement-click handler (both only
+// ever check that array) — no separate "non-interactive" flag needed,
+// same reasoning addBuildModeNeighborOutlines' own low-opacity overlay
+// already relies on.
+const BACKUP_REFERENCE_OPACITY = 0.35;
+let backupReferenceMesh = null;
+
+async function showBackupReferenceMesh(mesh) {
+  hideBackupReferenceMesh();
+  const reference = await createMeshForInstance({
+    templateId: mesh.userData.template.templateId,
+    x: mesh.position.x,
+    y: mesh.position.y,
+    z: mesh.position.z,
+    rotationX: mesh.rotation.x,
+    rotationY: mesh.rotation.y,
+    rotationZ: mesh.rotation.z,
+    crop: mesh.userData.crop,
+    scale: mesh.userData.scale,
+    label: mesh.userData.label,
+  });
+  if (!reference) return;
+  // Same "traverse every part's material(s), including a multi-mesh
+  // loaded GLTF" idiom as setShopAvatarOpacity — a product mesh can have
+  // arbitrarily many parts, unlike a simple procedural box.
+  reference.traverse((object) => {
+    if (!object.material) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    for (const material of materials) {
+      material.transparent = true;
+      material.opacity = BACKUP_REFERENCE_OPACITY;
+    }
+  });
+  scene.add(reference);
+  backupReferenceMesh = reference;
+}
+
+function hideBackupReferenceMesh() {
+  if (!backupReferenceMesh) return;
+  scene.remove(backupReferenceMesh);
+  disposeObject(backupReferenceMesh);
+  backupReferenceMesh = null;
+}
+// #2051: e2e-only hook (same window.__test* convention as
+// window.__testShopAvatarHasTransparentMaterial above) -- lets a test
+// confirm the low-opacity placement reference actually appears while the
+// catalog picker is open for a backup pick, and is gone again once it
+// closes, without needing to read raw WebGL pixels. Always inert unless a
+// test calls it.
+window.__testBackupReferenceMeshVisible = () => backupReferenceMesh !== null;
+
+function formatInstanceBackupTemplateName(templateId) {
+  return findTemplate(templateId)?.name ?? templateId;
+}
+
+async function renderBackupChain() {
+  backupChainListEl.innerHTML = '';
+  if (!backupChainTargetMesh) return;
+  const myLoadToken = ++backupChainLoadToken;
+  const instanceId = backupChainTargetMesh.userData.instanceId;
+  let backups;
+  try {
+    ({ backups } = await fetchInstanceBackups(instanceId));
+  } catch (err) {
+    if (myLoadToken !== backupChainLoadToken) return; // superseded while fetching
+    backupChainEmptyEl.textContent = err.message || 'Could not load the backup chain.';
+    backupChainEmptyEl.hidden = false;
+    return;
+  }
+  if (myLoadToken !== backupChainLoadToken) return; // superseded — a newer call owns the list now
+  // #1128-style reset-on-success: without this, a past fetch failure
+  // leaves this stuck on its error message forever, even once a later
+  // load succeeds with an empty (but genuinely empty) chain.
+  backupChainEmptyEl.textContent = 'No backups configured yet.';
+  backupChainEmptyEl.hidden = backups.length > 0;
+  backups.forEach((backup, index) => {
+    const row = document.createElement('div');
+    row.className = 'backup-chain-row';
+    const name = document.createElement('span');
+    name.className = 'backup-chain-row-name';
+    name.textContent = `${index + 1}. ${formatInstanceBackupTemplateName(backup.templateId)}`;
+    row.appendChild(name);
+    const upBtn = document.createElement('button');
+    upBtn.type = 'button';
+    upBtn.className = 'backup-chain-row-up';
+    upBtn.textContent = '▲';
+    upBtn.setAttribute('aria-label', 'Move up in the chain');
+    upBtn.disabled = index === 0;
+    upBtn.addEventListener('click', () => reorderBackupChainRow(backups, index, index - 1));
+    row.appendChild(upBtn);
+    const downBtn = document.createElement('button');
+    downBtn.type = 'button';
+    downBtn.className = 'backup-chain-row-down';
+    downBtn.textContent = '▼';
+    downBtn.setAttribute('aria-label', 'Move down in the chain');
+    downBtn.disabled = index === backups.length - 1;
+    downBtn.addEventListener('click', () => reorderBackupChainRow(backups, index, index + 1));
+    row.appendChild(downBtn);
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'backup-chain-row-remove';
+    removeBtn.textContent = '×';
+    removeBtn.setAttribute('aria-label', 'Remove backup');
+    removeBtn.addEventListener('click', async () => {
+      removeBtn.disabled = true;
+      try {
+        await deleteInstanceBackup(instanceId, backup.backupId);
+        await renderBackupChain();
+      } catch (err) {
+        alert(err.message || 'Could not remove this backup.');
+        removeBtn.disabled = false;
+      }
+    });
+    row.appendChild(removeBtn);
+    backupChainListEl.appendChild(row);
+  });
+}
+
+async function reorderBackupChainRow(backups, fromIndex, toIndex) {
+  const reordered = [...backups];
+  const [moved] = reordered.splice(fromIndex, 1);
+  reordered.splice(toIndex, 0, moved);
+  const instanceId = backupChainTargetMesh.userData.instanceId;
+  try {
+    await reorderInstanceBackups(instanceId, reordered.map((backup) => backup.backupId));
+    await renderBackupChain();
+  } catch (err) {
+    alert(err.message || 'Could not reorder the backup chain.');
+  }
+}
+
+function openBackupChainModal(mesh) {
+  backupChainTargetMesh = mesh;
+  backupChainModalEl.classList.add('visible');
+  openModalA11y(backupChainModalEl, closeBackupChainModal);
+  renderBackupChain();
+}
+function closeBackupChainModal() {
+  backupChainModalEl.classList.remove('visible');
+  backupChainTargetMesh = null;
+  hideBackupReferenceMesh();
+  closeModalA11y(backupChainModalEl);
+}
+backupChainCloseBtn.addEventListener('click', closeBackupChainModal);
+backupChainBtn.addEventListener('click', () => {
+  if (selectedMeshes.size !== 1) return;
+  const [mesh] = selectedMeshes;
+  openBackupChainModal(mesh);
+});
+backupChainAddBtn.addEventListener('click', async () => {
+  if (!backupChainTargetMesh) return;
+  const mesh = backupChainTargetMesh;
+  const instanceId = mesh.userData.instanceId;
+  closeBackupChainModal();
+  await showBackupReferenceMesh(mesh);
+  openCatalogPickerForPick(
+    async (template) => {
+      try {
+        await addInstanceBackup(instanceId, { templateId: template.templateId });
+        await renderBackupChain();
+      } catch (err) {
+        alert(err.message || 'Could not add this backup.');
+      }
+    },
+    () => openBackupChainModal(mesh),
+  );
 });
 
 // Placement-pending state: set by tapping a catalog item, the upload

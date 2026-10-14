@@ -842,6 +842,38 @@ describe('Product reviews', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #2075: PUT /catalog/batch used to run assertUploadedModelExists (up to
+  // 100 real R2 bucket.head() calls) before checkRateLimit, so an
+  // already-rate-limited caller still paid that full cost on every rejected
+  // call. Proven here the same way the two tests above exhaust the limit,
+  // then the one-past-the-limit request also carries a modelUrl that would
+  // fail assertUploadedModelExists (a /uploads/models/ path nothing ever
+  // uploaded to) -- if the rate limit is genuinely checked first, this still
+  // 429s; if assertUploadedModelExists ran first again, it would 400 instead.
+  it('checks the rate limit before assertUploadedModelExists on an already-limited batch PUT', async () => {
+    const templateId = await createTemplate('catalog-batch-put-rate-limit-ordering');
+    const headers = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/catalog/batch', {
+        method: 'PUT', headers,
+        body: JSON.stringify({ templates: [{
+          templateId, name: 'Batch put rate limit ordering', color: '#123456',
+          dimensions: { width: 1 + i * 0.01, depth: 1, height: 1 },
+        }] }),
+      });
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/catalog/batch', {
+      method: 'PUT', headers,
+      body: JSON.stringify({ templates: [{
+        templateId, name: 'Batch put rate limit ordering', color: '#123456',
+        dimensions: { width: 9, depth: 1, height: 1 },
+        modelUrl: `/uploads/models/nonexistent-${crypto.randomUUID()}.glb`,
+      }] }),
+    });
+    expect(limited.response.status).toBe(429);
+  });
+
   // Found via backlog audit: review moderation (DELETE) has the identical
   // permissive-when-orphaned shape as catalog template DELETE above (#520)
   // — a seller-less template's reviews stay unrestricted, but until now had
@@ -1804,6 +1836,171 @@ describe('Authentication', () => {
       );
       expect(afterSuspend.response.status).toBe(200);
       expect(afterSuspend.body.suspension.reason).toBe('x');
+    });
+
+    // #2032: the suspend action's optional sign-post/calendar-event removal
+    // cascade, reusing #781's own admin-override DELETE path per row.
+    describe('removeContent cascade (#2032)', () => {
+      async function createTemplate(templateId) {
+        const created = await api('/catalog', {
+          method: 'POST',
+          body: JSON.stringify({
+            templateId, name: `Suspension content ${templateId}`, color: '#654321',
+            dimensions: { width: 1, depth: 1, height: 1 },
+          }),
+        });
+        expect(created.response.status).toBe(201);
+        return templateId;
+      }
+
+      it('removes only the suspended user\'s own sign posts and calendar events, across every landlet, logging each via admin_action_log', async () => {
+        const admin = await makeAdmin('remove-content-admin');
+        const target = await signupBuilder('remove-content-target');
+        const stranger = await signupBuilder('remove-content-stranger');
+
+        await createGreenbeltLandlet('remove-content-target-landlet');
+        await api('/landlets/remove-content-target-landlet/claim', target.session({ method: 'POST' }));
+        const templateId = await createTemplate('remove-content-template');
+        await api('/instances', target.session({
+          method: 'POST',
+          body: JSON.stringify({
+            instanceId: 'remove-content-sign', landletId: 'remove-content-target-landlet',
+            templateId, x: 1, y: 1, isCommunitySign: true,
+          }),
+        }));
+        await api('/instances', target.session({
+          method: 'POST',
+          body: JSON.stringify({
+            instanceId: 'remove-content-calendar', landletId: 'remove-content-target-landlet',
+            templateId, x: 2, y: 2, isCommunityCalendar: true,
+          }),
+        }));
+
+        // The suspended user's own content, on their own landlet.
+        const targetPost = await api('/instances/remove-content-sign/posts', target.session({
+          method: 'POST', body: JSON.stringify({ text: 'My own sign post' }),
+        }));
+        expect(targetPost.response.status).toBe(201);
+        const targetEvent = await api('/instances/remove-content-calendar/events', target.session({
+          method: 'POST', body: JSON.stringify({ text: 'My own calendar event' }),
+        }));
+        expect(targetEvent.response.status).toBe(201);
+
+        // A different account's sign post on the *same* community sign --
+        // must survive. Calendar events require landlet ownership to post
+        // at all (requireOwnedLandlet), so only a sign post can exercise
+        // "someone else posting on the suspended user's own instance."
+        const strangerPost = await api('/instances/remove-content-sign/posts', stranger.session({
+          method: 'POST', body: JSON.stringify({ text: "A stranger's sign post" }),
+        }));
+        expect(strangerPost.response.status).toBe(201);
+
+        // The stranger's own landlet and content -- must also survive.
+        await createGreenbeltLandlet('remove-content-stranger-landlet');
+        await api('/landlets/remove-content-stranger-landlet/claim', stranger.session({ method: 'POST' }));
+        await api('/instances', stranger.session({
+          method: 'POST',
+          body: JSON.stringify({
+            instanceId: 'remove-content-stranger-calendar', landletId: 'remove-content-stranger-landlet',
+            templateId, x: 3, y: 3, isCommunityCalendar: true,
+          }),
+        }));
+        const strangerEvent = await api('/instances/remove-content-stranger-calendar/events', stranger.session({
+          method: 'POST', body: JSON.stringify({ text: "A stranger's own calendar event" }),
+        }));
+        expect(strangerEvent.response.status).toBe(201);
+
+        // A legacy calendar event predating migrations/0135 -- no user_id
+        // to attribute at all, even sharing the target's own author_label.
+        // Confirms the cascade correctly leaves an unattributable row in
+        // place rather than guessing from author_label.
+        await env.DB.prepare(`
+          INSERT INTO calendar_events (event_id, instance_id, author_label, text) VALUES (?, ?, ?, ?)
+        `).bind('remove-content-legacy-event', 'remove-content-calendar', target.builder.label, 'Pre-migration, unattributed').run();
+
+        const suspended = await api('/auth/suspend-account', admin.session({
+          method: 'POST', body: JSON.stringify({ email: target.email, reason: 'x', removeContent: true }),
+        }));
+        expect(suspended.response.status).toBe(200);
+        expect(suspended.body.removedContent).toEqual({ signPostsRemoved: 1, calendarEventsRemoved: 1 });
+
+        const signsAfter = await api('/instances/remove-content-sign/posts');
+        expect(signsAfter.body.posts.map((p) => p.text)).toEqual(["A stranger's sign post"]);
+        const calendarAfter = await api('/instances/remove-content-calendar/events');
+        expect(calendarAfter.body.events.map((e) => e.text)).toEqual(['Pre-migration, unattributed']);
+        const strangerCalendarAfter = await api('/instances/remove-content-stranger-calendar/events');
+        expect(strangerCalendarAfter.body.events.map((e) => e.text)).toEqual(["A stranger's own calendar event"]);
+
+        const adminUserId = (await api('/auth/me', admin.session())).body.user.userId;
+        const postLog = await env.DB.prepare(
+          'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+        ).bind('delete_sign_post_override', targetPost.body.post.postId).first();
+        expect(postLog.admin_user_id).toBe(adminUserId);
+        expect(postLog.target_type).toBe('sign_post');
+        const eventLog = await env.DB.prepare(
+          'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+        ).bind('delete_calendar_event_override', targetEvent.body.event.eventId).first();
+        expect(eventLog.admin_user_id).toBe(adminUserId);
+        expect(eventLog.target_type).toBe('calendar_event');
+      });
+
+      it('leaves content alone when removeContent is omitted, and reports no removedContent key', async () => {
+        const admin = await makeAdmin('remove-content-omit-admin');
+        const target = await signupBuilder('remove-content-omit-target');
+        await createGreenbeltLandlet('remove-content-omit-landlet');
+        await api('/landlets/remove-content-omit-landlet/claim', target.session({ method: 'POST' }));
+        const templateId = await createTemplate('remove-content-omit-template');
+        await api('/instances', target.session({
+          method: 'POST',
+          body: JSON.stringify({
+            instanceId: 'remove-content-omit-sign', landletId: 'remove-content-omit-landlet',
+            templateId, x: 1, y: 1, isCommunitySign: true,
+          }),
+        }));
+        const posted = await api('/instances/remove-content-omit-sign/posts', target.session({
+          method: 'POST', body: JSON.stringify({ text: 'Should survive' }),
+        }));
+        expect(posted.response.status).toBe(201);
+
+        const suspended = await api('/auth/suspend-account', admin.session({
+          method: 'POST', body: JSON.stringify({ email: target.email, reason: 'x' }),
+        }));
+        expect(suspended.response.status).toBe(200);
+        expect(suspended.body.removedContent).toBeUndefined();
+
+        const postsAfter = await api('/instances/remove-content-omit-sign/posts');
+        expect(postsAfter.body.posts.map((p) => p.text)).toEqual(['Should survive']);
+      });
+
+      it('removes nothing when the account is already suspended (409), even with removeContent: true', async () => {
+        const admin = await makeAdmin('remove-content-409-admin');
+        const target = await signupBuilder('remove-content-409-target');
+        await createGreenbeltLandlet('remove-content-409-landlet');
+        await api('/landlets/remove-content-409-landlet/claim', target.session({ method: 'POST' }));
+        const templateId = await createTemplate('remove-content-409-template');
+        await api('/instances', target.session({
+          method: 'POST',
+          body: JSON.stringify({
+            instanceId: 'remove-content-409-sign', landletId: 'remove-content-409-landlet',
+            templateId, x: 1, y: 1, isCommunitySign: true,
+          }),
+        }));
+        const posted = await api('/instances/remove-content-409-sign/posts', target.session({
+          method: 'POST', body: JSON.stringify({ text: 'Still here' }),
+        }));
+        expect(posted.response.status).toBe(201);
+
+        await api('/auth/suspend-account', admin.session({
+          method: 'POST', body: JSON.stringify({ email: target.email, reason: 'first' }),
+        }));
+        const secondAttempt = await api('/auth/suspend-account', admin.session({
+          method: 'POST', body: JSON.stringify({ email: target.email, reason: 'second', removeContent: true }),
+        }));
+        expect(secondAttempt.response.status).toBe(409);
+
+        const postsAfter = await api('/instances/remove-content-409-sign/posts');
+        expect(postsAfter.body.posts.map((p) => p.text)).toEqual(['Still here']);
+      });
     });
 
     // #2030: requireCurrentUser is the single join point every
