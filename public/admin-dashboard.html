@@ -759,6 +759,12 @@
   // overlapping Refresh clicks) can apply out of order, duplicating or
   // reverting rows with no ordering protection.
   let ringsLoadToken = 0;
+  // #2073: same monotonic-token guard as ringsLoadToken just above --
+  // viewRing() has no re-entrancy protection of its own, so an admin
+  // clicking "Details" on one ring and then another before the first
+  // response lands can have the slower response overwrite the faster
+  // one, showing a ring that doesn't match the admin's last click.
+  let ringDetailLoadToken = 0;
 
   function renderRings() {
     if (!ringsRows.length) {
@@ -819,13 +825,16 @@
   }
 
   async function viewRing(ringId) {
+    const myDetailLoadToken = ++ringDetailLoadToken;
     clearError();
     try {
       const body = await apiFetch('/api/land-candidate-rings/' + encodeURIComponent(ringId));
+      if (myDetailLoadToken !== ringDetailLoadToken) return;
       document.getElementById('ringDetailId').textContent = body.ring.ringId;
       document.getElementById('ringDetailBody').textContent = JSON.stringify(body.ring, null, 2);
       ringDetailWrap.hidden = false;
     } catch (error) {
+      if (myDetailLoadToken !== ringDetailLoadToken) return;
       showError(error.message);
     }
   }
@@ -1551,14 +1560,29 @@
       reassignTargetInput.value = '';
     }
 
+    // #2062/#2072: lookupLandlet() and forceComplete()/reassign() below all
+    // race each other -- a lookup, a force-complete, and a reassign-owner
+    // call can each be in flight at once, all resolving into the very same
+    // renderLandlet() (which also reassigns currentLandlet). Every one of
+    // them increments this single shared token, so whichever call is
+    // actually the LATEST one started always wins the eventual render,
+    // regardless of which order their responses happen to land in -- same
+    // monotonic-token idiom every other panel in this file already uses
+    // (loadRosterToken, worldLoadToken, ringsLoadToken, etc.), just shared
+    // across three call sites instead of one.
+    let landletLookupToken = 0;
+
     async function lookupLandlet() {
       clearError();
       const landletId = lookupInput.value.trim();
       if (!landletId) return;
+      const myLandletLookupToken = ++landletLookupToken;
       try {
         const body = await apiFetch('/api/landlets/' + encodeURIComponent(landletId));
+        if (myLandletLookupToken !== landletLookupToken) return;
         renderLandlet(body.landlet);
       } catch (error) {
+        if (myLandletLookupToken !== landletLookupToken) return;
         detailWrap.hidden = true;
         showError(error.message);
       }
@@ -1567,11 +1591,13 @@
     async function forceComplete() {
       if (!currentLandlet) return;
       clearError();
+      const myLandletLookupToken = ++landletLookupToken;
       try {
         const body = await apiFetch(
           '/api/landlets/' + encodeURIComponent(currentLandlet.landletId) + '/generation-complete',
           { method: 'POST' },
         );
+        if (myLandletLookupToken !== landletLookupToken) return;
         renderLandlet(body.landlet);
         // #1888: a landlet the world circle doesn't yet fully enclose stays
         // "generating" even after this call succeeds (generatedAt is set,
@@ -1583,6 +1609,7 @@
           forceCompleteNote.textContent = 'Generation marked complete; this landlet will become greenbelt once a world expansion encloses it.';
         }
       } catch (error) {
+        if (myLandletLookupToken !== landletLookupToken) return;
         showError(error.message);
       }
     }
@@ -1592,6 +1619,7 @@
       const ownerBuilderId = reassignTargetInput.value.trim();
       if (!ownerBuilderId) return;
       clearError();
+      const myLandletLookupToken = ++landletLookupToken;
       const payload = { ownerBuilderId };
       if (cancelActiveAuction) payload.cancelActiveAuction = true;
       try {
@@ -1599,8 +1627,10 @@
           '/api/landlets/' + encodeURIComponent(currentLandlet.landletId) + '/reassign-owner',
           { method: 'POST', body: JSON.stringify(payload) },
         );
+        if (myLandletLookupToken !== landletLookupToken) return;
         renderLandlet(body.landlet);
       } catch (error) {
+        if (myLandletLookupToken !== landletLookupToken) return;
         if (error.activeAuction) {
           const a = error.activeAuction;
           auctionDetailsEl.textContent = 'Active auction ' + a.auctionId + ': starting bid '
