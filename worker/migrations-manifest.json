@@ -126,5 +126,6 @@
   "0126_catalog_template_test_model.sql",
   "0127_video_generation_credits.sql",
   "0129_user_content_edit_history.sql",
-  "0130_product_reviews_user_id.sql"
+  "0130_product_reviews_user_id.sql",
+  "0132_self_dealing_flags.sql"
 ]
