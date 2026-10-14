@@ -11636,6 +11636,16 @@ async function handleLandlets(request, db, route, url) {
     return handleLandletVersions(request, db, route, url);
   }
 
+  // #2068 (leaf sub-issue of #1973/#1947): grayed-out sold-out markers for
+  // the builder's own land -- landlet-scoped (not a cross-landlet "my
+  // markers" list like GET /builders/me/low-stock above) since a marker's
+  // x_m/y_m are landlet-local coordinates, same as placed_instances' own,
+  // and only make sense rendered inside the one landlet's scene they
+  // belong to.
+  if (route.length >= 3 && route[2] === 'sold-out-markers') {
+    return handleSoldOutMarkers(request, db, route);
+  }
+
   if (route.length === 3 && route[2] === 'auction') {
     return handleStartAuction(request, db, route[1]);
   }
@@ -15674,14 +15684,15 @@ async function handleSelfDealingFlags(request, db, route) {
 // before.
 async function sweepSoldOutTemplateInstances(db, template) {
   const { results: affectedInstances } = await db.prepare(`
-    SELECT pi.instance_id AS instanceId, l.owner_builder_id AS builderId
+    SELECT pi.instance_id AS instanceId, pi.landlet_id AS landletId, pi.x_m AS xM, pi.y_m AS yM, pi.z_m AS zM,
+           l.owner_builder_id AS builderId
     FROM placed_instances pi
     JOIN landlets l ON l.landlet_id = pi.landlet_id
     WHERE pi.template_id = ?
   `).bind(template.template_id).all();
 
   const deletedCountByBuilder = new Map();
-  for (const { instanceId, builderId } of affectedInstances) {
+  for (const { instanceId, landletId, xM, yM, zM, builderId } of affectedInstances) {
     const { results: chain } = await db.prepare(`
       SELECT pib.backup_id AS backupId, pib.template_id AS templateId, ct.stock_quantity AS stockQuantity
       FROM placed_instance_backups pib
@@ -15715,6 +15726,17 @@ async function sweepSoldOutTemplateInstances(db, template) {
       ]);
       continue;
     }
+    // #2068: snapshot this instance's own landlet/position (already fetched
+    // above) before deleting it -- lets Build mode later show "something
+    // used to be here" via a grayed-out marker, instead of the location
+    // simply vanishing with no trace. Only reached once the backup chain
+    // above is confirmed exhausted -- an instance reactivated onto a
+    // backup template in the branch above is not "sold out and gone," so
+    // it gets no marker.
+    await db.prepare(`
+      INSERT INTO sold_out_markers (marker_id, landlet_id, x_m, y_m, z_m, template_id, template_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(`sold-out-marker-${crypto.randomUUID()}`, landletId, xM, yM, zM, template.template_id, template.name).run();
     // Chain exhausted (or empty) with nothing viable -- cascades away this
     // instance's own now-moot placed_instance_backups rows automatically
     // (migrations/0137's ON DELETE CASCADE), unlike the activation branch
@@ -15729,6 +15751,55 @@ async function sweepSoldOutTemplateInstances(db, template) {
     await fireNotification(db, builderId,
       `"${template.name}" just sold out — ${count} placed ${count === 1 ? 'instance has' : 'instances have'} been removed from your land.`);
   }
+}
+
+function soldOutMarkerFromRow(row) {
+  return {
+    markerId: row.marker_id,
+    landletId: row.landlet_id,
+    x: row.x_m,
+    y: row.y_m,
+    z: row.z_m,
+    templateId: row.template_id,
+    templateName: row.template_name,
+    soldOutAt: row.sold_out_at,
+  };
+}
+
+// #2068: dismissing is a one-way action (clearing a marker permanently,
+// same "builder has acknowledged this, stop showing it" shape other
+// dismiss-style actions in this app use), not a delete-then-recreate --
+// shares a rate-limit bucket shape with every other per-account mutation
+// limit in this file.
+const SOLD_OUT_MARKER_DISMISS_RATE_LIMIT_MAX = 20;
+
+async function handleSoldOutMarkers(request, db, route) {
+  const landletId = route[1];
+
+  if (request.method === 'GET' && route.length === 3) {
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await requireOwnedLandlet(db, landletId, sessionBuilder.builder_id);
+    const { results } = await db.prepare(
+      'SELECT * FROM sold_out_markers WHERE landlet_id = ? AND dismissed_at IS NULL ORDER BY sold_out_at ASC',
+    ).bind(landletId).all();
+    return json({ markers: results.map(soldOutMarkerFromRow) });
+  }
+
+  if (request.method === 'POST' && route.length === 5 && route[4] === 'dismiss') {
+    const markerId = route[3];
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await requireOwnedLandlet(db, landletId, sessionBuilder.builder_id);
+    await checkRateLimit(db, `sold-out-marker-dismiss:${sessionBuilder.builder_id}`, SOLD_OUT_MARKER_DISMISS_RATE_LIMIT_MAX);
+    const result = await db.prepare(
+      'UPDATE sold_out_markers SET dismissed_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE marker_id = ? AND landlet_id = ? AND dismissed_at IS NULL',
+    ).bind(markerId, landletId).run();
+    if (result.meta.changes === 0) {
+      throw new HttpError('Marker not found or already dismissed', 404);
+    }
+    return json({ dismissed: true });
+  }
+
+  return json({ error: 'Not found' }, 404);
 }
 
 async function handlePurchases(request, env, route, url) {

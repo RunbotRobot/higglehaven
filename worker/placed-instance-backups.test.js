@@ -232,6 +232,13 @@ describe('sweepSoldOutTemplateInstances consults the backup chain (#2050)', () =
 
     const notices = await api('/notifications', builder.session());
     expect(notices.body.notifications.some((n) => n.message.includes('just sold out'))).toBe(false);
+
+    // #2068: a successful backup-chain activation reuses the instance in
+    // place -- nothing about it is "gone," so it must not also leave behind
+    // a sold-out marker (that's reserved for the chain-exhausted path below).
+    const markers = await api('/landlets/sweep-chain-landlet/sold-out-markers', builder.session());
+    expect(markers.response.status).toBe(200);
+    expect(markers.body.markers).toEqual([]);
   });
 
   it('skips past a chain entry whose own template is already out of stock, and compacts the surviving tail\'s positions', async () => {
@@ -293,6 +300,11 @@ describe('sweepSoldOutTemplateInstances consults the backup chain (#2050)', () =
     expect(afterSale.response.status).toBe(404);
     const notices = await api('/notifications', builder.session());
     expect(notices.body.notifications.some((n) => n.message.includes('just sold out'))).toBe(true);
+
+    // #2068: an empty chain is the same as no chain at all -- the
+    // chain-exhausted branch still runs and leaves a marker behind.
+    const markers = await api('/landlets/sweep-empty-chain-landlet/sold-out-markers', builder.session());
+    expect(markers.body.markers).toMatchObject([{ templateId: 'sweep-empty-chain-active' }]);
   });
 
   it('falls back to delete+notify when every chain entry is exhausted', async () => {
@@ -318,5 +330,10 @@ describe('sweepSoldOutTemplateInstances consults the backup chain (#2050)', () =
     const row = await env.DB.prepare('SELECT COUNT(*) AS count FROM placed_instance_backups WHERE instance_id = ?')
       .bind('sweep-all-exhausted-instance').first();
     expect(row.count).toBe(0);
+
+    // #2068: exhausted entries are skipped, not "viable" -- the chain still
+    // counts as exhausted overall, so the chain-exhausted branch runs.
+    const markers = await api('/landlets/sweep-all-exhausted-landlet/sold-out-markers', builder.session());
+    expect(markers.body.markers).toMatchObject([{ templateId: 'sweep-all-exhausted-active' }]);
   });
 });
