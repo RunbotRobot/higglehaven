@@ -6808,6 +6808,73 @@ here — a flag is a soft signal, not an accusation, so reviewing one is
 just acknowledgment, optionally with a note for the admin's own record;
 nothing else in this app reacts to a flag's status.
 
+### Counterfeit/policy flags + strike ladder (#2017/#2018)
+
+`#2017`'s own endpoints were never written up here — documented now
+alongside `#2018`'s strike-ladder consequence, which hangs directly off
+the `resolve` action below.
+
+```
+POST /api/catalog/:templateId/flags
+{ "reason": "Looks like a counterfeit of a trademarked design" }  // optional, ≤280 chars
+```
+
+Requires `requireSessionBuilder`. Inserts a `product_flags` row
+(`migrations/0131`); a second flag from the same builder on the same
+listing hits that migration's own `UNIQUE(template_id, flagger_builder_id)`
+and surfaces as a `409`. Once `PRODUCT_FLAG_AUTO_HIDE_THRESHOLD` (3)
+*distinct* flaggers are pending at once, the listing auto-hides
+(`catalog_templates.flagged_hidden_at`, blocking new purchases) and the
+seller is notified (`#2056`) — all before any admin has reviewed anything.
+Returns `{ flagId, pendingCount, autoHidden }`.
+
+```
+GET /api/product-flags
+```
+
+Admin-only. One row per listing with pending flags (not one per flag) —
+`{ templateId, templateName, sellerId, pendingCount }` — since an admin
+resolves a listing's whole pending set in one action, not flag-by-flag.
+
+```
+POST /api/catalog/:templateId/flags/resolve
+{ "action": "approve", "severe": false }  // severe optional, approve-only
+```
+
+Admin-only. `action` is `"approve"` or `"reject"`; `400` if neither.
+Resolves every still-pending flag on the listing at once (a flag is a
+report against the listing, not an individually-adjudicated claim).
+`400` if there was nothing pending to resolve. `approve` hides the listing
+permanently (not a hard delete — `assertCatalogTemplatesDeletable` still
+applies to it) and increments `sellers.strike_count`; `reject` un-hides it
+if auto-hide had already fired. Either way, writes one `admin_action_log`
+entry (`action_type: "approved_product_flags"`/`"rejected_product_flags"`).
+
+**`#2018`'s strike ladder** fires only on `approve`, reading the seller's
+own just-incremented `strike_count` fresh (so it always acts on the real
+post-increment total, not a stale pre-read): 1st confirmed violation is a
+dashboard-notification warning only; the 2nd violation (or the 1st, if
+`severe: true`) is a 7-day account suspension via `#1201`'s own suspension
+primitive; the 3rd violation, or any single `severe` one — skipping the
+ladder entirely regardless of count — is "permanent removal." `#1201`'s
+own resolution ruled out a separate admin-initiated hard-delete tool, so
+"permanent" here reuses the ordinary suspension primitive at its own
+maximum `graceDays` (365) rather than inventing a second mechanism —
+`#2033`'s own auto-escalation (once it lands) is what actually turns an
+unlifted suspension into a real deletion; this rung's only job is to start
+that clock. A seller with no linked `user_id` (a legacy/dangling row) gets
+no suspension — there's no account to act on — but the strike count itself
+still increments.
+
+If the account the ladder targets is already under an active suspension
+(e.g. a 3rd violation landing on a seller the 2nd violation already
+suspended for 7 days), this does **not** 409 the way a second plain
+`suspend-account` call against an already-suspended email would — it
+escalates the existing suspension's own `grace_period_ends_at` forward to
+the harsher rung's target, logging an `escalate_suspension` admin-action
+entry, and never pulls it earlier if the account were already on a longer
+suspension than this rung would set.
+
 ### Low-stock / days-remaining list (#1949, sub-issue of #1947)
 
 ```
