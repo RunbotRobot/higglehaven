@@ -12425,11 +12425,18 @@ async function handleLandCandidateRings(request, db, route, url) {
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'generation-complete') {
     const admin = await requireAdmin(request, db);
-    const result = await completeRingGenerationInternal(db, route[1]);
+    const { changed, ...result } = await completeRingGenerationInternal(db, route[1]);
     // #829: unlike its landlet-level sibling (see that handler's own
     // adminActionLogStatement call), this endpoint never logged who
     // completed a ring's generation — missed by #817's own sweep.
-    await adminActionLogStatement(db, admin.user_id, 'ring_generation_complete', 'landlet_candidate_ring', route[1]).run();
+    // #2037: logging unconditionally missed the same race #1666 already
+    // fixed for the landlet-level sibling above — completeRingGeneration-
+    // Internal's own UPDATE can legitimately affect 0 rows (every member
+    // already enclosed by an earlier call, admin or automatic), and this
+    // handler still logged a completion that didn't happen on this call.
+    if (changed) {
+      await adminActionLogStatement(db, admin.user_id, 'ring_generation_complete', 'landlet_candidate_ring', route[1]).run();
+    }
     return json(result);
   }
 
@@ -12459,7 +12466,14 @@ async function completeRingGenerationInternal(db, ringId) {
   // #1055: same live-subquery fix as the single-landlet generation-complete
   // endpoint above -- a JS-read settings.radius_m here could go stale
   // against a concurrent expandWorldOnce.
-  await db.prepare(`
+  // #2037: added "AND generated_at IS NULL", matching the landlet-level
+  // sibling's own WHERE guard -- without it, a member that's already
+  // completed but not yet enclosed (still 'generating', COALESCE-preserved
+  // generated_at) keeps matching this UPDATE on every retry, since
+  // status = 'generating' alone stays true until enclosure. The SET clause
+  // was already a no-op for such a row either way; this only fixes what
+  // `changed` below actually measures.
+  const result = await db.prepare(`
     UPDATE landlets
     SET generated_at = COALESCE(generated_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
         status = CASE WHEN max_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN 'greenbelt' ELSE status END,
@@ -12469,7 +12483,7 @@ async function completeRingGenerationInternal(db, ringId) {
         END,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE landlet_id IN (SELECT landlet_id FROM landlet_candidates WHERE ring_id = ?)
-      AND status = 'generating'
+      AND status = 'generating' AND generated_at IS NULL
   `).bind(ringId).run();
   const completed = await db.prepare(`
     SELECT landlets.* FROM landlets
@@ -12480,6 +12494,11 @@ async function completeRingGenerationInternal(db, ringId) {
   return {
     ring: landCandidateRingFromRow(updatedRing),
     landlets: completed.results.map(landletFromRow),
+    // #2037: lets the HTTP handler log only when this call itself actually
+    // enclosed something, not just that the ring is (now, or already)
+    // fully complete -- same "logged only after confirmed" idiom as the
+    // landlet-level sibling handler above.
+    changed: result.meta.changes > 0,
   };
 }
 
