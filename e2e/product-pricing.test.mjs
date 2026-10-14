@@ -14,10 +14,13 @@
 // #1601: the upload wizard's own price field is required (owner wants an
 // explicit $0 for a free product, not a blank field) — only the separate
 // "Edit Price" panel keeps the older null-means-unset convention, for a
-// product that predates this requirement or was created directly through
-// the API rather than this wizard. This suite's "unpriced" fixture is
-// created that second way (a direct POST, below) specifically to keep
-// exercising that panel's own give-it-a-price-after-the-fact path.
+// product that predates this requirement. The server itself now enforces
+// the same requirement on any direct POST with a sellerId, so this suite's
+// "unpriced" fixture (below) has to go through a POST-with-a-price followed
+// by a direct PATCH clearing it back to null — the same clear-to-null path
+// "Edit Price" itself uses — rather than a single priceCents-less POST, to
+// land in that pre-#1601/legacy null-price state and keep exercising the
+// panel's own give-it-a-price-after-the-fact path.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
@@ -114,12 +117,16 @@ await page.waitForTimeout(200);
 // created before #1601, or by a non-wizard caller, would be), since the
 // upload wizard itself no longer allows a blank price. Reuses
 // PRICED_PRODUCT's own already-uploaded model/dimensions/color so this
-// direct POST doesn't need a fresh file upload of its own.
+// direct POST doesn't need a fresh file upload of its own. The server
+// itself now also requires a price on this same create path (#1601), so
+// this creates with a throwaway price and then PATCHes it straight back
+// to null — landing in the identical legacy/pre-#1601 null-price state
+// without ever going through the wizard.
 await page.evaluate(async ({ name, referenceName }) => {
   const { seller } = await (await fetch('/api/sellers/me')).json();
   const { templates } = await (await fetch('/api/catalog?limit=100')).json();
   const reference = templates.find((t) => t.name === referenceName);
-  await fetch('/api/catalog', {
+  const created = await (await fetch('/api/catalog', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -128,7 +135,13 @@ await page.evaluate(async ({ name, referenceName }) => {
       dimensions: reference.dimensions,
       modelUrl: reference.modelUrl,
       sellerId: seller.sellerId,
+      priceCents: 1,
     }),
+  })).json();
+  await fetch(`/api/catalog/${created.template.templateId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ priceCents: null }),
   });
 }, { name: UNPRICED_PRODUCT, referenceName: PRICED_PRODUCT });
 await page.reload();

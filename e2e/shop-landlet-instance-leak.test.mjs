@@ -184,7 +184,7 @@ const templateRes = await fetch(`${BASE_URL}/api/catalog`, {
   body: JSON.stringify({
     name: PRODUCT_NAME, category: 'placeholder', color: '#8899aa',
     dimensions: { width: 1, depth: 1, height: 1 },
-    sellerId, modelUrl: modelUpload.modelUrl, modelSizeBytes: modelUpload.sizeBytes,
+    sellerId, modelUrl: modelUpload.modelUrl, modelSizeBytes: modelUpload.sizeBytes, priceCents: 500,
   }),
 });
 const templateBody = await templateRes.json();
