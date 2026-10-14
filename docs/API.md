@@ -6306,14 +6306,18 @@ succeed.
   purchase fallback below). Instead, remaining stock is floored at zero
   and the purchase is completed and recorded normally.
 - Either way, the moment `stockQuantity` reaches exactly `0`, every
-  `placed_instances` row referencing that template is removed outright —
-  no archive, no "flagged sold-out but still placed" state — and each
-  affected landlet owner gets one notification naming how many of their
-  placed instances were removed. This is the same hard-delete-no-archive
-  treatment an owning builder's own self-deletion already gives every
-  instance on their landlets; there is no backup/replacement-product
-  concept yet (that's a separate, later sub-issue of #1947's own tracking
-  issue).
+  affected `placed_instances` row first gets a chance to survive via its
+  own configured backup chain (#2050 — see "Placed instance backup chains"
+  below): the first chain entry that isn't *also* already sold out is
+  activated in the instance's place, and the entries up to and including
+  it are removed from the chain. Only once an instance's own chain is
+  exhausted (or was never configured) is it removed outright — no
+  archive, no "flagged sold-out but still placed" state — with the
+  affected landlet owner getting one notification naming how many of
+  their placed instances were removed. This is the same hard-delete-no-
+  archive treatment an owning builder's own self-deletion already gives
+  every instance on their landlets, now reserved for instances that had
+  no viable backup to fall back on.
 - A `PATCH`/`PUT /api/catalog/:templateId` (or its batch sibling) that sets
   a fresh `stockQuantity` directly overwrites whatever remained — restocking
   a sold-out template, for instance, is just a normal update setting it back
@@ -6322,6 +6326,45 @@ succeed.
   a quick rejection for an obviously sold-out item) also runs earlier, in
   `POST /api/instances/:instanceId/purchase` itself, before a real-money
   purchase is even sent to checkout.
+
+### Placed instance backup chains (#2050)
+
+A sub-issue of #1952 (itself under #1947's tracking issue). Lets a
+builder configure an ordered list of backup/replacement products for one
+specific placed instance — per-*instance*, not per-template, so two
+different builders' placed instances of the same product each get their
+own independent chain. There's no footprint/dimension-matching
+requirement: a backup with different dimensions than the original is the
+builder's own problem to notice and fix (resolved on #1952's own comment
+thread). Every op below is gated to the instance's own hosting landlet's
+owner — `403` ("Not your landlet") for anyone else, `404` if the instance
+itself doesn't exist.
+
+- `GET /api/instances/:instanceId/backups` — lists the chain in order.
+  Returns `{ backups: [...] }`, each `{ backupId, instanceId, position,
+  templateId, createdAt }`.
+- `POST /api/instances/:instanceId/backups` — appends one entry. Body:
+  `{ templateId }`. `400` if `templateId` doesn't reference a real
+  catalog template. Always lands at the end of the chain — position is
+  never client-supplied.
+- `PUT /api/instances/:instanceId/backups` — reorders the whole chain in
+  one call. Body: `{ order: [backupId, ...] }`, which must contain
+  exactly the instance's current backup ids, each exactly once (`400`
+  otherwise — a partial reorder is rejected rather than guessing what to
+  do with the ids it omits).
+- `DELETE /api/instances/:instanceId/backups/:backupId` — removes one
+  entry and compacts every later entry's `position` down by one, so the
+  chain stays contiguous (the next `POST`'s own tail position is a plain
+  count of the chain, not a max).
+
+A catalog template still referenced by any `placed_instance_backups` row
+cannot be deleted (`409`, same `assertCatalogTemplatesDeletable` guard
+`saved_layout_instances`/`version_instances`/`placed_instances` already
+use) until it's removed from every chain that references it.
+
+See "Sold-out templates" above for how `sweepSoldOutTemplateInstances`
+consults this chain the moment a template it's placed against hits zero
+stock.
 
 #### Stock indicator in the catalog picker (#1951)
 

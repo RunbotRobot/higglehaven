@@ -134,5 +134,6 @@
   "0134_account_suspensions.sql",
   "0135_calendar_events_user_id.sql",
   "0136_credit_orbs.sql",
-  "0137_avatar_presence_flying.sql"
+  "0137_placed_instance_backups.sql",
+  "0138_avatar_presence_flying.sql"
 ]
