@@ -14179,9 +14179,25 @@ async function handleInstanceBackups(request, db, route) {
       throw new HttpError("order must contain exactly this instance's current backup ids, each once", 400);
     }
     await checkRateLimit(db, `instance-backup-write:${sessionBuilder.builder_id}`, INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX);
-    await db.batch(input.order.map((backupId, position) => db.prepare(
-      'UPDATE placed_instance_backups SET position = ? WHERE backup_id = ? AND instance_id = ?',
-    ).bind(position, backupId, instanceId)));
+    // #929/#960 idiom (see this handler's own POST above): requireOwnedLandlet
+    // at the top is a point-in-time check, and the awaits since then
+    // (readJson, the two SELECTs, checkRateLimit) are real gaps a landlet
+    // transfer could land in. Every row here belongs to this same
+    // instanceId (and therefore the same single landlet), so unlike the
+    // multi-landlet /instances/batch endpoint (#1773), a mismatch on one
+    // row means a mismatch on all of them -- a uniform all-or-nothing 409
+    // is accurate here, not a lie.
+    const batchResults = await db.batch(input.order.map((backupId, position) => db.prepare(`
+      UPDATE placed_instance_backups SET position = ?
+      WHERE backup_id = ? AND instance_id = ?
+        AND EXISTS (
+          SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
+          WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
+        )
+    `).bind(position, backupId, instanceId, instanceId, sessionBuilder.builder_id)));
+    if (batchResults.some((result) => result.meta.changes === 0)) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     const { results } = await db.prepare(
       'SELECT * FROM placed_instance_backups WHERE instance_id = ? ORDER BY position',
     ).bind(instanceId).all();
@@ -14195,9 +14211,19 @@ async function handleInstanceBackups(request, db, route) {
     ).bind(backupId, instanceId).first();
     if (!existing) return json({ error: 'Backup not found' }, 404);
     await checkRateLimit(db, `instance-backup-write:${sessionBuilder.builder_id}`, INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX);
-    const deleted = await db.prepare(
-      'DELETE FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ?',
-    ).bind(backupId, instanceId).run();
+    // Same #929/#960 idiom as this handler's own POST/PUT siblings above --
+    // the existing check above is a point-in-time read, and checkRateLimit
+    // is a real awaited gap after it. A changes === 0 here still means
+    // "Backup not found" to the caller either way (same conflation every
+    // other write site using this idiom accepts), whether the row was
+    // concurrently removed or the landlet changed hands.
+    const deleted = await db.prepare(`
+      DELETE FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ?
+        AND EXISTS (
+          SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
+          WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
+        )
+    `).bind(backupId, instanceId, instanceId, sessionBuilder.builder_id).run();
     if (deleted.meta.changes === 0) return json({ error: 'Backup not found' }, 404);
     // Closes the gap left behind rather than leaving positions sparse --
     // every position strictly greater than the removed one shifts down by

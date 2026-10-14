@@ -151,6 +151,57 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
     expect(reordered.body.backups.map((b) => b.position)).toEqual([0, 1]);
   });
 
+  // #2088: same #929/#960 race as POST's own guard (land.test.js's
+  // "rejects an event on a landlet that was transferred to a new owner
+  // mid-request" uses the identical monkey-patch-checkRateLimit's own
+  // INSERT trick) -- requireOwnedLandlet is a point-in-time read, and
+  // checkRateLimit is a real awaited gap after it; PUT's reorder write had
+  // no fold-in before this fix, so a landlet transferred away from this
+  // builder in that gap could still let their reorder land on it.
+  it('rejects a PUT reorder when the landlet is transferred mid-request', async () => {
+    const owner = await signupBuilder('backups-reorder-race-owner');
+    const newOwner = await signupBuilder('backups-reorder-race-new-owner');
+    await createLandletAndClaim('backups-reorder-race-landlet', owner);
+    await createTemplate('backups-reorder-race-template');
+    await createTemplate('backups-reorder-race-backup-1');
+    await createTemplate('backups-reorder-race-backup-2');
+    await placeInstance('backups-reorder-race-instance', 'backups-reorder-race-landlet', 'backups-reorder-race-template', owner);
+    const first = await api('/instances/backups-reorder-race-instance/backups', owner.session({
+      method: 'POST', body: JSON.stringify({ templateId: 'backups-reorder-race-backup-1' }),
+    }));
+    const second = await api('/instances/backups-reorder-race-instance/backups', owner.session({
+      method: 'POST', body: JSON.stringify({ templateId: 'backups-reorder-race-backup-2' }),
+    }));
+    const id1 = first.body.backup.backupId;
+    const id2 = second.body.backup.backupId;
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO rate_limit_events')) {
+        armed = false;
+        originalPrepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+          .bind(newOwner.builderId, 'backups-reorder-race-landlet').run();
+      }
+      return originalPrepare(sql);
+    };
+    let rejected;
+    try {
+      rejected = await api('/instances/backups-reorder-race-instance/backups', owner.session({
+        method: 'PUT', body: JSON.stringify({ order: [id2, id1] }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body.error).toMatch(/Landlet changed concurrently/);
+
+    const stillOriginalOrder = await env.DB.prepare(
+      'SELECT backup_id FROM placed_instance_backups WHERE instance_id = ? ORDER BY position',
+    ).bind('backups-reorder-race-instance').all();
+    expect(stillOriginalOrder.results.map((row) => row.backup_id)).toEqual([id1, id2]);
+  });
+
   it('on DELETE, compacts positions so the chain stays contiguous for the next append', async () => {
     const builder = await signupBuilder('backups-delete-builder');
     await createLandletAndClaim('backups-delete-landlet', builder);
@@ -180,6 +231,49 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
       method: 'POST', body: JSON.stringify({ templateId: 'backups-delete-backup-1' }),
     }));
     expect(appended.body.backup.position).toBe(2);
+  });
+
+  // #2088: same #929/#960 race as POST's own guard -- DELETE's write had
+  // no fold-in before this fix, so a landlet transferred away from this
+  // builder in the gap after the point-in-time requireOwnedLandlet check
+  // (and the awaited checkRateLimit after it) could still let their
+  // DELETE remove a backup-chain row on a landlet they no longer own.
+  it('rejects a DELETE when the landlet is transferred mid-request', async () => {
+    const owner = await signupBuilder('backups-delete-race-owner');
+    const newOwner = await signupBuilder('backups-delete-race-new-owner');
+    await createLandletAndClaim('backups-delete-race-landlet', owner);
+    await createTemplate('backups-delete-race-template');
+    await createTemplate('backups-delete-race-backup');
+    await placeInstance('backups-delete-race-instance', 'backups-delete-race-landlet', 'backups-delete-race-template', owner);
+    const added = await api('/instances/backups-delete-race-instance/backups', owner.session({
+      method: 'POST', body: JSON.stringify({ templateId: 'backups-delete-race-backup' }),
+    }));
+    const backupId = added.body.backup.backupId;
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO rate_limit_events')) {
+        armed = false;
+        originalPrepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+          .bind(newOwner.builderId, 'backups-delete-race-landlet').run();
+      }
+      return originalPrepare(sql);
+    };
+    let rejected;
+    try {
+      rejected = await api(`/instances/backups-delete-race-instance/backups/${backupId}`, owner.session({ method: 'DELETE' }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    // Same conflation every other #929/#960 write site accepts: a
+    // changes === 0 here reads as plain "Backup not found" either way,
+    // whether the row was concurrently removed or the landlet changed
+    // hands -- not a 409, since the caller can't tell the two apart.
+    expect(rejected.response.status).toBe(404);
+
+    const stillThere = await env.DB.prepare('SELECT 1 FROM placed_instance_backups WHERE backup_id = ?').bind(backupId).first();
+    expect(stillThere).not.toBeNull();
   });
 
   it('blocks deleting a catalog template still configured as a backup', async () => {
