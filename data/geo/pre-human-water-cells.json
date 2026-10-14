@@ -1,0 +1,225 @@
+{
+  "generatedAt": "2026-10-14T01:44:16.991Z",
+  "originLat": 47.638887,
+  "originLon": -122.280433,
+  "radiusM": 300,
+  "spacingM": 25,
+  "reclamationRadiusM": 400,
+  "cells": [
+    {
+      "x": -275,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": -275,
+      "y": -75,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -150,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": -150,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": -150,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -100,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": 75,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": 75,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -75,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 250,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 250,
+      "y": -125,
+      "landType": "water"
+    }
+  ]
+}
