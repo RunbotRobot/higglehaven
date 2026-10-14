@@ -3223,10 +3223,7 @@ async function handleBuilders(request, env, db, route, url) {
       const ids = [...new Set(idsParam.split(',').map((id) => id.trim()).filter((id) => id !== ''))];
       if (ids.length === 0) return json({ builders: [] });
       if (ids.length > 200) throw new HttpError('ids must contain at most 200 items', 400);
-      const placeholders = ids.map(() => '?').join(', ');
-      const { results } = await db.prepare(
-        `SELECT * FROM builders WHERE builder_id IN (${placeholders}) ORDER BY created_at, builder_id`,
-      ).bind(...ids).all();
+      const results = await selectRowsByIdsChunked(db, 'builders', 'builder_id', ids);
       await recomputeLandCapsBatch(db, results);
       return json({ builders: results.map(publicBuilderFromRow) });
     }
@@ -4113,10 +4110,7 @@ async function handleSellers(request, env, db, route, url) {
       const ids = [...new Set(idsParam.split(',').map((id) => id.trim()).filter((id) => id !== ''))];
       if (ids.length === 0) return json({ sellers: [] });
       if (ids.length > 200) throw new HttpError('ids must contain at most 200 items', 400);
-      const placeholders = ids.map(() => '?').join(', ');
-      const { results } = await db.prepare(
-        `SELECT * FROM sellers WHERE seller_id IN (${placeholders}) ORDER BY created_at, seller_id`,
-      ).bind(...ids).all();
+      const results = await selectRowsByIdsChunked(db, 'sellers', 'seller_id', ids);
       return json({ sellers: results.map(sellerFromRow) });
     }
 
@@ -15722,12 +15716,37 @@ async function recordContentEditHistory(db, sourceTable, sourceId, action, row, 
 
 // #1978: D1 caps a single query at 100 bound parameters
 // (developers.cloudflare.com/d1/platform/limits) -- a deduplicated value
-// set past that limit (e.g. GET /api/sellers?ids=... allows up to 200
-// distinct ids) would otherwise throw a raw D1 error here instead of this
-// function's own clean "does not exist" message. Chunking fixes every
-// caller at the source rather than needing each one capped to this limit
-// individually.
+// set past that limit would otherwise throw a raw D1 error here instead
+// of this function's own clean "does not exist" message. Chunking fixes
+// every caller of assertReferencesExist at the source rather than
+// needing each one capped to this limit individually. Shared by
+// selectRowsByIdsChunked below for the same reason, for callers (GET
+// /api/builders?ids=.../sellers?ids=..., #2038) that query directly
+// rather than through assertReferencesExist.
 const D1_MAX_BOUND_PARAMETERS = 100;
+
+// #2038: GET /api/builders?ids=... and GET /api/sellers?ids=... accept up
+// to 200 ids but bound them in one unchunked IN (...) query -- the same
+// D1 100-bound-parameter hazard the comment above already warned about
+// for this exact endpoint, without actually fixing it. Chunks the lookup
+// and re-sorts the merged rows afterward, since each chunk's own query
+// only sorts within that chunk, not across all of them.
+async function selectRowsByIdsChunked(db, table, idColumn, ids) {
+  const rows = [];
+  for (let i = 0; i < ids.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = ids.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(
+      `SELECT * FROM ${table} WHERE ${idColumn} IN (${placeholders})`,
+    ).bind(...chunk).all();
+    rows.push(...results);
+  }
+  rows.sort((a, b) => {
+    if (a.created_at !== b.created_at) return a.created_at < b.created_at ? -1 : 1;
+    return a[idColumn] < b[idColumn] ? -1 : a[idColumn] > b[idColumn] ? 1 : 0;
+  });
+  return rows;
+}
 
 export async function assertReferencesExist(db, table, column, values, field) {
   const uniqueValues = [...new Set(values)];
