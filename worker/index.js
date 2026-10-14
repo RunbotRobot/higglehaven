@@ -2628,7 +2628,7 @@ async function handleProductFlags(request, db, route) {
   const templateId = route[1];
 
   if (request.method === 'POST' && route.length === 3) {
-    const template = await db.prepare('SELECT template_id, flagged_hidden_at FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    const template = await db.prepare('SELECT template_id, flagged_hidden_at, seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     if (!template) return json({ error: 'Catalog template not found' }, 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
     await checkRateLimit(db, `product-flag-create:${sessionBuilder.builder_id}`, PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX);
@@ -2661,6 +2661,22 @@ async function handleProductFlags(request, db, route) {
         WHERE template_id = ? AND flagged_hidden_at IS NULL
       `).bind(templateId).run();
       autoHidden = hideResult.meta.changes === 1;
+      // #2056: auto-hide blocks every future purchase of this listing
+      // immediately, well before any admin reviews the flags -- the same
+      // practical effect on the seller as the admin-confirmed `approve`
+      // branch below, which already notifies. Best-effort, same seller-
+      // resolved-via-shared-user_id join that branch already uses.
+      if (autoHidden && template.seller_id) {
+        const owner = await db.prepare(`
+          SELECT b.builder_id AS builder_id FROM sellers s
+          JOIN builders b ON b.user_id = s.user_id
+          WHERE s.seller_id = ?
+        `).bind(template.seller_id).first();
+        if (owner) {
+          await fireNotification(db, owner.builder_id,
+            'A listing of yours was automatically hidden pending review after multiple counterfeit/policy flags. New purchases are blocked until an admin resolves it.');
+        }
+      }
     }
     return json({ flagId, pendingCount, autoHidden }, 201);
   }
@@ -7399,6 +7415,20 @@ async function currentUser(request, db) {
 async function requireCurrentUser(request, db) {
   const user = await currentUser(request, db);
   if (!user) throw new HttpError('Not authenticated', 401);
+  // #2030 (sub-issue of #1201): the single join point every authenticated
+  // request goes through -- enforcing the check here, rather than in
+  // currentUser() itself, is what lets this throw a distinct, client-
+  // actionable error instead of the generic 401 a plain null would produce
+  // (a suspended user's session is still valid; it's their standing that's
+  // revoked, not their login). #2029's own admin endpoints read a TARGET
+  // account's suspension state via a direct SELECT on account_suspensions,
+  // never through currentUser/requireCurrentUser, so they're unaffected by
+  // this -- only the CALLING admin's own session goes through this check,
+  // the same as any other authenticated action.
+  const activeSuspension = await db.prepare(`
+    SELECT 1 FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+  `).bind(user.user_id).first();
+  if (activeSuspension) throw new HttpError('Your account is suspended', 403, { suspended: true });
   return user;
 }
 
@@ -14147,6 +14177,9 @@ const CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX = 20;
 // route is unauthenticated like sign posts, not owner-gated like the POST
 // above.
 const EVENT_TRIGGER_RATE_LIMIT_MAX = 20;
+// #1975: same missing-rate-limit gap as CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX,
+// for the new author-only edit branch below.
+const CALENDAR_EVENT_EDIT_RATE_LIMIT_MAX = 20;
 
 // #1716: same "a lost response looks, from here, identical to the request
 // never having reached us at all" protection as the purchase flow's own
@@ -14231,12 +14264,12 @@ async function handleCalendarEvents(request, db, route) {
     // INSERT land afterward. Same #929/#960 idiom as this handler's own
     // DELETE sibling below.
     const inserted = await db.prepare(`
-      INSERT INTO calendar_events (event_id, instance_id, author_label, text, scheduled_at)
-      SELECT ?, ?, ?, ?, ? WHERE EXISTS (
+      INSERT INTO calendar_events (event_id, instance_id, author_label, text, scheduled_at, user_id)
+      SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (
         SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
         WHERE pi.instance_id = ? AND pi.is_community_calendar = 1 AND l.owner_builder_id IS ?
       )
-    `).bind(eventId, instanceId, sessionBuilder.label, text, scheduledAt, instanceId, sessionBuilder.builder_id).run();
+    `).bind(eventId, instanceId, sessionBuilder.label, text, scheduledAt, sessionBuilder.user_id, instanceId, sessionBuilder.builder_id).run();
     if (inserted.meta.changes === 0) {
       const current = await db.prepare('SELECT is_community_calendar FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
       if (!current?.is_community_calendar) {
@@ -14246,6 +14279,53 @@ async function handleCalendarEvents(request, db, route) {
     }
     const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
     return json({ event: calendarEventFromRow(row) }, 201);
+  }
+
+  if (request.method === 'PATCH' && route.length === 4) {
+    const eventId = route[3];
+    const existing = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ? AND instance_id = ?').bind(eventId, instanceId).first();
+    if (!existing) return json({ error: 'Event not found' }, 404);
+    // #1975: editing is author-only -- same reasoning as sign posts' own
+    // PATCH (#1830): there's no moderation equivalent for rewriting
+    // someone else's words under their own name. In the ordinary case the
+    // event's author already IS the hosting landlet's current owner (POST
+    // requires it), but this uses the event's own recorded user_id rather
+    // than re-checking landlet ownership, so the original author keeps
+    // editing rights even after the landlet changes hands (auction, admin
+    // reassignment) -- the same guarantee sign posts/product reviews give.
+    // A pre-#1975 event with no user_id at all (user_id IS NULL) can never
+    // match here, same as DELETE's own author-path below.
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    if (existing.user_id === null || existing.user_id !== sessionBuilder.user_id) {
+      throw new HttpError('Not your event', 403);
+    }
+    await checkRateLimit(db, `calendar-event-edit:${sessionBuilder.user_id}`, CALENDAR_EVENT_EDIT_RATE_LIMIT_MAX);
+    const input = await readJson(request);
+    let text = existing.text;
+    if (input.text !== undefined) {
+      text = stringValue(input.text, 'text');
+      if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    }
+    let scheduledAt = existing.scheduled_at;
+    if ('scheduledAt' in input) {
+      scheduledAt = input.scheduledAt === undefined || input.scheduledAt === null
+        ? null
+        : isoDateString(input.scheduledAt, 'scheduledAt');
+    }
+    // A changed scheduledAt re-arms the one-shot trigger (#270) -- this is
+    // logically a different scheduled moment, the same "genuinely
+    // different event" distinction #1751's own idempotency-key content
+    // match already draws, so it shouldn't stay permanently inert just
+    // because some earlier scheduledAt on this same row already fired.
+    const triggeredAt = scheduledAt === existing.scheduled_at ? existing.triggered_at : null;
+    await recordContentEditHistory(db, 'calendar_events', eventId, 'edit', existing, sessionBuilder.user_id);
+    const updated = await db.prepare('UPDATE calendar_events SET text = ?, scheduled_at = ?, triggered_at = ? WHERE event_id = ? AND user_id = ?')
+      .bind(text, scheduledAt, triggeredAt, eventId, sessionBuilder.user_id).run();
+    if (updated.meta.changes === 0) {
+      throw new HttpError('Event changed concurrently — refetch and retry', 409);
+    }
+    const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
+    return json({ event: calendarEventFromRow(row) });
   }
 
   if (request.method === 'DELETE' && route.length === 4) {
@@ -14270,6 +14350,21 @@ async function handleCalendarEvents(request, db, route) {
     const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
+    // #1975: the event's own author can remove it directly, independent of
+    // current landlet ownership -- same reasoning as the new PATCH branch
+    // above. A pre-#1975 event with no user_id at all (user_id IS NULL)
+    // can never match here, so it falls through to the moderation path
+    // exactly as it always has.
+    if (existing.user_id !== null && existing.user_id === sessionBuilder.user_id) {
+      await checkRateLimit(db, `calendar-event-delete:${sessionBuilder.user_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
+      await recordContentEditHistory(db, 'calendar_events', eventId, 'delete', existing, sessionBuilder.user_id);
+      const deletedByAuthor = await db.prepare('DELETE FROM calendar_events WHERE event_id = ? AND user_id = ?')
+        .bind(eventId, sessionBuilder.user_id).run();
+      if (deletedByAuthor.meta.changes === 0) {
+        throw new HttpError('Event changed concurrently — refetch and retry', 409);
+      }
+      return json({ deleted: true });
+    }
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
     await checkRateLimit(db, `calendar-event-delete:${sessionBuilder.builder_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
     // #960: same #929 idiom as the sign-posts DELETE above -- see its own
@@ -14338,6 +14433,7 @@ function calendarEventFromRow(row) {
     scheduledAt: row.scheduled_at,
     triggeredAt: row.triggered_at,
     createdAt: row.created_at,
+    userId: row.user_id,
   };
 }
 
@@ -15313,6 +15409,10 @@ async function handlePurchases(request, env, route, url) {
     return handleSellerFeedbackCreate(request, env, route[1]);
   }
 
+  if (request.method === 'PATCH' && route.length === 3 && route[2] === 'feedback') {
+    return handleSellerFeedbackEdit(request, env, route[1]);
+  }
+
   if (request.method === 'DELETE' && route.length === 3 && route[2] === 'feedback') {
     return handleSellerFeedbackDelete(request, env, route[1]);
   }
@@ -15426,6 +15526,24 @@ async function handleMarkShipped(request, env, purchaseId) {
 // eligibility check #1113/#1116 already brought to product reviews.
 const SELLER_FEEDBACK_CREATE_RATE_LIMIT_MAX = 20;
 
+// #1975 (owner decision via #1738, 2026-10-13): the feedback's own author
+// (the purchase's buyer) gets the same self-edit/delete #1975 already gave
+// sign posts/product reviews/calendar events. Unlike those three,
+// seller_feedback gets no new user_id column for it — the buyer's identity
+// is already permanently on record via purchases.buyer_builder_id
+// (migrations/0099), the same real, session-verified, never-reassigned
+// identity handleSellerFeedbackCreate's own eligibility check already
+// uses, so authorization and this row shape's own userId field both
+// resolve it with a join instead. A purchase whose buyer later self-
+// deletes their account nulls buyer_builder_id (ON DELETE SET NULL) —
+// same as every other precedent's "legacy/no author on record" case, such
+// a row can never be claimed by anyone as their own.
+const SELLER_FEEDBACK_SELECT_WITH_BUYER = `
+  SELECT f.*, bld.user_id AS buyer_user_id FROM seller_feedback f
+  JOIN purchases p ON p.purchase_id = f.purchase_id
+  LEFT JOIN builders bld ON bld.builder_id = p.buyer_builder_id
+`;
+
 function sellerFeedbackFromRow(row) {
   return {
     feedbackId: row.feedback_id,
@@ -15435,6 +15553,7 @@ function sellerFeedbackFromRow(row) {
     rating: row.rating,
     text: row.text,
     createdAt: row.created_at,
+    userId: row.buyer_user_id ?? null,
   };
 }
 
@@ -15509,18 +15628,78 @@ async function handleSellerFeedbackCreate(request, env, purchaseId) {
     await fireNotification(db, owner.builder_id,
       `"${authorLabel}" left ${rating}-star feedback on a purchase from you.`);
   }
-  const row = await db.prepare('SELECT * FROM seller_feedback WHERE feedback_id = ?').bind(feedbackId).first();
+  const row = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.feedback_id = ?`).bind(feedbackId).first();
   return json({ feedback: sellerFeedbackFromRow(row) }, 201);
+}
+
+// #1975/#1738: author-only edit for the feedback's own author (the
+// purchase's buyer) — mirrors product_reviews'/calendar_events' own PATCH
+// shape exactly (see SELLER_FEEDBACK_SELECT_WITH_BUYER's own comment above
+// for why this is gated via a join instead of a native user_id column).
+// No moderation equivalent for PATCH, same reasoning as those two:
+// rewriting someone else's feedback under their own name isn't a kind of
+// moderation action that exists anywhere else in this file.
+const SELLER_FEEDBACK_EDIT_RATE_LIMIT_MAX = 20;
+
+async function handleSellerFeedbackEdit(request, env, purchaseId) {
+  const db = env.DB;
+  const existing = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
+  if (!existing) return json({ error: 'Feedback not found' }, 404);
+  const sessionBuilder = await requireSessionBuilder(request, db);
+  if (existing.buyer_user_id === null || existing.buyer_user_id !== sessionBuilder.user_id) {
+    throw new HttpError('Not your feedback', 403);
+  }
+  await checkRateLimit(db, `seller-feedback-edit:${sessionBuilder.user_id}`, SELLER_FEEDBACK_EDIT_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  let rating = existing.rating;
+  if (input.rating !== undefined) {
+    rating = Number(input.rating);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      throw new HttpError('rating must be an integer from 1 to 5', 400);
+    }
+  }
+  // Same omitted-vs-explicitly-cleared distinction product_reviews' own
+  // PATCH already makes — an absent `text` key keeps the existing value, an
+  // explicit null/empty string clears it.
+  let text = existing.text;
+  if ('text' in input) {
+    text = (input.text === null || input.text === '') ? null : stringValue(input.text, 'text');
+  }
+  if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+  // #1975: snapshot the pre-edit row for disputes before overwriting it.
+  await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'edit', existing, sessionBuilder.user_id);
+  // Same "point-in-time read, real awaited gaps after it" race this file's
+  // other author-direct mutations guard against — re-verified atomically via
+  // the same join authorization used above, not just the eager read.
+  const updated = await db.prepare(`
+    UPDATE seller_feedback SET rating = ?, text = ? WHERE purchase_id = ? AND EXISTS (
+      SELECT 1 FROM purchases p JOIN builders bld ON bld.builder_id = p.buyer_builder_id
+      WHERE p.purchase_id = seller_feedback.purchase_id AND bld.user_id = ?
+    )
+  `).bind(rating, text, purchaseId, sessionBuilder.user_id).run();
+  if (updated.meta.changes === 0) {
+    throw new HttpError('Feedback changed concurrently — refetch and retry', 409);
+  }
+  const row = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
+  return json({ feedback: sellerFeedbackFromRow(row) });
 }
 
 // #1738 (owner confirmed, 2026-10-13): seller_feedback rates a person's own
 // conduct on a transaction, not a product -- unlike product_reviews' own
 // DELETE branch, which lets the reviewed template's seller self-delete,
 // self-delete here would let a seller scrub legitimate negative feedback
-// about their own conduct. Admin-only removal is the deliberate, owner-
-// confirmed bar, not a placeholder pending a seller-facing path; whether
-// sellers also get their own appeal/self-delete path is a separate,
-// explicitly-still-open question per the issue's own comment thread.
+// about their own conduct. Admin-only removal remains the sole moderation
+// route for the rated seller's side — there is deliberately no third,
+// seller-moderation branch the way product_reviews has one, since #1738's
+// own resolution confirmed the rated seller never gets to remove feedback
+// about themselves, ever. #1975 (same thread): the feedback's own author
+// (the buyer who actually wrote it) is a different person from the rated
+// seller and gets the ordinary author-direct removal every other
+// self-authored content type in this file already has — ON DELETE SET
+// NULL on purchases.buyer_builder_id means a buyer who later self-deletes
+// their account can never come back and claim it (same "legacy/no author
+// on record" case SELLER_FEEDBACK_SELECT_WITH_BUYER's own comment
+// describes), so it falls through to admin-only exactly as it always has.
 // Keyed by purchaseId (not a separate feedbackId) since migrations/0097's
 // own UNIQUE constraint on purchase_id already makes it a 1-to-1 resource,
 // the same shape POST .../feedback above already uses.
@@ -15528,10 +15707,26 @@ const SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX = 20;
 
 async function handleSellerFeedbackDelete(request, env, purchaseId) {
   const db = env.DB;
-  const existing = await db.prepare('SELECT * FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).first();
+  const existing = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
   if (!existing) return json({ error: 'Feedback not found' }, 404);
-  const admin = await requireAdmin(request, db);
-  await checkRateLimit(db, `seller-feedback-delete:${admin.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
+  const requester = await currentUser(request, db);
+  const admin = requester && requester.is_admin ? requester : null;
+  if (!admin && requester && existing.buyer_user_id !== null && existing.buyer_user_id === requester.user_id) {
+    await checkRateLimit(db, `seller-feedback-delete:${requester.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
+    await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'delete', existing, requester.user_id);
+    const deletedByAuthor = await db.prepare(`
+      DELETE FROM seller_feedback WHERE purchase_id = ? AND EXISTS (
+        SELECT 1 FROM purchases p JOIN builders bld ON bld.builder_id = p.buyer_builder_id
+        WHERE p.purchase_id = seller_feedback.purchase_id AND bld.user_id = ?
+      )
+    `).bind(purchaseId, requester.user_id).run();
+    if (deletedByAuthor.meta.changes === 0) {
+      throw new HttpError('Feedback changed concurrently — refetch and retry', 409);
+    }
+    return json({ deleted: true });
+  }
+  const resolvedAdmin = admin || await requireAdmin(request, db);
+  await checkRateLimit(db, `seller-feedback-delete:${resolvedAdmin.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
   const result = await db.prepare('DELETE FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).run();
   // #2003: the existence check above and this DELETE aren't atomic, so a
   // concurrent delete (another admin retrying, say) can win the race
@@ -15540,7 +15735,7 @@ async function handleSellerFeedbackDelete(request, env, purchaseId) {
   // delete_land_candidate already use, so a deletion that didn't happen
   // is never misattributed to this admin.
   if (result.meta.changes === 1) {
-    await adminActionLogStatement(db, admin.user_id, 'delete_seller_feedback', 'seller_feedback', existing.feedback_id).run();
+    await adminActionLogStatement(db, resolvedAdmin.user_id, 'delete_seller_feedback', 'seller_feedback', existing.feedback_id).run();
   }
   return json({ deleted: true });
 }
@@ -15553,7 +15748,7 @@ async function handleSellerFeedbackList(db, sellerId) {
   // it read as "seller-facing" in practice without the API itself needing
   // to restrict who can ask.
   const { results } = await db.prepare(`
-    SELECT * FROM seller_feedback WHERE seller_id = ? ORDER BY created_at DESC LIMIT 200
+    ${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.seller_id = ? ORDER BY f.created_at DESC LIMIT 200
   `).bind(sellerId).all();
   const feedback = results.reverse().map(sellerFeedbackFromRow);
   // averageRating/count are the seller's real, all-time summary, not

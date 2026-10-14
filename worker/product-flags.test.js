@@ -66,14 +66,15 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
   // #1946 already established that hiding a flagged/test row from GET
   // /api/catalog breaks ordinary Build-mode placement for everyone -- this
   // feature deliberately never touches that endpoint, only purchase.
-  it('auto-hides a listing (blocking new purchases, not browsing) once 3 distinct builders flag it', async () => {
+  it('auto-hides a listing (blocking new purchases, not browsing) once 3 distinct builders flag it, and notifies the seller (#2056)', async () => {
+    const seller = await signupSeller('flag-threshold-seller');
     const builder = await signupBuilder('flag-threshold-owner');
     await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({ landletId: 'flag-threshold-landlet', name: 'Flag threshold landlet', areaM2: 1000, status: 'greenbelt' }),
     }));
     await api('/landlets/flag-threshold-landlet/claim', builder.session({ method: 'POST' }));
-    await createTemplate('flag-threshold-template');
+    await createTemplate('flag-threshold-template', seller);
     const placed = await api('/instances', builder.session({
       method: 'POST',
       body: JSON.stringify({ instanceId: 'flag-threshold-instance', landletId: 'flag-threshold-landlet', templateId: 'flag-threshold-template', x: 0, y: 0 }),
@@ -95,6 +96,24 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     const fetched = await api('/catalog/flag-threshold-template');
     expect(fetched.response.status).toBe(200);
     expect(fetched.body.template.flaggedHiddenAt).toBeTruthy();
+
+    const ownerBuilder = await api('/builders/me', seller.session());
+    const { results: notifications } = await env.DB.prepare('SELECT message FROM notifications WHERE builder_id = ?')
+      .bind(ownerBuilder.body.builder.builderId).all();
+    expect(notifications.some((n) => /automatically hidden/i.test(n.message))).toBe(true);
+  });
+
+  it('does not notify the seller on a flag that does not cross the auto-hide threshold', async () => {
+    const seller = await signupSeller('flag-no-notify-seller');
+    await createTemplate('flag-no-notify-template', seller);
+    const flagger = await signupBuilder('flag-no-notify-flagger');
+    const result = await api('/catalog/flag-no-notify-template/flags', flagger.session({ method: 'POST', body: JSON.stringify({}) }));
+    expect(result.body.autoHidden).toBe(false);
+
+    const ownerBuilder = await api('/builders/me', seller.session());
+    const { results: notifications } = await env.DB.prepare('SELECT message FROM notifications WHERE builder_id = ?')
+      .bind(ownerBuilder.body.builder.builderId).all();
+    expect(notifications.some((n) => /automatically hidden/i.test(n.message))).toBe(false);
   });
 
   it('rejects a non-admin resolving flags', async () => {

@@ -9,9 +9,10 @@
 // docs/API.md). This test covers the pieces that ARE reliably automatable:
 // the build-mode toggle-then-manage button, the Manage Events moderation
 // panel (#calendar-events-modal, including its own "Remove Community
-// Calendar" button), and the backend calendar-events API all three unlock
-// — posting here as the landlet's own owner (this browser's logged-in
-// identity, per claimLandlet below), the only identity actually allowed to.
+// Calendar" button and, since #1975, its own per-row author-edit button),
+// and the backend calendar-events API all three unlock — posting here as
+// the landlet's own owner (this browser's logged-in identity, per
+// claimLandlet below), the only identity actually allowed to.
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
 
 const LABEL = 'Community Calendar Suite Tester';
@@ -94,6 +95,26 @@ console.log('rows shown after deleting one via the panel (should be 1):', rowCou
 const { events: eventsAfterDelete } = (await fetchJson(`/api/instances/${calendarInstance.instanceId}/events`)).body;
 console.log('events persisted server-side after the panel delete (should be 1, the surviving "Bonfire night" one):', eventsAfterDelete.map((e) => `${e.authorLabel}: ${e.text}`));
 
+// #1975: the Manage Events panel now also offers an edit button (✎) on any
+// row this browser's own logged-in account authored — every row here,
+// since this builder both owns the landlet and authored both events. The
+// page's single dialog handler (launchPage's own promptAnswer) answers
+// every prompt() with the same fixed LABEL string, so the edited text ends
+// up equal to LABEL rather than some distinct new string — that's fine,
+// this is exercising the real click -> prompt -> PATCH -> re-render wiring
+// (and that the button renders for an own-authored row at all), not
+// testing a specific submitted string.
+await page.locator('.calendar-event-row').filter({ hasText: 'Bonfire night' }).locator('.calendar-event-row-edit').click();
+await page.waitForFunction(() => {
+  const row = document.querySelector('.calendar-event-row');
+  return row && !row.textContent.includes('Bonfire night');
+}, { timeout: 5000 });
+const editedRowText = await page.locator('.calendar-event-row').first().textContent();
+console.log('row text after editing via the panel\'s own edit button (should no longer mention "Bonfire night"):', editedRowText);
+
+const { events: eventsAfterEdit } = (await fetchJson(`/api/instances/${calendarInstance.instanceId}/events`)).body;
+console.log('events persisted server-side after the panel edit (text should now equal LABEL):', eventsAfterEdit.map((e) => `${e.authorLabel}: ${e.text}`));
+
 // Scheduled events + the one-shot creative-tool trigger (docs/SPEC.md
 // §6's own "scheduled confetti-cannon" example) — posted directly via the
 // API (the in-world "Add an Event" flow's own third, optional prompt for
@@ -150,6 +171,8 @@ const pass = labelBefore.trim() === 'Community Calendar' &&
   rowCountAfterDelete === 1 &&
   eventsAfterDelete.length === 1 && eventsAfterDelete[0].authorLabel === LABEL &&
   eventsAfterDelete[0].text === 'Bonfire night, Friday 8pm!' &&
+  editedRowText.includes(LABEL) && !editedRowText.includes('Bonfire night') &&
+  eventsAfterEdit.length === 1 && eventsAfterEdit[0].text === LABEL &&
   scheduledRowText.includes('Scheduled for') &&
   notDueTrigger.body.triggered === false &&
   modalHiddenAfterUnflag &&
