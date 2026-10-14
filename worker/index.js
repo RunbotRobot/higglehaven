@@ -416,6 +416,11 @@ export default {
     ctx.waitUntil(escalateExpiredSuspensions(env.DB).catch((error) => {
       console.error('escalateExpiredSuspensions failed', error);
     }));
+    // #1994: without this, no credit orb ever spawns at all -- this is
+    // the only mechanism that creates one.
+    ctx.waitUntil(spawnCreditOrbIfDue(env.DB).catch((error) => {
+      console.error('spawnCreditOrbIfDue failed', error);
+    }));
     // #1135: only on the once-daily cron (see wrangler.jsonc's own comment
     // on DB_BACKUP_CRON_EXPRESSION) -- a full-table dump has no reason to
     // run on every */10 tick the other jobs above share.
@@ -721,6 +726,10 @@ async function handleApi(request, env, url, ctx) {
   }
   if (request.method === 'GET' && route[0] === 'video-generation-jobs' && route.length === 2) {
     return handleVideoGenerationJobStatus(request, env, env.DB, route[1]);
+  }
+
+  if (route[0] === 'credit-orbs') {
+    return handleCreditOrbs(request, env.DB, route, url);
   }
 
   if (route[0] === 'control-room') {
@@ -8671,6 +8680,95 @@ async function handleVideoGenerationWebhook(request, env, db) {
   if (!job || job.processed_at !== null) return json({ received: true });
   await applyTripoTaskResult(db, env, job.job_id, payload.data);
   return json({ received: true });
+}
+
+// #1994 (sub-issue of #1976, "Orb-collection mechanic to ration free
+// video-to-3D generation credits within a hard $5/day budget"): the real
+// per-generation cost isn't tracked anywhere in this codebase yet (see
+// VIDEO_GENERATION_RATE_LIMIT_MAX's own comment above), so this is a
+// named, adjustable placeholder rather than derived from live cost data.
+// #1617's own research cites ~$0.20-0.30/generation -- a conservative
+// $0.25 mid-point (CREDIT_ORB_COST_CENTS_PER_GENERATION below) against a
+// $5/day budget funds 20 credits/day, not the owner's own original "5/day"
+// illustrative example (that used a hypothetical $1/generation). Raise or
+// lower CREDIT_ORB_COST_CENTS_PER_GENERATION once real Tripo billing is
+// confirmed -- neither constant is load-bearing beyond this feature.
+const CREDIT_ORB_BUDGET_CENTS_PER_DAY = 500;
+const CREDIT_ORB_COST_CENTS_PER_GENERATION = 25;
+const CREDIT_ORBS_PER_DAY = Math.floor(CREDIT_ORB_BUDGET_CENTS_PER_DAY / CREDIT_ORB_COST_CENTS_PER_GENERATION);
+// Owner's own spec: interval = 1440 minutes ÷ credits-funded-that-day, so
+// orbs spawn spread evenly across the day rather than in a burst.
+const CREDIT_ORB_SPAWN_INTERVAL_MS = (24 * 60 * 60 * 1000) / CREDIT_ORBS_PER_DAY;
+
+// Keeps a spawned orb's center comfortably inside the buildable footprint
+// landlets.live/handleInstances already enforce (LANDLET_SIDE_M, #789) --
+// an 0.8 margin so it never spawns flush against the very edge, which
+// would read as half-buried in a neighboring landlet once rendered.
+const CREDIT_ORB_SPAWN_MARGIN_FACTOR = 0.8;
+
+// Called from scheduled() on the existing */10 cron (no dedicated cron of
+// its own needed -- the 10-minute granularity is well under
+// CREDIT_ORB_SPAWN_INTERVAL_MS at any plausible CREDIT_ORBS_PER_DAY, so the
+// actual cadence this produces stays close to even). Reuses credit_orbs'
+// own most recent spawned_at (across every orb, collected or not) as the
+// "last spawn time" anchor rather than a separate single-row state table
+// -- there's already exactly one row to read it from once any orb exists,
+// and the INSERT...WHERE NOT EXISTS below folds the "is one due" check and
+// the spawn into one atomic statement, the same race-proofing idiom
+// reserveVideoGenerationJob/reserveDiditSession already use for their own
+// concurrent-caller races: two overlapping cron ticks can never both spawn
+// one, because D1/SQLite serializes writes and the second caller's own
+// NOT EXISTS subquery sees the first caller's already-committed INSERT.
+export async function spawnCreditOrbIfDue(db) {
+  const cutoff = new Date(Date.now() - CREDIT_ORB_SPAWN_INTERVAL_MS).toISOString();
+  const halfSpan = (LANDLET_SIDE_M / 2) * CREDIT_ORB_SPAWN_MARGIN_FACTOR;
+  const x = (Math.random() * 2 - 1) * halfSpan;
+  const y = (Math.random() * 2 - 1) * halfSpan;
+  const orbId = `orb-${crypto.randomUUID()}`;
+  await db.prepare(`
+    INSERT INTO credit_orbs (orb_id, landlet_id, x_m, y_m, z_m)
+    SELECT ?, landlet_id, ?, ?, 0 FROM landlets
+    WHERE status = 'greenbelt'
+      AND NOT EXISTS (SELECT 1 FROM credit_orbs WHERE spawned_at > ?)
+    ORDER BY RANDOM() LIMIT 1
+  `).bind(orbId, x, y, cutoff).run();
+}
+
+function creditOrbFromRow(row) {
+  return {
+    orbId: row.orb_id,
+    landletId: row.landlet_id,
+    x: row.x_m,
+    y: row.y_m,
+    z: row.z_m,
+    spawnedAt: row.spawned_at,
+  };
+}
+
+// GET /api/credit-orbs (optionally ?landletId=... to scope to one landlet,
+// per #1994's own "or scoped by landlet" note) -- the frontend's read path
+// for #1995's own rendering/collection sub-issue. Deliberately
+// unauthenticated/unsession-gated: an active orb's existence and position
+// are the same kind of public, visible-in-the-3D-scene information
+// GET /api/instances already serves for ordinary placed items, not a
+// builder-specific secret.
+async function handleCreditOrbs(request, db, route, url) {
+  if (request.method === 'GET' && route.length === 1) {
+    const landletId = url.searchParams.get('landletId');
+    const conditions = ['collected_at IS NULL'];
+    const bindings = [];
+    if (landletId !== null) {
+      conditions.push('landlet_id = ?');
+      bindings.push(stringValue(landletId, 'landletId'));
+    }
+    const { results } = await db.prepare(`
+      SELECT orb_id, landlet_id, x_m, y_m, z_m, spawned_at FROM credit_orbs
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY spawned_at
+    `).bind(...bindings).all();
+    return json({ orbs: results.map(creditOrbFromRow) });
+  }
+  return json({ error: 'Not found' }, 404);
 }
 
 function boundedIntegerValue(value, field, min, max) {

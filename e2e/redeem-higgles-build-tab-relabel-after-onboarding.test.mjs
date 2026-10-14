@@ -107,6 +107,17 @@ console.log('Old "Set up payout account" label no longer present (should be 0):'
 
 // Land Cap is a sibling field rendered by the same renderBuildSettingsSection
 // redraw -- confirm the redraw completed cleanly, not left mid-teardown.
+// #1980: renderLandCapField() and renderRedeemHigglesField() both fire
+// without awaiting each other and each run their own independent async
+// fetch, so the Redeem Higgles button above relabeling doesn't mean Land
+// Cap's own fetchMyBuilder() has resolved yet -- wait for its real content
+// first, same as e2e/auction-resolve-refreshes-settings.test.mjs's own
+// identical check already does, instead of assuming the whole redraw is
+// settled just because one sibling field finished first.
+await page.waitForFunction(
+  () => document.getElementById('land-cap-field')?.textContent.includes('cap'),
+  { timeout: 10000 },
+);
 const landCapStillShowing = (await page.locator('#land-cap-field').textContent()).includes('cap');
 console.log('Land Cap field still showing loaded text after the redraw (should be true):', landCapStillShowing);
 
