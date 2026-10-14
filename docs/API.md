@@ -560,20 +560,17 @@ Most of these are straightforward `builder_id`/`user_id` filters, or (for
 `purchases.buyer_builder_id` (#1101/#1123's own foreign key, not a
 free-text label match) — a review/feedback row created before that FK
 existed, or whose purchase was later deleted, is correctly left out of the
-export rather than guessed at. Two sections are a best-effort
-approximation rather than a real foreign-key filter, documented in
-`exportSocialSection`'s own comment in `worker/index.js`:
+export rather than guessed at. `calendarEvents` used to be a third,
+best-effort exception here (matching `calendar_events.author_label`
+against the account's current builder label, since `calendar_events` had
+no durable author reference at all) — #2032's own
+`migrations/0135_calendar_events_user_id.sql` added the real `user_id`
+column (same shape `sign_posts` already got in #1830/migrations/0125), so
+this is now a real foreign-key filter like the others. A calendar event
+created before that migration landed still has no attribution to check
+and is correctly left out of the export, rather than falling back to the
+old, spoofable label match. One remaining approximation:
 
-- `calendarEvents` matches `calendar_events.author_label` against the
-  account's **current** builder label — unlike `sign_posts`, which got a
-  real `user_id` column in #1830/migrations/0125, `calendar_events` was
-  never given the equivalent treatment, so there's no durable author
-  reference to filter on. This misses an event posted under a since-
-  changed label, and could in principle include an event actually posted
-  by a different account that happens to share today's label with a past
-  poster. A real `author_id`/`user_id` column on `calendar_events` is the
-  actual fix for this gap; it's tracked separately from this export
-  feature, not solved here.
 - `landletVersions`/their `instances` are scoped to landlets this builder
   **currently owns** (`landlets.owner_builder_id`), since neither
   `landlet_versions` nor `version_instances` records who actually created
@@ -873,10 +870,11 @@ on the same account. A suspension is **reversible, not a deletion** — the
 owner explicitly ruled out a separate admin-initiated hard-delete path;
 real deletion stays reserved for the account-holder's own self-service
 `delete-account` request. (Enforcing suspension against login/actions, the
-automated notice to the suspended user, the optional sign-post/calendar-
-event removal cascade, and the 30-day grace-period auto-escalation to a
-full deletion are each their own separate, not-yet-landed sub-issue —
-#2030/#2031/#2032/#2033 respectively.)
+automated notice to the suspended user, and the 30-day grace-period
+auto-escalation to a full deletion are each their own separate,
+not-yet-landed sub-issue — #2030/#2031/#2033 respectively. The optional
+sign-post/calendar-event removal cascade is #2032, documented on
+`suspend-account` below.)
 
 ### `POST /api/auth/suspend-account`
 
@@ -895,6 +893,30 @@ otherwise) — this becomes `gracePeriodEndsAt` in the response, the point
 already has an active (not lifted, not escalated) suspension — lift it via
 `unsuspend-account` first before suspending again. On success, returns
 `{ "suspension": { "suspensionId", "userId", "adminUserId", "reason", "evidenceNote", "suspendedAt", "gracePeriodEndsAt" } }`.
+
+An optional `"removeContent": true` in the request body (#2032) also
+removes every sign post and calendar event the suspended user themselves
+authored, across every landlet/instance — not just the one, if any, the
+admin happened to be looking at. This is opt-in per the owner's own
+resolved call on #781 ("not a fully separate, easy-to-forget manual step,
+but also not unconditionally automatic"), and only runs once the
+suspension insert above is confirmed to have actually landed (never on a
+`409`). Each removed row goes through the exact same admin-override DELETE
+path `DELETE /instances/:id/posts/:postId` / `.../events/:eventId` already
+use for a single post/event — one `admin_action_log` entry per row
+(`action_type: "delete_sign_post_override"`/`"delete_calendar_event_override"`),
+not a single bulk entry. **Known gap**: `calendar_events.user_id`
+(`migrations/0135_calendar_events_user_id.sql`) only exists going forward
+from that migration — unlike `sign_posts.user_id` (#1830), nothing
+previously recorded who authored a calendar event, so this cascade can
+only find and remove a long-suspended user's calendar events created
+*after* this migration landed; older ones have no attribution to check
+against at all and are silently left in place, the same limitation
+`sign_posts` already accepted for pre-#1830 posts. On success, the
+response also carries
+`"removedContent": { "signPostsRemoved", "calendarEventsRemoved" }` with
+the counts actually deleted — omitted entirely when `removeContent` isn't
+set.
 
 ### `POST /api/auth/unsuspend-account`
 

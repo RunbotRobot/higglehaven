@@ -1,0 +1,17 @@
+-- #2032 (sub-issue of #1201): implementing the suspend action's optional
+-- sign-post/calendar-event removal cascade surfaced a real gap -- unlike
+-- sign_posts (migrations/0125, #1830), calendar_events was never given a
+-- user_id column, so there is no way to find "this suspended user's own
+-- calendar events" at all. calendar_events.author_label is free display
+-- text (the posting builder's own label at post time), not a real
+-- attribution column -- using it to match a suspended user would be both
+-- unreliable (two different users can share a label) and unauthenticated
+-- (nothing enforces it stays in sync with the account that posted it).
+--
+-- Same shape and same ON DELETE SET NULL reasoning as 0125's own comment:
+-- a user row is never hard-deleted, so this only governs a pre-existing
+-- row referencing a user_id that predates this column. A calendar event
+-- created before this migration lands keeps user_id NULL permanently --
+-- same "nobody on record to own it" limitation 0125 already accepted for
+-- pre-#1830 sign posts, not a new one introduced here.
+ALTER TABLE calendar_events ADD COLUMN user_id TEXT REFERENCES users(user_id) ON DELETE SET NULL;

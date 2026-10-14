@@ -10406,6 +10406,39 @@ async function handleListAdmins(request, db) {
 
 const ACCOUNT_SUSPENSION_RATE_LIMIT_MAX = 20;
 
+// #2032 (sub-issue of #1201): the suspend action's optional sign-post/
+// calendar-event removal cascade -- per the owner's own resolved call on
+// #781: offered as part of suspending, not unconditionally automatic and
+// not a separate manual step. Reuses the exact admin-override DELETE path
+// #781 already added for a single post/event (same action_type/target_type
+// per row in admin_action_log), just applied across every row this user
+// authored instead of one at a time via the HTTP DELETE endpoints.
+//
+// calendar_events.user_id (migrations/0135) only exists going forward from
+// that migration -- a pre-existing event has no attribution at all to
+// check against (same limitation sign_posts accepted pre-#1830), so this
+// can only ever find and remove a subset of a long-suspended user's older
+// calendar events. Flagged in docs/API.md, not silently glossed over.
+async function removeSuspendedUserPostedContent(db, adminUserId, suspendedUserId) {
+  const { results: posts } = await db.prepare(
+    'SELECT post_id FROM sign_posts WHERE user_id = ?',
+  ).bind(suspendedUserId).all();
+  const { results: events } = await db.prepare(
+    'SELECT event_id FROM calendar_events WHERE user_id = ?',
+  ).bind(suspendedUserId).all();
+  const statements = [];
+  for (const { post_id: postId } of posts) {
+    statements.push(db.prepare('DELETE FROM sign_posts WHERE post_id = ?').bind(postId));
+    statements.push(adminActionLogStatement(db, adminUserId, 'delete_sign_post_override', 'sign_post', postId));
+  }
+  for (const { event_id: eventId } of events) {
+    statements.push(db.prepare('DELETE FROM calendar_events WHERE event_id = ?').bind(eventId));
+    statements.push(adminActionLogStatement(db, adminUserId, 'delete_calendar_event_override', 'calendar_event', eventId));
+  }
+  if (statements.length > 0) await db.batch(statements);
+  return { signPostsRemoved: posts.length, calendarEventsRemoved: events.length };
+}
+
 // #2029 (sub-issue of #1201): the foundational primitive for admin-
 // initiated account suspension -- email-addressed and admin_action_log-
 // recorded the same way grant-admin/revoke-admin above already are, since
@@ -10425,6 +10458,9 @@ async function handleSuspendAccount(request, db) {
   if (!reason) throw new HttpError('reason is required', 400);
   const evidenceNote = typeof input.evidenceNote === 'string' && input.evidenceNote.trim()
     ? input.evidenceNote.trim() : null;
+  // #2032: opt-in, not the default -- see removeSuspendedUserPostedContent's
+  // own comment for why this isn't unconditional.
+  const removeContent = input.removeContent === true;
   // Owner-confirmed default (#1201, 2026-10-07): 30 days. A caller may
   // override it, but only within a sane range -- not unbounded, and not
   // zero/negative (that would mean "already past its own grace period,"
@@ -10458,11 +10494,19 @@ async function handleSuspendAccount(request, db) {
     suspensionId, reason, evidenceNote, gracePeriodEndsAt,
   }).run();
 
+  // #2032: run only after the suspension itself is confirmed landed -- a
+  // removeContent request against an account that turned out to already be
+  // suspended (the 409 above) must not remove anything.
+  const removedContent = removeContent
+    ? await removeSuspendedUserPostedContent(db, admin.user_id, row.user_id)
+    : null;
+
   return json({
     suspension: {
       suspensionId, userId: row.user_id, adminUserId: admin.user_id, reason, evidenceNote,
       suspendedAt: new Date().toISOString(), gracePeriodEndsAt,
     },
+    ...(removedContent ? { removedContent } : {}),
   });
 }
 
@@ -10916,7 +10960,7 @@ const EXPORT_DATA_RATE_LIMIT_MAX = 10;
 //   "versions of landlets this builder currently owns," since landlet
 //   ownership itself can change hands (auction, admin reassignment) and
 //   nothing records who actually created a given version.
-async function exportSocialSection(db, builderId, builderLabel, userId) {
+async function exportSocialSection(db, builderId, userId) {
   const friendships = await db.prepare(`
     SELECT * FROM friendships WHERE requester_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
   `).bind(builderId, builderId).all();
@@ -10943,9 +10987,15 @@ async function exportSocialSection(db, builderId, builderLabel, userId) {
   const signPosts = await db.prepare(`
     SELECT * FROM sign_posts WHERE user_id = ? ORDER BY created_at ASC
   `).bind(userId).all();
+  // #2032's own migrations/0135_calendar_events_user_id.sql closes the gap
+  // this used to work around with an author_label match (see this
+  // function's own doc comment history) -- a real user_id FK now exists,
+  // same shape as sign_posts just above. A calendar event created before
+  // that migration landed still has no attribution at all and is correctly
+  // left out, rather than falling back to the old, spoofable label match.
   const calendarEvents = await db.prepare(`
-    SELECT * FROM calendar_events WHERE author_label = ? ORDER BY created_at ASC
-  `).bind(builderLabel).all();
+    SELECT * FROM calendar_events WHERE user_id = ? ORDER BY created_at ASC
+  `).bind(userId).all();
   const savedLayouts = await db.prepare(`
     SELECT * FROM saved_level_layouts WHERE builder_id = ? ORDER BY created_at ASC
   `).bind(builderId).all();
@@ -11022,7 +11072,7 @@ async function handleExportData(request, db) {
       })),
     },
     commerce: await exportCommerceData(db, builderRow),
-    social: builderRow ? await exportSocialSection(db, builderRow.builder_id, builderRow.label, user.user_id) : null,
+    social: builderRow ? await exportSocialSection(db, builderRow.builder_id, user.user_id) : null,
   });
 }
 
@@ -14217,12 +14267,12 @@ async function handleCalendarEvents(request, db, route) {
     // INSERT land afterward. Same #929/#960 idiom as this handler's own
     // DELETE sibling below.
     const inserted = await db.prepare(`
-      INSERT INTO calendar_events (event_id, instance_id, author_label, text, scheduled_at)
-      SELECT ?, ?, ?, ?, ? WHERE EXISTS (
+      INSERT INTO calendar_events (event_id, instance_id, author_label, text, scheduled_at, user_id)
+      SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (
         SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
         WHERE pi.instance_id = ? AND pi.is_community_calendar = 1 AND l.owner_builder_id IS ?
       )
-    `).bind(eventId, instanceId, sessionBuilder.label, text, scheduledAt, instanceId, sessionBuilder.builder_id).run();
+    `).bind(eventId, instanceId, sessionBuilder.label, text, scheduledAt, sessionBuilder.user_id, instanceId, sessionBuilder.builder_id).run();
     if (inserted.meta.changes === 0) {
       const current = await db.prepare('SELECT is_community_calendar FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
       if (!current?.is_community_calendar) {
@@ -14323,6 +14373,7 @@ function calendarEventFromRow(row) {
     text: row.text,
     scheduledAt: row.scheduled_at,
     triggeredAt: row.triggered_at,
+    userId: row.user_id,
     createdAt: row.created_at,
   };
 }
