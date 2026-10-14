@@ -2527,13 +2527,21 @@ describe('Community calendar', () => {
   });
 
   // #960: same race as the sign-post DELETE test in the "Community signs"
-  // describe block above -- see its own comment.
-  it('does not delete a calendar event on a landlet that was transferred to a new owner mid-request', async () => {
-    const owner = await signupBuilder('calendar-delete-ownership-race-owner');
-    const newOwner = await signupBuilder('calendar-delete-ownership-race-new-owner');
+  // describe block above -- see its own comment. #1975 split deletion into
+  // two independent paths (the event's own author, via user_id -- entirely
+  // unaffected by landlet ownership -- and the landlet's current owner, for
+  // moderation), so this needs a deleter who is the landlet's owner but NOT
+  // the event's author to keep exercising the moderation path's own race
+  // protection specifically (an author-authored delete no longer goes
+  // through requireOwnedLandlet at all -- see the "Author self-edit/delete
+  // (#1975)" describe block below for that path's own coverage).
+  it('does not let a moderator delete a calendar event on a landlet that was transferred away from them mid-request', async () => {
+    const author = await signupBuilder('calendar-delete-ownership-race-author');
+    const moderator = await signupBuilder('calendar-delete-ownership-race-moderator');
+    const thief = await signupBuilder('calendar-delete-ownership-race-thief');
     await createGreenbeltLandlet('calendar-delete-ownership-race-landlet');
-    await api('/landlets/calendar-delete-ownership-race-landlet/claim', owner.session({ method: 'POST' }));
-    await api('/instances', owner.session({
+    await api('/landlets/calendar-delete-ownership-race-landlet/claim', author.session({ method: 'POST' }));
+    await api('/instances', author.session({
       method: 'POST',
       body: JSON.stringify({
         instanceId: 'calendar-delete-ownership-race-instance',
@@ -2542,10 +2550,17 @@ describe('Community calendar', () => {
         x: 1, y: 1, isCommunityCalendar: true,
       }),
     }));
-    const posted = await api('/instances/calendar-delete-ownership-race-instance/events', owner.session({
+    const posted = await api('/instances/calendar-delete-ownership-race-instance/events', author.session({
       method: 'POST', body: JSON.stringify({ text: 'Bonfire night!' }),
     }));
     const eventId = posted.body.event.eventId;
+
+    // Transfer the landlet to the moderator -- they now own it (and will
+    // attempt a moderation delete below) but are not the event's author,
+    // so their own delete must go through requireOwnedLandlet, not the
+    // author-direct path.
+    await env.DB.prepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+      .bind(moderator.builderId, 'calendar-delete-ownership-race-landlet').run();
 
     const originalPrepare = env.DB.prepare.bind(env.DB);
     let armed = true;
@@ -2553,13 +2568,13 @@ describe('Community calendar', () => {
       if (armed && sql.includes('INSERT INTO rate_limit_events')) {
         armed = false;
         originalPrepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
-          .bind(newOwner.builderId, 'calendar-delete-ownership-race-landlet').run();
+          .bind(thief.builderId, 'calendar-delete-ownership-race-landlet').run();
       }
       return originalPrepare(sql);
     };
     let deleted;
     try {
-      deleted = await api(`/instances/calendar-delete-ownership-race-instance/events/${eventId}`, owner.session({ method: 'DELETE' }));
+      deleted = await api(`/instances/calendar-delete-ownership-race-instance/events/${eventId}`, moderator.session({ method: 'DELETE' }));
     } finally {
       env.DB.prepare = originalPrepare;
     }
@@ -2678,6 +2693,274 @@ describe('Community calendar', () => {
     }
     const limited = await api(`/instances/calendar-trigger-rate-limit-instance/events/${eventIds[20]}/trigger`, { method: 'POST', headers });
     expect(limited.response.status).toBe(429);
+  });
+
+  // #1975: same pattern as product_reviews' own "Author self-edit/delete"
+  // describe block -- an event's own author (tracked via the new user_id
+  // column, migrations/0131) can edit/delete it directly, independent of
+  // who currently owns the hosting landlet, unlike the pre-existing
+  // moderation path (requireOwnedLandlet) which only ever worked for the
+  // *current* owner.
+  describe('Author self-edit/delete (#1975)', () => {
+    async function setupCalendar(suffix) {
+      const owner = await signupBuilder(`cal-au-${suffix}-owner`);
+      await createGreenbeltLandlet(`cal-au-${suffix}-landlet`);
+      await api(`/landlets/cal-au-${suffix}-landlet/claim`, owner.session({ method: 'POST' }));
+      const instanceId = `cal-au-${suffix}-instance`;
+      await api('/instances', owner.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instanceId, landletId: `cal-au-${suffix}-landlet`,
+          templateId: 'placeholder-tree', x: 1, y: 1, isCommunityCalendar: true,
+        }),
+      }));
+      return { owner, instanceId, landletId: `cal-au-${suffix}-landlet` };
+    }
+
+    async function postEvent(instanceId, builder, { text = 'An event', scheduledAt } = {}) {
+      const posted = await api(`/instances/${instanceId}/events`, builder.session({
+        method: 'POST', body: JSON.stringify({ text, scheduledAt }),
+      }));
+      expect(posted.response.status).toBe(201);
+      return posted.body.event.eventId;
+    }
+
+    it('lets the event\'s own author edit it directly, even after the hosting landlet changes hands', async () => {
+      const { owner, instanceId, landletId } = await setupCalendar('edit-after-transfer');
+      const eventId = await postEvent(instanceId, owner, { text: 'Original text' });
+
+      const newOwner = await signupBuilder('cal-au-edit-after-transfer-new-owner');
+      await env.DB.prepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+        .bind(newOwner.builderId, landletId).run();
+
+      // The new landlet owner is not the event's author, so it 403s them --
+      // there's no moderation equivalent for PATCH.
+      const newOwnerRejected = await api(`/instances/${instanceId}/events/${eventId}`, newOwner.session({
+        method: 'PATCH', body: JSON.stringify({ text: 'Hijacked' }),
+      }));
+      expect(newOwnerRejected.response.status).toBe(403);
+
+      const edited = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ text: 'Edited by the real author' }),
+      }));
+      expect(edited.response.status).toBe(200);
+      expect(edited.body.event).toMatchObject({ text: 'Edited by the real author' });
+    });
+
+    it('rejects an edit from anyone other than the event\'s own author', async () => {
+      const { owner, instanceId } = await setupCalendar('edit-cross-account');
+      const eventId = await postEvent(instanceId, owner);
+      const stranger = await signupBuilder('cal-au-edit-cross-account-stranger');
+
+      const unauthenticated = await api(`/instances/${instanceId}/events/${eventId}`, {
+        method: 'PATCH', body: JSON.stringify({ text: 'Nope' }),
+      });
+      expect(unauthenticated.response.status).toBe(401);
+
+      const wrongAccount = await api(`/instances/${instanceId}/events/${eventId}`, stranger.session({
+        method: 'PATCH', body: JSON.stringify({ text: 'Nope' }),
+      }));
+      expect(wrongAccount.response.status).toBe(403);
+    });
+
+    it('keeps an omitted field as-is on edit, and lets scheduledAt be explicitly cleared', async () => {
+      const { owner, instanceId } = await setupCalendar('edit-partial');
+      const eventId = await postEvent(instanceId, owner, { text: 'Original', scheduledAt: '2099-01-01T00:00:00.000Z' });
+
+      const textOnly = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ text: 'Updated text' }),
+      }));
+      expect(textOnly.response.status).toBe(200);
+      expect(textOnly.body.event).toMatchObject({ text: 'Updated text', scheduledAt: '2099-01-01T00:00:00.000Z' });
+
+      const clearSchedule = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ scheduledAt: null }),
+      }));
+      expect(clearSchedule.response.status).toBe(200);
+      expect(clearSchedule.body.event).toMatchObject({ text: 'Updated text', scheduledAt: null });
+    });
+
+    it('rejects an edit with text over 280 characters or an invalid scheduledAt', async () => {
+      const { owner, instanceId } = await setupCalendar('edit-validation');
+      const eventId = await postEvent(instanceId, owner);
+
+      const tooLong = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ text: 'x'.repeat(281) }),
+      }));
+      expect(tooLong.response.status).toBe(400);
+
+      const badDate = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ scheduledAt: 'not a date' }),
+      }));
+      expect(badDate.response.status).toBe(400);
+    });
+
+    // A changed scheduledAt is logically a different scheduled moment --
+    // same "genuinely different event" distinction #1751's own idempotency-
+    // key content-match already draws -- so it re-arms the one-shot
+    // trigger. An edit that leaves scheduledAt unchanged must NOT reset an
+    // already-fired trigger back to pending.
+    it('re-arms the trigger when scheduledAt actually changes, but not when it stays the same', async () => {
+      const { owner, instanceId } = await setupCalendar('edit-rearm-trigger');
+      const eventId = await postEvent(instanceId, owner, { text: 'Due soon', scheduledAt: '2000-01-01T00:00:00.000Z' });
+      const triggered = await api(`/instances/${instanceId}/events/${eventId}/trigger`, { method: 'POST' });
+      expect(triggered.body.triggered).toBe(true);
+
+      const sameSchedule = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ text: 'Still due soon, just reworded' }),
+      }));
+      expect(sameSchedule.response.status).toBe(200);
+      expect(sameSchedule.body.event.triggeredAt).not.toBeNull();
+
+      const newSchedule = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ scheduledAt: '2000-06-01T00:00:00.000Z' }),
+      }));
+      expect(newSchedule.response.status).toBe(200);
+      expect(newSchedule.body.event.triggeredAt).toBeNull();
+
+      const retriggered = await api(`/instances/${instanceId}/events/${eventId}/trigger`, { method: 'POST' });
+      expect(retriggered.body.triggered).toBe(true);
+    });
+
+    it('lets the event\'s own author delete it directly, even after the hosting landlet changes hands', async () => {
+      const { owner, instanceId, landletId } = await setupCalendar('delete-after-transfer');
+      const eventId = await postEvent(instanceId, owner);
+      const stranger = await signupBuilder('cal-au-delete-after-transfer-stranger');
+
+      const newOwner = await signupBuilder('cal-au-delete-after-transfer-new-owner');
+      await env.DB.prepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+        .bind(newOwner.builderId, landletId).run();
+
+      const strangerRejected = await api(`/instances/${instanceId}/events/${eventId}`, stranger.session({ method: 'DELETE' }));
+      expect(strangerRejected.response.status).toBe(403);
+
+      const deleted = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({ method: 'DELETE' }));
+      expect(deleted.response.status).toBe(200);
+      expect(deleted.body).toEqual({ deleted: true });
+
+      const listed = await api(`/instances/${instanceId}/events`);
+      expect(listed.body.events).toEqual([]);
+    });
+
+    // The pre-existing moderation path (requireOwnedLandlet) still works for
+    // whoever currently owns the landlet, as a fallback when the original
+    // author doesn't remove their own event -- unchanged by #1975.
+    it('still lets the landlet\'s current owner moderate-delete an event the original author left behind', async () => {
+      const { owner, instanceId, landletId } = await setupCalendar('moderation-fallback');
+      const eventId = await postEvent(instanceId, owner);
+
+      const newOwner = await signupBuilder('cal-au-moderation-fallback-new-owner');
+      await env.DB.prepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+        .bind(newOwner.builderId, landletId).run();
+
+      const deleted = await api(`/instances/${instanceId}/events/${eventId}`, newOwner.session({ method: 'DELETE' }));
+      expect(deleted.response.status).toBe(200);
+    });
+
+    // A pre-#1975 event (user_id IS NULL, seeded directly) has nobody on
+    // record to own it -- the author-direct branches must never match it,
+    // falling straight through to the existing moderation path exactly as
+    // before.
+    it('never lets a legacy event with no recorded author be claimed as anyone\'s own', async () => {
+      const { owner, instanceId } = await setupCalendar('legacy-no-userid');
+      const eventId = 'cal-au-legacy-no-userid-event';
+      await env.DB.prepare(`
+        INSERT INTO calendar_events (event_id, instance_id, author_label, text, user_id) VALUES (?, ?, 'Legacy Author', 'Pre-#1975 event.', NULL)
+      `).bind(eventId, instanceId).run();
+      const stranger = await signupBuilder('cal-au-legacy-no-userid-stranger');
+
+      const editRejected = await api(`/instances/${instanceId}/events/${eventId}`, stranger.session({
+        method: 'PATCH', body: JSON.stringify({ text: 'Claimed!' }),
+      }));
+      expect(editRejected.response.status).toBe(403);
+
+      const deleteRejectedByStranger = await api(`/instances/${instanceId}/events/${eventId}`, stranger.session({ method: 'DELETE' }));
+      expect(deleteRejectedByStranger.response.status).toBe(403);
+
+      const deletedByOwner = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({ method: 'DELETE' }));
+      expect(deletedByOwner.response.status).toBe(200);
+    });
+
+    it('rate-limits repeated event edits from the same account', async () => {
+      const { owner, instanceId } = await setupCalendar('edit-rate-limit');
+      const eventId = await postEvent(instanceId, owner);
+
+      for (let i = 0; i < 20; i++) {
+        const attempt = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({
+          method: 'PATCH', body: JSON.stringify({ text: `Edit number ${i}` }),
+        }));
+        expect(attempt.response.status).not.toBe(429);
+      }
+      const limited = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ text: 'One too many' }),
+      }));
+      expect(limited.response.status).toBe(429);
+    });
+
+    // #1975: "Maybe we should keep a record of the original content
+    // internally in case of disputes" -- every author-initiated edit/
+    // delete should snapshot the pre-change row into
+    // user_content_edit_history (migrations/0129) first.
+    it('snapshots the pre-edit event into user_content_edit_history before applying an author edit', async () => {
+      const { owner, instanceId } = await setupCalendar('history-edit');
+      const eventId = await postEvent(instanceId, owner, { text: 'Before the edit.' });
+      const ownerUserId = (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?')
+        .bind(owner.builderId).first()).user_id;
+
+      const edited = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ text: 'After the edit.' }),
+      }));
+      expect(edited.response.status).toBe(200);
+
+      const history = await env.DB.prepare(
+        'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+      ).bind('calendar_events', eventId).all();
+      expect(history.results).toHaveLength(1);
+      expect(history.results[0]).toMatchObject({ action: 'edit', actor_user_id: ownerUserId });
+      const snapshot = JSON.parse(history.results[0].snapshot_json);
+      expect(snapshot).toMatchObject({ event_id: eventId, text: 'Before the edit.' });
+    });
+
+    it('snapshots the pre-delete event into user_content_edit_history before an author delete', async () => {
+      const { owner, instanceId } = await setupCalendar('history-delete');
+      const eventId = await postEvent(instanceId, owner, { text: 'About to be deleted.' });
+      const ownerUserId = (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?')
+        .bind(owner.builderId).first()).user_id;
+
+      const deleted = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({ method: 'DELETE' }));
+      expect(deleted.response.status).toBe(200);
+
+      const history = await env.DB.prepare(
+        'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+      ).bind('calendar_events', eventId).all();
+      expect(history.results).toHaveLength(1);
+      expect(history.results[0]).toMatchObject({ action: 'delete', actor_user_id: ownerUserId });
+      const snapshot = JSON.parse(history.results[0].snapshot_json);
+      expect(snapshot).toMatchObject({ event_id: eventId, text: 'About to be deleted.' });
+    });
+
+    // Moderation (admin override, or the current landlet owner removing an
+    // event left behind by a former owner) is not the user editing/deleting
+    // their own content -- the owner's own framing was specifically about
+    // self-service, so these must not write to the history table.
+    it('does not snapshot to user_content_edit_history on an admin or landlet-moderation delete', async () => {
+      const { owner, instanceId, landletId } = await setupCalendar('history-moderation');
+      const adminEventId = await postEvent(instanceId, owner, { text: 'Admin will remove this.' });
+      const adminDeleted = await api(`/instances/${instanceId}/events/${adminEventId}`, adminSession({ method: 'DELETE' }));
+      expect(adminDeleted.response.status).toBe(200);
+
+      const moderationEventId = await postEvent(instanceId, owner, { text: 'New owner will remove this.' });
+      const newOwner = await signupBuilder('cal-au-history-moderation-new-owner');
+      await env.DB.prepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+        .bind(newOwner.builderId, landletId).run();
+      const moderationDeleted = await api(`/instances/${instanceId}/events/${moderationEventId}`, newOwner.session({ method: 'DELETE' }));
+      expect(moderationDeleted.response.status).toBe(200);
+
+      const history = await env.DB.prepare(
+        'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id IN (?, ?)',
+      ).bind('calendar_events', adminEventId, moderationEventId).all();
+      expect(history.results).toHaveLength(0);
+    });
   });
 });
 
@@ -3267,9 +3550,14 @@ describe('Land cap', () => {
     return listResponse.body.builders.find((b) => b.builderId === builderId).landCapM2;
   }
 
+  // #715's default page (100, ascending by created_at) means an unfiltered
+  // GET /builders can leave this test's own freshly-created builder off
+  // the first page once enough other builders have been created earlier
+  // in this file -- the #717 ids= lookup bypasses pagination entirely, so
+  // this stays correct regardless of how many builders exist elsewhere.
   it('defaults every new builder to a 1000 m² land cap', async () => {
     const builderId = await createBuilder('Land Cap Default Builder');
-    expect(landCapOf(await api('/builders'), builderId)).toBe(1000);
+    expect(landCapOf(await api(`/builders?ids=${builderId}`), builderId)).toBe(1000);
   });
 
   // #489 (owner-confirmed): this used to be deliberately unenforced — see
@@ -3403,7 +3691,7 @@ describe('Land cap', () => {
     await env.DB.prepare(`
       INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
     `).bind('land-cap-formula-earning', builderId, 4000).run();
-    expect(landCapOf(await api('/builders'), builderId)).toBe(5000);
+    expect(landCapOf(await api(`/builders?ids=${builderId}`), builderId)).toBe(5000);
   });
 
   it('ratchets — a cap increase never reverts even after the earnings that produced it age out of the trailing window', async () => {
@@ -3411,7 +3699,7 @@ describe('Land cap', () => {
     await env.DB.prepare(`
       INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)
     `).bind('land-cap-ratchet-earning', builderId, 4000).run();
-    expect(landCapOf(await api('/builders'), builderId)).toBe(5000);
+    expect(landCapOf(await api(`/builders?ids=${builderId}`), builderId)).toBe(5000);
 
     // Age the earning out of the 30-day trailing window, then force another
     // recompute (any GET /builders does this) — the cap must NOT drop back
@@ -3420,7 +3708,7 @@ describe('Land cap', () => {
     await env.DB.prepare(`
       UPDATE higgles_earnings_events SET created_at = '2000-01-01T00:00:00.000Z' WHERE event_id = ?
     `).bind('land-cap-ratchet-earning').run();
-    expect(landCapOf(await api('/builders'), builderId)).toBe(5000);
+    expect(landCapOf(await api(`/builders?ids=${builderId}`), builderId)).toBe(5000);
   });
 
   it('credits a real per-event earnings ledger entry when an auction actually sells', async () => {

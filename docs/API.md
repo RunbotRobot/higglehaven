@@ -4604,25 +4604,61 @@ An instance can be a sign and a calendar at once (independent flags,
 independently toggled and moderated) — nothing in the spec says a builder
 must choose one or the other for a given placed object.
 
-### `GET /api/instances/:instanceId/events`, `POST .../events`, `DELETE .../events/:eventId`
+### `GET /api/instances/:instanceId/events`, `POST .../events`, `PATCH`/`DELETE .../events/:eventId`
 
 Same shape as the sign posts endpoints above, with `event`/`events` in
 place of `post`/`posts` and `eventId` in place of `postId`:
-`{ eventId, instanceId, authorLabel, text, createdAt }`, `text` capped at
-280 characters, `GET` newest-200-plus-`totalCount` the same way (`#356`),
-`POST` rejected with `400` unless the target instance is currently flagged
-`isCommunityCalendar`, deletion cascades when the instance itself is
-deleted. Both `POST` and `DELETE` are rate-limited per builder (20 per
-15-minute window, `429` past that, `#944`) — the same bucket shape as
-other per-account mutation limits in this file.
+`{ eventId, instanceId, authorLabel, text, scheduledAt, triggeredAt,
+createdAt, userId }`, `text` capped at 280 characters, `GET`
+newest-200-plus-`totalCount` the same way (`#356`), `POST` rejected with
+`400` unless the target instance is currently flagged `isCommunityCalendar`,
+deletion cascades when the instance itself is deleted. `POST`, `PATCH`, and
+`DELETE` are all rate-limited per builder/user (20 per 15-minute window,
+`429` past that, `#944`/`#1975`) — the same bucket shape as other
+per-account mutation limits in this file.
 
-Unlike sign posts, there's no author-delete path here (calendar events are
-builder-authored, not shopper-authored, so the hosting landlet's own owner
-already *is* the author in the ordinary case) — but `DELETE` does have the
-same admin-override path sign posts gained (`#781`): an admin can remove
-any calendar event outright, checked first, rate-limited per admin (same
-`CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX` bucket), and logged via
-`admin_action_log` (`action_type: 'delete_calendar_event_override'`).
+`DELETE` has the same admin-override path sign posts gained (`#781`): an
+admin can remove any calendar event outright, checked first, rate-limited
+per admin (same `CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX` bucket), and logged
+via `admin_action_log` (`action_type: 'delete_calendar_event_override'`).
+
+**`#1975` (owner decision, 2026-10-13): an event's own author can also edit
+or delete it directly, independent of who currently owns the hosting
+landlet.** `userId` (new, `migrations/0131`) records the session that
+created the event — populated server-side at `POST` time from
+`requireSessionBuilder`'s own resolved user, the same "derive authorship
+server-side" discipline this endpoint's `authorLabel` already uses. Unlike
+the original design (calendar events are builder-authored, so the hosting
+landlet's own owner used to be the *only* way to manage one, making an
+explicit author-delete path redundant with moderation in the ordinary
+case), tracking the real author separately means it keeps working even
+after the landlet changes hands (auction, admin reassignment) — the same
+guarantee sign posts (`#1830`) and product reviews give their own authors.
+
+- `PATCH /api/instances/:instanceId/events/:eventId` — author-only, `403`
+  `"Not your event"` for anyone else (including the landlet's *current*
+  owner, if that's no longer the same account); there's no moderation
+  equivalent for `PATCH`, same as sign posts. Body accepts `text` and/or
+  `scheduledAt` (either field omitted keeps its existing value; `scheduledAt:
+  null` clears a previously-set schedule). Changing `scheduledAt` to a
+  genuinely different value re-arms `triggeredAt` back to `null` — the
+  same "is this actually a different event" distinction `#1751`'s own
+  idempotency-key content-match already draws — so editing a past-due,
+  already-triggered event's schedule doesn't leave it permanently inert.
+  A pre-`#1975` event with no `userId` at all can never be claimed via
+  this path. Rate-limited per user (`CALENDAR_EVENT_EDIT_RATE_LIMIT_MAX`).
+- `DELETE`'s author-direct path sits between the admin-override check and
+  the pre-existing landlet-owner moderation fallback: the event's own
+  author (by `userId`) can remove it directly; a pre-`#1975` event with no
+  `userId` falls through to the moderation path exactly as it always has.
+
+Both the `PATCH` and the author-direct `DELETE` write a full snapshot of
+the event (as it existed just before the change) into the same shared
+`user_content_edit_history` table product reviews use (`#1975`,
+`recordContentEditHistory`) — "in case of disputes," per the owner's own
+framing. The admin-override and landlet-owner moderation `DELETE` paths
+deliberately do **not** write to it; that table is for a genuine author's
+own edit/delete of their own content, not moderation.
 
 **`POST` requires a real session either way (since #1830, sign posts too)
 — the distinction is *whose*.** This endpoint requires a session logged

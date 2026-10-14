@@ -101,6 +101,7 @@ import {
   fetchCalendarEvents,
   createCalendarEvent,
   deleteCalendarEvent,
+  editCalendarEvent,
   triggerCalendarEvent,
   fetchProductReviews,
   createProductReview,
@@ -9033,6 +9034,42 @@ async function renderCalendarEvents() {
       body.appendChild(schedule);
     }
     row.appendChild(body);
+    const actions = document.createElement('div');
+    actions.className = 'calendar-event-row-actions';
+    // #1975: editing is author-only (handleCalendarEvents' own PATCH
+    // branch 403s "Not your event" for anyone else) — this modal lists
+    // every event on the calendar, not just this viewer's own, so the
+    // edit button only renders for rows this session's own account
+    // authored, same userId-match idiom as the sign-post/product-review
+    // "myPost"/"myReview" checks use elsewhere.
+    if (event.userId && currentAuthUser && event.userId === currentAuthUser.userId) {
+      const editRowBtn = document.createElement('button');
+      editRowBtn.className = 'calendar-event-row-edit';
+      editRowBtn.type = 'button';
+      editRowBtn.textContent = '✎';
+      editRowBtn.setAttribute('aria-label', 'Edit event');
+      editRowBtn.addEventListener('click', async () => {
+        const newText = prompt('Edit this event (up to 280 characters):', event.text);
+        if (newText === null) return;
+        if (!newText.trim()) {
+          alert('Event text cannot be empty.');
+          return;
+        }
+        if (newText.trim().length > 280) {
+          alert('Keep it to 280 characters or fewer.');
+          return;
+        }
+        editRowBtn.disabled = true;
+        try {
+          await editCalendarEvent(instanceId, event.eventId, { text: newText.trim() });
+          await renderCalendarEvents();
+        } catch (err) {
+          alert(err.message || 'Could not update this event.');
+          editRowBtn.disabled = false;
+        }
+      });
+      actions.appendChild(editRowBtn);
+    }
     const deleteRowBtn = document.createElement('button');
     deleteRowBtn.className = 'calendar-event-row-delete';
     deleteRowBtn.type = 'button';
@@ -9048,7 +9085,8 @@ async function renderCalendarEvents() {
         deleteRowBtn.disabled = false;
       }
     });
-    row.appendChild(deleteRowBtn);
+    actions.appendChild(deleteRowBtn);
+    row.appendChild(actions);
     calendarEventsListEl.appendChild(row);
   }
 }
