@@ -13363,6 +13363,22 @@ async function handleSignPosts(request, db, route) {
     if (!existing) return json({ error: 'Post not found' }, 404);
     const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
+    // #781: an admin can remove any sign post outright (harassment, doxxing,
+    // other policy violations) regardless of whether the hosting landlet's
+    // own owner ever acts on it -- same "checked first, via the non-throwing
+    // currentUser lookup" shape as #1712's product-review admin override,
+    // since an admin isn't necessarily the post's author or the landlet owner.
+    const requester = await currentUser(request, db);
+    const admin = requester && requester.is_admin ? requester : null;
+    if (admin) {
+      await checkRateLimit(db, `sign-post-delete:${admin.user_id}`, SIGN_POST_DELETE_RATE_LIMIT_MAX);
+      const deletedByAdmin = await db.prepare('DELETE FROM sign_posts WHERE post_id = ?').bind(postId).run();
+      if (deletedByAdmin.meta.changes === 0) {
+        throw new HttpError('Post changed concurrently — refetch and retry', 409);
+      }
+      await adminActionLogStatement(db, admin.user_id, 'delete_sign_post_override', 'sign_post', postId).run();
+      return json({ deleted: true });
+    }
     // #1830: requireSessionBuilder (not requireVerifiedSession) so this one
     // call resolves both the real user_id a post's own author needs below,
     // and the builder_id the moderation fallback below that already needs
@@ -13560,6 +13576,19 @@ async function handleCalendarEvents(request, db, route) {
     const eventId = route[3];
     const existing = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ? AND instance_id = ?').bind(eventId, instanceId).first();
     if (!existing) return json({ error: 'Event not found' }, 404);
+    // #781: an admin can remove any calendar event outright, same reasoning
+    // and shape as the sign-posts admin override above.
+    const requester = await currentUser(request, db);
+    const admin = requester && requester.is_admin ? requester : null;
+    if (admin) {
+      await checkRateLimit(db, `calendar-event-delete:${admin.user_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
+      const deletedByAdmin = await db.prepare('DELETE FROM calendar_events WHERE event_id = ?').bind(eventId).run();
+      if (deletedByAdmin.meta.changes === 0) {
+        throw new HttpError('Event changed concurrently — refetch and retry', 409);
+      }
+      await adminActionLogStatement(db, admin.user_id, 'delete_calendar_event_override', 'calendar_event', eventId).run();
+      return json({ deleted: true });
+    }
     // Same moderation gate as sign posts above — the calendar's own hosting
     // landlet's owner, not the event's free-text author.
     const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();

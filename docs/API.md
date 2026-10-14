@@ -4423,8 +4423,13 @@ instance). Rate-limited per editing account, the same shape as `POST`/
 
 ### `DELETE /api/instances/:instanceId/posts/:postId`
 
-Two independent ways in, either sufficient on its own:
+Three independent ways in, either sufficient on its own:
 
+- **An admin**, outright — checked first (`#781`), regardless of who posted
+  it or who owns the hosting landlet. Rate-limited per admin (same
+  `SIGN_POST_DELETE_RATE_LIMIT_MAX` bucket as the other two paths) and
+  logged via `admin_action_log` (`action_type: 'delete_sign_post_override'`),
+  the same shape as the product-review (`#1712`) admin override.
 - **The post's own author**, directly — a verified session whose `userId`
   matches the post's `userId`. Added by #1830; a pre-#1830 post with
   `userId: null` can never match this path, so it falls through to
@@ -4607,6 +4612,14 @@ place of `post`/`posts` and `eventId` in place of `postId`:
 deleted. Both `POST` and `DELETE` are rate-limited per builder (20 per
 15-minute window, `429` past that, `#944`) — the same bucket shape as
 other per-account mutation limits in this file.
+
+Unlike sign posts, there's no author-delete path here (calendar events are
+builder-authored, not shopper-authored, so the hosting landlet's own owner
+already *is* the author in the ordinary case) — but `DELETE` does have the
+same admin-override path sign posts gained (`#781`): an admin can remove
+any calendar event outright, checked first, rate-limited per admin (same
+`CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX` bucket), and logged via
+`admin_action_log` (`action_type: 'delete_calendar_event_override'`).
 
 **`POST` requires a real session either way (since #1830, sign posts too)
 — the distinction is *whose*.** This endpoint requires a session logged
