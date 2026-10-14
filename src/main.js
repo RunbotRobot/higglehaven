@@ -119,6 +119,7 @@ import {
   clearPurchaseIdempotencyKey,
   finalizePurchase,
   fetchPurchases,
+  fetchLowStock,
   refundPurchase,
   fetchSellerPayouts,
   requestSellerPayout,
@@ -6497,6 +6498,7 @@ function renderBuildSettingsSection() {
   renderLandCapField();
   renderRedeemHigglesField();
   renderAuctionSection();
+  renderLowStockSection();
   if (currentMode !== 'build' || !currentLandletId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
@@ -7545,6 +7547,120 @@ async function renderAuctionSection() {
 
   renderStartSection();
   renderAuctionList();
+}
+
+// #1949 (sub-issue of #1947): a builder-wide list of their own placed
+// products carrying finite stock, each annotated with the server's own
+// estimated days-remaining figure -- same "builder-wide, independent of
+// which/any landlet is active" placement as renderAuctionSection just
+// above, filterable client-side by remaining quantity and/or days
+// remaining the same way the catalog picker's own search box filters
+// already-fetched tiles (filterCatalogTiles) rather than re-fetching per
+// keystroke.
+async function renderLowStockSection() {
+  const myToken = settingsRenderToken;
+  if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
+  if (myToken !== settingsRenderToken) return;
+  if (!builderId) {
+    const note = document.createElement('div');
+    note.className = 'settings-empty-note';
+    note.textContent = 'Choose a builder identity to see which of your placed products are low on stock.';
+    settingsSectionEl.appendChild(note);
+    return;
+  }
+
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const label = document.createElement('span');
+  label.textContent = 'Low Stock';
+  field.appendChild(label);
+
+  const filterRow = document.createElement('div');
+  filterRow.className = 'low-stock-filter-row';
+  const qtyLabel = document.createElement('label');
+  qtyLabel.textContent = 'Max remaining';
+  const qtyInput = document.createElement('input');
+  qtyInput.type = 'number';
+  qtyInput.min = '0';
+  qtyInput.placeholder = 'Any';
+  qtyInput.className = 'low-stock-filter-input';
+  qtyLabel.appendChild(qtyInput);
+  filterRow.appendChild(qtyLabel);
+  const daysLabel = document.createElement('label');
+  daysLabel.textContent = 'Max days remaining';
+  const daysInput = document.createElement('input');
+  daysInput.type = 'number';
+  daysInput.min = '0';
+  daysInput.placeholder = 'Any';
+  daysInput.className = 'low-stock-filter-input';
+  daysLabel.appendChild(daysInput);
+  filterRow.appendChild(daysLabel);
+  field.appendChild(filterRow);
+
+  const list = document.createElement('div');
+  list.className = 'low-stock-list';
+  field.appendChild(list);
+  const empty = document.createElement('div');
+  empty.className = 'settings-empty-note';
+  field.appendChild(empty);
+  settingsSectionEl.appendChild(field);
+
+  // A days-remaining threshold only ever excludes a row that actually has a
+  // number -- 'unpredictable'/'notEnoughData' rows (daysRemaining: null)
+  // have nothing to compare against a numeric threshold, so they stay
+  // filtered out once that threshold is set rather than matching by
+  // accident on a missing value.
+  function applyFilter() {
+    const maxQty = qtyInput.value === '' ? null : Number(qtyInput.value);
+    const maxDays = daysInput.value === '' ? null : Number(daysInput.value);
+    let anyVisible = false;
+    for (const row of list.children) {
+      const qty = Number(row.dataset.stockQuantity);
+      const days = row.dataset.daysRemaining === '' ? null : Number(row.dataset.daysRemaining);
+      const matchesQty = maxQty == null || qty <= maxQty;
+      const matchesDays = maxDays == null || (days != null && days <= maxDays);
+      const matches = matchesQty && matchesDays;
+      row.hidden = !matches;
+      if (matches) anyVisible = true;
+    }
+    empty.hidden = list.children.length === 0 || anyVisible;
+    empty.textContent = list.children.length === 0
+      ? 'None of your placed products carry finite stock yet.'
+      : 'No placed products match this filter.';
+  }
+  qtyInput.addEventListener('input', applyFilter);
+  daysInput.addEventListener('input', applyFilter);
+
+  let templates;
+  try {
+    templates = await fetchLowStock();
+  } catch (err) {
+    if (myToken !== settingsRenderToken) return;
+    empty.hidden = false;
+    empty.textContent = err.message || 'Could not load low-stock products.';
+    return;
+  }
+  if (myToken !== settingsRenderToken) return;
+
+  for (const t of templates) {
+    const row = document.createElement('div');
+    row.className = 'low-stock-row';
+    row.dataset.stockQuantity = String(t.stockQuantity);
+    row.dataset.daysRemaining = t.daysRemaining == null ? '' : String(t.daysRemaining);
+    const info = document.createElement('div');
+    info.className = 'low-stock-row-info';
+    const countLabel = t.placedInstanceCount === 1 ? '1 placed' : `${t.placedInstanceCount} placed`;
+    const stockLabel = t.stockQuantity === 1 ? '1 left (one-of-a-kind)' : `${t.stockQuantity} left`;
+    let estimateLabel;
+    if (t.predictability === 'unpredictable') estimateLabel = 'hard to predict';
+    else if (t.predictability === 'notEnoughData') estimateLabel = 'not enough data yet';
+    else if (t.predictability === 'estimatedFromCategory') estimateLabel = `~${t.daysRemaining}d left (est. from similar products)`;
+    else estimateLabel = `~${t.daysRemaining}d left`;
+    info.textContent = `"${t.name}" — ${stockLabel}, ${countLabel} — ${estimateLabel}`;
+    row.appendChild(info);
+    list.appendChild(row);
+  }
+  applyFilter();
 }
 
 for (const btn of settingsTabsEl.querySelectorAll('.settings-tab-btn')) {
@@ -12029,14 +12145,14 @@ const SHOP_WALK_SPEED_M_S = 1.8;
 const SHOP_RUN_SPEED_M_S = 2.7; // docs/SPEC.md §2 (v16): ~6 mph, a more noticeable gap from walking
 const SHOP_LOOK_SPEED_RAD_S = 1.8;
 const SHOP_MIN_HEIGHT_M = 1.5;
-// Flight (docs/SPEC.md §2) — see updateShopFlight/bindShopFlyToggle. Two
-// spec details are deliberately not built here, both because they're
-// inherently about *other* players seeing you, which this single-player-
-// only build has none of: "flying avatars are invisible to other users"
-// (so takeoff/landing here are pure altitude ramps, no fade — there's no
-// one else to fade for) and "occupied landing spots offset to nearest open
-// space" (nothing to occupy a spot with yet). Revisit both once real
-// multiplayer presence exists (spec §9's own phase-4, after this one).
+// Flight (docs/SPEC.md §2) — see updateShopFlight/bindShopFlyToggle.
+// "Occupied landing spots offset to nearest open space" is now built
+// (#2044, nearestOpenLandingSpot below) now that real multiplayer presence
+// (#1095) gives it another avatar to actually collide with. "Flying
+// avatars are invisible to other users" is still deliberately not built
+// here — a separate, still-open gap (#2043) about *other* players seeing
+// you, which takeoff/landing's own plain altitude ramps (no fade) don't
+// address.
 const SHOP_FLIGHT_TAKEOFF_DURATION_S = 1; // spec's "~1s lift"
 const SHOP_FLIGHT_LANDING_DURATION_S = 2; // spec's "~2s reverse"
 const SHOP_FLIGHT_HOVER_START_ALTITUDE_M = 3; // altitude reached at the end of takeoff, before the player climbs further
@@ -14046,7 +14162,17 @@ function updateShopFlight(dt) {
       shopFlightTransitionElapsedS, SHOP_FLIGHT_LANDING_DURATION_S, shopFlightLandingStartAltitudeM, minAltitudeM,
     );
     shopFlightAltitudeM = altitudeM;
-    if (landed) shopFlightState = 'grounded';
+    if (landed) {
+      // #2044: nudge away from another avatar occupying this exact spot,
+      // the same moment the vertical ramp above finishes -- mirrors #1090's
+      // item-collision handling (which already stopped the *descent* short
+      // of a solid object) but for the *landing spot itself*, against a
+      // live player instead of static geometry.
+      const openSpot = nearestOpenLandingSpot(shopAvatarPosition.x, shopAvatarPosition.y);
+      shopAvatarPosition.x = openSpot.x;
+      shopAvatarPosition.y = openSpot.y;
+      shopFlightState = 'grounded';
+    }
   } else if (shopFlightState === 'flying') {
     if (shopVerticalInput !== 0) {
       shopFlightAltitudeM += shopVerticalInput * SHOP_FLIGHT_VERTICAL_SPEED_M_S * dt;
@@ -14201,6 +14327,55 @@ function shopLandingObstructionTopZ(x, y) {
   }
   return topZ;
 }
+
+// #2044: the spec line SHOP_FLIGHT_TAKEOFF_DURATION_S's own comment above
+// flags as deferred ("occupied landing spots offset to nearest open
+// space... nothing to occupy a spot with yet") -- now actionable since
+// shopOtherAvatars (#1100) tracks other builders' live positions in this
+// same landlet. entry.group.position is each one's current interpolated
+// render position (updateOtherShopAvatars keeps it live every frame), not
+// just its last poll snapshot. Purely horizontal and purely a clearance
+// *radius* around each other avatar -- deliberately not reusing
+// shopPositionBlocked's rectangular-footprint/vertical-overlap machinery
+// (that's #1090's domain, solid placed items, already handled upstream of
+// this check), since a landing-spot nudge away from another player doesn't
+// need that precision.
+function landingSpotOccupiedByAvatar(x, y) {
+  const clearanceM = shopAvatarCollisionHalfM() + SHOP_AVATAR_COLLISION_HALF_M;
+  for (const entry of shopOtherAvatars.values()) {
+    if (Math.hypot(entry.group.position.x - x, entry.group.position.y - y) < clearanceM) return true;
+  }
+  return false;
+}
+
+// Ring search outward from the original landing spot -- kept deliberately
+// simple per #2044's own framing ("keep it simple... rather than
+// over-engineering") since this only ever needs to nudge a landing a few
+// meters, not solve general pathfinding. Gives up and returns the original
+// spot past LANDING_SPOT_SEARCH_MAX_RADIUS_M rather than searching forever;
+// landing on top of another avatar in that vanishingly unlikely case is no
+// worse than today's pre-#2044 behavior.
+const LANDING_SPOT_SEARCH_DIRECTIONS = 8;
+const LANDING_SPOT_SEARCH_STEP_M = 0.5;
+const LANDING_SPOT_SEARCH_MAX_RADIUS_M = 5;
+function nearestOpenLandingSpot(x, y) {
+  if (!landingSpotOccupiedByAvatar(x, y)) return { x, y };
+  for (let radius = LANDING_SPOT_SEARCH_STEP_M; radius <= LANDING_SPOT_SEARCH_MAX_RADIUS_M; radius += LANDING_SPOT_SEARCH_STEP_M) {
+    for (let i = 0; i < LANDING_SPOT_SEARCH_DIRECTIONS; i++) {
+      const angle = (i / LANDING_SPOT_SEARCH_DIRECTIONS) * Math.PI * 2;
+      const candidateX = x + radius * Math.cos(angle);
+      const candidateY = y + radius * Math.sin(angle);
+      if (!landingSpotOccupiedByAvatar(candidateX, candidateY)) return { x: candidateX, y: candidateY };
+    }
+  }
+  return { x, y };
+}
+// #2044: e2e-only hook, same convention as window.__testMoveShopAvatarWithCollision
+// below -- lets a test drive the search directly (against whatever
+// shopOtherAvatars a real second browser session's presence reports have
+// actually populated) without needing to choreograph exact flight-landing
+// timing against that second session.
+window.__testNearestOpenLandingSpot = (x, y) => nearestOpenLandingSpot(x, y);
 
 // Tries the full requested move first; if that's blocked, slides along
 // whichever single axis is still open (the same axis-separated collision
