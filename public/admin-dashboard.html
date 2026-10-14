@@ -1249,6 +1249,12 @@
   }
 
   async function act(purchaseId, action, statusEl) {
+    // #2081: a real, unconditional Stripe refund (handlePurchaseRefund) with
+    // no "are you sure" step was the one dangerous action in this dashboard
+    // without one — every other irreversible admin action here already
+    // confirms first (revoke-admin, delete-land-candidate, tax-form
+    // approve/file/void, R2 model delete, auction-cancel-and-reassign).
+    if (action === 'refund' && !confirm('Refund purchase ' + purchaseId + '? This cannot be undone.')) return;
     statusEl.textContent = 'Working…';
     statusEl.classList.remove('error');
     try {
