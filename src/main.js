@@ -7325,7 +7325,19 @@ async function renderAuctionSection() {
     await renderForLandlet(selectedLandletId);
   }
 
+  // #2016: each row's own bid button only disables itself (see its click
+  // handler below), not the whole panel or any other row — so a bid on
+  // row A and a bid on row B can both be in flight at once, each
+  // triggering its own renderAuctionList() call. Without this guard,
+  // whichever fetchAllAuctions() round-trip happens to resolve last wins
+  // regardless of which bid was actually placed most recently, the same
+  // "slower, earlier-issued fetch lands after a faster, newer one" race
+  // landletRenderToken already guards against for renderForLandlet just
+  // above.
+  let auctionListLoadToken = 0;
+
   async function renderAuctionList() {
+    const myToken = ++auctionListLoadToken;
     auctionList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
     let auctions;
     try {
@@ -7334,6 +7346,7 @@ async function renderAuctionSection() {
       // simultaneously active auctions (#190, same shape as #186).
       auctions = await fetchAllAuctions({ status: 'active' });
     } catch (err) {
+      if (myToken !== auctionListLoadToken) return;
       auctionList.innerHTML = '';
       const errNote = document.createElement('div');
       errNote.className = 'settings-empty-note';
@@ -7341,6 +7354,7 @@ async function renderAuctionSection() {
       auctionList.appendChild(errNote);
       return;
     }
+    if (myToken !== auctionListLoadToken) return;
     auctionList.innerHTML = '';
     if (auctions.length === 0) {
       auctionList.innerHTML = '<div class="settings-empty-note">No active auctions right now.</div>';
