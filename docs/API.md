@@ -1037,6 +1037,7 @@ Idempotent — the same profile every call, never a new one.
   "higglesBalanceCents": 0,
   "landCapM2": 1000,
   "ownedAreaM2": 1000,
+  "notifySoldOutEmail": false,
   "createdAt": "2026-08-16T00:00:00.000Z",
   "updatedAt": "2026-08-16T00:00:00.000Z"
 }
@@ -1049,6 +1050,13 @@ can't yet) change it.
 ground-plus-levels total counted against it — `ownedAreaM2` is `null`
 instead of a number on a response that didn't just recompute both (a
 plain create/rename), never a stale or silently-wrong figure.
+`notifySoldOutEmail` (#2067, leaf sub-issue of #1973/#1947) is this
+account's opt-in for an email alert on top of the dashboard notification
+already fired unconditionally when one of their placed products sells
+out — see `PUT /api/builders/me/notification-preferences` below and
+"Sold-out templates (#1948)"'s own section. `higglesBalanceCents` and
+this field are both own-account-only — never returned by `GET
+/api/builders` or its `ids=`/`label=` variants.
 
 ### `GET /api/builders`
 
@@ -6405,6 +6413,42 @@ remaining" estimate — no such computation exists anywhere in this
 codebase yet, and #1947's own tracking issue flags the shape of that
 math (trailing window, no-sales-history behavior) as still undecided by
 the owner.
+
+#### Sold-out notifications: dashboard + opt-in email (#2067)
+
+Leaf sub-issue of #1973 (itself part of #1947). Every affected builder
+gets a dashboard notification (see "Notifications" above) unconditionally
+when `sweepSoldOutTemplateInstances` removes their placed instances of a
+newly-sold-out template — this was already true since #1948 and is
+unchanged. On top of that, a builder can opt in to *also* get an email
+for the same event:
+
+### `GET /api/builders/me/notification-preferences`
+### `PUT /api/builders/me/notification-preferences`
+
+```json
+{ "notifySoldOutEmail": false }
+```
+
+`GET` returns the calling account's current preference (also mirrored on
+the builder object itself — see "Builder object" above). `PUT` takes the
+same shape; `notifySoldOutEmail` must be a boolean (`400` otherwise).
+Both require a session (`401` otherwise) and act on the caller's own
+builder profile only — same `requireCurrentUser`-only bar as
+`GET`/`PUT /api/builders/me/avatar`.
+
+When a builder has `notifySoldOutEmail: true` and their account has a
+linked user with an email on file, `sweepSoldOutTemplateInstances` also
+calls the existing `sendEmail` (Resend-backed — see `POST
+/api/auth/request-password-reset` above for the same `RESEND_API_KEY`-
+gated, best-effort, never-throws behavior) with the same message as the
+dashboard notification. Off by default, so no existing builder's
+behavior changes until they opt in.
+Deliberately independent toggles rather than a single exclusive channel
+picker: the dashboard notification is the always-on baseline (matching
+the owner's "dashboard-only" being one of the three named options), and
+email (and, once built, text — see #2069) are additive opt-ins on top of
+it, not a replacement for it.
 
 `GET /api/purchases?builderId=...` requires a session logged in as that
 builder (`403` otherwise); lists everything hosted on that builder's own
