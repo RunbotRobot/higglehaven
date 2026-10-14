@@ -313,7 +313,7 @@ describe('sweepSoldOutTemplateInstances consults the backup chain (#2050)', () =
     const notices = await api('/notifications', builder.session());
     expect(notices.body.notifications.some((n) => n.message.includes('just sold out'))).toBe(true);
     // The exhausted backup entry is gone too, cascaded away with the
-    // instance itself (migrations/0135's ON DELETE CASCADE) rather than
+    // instance itself (migrations/0137's ON DELETE CASCADE) rather than
     // left dangling.
     const row = await env.DB.prepare('SELECT COUNT(*) AS count FROM placed_instance_backups WHERE instance_id = ?')
       .bind('sweep-all-exhausted-instance').first();

@@ -3543,16 +3543,27 @@
         font-size: 11px;
         color: var(--pill-text-soft);
       }
-      .calendar-event-row-delete {
+      .calendar-event-row-actions {
+        flex-shrink: 0;
+        display: flex;
+        gap: 6px;
+      }
+      .calendar-event-row-delete,
+      .calendar-event-row-edit {
         flex-shrink: 0;
         border: none;
         border-radius: 999px;
         width: 24px;
         height: 24px;
-        background: var(--danger);
         color: #fff;
         font-size: 13px;
         line-height: 1;
+      }
+      .calendar-event-row-delete {
+        background: var(--danger);
+      }
+      .calendar-event-row-edit {
+        background: rgb(var(--ink-rgb) / 0.35);
       }
       #calendar-events-empty,
       #calendar-events-truncated {
