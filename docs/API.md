@@ -4624,7 +4624,7 @@ via `admin_action_log` (`action_type: 'delete_calendar_event_override'`).
 
 **`#1975` (owner decision, 2026-10-13): an event's own author can also edit
 or delete it directly, independent of who currently owns the hosting
-landlet.** `userId` (new, `migrations/0131`) records the session that
+landlet.** `userId` (new, `migrations/0132`) records the session that
 created the event — populated server-side at `POST` time from
 `requireSessionBuilder`'s own resolved user, the same "derive authorship
 server-side" discipline this endpoint's `authorLabel` already uses. Unlike

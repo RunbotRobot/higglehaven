@@ -2697,7 +2697,7 @@ describe('Community calendar', () => {
 
   // #1975: same pattern as product_reviews' own "Author self-edit/delete"
   // describe block -- an event's own author (tracked via the new user_id
-  // column, migrations/0131) can edit/delete it directly, independent of
+  // column, migrations/0132) can edit/delete it directly, independent of
   // who currently owns the hosting landlet, unlike the pre-existing
   // moderation path (requireOwnedLandlet) which only ever worked for the
   // *current* owner.
