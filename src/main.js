@@ -14345,6 +14345,13 @@ function updateShopFlight(dt) {
       const openSpot = nearestOpenLandingSpot(shopAvatarPosition.x, shopAvatarPosition.y);
       shopAvatarPosition.x = openSpot.x;
       shopAvatarPosition.y = openSpot.y;
+      // #2080: nearestOpenLandingSpot only checks clearance from other
+      // avatars, not the world boundary -- without this, a nudge taken near
+      // the wall could push shopAvatarPosition outside shopAvatarMaxRadiusM,
+      // left unclamped (clampShopRadius is otherwise only ever called from
+      // updateShopMovement, gated on actual movement input) until the
+      // player's next WASD/joystick move.
+      clampShopRadius(shopAvatarPosition, shopMaxRadiusAtWorldZM(shopAvatarPosition.z, shopAvatarMaxRadiusM()));
       shopFlightState = 'grounded';
     }
   } else if (shopFlightState === 'flying') {
@@ -14550,6 +14557,10 @@ function nearestOpenLandingSpot(x, y) {
 // actually populated) without needing to choreograph exact flight-landing
 // timing against that second session.
 window.__testNearestOpenLandingSpot = (x, y) => nearestOpenLandingSpot(x, y);
+// #2080: e2e-only hook, same convention as __testNearestOpenLandingSpot
+// above -- lets a test compute the real world-boundary radius a landing
+// should be clamped to, instead of hardcoding/guessing it.
+window.__testShopAvatarMaxRadiusM = () => shopAvatarMaxRadiusM();
 
 // Tries the full requested move first; if that's blocked, slides along
 // whichever single axis is still open (the same axis-separated collision
