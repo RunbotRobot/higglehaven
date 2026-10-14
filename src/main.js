@@ -1875,6 +1875,14 @@ async function addInstanceToScene(instance) {
   if (!object) return null;
   scene.add(object);
   productMeshes.push(object);
+  // #1950: covers every way a new mesh can appear -- bootstrap()'s initial
+  // batch, placing a fresh item from the catalog, and undo/redo recreating
+  // one -- through this one choke point, so a low-stock filter that was
+  // already active before this instance existed still highlights it the
+  // moment it appears, with no separate case needed per call site.
+  if (activeLowStockTemplateIds?.has(object.userData.template?.templateId)) {
+    addLowStockHighlight(object);
+  }
   return object;
 }
 
@@ -2167,6 +2175,13 @@ function deleteInstance(mesh, { sync = true } = {}) {
   if (index === -1) return;
   const instanceId = mesh.userData.instanceId;
   productMeshes.splice(index, 1);
+  // #1950: unlike selectionOutlines (cleared by the caller via
+  // clearSelection() before every delete path), the low-stock highlight
+  // isn't selection-coupled, so this one true removal choke point is where
+  // it needs to go -- otherwise a highlighted item's BoxHelper/fill mesh
+  // would keep floating in the scene, pointing at nothing, after the item
+  // itself is gone.
+  removeLowStockHighlight(mesh);
   scene.remove(mesh);
   disposeObject(mesh);
   persistLayout();
@@ -7607,6 +7622,12 @@ async function renderLowStockSection() {
   qtyInput.min = '0';
   qtyInput.placeholder = 'Any';
   qtyInput.className = 'low-stock-filter-input';
+  // #1950: restores whatever threshold was active last time this section
+  // was rendered -- without this, merely reopening Settings (or switching
+  // tabs and back) would reset the inputs to blank and silently clear the
+  // in-world highlight these drive, even though the builder never asked
+  // for that.
+  qtyInput.value = lowStockFilterMaxQty == null ? '' : String(lowStockFilterMaxQty);
   qtyLabel.appendChild(qtyInput);
   filterRow.appendChild(qtyLabel);
   const daysLabel = document.createElement('label');
@@ -7616,6 +7637,7 @@ async function renderLowStockSection() {
   daysInput.min = '0';
   daysInput.placeholder = 'Any';
   daysInput.className = 'low-stock-filter-input';
+  daysInput.value = lowStockFilterMaxDays == null ? '' : String(lowStockFilterMaxDays);
   daysLabel.appendChild(daysInput);
   filterRow.appendChild(daysLabel);
   field.appendChild(filterRow);
@@ -7636,7 +7658,10 @@ async function renderLowStockSection() {
   function applyFilter() {
     const maxQty = qtyInput.value === '' ? null : Number(qtyInput.value);
     const maxDays = daysInput.value === '' ? null : Number(daysInput.value);
+    lowStockFilterMaxQty = maxQty;
+    lowStockFilterMaxDays = maxDays;
     let anyVisible = false;
+    const matchingTemplateIds = new Set();
     for (const row of list.children) {
       const qty = Number(row.dataset.stockQuantity);
       const days = row.dataset.daysRemaining === '' ? null : Number(row.dataset.daysRemaining);
@@ -7644,12 +7669,21 @@ async function renderLowStockSection() {
       const matchesDays = maxDays == null || (days != null && days <= maxDays);
       const matches = matchesQty && matchesDays;
       row.hidden = !matches;
-      if (matches) anyVisible = true;
+      if (matches) {
+        anyVisible = true;
+        matchingTemplateIds.add(row.dataset.templateId);
+      }
     }
     empty.hidden = list.children.length === 0 || anyVisible;
     empty.textContent = list.children.length === 0
       ? 'None of your placed products carry finite stock yet.'
       : 'No placed products match this filter.';
+    // #1950: only an actually-set threshold counts as "the filter is
+    // active" -- the unfiltered full list (both inputs still "Any")
+    // highlights nothing in the 3D view, matching the issue's own
+    // "matching the active filter" wording rather than highlighting every
+    // finite-stock item by default.
+    updateLowStockHighlights((maxQty != null || maxDays != null) ? matchingTemplateIds : null);
   }
   qtyInput.addEventListener('input', applyFilter);
   daysInput.addEventListener('input', applyFilter);
@@ -7668,6 +7702,7 @@ async function renderLowStockSection() {
   for (const t of templates) {
     const row = document.createElement('div');
     row.className = 'low-stock-row';
+    row.dataset.templateId = t.templateId;
     row.dataset.stockQuantity = String(t.stockQuantity);
     row.dataset.daysRemaining = t.daysRemaining == null ? '' : String(t.daysRemaining);
     const info = document.createElement('div');
@@ -8661,6 +8696,74 @@ function removeSelectionOutline(mesh) {
   entry.fill.material.dispose();
   selectionOutlines.delete(mesh);
 }
+
+// #1950 (sub-issue of #1947): a second, independent highlight for placed
+// items matching the active low-stock filter in Settings > Build --
+// deliberately not reusing selectionOutlines above, since an item can be
+// simultaneously selected AND low-stock-matching and the two states need
+// to stack rather than collide. Same BoxHelper-plus-fill mechanism, for the
+// same "works on any material, including unlit/baked builder-uploaded
+// models" reasoning the comment above already explains -- just its own
+// color (and its own Map) so the two never read as the same thing. Reuses
+// selectionFillGeometry (a plain unit cube, rescaled per mesh below) rather
+// than allocating a second identical buffer.
+const LOW_STOCK_HIGHLIGHT_COLOR = 0xe08a1e;
+const lowStockHighlights = new Map(); // mesh -> { helper: THREE.BoxHelper, fill: THREE.Mesh }
+
+function addLowStockHighlight(mesh) {
+  if (lowStockHighlights.has(mesh)) return;
+  const helper = new THREE.BoxHelper(mesh, LOW_STOCK_HIGHLIGHT_COLOR);
+  scene.add(helper);
+  const fillMaterial = new THREE.MeshBasicMaterial({
+    color: LOW_STOCK_HIGHLIGHT_COLOR,
+    transparent: true,
+    opacity: SELECTION_FILL_OPACITY,
+    depthWrite: false,
+  });
+  const fill = new THREE.Mesh(selectionFillGeometry, fillMaterial);
+  scene.add(fill);
+  lowStockHighlights.set(mesh, { helper, fill });
+}
+
+function removeLowStockHighlight(mesh) {
+  const entry = lowStockHighlights.get(mesh);
+  if (!entry) return;
+  scene.remove(entry.helper);
+  entry.helper.geometry.dispose();
+  entry.helper.material.dispose();
+  scene.remove(entry.fill);
+  entry.fill.material.dispose();
+  lowStockHighlights.delete(mesh);
+}
+
+// null = no active filter (nothing highlighted). Persisted at module scope
+// (not just inside renderLowStockSection) so a freshly placed/undo-
+// restored item picks up an already-active filter immediately via
+// addInstanceToScene's own check below, and so the highlight survives
+// closing the Settings modal entirely -- the whole point of #1950 is
+// finding a matching item in the live 3D view without the list still open.
+let activeLowStockTemplateIds = null;
+// Mirrors the currently-active filter thresholds so reopening Settings (or
+// switching tabs and back) restores the same inputs instead of silently
+// resetting to "Any" and clearing the highlight -- read back by
+// renderLowStockSection's own input values above.
+let lowStockFilterMaxQty = null;
+let lowStockFilterMaxDays = null;
+
+function updateLowStockHighlights(templateIds) {
+  activeLowStockTemplateIds = templateIds && templateIds.size > 0 ? templateIds : null;
+  for (const mesh of productMeshes) {
+    const matches = !!activeLowStockTemplateIds && activeLowStockTemplateIds.has(mesh.userData.template?.templateId);
+    if (matches) addLowStockHighlight(mesh);
+    else removeLowStockHighlight(mesh);
+  }
+}
+
+// #1950: test-only hook (the window.__test* convention already used
+// throughout this file for otherwise-unreachable 3D scene state, e.g.
+// __testProductScreenPositions) -- exposes which currently-placed
+// instances have the low-stock highlight applied right now.
+window.__testLowStockHighlightedInstanceIds = () => [...lowStockHighlights.keys()].map((mesh) => mesh.userData.instanceId);
 
 // Reconciles every visible bit of "what's selected" UI (highlight already
 // applied by the caller — this only handles text/panels/gizmo) with the
@@ -10119,6 +10222,18 @@ function animate(now) {
     // it (no public `.box` on this three.js version), so the fill mesh
     // recomputes the same box independently rather than reading it back off
     // the helper.
+    scratchBox.setFromObject(mesh);
+    scratchBox.getSize(scratchBoxSize);
+    scratchBox.getCenter(scratchBoxCenter);
+    fill.scale.copy(scratchBoxSize).multiplyScalar(SELECTION_FILL_PADDING);
+    fill.position.copy(scratchBoxCenter);
+  }
+  // #1950: same "recomputed every frame, not just on change" reasoning as
+  // selectionOutlines just above -- a highlighted item being dragged by the
+  // gizmo (it can be selected and low-stock-matching at once) needs its
+  // highlight to track it live too.
+  for (const [mesh, { helper, fill }] of lowStockHighlights) {
+    helper.update();
     scratchBox.setFromObject(mesh);
     scratchBox.getSize(scratchBoxSize);
     scratchBox.getCenter(scratchBoxCenter);
@@ -16442,10 +16557,18 @@ async function enterShopMode() {
   translateControls.detach();
   rotateControls.detach();
   for (const mesh of productMeshes) {
+    removeLowStockHighlight(mesh);
     scene.remove(mesh);
     disposeObject(mesh);
   }
   productMeshes.length = 0;
+  // #1950: Build-mode-only state -- nothing to highlight once its scene is
+  // torn down, and a stale filter would otherwise silently reapply itself
+  // (matching nothing, harmlessly, but still wrong) if Build is re-entered
+  // later without Settings ever being reopened to reset it.
+  activeLowStockTemplateIds = null;
+  lowStockFilterMaxQty = null;
+  lowStockFilterMaxDays = null;
 
   try {
     activeCatalog = await fetchCatalog();
@@ -17267,10 +17390,16 @@ async function enterSellMode() {
   translateControls.detach();
   rotateControls.detach();
   for (const mesh of productMeshes) {
+    removeLowStockHighlight(mesh);
     scene.remove(mesh);
     disposeObject(mesh);
   }
   productMeshes.length = 0;
+  // #1950: same "Build-mode-only state" reasoning as enterShopMode's own
+  // identical teardown above.
+  activeLowStockTemplateIds = null;
+  lowStockFilterMaxQty = null;
+  lowStockFilterMaxDays = null;
 
   const id = await ensureSellerIdentity();
   if (!id) {
