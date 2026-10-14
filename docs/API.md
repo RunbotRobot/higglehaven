@@ -863,6 +863,61 @@ signup date, not when it became an admin; `adminGrantedAt` is `null` for an
 admin whose grant predates `admin_action_log` itself, the one case a caller
 should fall back to `createdAt` for.
 
+### Account suspension (#2029, sub-issue of #1201)
+
+`migrations/0132_account_suspensions.sql` adds `account_suspensions` — a
+dedicated, append-only history table (not columns on `users`), since the
+owner's own settled scope for #1201 wants "longer suspension log retention
+and greater detail" preserved across possibly-multiple suspend/lift cycles
+on the same account. A suspension is **reversible, not a deletion** — the
+owner explicitly ruled out a separate admin-initiated hard-delete path;
+real deletion stays reserved for the account-holder's own self-service
+`delete-account` request. (Enforcing suspension against login/actions, the
+automated notice to the suspended user, the optional sign-post/calendar-
+event removal cascade, and the 30-day grace-period auto-escalation to a
+full deletion are each their own separate, not-yet-landed sub-issue —
+#2030/#2031/#2032/#2033 respectively.)
+
+### `POST /api/auth/suspend-account`
+
+`requireAdmin`-gated (`401`/`403` the same way `grant-admin` is). Request
+body: `{ "email", "reason", "evidenceNote"?, "graceDays"? }`. `email` is
+looked up the same case-insensitive way `grant-admin` does; `404` if no
+account has it. `reason` is required (`400` if blank) — stored verbatim,
+along with the optional free-text `evidenceNote`, in both the new
+`account_suspensions` row and the `admin_action_log` entry this call writes
+(`action_type: "suspend_account"`), real detail retained with no auto-
+expiry (the owner's own instruction: minors-access cases in particular
+should keep *more* detail, not less). `graceDays` defaults to `30` (the
+owner's confirmed default) and must be an integer in `[1, 365]` (`400`
+otherwise) — this becomes `gracePeriodEndsAt` in the response, the point
+#2033's eventual auto-escalation job will act on. `409` if the account
+already has an active (not lifted, not escalated) suspension — lift it via
+`unsuspend-account` first before suspending again. On success, returns
+`{ "suspension": { "suspensionId", "userId", "adminUserId", "reason", "evidenceNote", "suspendedAt", "gracePeriodEndsAt" } }`.
+
+### `POST /api/auth/unsuspend-account`
+
+`requireAdmin`-gated. Request body: `{ "email" }`. `404` if no account has
+it, `409` if that account has no currently-active suspension to lift. On
+success, sets `liftedAt`/the lifting admin on the active
+`account_suspensions` row, logs via `admin_action_log`
+(`action_type: "unsuspend_account"`), and returns
+`{ "suspension": { "suspensionId", "userId", "liftedAt" } }`. The account
+can be suspended again afterward — lifting isn't a one-time, permanent
+clearing of the record, just of the currently-active hold.
+
+### `GET /api/auth/suspension-status?email=...`
+
+`requireAdmin`-gated. `400` with no `email` query parameter, `404` if no
+account has it. Returns
+`{ "suspension": null }` if the account has no currently-active
+suspension, or
+`{ "suspension": { "suspensionId", "userId", "adminUserId", "reason", "evidenceNote", "suspendedAt", "gracePeriodEndsAt" } }`
+otherwise — the same shape `suspend-account`'s own response returns, so a
+caller can check status first without needing two different response
+shapes.
+
 ## Builders
 
 A shared, cross-device roster of builder profiles. `GET`/`POST` below stay
@@ -4656,7 +4711,7 @@ via `admin_action_log` (`action_type: 'delete_calendar_event_override'`).
 
 **`#1975` (owner decision, 2026-10-13): an event's own author can also edit
 or delete it directly, independent of who currently owns the hosting
-landlet.** `userId` (new, `migrations/0134`) records the session that
+landlet.** `userId` (new, `migrations/0135`) records the session that
 created the event — populated server-side at `POST` time from
 `requireSessionBuilder`'s own resolved user, the same "derive authorship
 server-side" discipline this endpoint's `authorLabel` already uses. Unlike
@@ -6540,6 +6595,62 @@ heading and its 99%-mentioning copy, that the close button hides it
 again, and that no console/page errors occurred anywhere in the flow. The
 verification script itself was a temporary scratch file, deleted before
 committing.
+
+### Disputes (#2020)
+
+docs/SPEC.md §5's "Fraud/dispute defense" bullet: "Low-value disputes from
+established accounts: auto-resolved in buyer's favor. Higher-value/new-
+account disputes: require actual evidence." Before this, no buyer-facing
+dispute/refund-request endpoint existed at all — every refund path above
+is seller- or admin-initiated (see "Refunding is seller-initiated, not
+shopper self-service" above); a shopper had no way to raise one themselves.
+
+`POST /api/purchases/:purchaseId/dispute` requires a session, and requires
+that session's own `builderId` match the purchase's `buyerBuilderId`
+(`400` otherwise — "Only the buyer of this purchase can dispute it"), the
+same real-buyer-session gate `POST .../feedback` uses (#1123). `404` if the
+purchase doesn't exist, `400` if already refunded, `409` if already paid
+out (same "contact support for manual reconciliation" case `.../refund`
+itself rejects).
+
+**Eligibility, evaluated entirely server-side — never a free-text claim:**
+- **Low-value**: `totalCents <= 2000` ($20 — the owner's own range was
+  "$15-25, exact value at implementer's discretion").
+- **Established buyer**: at least one *other* purchase by this same
+  `buyerBuilderId` that isn't refunded, **and** zero purchases by this
+  buyer that are refunded. There's no buyer-side strike/flag column in
+  this schema (unlike `sellers.strike_count`, migrations/0131, which is
+  seller-only) — refund/dispute history on `purchases.refundedAt` is the
+  only queryable signal for "has this buyer had a dispute before," so
+  that's what "established" actually checks.
+
+Both conditions must hold, **and** the product's own seller must not have
+opted into "no returns" (`metadata.noReturns`) — the same guard `.../refund`
+enforces; auto-resolving in the buyer's favor is a faster path to the same
+outcome a seller-initiated refund would reach, not a bypass of that
+seller's own policy choice. When all of that holds, this performs the
+exact same reversal `POST .../refund` does (the atomic `refundedAt` guard,
+the real Stripe reversal at the same 99% `REFUND_PAYOUT_RATE` for a
+real-money purchase, the higgle-commission clawback, the avatar/animation-
+ownership revocation) with no seller or admin action required, and logs an
+`admin_action_log` entry (`dispute_auto_resolved`, `adminUserId: null` —
+the established convention for a system/automated action with no human in
+the loop, same as the video-generation stale-reservation sweep) instead of
+the seller/admin-override log `.../refund` writes.
+
+Response shape is `{ autoResolved: boolean, purchase }` either way.
+**`autoResolved: false` is not an error** — a new/flagged buyer or a
+higher-value claim falls through to today's unchanged manual handling (no
+automated path exists for that case yet; this never fabricates a "pending
+review" state nothing else in this app reads). The purchase itself is left
+exactly as it was in that case.
+
+`worker/purchase-disputes.test.js` covers: auth required, buyer-ownership
+enforcement, 404/already-refunded/already-paid-out, the established+
+low-value auto-resolve path (refund, clawback, admin-log entry), a new
+buyer's first-ever purchase (not established, no prior purchase to count),
+a buyer with refund history (not established), a high-value purchase from
+an established buyer (no auto-resolve), and the no-returns override.
 
 ### Self-dealing flags (#2019, sub-issue of #1212)
 

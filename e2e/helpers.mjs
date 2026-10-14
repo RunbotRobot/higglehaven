@@ -331,7 +331,12 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   // #1896: CI-wide contention has since grown past even that 20000ms
   // margin (seen tripping simulated-purchases.test.mjs, twice in a row, with
   // no change anywhere near this call site) -- bumped again to 30000ms.
-  await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 30000 });
+  // #2048: outpaced again within about a week (seen tripping five more
+  // unrelated files across one run's original attempt and two re-runs) --
+  // bumped by more than the prior two escalations this time, rather than
+  // just matching their size, since each matched bump has been outpaced
+  // this quickly.
+  await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 60000 });
   await clearVerifyModalIfShown(page);
 
   // N44: an already-showing modal (the branch above that skipped the
