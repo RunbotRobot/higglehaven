@@ -3209,6 +3209,14 @@ async function handleBuilders(request, env, db, route, url) {
     return handleMyAnimation(request, db);
   }
 
+  // #1949 (sub-issue of #1947): every finite-stock template this builder
+  // currently has placed on their own land, annotated with an estimated
+  // days-remaining figure -- see handleBuilderLowStock's own comment for
+  // how that's computed.
+  if (request.method === 'GET' && route.length === 3 && route[1] === 'me' && route[2] === 'low-stock') {
+    return handleBuilderLowStock(request, db);
+  }
+
   if (request.method === 'GET' && route.length === 1) {
     await checkRateLimit(db, `builder-list:${clientIp(request)}`, BUILDER_LIST_RATE_LIMIT_MAX);
     const idsParam = url.searchParams.get('ids');
@@ -3929,6 +3937,121 @@ async function handleMyOwnedAnimations(request, db) {
   return json({
     animations: results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
   });
+}
+
+// #1949 (sub-issue of #1947): a builder-facing view of every template they
+// currently have placed that carries finite stock (#1948's own
+// stock_quantity column), each annotated with an estimated days-remaining
+// figure -- lets a builder weigh which of their own placed products are at
+// risk of selling out and disappearing from their land (per #1947's own
+// framing, that's expected, normal behavior, not a bug to prevent).
+//
+// Owner guidance (direct conversation, 2026-10-13, captured on issue #1949
+// itself): no fixed trailing window -- "please have the assigned session
+// use its best judgment, probably using a more dynamic calculation rather
+// than a static 30-days, particularly for new products. It could be
+// beneficial to look at how quickly similar products have sold." A
+// one-of-a-kind item (stockQuantity === 1) is a single sale event, not a
+// queue being drawn down, so "for single-quantity items, the builder should
+// understand that it's going to be very unpredictable" -- it always gets an
+// explicit "unpredictable" state rather than a fabricated day count,
+// regardless of any sales data.
+async function handleBuilderLowStock(request, db) {
+  const user = await requireCurrentUser(request, db);
+  const builder = await getOrCreateBuilderForUser(db, user);
+  const { results: templates } = await db.prepare(`
+    SELECT ct.template_id AS templateId, ct.name AS name, ct.category AS category,
+           ct.stock_quantity AS stockQuantity, COUNT(*) AS placedInstanceCount
+    FROM placed_instances pi
+    JOIN landlets l ON l.landlet_id = pi.landlet_id
+    JOIN catalog_templates ct ON ct.template_id = pi.template_id
+    WHERE l.owner_builder_id = ? AND ct.stock_quantity IS NOT NULL
+    GROUP BY ct.template_id
+  `).bind(builder.builder_id).all();
+  if (templates.length === 0) return json({ templates: [] });
+
+  const templateIds = templates.map((t) => t.templateId);
+  const ownVelocityByTemplateId = await templateSalesVelocity(db, templateIds);
+  // Only the categories genuinely needed -- a template with sales history
+  // of its own never looks at this.
+  const categoriesNeedingFallback = [...new Set(
+    templates.filter((t) => !ownVelocityByTemplateId.has(t.templateId)).map((t) => t.category),
+  )];
+  const categoryVelocityByCategory = new Map(await Promise.all(
+    categoriesNeedingFallback.map(async (category) => [category, await categorySalesVelocityPerDay(db, category)]),
+  ));
+
+  return json({
+    templates: templates.map((t) => ({
+      templateId: t.templateId,
+      name: t.name,
+      category: t.category,
+      stockQuantity: t.stockQuantity,
+      placedInstanceCount: t.placedInstanceCount,
+      ...estimateDaysRemaining(t, ownVelocityByTemplateId.get(t.templateId), categoryVelocityByCategory.get(t.category)),
+    })),
+  });
+}
+
+function estimateDaysRemaining(template, ownUnitsPerDay, categoryUnitsPerDay) {
+  if (template.stockQuantity === 1) {
+    return { daysRemaining: null, predictability: 'unpredictable' };
+  }
+  const unitsPerDay = ownUnitsPerDay ?? categoryUnitsPerDay;
+  if (!unitsPerDay) {
+    return { daysRemaining: null, predictability: 'notEnoughData' };
+  }
+  return {
+    daysRemaining: Math.round((template.stockQuantity / unitsPerDay) * 10) / 10,
+    predictability: ownUnitsPerDay ? 'estimated' : 'estimatedFromCategory',
+  };
+}
+
+// One units-per-day rate per template, derived from every non-refunded sale
+// of that specific template across every builder who happens to host an
+// instance of it -- the same cross-builder, shared-stock-pool shape
+// GET /api/purchases?templateId= already uses, since #1947 itself requires
+// velocity to be "computed across every builder selling that same
+// template," not just this one builder's own sales.
+async function templateSalesVelocity(db, templateIds) {
+  const placeholders = templateIds.map(() => '?').join(', ');
+  const { results } = await db.prepare(`
+    SELECT template_id AS templateId, SUM(quantity) AS totalSold,
+           MIN(created_at) AS firstSaleAt, MAX(created_at) AS lastSaleAt
+    FROM purchases
+    WHERE template_id IN (${placeholders}) AND refunded_at IS NULL
+    GROUP BY template_id
+  `).bind(...templateIds).all();
+  return new Map(results.map((row) => [row.templateId, salesVelocityPerDay(row)]));
+}
+
+// #1949: the owner-endorsed fallback for a template with no sales history
+// of its own -- every other template in the same category, regardless of
+// seller, averaged into one rate. Deliberately not scoped to this builder's
+// own templates; "similar products" means the category as a whole, the
+// same freeform `category` column (indexed, always populated) every other
+// browse/filter feature in this file already groups by.
+async function categorySalesVelocityPerDay(db, category) {
+  const { results } = await db.prepare(`
+    SELECT p.template_id AS templateId, SUM(p.quantity) AS totalSold,
+           MIN(p.created_at) AS firstSaleAt, MAX(p.created_at) AS lastSaleAt
+    FROM purchases p
+    JOIN catalog_templates ct ON ct.template_id = p.template_id
+    WHERE ct.category = ? AND p.refunded_at IS NULL
+    GROUP BY p.template_id
+  `).bind(category).all();
+  if (results.length === 0) return null;
+  const rates = results.map(salesVelocityPerDay);
+  return rates.reduce((sum, rate) => sum + rate, 0) / rates.length;
+}
+
+// Spans however long this template has actually been selling (first sale to
+// last sale), never an assumed fixed window -- a single sale floors the
+// span at one day rather than dividing by zero, which is deliberately a
+// rough, early estimate (one data point) rather than a crash.
+function salesVelocityPerDay(row) {
+  const spanDays = Math.max(1, (new Date(row.lastSaleAt).getTime() - new Date(row.firstSaleAt).getTime()) / 86400000);
+  return row.totalSold / spanDays;
 }
 
 // #1057's own fix, mirrored for the new PUT below from day one rather than

@@ -6682,7 +6682,88 @@ here — a flag is a soft signal, not an accusation, so reviewing one is
 just acknowledgment, optionally with a note for the admin's own record;
 nothing else in this app reacts to a flag's status.
 
-## Tax reporting
+### Low-stock / days-remaining list (#1949, sub-issue of #1947)
+
+```
+GET /api/builders/me/low-stock
+```
+
+Requires `requireCurrentUser` (same bar as `GET /api/builders/me/avatars`/
+`.../animations`, not the full verification gate). Lists every catalog
+template the session builder currently has placed anywhere on their own
+land (any landlet, not just one) that carries finite stock (#1948's own
+`stockQuantity`, not `null`) — the templates this builder's own placed
+products stand to disappear from under them for, per #1947's "expected,
+normal behavior" framing.
+
+```json
+{
+  "templates": [
+    {
+      "templateId": "antique-lamp",
+      "name": "Antique Brass Lamp",
+      "category": "decor",
+      "stockQuantity": 1,
+      "placedInstanceCount": 1,
+      "daysRemaining": null,
+      "predictability": "unpredictable"
+    },
+    {
+      "templateId": "cottage-brick",
+      "name": "Cottage Brick",
+      "category": "structural",
+      "stockQuantity": 40,
+      "placedInstanceCount": 3,
+      "daysRemaining": 56.5,
+      "predictability": "estimated"
+    }
+  ]
+}
+```
+
+`placedInstanceCount` is how many of this builder's own placed instances
+reference the template — a builder with several copies placed sees one
+row, not one per instance.
+
+`daysRemaining`/`predictability` together carry the owner's own direct
+guidance (2026-10-13, captured on issue #1949 itself) on how to estimate
+this, deliberately **not** a fixed trailing window: "please have the
+assigned session use its best judgment, probably using a more dynamic
+calculation rather than a static 30-days, particularly for new products.
+It could be beneficial to look at how quickly similar products have
+sold... for single-quantity items, the builder should understand that
+it's going to be very unpredictable how long it will take to sell."
+Concretely, `predictability` is one of:
+
+- `"unpredictable"` — `stockQuantity === 1` (one-of-a-kind). A single sale
+  event is not a queue being drawn down, so this is always reported
+  regardless of any sales data; `daysRemaining` is always `null` here.
+- `"estimated"` — the template has its own non-refunded sales history.
+  The rate is `totalUnitsSold / daysBetweenFirstAndLastSale` (floored at
+  1 day to avoid a divide-by-near-zero blowup on a single early sale) —
+  the span is whatever history actually exists, never an assumed window.
+  Computed across **every** builder who happens to host an instance of
+  the template (the same cross-builder query shape `GET
+  /api/purchases?templateId=` already uses), not just this one builder's
+  own sales, per #1947's own "shared stock pool" requirement.
+- `"estimatedFromCategory"` — the template has no sales history of its
+  own yet. Falls back to the average of that same per-template rate
+  across every *other* template sharing its `category` (regardless of
+  seller) that does have sales history — the owner-endorsed "how quickly
+  similar products have sold" fallback. `daysRemaining` here is `stock
+  Quantity / thatAverageRate`.
+- `"notEnoughData"` — neither the template itself nor any other template
+  in its category has any sales history yet. `daysRemaining` is `null`;
+  the UI shows an explicit "not enough data yet" state rather than a
+  number that could mislead, matching the single-quantity case's own
+  "don't fabricate a number" principle.
+
+**Filtering** (by remaining-quantity threshold and/or days-remaining
+threshold) is deliberately **not** a server-side query param — this
+endpoint returns the builder's full low-stock list in one call, and the
+Settings > Build panel applies both thresholds client-side the same way
+the catalog picker's own search box filters already-rendered tiles
+(`filterCatalogTiles`) rather than re-fetching per keystroke.
 
 docs/SPEC.md §7: 1099-NEC generation once a seller/builder crosses the
 reporting threshold, W-8BEN/W-9 collection, and folding higgles-commission
