@@ -8777,6 +8777,58 @@ async function handleCreditOrbs(request, db, route, url) {
     `).bind(...bindings).all();
     return json({ orbs: results.map(creditOrbFromRow) });
   }
+  // POST /api/credit-orbs -- admin-gated test/ops fixture, same escape-hatch
+  // reasoning as POST /api/landlets/.../land-cap-grants/higgles-grants: the
+  // real spawn cadence (spawnCreditOrbIfDue, ~70min apart by default) is far
+  // too slow for a test that only cares about what happens once an orb
+  // exists to self-time against reliably. Inserts directly into a caller-
+  // specified landlet (any status, not gated to 'greenbelt' -- a caller
+  // using this already knows exactly what it wants to seed).
+  if (request.method === 'POST' && route.length === 1) {
+    const admin = await requireAdmin(request, db);
+    const input = await readJson(request);
+    const landletId = stringValue(input.landletId, 'landletId');
+    const x = input.x === undefined ? 0 : finiteNumber(input.x, 'x');
+    const y = input.y === undefined ? 0 : finiteNumber(input.y, 'y');
+    const orbId = `orb-${crypto.randomUUID()}`;
+    const inserted = await db.prepare(`
+      INSERT INTO credit_orbs (orb_id, landlet_id, x_m, y_m, z_m)
+      SELECT ?, landlet_id, ?, ?, 0 FROM landlets WHERE landlet_id = ?
+    `).bind(orbId, x, y, landletId).run();
+    if (inserted.meta.changes === 0) throw new HttpError('Landlet not found', 404);
+    await adminActionLogStatement(db, admin.user_id, 'credit_orb_seed', 'landlet', landletId, { orbId }).run();
+    return json({ orbId }, 201);
+  }
+  // POST /api/credit-orbs/:orbId/collect (#1995) -- session-gated (unlike
+  // the GET above) since collecting actually credits the calling builder's
+  // own video_generation_credits. Race-safe the same way every other
+  // claim-before-act endpoint in this file already is: the UPDATE's own
+  // `WHERE collected_at IS NULL` is the atomic "first builder wins" claim,
+  // and the credit grant is batched in the same D1 transaction, gated on
+  // an EXISTS check against the row this same batch's first statement just
+  // committed -- so a crash between the two can never happen (they're one
+  // atomic unit), and two shoppers racing the same orb can never both grant
+  // themselves a credit for it.
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'collect') {
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    const orbId = stringValue(route[1], 'orbId');
+    const [claim] = await db.batch([
+      db.prepare(`
+        UPDATE credit_orbs SET collected_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), collected_by_builder_id = ?
+        WHERE orb_id = ? AND collected_at IS NULL
+      `).bind(sessionBuilder.builder_id, orbId),
+      db.prepare(`
+        UPDATE builders SET video_generation_credits = video_generation_credits + 1
+        WHERE builder_id = ? AND EXISTS (
+          SELECT 1 FROM credit_orbs WHERE orb_id = ? AND collected_by_builder_id = ?
+        )
+      `).bind(sessionBuilder.builder_id, orbId, sessionBuilder.builder_id),
+    ]);
+    if (claim.meta.changes === 0) {
+      throw new HttpError('This credit orb is no longer available -- someone else may have already collected it.', 404);
+    }
+    return json({ collected: true });
+  }
   return json({ error: 'Not found' }, 404);
 }
 

@@ -136,6 +136,8 @@ import {
   reportPresence,
   fetchNearbyPresence,
   fetchOwnLastPresence,
+  fetchCreditOrbs,
+  collectCreditOrb,
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';
@@ -12531,6 +12533,7 @@ const shopUpBtn = document.getElementById('shop-up-btn');
 const shopDownBtn = document.getElementById('shop-down-btn');
 const shopSignHintEl = document.getElementById('shop-sign-hint');
 const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
+const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
 const shopProductPreviewModalEl = document.getElementById('shop-product-preview-modal');
 const shopProductPreviewCloseBtn = document.getElementById('shop-product-preview-close-btn');
 const shopProductPreviewCanvas = document.getElementById('shop-product-preview-canvas');
@@ -12883,6 +12886,28 @@ const SIGN_MAX_VISIBLE_POSTS = 5;
 // specific to signs, so there's nothing calendar-specific to tune
 // separately (unlike the backend's own deliberately-separate table/flag —
 // see migrations/0042's comment on why that split is real).
+// Credit orbs (#1995, sub-issue of #1976) — a much tighter radius than
+// SIGN_INTERACT_RADIUS_M, since collection is automatic on proximity alone
+// (the owner's own spec: "the orb stays there until an avatar collects
+// it" — no tap required), not a hint a shopper opts into by tapping.
+// Floats at a fixed height above the spawned ground position (#1994's own
+// z_m is always 0) purely for visual legibility — walking "through" it at
+// avatar height is the intended collection gesture, not a bug.
+const CREDIT_ORB_COLLECT_RADIUS_M = 1.5;
+const CREDIT_ORB_FLOAT_HEIGHT_M = 1.2;
+const CREDIT_ORB_RADIUS_M = 0.25;
+const CREDIT_ORB_ROTATION_SPEED_RAD_S = 1.4;
+// Shimmer: emissiveIntensity oscillates between these two bounds rather
+// than sitting at one fixed brightness — "shimmery" per the owner's own
+// spec, not just "glowing."
+const CREDIT_ORB_SHIMMER_SPEED_RAD_S = 3.2;
+const CREDIT_ORB_SHIMMER_MIN = 0.6;
+const CREDIT_ORB_SHIMMER_MAX = 1.8;
+// How long the "+1 free model-generation credit!" toast stays visible
+// after a successful collect, matching #shop-last-location-btn's own
+// opacity-transition show/auto-hide shape (see its CSS comment in
+// index.html) rather than a hard show/hide cutoff.
+const CREDIT_ORB_TOAST_VISIBLE_MS = 3000;
 // The world wall: an opaque ring standing at exactly the current world
 // radius, tall enough that nothing generating out beyond it (still
 // unclaimable — see the availability circle in docs/SPEC.md) is visible
@@ -13278,6 +13303,13 @@ let nearestActiveSign = null; // whichever sign #shop-sign-hint currently target
 // Same shape/lifecycle as shopSigns above, for community-calendar instances.
 const shopCalendars = [];
 let nearestActiveCalendar = null;
+// #1995: every currently-loaded credit orb: { mesh, group, orbId, landletId }.
+// Unlike shopSigns/shopCalendars above, an orb isn't a placed instance at
+// all (#1994's own data model, a separate credit_orbs table keyed only by
+// landlet) — so it's fetched and added alongside a landlet's own instances
+// in loadShopLandletInstances rather than discovered via any instance's
+// userData, but torn down the identical way in unloadShopLandletInstances.
+const shopCreditOrbs = [];
 // Same shape/lifecycle as shopSigns above, for every placed instance's
 // reviews (no opt-in flag — see registerShopReview) — a
 // {mesh, group, templateId, reviews, sprites} entry per loaded one, with
@@ -15049,6 +15081,7 @@ function updateShopMovement(now) {
   updateSignFade();
   updateCalendarFade();
   updateReviewFade();
+  updateCreditOrbs(dt);
   if (now - lastScheduledEventCheck >= SCHEDULED_EVENT_CHECK_INTERVAL_MS) {
     lastScheduledEventCheck = now;
     checkScheduledCalendarEvents();
@@ -15158,16 +15191,32 @@ function updateShopItemHandling(dt, moveMagnitude, airborne) {
 
 function updateShopProximity() {
   for (const entry of shopLandlets.values()) {
-    if (entry.record.status !== 'claimed') continue; // nothing built to show for anything else
     const distance = Math.hypot(entry.record.center.x - camera.position.x, entry.record.center.y - camera.position.y);
-    if (!entry.loaded && distance < SHOP_LOAD_RADIUS_M) {
-      entry.loaded = true; // set before awaiting so a second tick can't double-load
-      // Each load gets its own token (see loadShopLandletInstances) so a
-      // fast unload-then-reload cycle can't let an earlier, still in-flight
-      // fetch resurrect itself once entry.loaded flips back to true.
-      loadShopLandletInstances(entry, ++entry.loadToken);
-    } else if (entry.loaded && distance > SHOP_UNLOAD_RADIUS_M) {
-      unloadShopLandletInstances(entry);
+    if (entry.record.status === 'claimed') {
+      if (!entry.loaded && distance < SHOP_LOAD_RADIUS_M) {
+        entry.loaded = true; // set before awaiting so a second tick can't double-load
+        // Each load gets its own token (see loadShopLandletInstances) so a
+        // fast unload-then-reload cycle can't let an earlier, still in-flight
+        // fetch resurrect itself once entry.loaded flips back to true.
+        loadShopLandletInstances(entry, ++entry.loadToken);
+      } else if (entry.loaded && distance > SHOP_UNLOAD_RADIUS_M) {
+        unloadShopLandletInstances(entry);
+      }
+    } else if (entry.record.status === 'greenbelt') {
+      // #1995: credit orbs only ever spawn into greenbelt landlets
+      // (spawnCreditOrbIfDue's own `WHERE status = 'greenbelt'`) -- an
+      // unclaimed plot otherwise has nothing built on it to load at all
+      // (see the claimed-only branch above, and its own "nothing built to
+      // show for anything else" precedent), so this is a separate, narrower
+      // load/unload decision scoped to orbs alone, independent of
+      // entry.loaded/entry.objects (which stay permanently empty/false for
+      // every greenbelt landlet).
+      if (!entry.orbsLoaded && distance < SHOP_LOAD_RADIUS_M) {
+        entry.orbsLoaded = true;
+        loadCreditOrbsForLandlet(entry, ++entry.orbLoadToken);
+      } else if (entry.orbsLoaded && distance > SHOP_UNLOAD_RADIUS_M) {
+        unloadCreditOrbsForLandlet(entry);
+      }
     }
   }
 }
@@ -15502,6 +15551,131 @@ async function loadShopLandletInstances(entry, myToken) {
     registerShopReview(object, entry);
   }
 }
+
+// Unlike signs/calendars/reviews above, a credit orb isn't a placed
+// instance at all (#1994's own data model — a separate credit_orbs table
+// keyed only by landlet), and unlike those, it only ever loads for a
+// greenbelt landlet (see updateShopProximity's own comment on why that's a
+// separate load/unload decision from loadShopLandletInstances' claimed-only
+// one) — so its mesh is never added to entry.objects; it's tracked solely
+// in shopCreditOrbs, and disposed either here-ish (on collect, see
+// updateCreditOrbs) or in unloadCreditOrbsForLandlet below, not via
+// entry.objects' own generic disposal loop. Fetched once, right as the
+// landlet enters load range — same "not kept in sync afterward" tradeoff
+// registerShopSign's own posts fetch already accepts; an orb collected by
+// another shopper while this one is still nearby just lingers visually
+// until the next reload, exactly like registerShopSign's own stale-posts
+// case.
+async function loadCreditOrbsForLandlet(entry, myToken) {
+  let orbs;
+  try {
+    orbs = await fetchCreditOrbs(entry.record.landletId);
+  } catch {
+    return;
+  }
+  if (myToken !== entry.orbLoadToken) return; // superseded while this was in flight
+  for (const orb of orbs) {
+    const mesh = createCreditOrbMesh();
+    mesh.position.set(orb.x, orb.y, orb.z + CREDIT_ORB_FLOAT_HEIGHT_M);
+    entry.group.add(mesh);
+    shopCreditOrbs.push({ mesh, group: entry.group, orbId: orb.orbId, collecting: false });
+  }
+}
+
+// updateShopProximity's own greenbelt-landlet unload branch — mirrors
+// unloadShopLandletInstances' shape for the claimed-only path, but only
+// ever needs to clean up shopCreditOrbs (entry.objects/loaded/loadToken
+// stay permanently empty/false/0 for a greenbelt landlet, since nothing
+// else ever loads for one).
+function unloadCreditOrbsForLandlet(entry) {
+  entry.orbsLoaded = false;
+  entry.orbLoadToken++; // invalidate any in-flight loadCreditOrbsForLandlet call
+  for (const orb of [...shopCreditOrbs]) {
+    if (orb.group !== entry.group) continue;
+    shopCreditOrbs.splice(shopCreditOrbs.indexOf(orb), 1);
+    orb.group.remove(orb.mesh);
+    disposeObject3D(orb.mesh);
+  }
+}
+
+// A small shimmering sphere — emissiveIntensity is animated per-frame in
+// updateCreditOrbs (the "shimmer"), rotation.y likewise (the "rotating"),
+// per the owner's own spec phrase "a shimmery, rotating orb."
+function createCreditOrbMesh() {
+  const geometry = new THREE.SphereGeometry(CREDIT_ORB_RADIUS_M, 16, 16);
+  const material = new THREE.MeshStandardMaterial({
+    color: 0xfff176,
+    emissive: 0xffe066,
+    emissiveIntensity: CREDIT_ORB_SHIMMER_MIN,
+    metalness: 0.2,
+    roughness: 0.25,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.userData.isCreditOrb = true;
+  return mesh;
+}
+
+let creditOrbShimmerElapsedS = 0;
+const scratchCreditOrbWorldPos = new THREE.Vector3();
+
+// Called every Shop-mode frame, unthrottled like updateSignFade/
+// updateCalendarFade — the shimmer needs to read as continuous, and
+// collection should feel immediate, not stepped to SHOP_PROXIMITY_INTERVAL_MS.
+function updateCreditOrbs(dt) {
+  creditOrbShimmerElapsedS += dt;
+  const shimmer = CREDIT_ORB_SHIMMER_MIN + (CREDIT_ORB_SHIMMER_MAX - CREDIT_ORB_SHIMMER_MIN)
+    * (0.5 + 0.5 * Math.sin(creditOrbShimmerElapsedS * CREDIT_ORB_SHIMMER_SPEED_RAD_S));
+  for (const orb of shopCreditOrbs) {
+    orb.mesh.rotation.y += CREDIT_ORB_ROTATION_SPEED_RAD_S * dt;
+    orb.mesh.material.emissiveIntensity = shimmer;
+    // Already mid-collect-request — avoid firing a second one every frame
+    // while the first is still in flight (walking stays within the radius
+    // for several frames, not just one).
+    if (orb.collecting) continue;
+    // Deliberately the avatar's own position, not camera.position (unlike
+    // updateSignFade/updateCalendarFade's fade distance) -- positionShopCamera
+    // holds the third-person camera SHOP_CAMERA_FOLLOW_DISTANCE_M (4.2m)
+    // behind the avatar, well outside CREDIT_ORB_COLLECT_RADIUS_M on its
+    // own, so camera.position would never read as "standing on it" at this
+    // tight a radius the way it still works for signs/calendars' much wider
+    // SIGN_INTERACT_RADIUS_M (8m). Horizontal-only (x/y), ignoring z, since
+    // CREDIT_ORB_FLOAT_HEIGHT_M's own float-above-ground offset shouldn't
+    // count against "walked into it."
+    const world = orb.mesh.getWorldPosition(scratchCreditOrbWorldPos);
+    const dx = world.x - shopAvatarPosition.x;
+    const dy = world.y - shopAvatarPosition.y;
+    if (Math.hypot(dx, dy) > CREDIT_ORB_COLLECT_RADIUS_M) continue;
+    orb.collecting = true;
+    collectCreditOrb(orb.orbId).then(() => {
+      removeCreditOrb(orb);
+      showCreditOrbToast();
+    }).catch(() => {
+      // The server's own atomic claim is authoritative (docs/API.md's
+      // "Credit orbs" section) — a 404 here just means another shopper
+      // collected it first, not a real error, so this quietly drops the
+      // now-stale orb from the scene instead of surfacing anything to the
+      // shopper or retrying.
+      removeCreditOrb(orb);
+    });
+  }
+}
+
+function removeCreditOrb(orb) {
+  const index = shopCreditOrbs.indexOf(orb);
+  if (index === -1) return; // already removed (e.g. its landlet was unloaded while the request was in flight)
+  shopCreditOrbs.splice(index, 1);
+  orb.group.remove(orb.mesh);
+  disposeObject3D(orb.mesh);
+}
+
+function showCreditOrbToast() {
+  shopCreditOrbToastEl.classList.add('visible');
+  clearTimeout(creditOrbToastHideTimer);
+  creditOrbToastHideTimer = setTimeout(() => {
+    shopCreditOrbToastEl.classList.remove('visible');
+  }, CREDIT_ORB_TOAST_VISIBLE_MS);
+}
+let creditOrbToastHideTimer = null;
 
 // A sign starts with no posts loaded — fetched once, here, right as it
 // enters the world (rather than re-fetched on every proximity tick), then
@@ -16666,6 +16840,10 @@ function unloadShopLandletInstances(entry) {
       shopCalendarHintEl.classList.remove('visible');
     }
   }
+  // #1995: credit orbs never load for a claimed landlet at all (see
+  // updateShopProximity's own comment — only ever greenbelt, torn down by
+  // unloadCreditOrbsForLandlet instead), so there's nothing of theirs to
+  // clean up here.
   for (const review of [...shopReviews]) {
     if (review.group !== entry.group) continue;
     disposeReviewSprites(review);
@@ -17025,7 +17203,12 @@ async function enterShopMode() {
     groundMesh.position.z = 0.02;
     group.add(groundMesh);
     scene.add(group);
-    shopLandlets.set(record.landletId, { record, group, loaded: false, loadToken: 0, objects: [] });
+    shopLandlets.set(record.landletId, {
+      record, group, loaded: false, loadToken: 0, objects: [],
+      // #1995: orbs' own load state, independent of loaded/loadToken/
+      // objects above -- see updateShopProximity's own comment on why.
+      orbsLoaded: false, orbLoadToken: 0,
+    });
   }
 
   // Shop mode can be (re-)entered without a reload (see this function's own
