@@ -3397,6 +3397,15 @@ describe('Worker API', () => {
       completed.body.landlets.map((landlet) => landlet.generatedAt),
     );
 
+    // #2037: unlike its landlet-level sibling (#1666), this retry used to
+    // log a second ring_generation_complete row even though its own UPDATE
+    // affected 0 rows -- every member was already enclosed by the first
+    // call above.
+    const logsAfterRetry = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('ring_generation_complete', 'completion-ring').first();
+    expect(logsAfterRetry.count).toBe(1);
+
     // Restore before generating pending-completion-ring at its own
     // explicit innerRadiusM:1000 -- that call requires innerRadiusM to be
     // at or beyond the current radius, which the 50000 bump above would
