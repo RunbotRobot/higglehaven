@@ -16312,7 +16312,7 @@ async function handleMarkShipped(request, env, purchaseId) {
     throw new HttpError('Digital goods have nothing to ship', 400);
   }
   if (purchase.shipped_at) {
-    throw new HttpError('This purchase is already marked shipped', 400);
+    throw new HttpError('This purchase is already marked shipped', 409);
   }
   if (purchase.refunded_at) {
     throw new HttpError('This purchase has been refunded', 400);
@@ -16335,7 +16335,7 @@ async function handleMarkShipped(request, env, purchaseId) {
   if (result.meta.changes === 0) {
     const current = await db.prepare('SELECT shipped_at, refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
     if (current.refunded_at) throw new HttpError('This purchase has been refunded', 400);
-    throw new HttpError('This purchase is already marked shipped', 400);
+    throw new HttpError('This purchase is already marked shipped', 409);
   }
   // Logged only once the update above actually succeeded, same reasoning as
   // handlePurchaseRefund's own admin-override log: `admin` is only set on
@@ -16910,7 +16910,7 @@ async function handlePurchaseRefund(request, env, purchaseId) {
     await checkRateLimit(db, `purchase-refund:${admin.user_id}`, STRIPE_RATE_LIMIT_MAX);
   }
   if (purchase.refunded_at) {
-    throw new HttpError('This purchase has already been refunded', 400);
+    throw new HttpError('This purchase has already been refunded', 409);
   }
   // Found via backlog audit: migrations/0072's own comment establishes
   // paid_out_at as meaning this purchase's seller-share has actually left
@@ -16954,7 +16954,7 @@ async function handlePurchaseRefund(request, env, purchaseId) {
     if (current?.paid_out_at) {
       throw new HttpError('This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
     }
-    throw new HttpError('This purchase has already been refunded', 400);
+    throw new HttpError('This purchase has already been refunded', 409);
   }
 
   // #1086: the balance clawback, notification, and avatar-ownership
@@ -17008,7 +17008,7 @@ async function handlePurchaseDispute(request, env, purchaseId) {
     throw new HttpError('Only the buyer of this purchase can dispute it', 400);
   }
   if (purchase.refunded_at) {
-    throw new HttpError('This purchase has already been refunded', 400);
+    throw new HttpError('This purchase has already been refunded', 409);
   }
   if (purchase.paid_out_at) {
     throw new HttpError('This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.', 409);

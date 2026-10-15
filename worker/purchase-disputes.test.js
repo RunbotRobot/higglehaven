@@ -151,7 +151,7 @@ describe('Buyer-initiated purchase disputes (#2020)', () => {
     expect(result.body.purchase.refundedAt).toBeNull();
   });
 
-  it('400s disputing an already-refunded purchase', async () => {
+  it('409s disputing an already-refunded purchase', async () => {
     const buyer = await signupBuilder('dispute-alreadyrefunded-buyer');
     await createGreenbeltLandlet('dispute-alreadyrefunded-landlet');
     await claim('dispute-alreadyrefunded-landlet', buyer);
@@ -160,7 +160,7 @@ describe('Buyer-initiated purchase disputes (#2020)', () => {
     await api(`/purchases/${purchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
 
     const result = await api(`/purchases/${purchase.purchaseId}/dispute`, buyer.session({ method: 'POST' }));
-    expect(result.response.status).toBe(400);
+    expect(result.response.status).toBe(409);
   });
 
   it('409s disputing a purchase that has already been paid out', async () => {
