@@ -42,11 +42,11 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '5');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.check('#upload-animation-category-checkbox');
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
 await page.waitForTimeout(500);
 await page.click('#seller-close-btn');
 await page.waitForTimeout(300);
@@ -95,7 +95,8 @@ await page.click('.settings-tab-btn[data-section="shop"]');
 const myAnimationsField = page.locator('.settings-field', { hasText: 'My Animations' });
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My Animations') && f.querySelectorAll('.version-row').length >= 1),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 
 // "— applied" (the em-dash-joined suffix renderMyAnimationsField appends
@@ -137,7 +138,8 @@ const noneRow = myAnimationsField.locator('.version-row', { hasText: 'None appli
 await noneRow.locator('button', { hasText: 'Clear' }).click();
 await page.waitForFunction(
   () => [...document.querySelectorAll('.version-row')].some((r) => r.textContent.includes('None applied') && r.textContent.includes('— applied')),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const rowTextsAfterClear = await myAnimationsField.locator('.version-row').allTextContents();
 console.log('My Animations rows after clearing:', rowTextsAfterClear);
