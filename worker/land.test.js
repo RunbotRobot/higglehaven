@@ -4732,15 +4732,15 @@ describe('Landlet levels', () => {
     }
     const limited = await sweepOneLevel('levels-rate-limit-instance-final');
     expect(limited.response.status).toBe(429);
-  }, 60000); // #978/#2060: 20 iterations x 3 real HTTP requests each (add
-  // level, place instance, sweep-delete) reliably finishes in ~2s in
+  }, 90000); // #978/#2060/#2157: 20 iterations x 3 real HTTP requests each
+  // (add level, place instance, sweep-delete) reliably finishes in ~2s in
   // isolation, but this file shares one D1 instance across its whole,
   // ever-growing test count, and late-file cumulative state occasionally
   // pushes this specific test past its own timeout under CI load -- 20s
-  // (the global default) wasn't enough (#978, bumped to 45000ms), and
-  // #2060 found 45000ms itself no longer enough either, so this is the
-  // next step up, matching worker/commerce.test.js's own precedent for a
-  // comparable request volume.
+  // (the global default) wasn't enough (#978, bumped to 45000ms), #2060
+  // found 45000ms itself no longer enough either (bumped to 60000ms), and
+  // #2157 found even 60000ms insufficient under this file's continued
+  // growth, so this is the next step up.
 
   // #907: the sweep-specific rate limit just above (#794) only covers a
   // level removal that has an out-of-range instance to archive -- the
@@ -4768,11 +4768,12 @@ describe('Landlet levels', () => {
       method: 'POST', body: JSON.stringify({ direction: 'up' }),
     }));
     expect(limited.response.status).toBe(429);
-  }, 45000); // #978: same cumulative-D1-state-under-CI-load shape as the
-  // sweep-rate-limit test above — 40 real HTTP round trips late in this
-  // file's 121-test run against one shared D1 instance, reliably finishing
-  // in well under 1s in isolation but occasionally pushed past the 20s
-  // default under CI load.
+  }, 90000); // #978/#2157: same cumulative-D1-state-under-CI-load shape as
+  // the sweep-rate-limit test above — 40 real HTTP round trips late in this
+  // file's ever-growing test run against one shared D1 instance, reliably
+  // finishing in well under 1s in isolation but occasionally pushed past
+  // the original 45000ms (itself already a bump from the 20000ms default)
+  // under CI load, hence this further bump.
 
   // #907: a level removal with nothing to sweep (the common case for an
   // empty level) fell through with no rate limit at all -- only the sweep

@@ -63,9 +63,18 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
+// #2145 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real
+// applied timeout was always Playwright's actual default (30000ms), never
+// the smaller number written here. The explicit `null` arg reaches the
+// options slot, and the timeout itself is widened to 60000ms for real
+// headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
+// wait.
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Redeem Higgles')),
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 
 // "Redeem Higgles" label and the actual form live in separate sibling
@@ -97,7 +106,8 @@ await submitBtn.click();
 // sleep.
 await page.waitForFunction(
   () => [...document.querySelectorAll('button')].some((b) => b.textContent.includes('Update payout account')),
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 const relabeledBtnPresent = await page.getByRole('button', { name: 'Update payout account' }).count();
 console.log('Submit button relabeled to "Update payout account" right after the first successful submit, no tab switch needed (should be 1 -- was the #1403 bug):', relabeledBtnPresent);
@@ -116,7 +126,8 @@ console.log('Old "Set up payout account" label no longer present (should be 0):'
 // settled just because one sibling field finished first.
 await page.waitForFunction(
   () => document.getElementById('land-cap-field')?.textContent.includes('cap'),
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 const landCapStillShowing = (await page.locator('#land-cap-field').textContent()).includes('cap');
 console.log('Land Cap field still showing loaded text after the redraw (should be true):', landCapStillShowing);
