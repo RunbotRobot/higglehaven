@@ -226,5 +226,10 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     const hit = listed.body.listings.find((l) => l.templateId === 'flag-list-template');
     expect(hit).toBeTruthy();
     expect(hit.pendingCount).toBe(1);
+    // #2110: totalCount counts every pending-flagged template, not just the
+    // capped page -- distinct from listings.length once the list is ever
+    // actually truncated, but even here it must be at least 1 (this test's
+    // own flagged template).
+    expect(listed.body.totalCount).toBeGreaterThanOrEqual(1);
   });
 });
