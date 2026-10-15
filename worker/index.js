@@ -10602,8 +10602,17 @@ async function handleAdminBootstrap(request, env, db) {
 // could mint real site admins. Same email lookup handleLogin already
 // uses (normalizeEmail against the plain `email` column), so this finds
 // exactly the account that email actually logs into.
+// #2123: grant/revoke-admin mint or remove is_admin itself -- the one pair
+// of admin mutations in this file with no rate limit at all, unlike
+// suspend-account (ACCOUNT_SUSPENSION_RATE_LIMIT_MAX) and nearly every
+// other admin-gated mutation here. Same bucket shape: keyed by the acting
+// admin, not the target account, so one admin can't be throttled out by
+// someone else's grants/revokes.
+const ADMIN_GRANT_RATE_LIMIT_MAX = 20;
+
 async function handleGrantAdmin(request, db) {
   const admin = await requireAdmin(request, db);
+  await checkRateLimit(db, `admin-grant:${admin.user_id}`, ADMIN_GRANT_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const email = normalizeEmail(input.email);
   const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
@@ -10633,6 +10642,7 @@ async function handleGrantAdmin(request, db) {
 // each UPDATE re-evaluates the live COUNT at the moment it runs.
 async function handleRevokeAdmin(request, db) {
   const admin = await requireAdmin(request, db);
+  await checkRateLimit(db, `admin-grant:${admin.user_id}`, ADMIN_GRANT_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const email = normalizeEmail(input.email);
   const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
