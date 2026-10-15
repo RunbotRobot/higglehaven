@@ -32,7 +32,8 @@ await durationInput.fill('100000'); // well past the server's 8760-hour (one yea
 await page.click('.auction-start-btn');
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field .settings-empty-note')].some((el) => el.textContent.includes('8760')),
-  { timeout: 5000 },
+  null,
+  { timeout: 30000 },
 );
 const overLimitStatusText = await startStatus.textContent();
 console.log('status after an over-the-cap duration (should be a friendly client-side message, not the raw server one):', overLimitStatusText);
@@ -50,7 +51,8 @@ await durationInput.fill('1');
 await page.click('.auction-start-btn');
 await page.waitForFunction(
   () => document.querySelector('.settings-field .auction-row')?.textContent.includes('Your auction is live'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const auctionStartedText = await page.locator('.auction-row').first().textContent();
 console.log('auction started normally with a valid duration (should mention "Your auction is live"):', auctionStartedText);

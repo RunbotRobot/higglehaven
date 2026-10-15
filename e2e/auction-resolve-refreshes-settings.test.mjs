@@ -40,7 +40,8 @@ await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
 await page.waitForFunction(
   () => document.getElementById('land-cap-field')?.textContent.includes('cap'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 
 // Only the global "active, no landletId filter" list (fetchAllAuctions,
@@ -83,7 +84,8 @@ await startForm.locator('input').nth(1).fill('1');
 await page.click('.auction-start-btn');
 await page.waitForFunction(
   () => document.querySelector('.settings-field .auction-row')?.textContent.includes('Your auction is live'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 
 // The Active Auctions list's own re-fetch (fired by the Start Auction
@@ -117,7 +119,8 @@ console.log('GET /api/builders/me/redeem re-fetched after Resolve Now (should be
 // never finished.
 await page.waitForFunction(
   () => document.getElementById('land-cap-field')?.textContent.includes('cap'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const landCapStillShowing = (await page.locator('#land-cap-field').textContent()).includes('cap');
 console.log('Land Cap field still showing loaded text after the redraw (should be true):', landCapStillShowing);

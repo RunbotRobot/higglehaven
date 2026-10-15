@@ -38,9 +38,10 @@ await page.waitForTimeout(500);
 await page.click('.version-action-btn:has-text("Publish")');
 await page.waitForFunction(
   () => document.getElementById('build-publish-status')?.textContent.includes('Published'),
-  { timeout: 10000 },
+  null,
+  { timeout: 20000 },
 );
-await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, { timeout: 10000 });
+await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, null, { timeout: 20000 });
 const historyAfterFirstPublish = await page.locator('.version-row').count();
 const firstRowText = await page.locator('.version-row').first().locator('.version-row-info').textContent();
 const setLiveDisabledOnLiveRow = await page.locator('.version-row').first().locator('button', { hasText: 'Set Live' }).isDisabled();
@@ -70,7 +71,7 @@ await page.click('#settings-btn');
 await page.click('.settings-tab-btn[data-section="build"]');
 await page.waitForTimeout(500);
 await page.click('.version-action-btn:has-text("Publish")');
-await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 2, { timeout: 10000 });
+await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 2, null, { timeout: 20000 });
 const rowCountAfterSecondPublish = await page.locator('.version-row').count();
 console.log('version rows after second publish (should be 2):', rowCountAfterSecondPublish);
 
@@ -84,7 +85,8 @@ const olderRowSetLiveEnabled = await olderRow.locator('button', { hasText: 'Set 
 await olderRow.locator('button', { hasText: 'Set Live' }).click();
 await page.waitForFunction(
   () => document.getElementById('build-publish-status')?.textContent.includes('now see'),
-  { timeout: 10000 },
+  null,
+  { timeout: 20000 },
 );
 const { landlets: landletsAfterSetLive } = await fetchJson('/api/landlets?limit=100');
 const landletAfterSetLive = landletsAfterSetLive.find((l) => l.landletId === myLandlet.landletId);
@@ -99,7 +101,7 @@ await page.click('.settings-tab-btn[data-section="build"]'); // re-render after 
 await page.waitForTimeout(300);
 const treeOnlyRow = page.locator('.version-row').filter({ hasText: '1 item' }).last();
 await treeOnlyRow.locator('button', { hasText: 'Restore to Editor' }).click();
-await page.waitForFunction(() => !document.getElementById('claim-modal')?.classList.contains('visible'), { timeout: 15000 }).catch(() => {});
+await page.waitForFunction(() => !document.getElementById('claim-modal')?.classList.contains('visible'), null, { timeout: 25000 }).catch(() => {});
 await page.waitForLoadState('networkidle', { timeout: 15000 });
 await page.waitForTimeout(1500);
 

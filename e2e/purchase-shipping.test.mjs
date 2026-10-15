@@ -47,10 +47,10 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '40');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 20000 });
 await page.waitForTimeout(500);
 
 async function fetchJson(pathAndQuery, options) {
@@ -99,7 +99,8 @@ console.log('Mark shipped button present for this real-money, non-digital, unref
 await row().locator('.product-sale-row-ship-btn').click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.product-sale-row-shipping')).some((el) => el.textContent.includes('Shipped')),
-  { timeout: 10000 },
+  null,
+  { timeout: 20000 },
 );
 const shippingTextAfterShip = await row().locator('.product-sale-row-shipping').first().textContent();
 console.log('shipping status text after marking shipped (should mention "Shipped"):', shippingTextAfterShip);
