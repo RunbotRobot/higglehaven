@@ -83,7 +83,8 @@ async function startAuction(session, label, startingBidDollars) {
   await page.click('.auction-start-btn');
   await page.waitForFunction(
     () => document.querySelector('.settings-field .auction-row')?.textContent.includes('Your auction is live'),
-    { timeout: 10000 },
+    null,
+    { timeout: 30000 },
   );
   await page.click('#settings-close-btn');
 }
@@ -173,7 +174,8 @@ await bidderPage.waitForFunction(
     const rows = [...document.querySelectorAll('.auction-list .auction-row')].map((r) => r.textContent);
     return rows.some((t) => t.includes('high bid $15.00')) && rows.some((t) => t.includes('high bid $25.00'));
   },
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 // Note: formatAuctionSummary's own "stays yours at $X if unsold" outcome
 // text always echoes each auction's *starting* bid (startingBidCents),
