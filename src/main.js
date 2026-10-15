@@ -4855,6 +4855,7 @@ function renderSellerList() {
           modelSizeBytes: template.modelSizeBytes,
           skeletonSignature: template.skeletonSignature,
           priceCents: template.priceCents,
+          stockQuantity: template.stockQuantity,
           metadata: template.metadata,
           // Safe to read directly (not ensureSellerIdentity()) — this only
           // ever runs while the Seller modal is open, which already
