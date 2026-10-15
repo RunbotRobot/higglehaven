@@ -525,13 +525,37 @@ raw Didit payload, since that's a third party's data about the account,
 not the account's own authored content.
 
 The response shape has one top-level key per data section — `profile`
-here, `social` as of #1986 below. A later sub-issue adds `commerce`
-(purchases, owned avatars/animations, video-generation jobs, higgles
-redemptions/earnings, bundles — blocked on an owner call about whether
-`tax_1099_forms` belongs in it, and in what form) to this same endpoint's
-response rather than introducing a separate endpoint, and a "Download my
-data" Settings UI (#1987) wires a browser download up to whatever sections
-exist once built.
+here, `commerce` and `social` below. A "Download my data" Settings UI
+(#1987) wires a browser download up to whatever sections exist.
+
+#### `commerce` (#1985)
+
+```json
+{
+  "commerce": {
+    "purchasesAsBuyer": [{ "purchaseId": "...", "templateId": "...", "totalCents": 500, "...": "..." }],
+    "ownedAvatars": [{ "templateId": "...", "name": "...", "purchasedAt": "...", "...": "..." }],
+    "ownedAnimations": [{ "templateId": "...", "name": "...", "purchasedAt": "...", "...": "..." }],
+    "videoGenerationJobs": [{ "jobId": "...", "status": "completed", "modelUrl": "...", "...": "..." }],
+    "higglesRedemptions": [{ "redemptionId": "...", "amountCents": 1000, "...": "..." }],
+    "higglesEarningsEvents": [{ "eventId": "...", "amountCents": 50, "createdAt": "..." }],
+    "bundles": [{ "bundleId": "...", "name": "...", "...": "..." }]
+  }
+}
+```
+
+Unlike `social` below, always an object, never `null` — empty arrays
+throughout when the account has no builder profile, since none of these
+tables have a `user_id` column of their own to fall back to (every one
+scopes by `builder_id`). Every field is a straightforward `builder_id`
+filter against the requesting account's own builder row. Deliberately
+excludes `tax_1099_forms` — still an open owner judgment call on whether
+the raw `taxIdNumber`/`foreignTaxId` it carries belongs in an export at
+all, and in what form; #1985 itself stays open for just that piece. Also
+excludes `owned_avatar_purchases`/`owned_animation_purchases` — internal
+idempotency/cascade-delete bookkeeping, not independent user-facing data,
+since every field either carries (`purchaseId`, `templateId`) is already
+on the corresponding `ownedAvatars`/`ownedAnimations` row itself.
 
 #### `social` (#1986)
 
