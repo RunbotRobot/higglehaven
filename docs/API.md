@@ -2539,12 +2539,17 @@ need it or not.
   (no `metadata` involved, so the merge-vs-replace caveat below doesn't
   apply here).
 - **Duplicate** is a plain `POST /api/catalog` carrying the same
-  `dimensions`/`color`/`modelUrl`/`metadata` under a fresh server-generated
-  `templateId`, with `" (copy)"` appended to the name. The model file itself
-  is never re-uploaded — the copy just references the same `modelUrl` — so
-  this is safe to do freely: a builder can try a risky edit (like marking
-  something extensible for the first time) on a duplicate without any
-  chance of disturbing the original or any instances already placed from it.
+  `category`/`subcategory`/`dimensions`/`color`/`modelUrl`/`modelSizeBytes`/
+  `skeletonSignature`/`priceCents`/`stockQuantity`/`metadata` under a fresh
+  server-generated `templateId`, with `" (copy)"` appended to the name
+  (#2107: `stockQuantity` is carried over too, so duplicating a
+  one-of-a-kind product doesn't silently produce an unlimited-stock copy).
+  The model file itself is never re-uploaded — the copy just references the
+  same `modelUrl`, which is why `modelSizeBytes`/`skeletonSignature` (both
+  derived from that same file) ride along unchanged too — so this is safe
+  to do freely: a builder can try a risky edit (like marking something
+  extensible for the first time) on a duplicate without any chance of
+  disturbing the original or any instances already placed from it.
 - **Delete** is a plain `DELETE /api/catalog/:templateId`, gated only by a
   `confirm()` — deleting a template only ever removes its `catalog_templates`
   row, never the underlying R2 object, so it's recoverable by re-registering
