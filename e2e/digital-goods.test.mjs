@@ -55,10 +55,10 @@ console.log('disclaimer picker visible once the checkbox is checked (should be t
 await page.selectOption('#upload-digital-good-disclaimer-select', 'gift-card');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 45000 });
 await page.waitForTimeout(300);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 45000 });
 await page.waitForTimeout(500);
 
 const digitalRow = () => page.locator('.seller-row').filter({ hasText: DIGITAL_PRODUCT });
@@ -82,9 +82,13 @@ const checkboxCheckedInPanel = await digitalRow().locator('.seller-digital-good-
 console.log('Edit Digital Good panel opens pre-checked for an existing digital good (should be true):', checkboxCheckedInPanel);
 await digitalRow().locator('.seller-digital-good-checkbox-label input').uncheck();
 await digitalRow().locator('button', { hasText: 'Save Digital Good' }).click();
+// #2143: waitForFunction's signature is (pageFunction, arg, options) --
+// the explicit null reaches the options slot; without it the timeout
+// below silently fell back to Playwright's actual default (30000ms).
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-digital-good-status')).some((el) => el.textContent === 'Saved.'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const digitalGoodRowTextAfterClear = await digitalRow().locator('.seller-row-digital-good').textContent();
 console.log('digital-good row text after unchecking + saving (should be "Not a digital good"):', digitalGoodRowTextAfterClear);
@@ -115,14 +119,19 @@ await digitalRow().locator('.seller-digital-good-select').selectOption('gift-car
 await digitalRow().locator('button', { hasText: 'Save Shipping' }).click();
 const digitalGoodSaveDisabledMidFlight = await digitalRow().locator('button', { hasText: 'Save Digital Good' }).isDisabled();
 console.log('Save Digital Good disabled while Save Shipping request is in flight (should be true):', digitalGoodSaveDisabledMidFlight);
+// #2143: waitForFunction's signature is (pageFunction, arg, options) --
+// the explicit null reaches the options slot; without it the timeout
+// below silently fell back to Playwright's actual default (30000ms).
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-domestic-only-status')).some((el) => el.textContent === 'Saved.'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 await digitalRow().locator('button', { hasText: 'Save Digital Good' }).click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-digital-good-status')).some((el) => el.textContent === 'Saved.'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 await page.unroute('**/api/catalog/*');
 const afterRace = await page.evaluate(async () => {

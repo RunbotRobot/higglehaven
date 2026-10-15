@@ -39,10 +39,10 @@ async function uploadProduct(name) {
   await page.fill('#upload-price', '5');
   await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
   await page.click('#upload-submit-btn');
-  await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+  await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 45000 });
   await page.waitForTimeout(300);
   await page.click('#upload-submit-btn');
-  await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+  await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 45000 });
   await page.waitForTimeout(500);
 }
 

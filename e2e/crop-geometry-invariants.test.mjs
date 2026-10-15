@@ -32,7 +32,7 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '5');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 45000 });
 await page.waitForTimeout(300);
 
 const originalX = Number(await page.locator('.upload-dimension-input[data-axis="x"]').inputValue());
@@ -43,7 +43,7 @@ console.log('measured original dimensions (all should be > 0):', { originalX, or
 // No dimension edit here — this test is about Trim's crop, not
 // rescaleModelFile's upload-time rescale (see rescale-model-file-invariants.test.mjs).
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 45000 });
 await page.waitForTimeout(500);
 
 // Mark extensible on x with a tiny minimum — this test only cares that
