@@ -885,6 +885,45 @@ describe('Control Room admin page (/admin/control-room, #N31 option 3)', () => {
     const response = await SELF.fetch('https://higglehaven.test/admin/control-room', { ...adminSession(), method: 'POST' });
     expect(response.status).toBe(404);
   });
+
+  // #2173: this handler's own try/catch around requireAdmin only handles
+  // HttpError (rendering the sign-in page) and re-throws anything else --
+  // before the fix, routeRequest called this handler with no wrapping
+  // .catch at all, unlike every /api/ and /uploads/ route, so a non-
+  // HttpError escaping requireAdmin (a raw D1/runtime failure from its own
+  // account_suspensions lookup) propagated out of the whole request
+  // instead of landing on this app's own consistent JSON error shape.
+  // Simulates exactly that by making the account_suspensions query itself
+  // throw a plain Error, same proxy idiom video-generation.test.js/
+  // auctions.test.js already use for a "simulated transient D1 failure".
+  it("converts a non-HttpError thrown past requireAdmin's own catch into a clean 500, not an unhandled exception", async () => {
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    env.DB.prepare = (sql) => {
+      const stmt = originalPrepare(sql);
+      if (!sql.includes('account_suspensions')) return stmt;
+      return {
+        bind: (...args) => {
+          const bound = stmt.bind(...args);
+          return new Proxy(bound, {
+            get(target, prop) {
+              if (prop === 'first') return async () => { throw new Error('simulated transient D1 failure'); };
+              const value = target[prop];
+              return typeof value === 'function' ? value.bind(target) : value;
+            },
+          });
+        },
+      };
+    };
+    let response;
+    try {
+      response = await SELF.fetch('https://higglehaven.test/admin/control-room', adminSession());
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(response.status).toBe(500);
+    expect(response.headers.get('content-type')).toMatch(/application\/json/);
+    expect((await response.json()).error).toBe('Internal server error');
+  });
 });
 
 // #1818 (sub-issue of #1817): same gate/serve shape as the Control Room and
@@ -917,5 +956,37 @@ describe('Admin Dashboard page (/admin/dashboard, #1818)', () => {
   it('404s a non-GET request to the admin page route', async () => {
     const response = await SELF.fetch('https://higglehaven.test/admin/dashboard', { ...adminSession(), method: 'POST' });
     expect(response.status).toBe(404);
+  });
+
+  // #2173: same gap and same fix as the Control Room admin page's own
+  // equivalent test above -- this handler independently needed the same
+  // wrapping .catch in routeRequest.
+  it("converts a non-HttpError thrown past requireAdmin's own catch into a clean 500, not an unhandled exception", async () => {
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    env.DB.prepare = (sql) => {
+      const stmt = originalPrepare(sql);
+      if (!sql.includes('account_suspensions')) return stmt;
+      return {
+        bind: (...args) => {
+          const bound = stmt.bind(...args);
+          return new Proxy(bound, {
+            get(target, prop) {
+              if (prop === 'first') return async () => { throw new Error('simulated transient D1 failure'); };
+              const value = target[prop];
+              return typeof value === 'function' ? value.bind(target) : value;
+            },
+          });
+        },
+      };
+    };
+    let response;
+    try {
+      response = await SELF.fetch('https://higglehaven.test/admin/dashboard', adminSession());
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(response.status).toBe(500);
+    expect(response.headers.get('content-type')).toMatch(/application\/json/);
+    expect((await response.json()).error).toBe('Internal server error');
   });
 });

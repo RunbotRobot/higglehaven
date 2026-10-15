@@ -310,16 +310,35 @@ async function routeRequest(request, env, ctx) {
     return new Response(null, { status: 204, headers: JSON_HEADERS });
   }
 
+  // #2173: each handler below already catches its own requireAdmin
+  // HttpError and renders an HTML sign-in page for it -- but requireAdmin's
+  // underlying db.prepare(...).first() call can also throw a raw, non-
+  // HttpError runtime/D1 error (a transient DB failure, a binding issue),
+  // which each handler explicitly re-throws. Unlike every /api/ and
+  // /uploads/ route below, nothing here was catching that escape, so it
+  // propagated out of routeRequest entirely -- past withSecurityHeaders,
+  // into a bare unhandled-exception response instead of this app's own
+  // consistent JSON error shape. Same catch-all fallback the /api/ branch
+  // already uses.
   if (url.pathname === '/admin/control-room') {
-    return handleControlRoomAdminPage(request, env);
+    return handleControlRoomAdminPage(request, env).catch((error) => {
+      console.error(error);
+      return json({ error: 'Internal server error' }, 500);
+    });
   }
 
   if (url.pathname === '/admin/action-log') {
-    return handleAdminActionLogPage(request, env);
+    return handleAdminActionLogPage(request, env).catch((error) => {
+      console.error(error);
+      return json({ error: 'Internal server error' }, 500);
+    });
   }
 
   if (url.pathname === '/admin/dashboard') {
-    return handleAdminDashboardPage(request, env);
+    return handleAdminDashboardPage(request, env).catch((error) => {
+      console.error(error);
+      return json({ error: 'Internal server error' }, 500);
+    });
   }
 
   if (url.pathname.startsWith('/api/')) {
