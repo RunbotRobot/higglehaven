@@ -14425,8 +14425,12 @@ async function handleInstanceBackups(request, db, route) {
     const input = await readJson(request);
     const templateId = stringValue(input.templateId, 'templateId');
     await assertReferenceExists(db, 'catalog_templates', 'template_id', templateId, 'templateId');
-    // Appends to the end of the chain -- the new entry's position is the
-    // chain's own current length, not a client-supplied index.
+    // An early, best-effort cap check -- not itself race-free (two
+    // concurrent appends can both read a count one below the max and both
+    // pass), but that only risks the chain briefly exceeding
+    // INSTANCE_BACKUP_CHAIN_MAX by a small amount under a genuine race, not
+    // the position-collision/gap bug #2183 is about. Position itself is no
+    // longer derived from this read -- see the INSERT's own subquery below.
     const tail = await db.prepare(
       'SELECT COUNT(*) AS count FROM placed_instance_backups WHERE instance_id = ?',
     ).bind(instanceId).first();
@@ -14436,16 +14440,30 @@ async function handleInstanceBackups(request, db, route) {
     const backupId = `backup-${crypto.randomUUID()}`;
     // #929/#960 idiom (see handleInstances' own POST above): requireOwnedLandlet
     // above is a point-in-time check, and the awaits since then (readJson,
-    // assertReferenceExists, the COUNT) are real gaps a landlet transfer
-    // could land in -- fold the ownership re-check into the write itself.
+    // assertReferenceExists, the cap check above) are real gaps a landlet
+    // transfer could land in -- fold the ownership re-check into the write
+    // itself.
+    //
+    // #2183: position used to come from a COUNT(*) read in a statement
+    // separate from this INSERT -- two concurrent appends could both read
+    // the same count and both insert at the identical position, since
+    // nothing else enforces uniqueness on (instance_id, position). Appends
+    // to the end of the chain -- the new entry's position is the chain's own
+    // current length, not a client-supplied index -- so folding that same
+    // COUNT(*) into a live subquery inside this INSERT instead closes the
+    // race the same way spawnCreditOrbIfDue's own comment describes: D1/
+    // SQLite serializes writes, so a second concurrent append's own
+    // subquery only ever runs after the first append's INSERT has already
+    // committed, and sees the incremented count. (The cap check above still
+    // uses its own separate, slightly-stale read -- see that comment.)
     const created = await db.prepare(`
       INSERT INTO placed_instance_backups (backup_id, instance_id, position, template_id)
-      SELECT ?, ?, ?, ?
+      SELECT ?, ?, (SELECT COUNT(*) FROM placed_instance_backups WHERE instance_id = ?), ?
       WHERE EXISTS (
         SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
         WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
       )
-    `).bind(backupId, instanceId, tail.count, templateId, instanceId, sessionBuilder.builder_id).run();
+    `).bind(backupId, instanceId, instanceId, templateId, instanceId, sessionBuilder.builder_id).run();
     if (created.meta.changes === 0) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
@@ -14506,29 +14524,49 @@ async function handleInstanceBackups(request, db, route) {
     // top-of-handler requireOwnedLandlet, which is only a point-in-time
     // check against the awaits (readJson/SELECT/checkRateLimit) since then.
     //
-    // #2174: batched with the position-shift UPDATE below (mirroring the
-    // PUT/reorder branch above) so the two writes commit as one D1
-    // transaction -- previously these were sequential awaited .run() calls,
-    // so an interruption between them could leave the chain with a position
-    // gap, which the next append (keyed off COUNT(*), not MAX(position))
-    // would then collide into. The UPDATE's own NOT EXISTS guard ties its
-    // effect to the DELETE actually having landed earlier in this same
-    // batch/transaction, so a lost ownership race (DELETE's EXISTS guard
-    // fails, 0 rows) leaves positions untouched instead of shifting them
-    // for a row that was never removed.
-    const [deleted] = await db.batch([
+    // #2174/PR #2179 (landed independently, mid-investigation of this
+    // issue) already wrapped this DELETE and a position-shift UPDATE in
+    // one db.batch for crash-safety between the two statements -- but kept
+    // the shift's threshold bound from this same early `existing.position`
+    // read, just now atomically with the DELETE. That closes the single-
+    // request crash window #2174 was about, but not the cross-request race
+    // #2183 is about: two different concurrent deletes' *batches* still
+    // just serialize as two separate transactions, each trusting its own
+    // now-possibly-stale threshold. Confirmed by hand-tracing and then
+    // empirically (see this file's own test): when the batch for the
+    // lower position threshold commits first, the other batch's stale,
+    // already-bound higher threshold stops matching rows the first batch
+    // already pulled below it, leaving a gap.
+    //
+    // Folding a live subquery (re-deriving the target row's current
+    // position by backup_id) into the shift instead makes it correct
+    // regardless of commit ordering -- not the possibly-stale
+    // `existing.position` this still only uses for the early 404. The
+    // shift is placed first in the batch so its own subquery re-derives
+    // the row's position immediately before the delete that follows it in
+    // the same transaction removes it, and carries the same ownership
+    // guard as the delete so an invalid/transferred-landlet request can't
+    // partially shift without actually deleting anything -- the delete
+    // failing (0 changes, whether from a lost ownership race or the row
+    // already being gone) also makes the shift's own subquery return
+    // nothing to compare against, so it naturally matches 0 rows too,
+    // without needing #2179's separate NOT-EXISTS-the-row guard.
+    const [, deleted] = await db.batch([
+      db.prepare(`
+        UPDATE placed_instance_backups SET position = position - 1
+        WHERE instance_id = ? AND position > (
+          SELECT position FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ?
+        ) AND EXISTS (
+          SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
+          WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
+        )
+      `).bind(instanceId, backupId, instanceId, instanceId, sessionBuilder.builder_id),
       db.prepare(`
         DELETE FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ? AND EXISTS (
           SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
           WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
         )
       `).bind(backupId, instanceId, instanceId, sessionBuilder.builder_id),
-      db.prepare(`
-        UPDATE placed_instance_backups SET position = position - 1
-        WHERE instance_id = ? AND position > ? AND NOT EXISTS (
-          SELECT 1 FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ?
-        )
-      `).bind(instanceId, existing.position, backupId, instanceId),
     ]);
     if (deleted.meta.changes === 0) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
