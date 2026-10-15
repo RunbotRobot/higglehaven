@@ -615,6 +615,69 @@ describe('Seller feedback', () => {
       expect(snapshot).toMatchObject({ feedback_id: feedbackId, rating: 5, text: 'About to be deleted.' });
     });
 
+    // #2122: a lost concurrency race (another request deletes the feedback
+    // in the real gap between the eager read and this handler's own
+    // UPDATE/DELETE) must not leave a false snapshot behind for an edit/
+    // delete that never actually took effect -- the request itself still
+    // 409s either way.
+    it('does not snapshot to user_content_edit_history when an author edit loses a concurrency race', async () => {
+      const buyer = await signupBuilder('feedback-history-edit-lost-race-buyer');
+      const purchaseId = await createPurchase(buyer);
+      const feedbackId = await postFeedback(purchaseId, buyer, { rating: 4, text: 'Before the race.' });
+
+      const originalPrepare = env.DB.prepare.bind(env.DB);
+      let armed = true;
+      env.DB.prepare = (sql) => {
+        if (armed && sql.includes('UPDATE seller_feedback SET rating')) {
+          armed = false;
+          originalPrepare('DELETE FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).run();
+        }
+        return originalPrepare(sql);
+      };
+      let edited;
+      try {
+        edited = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
+          method: 'PATCH', body: JSON.stringify({ rating: 1, text: 'After the race.' }),
+        }));
+      } finally {
+        env.DB.prepare = originalPrepare;
+      }
+      expect(edited.response.status).toBe(409);
+
+      const history = await env.DB.prepare(
+        'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+      ).bind('seller_feedback', feedbackId).all();
+      expect(history.results).toHaveLength(0);
+    });
+
+    it('does not snapshot to user_content_edit_history when an author delete loses a concurrency race', async () => {
+      const buyer = await signupBuilder('feedback-history-delete-lost-race-buyer');
+      const purchaseId = await createPurchase(buyer);
+      const feedbackId = await postFeedback(purchaseId, buyer, { rating: 5, text: 'Already gone.' });
+
+      const originalPrepare = env.DB.prepare.bind(env.DB);
+      let armed = true;
+      env.DB.prepare = (sql) => {
+        if (armed && sql.includes('DELETE FROM seller_feedback WHERE purchase_id = ? AND EXISTS')) {
+          armed = false;
+          originalPrepare('DELETE FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).run();
+        }
+        return originalPrepare(sql);
+      };
+      let deleted;
+      try {
+        deleted = await api(`/purchases/${purchaseId}/feedback`, buyer.session({ method: 'DELETE' }));
+      } finally {
+        env.DB.prepare = originalPrepare;
+      }
+      expect(deleted.response.status).toBe(409);
+
+      const history = await env.DB.prepare(
+        'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+      ).bind('seller_feedback', feedbackId).all();
+      expect(history.results).toHaveLength(0);
+    });
+
     // Moderation deletes (admin override) are not the user editing/
     // deleting their own content -- the owner's own framing was
     // specifically about self-service, so these must not write to the
