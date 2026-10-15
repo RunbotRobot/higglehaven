@@ -38,14 +38,14 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '5');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await page.waitForTimeout(300);
 
 const originalX = Number(await page.locator('.upload-dimension-input[data-axis="x"]').inputValue());
 console.log('measured original width (should be > 0):', originalX);
 
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
 await page.waitForTimeout(500);
 
 const sellerListText = await page.textContent('#seller-list');
@@ -132,7 +132,8 @@ const scaledProportionally = Math.abs(yAfter - yBefore * 2) < 0.02;
 await row().locator('button', { hasText: 'Save Size' }).click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-size-status')).some((el) => el.textContent.includes('notified')),
-  { timeout: 20000 },
+  null,
+  { timeout: 30000 },
 );
 const saveStatus = await row().locator('.seller-size-status').textContent();
 console.log('save status (should mention notified):', saveStatus);

@@ -74,7 +74,8 @@ await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="sell"]');
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Payout Account')),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 
 const payoutAccountField = page.locator('.settings-field', { hasText: 'Payout Account' });
@@ -111,7 +112,8 @@ await submitBtn.click();
 // this wait immediately regardless of whether the real field appeared.)
 await page.waitForFunction(
   () => [...document.querySelectorAll('button')].some((b) => b.textContent.includes('Cash out')),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const cashOutBtnPresentAfterSubmit = await page.locator('button', { hasText: 'Cash out' }).count();
 console.log('Cash out button appears right after the first successful submit, no tab switch needed (should be 1 -- was the #1373 bug):', cashOutBtnPresentAfterSubmit);
