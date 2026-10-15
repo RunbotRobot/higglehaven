@@ -169,4 +169,23 @@ describe('admin-forms rate limit (#2082)', () => {
     const limited = await api(`/tax/admin-forms/${formIds[100]}/void`, admin.session({ method: 'POST' }));
     expect(limited.response.status).toBe(429);
   }, 60000);
+
+  // #2130: GET /tax/admin-forms (re-)generates draft 1099s on every call --
+  // the same "real DB cost" shape as the approve/file/void trio above, but
+  // it had no guard at all. Shares their exact bucket key, so pre-seeding
+  // it directly (same idiom as #1844's own GET /builders rate-limit test)
+  // is cheaper than firing 100 real requests just to prove the shared
+  // bucket actually covers this branch too.
+  it('rate-limits GET /tax/admin-forms, sharing the admin-forms mutation bucket', async () => {
+    const admin = await signupAdmin('tax-1099-admin-get-rate-limit-admin');
+    const adminRow = await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(admin.email).first();
+    const bucketKey = `tax-1099-admin:${adminRow.user_id}`;
+    const now = Date.now();
+    await env.DB.batch(Array.from({ length: 100 }, () => env.DB.prepare(
+      'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+    ).bind(bucketKey, now)));
+
+    const limited = await api(`/tax/admin-forms?year=${new Date().getUTCFullYear()}`, admin.session());
+    expect(limited.response.status).toBe(429);
+  });
 });
