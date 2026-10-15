@@ -6451,7 +6451,8 @@ itself doesn't exist.
 - `POST /api/instances/:instanceId/backups` — appends one entry. Body:
   `{ templateId }`. `400` if `templateId` doesn't reference a real
   catalog template. Always lands at the end of the chain — position is
-  never client-supplied.
+  never client-supplied. A chain can hold at most 20 entries (`400` once
+  full).
 - `PUT /api/instances/:instanceId/backups` — reorders the whole chain in
   one call. Body: `{ order: [backupId, ...] }`, which must contain
   exactly the instance's current backup ids, each exactly once (`400`
