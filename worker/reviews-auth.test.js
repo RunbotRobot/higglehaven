@@ -2355,7 +2355,10 @@ describe('Authentication', () => {
     }
     const limited = await api('/auth/card-setup-intent', builder.session({ method: 'POST' }));
     expect(limited.response.status).toBe(429);
-  });
+  }, 60000); // #978-class/#2198: 21 real HTTP requests exceeds the 20000ms
+  // default under this file's own size/load, despite passing instantly in
+  // isolation -- same reasoning as #1759/#2157's own precedent for a
+  // comparable request volume in this file.
 
   it('rate-limits repeated confirm-card calls from the same session', async () => {
     const builder = await signupBuilder('confirm-card-rate-limit');
