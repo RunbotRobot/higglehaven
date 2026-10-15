@@ -7,18 +7,40 @@
 // verifies both halves of the fix: dismissing the confirm leaves the
 // purchase untouched, and accepting it still actually refunds.
 //
-// Seeding recipe reused verbatim from
-// e2e/admin-dashboard-purchases-panel-race.test.mjs's own comment: a real
-// dangling-seller purchase needs a builder to claim land and place a
-// seller's priced product, buy it (simulatePaidPurchaseForTests for a real
-// paymentIntentId), stand in for a real Stripe payout via a direct D1 write
-// (this suite never configures STRIPE_SECRET_KEY, so there's no real way
-// through the app's own HTTP surface to satisfy the #732/#745 deletion
-// guard), then have the seller self-delete so the purchase's seller_id goes
-// dangling.
+// Seeding recipe adapted from e2e/admin-dashboard-purchases-panel-race.test.mjs's
+// own comment, with one deliberate difference: that recipe uses
+// simulatePaidPurchaseForTests to mint a real paymentIntentId, which it
+// needs purely to satisfy the seller-delete guard (#732/#745 -- blocks
+// deleting a seller with an unpaid real-money purchase). This test instead
+// omits simulatePaidPurchaseForTests entirely: with no paymentIntentId, that
+// guard's own WHERE clause (payment_intent_id IS NOT NULL) never matches, so
+// the seller can self-delete immediately with no D1 workaround needed at
+// all, and GET /api/purchases?danglingSeller=1 -- the query the admin
+// dashboard's panel and this test both read from -- has no paymentIntentId
+// requirement of its own either (worker/index.js's own handler for it).
+//
+// This isn't just a simplification: a paymentIntentId-bearing purchase
+// cannot actually be refunded in this suite at all.
+// handlePurchaseRefund->finalizeRefundReversal only skips its real Stripe
+// call when `purchase.payment_intent_id` is falsy; once it's set (which
+// simulatePaidPurchaseForTests exists specifically to do), the function
+// requires stripeConfigured(env) and this suite never sets
+// STRIPE_SECRET_KEY (same reason the race-test sibling's own comment gives
+// for why it can't drive a real Stripe checkout either) -- so the refund
+// endpoint would 503 ("Stripe payments are not configured on this server
+// yet.") every single time. That's exactly what three earlier revisions of
+// this test chased: CI's own .dev.vars (unlike a bare local checkout) sets
+// E2E_SIMULATE_PAID_PURCHASES=true, so only there did
+// simulatePaidPurchaseForTests actually mint a non-null paymentIntentId and
+// hit this 503 -- locally, with that var unset, the purchase's
+// paymentIntentId stayed null and the real refund trivially succeeded,
+// masking the bug in every local run. Reproduced directly by copying CI's
+// own .dev.vars locally once (E2E_SIMULATE_PAID_PURCHASES=true) and
+// confirming the identical 503 appeared. The two wrangler-d1-execute calls,
+// and the write-visibility poll added to wait on the second one, existed
+// only to support a paymentIntentId this test never actually needed.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 import {
   launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish,
@@ -74,32 +96,21 @@ await fetchJson('/api/instances', {
   body: JSON.stringify({ instanceId, landletId: landlet.landletId, templateId: template.templateId, x: 0, y: 0 }),
 });
 
+// No simulatePaidPurchaseForTests -- see this file's own top comment for
+// why that's deliberate, not an oversight: leaving paymentIntentId null is
+// what makes a real refund possible here at all, and is also what lets the
+// seller below self-delete immediately with no D1 workaround.
 const purchased = await fetchJson(`/api/instances/${instanceId}/purchase`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ buyerLabel: 'A Dangling-Refund-Confirm Shopper', simulatePaidPurchaseForTests: true }),
+  body: JSON.stringify({ buyerLabel: 'A Dangling-Refund-Confirm Shopper' }),
 });
 console.log('purchase created (status should be 201):', purchased.status);
 const purchaseId = purchased.body.purchase?.purchaseId;
 
-execFileSync('npx', [
-  'wrangler', 'd1', 'execute', 'higglehaven-db', '--local', '--command',
-  `UPDATE purchases SET paid_out_at = '2024-01-01T00:00:00.000Z', stripe_payout_id = 'po_dangling_refund_confirm_test' WHERE purchase_id = '${purchaseId}'`,
-], { cwd: REPO_ROOT, stdio: 'pipe' });
-
 const { seller } = (await fetchJson('/api/sellers/me')).body;
 const deleteResult = await fetchJson(`/api/sellers/${encodeURIComponent(seller.sellerId)}`, { method: 'DELETE' });
 console.log('seller self-delete status (should be 200, making seller_id dangling):', deleteResult.status);
-
-// The seller is gone now, so nothing re-checks paid_out_at/stripe_payout_id
-// for the deletion guard's sake anymore -- clear them back to null so
-// handlePurchaseRefund's own separate "already paid out, can't auto-refund"
-// 409 guard (worker/index.js's own #(see that handler)) doesn't fire when
-// this test actually exercises a real refund below.
-execFileSync('npx', [
-  'wrangler', 'd1', 'execute', 'higglehaven-db', '--local', '--command',
-  `UPDATE purchases SET paid_out_at = NULL, stripe_payout_id = NULL WHERE purchase_id = '${purchaseId}'`,
-], { cwd: REPO_ROOT, stdio: 'pipe' });
 
 await seedBrowser.close();
 
@@ -117,51 +128,6 @@ page.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()
 await page.context().addCookies([{ name: 'hh_session', value: token, url: BASE_URL }]);
 
 await page.goto(`${BASE_URL}/admin/dashboard`, { waitUntil: 'networkidle' });
-
-// The second `wrangler d1 execute` above (clearing paid_out_at back to NULL)
-// runs as a separate process against the same local D1 SQLite file while
-// wrangler dev is already up and serving requests -- unlike everything else
-// in this shard, this test (and its sibling
-// admin-dashboard-purchases-panel-race.test.mjs, which does the same thing
-// for its own, single, paid_out_at-setting write) is the only file making an
-// external write to the live D1 file mid-run rather than through the app's
-// own HTTP surface. That's exactly the kind of cross-process write that can
-// take a beat longer to become visible to the already-running server under
-// real CI load than it does locally -- rather than guessing at a fixed delay
-// (already tried once and still saw this test fail in CI), poll the actual
-// endpoint handlePurchaseRefund itself re-reads from (GET
-// /api/purchases?danglingSeller=1) until it reflects the cleared value, so
-// the refund click below never races the write.
-// 30000ms, not the original 10000ms: this exact poll already fired its own
-// distinguishing "never read back as cleared" error on the CI run right
-// after it was added (admin-dashboard-purchases-panel-refund-confirm.test.mjs
-// was still the only failure, console output unreachable per usual, but the
-// shape -- isolated, repeated failure of this file alone -- is consistent
-// with the write-visibility lag this poll targets simply being longer than
-// 10s under this shard's real CI load). 30s matches this file's own other
-// margins (the two .action-refund click timeouts below) and this suite's
-// established precedent for heavy-seeding-chain + admin-dashboard CI load
-// (#978/#1224/#1469/#1511).
-async function waitForPaidOutAtCleared(timeoutMs = 30000, intervalMs = 300) {
-  const start = Date.now();
-  for (;;) {
-    const res = await page.evaluate(async (id) => {
-      const r = await fetch('/api/purchases?danglingSeller=1&limit=100');
-      const body = await r.json();
-      const found = (body.purchases || []).find((p) => p.purchaseId === id);
-      return found ? found.paidOutAt : 'not-found';
-    }, purchaseId);
-    if (res === null) {
-      console.log(`paidOutAt read back as cleared after ${Date.now() - start}ms`);
-      return;
-    }
-    if (Date.now() - start >= timeoutMs) {
-      throw new Error(`purchase ${purchaseId}'s paidOutAt never read back as cleared via GET /api/purchases?danglingSeller=1 within ${timeoutMs}ms (last seen: ${JSON.stringify(res)}) -- the external wrangler d1 execute reset may not have become visible to the running server in time`);
-    }
-    await new Promise((resolve) => setTimeout(resolve, intervalMs));
-  }
-}
-await waitForPaidOutAtCleared();
 await page.click('button[data-panel="purchases"]');
 
 await page.waitForFunction(
@@ -187,14 +153,6 @@ const statusTextAfterDismiss = await statusCell().textContent();
 console.log('status cell after dismissing the confirm (should still be the pre-refund dash):', JSON.stringify(statusTextAfterDismiss));
 
 // Second click: accept the confirm -- the refund should actually go through.
-// 30s/20s margins (vs. a plain 10s) match this suite's own established
-// precedent for this exact heavy-seeding-chain + admin-dashboard shape
-// (e.g. #978/#1224/#1469/#1511's land.test.js timeout bumps) -- this test's
-// own seed chain already does a real model upload, catalog create, instance
-// create, purchase, two separate `wrangler d1 execute` process spawns, and
-// a seller delete before ever reaching the dashboard, all of which get
-// slower, not just this click's own real backend refund round-trip, under
-// the shared-runner CI load this repo's CI visibly runs under.
 page.once('dialog', (dialog) => dialog.accept());
 await row().locator('.action-refund').click({ timeout: 30000 });
 await page.waitForFunction(
