@@ -7081,6 +7081,14 @@ owner's scope. `404 "Marker not found or already dismissed"` covers both
 cases identically (same "no distinguishing a race from a genuine miss"
 shape other dismiss/claim-style actions in this file already use).
 
+#2098: the dismiss UPDATE also re-verifies the landlet is still owned by
+the caller at write time, same `#929`/`#960` idiom every other mutation
+in this file folds into its own write — `requireOwnedLandlet` above is
+only a point-in-time check, and the awaited `checkRateLimit` since then
+is a real gap a landlet reassignment/auction resolution could land in.
+Losing ownership in that gap is `409 "Landlet changed concurrently —
+refetch and retry"`, distinct from the marker-level `404` above.
+
 ### Frontend wiring
 
 Settings > Build gets a new "Sold-out markers" panel (`renderSoldOutMarkersSection`,
