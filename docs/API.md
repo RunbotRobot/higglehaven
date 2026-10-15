@@ -1509,6 +1509,14 @@ discipline every other admin mutation in this file follows. Response
 shape matches `GET .../stripe-account` above, reflecting the now-cleared
 state.
 
+Rate-limited per admin (`STRIPE_ACCOUNT_RESET_RATE_LIMIT_MAX`, 20 — same
+bound as `suspend-account`/`unsuspend-account`'s own
+`ACCOUNT_SUSPENSION_RATE_LIMIT_MAX`), in a separate bucket for the
+builder-side and seller-side call (#2124) — this mutates a live Stripe
+linkage the same way those endpoints mutate account standing, and was
+otherwise the one consequential admin mutation in this file missing that
+guard.
+
 **Deliberately makes no judgment call about whether reconnection should be
 allowed** — this is mechanical plumbing only, narrowed down from this
 issue's own original, broader "self-service vs. manual intervention" UX

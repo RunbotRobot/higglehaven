@@ -511,6 +511,41 @@ describe('Stripe account reset (#1065)', () => {
     ).bind('stripe_account_reset', seller.sellerId).first();
     expect(logRow.count).toBe(0);
   });
+
+  // #2124: stripe-account-reset had no rate limit at all, unlike nearly
+  // every other admin mutation that touches money/account state (e.g.
+  // suspend-account's own ACCOUNT_SUSPENSION_RATE_LIMIT_MAX bucket) --
+  // its own STRIPE_ACCOUNT_RESET_RATE_LIMIT_MAX bucket, bound per-admin.
+  it('rate-limits repeated reset attempts against a builder from the same admin', async () => {
+    const admin = await signupAdmin('stripe-reset-rate-limit-admin');
+    const builder = await signupBuilder('stripe-reset-rate-limit-builder');
+    for (let i = 0; i < 20; i++) {
+      await env.DB.prepare(`
+        UPDATE builders SET stripe_account_id = ?, stripe_onboarding_status = 'action_needed' WHERE builder_id = ?
+      `).bind(`acct_rate_limit_builder_${i}`, builder.builderId).run();
+      const attempt = await api(`/builders/${builder.builderId}/stripe-account-reset`, admin.session({ method: 'POST' }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api(`/builders/${builder.builderId}/stripe-account-reset`, admin.session({ method: 'POST' }));
+    expect(limited.response.status).toBe(429);
+  }, 30000); // #978-class: 21 real HTTP requests against this file's own
+  // shared D1 instance -- a smaller margin than the 3-requests-per-
+  // iteration suspend/unsuspend precedent above, but still worth the same
+  // proactive buffer under CI load.
+
+  it('rate-limits repeated reset attempts against a seller from the same admin, in a separate bucket from the builder-side limit above', async () => {
+    const admin = await signupAdmin('stripe-reset-rate-limit-seller-admin');
+    const seller = await signupSeller('stripe-reset-rate-limit-seller');
+    for (let i = 0; i < 20; i++) {
+      await env.DB.prepare(`
+        UPDATE sellers SET stripe_account_id = ?, stripe_onboarding_status = 'action_needed' WHERE seller_id = ?
+      `).bind(`acct_rate_limit_seller_${i}`, seller.sellerId).run();
+      const attempt = await api(`/sellers/${seller.sellerId}/stripe-account-reset`, admin.session({ method: 'POST' }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api(`/sellers/${seller.sellerId}/stripe-account-reset`, admin.session({ method: 'POST' }));
+    expect(limited.response.status).toBe(429);
+  }, 30000);
 });
 
 // #625 (sub-issue of #349/#324): redeeming a builder's higgles balance for

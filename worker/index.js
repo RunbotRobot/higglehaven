@@ -3756,6 +3756,7 @@ async function handleBuilders(request, env, db, route, url) {
   // other sensitive account mutation in this file is.
   if (request.method === 'POST' && route.length === 3 && route[2] === 'stripe-account-reset') {
     const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `stripe-account-reset:${admin.user_id}`, STRIPE_ACCOUNT_RESET_RATE_LIMIT_MAX);
     const builder = await requireBuilder(db, route[1]);
     if (!builder.stripe_account_id) {
       throw new HttpError('This builder has no connected Stripe account to reset', 409);
@@ -4509,6 +4510,7 @@ async function handleSellers(request, env, db, route, url) {
   // should be allowed).
   if (request.method === 'POST' && route.length === 3 && route[2] === 'stripe-account-reset') {
     const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `stripe-account-reset:${admin.user_id}`, STRIPE_ACCOUNT_RESET_RATE_LIMIT_MAX);
     const seller = await requireSeller(db, route[1]);
     if (!seller.stripe_account_id) {
       throw new HttpError('This seller has no connected Stripe account to reset', 409);
@@ -10715,6 +10717,10 @@ async function handleListAdmins(request, db) {
 }
 
 const ACCOUNT_SUSPENSION_RATE_LIMIT_MAX = 20;
+// #2124: stripe-account-reset (builder + seller) mutates a live Stripe
+// linkage the same way suspend-account above mutates account standing --
+// rate-limited the same way, unlike its own sibling admin mutations.
+const STRIPE_ACCOUNT_RESET_RATE_LIMIT_MAX = 20;
 
 // #2032 (sub-issue of #1201): the suspend action's optional sign-post/
 // calendar-event removal cascade -- per the owner's own resolved call on
