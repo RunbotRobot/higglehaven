@@ -104,4 +104,52 @@ describe('escalateExpiredSuspensions (#2033)', () => {
       .bind(suspensionId).first();
     expect(suspensionRow.escalated_at).toBeTruthy();
   });
+
+  it('re-arms (clears escalated_at) when cascadeDeleteAccount fails, and succeeds on a later retry (#2117)', async () => {
+    const target = await signupBuilder('escalate-retry-target');
+    const userId = await userIdFor(target);
+    const pastGracePeriod = new Date(Date.now() - 1000).toISOString();
+    const suspensionId = await insertSuspension(userId, { gracePeriodEndsAt: pastGracePeriod });
+
+    // Forces cascadeDeleteAccount's own UPDATE to fail with a real UNIQUE
+    // constraint violation: it always rewrites username to a deterministic
+    // `deleted-<last 8 chars of user_id>` value (see its own comment), so a
+    // decoy row already holding that exact username collides every time.
+    const suffix = userId.slice(-8);
+    const decoyUserId = `escalate-retry-decoy-${crypto.randomUUID()}`;
+    await env.DB.prepare(`
+      INSERT INTO users (user_id, email, username, password_hash)
+      VALUES (?, ?, ?, 'x')
+    `).bind(decoyUserId, `${decoyUserId}@example.com`, `deleted-${suffix}`).run();
+
+    await escalateExpiredSuspensions(env.DB);
+
+    // The whole batch (including the sessions DELETE) rolls back with the
+    // failed UPDATE -- nothing about the account changed.
+    const userRowAfterFailure = await env.DB.prepare('SELECT * FROM users WHERE user_id = ?').bind(userId).first();
+    expect(userRowAfterFailure.deleted_at).toBeNull();
+    expect(userRowAfterFailure.email).toBe(target.email);
+    const suspensionRowAfterFailure = await env.DB.prepare('SELECT escalated_at FROM account_suspensions WHERE suspension_id = ?')
+      .bind(suspensionId).first();
+    expect(suspensionRowAfterFailure.escalated_at).toBeNull();
+    const logCountAfterFailure = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('auto_escalate_suspension', userId).first();
+    expect(logCountAfterFailure.count).toBe(0);
+
+    // Clear the collision and retry -- the re-armed suspension is due
+    // again (escalated_at IS NULL), so the next run picks it right up.
+    await env.DB.prepare('DELETE FROM users WHERE user_id = ?').bind(decoyUserId).run();
+    await escalateExpiredSuspensions(env.DB);
+
+    const userRowAfterRetry = await env.DB.prepare('SELECT * FROM users WHERE user_id = ?').bind(userId).first();
+    expect(userRowAfterRetry.deleted_at).toBeTruthy();
+    const suspensionRowAfterRetry = await env.DB.prepare('SELECT escalated_at FROM account_suspensions WHERE suspension_id = ?')
+      .bind(suspensionId).first();
+    expect(suspensionRowAfterRetry.escalated_at).toBeTruthy();
+    const logCountAfterRetry = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('auto_escalate_suspension', userId).first();
+    expect(logCountAfterRetry.count).toBe(1);
+  });
 });
