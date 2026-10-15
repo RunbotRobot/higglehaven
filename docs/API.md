@@ -1836,7 +1836,9 @@ already marked shipped, or has been refunded. On success, notifies the
 purchase's buyer (`purchases.buyer_builder_id`) that it has shipped — same
 best-effort notification convention as every other transactional event in
 this app (#1288), skipped silently if there's no `buyer_builder_id` (a
-pre-#1112 purchase, or a buyer who has since self-deleted).
+pre-#1112 purchase, or a buyer who has since self-deleted). Rate-limited to
+20 calls per 15 minutes, bucketed by the acting seller's or admin's own
+user id (see "Rate limiting" above).
 
 ```json
 { "purchase": { "purchaseId": "...", "shippedAt": "2026-01-01T00:00:00.000Z", "...": "..." } }
@@ -1870,7 +1872,9 @@ the purchase has been refunded. On the first confirmation (not a repeat
 visit), notifies the seller that delivery was confirmed and their payout
 was released early — same best-effort notification convention as every
 other transactional event in this app (#1289), skipped if the seller has
-since self-deleted.
+since self-deleted. Rate-limited to 20 calls per 15 minutes, bucketed by
+client IP since this endpoint is unauthenticated (see "Rate limiting"
+above).
 
 ## Catalog templates
 
