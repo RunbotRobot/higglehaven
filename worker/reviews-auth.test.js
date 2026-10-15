@@ -909,7 +909,10 @@ describe('Product reviews', () => {
       method: 'DELETE', headers,
     });
     expect(limited.response.status).toBe(429);
-  });
+  }, 30000); // #2097: same 20-iteration signupBuilder+createPurchase+POST+
+  // DELETE shape (~80 real HTTP/DB operations total) as the authenticated
+  // DELETE rate-limit test just below (#1511) -- this file has grown
+  // enough since then that this test now hits the same 20s default too.
 
   // #990: unlike the anonymous/orphaned-template path just above (#564),
   // the authenticated seller-owner branch (see "gates review moderation"
