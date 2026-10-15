@@ -53,6 +53,8 @@ import {
   fetchMyBuilder,
   renameBuilder,
   deleteBuilder,
+  fetchNotificationPreferences,
+  updateNotificationPreferences,
   fetchMySeller,
   renameSeller,
   deleteSeller,
@@ -6017,6 +6019,61 @@ function renderGeneralSettingsSection() {
   settingsSectionEl.appendChild(versionField);
 
   renderTaxPaperworkField();
+  renderNotificationPreferencesField();
+}
+
+// #2067 (leaf sub-issue of #1973, part of #1947): account-level opt-in
+// for an email alert on top of the dashboard notification already fired
+// unconditionally when one of this builder's placed products sells out.
+// Same async-field-in-General shape as renderTaxPaperworkField just
+// above (currentAuthUser-gated, settingsRenderToken-guarded against a
+// tab switch/modal reopen racing the fetch).
+async function renderNotificationPreferencesField() {
+  if (!currentAuthUser) return;
+  const myToken = settingsRenderToken;
+  let prefs;
+  try {
+    prefs = await fetchNotificationPreferences();
+  } catch {
+    return;
+  }
+  if (myToken !== settingsRenderToken) return;
+
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const fieldLabel = document.createElement('span');
+  fieldLabel.textContent = 'Notifications';
+  field.appendChild(fieldLabel);
+
+  const row = document.createElement('div');
+  row.className = 'settings-radio-row';
+  const labelEl = document.createElement('label');
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = !!prefs.notifySoldOutEmail;
+  checkbox.addEventListener('change', async () => {
+    const desired = checkbox.checked;
+    checkbox.disabled = true;
+    try {
+      await updateNotificationPreferences({ notifySoldOutEmail: desired });
+    } catch (err) {
+      checkbox.checked = !desired;
+      alert(err.message || 'Could not update this preference.');
+    } finally {
+      checkbox.disabled = false;
+    }
+  });
+  labelEl.appendChild(checkbox);
+  labelEl.appendChild(document.createTextNode('Email me when one of my placed products sells out'));
+  row.appendChild(labelEl);
+  field.appendChild(row);
+
+  const note = document.createElement('div');
+  note.className = 'settings-empty-note';
+  note.textContent = 'You always get a dashboard notification when this happens — this adds an email on top.';
+  field.appendChild(note);
+
+  settingsSectionEl.appendChild(field);
 }
 
 // #614: POST /api/tax/id-form (W-9/W-8BEN collection) has existed on the
