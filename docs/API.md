@@ -7014,7 +7014,9 @@ doesn't exist) and writes an `admin_action_log` entry. Unlike #2017's
 product-flag resolve action, there is no "approve"/"reject" consequence
 here — a flag is a soft signal, not an accusation, so reviewing one is
 just acknowledgment, optionally with a note for the admin's own record;
-nothing else in this app reacts to a flag's status.
+nothing else in this app reacts to a flag's status. Rate-limited to 20
+calls per 15 minutes, bucketed by the acting admin's own user id (see
+"Rate limiting" above).
 
 ### Low-stock / days-remaining list (#1949, sub-issue of #1947)
 
