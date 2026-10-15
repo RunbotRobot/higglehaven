@@ -64,9 +64,19 @@ console.log('force-complete button visible for the far (generating) landlet befo
 console.log('force-complete note hidden before clicking (should be true):', farNoteHiddenBeforeClick);
 
 await page.click('#landletForceCompleteBtn');
+// #2139 (sub-issue of #2138): waitForFunction's real signature is
+// (pageFunction, arg, options) -- a 2-arg call with a parameterless
+// pageFunction binds {timeout} to arg, not options, so this (and the two
+// below) always silently ran at Playwright's true default (30000ms)
+// regardless of what was written here. Passing `null` for arg now
+// actually honors the option -- set to 30000 explicitly (the same value
+// that was already secretly in effect) rather than the originally-written
+// 10000, since that number was never real and these are all "wait for
+// this to eventually become true" patterns where more margin is safer.
 await page.waitForFunction(
   () => !document.getElementById('landletForceCompleteNote').hidden,
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const farStatusAfterClick = await page.locator('#landletStatGrid').textContent();
 const farNoteText = await page.textContent('#landletForceCompleteNote');
@@ -83,7 +93,8 @@ console.log('force-complete button still visible after click (should be true, st
 await lookup(FAR_LANDLET_ID);
 await page.waitForFunction(
   () => document.getElementById('landletForceCompleteNote').hidden,
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const farNoteHiddenAfterFreshLookup = await page.locator('#landletForceCompleteNote').isHidden();
 console.log('note hidden again after a fresh lookup (should be true):', farNoteHiddenAfterFreshLookup);
@@ -94,7 +105,8 @@ await lookup(ENCLOSED_LANDLET_ID);
 await page.click('#landletForceCompleteBtn');
 await page.waitForFunction(
   () => document.getElementById('landletStatGrid')?.textContent.includes('greenbelt'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const enclosedBtnHiddenAfterClick = await page.locator('#landletForceCompleteBtn').isHidden();
 const enclosedNoteHiddenAfterClick = await page.locator('#landletForceCompleteNote').isHidden();

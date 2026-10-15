@@ -38,7 +38,16 @@ await sharerPage.mouse.click(210, 400);
 // text (the single selected item's own name, exactly what updateSelectionUI
 // sets product-info to for a 1-item selection) makes this deterministic
 // instead of guessing a delay that's long enough.
-await sharerPage.waitForFunction(() => document.getElementById('product-info').textContent.includes('Tree'), { timeout: 10000 });
+//
+// #2142 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real
+// applied timeout was always Playwright's actual default (30000ms), never
+// the smaller number written here. The explicit `null` arg reaches the
+// options slot, and the timeout itself is widened to 60000ms for real
+// headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
+// wait.
+await sharerPage.waitForFunction(() => document.getElementById('product-info').textContent.includes('Tree'), null, { timeout: 60000 });
 
 // Placing already auto-selected the tree (handlePlacementClick's own
 // selectOnly) — Multi-Select carries that selection in (confirmed: see the
@@ -51,7 +60,7 @@ await sharerPage.click('#save-bundle-item');
 // launchPage's dialog handler auto-accepts confirm() too, which is exactly
 // the "share it" path this test wants (the Save Bundle handler's confirm()
 // asks whether to share).
-await sharerPage.waitForFunction(() => document.getElementById('product-info').textContent.includes('Saved'), { timeout: 10000 });
+await sharerPage.waitForFunction(() => document.getElementById('product-info').textContent.includes('Saved'), null, { timeout: 60000 });
 const savedStatus = await sharerPage.textContent('#product-info');
 console.log('save status (should mention Saved):', savedStatus);
 
