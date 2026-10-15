@@ -14325,6 +14325,12 @@ async function handleInstances(request, env, route, url) {
 // sign posts have, since nobody but the owner has any business touching
 // their own backup chain.
 const INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX = 200;
+// #2171: every other ordered/bulk-array endpoint in this file caps its
+// length explicitly (e.g. PUT /landlets/:id/instances at 250, POST
+// /land-candidates/batch at 100) -- this chain had no such cap. 20 matches
+// the scale of a "backup chain" feature (a handful of fallback templates
+// per instance, not a bulk list).
+const INSTANCE_BACKUP_CHAIN_MAX = 20;
 
 function backupFromRow(row) {
   return {
@@ -14360,6 +14366,9 @@ async function handleInstanceBackups(request, db, route) {
     const tail = await db.prepare(
       'SELECT COUNT(*) AS count FROM placed_instance_backups WHERE instance_id = ?',
     ).bind(instanceId).first();
+    if (tail.count >= INSTANCE_BACKUP_CHAIN_MAX) {
+      throw new HttpError(`A backup chain can contain at most ${INSTANCE_BACKUP_CHAIN_MAX} entries`, 400);
+    }
     const backupId = `backup-${crypto.randomUUID()}`;
     // #929/#960 idiom (see handleInstances' own POST above): requireOwnedLandlet
     // above is a point-in-time check, and the awaits since then (readJson,
