@@ -570,7 +570,8 @@ on the corresponding `ownedAvatars`/`ownedAnimations` row itself.
     "signPosts": [{ "postId": "...", "text": "...", "...": "..." }],
     "calendarEvents": [{ "eventId": "...", "text": "...", "...": "..." }],
     "savedLevelLayouts": [{ "savedLayoutId": "...", "name": "...", "instanceCount": 1, "instances": [{ "...": "..." }] }],
-    "landletVersions": [{ "versionId": "...", "name": "...", "instanceCount": 1, "instances": [{ "...": "..." }] }]
+    "landletVersions": [{ "versionId": "...", "name": "...", "instanceCount": 1, "instances": [{ "...": "..." }] }],
+    "archivedLandletVersions": [{ "versionId": "...", "sourceLandletId": "...", "name": "...", "instanceCount": 1, "instances": [{ "...": "..." }] }]
   }
 }
 ```
@@ -601,6 +602,17 @@ old, spoofable label match. One remaining approximation:
   `landlet_versions` nor `version_instances` records who actually created
   a version — only which landlet it belongs to — and landlet ownership
   itself can change hands (auction, admin reassignment).
+
+`archivedLandletVersions` (#2185) covers `archived_landlet_versions`/
+`archived_version_instances` (`migrations/0140`) — the version history
+preserved when an inactivity-triggered auction reclaims a landlet (see
+`POST /api/auctions/:id/resolve`'s own notes below). Unlike
+`landletVersions` above, this is an exact match, not an approximation:
+`archived_landlet_versions` carries a real `builder_id` column (the
+permanent owner, re-parented off the landlet at archive time), so no
+current-ownership join is needed. `sourceLandletId` is informational
+only — the landlet it was archived from, nullable if that landlet was
+since deleted.
 
 ### `POST /api/auth/verify-email`
 
