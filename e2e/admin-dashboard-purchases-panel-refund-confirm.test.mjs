@@ -117,6 +117,38 @@ page.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()
 await page.context().addCookies([{ name: 'hh_session', value: token, url: BASE_URL }]);
 
 await page.goto(`${BASE_URL}/admin/dashboard`, { waitUntil: 'networkidle' });
+
+// The second `wrangler d1 execute` above (clearing paid_out_at back to NULL)
+// runs as a separate process against the same local D1 SQLite file while
+// wrangler dev is already up and serving requests -- unlike everything else
+// in this shard, this test (and its sibling
+// admin-dashboard-purchases-panel-race.test.mjs, which does the same thing
+// for its own, single, paid_out_at-setting write) is the only file making an
+// external write to the live D1 file mid-run rather than through the app's
+// own HTTP surface. That's exactly the kind of cross-process write that can
+// take a beat longer to become visible to the already-running server under
+// real CI load than it does locally -- rather than guessing at a fixed delay
+// (already tried once and still saw this test fail in CI), poll the actual
+// endpoint handlePurchaseRefund itself re-reads from (GET
+// /api/purchases?danglingSeller=1) until it reflects the cleared value, so
+// the refund click below never races the write.
+async function waitForPaidOutAtCleared(timeoutMs = 10000, intervalMs = 300) {
+  const start = Date.now();
+  for (;;) {
+    const res = await page.evaluate(async (id) => {
+      const r = await fetch('/api/purchases?danglingSeller=1&limit=100');
+      const body = await r.json();
+      const found = (body.purchases || []).find((p) => p.purchaseId === id);
+      return found ? found.paidOutAt : 'not-found';
+    }, purchaseId);
+    if (res === null) return;
+    if (Date.now() - start >= timeoutMs) {
+      throw new Error(`purchase ${purchaseId}'s paidOutAt never read back as cleared via GET /api/purchases?danglingSeller=1 (last seen: ${JSON.stringify(res)}) -- the external wrangler d1 execute reset may not have become visible to the running server in time`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+  }
+}
+await waitForPaidOutAtCleared();
 await page.click('button[data-panel="purchases"]');
 
 await page.waitForFunction(
