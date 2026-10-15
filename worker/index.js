@@ -12555,11 +12555,33 @@ async function handleLandletDraft(request, db, landletId) {
     // #1726: a deterministic versionId (from the client's own idempotency
     // key, when present and valid) lets a retry's INSERT below no-op via
     // ON CONFLICT instead of minting a second, fully duplicate version.
-    const versionId = landletVersionIdempotencyKey(landletId, landlet.owner_builder_id, input.idempotencyKey) || crypto.randomUUID();
+    const idempotencyKey = landletVersionIdempotencyKey(landletId, landlet.owner_builder_id, input.idempotencyKey);
+    let versionId = idempotencyKey || crypto.randomUUID();
     // #480: same gap as handleLandletVersions' POST above.
     const versionName = optionalLabelValue(input.versionName, 'versionName');
     const versionMetadata = input.versionMetadata || {};
     JSON.stringify(versionMetadata);
+    if (idempotencyKey) {
+      // #2184: same "a client-supplied idempotency key reused for
+      // genuinely different content must not fabricate a stale success"
+      // fix handleLandletVersions' own POST above already applies (#1874,
+      // itself following #1750/#1751/#1758/#1873) -- this endpoint's
+      // auto-version side effect never got it, so a retry with the same
+      // idempotencyKey but genuinely different versionName/versionMetadata
+      // used to silently no-op on the version INSERT below, leaving the
+      // returned (and permanently stored) version mismatched against the
+      // live draft it's supposed to represent. Minting a fresh versionId
+      // on a real mismatch is the same escape hatch the sibling uses;
+      // unlike that POST, this PUT can't just return the existing version
+      // early, since replacing the draft's placed_instances always has to
+      // run regardless of the version side effect's own dedup outcome.
+      const existing = await getVersion(db, landletId, idempotencyKey);
+      if (existing) {
+        const expectedName = versionName ?? `Version ${existing.versionNumber}`;
+        const matches = existing.name === expectedName && JSON.stringify(existing.metadata) === JSON.stringify(versionMetadata);
+        if (!matches) versionId = crypto.randomUUID();
+      }
+    }
 
     // Upsert-by-instance_id, not delete-all/re-insert: sign_posts and
     // calendar_events both cascade-delete on their own instance_id (see
