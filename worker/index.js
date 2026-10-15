@@ -2558,8 +2558,6 @@ async function handleProductReviews(request, db, route) {
       text = (input.text === null || input.text === '') ? null : stringValue(input.text, 'text');
     }
     if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-    // #1975: snapshot the pre-edit row for disputes before overwriting it.
-    await recordContentEditHistory(db, 'product_reviews', reviewId, 'edit', existing, sessionBuilder.user_id);
     // Same "point-in-time read, real awaited gaps after it" race this file's
     // other author-direct mutations guard against (sign_posts' own PATCH).
     const updated = await db.prepare('UPDATE product_reviews SET rating = ?, text = ? WHERE review_id = ? AND user_id = ?')
@@ -2567,6 +2565,12 @@ async function handleProductReviews(request, db, route) {
     if (updated.meta.changes === 0) {
       throw new HttpError('Review changed concurrently — refetch and retry', 409);
     }
+    // #1975/#2122: snapshot the pre-edit row for disputes -- logged only
+    // after the update is confirmed to have actually happened (a concurrent
+    // delete could otherwise win the race first and leave a false edit
+    // snapshot for an edit that never took effect), same "logged only after
+    // confirmed" idiom the delete_review_override admin branch below uses.
+    await recordContentEditHistory(db, 'product_reviews', reviewId, 'edit', existing, sessionBuilder.user_id);
     const row = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ?').bind(reviewId).first();
     return json({ review: reviewFromRow(row) });
   }
@@ -2594,12 +2598,14 @@ async function handleProductReviews(request, db, route) {
     // always has.
     if (!admin && requester && existing.user_id !== null && existing.user_id === requester.user_id) {
       await checkRateLimit(db, `product-review-delete:${requester.user_id}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
-      await recordContentEditHistory(db, 'product_reviews', reviewId, 'delete', existing, requester.user_id);
       const deletedByAuthor = await db.prepare('DELETE FROM product_reviews WHERE review_id = ? AND user_id = ?')
         .bind(reviewId, requester.user_id).run();
       if (deletedByAuthor.meta.changes === 0) {
         throw new HttpError('Review changed concurrently — refetch and retry', 409);
       }
+      // #1975/#2122: logged only after the delete is confirmed to have
+      // actually happened, same reasoning as the PATCH branch above.
+      await recordContentEditHistory(db, 'product_reviews', reviewId, 'delete', existing, requester.user_id);
       return json({ deleted: true });
     }
     if (admin) {
@@ -14901,12 +14907,15 @@ async function handleCalendarEvents(request, db, route) {
     // match already draws, so it shouldn't stay permanently inert just
     // because some earlier scheduledAt on this same row already fired.
     const triggeredAt = scheduledAt === existing.scheduled_at ? existing.triggered_at : null;
-    await recordContentEditHistory(db, 'calendar_events', eventId, 'edit', existing, sessionBuilder.user_id);
     const updated = await db.prepare('UPDATE calendar_events SET text = ?, scheduled_at = ?, triggered_at = ? WHERE event_id = ? AND user_id = ?')
       .bind(text, scheduledAt, triggeredAt, eventId, sessionBuilder.user_id).run();
     if (updated.meta.changes === 0) {
       throw new HttpError('Event changed concurrently — refetch and retry', 409);
     }
+    // #2122: logged only after the update is confirmed to have actually
+    // happened, same "logged only after confirmed" idiom the
+    // delete_calendar_event_override admin branch below uses.
+    await recordContentEditHistory(db, 'calendar_events', eventId, 'edit', existing, sessionBuilder.user_id);
     const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
     return json({ event: calendarEventFromRow(row) });
   }
@@ -14940,12 +14949,14 @@ async function handleCalendarEvents(request, db, route) {
     // exactly as it always has.
     if (existing.user_id !== null && existing.user_id === sessionBuilder.user_id) {
       await checkRateLimit(db, `calendar-event-delete:${sessionBuilder.user_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
-      await recordContentEditHistory(db, 'calendar_events', eventId, 'delete', existing, sessionBuilder.user_id);
       const deletedByAuthor = await db.prepare('DELETE FROM calendar_events WHERE event_id = ? AND user_id = ?')
         .bind(eventId, sessionBuilder.user_id).run();
       if (deletedByAuthor.meta.changes === 0) {
         throw new HttpError('Event changed concurrently — refetch and retry', 409);
       }
+      // #2122: logged only after the delete is confirmed to have actually
+      // happened, same reasoning as the PATCH branch above.
+      await recordContentEditHistory(db, 'calendar_events', eventId, 'delete', existing, sessionBuilder.user_id);
       return json({ deleted: true });
     }
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
@@ -16405,8 +16416,6 @@ async function handleSellerFeedbackEdit(request, env, purchaseId) {
     text = (input.text === null || input.text === '') ? null : stringValue(input.text, 'text');
   }
   if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-  // #1975: snapshot the pre-edit row for disputes before overwriting it.
-  await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'edit', existing, sessionBuilder.user_id);
   // Same "point-in-time read, real awaited gaps after it" race this file's
   // other author-direct mutations guard against — re-verified atomically via
   // the same join authorization used above, not just the eager read.
@@ -16419,6 +16428,10 @@ async function handleSellerFeedbackEdit(request, env, purchaseId) {
   if (updated.meta.changes === 0) {
     throw new HttpError('Feedback changed concurrently — refetch and retry', 409);
   }
+  // #1975/#2122: snapshot the pre-edit row for disputes -- logged only
+  // after the update is confirmed to have actually happened, same "logged
+  // only after confirmed" idiom the admin-DELETE branch below uses.
+  await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'edit', existing, sessionBuilder.user_id);
   const row = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
   return json({ feedback: sellerFeedbackFromRow(row) });
 }
@@ -16452,7 +16465,6 @@ async function handleSellerFeedbackDelete(request, env, purchaseId) {
   const admin = requester && requester.is_admin ? requester : null;
   if (!admin && requester && existing.buyer_user_id !== null && existing.buyer_user_id === requester.user_id) {
     await checkRateLimit(db, `seller-feedback-delete:${requester.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
-    await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'delete', existing, requester.user_id);
     const deletedByAuthor = await db.prepare(`
       DELETE FROM seller_feedback WHERE purchase_id = ? AND EXISTS (
         SELECT 1 FROM purchases p JOIN builders bld ON bld.builder_id = p.buyer_builder_id
@@ -16462,6 +16474,9 @@ async function handleSellerFeedbackDelete(request, env, purchaseId) {
     if (deletedByAuthor.meta.changes === 0) {
       throw new HttpError('Feedback changed concurrently — refetch and retry', 409);
     }
+    // #1975/#2122: logged only after the delete is confirmed to have
+    // actually happened, same reasoning as the PATCH branch above.
+    await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'delete', existing, requester.user_id);
     return json({ deleted: true });
   }
   const resolvedAdmin = admin || await requireAdmin(request, db);
