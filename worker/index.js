@@ -7584,6 +7584,19 @@ async function requireAdmin(request, db) {
   return user;
 }
 
+// #2212: no server-side HTML-escaping helper existed anywhere in this file
+// before this -- the several escapeHtml() implementations elsewhere in this
+// repo (public/admin-dashboard.html, admin-control-room.html, admin-action-
+// log.html) are each a local, browser-only function, unreachable from here.
+// Needed because an email's own `html` body can carry free-text, seller-
+// supplied content (e.g. a catalog template's name) that was never
+// validated for HTML-safety on the way in.
+export function escapeHtml(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
 // Resend's REST API (https://resend.com/docs/api-reference/emails/send-email)
 // — chosen for a simple, well-documented API and a free tier generous
 // enough for this stage. Returns quietly (no email actually sent) whenever
@@ -16113,10 +16126,14 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
       `"${template.name}" just sold out — ${count} placed ${plural} been removed from your land.`);
     const preference = preferenceByBuilder.get(builderId);
     if (preference?.notifySoldOutEmail && preference.builderEmail) {
+      // #2212: template.name is free-text/seller-supplied -- escape it
+      // before it lands in the html body (the plain-text body and the
+      // subject line, neither of which render as markup, are unaffected).
+      const safeName = escapeHtml(template.name);
       await sendEmail(env, {
         to: preference.builderEmail,
         subject: `"${template.name}" just sold out`,
-        html: `<p>"${template.name}" just sold out — ${count} placed ${plural} been removed from your land.</p>`,
+        html: `<p>"${safeName}" just sold out — ${count} placed ${plural} been removed from your land.</p>`,
         text: `"${template.name}" just sold out — ${count} placed ${plural} been removed from your land.`,
       });
     }
