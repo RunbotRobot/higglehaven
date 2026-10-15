@@ -295,6 +295,21 @@ describe('Control Room tasks (#N31)', () => {
     expect(typeof task.noteNumber).toBe('number');
   });
 
+  // #2205: the gate above (auto-numbering) already worked case-insensitively,
+  // but kind itself was never normalized to the canonical lowercase value --
+  // admin-control-room.html's needsAnswerBadge() does a strict === against
+  // the stored kind, so a casing variant like 'Question' silently never
+  // showed the "Needs your answer" badge even though it's a real question.
+  it('normalizes a casing variant of kind feedback to the canonical lowercase value', async () => {
+    const task = await createTask({ kind: 'Feedback', title: 'Casing-variant kind, feedback' });
+    expect(task.kind).toBe('feedback');
+  });
+
+  it('normalizes a casing variant of kind question to the canonical lowercase value', async () => {
+    const task = await createTask({ kind: 'Question', title: 'Casing-variant kind, question' });
+    expect(task.kind).toBe('question');
+  });
+
   it('does not auto-assign a noteNumber when one is explicitly given', async () => {
     const task = await createTask({ title: 'Explicit note number', noteNumber: 9001 });
     expect(task.noteNumber).toBe(9001);
@@ -304,6 +319,9 @@ describe('Control Room tasks (#N31)', () => {
     const task = await createTask({ kind: 'issue', number: 8001, title: 'A real GitHub issue' });
     expect(task.number).toBe(8001);
     expect(task.noteNumber).toBeNull();
+    // #2205: a non-sentinel kind (anything other than feedback/question)
+    // must pass through untouched, not get coerced by the canonicalization.
+    expect(task.kind).toBe('issue');
   });
 
   it('rejects creating a second task with a duplicate explicit id', async () => {
