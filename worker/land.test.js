@@ -2939,6 +2939,68 @@ describe('Community calendar', () => {
       expect(snapshot).toMatchObject({ event_id: eventId, text: 'About to be deleted.' });
     });
 
+    // #2122: a lost concurrency race (another request deletes the event in
+    // the real gap between the eager read and this handler's own
+    // UPDATE/DELETE, same injection technique as the ownership-race POST
+    // test above) must not leave a false snapshot behind for an edit/
+    // delete that never actually took effect -- the request itself still
+    // 409s either way.
+    it('does not snapshot to user_content_edit_history when an author edit loses a concurrency race', async () => {
+      const { owner, instanceId } = await setupCalendar('history-edit-lost-race');
+      const eventId = await postEvent(instanceId, owner, { text: 'Before the race.' });
+
+      const originalPrepare = env.DB.prepare.bind(env.DB);
+      let armed = true;
+      env.DB.prepare = (sql) => {
+        if (armed && sql.includes('UPDATE calendar_events SET text')) {
+          armed = false;
+          originalPrepare('DELETE FROM calendar_events WHERE event_id = ?').bind(eventId).run();
+        }
+        return originalPrepare(sql);
+      };
+      let edited;
+      try {
+        edited = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({
+          method: 'PATCH', body: JSON.stringify({ text: 'After the race.' }),
+        }));
+      } finally {
+        env.DB.prepare = originalPrepare;
+      }
+      expect(edited.response.status).toBe(409);
+
+      const history = await env.DB.prepare(
+        'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+      ).bind('calendar_events', eventId).all();
+      expect(history.results).toHaveLength(0);
+    });
+
+    it('does not snapshot to user_content_edit_history when an author delete loses a concurrency race', async () => {
+      const { owner, instanceId } = await setupCalendar('history-delete-lost-race');
+      const eventId = await postEvent(instanceId, owner, { text: 'Already gone.' });
+
+      const originalPrepare = env.DB.prepare.bind(env.DB);
+      let armed = true;
+      env.DB.prepare = (sql) => {
+        if (armed && sql.includes('DELETE FROM calendar_events WHERE event_id = ? AND user_id = ?')) {
+          armed = false;
+          originalPrepare('DELETE FROM calendar_events WHERE event_id = ?').bind(eventId).run();
+        }
+        return originalPrepare(sql);
+      };
+      let deleted;
+      try {
+        deleted = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({ method: 'DELETE' }));
+      } finally {
+        env.DB.prepare = originalPrepare;
+      }
+      expect(deleted.response.status).toBe(409);
+
+      const history = await env.DB.prepare(
+        'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+      ).bind('calendar_events', eventId).all();
+      expect(history.results).toHaveLength(0);
+    });
+
     // Moderation (admin override, or the current landlet owner removing an
     // event left behind by a former owner) is not the user editing/deleting
     // their own content -- the owner's own framing was specifically about
