@@ -1457,6 +1457,254 @@ describe('Finite stock tracking (#1948)', () => {
     const listed = await api('/instances?landletId=stock-oversell-floor-landlet');
     expect(listed.body.instances).toEqual([]);
   });
+
+  // #2068 (leaf sub-issue of #1973/#1947): sweepSoldOutTemplateInstances
+  // used to just discard each removed instance's own position -- now it
+  // snapshots one sold_out_markers row per instance first, so Build mode
+  // can later show a builder a grayed-out "something used to be here"
+  // placeholder.
+  describe('Sold-out markers (#2068)', () => {
+    it('creates one marker per removed instance, capturing its own landlet/position/template snapshot', async () => {
+      const ownerA = await signupBuilder('marker-soldout-owner-a');
+      const ownerB = await signupBuilder('marker-soldout-owner-b');
+      await createLandletAndClaim('marker-soldout-landlet-a', ownerA);
+      await createLandletAndClaim('marker-soldout-landlet-b', ownerB);
+      await createTemplateWithStock('marker-soldout-template', { stockQuantity: 1, name: 'Marker Fixture Product' });
+      await api('/instances', ownerA.session({
+        method: 'POST',
+        body: JSON.stringify({ instanceId: 'marker-soldout-instance-a', landletId: 'marker-soldout-landlet-a', templateId: 'marker-soldout-template', x: 3, y: 4 }),
+      }));
+      await api('/instances', ownerB.session({
+        method: 'POST',
+        body: JSON.stringify({ instanceId: 'marker-soldout-instance-b', landletId: 'marker-soldout-landlet-b', templateId: 'marker-soldout-template', x: -2, y: 5 }),
+      }));
+
+      const purchased = await api('/instances/marker-soldout-instance-a/purchase', ownerA.session({ method: 'POST' }));
+      expect(purchased.response.status).toBe(201);
+
+      const markersA = await api('/landlets/marker-soldout-landlet-a/sold-out-markers', ownerA.session());
+      expect(markersA.response.status).toBe(200);
+      expect(markersA.body.markers).toHaveLength(1);
+      expect(markersA.body.markers[0]).toMatchObject({
+        landletId: 'marker-soldout-landlet-a', x: 3, y: 4, templateId: 'marker-soldout-template', templateName: 'Marker Fixture Product',
+      });
+      expect(markersA.body.markers[0].soldOutAt).toEqual(expect.any(String));
+
+      const markersB = await api('/landlets/marker-soldout-landlet-b/sold-out-markers', ownerB.session());
+      expect(markersB.response.status).toBe(200);
+      expect(markersB.body.markers).toHaveLength(1);
+      expect(markersB.body.markers[0]).toMatchObject({ landletId: 'marker-soldout-landlet-b', x: -2, y: 5 });
+    });
+
+    it('scopes the list to the given landlet only, requires its own owner\'s session, and 404s a nonexistent landlet', async () => {
+      const owner = await signupBuilder('marker-list-owner');
+      const stranger = await signupBuilder('marker-list-stranger');
+      await createLandletAndClaim('marker-list-landlet', owner);
+      await createTemplateWithStock('marker-list-template', { stockQuantity: 1 });
+      await placeInstance('marker-list-instance', 'marker-list-landlet', 'marker-list-template', owner);
+      await api('/instances/marker-list-instance/purchase', owner.session({ method: 'POST' }));
+
+      const unauthenticated = await api('/landlets/marker-list-landlet/sold-out-markers');
+      expect(unauthenticated.response.status).toBe(401);
+
+      const wrongOwner = await api('/landlets/marker-list-landlet/sold-out-markers', stranger.session());
+      expect(wrongOwner.response.status).toBe(403);
+
+      const missingLandlet = await api('/landlets/marker-list-does-not-exist/sold-out-markers', owner.session());
+      expect(missingLandlet.response.status).toBe(404);
+
+      const ok = await api('/landlets/marker-list-landlet/sold-out-markers', owner.session());
+      expect(ok.response.status).toBe(200);
+      expect(ok.body.markers).toHaveLength(1);
+    });
+
+    it('dismisses a marker so it no longer appears in the list, 404ing a repeat dismiss or a marker from a different landlet', async () => {
+      const owner = await signupBuilder('marker-dismiss-owner');
+      const stranger = await signupBuilder('marker-dismiss-stranger');
+      await createLandletAndClaim('marker-dismiss-landlet', owner);
+      // POST .../claim enforces a hard one-claimed-landlet-per-builder
+      // invariant regardless of land cap (worker/index.js's own comment on
+      // that route: "nothing else in this file... is built to handle a
+      // builder legitimately owning two claimed landlets at once") -- there
+      // is no real path to a second claimed landlet for the same builder,
+      // so this sets it up directly, same as this suite's own direct
+      // higgles_earnings_events/purchases row manipulation elsewhere for
+      // state no API call can produce.
+      await api('/landlets', adminSession({
+        method: 'POST',
+        body: JSON.stringify({ landletId: 'marker-dismiss-other-landlet', name: 'Test marker-dismiss-other-landlet', areaM2: 1000, status: 'greenbelt' }),
+      }));
+      await env.DB.prepare(
+        'UPDATE landlets SET status = \'claimed\', owner_builder_id = ? WHERE landlet_id = ?',
+      ).bind(owner.builderId, 'marker-dismiss-other-landlet').run();
+      await createTemplateWithStock('marker-dismiss-template', { stockQuantity: 1 });
+      await placeInstance('marker-dismiss-instance', 'marker-dismiss-landlet', 'marker-dismiss-template', owner);
+      await api('/instances/marker-dismiss-instance/purchase', owner.session({ method: 'POST' }));
+
+      const listed = await api('/landlets/marker-dismiss-landlet/sold-out-markers', owner.session());
+      const markerId = listed.body.markers[0].markerId;
+
+      const unauthenticated = await api(`/landlets/marker-dismiss-landlet/sold-out-markers/${markerId}/dismiss`, { method: 'POST' });
+      expect(unauthenticated.response.status).toBe(401);
+
+      const wrongOwner = await api(`/landlets/marker-dismiss-landlet/sold-out-markers/${markerId}/dismiss`, stranger.session({ method: 'POST' }));
+      expect(wrongOwner.response.status).toBe(403);
+
+      // The marker genuinely belongs to a different landlet owned by the
+      // same builder -- the dismiss route's own landletId segment must
+      // still gate it, not just marker_id alone.
+      const wrongLandlet = await api(`/landlets/marker-dismiss-other-landlet/sold-out-markers/${markerId}/dismiss`, owner.session({ method: 'POST' }));
+      expect(wrongLandlet.response.status).toBe(404);
+
+      const dismissed = await api(`/landlets/marker-dismiss-landlet/sold-out-markers/${markerId}/dismiss`, owner.session({ method: 'POST' }));
+      expect(dismissed.response.status).toBe(200);
+      expect(dismissed.body).toEqual({ dismissed: true });
+
+      const afterList = await api('/landlets/marker-dismiss-landlet/sold-out-markers', owner.session());
+      expect(afterList.body.markers).toEqual([]);
+
+      const repeatDismiss = await api(`/landlets/marker-dismiss-landlet/sold-out-markers/${markerId}/dismiss`, owner.session({ method: 'POST' }));
+      expect(repeatDismiss.response.status).toBe(404);
+    });
+
+    it('rate-limits repeated dismiss attempts from the same builder', async () => {
+      const owner = await signupBuilder('marker-dismiss-rate-limit-owner');
+      await createLandletAndClaim('marker-dismiss-rate-limit-landlet', owner);
+      await createTemplateWithStock('marker-dismiss-rate-limit-template', { stockQuantity: 20 });
+      for (let i = 0; i < 20; i++) {
+        await placeInstance(`marker-dismiss-rate-limit-instance-${i}`, 'marker-dismiss-rate-limit-landlet', 'marker-dismiss-rate-limit-template', owner);
+      }
+      await api('/instances/marker-dismiss-rate-limit-instance-0/purchase', owner.session({
+        method: 'POST', body: JSON.stringify({ quantity: 20 }),
+      }));
+
+      const listed = await api('/landlets/marker-dismiss-rate-limit-landlet/sold-out-markers', owner.session());
+      expect(listed.body.markers).toHaveLength(20);
+
+      for (const marker of listed.body.markers) {
+        const attempt = await api(`/landlets/marker-dismiss-rate-limit-landlet/sold-out-markers/${marker.markerId}/dismiss`, owner.session({ method: 'POST' }));
+        expect(attempt.response.status).not.toBe(429);
+      }
+      // One more marker, created fresh, to dismiss past the limit.
+      await placeInstance('marker-dismiss-rate-limit-instance-extra', 'marker-dismiss-rate-limit-landlet', 'marker-dismiss-rate-limit-template', owner);
+      await api('/catalog/marker-dismiss-rate-limit-template', { method: 'PATCH', body: JSON.stringify({ stockQuantity: 1 }) });
+      await api('/instances/marker-dismiss-rate-limit-instance-extra/purchase', owner.session({ method: 'POST' }));
+      const listedAgain = await api('/landlets/marker-dismiss-rate-limit-landlet/sold-out-markers', owner.session());
+      const extraMarkerId = listedAgain.body.markers[0].markerId;
+      const limited = await api(`/landlets/marker-dismiss-rate-limit-landlet/sold-out-markers/${extraMarkerId}/dismiss`, owner.session({ method: 'POST' }));
+      expect(limited.response.status).toBe(429);
+    });
+
+    it('does not remove or resurrect markers when the sold-out template is later restocked', async () => {
+      const owner = await signupBuilder('marker-restock-owner');
+      await createLandletAndClaim('marker-restock-landlet', owner);
+      await createTemplateWithStock('marker-restock-template', { stockQuantity: 1 });
+      await placeInstance('marker-restock-instance', 'marker-restock-landlet', 'marker-restock-template', owner);
+      await api('/instances/marker-restock-instance/purchase', owner.session({ method: 'POST' }));
+
+      const beforeRestock = await api('/landlets/marker-restock-landlet/sold-out-markers', owner.session());
+      expect(beforeRestock.body.markers).toHaveLength(1);
+
+      await api('/catalog/marker-restock-template', { method: 'PATCH', body: JSON.stringify({ stockQuantity: 5 }) });
+
+      const afterRestock = await api('/landlets/marker-restock-landlet/sold-out-markers', owner.session());
+      expect(afterRestock.body.markers).toHaveLength(1);
+    });
+  });
+});
+
+// #2067 (leaf sub-issue of #1973, part of #1947): RESEND_API_KEY is never
+// configured in this test environment (same established convention as the
+// Prompt-mode concept-image describe block's own comment above), so
+// sendEmail always silently no-ops here regardless of this preference --
+// these tests cover everything reachable without a real send: auth
+// gating, validation, persistence, and that the sweep's existing
+// dashboard notification is unaffected either way.
+describe('Sold-out notifications: dashboard + opt-in email (#2067)', () => {
+  async function createTemplateWithStock(templateId, overrides = {}) {
+    return api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId,
+        name: `Notify fixture ${templateId}`,
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 500,
+        ...overrides,
+      }),
+    });
+  }
+
+  async function createLandletAndClaim(landletId, builder) {
+    await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ landletId, name: `Test ${landletId}`, areaM2: 1000, status: 'greenbelt' }),
+    }));
+    await api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
+  }
+
+  it('GET and PUT both require a session', async () => {
+    const get = await api('/builders/me/notification-preferences');
+    expect(get.response.status).toBe(401);
+    const put = await api('/builders/me/notification-preferences', {
+      method: 'PUT',
+      body: JSON.stringify({ notifySoldOutEmail: true }),
+    });
+    expect(put.response.status).toBe(401);
+  });
+
+  it('defaults to false and is reflected on the builder object', async () => {
+    const builder = await signupBuilder('notify-default-builder');
+    expect(builder.builder.notifySoldOutEmail).toBe(false);
+    const prefs = await api('/builders/me/notification-preferences', builder.session());
+    expect(prefs.response.status).toBe(200);
+    expect(prefs.body.notifySoldOutEmail).toBe(false);
+  });
+
+  it('rejects a non-boolean notifySoldOutEmail', async () => {
+    const builder = await signupBuilder('notify-invalid-builder');
+    const invalid = await api('/builders/me/notification-preferences', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({ notifySoldOutEmail: 'yes' }),
+    }));
+    expect(invalid.response.status).toBe(400);
+  });
+
+  it('PUT persists the preference, reflected by both GET endpoints', async () => {
+    const builder = await signupBuilder('notify-persist-builder');
+    const updated = await api('/builders/me/notification-preferences', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({ notifySoldOutEmail: true }),
+    }));
+    expect(updated.response.status).toBe(200);
+    expect(updated.body.notifySoldOutEmail).toBe(true);
+
+    const prefs = await api('/builders/me/notification-preferences', builder.session());
+    expect(prefs.body.notifySoldOutEmail).toBe(true);
+    const me = await api('/builders/me', builder.session());
+    expect(me.body.builder.notifySoldOutEmail).toBe(true);
+  });
+
+  it('sold-out sweep still fires the dashboard notification for an opted-in builder (email itself is unverifiable without RESEND_API_KEY)', async () => {
+    const owner = await signupBuilder('notify-soldout-owner');
+    await api('/builders/me/notification-preferences', owner.session({
+      method: 'PUT',
+      body: JSON.stringify({ notifySoldOutEmail: true }),
+    }));
+    await createLandletAndClaim('notify-soldout-landlet', owner);
+    await createTemplateWithStock('notify-soldout-template', { stockQuantity: 1 });
+    const placed = await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId: 'notify-soldout-instance', landletId: 'notify-soldout-landlet', templateId: 'notify-soldout-template', x: 0, y: 0 }),
+    }));
+    expect(placed.response.status).toBe(201);
+
+    const purchased = await api('/instances/notify-soldout-instance/purchase', owner.session({ method: 'POST' }));
+    expect(purchased.response.status).toBe(201);
+
+    const notices = await api('/notifications', owner.session());
+    expect(notices.body.notifications.some((n) => n.message.includes('just sold out'))).toBe(true);
+  });
 });
 
 describe('Low-stock / days-remaining list (#1949)', () => {

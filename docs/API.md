@@ -1037,6 +1037,7 @@ Idempotent — the same profile every call, never a new one.
   "higglesBalanceCents": 0,
   "landCapM2": 1000,
   "ownedAreaM2": 1000,
+  "notifySoldOutEmail": false,
   "createdAt": "2026-08-16T00:00:00.000Z",
   "updatedAt": "2026-08-16T00:00:00.000Z"
 }
@@ -1049,6 +1050,13 @@ can't yet) change it.
 ground-plus-levels total counted against it — `ownedAreaM2` is `null`
 instead of a number on a response that didn't just recompute both (a
 plain create/rename), never a stale or silently-wrong figure.
+`notifySoldOutEmail` (#2067, leaf sub-issue of #1973/#1947) is this
+account's opt-in for an email alert on top of the dashboard notification
+already fired unconditionally when one of their placed products sells
+out — see `PUT /api/builders/me/notification-preferences` below and
+"Sold-out templates (#1948)"'s own section. `higglesBalanceCents` and
+this field are both own-account-only — never returned by `GET
+/api/builders` or its `ids=`/`label=` variants.
 
 ### `GET /api/builders`
 
@@ -6406,6 +6414,42 @@ codebase yet, and #1947's own tracking issue flags the shape of that
 math (trailing window, no-sales-history behavior) as still undecided by
 the owner.
 
+#### Sold-out notifications: dashboard + opt-in email (#2067)
+
+Leaf sub-issue of #1973 (itself part of #1947). Every affected builder
+gets a dashboard notification (see "Notifications" above) unconditionally
+when `sweepSoldOutTemplateInstances` removes their placed instances of a
+newly-sold-out template — this was already true since #1948 and is
+unchanged. On top of that, a builder can opt in to *also* get an email
+for the same event:
+
+### `GET /api/builders/me/notification-preferences`
+### `PUT /api/builders/me/notification-preferences`
+
+```json
+{ "notifySoldOutEmail": false }
+```
+
+`GET` returns the calling account's current preference (also mirrored on
+the builder object itself — see "Builder object" above). `PUT` takes the
+same shape; `notifySoldOutEmail` must be a boolean (`400` otherwise).
+Both require a session (`401` otherwise) and act on the caller's own
+builder profile only — same `requireCurrentUser`-only bar as
+`GET`/`PUT /api/builders/me/avatar`.
+
+When a builder has `notifySoldOutEmail: true` and their account has a
+linked user with an email on file, `sweepSoldOutTemplateInstances` also
+calls the existing `sendEmail` (Resend-backed — see `POST
+/api/auth/request-password-reset` above for the same `RESEND_API_KEY`-
+gated, best-effort, never-throws behavior) with the same message as the
+dashboard notification. Off by default, so no existing builder's
+behavior changes until they opt in.
+Deliberately independent toggles rather than a single exclusive channel
+picker: the dashboard notification is the always-on baseline (matching
+the owner's "dashboard-only" being one of the three named options), and
+email (and, once built, text — see #2069) are additive opt-ins on top of
+it, not a replacement for it.
+
 `GET /api/purchases?builderId=...` requires a session logged in as that
 builder (`403` otherwise); lists everything hosted on that builder's own
 land, most recent first — their "did I earn commission" view.
@@ -7036,6 +7080,95 @@ endpoint returns the builder's full low-stock list in one call, and the
 Settings > Build panel applies both thresholds client-side the same way
 the catalog picker's own search box filters already-rendered tiles
 (`filterCatalogTiles`) rather than re-fetching per keystroke.
+
+### Sold-out markers (#2068, leaf sub-issue of #1973/#1947)
+
+```
+GET /api/landlets/:landletId/sold-out-markers
+POST /api/landlets/:landletId/sold-out-markers/:markerId/dismiss
+```
+
+Owner requirement (captured on #1973 directly): "On the build screen
+looking at their land, they should be able to toggle on/off grayed-out
+items that have disappeared which they haven't dismissed yet."
+`sweepSoldOutTemplateInstances` (the same sweep #1948's "on hitting exactly
+zero, removes every placed instance" behavior already describes) used to
+just hard-delete every swept `placed_instances` row with nothing retained
+— this adds a `sold_out_markers` row (`migrations/0138`) per removed
+instance, snapshotting its own `landlet_id`/position/template **before**
+that delete runs, so Build mode can still show a builder where something
+used to be.
+
+**Landlet-scoped, not a cross-landlet "mine" list like `GET
+/builders/me/low-stock` above** — a marker's `x`/`y` are landlet-local
+coordinates (the same space `placed_instances.x_m`/`y_m` already use), so
+a marker only means anything rendered inside the one landlet's own scene
+it belongs to. Both routes require `requireSessionBuilder` +
+`requireOwnedLandlet` — only the landlet's own current owner can list or
+dismiss its markers (`401` with no session, `403` for anyone else, `404`
+for a landlet that doesn't exist).
+
+`template_id`/`template_name` are a **snapshot**, not a live join back to
+`catalog_templates` — same "a permanent record must survive the thing it
+references disappearing too" reasoning `purchases.seller_id`/
+`seller_feedback.seller_id` already use (the template that just sold out
+can itself be deleted later, and the marker should keep reading sensibly
+either way).
+
+```json
+GET /api/landlets/:landletId/sold-out-markers
+{
+  "markers": [
+    {
+      "markerId": "sold-out-marker-...",
+      "landletId": "...",
+      "x": 2, "y": 3, "z": 0.5,
+      "templateId": "antique-lamp",
+      "templateName": "Antique Brass Lamp",
+      "soldOutAt": "2026-10-14T..."
+    }
+  ]
+}
+```
+
+Only **un-dismissed** markers are listed (`dismissed_at IS NULL`), oldest
+first. Restocking the template afterward (`PATCH .../catalog/:templateId`)
+does **not** remove or resurrect any marker — a marker is a historical
+fact about an instance that was actually removed, independent of whatever
+the template's stock does later; a fresh placement against the restocked
+template is an unrelated new instance.
+
+`POST .../dismiss` clears a marker permanently (sets `dismissed_at`, never
+re-shown), rate-limited (20 per 15-minute window, `429` past that, bucket
+`sold-out-marker-dismiss:<builderId>`) and atomically re-verified against
+both `marker_id` **and** `landlet_id` together — dismissing a real marker
+id through the wrong landlet's own route 404s exactly like a marker that
+was already dismissed, rather than silently succeeding against the wrong
+owner's scope. `404 "Marker not found or already dismissed"` covers both
+cases identically (same "no distinguishing a race from a genuine miss"
+shape other dismiss/claim-style actions in this file already use).
+
+### Frontend wiring
+
+Settings > Build gets a new "Sold-out markers" panel (`renderSoldOutMarkersSection`,
+right below the existing Low Stock panel, #1949/#1950's own sibling) — a
+checkbox toggle (`#sold-out-marker-toggle`, defaults off) plus a list of
+this landlet's own un-dismissed markers, each with a `Dismiss` button.
+Unlike the Low Stock panel (which highlights an **already-placed, still-
+live** mesh — `addLowStockHighlight`), a sold-out marker has no live
+instance left to decorate, so checking the toggle instead spawns a
+standalone grayed-out ghost box (`THREE.MeshBasicMaterial`, 35% opacity,
+non-interactive) at each marker's own recorded position — cleared and
+re-applied via `applySoldOutMarkerVisibility` whenever the toggle flips or
+a fresh list loads. Same Build-mode-only lifecycle as the Low Stock
+panel's own `activeLowStockTemplateIds`: both the toggle state and the
+ghost boxes reset the moment Build mode is left (`enterShopMode`/
+`enterSellMode`), so re-entering Build later starts clean rather than
+silently reapplying a stale toggle with nothing behind it yet.
+`window.__testSoldOutMarkerMeshIds()` exposes which markers are currently
+rendered, the same `window.__test*` convention
+`window.__testLowStockHighlightedInstanceIds` already established for
+otherwise-unreachable 3D scene state.
 
 docs/SPEC.md §7: 1099-NEC generation once a seller/builder crosses the
 reporting threshold, W-8BEN/W-9 collection, and folding higgles-commission
@@ -8573,6 +8706,11 @@ shoppers racing the same orb can never both be credited for it. Returns
 `{ "collected": true }` on success. `404` if the orb doesn't exist, or
 already has a `collected_at` (someone else got there first — the frontend
 reads this as "it's already gone," not an error to surface loudly).
+Rate-limited (`CREDIT_ORB_COLLECT_RATE_LIMIT_MAX`, 20 per builder) like
+every other authenticated repeatable-write endpoint in this file (#2092) —
+a bogus or already-collected orb id still 404s cheaply but counts against
+the limit, since the cost is the D1 batch round-trip, not a successful
+collect specifically.
 
 ## Product pricing
 

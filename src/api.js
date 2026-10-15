@@ -238,6 +238,21 @@ export async function deleteBuilder(builderId) {
   return result.releasedLandletIds;
 }
 
+// #2067 (leaf sub-issue of #1973, part of #1947): this account's opt-in
+// for an email alert on top of the dashboard notification already fired
+// unconditionally when a placed product sells out.
+export async function fetchNotificationPreferences() {
+  return requestJson('/builders/me/notification-preferences');
+}
+
+export async function updateNotificationPreferences({ notifySoldOutEmail }) {
+  return requestJson('/builders/me/notification-preferences', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ notifySoldOutEmail }),
+  });
+}
+
 // #681 (sub-issue of #679/#680): which owned avatar (if any) the current
 // account has equipped — { equippedTemplateId, modelUrl }, both null for
 // the default hardcoded avatar. See docs/API.md's own "Avatar ownership +
@@ -1549,6 +1564,21 @@ export async function fetchPurchases({ builderId, templateId } = {}) {
 export async function fetchLowStock() {
   const { templates } = await requestJson('/builders/me/low-stock');
   return templates;
+}
+
+// #2068 (leaf sub-issue of #1973/#1947): grayed-out sold-out markers for
+// one specific landlet -- landlet-scoped, not a cross-landlet "mine" list
+// like fetchLowStock above, since a marker's x/y are landlet-local
+// coordinates that only mean anything inside the one landlet's own scene.
+export async function fetchSoldOutMarkers(landletId) {
+  const { markers } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/sold-out-markers`);
+  return markers;
+}
+
+export async function dismissSoldOutMarker(landletId, markerId) {
+  return requestJson(`/landlets/${encodeURIComponent(landletId)}/sold-out-markers/${encodeURIComponent(markerId)}/dismiss`, {
+    method: 'POST',
+  });
 }
 
 // Refund + higgles-commission clawback (migrations/0052_purchase_refunds.sql).

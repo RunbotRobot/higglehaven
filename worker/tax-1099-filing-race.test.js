@@ -132,3 +132,41 @@ describe('1099 e-filing transmission race (#1410)', () => {
     expect(retried.body.status).toBe('filed');
   });
 });
+
+// #2082: approve/file/void fired real outbound vendor calls (/file, via
+// transmitTax1099Form on the shared TAX_1099_EFILING credentials) with no
+// rate limit at all, unlike every other Stripe/vendor-calling handler in
+// this file (handlePurchaseRefund etc.). Exercised via /void here --
+// simplest of the three to set up 101 distinct attempts for (no vendor mock
+// or approved-form precondition needed), but all three share one bucket
+// key (`tax-1099-admin:${user.user_id}`) per the fix itself, so this
+// covers the guard for all of them. 100, not this file's usual 20 --
+// see TAX_1099_ADMIN_RATE_LIMIT_MAX's own comment in worker/index.js for
+// why (reviewing 1099s is a real batch admin workflow, and 20 tripped on
+// this exact file's own pre-existing e-filing test suite).
+describe('admin-forms rate limit (#2082)', () => {
+  it('rate-limits repeated admin-forms mutations (approve/file/void) from the same admin', async () => {
+    const admin = await signupAdmin('tax-1099-admin-rate-limit-admin');
+    const builder = await signupBuilder('tax-1099-admin-rate-limit-builder');
+    // builderFromRow/publicBuilderFromRow (worker/index.js) both exclude
+    // userId from the /builders/me response on purpose (#807) -- read it
+    // straight from the users table by email instead, same idiom this
+    // file's own concurrent-/file tests use for their own author lookups.
+    const userRow = await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first();
+    const userId = userRow.user_id;
+    const formIds = Array.from({ length: 101 }, (_, i) => `tax-1099-admin-rate-limit-form-${i}`);
+    // UNIQUE(user_id, tax_year, form_type) -- one real builder's user_id,
+    // a distinct tax_year per row so the constraint doesn't collide.
+    await env.DB.batch(formIds.map((formId, i) => env.DB.prepare(`
+      INSERT INTO tax_1099_forms (form_id, user_id, tax_year, form_type, status, gross_income_cents, generated_at, updated_at)
+      VALUES (?, ?, ?, '1099-nec', 'draft', 50000, datetime('now'), datetime('now'))
+    `).bind(formId, userId, 2000 + i)));
+
+    for (let i = 0; i < 100; i++) {
+      const attempt = await api(`/tax/admin-forms/${formIds[i]}/void`, admin.session({ method: 'POST' }));
+      expect(attempt.response.status).toBe(200);
+    }
+    const limited = await api(`/tax/admin-forms/${formIds[100]}/void`, admin.session({ method: 'POST' }));
+    expect(limited.response.status).toBe(429);
+  }, 60000);
+});

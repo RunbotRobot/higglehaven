@@ -53,6 +53,8 @@ import {
   fetchMyBuilder,
   renameBuilder,
   deleteBuilder,
+  fetchNotificationPreferences,
+  updateNotificationPreferences,
   fetchMySeller,
   renameSeller,
   deleteSeller,
@@ -125,6 +127,8 @@ import {
   finalizePurchase,
   fetchPurchases,
   fetchLowStock,
+  fetchSoldOutMarkers,
+  dismissSoldOutMarker,
   refundPurchase,
   fetchSellerPayouts,
   requestSellerPayout,
@@ -6015,6 +6019,61 @@ function renderGeneralSettingsSection() {
   settingsSectionEl.appendChild(versionField);
 
   renderTaxPaperworkField();
+  renderNotificationPreferencesField();
+}
+
+// #2067 (leaf sub-issue of #1973, part of #1947): account-level opt-in
+// for an email alert on top of the dashboard notification already fired
+// unconditionally when one of this builder's placed products sells out.
+// Same async-field-in-General shape as renderTaxPaperworkField just
+// above (currentAuthUser-gated, settingsRenderToken-guarded against a
+// tab switch/modal reopen racing the fetch).
+async function renderNotificationPreferencesField() {
+  if (!currentAuthUser) return;
+  const myToken = settingsRenderToken;
+  let prefs;
+  try {
+    prefs = await fetchNotificationPreferences();
+  } catch {
+    return;
+  }
+  if (myToken !== settingsRenderToken) return;
+
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const fieldLabel = document.createElement('span');
+  fieldLabel.textContent = 'Notifications';
+  field.appendChild(fieldLabel);
+
+  const row = document.createElement('div');
+  row.className = 'settings-radio-row';
+  const labelEl = document.createElement('label');
+  const checkbox = document.createElement('input');
+  checkbox.type = 'checkbox';
+  checkbox.checked = !!prefs.notifySoldOutEmail;
+  checkbox.addEventListener('change', async () => {
+    const desired = checkbox.checked;
+    checkbox.disabled = true;
+    try {
+      await updateNotificationPreferences({ notifySoldOutEmail: desired });
+    } catch (err) {
+      checkbox.checked = !desired;
+      alert(err.message || 'Could not update this preference.');
+    } finally {
+      checkbox.disabled = false;
+    }
+  });
+  labelEl.appendChild(checkbox);
+  labelEl.appendChild(document.createTextNode('Email me when one of my placed products sells out'));
+  row.appendChild(labelEl);
+  field.appendChild(row);
+
+  const note = document.createElement('div');
+  note.className = 'settings-empty-note';
+  note.textContent = 'You always get a dashboard notification when this happens — this adds an email on top.';
+  field.appendChild(note);
+
+  settingsSectionEl.appendChild(field);
 }
 
 // #614: POST /api/tax/id-form (W-9/W-8BEN collection) has existed on the
@@ -6563,7 +6622,16 @@ function renderBuilderIdentityField() {
         : '';
       return `Reset your builder profile? Any lándlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.${balanceNote} Your login stays active either way; use Delete Account under Account above to delete that too.`;
     },
-    onDeleted: () => { builderId = null; },
+    // #2068: Reset Profile releases any owned lándlet back to greenbelt
+    // server-side (see deleteWarning's own wording above) -- currentLandletId
+    // must be cleared alongside builderId, not left stale, since it's no
+    // longer a landlet this session owns. Previously harmless (nothing in
+    // Settings > Build auto-fetched anything landlet-ownership-gated), but
+    // renderSoldOutMarkersSection's own auto-fetch surfaced it: the very
+    // next full renderSettingsSection() redraw this same Reset Profile
+    // triggers would otherwise still query the old, just-released landlet
+    // and get a real 403 back.
+    onDeleted: () => { builderId = null; currentLandletId = null; },
     // #741: keep Shop mode's own "Built by X" attribution (populated once
     // in enterShopMode) from showing a stale pre-rename label for the rest
     // of this session.
@@ -6599,6 +6667,7 @@ function renderBuildSettingsSection() {
   renderRedeemHigglesField();
   renderAuctionSection();
   renderLowStockSection();
+  renderSoldOutMarkersSection();
   if (currentMode !== 'build' || !currentLandletId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
@@ -7783,6 +7852,93 @@ async function renderLowStockSection() {
   applyFilter();
 }
 
+// #2068 (leaf sub-issue of #1973/#1947, owner requirement): "On the build
+// screen looking at their land, they should be able to toggle on/off
+// grayed-out items that have disappeared which they haven't dismissed
+// yet." Unlike renderLowStockSection above (which decorates an already-
+// placed, still-live mesh), a sold-out marker has no live instance left to
+// attach to -- each one gets its own standalone ghost box at its own
+// recorded position instead. Landlet-scoped (fetchSoldOutMarkers takes
+// currentLandletId), not a cross-landlet "mine" list, since a marker's x/y
+// only mean anything inside the one landlet's own scene.
+async function renderSoldOutMarkersSection() {
+  const myToken = settingsRenderToken;
+  if (currentMode !== 'build' || !currentLandletId) return;
+
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const label = document.createElement('span');
+  label.textContent = 'Sold-out markers';
+  field.appendChild(label);
+
+  const toggleRow = document.createElement('label');
+  toggleRow.className = 'sold-out-marker-toggle-row';
+  const toggle = document.createElement('input');
+  toggle.type = 'checkbox';
+  toggle.id = 'sold-out-marker-toggle';
+  toggle.checked = showSoldOutMarkers;
+  toggleRow.appendChild(toggle);
+  toggleRow.appendChild(document.createTextNode(' Show grayed-out markers where sold-out items used to be'));
+  field.appendChild(toggleRow);
+
+  const list = document.createElement('div');
+  list.className = 'sold-out-marker-list';
+  field.appendChild(list);
+  const empty = document.createElement('div');
+  empty.className = 'settings-empty-note';
+  field.appendChild(empty);
+  settingsSectionEl.appendChild(field);
+
+  toggle.addEventListener('change', () => {
+    showSoldOutMarkers = toggle.checked;
+    applySoldOutMarkerVisibility();
+  });
+
+  let markers;
+  try {
+    markers = await fetchSoldOutMarkers(currentLandletId);
+  } catch (err) {
+    if (myToken !== settingsRenderToken) return;
+    empty.hidden = false;
+    empty.textContent = err.message || 'Could not load sold-out markers.';
+    return;
+  }
+  if (myToken !== settingsRenderToken) return;
+
+  soldOutMarkers = markers;
+  applySoldOutMarkerVisibility();
+  empty.hidden = markers.length > 0;
+  empty.textContent = 'Nothing sold out on this land yet.';
+
+  for (const marker of markers) {
+    const row = document.createElement('div');
+    row.className = 'sold-out-marker-row';
+    row.dataset.markerId = marker.markerId;
+    const info = document.createElement('div');
+    info.className = 'sold-out-marker-row-info';
+    info.textContent = `"${marker.templateName}" sold out`;
+    row.appendChild(info);
+    const dismissBtn = document.createElement('button');
+    dismissBtn.className = 'sold-out-marker-row-dismiss';
+    dismissBtn.textContent = 'Dismiss';
+    dismissBtn.addEventListener('click', async () => {
+      dismissBtn.disabled = true;
+      try {
+        await dismissSoldOutMarker(currentLandletId, marker.markerId);
+        soldOutMarkers = soldOutMarkers.filter((m) => m.markerId !== marker.markerId);
+        removeSoldOutMarkerMesh(marker.markerId);
+        row.remove();
+        empty.hidden = list.children.length > 0;
+      } catch (err) {
+        alert(err.message || 'Could not dismiss this marker.');
+        dismissBtn.disabled = false;
+      }
+    });
+    row.appendChild(dismissBtn);
+    list.appendChild(row);
+  }
+}
+
 for (const btn of settingsTabsEl.querySelectorAll('.settings-tab-btn')) {
   btn.addEventListener('click', () => {
     activeSettingsTab = btn.dataset.section;
@@ -8827,6 +8983,60 @@ function updateLowStockHighlights(templateIds) {
 // __testProductScreenPositions) -- exposes which currently-placed
 // instances have the low-stock highlight applied right now.
 window.__testLowStockHighlightedInstanceIds = () => [...lowStockHighlights.keys()].map((mesh) => mesh.userData.instanceId);
+
+// #2068: grayed-out placeholder markers for sold-out items that used to be
+// placed on this landlet. Unlike lowStockHighlights above (which decorates
+// an EXISTING, still-live mesh), there's no live instance left to attach
+// to here -- each marker gets its own standalone ghost box at its own
+// recorded position instead, keyed by markerId rather than by mesh.
+const SOLD_OUT_MARKER_COLOR = 0x888888;
+const soldOutMarkerMeshes = new Map(); // markerId -> THREE.Mesh
+// Build-mode-only state, same "nothing to show once the scene is torn
+// down" reasoning activeLowStockTemplateIds' own comment gives -- reset
+// alongside it at both of Build mode's own exits (enterShopMode/
+// enterSellMode below) so re-entering Build later starts clean rather than
+// silently reapplying a stale toggle with no meshes behind it yet.
+let showSoldOutMarkers = false;
+let soldOutMarkers = []; // the list renderSoldOutMarkersSection last fetched
+
+function addSoldOutMarkerMesh(marker) {
+  if (soldOutMarkerMeshes.has(marker.markerId)) return;
+  const geometry = new THREE.BoxGeometry(1, 1, 1);
+  const material = new THREE.MeshBasicMaterial({
+    color: SOLD_OUT_MARKER_COLOR, transparent: true, opacity: 0.35, depthWrite: false,
+  });
+  const mesh = new THREE.Mesh(geometry, material);
+  mesh.position.set(marker.x, marker.y, marker.z || 0.5);
+  mesh.userData.markerId = marker.markerId;
+  scene.add(mesh);
+  soldOutMarkerMeshes.set(marker.markerId, mesh);
+}
+
+function removeSoldOutMarkerMesh(markerId) {
+  const mesh = soldOutMarkerMeshes.get(markerId);
+  if (!mesh) return;
+  scene.remove(mesh);
+  mesh.geometry.dispose();
+  mesh.material.dispose();
+  soldOutMarkerMeshes.delete(markerId);
+}
+
+function clearSoldOutMarkerMeshes() {
+  for (const markerId of [...soldOutMarkerMeshes.keys()]) removeSoldOutMarkerMesh(markerId);
+}
+
+// Reconciles the 3D scene with showSoldOutMarkers/soldOutMarkers -- called
+// whenever either changes (the toggle flips, or a fresh list just loaded).
+function applySoldOutMarkerVisibility() {
+  clearSoldOutMarkerMeshes();
+  if (!showSoldOutMarkers) return;
+  for (const marker of soldOutMarkers) addSoldOutMarkerMesh(marker);
+}
+
+// #2068: same window.__test* convention as __testLowStockHighlightedInstanceIds
+// above -- exposes which sold-out markers are currently rendered as ghost
+// boxes, for e2e coverage that can't otherwise inspect the 3D scene.
+window.__testSoldOutMarkerMeshIds = () => [...soldOutMarkerMeshes.keys()];
 
 // Reconciles every visible bit of "what's selected" UI (highlight already
 // applied by the caller — this only handles text/panels/gizmo) with the
@@ -14635,6 +14845,13 @@ function updateShopFlight(dt) {
       const openSpot = nearestOpenLandingSpot(shopAvatarPosition.x, shopAvatarPosition.y);
       shopAvatarPosition.x = openSpot.x;
       shopAvatarPosition.y = openSpot.y;
+      // #2080: nearestOpenLandingSpot only checks clearance from other
+      // avatars, not the world boundary -- without this, a nudge taken near
+      // the wall could push shopAvatarPosition outside shopAvatarMaxRadiusM,
+      // left unclamped (clampShopRadius is otherwise only ever called from
+      // updateShopMovement, gated on actual movement input) until the
+      // player's next WASD/joystick move.
+      clampShopRadius(shopAvatarPosition, shopMaxRadiusAtWorldZM(shopAvatarPosition.z, shopAvatarMaxRadiusM()));
       shopFlightState = 'grounded';
     }
   } else if (shopFlightState === 'flying') {
@@ -14840,6 +15057,10 @@ function nearestOpenLandingSpot(x, y) {
 // actually populated) without needing to choreograph exact flight-landing
 // timing against that second session.
 window.__testNearestOpenLandingSpot = (x, y) => nearestOpenLandingSpot(x, y);
+// #2080: e2e-only hook, same convention as __testNearestOpenLandingSpot
+// above -- lets a test compute the real world-boundary radius a landing
+// should be clamped to, instead of hardcoding/guessing it.
+window.__testShopAvatarMaxRadiusM = () => shopAvatarMaxRadiusM();
 
 // Tries the full requested move first; if that's blocked, slides along
 // whichever single axis is still open (the same axis-separated collision
@@ -17005,6 +17226,13 @@ async function enterShopMode() {
   activeLowStockTemplateIds = null;
   lowStockFilterMaxQty = null;
   lowStockFilterMaxDays = null;
+  // #2068: same reasoning as the low-stock reset just above -- the ghost
+  // boxes belong to the Build scene being torn down right here, and the
+  // toggle/list themselves reset too so re-entering Build later starts
+  // clean rather than silently reapplying a stale toggle.
+  clearSoldOutMarkerMeshes();
+  showSoldOutMarkers = false;
+  soldOutMarkers = [];
 
   try {
     activeCatalog = await fetchCatalog();
@@ -17841,6 +18069,11 @@ async function enterSellMode() {
   activeLowStockTemplateIds = null;
   lowStockFilterMaxQty = null;
   lowStockFilterMaxDays = null;
+  // #2068: same reasoning, same place, as enterShopMode's own identical
+  // sold-out-marker teardown above.
+  clearSoldOutMarkerMeshes();
+  showSoldOutMarkers = false;
+  soldOutMarkers = [];
 
   const id = await ensureSellerIdentity();
   if (!id) {
