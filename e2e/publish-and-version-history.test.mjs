@@ -71,7 +71,13 @@ await page.click('#settings-btn');
 await page.click('.settings-tab-btn[data-section="build"]');
 await page.waitForTimeout(500);
 await page.click('.version-action-btn:has-text("Publish")');
-await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 2, null, { timeout: 20000 });
+// #2200: this call site's timeout was tightened to 20000ms by #2144's
+// arg/options fix, but CI-load testing showed the second publish's DOM
+// update needs more margin than that (the first publish's equivalent
+// assertion above, line 44, isn't under the same load since nothing has
+// accumulated yet) -- restoring the old de-facto ~30000ms default this
+// call was actually getting before #2144 made the timeout honored.
+await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 2, null, { timeout: 30000 });
 const rowCountAfterSecondPublish = await page.locator('.version-row').count();
 console.log('version rows after second publish (should be 2):', rowCountAfterSecondPublish);
 
