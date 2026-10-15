@@ -57,11 +57,11 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '5');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.check('#upload-avatar-category-checkbox');
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
 await page.waitForTimeout(500);
 await page.click('#seller-close-btn');
 await page.waitForTimeout(300);
@@ -110,7 +110,8 @@ await page.click('.settings-tab-btn[data-section="shop"]');
 const myAvatarsField = page.locator('.settings-field', { hasText: 'My Avatars' });
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My Avatars') && f.querySelectorAll('.version-row').length >= 2),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 
 const rowTextsBeforeEquip = await myAvatarsField.locator('.version-row').allTextContents();
@@ -181,7 +182,8 @@ const defaultRow = myAvatarsField.locator('.version-row', { hasText: 'Default av
 await defaultRow.locator('button', { hasText: 'Equip' }).click();
 await page.waitForFunction(
   () => [...document.querySelectorAll('.version-row')].some((r) => r.textContent.includes('Default avatar') && r.textContent.includes('equipped')),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const rowTextsAfterRevert = await myAvatarsField.locator('.version-row').allTextContents();
 console.log('My Avatars rows after reverting to default:', rowTextsAfterRevert);

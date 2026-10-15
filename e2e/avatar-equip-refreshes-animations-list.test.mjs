@@ -43,11 +43,11 @@ async function uploadProduct(name, categoryCheckboxId) {
   await page.fill('#upload-price', '5');
   await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
   await page.click('#upload-submit-btn');
-  await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+  await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
   await page.waitForTimeout(300);
   await page.check(categoryCheckboxId);
   await page.click('#upload-submit-btn');
-  await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+  await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
   await page.waitForTimeout(500);
 }
 
@@ -97,11 +97,13 @@ const myAvatarsField = page.locator('.settings-field', { hasText: 'My Avatars' }
 const myAnimationsField = page.locator('.settings-field', { hasText: 'My Animations' });
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My Avatars') && f.querySelectorAll('.version-row').length >= 2),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My Animations') && f.querySelectorAll('.version-row').length >= 2),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 
 // Armed right before the click -- this only resolves for a *future*
