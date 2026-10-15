@@ -75,18 +75,29 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
-await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, { timeout: 10000 });
+// #2146 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real
+// applied timeout was always Playwright's actual default (30000ms), never
+// the smaller number written here. The explicit `null` arg reaches the
+// options slot, and the timeout itself is widened to 60000ms for real
+// headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
+// wait.
+await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, null, { timeout: 60000 });
 const savedLayoutRow = page.locator('.settings-field', { hasText: 'Saved Layouts' }).locator('.version-row');
 await savedLayoutRow.locator('button', { hasText: 'Preview' }).click();
-await page.waitForFunction(() => document.getElementById('layout-preview-toolbar')?.classList.contains('visible'), { timeout: 15000 });
+await page.waitForFunction(() => document.getElementById('layout-preview-toolbar')?.classList.contains('visible'), null, { timeout: 60000 });
 await page.waitForTimeout(1000); // let the model actually load/render, and the picker to populate, before interacting
 
 const pickerHiddenInitially = await page.locator('#layout-preview-paste-target').isHidden();
 console.log('picker starts hidden while it populates (may be true or already-populated-and-visible by now):', pickerHiddenInitially);
 
+// #2146 (sub-issue of #2138): same waitForFunction arg/options bug as above
+// -- null arg, 60000ms real timeout.
 await page.waitForFunction(
   () => document.getElementById('layout-preview-paste-target')?.options.length === 2,
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 const pickerVisible = await page.locator('#layout-preview-paste-target').isVisible();
 console.log('picker visible once the builder owns 2 claimed landlets (should be true):', pickerVisible);
@@ -106,7 +117,9 @@ const selectionAfterDrag = await page.locator('#layout-preview-selection-count')
 console.log('selection count after marquee-drag (should be "1 selected"):', selectionAfterDrag);
 
 await page.click('#layout-preview-paste-btn');
-await page.waitForFunction(() => !document.getElementById('layout-preview-toolbar')?.classList.contains('visible'), { timeout: 15000 });
+// #2146 (sub-issue of #2138): same waitForFunction arg/options bug as above
+// -- null arg, 60000ms real timeout.
+await page.waitForFunction(() => !document.getElementById('layout-preview-toolbar')?.classList.contains('visible'), null, { timeout: 60000 });
 await page.waitForSelector('#add-item-btn', { timeout: 10000 });
 
 const onFirstLandlet = (await fetchJson(`/api/instances?landletId=${firstLandletId}&limit=100`)).body.instances;

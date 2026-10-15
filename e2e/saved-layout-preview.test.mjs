@@ -94,11 +94,20 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
+// #2146 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real
+// applied timeout was always Playwright's actual default (30000ms), never
+// the smaller number written here. The explicit `null` arg reaches the
+// options slot, and the timeout itself is widened to 60000ms for real
+// headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
+// wait.
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.settings-field span')).some((el) => el.textContent === 'Saved Layouts'),
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
-await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, { timeout: 10000 });
+await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, null, { timeout: 60000 });
 
 const savedLayoutRow = page.locator('.settings-field', { hasText: 'Saved Layouts' }).locator('.version-row');
 const rowText = await savedLayoutRow.locator('.version-row-info').textContent();
@@ -107,7 +116,9 @@ const rowTextCorrect = /Level 1/.test(rowText) && /1 item/.test(rowText);
 
 // Preview: reloads into the dedicated faux-layout view.
 await savedLayoutRow.locator('button', { hasText: 'Preview' }).click();
-await page.waitForFunction(() => document.getElementById('layout-preview-toolbar')?.classList.contains('visible'), { timeout: 15000 });
+// #2146 (sub-issue of #2138): same waitForFunction arg/options bug as above
+// -- null arg, 60000ms real timeout.
+await page.waitForFunction(() => document.getElementById('layout-preview-toolbar')?.classList.contains('visible'), null, { timeout: 60000 });
 await page.waitForTimeout(1000); // let the model actually load/render before interacting with it
 const previewNameShown = await page.locator('#layout-preview-name').textContent();
 console.log('preview toolbar name (should mention Level 1):', previewNameShown);
@@ -148,7 +159,9 @@ console.log('selection count after a plain click (should be empty):', JSON.strin
 
 // Back to Build.
 await page.click('#layout-preview-back-btn');
-await page.waitForFunction(() => !document.getElementById('layout-preview-toolbar')?.classList.contains('visible'), { timeout: 15000 });
+// #2146 (sub-issue of #2138): same waitForFunction arg/options bug as above
+// -- null arg, 60000ms real timeout.
+await page.waitForFunction(() => !document.getElementById('layout-preview-toolbar')?.classList.contains('visible'), null, { timeout: 60000 });
 await page.waitForSelector('#add-item-btn', { timeout: 10000 });
 console.log('back in Build mode after Back to Build (add-item-btn visible): ok');
 
@@ -157,13 +170,16 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
-await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, { timeout: 10000 });
+// #2146 (sub-issue of #2138): same waitForFunction arg/options bug as above
+// -- null arg, 60000ms real timeout.
+await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, null, { timeout: 60000 });
 await page.locator('.settings-field', { hasText: 'Saved Layouts' }).locator('.version-row')
   .locator('button', { hasText: 'Delete' }).click();
 await page.waitForFunction(
   () => document.querySelector('.settings-field')?.textContent.includes('Nothing saved yet') ||
     !Array.from(document.querySelectorAll('.settings-field')).some((f) => f.textContent.includes('Saved Layouts') && f.querySelector('.version-row')),
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 const savedLayoutsAfterDelete = (await fetchJson('/api/builders/me/saved-layouts')).body.savedLayouts;
 console.log('saved layouts after delete (should be 0):', savedLayoutsAfterDelete.length);
