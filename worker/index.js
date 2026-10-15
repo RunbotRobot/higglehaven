@@ -3973,6 +3973,12 @@ async function myAvatarJson(db, builder) {
   };
 }
 
+// #2103: PUT below had no rate limit at all, unlike handleMyAvatar's own
+// PUT (AVATAR_EQUIP_RATE_LIMIT_MAX #1057) -- this function's own comment
+// already says it mirrors that handler's shape exactly, but never got the
+// rate limit that shape calls for.
+const NOTIFICATION_PREFERENCES_RATE_LIMIT_MAX = 20;
+
 // #2067 (leaf sub-issue of #1973, part of #1947): GET/PUT this account's
 // sold-out-email opt-in, same requireCurrentUser-only bar and GET/PUT
 // shape as handleMyAvatar above -- a communication preference isn't a
@@ -3986,6 +3992,7 @@ async function handleMyNotificationPreferences(request, db) {
   }
 
   if (request.method === 'PUT') {
+    await checkRateLimit(db, `notification-preferences:${builder.builder_id}`, NOTIFICATION_PREFERENCES_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (typeof input.notifySoldOutEmail !== 'boolean') {
       throw new HttpError('notifySoldOutEmail must be a boolean', 400);

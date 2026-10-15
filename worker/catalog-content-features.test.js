@@ -1685,6 +1685,25 @@ describe('Sold-out notifications: dashboard + opt-in email (#2067)', () => {
     expect(me.body.builder.notifySoldOutEmail).toBe(true);
   });
 
+  // #2103: PUT had no rate limit at all, unlike handleMyAvatar's own PUT
+  // (#1057) -- same test shape as avatar-ownership.test.js's own
+  // "rate-limits repeated equip attempts from the same account".
+  it('rate-limits repeated PUT attempts from the same account', async () => {
+    const builder = await signupBuilder('notify-rate-limit-builder');
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/builders/me/notification-preferences', builder.session({
+        method: 'PUT',
+        body: JSON.stringify({ notifySoldOutEmail: i % 2 === 0 }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/builders/me/notification-preferences', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({ notifySoldOutEmail: true }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
   it('sold-out sweep still fires the dashboard notification for an opted-in builder (email itself is unverifiable without RESEND_API_KEY)', async () => {
     const owner = await signupBuilder('notify-soldout-owner');
     await api('/builders/me/notification-preferences', owner.session({
