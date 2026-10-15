@@ -1938,10 +1938,12 @@ describe('Authentication', () => {
         method: 'POST', body: JSON.stringify({ email: extraTarget.email }),
       }));
       expect(limited.response.status).toBe(429);
-    }, 45000); // #978-class: 20 iterations x 3 real HTTP requests each (signup,
-    // suspend, unsuspend) exceeds the 20000ms default under this file's own
-    // size/load, same reasoning worker/commerce.test.js's own precedent for a
-    // comparable request volume.
+    }, 90000); // #978-class/#2157: 20 iterations x 3 real HTTP requests each
+    // (signup, suspend, unsuspend) exceeds the 20000ms default under this
+    // file's own size/load, same reasoning as worker/commerce.test.js's own
+    // precedent for a comparable request volume -- #2157 found the original
+    // 45000ms bump itself no longer enough as this file continues to grow,
+    // hence this further bump.
 
     it('reports suspension status for any admin, but nobody else, null when not suspended', async () => {
       const admin = await makeAdmin('suspension-status-admin');
