@@ -4862,6 +4862,13 @@ function renderSellerList() {
           // guaranteed one via openSellerModal().
           sellerId,
         });
+        // #327: fire-and-forget, deliberately not awaited -- same reasoning
+        // as the upload-flow and resize-save call sites. Without this, the
+        // copy's imageUrl/imageEmbedding stay permanently null (nothing else
+        // ever backfills them), making it unfindable via Prompt-mode
+        // similarity search and forcing every picker render to re-render its
+        // full GLTF model from scratch instead of reusing a stored image.
+        persistCatalogThumbnail(copy);
         activeCatalog.push(copy);
         buildCatalogPickerButtons();
         refreshSellerShowcase();
@@ -9450,6 +9457,7 @@ async function renderSignPosts() {
     deleteRowBtn.textContent = '×';
     deleteRowBtn.setAttribute('aria-label', 'Delete post');
     deleteRowBtn.addEventListener('click', async () => {
+      if (!confirm('Delete this post? This can\'t be undone.')) return;
       deleteRowBtn.disabled = true;
       try {
         await deleteSignPost(instanceId, post.postId);
@@ -9617,6 +9625,7 @@ async function renderCalendarEvents() {
     deleteRowBtn.textContent = '×';
     deleteRowBtn.setAttribute('aria-label', 'Delete event');
     deleteRowBtn.addEventListener('click', async () => {
+      if (!confirm('Delete this event? This can\'t be undone.')) return;
       deleteRowBtn.disabled = true;
       try {
         await deleteCalendarEvent(instanceId, event.eventId);
@@ -9784,6 +9793,7 @@ async function renderBackupChain() {
     removeBtn.textContent = '×';
     removeBtn.setAttribute('aria-label', 'Remove backup');
     removeBtn.addEventListener('click', async () => {
+      if (!confirm('Remove this backup? This can\'t be undone.')) return;
       removeBtn.disabled = true;
       try {
         await deleteInstanceBackup(instanceId, backup.backupId);

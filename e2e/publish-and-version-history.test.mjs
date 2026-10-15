@@ -89,10 +89,13 @@ const activeVersionIdAfterSecondPublish = landletsAfterSecondPublish.find((l) =>
 const olderRow = page.locator('.version-row').last(); // oldest listed last (newest-first)
 const olderRowSetLiveEnabled = await olderRow.locator('button', { hasText: 'Set Live' }).isEnabled();
 await olderRow.locator('button', { hasText: 'Set Live' }).click();
+// #2200: same CI-load timing-margin shape as the version-row wait above --
+// bumped alongside it rather than leaving this sibling call on the tighter
+// post-#2144 default.
 await page.waitForFunction(
   () => document.getElementById('build-publish-status')?.textContent.includes('now see'),
   null,
-  { timeout: 20000 },
+  { timeout: 30000 },
 );
 const { landlets: landletsAfterSetLive } = await fetchJson('/api/landlets?limit=100');
 const landletAfterSetLive = landletsAfterSetLive.find((l) => l.landletId === myLandlet.landletId);

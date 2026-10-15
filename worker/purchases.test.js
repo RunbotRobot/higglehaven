@@ -628,7 +628,7 @@ describe('Simulated purchases', () => {
     // not batched with the balance mutation) mirrors handleAuctionBids's
     // already-proven-safe conditional-insert pattern in this same file.
     const secondRefund = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
-    expect(secondRefund.response.status).toBe(400);
+    expect(secondRefund.response.status).toBe(409);
     const afterSecondAttempt = await builderRow(seller.builderId);
     expect(afterSecondAttempt.higgles_balance_cents).toBe(after.higgles_balance_cents);
   });

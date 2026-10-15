@@ -21,8 +21,14 @@ await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
 
 await openAccountMenu(page);
 await page.click('#settings-btn');
-await page.waitForSelector('#settings-modal.visible', { timeout: 10000 });
-await page.waitForTimeout(300);
+// Widened from 10000/300ms -- this file was the companion failure in a
+// CI-only re-run of #2194 (settings-stale-after-delete.test.mjs failing
+// alongside a *different* file than its own first failure) despite a
+// clean 2/2 local pass on the exact same commit, matching this fleet's
+// established #978-class runner-load-margin pattern rather than a real
+// bug.
+await page.waitForSelector('#settings-modal.visible', { timeout: 15000 });
+await page.waitForTimeout(500);
 
 // Delay only GET /api/builders/me — the network call ensureBuilderIdentity()
 // makes for an already-logged-in visitor — long enough to reliably switch
@@ -33,16 +39,18 @@ await page.route('**/api/builders/me', async (route) => {
 });
 
 await page.click('.settings-tab-btn[data-section="build"]');
-await page.waitForTimeout(200);
+await page.waitForTimeout(400);
 await page.click('.settings-tab-btn[data-section="general"]');
-await page.waitForTimeout(200);
+await page.waitForTimeout(400);
 const generalTabHtmlRightAfterSwitch = await page.locator('#settings-section').innerHTML();
 console.log('General tab content right after switching away (should not yet mention Land Cap/Redeem Higgles/Auction):',
   /Land Cap|Redeem Higgles|Active Auctions/.test(generalTabHtmlRightAfterSwitch) ? 'MENTIONS THEM' : 'clean');
 
 // Wait past the delayed GET's own delay so the three superseded calls
 // actually resolve and (pre-fix) would have appended onto this tab.
-await page.waitForTimeout(2500);
+// Widened from 2500ms for more margin past the 2000ms route delay above
+// under CI load (see the modal-wait comment above for why).
+await page.waitForTimeout(4000);
 
 const stillOnGeneralTab = await page.locator('.settings-tab-btn[data-section="general"]').evaluate((el) => el.classList.contains('active'));
 console.log('still showing the General tab (should be true — no tab-switch happened on our own):', stillOnGeneralTab);
