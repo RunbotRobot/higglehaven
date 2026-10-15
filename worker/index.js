@@ -17433,12 +17433,25 @@ async function assertInstanceXYWithinLandlet(db, instances) {
   }
 }
 
+// #2216: this used to bind the full instanceIds array in a single
+// unchunked IN (...) query -- fine for this function's two 100-item-
+// capped batch-endpoint callers (right at D1's own bound-parameter limit,
+// never over it), but PUT /landlets/:id/draft calls this with up to its
+// own 250-item cap, which blew the limit well before reaching that cap.
+// Chunked here, at the source, rather than capped per-caller -- same
+// reasoning selectRowsByIdsChunked's own comment gives for fixing every
+// caller at once instead of bounding each one individually.
 async function getInstancesById(db, instanceIds) {
-  const placeholders = instanceIds.map(() => '?').join(', ');
-  const { results } = await db.prepare(`
-    SELECT * FROM placed_instances WHERE instance_id IN (${placeholders})
-  `).bind(...instanceIds).all();
-  return new Map(results.map((row) => [row.instance_id, instanceFromRow(row)]));
+  const rows = [];
+  for (let i = 0; i < instanceIds.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = instanceIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(`
+      SELECT * FROM placed_instances WHERE instance_id IN (${placeholders})
+    `).bind(...chunk).all();
+    rows.push(...results);
+  }
+  return new Map(rows.map((row) => [row.instance_id, instanceFromRow(row)]));
 }
 
 // Fallback classifier for constraint violations that reach D1 without an

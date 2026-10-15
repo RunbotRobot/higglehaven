@@ -1304,6 +1304,47 @@ describe('Community signs', () => {
     expect(versions.body.versions).toHaveLength(2);
   });
 
+  // #2216: this endpoint's own cap is 250 instances per save, but the
+  // getInstancesById call it makes to look up each instance's prior state
+  // used to bind the full id list in one unchunked IN (...) query. D1 caps
+  // a single statement at 100 bound parameters, so any save past ~100
+  // instances -- an ordinary "save my whole build" request on this
+  // endpoint, not an edge case -- threw a raw D1 "too many SQL variables"
+  // error instead of succeeding. 150 is comfortably past that threshold
+  // but still within the endpoint's own 250 cap.
+  it('accepts a draft save with more instances than D1 allows bound parameters for in one query', async () => {
+    const bulkBuilder = await signupBuilder('draft-bulk-instances-builder');
+    const bulkLandlet = 'draft-bulk-instances-landlet';
+    await createGreenbeltLandlet(bulkLandlet);
+    const claimed = await api(`/landlets/${bulkLandlet}/claim`, bulkBuilder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+
+    const instances = Array.from({ length: 150 }, (_, i) => ({
+      instanceId: `draft-bulk-instance-${i}`,
+      landletId: bulkLandlet,
+      templateId: 'placeholder-tree',
+      x: (i % 13) - 6,
+      y: Math.floor(i / 13) - 6,
+    }));
+    const saved = await api(`/landlets/${bulkLandlet}/draft`, bulkBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({ instances }),
+    }));
+    expect(saved.response.status).toBe(200);
+    expect(saved.body.instances).toHaveLength(150);
+
+    // A second save resending the same 150 instances exercises
+    // getInstancesById's chunked lookup finding every one of them as
+    // "already existing" (not just the empty-Map first-save path above),
+    // same shape as the real "edit an already-large build" case.
+    const resaved = await api(`/landlets/${bulkLandlet}/draft`, bulkBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({ instances }),
+    }));
+    expect(resaved.response.status).toBe(200);
+    expect(resaved.body.instances).toHaveLength(150);
+  });
+
   // #971: validateInstance's own `label` field used plain `input.label ||
   // null` -- no length cap and no type check at all, unlike every other
   // optional label-shaped field in this file (optionalLabelValue).
