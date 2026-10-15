@@ -11589,6 +11589,7 @@ async function renderFriends() {
     removeBtn.className = 'danger';
     removeBtn.textContent = 'Remove';
     removeBtn.addEventListener('click', async () => {
+      if (!confirm(`Remove ${friendship.otherLabel} as a friend?`)) return;
       removeBtn.disabled = true;
       try {
         await removeFriendship(friendship.friendshipId);

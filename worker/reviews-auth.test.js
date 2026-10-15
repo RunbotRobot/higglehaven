@@ -1256,6 +1256,76 @@ describe('Product reviews', () => {
       expect(snapshot).toMatchObject({ review_id: reviewId, rating: 5, text: 'About to be deleted.' });
     });
 
+    // #2122: a lost concurrency race (another request deletes the row in
+    // the real gap between the eager read and this handler's own
+    // UPDATE/DELETE -- same injection technique as the calendar-events
+    // ownership-race test above) must not leave a false snapshot behind for
+    // an edit/delete that never actually took effect -- the request itself
+    // still 409s either way.
+    it('does not snapshot to user_content_edit_history when an author edit loses a concurrency race', async () => {
+      const templateId = await createTemplate('review-history-edit-lost-race');
+      const shopper = await signupBuilder('review-history-edit-lost-race-shopper');
+      await createPurchase(templateId, shopper);
+      const reviewId = await postReview(templateId, shopper, { rating: 4, text: 'Before the race.' });
+
+      const originalPrepare = env.DB.prepare.bind(env.DB);
+      let armed = true;
+      env.DB.prepare = (sql) => {
+        if (armed && sql.includes('UPDATE product_reviews SET rating')) {
+          armed = false;
+          originalPrepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
+        }
+        return originalPrepare(sql);
+      };
+      let edited;
+      try {
+        edited = await api(`/catalog/${templateId}/reviews/${reviewId}`, shopper.session({
+          method: 'PATCH', body: JSON.stringify({ rating: 1, text: 'After the race.' }),
+        }));
+      } finally {
+        env.DB.prepare = originalPrepare;
+      }
+      expect(edited.response.status).toBe(409);
+
+      const history = await env.DB.prepare(
+        'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+      ).bind('product_reviews', reviewId).all();
+      expect(history.results).toHaveLength(0);
+    });
+
+    it('does not snapshot to user_content_edit_history when an author delete loses a concurrency race', async () => {
+      const templateId = await createTemplate('review-history-delete-lost-race');
+      const shopper = await signupBuilder('review-history-delete-lost-race-shopper');
+      await createPurchase(templateId, shopper);
+      const reviewId = await postReview(templateId, shopper, { rating: 5, text: 'Already gone.' });
+
+      const originalPrepare = env.DB.prepare.bind(env.DB);
+      let armed = true;
+      env.DB.prepare = (sql) => {
+        if (armed && sql.includes('DELETE FROM product_reviews WHERE review_id = ? AND user_id = ?')) {
+          armed = false;
+          // The admin/orphaned-template DELETE shares no WHERE-clause text
+          // with this author-only one, so this only ever fires once for the
+          // author branch under test, simulating a second tab winning the
+          // race first.
+          originalPrepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
+        }
+        return originalPrepare(sql);
+      };
+      let deleted;
+      try {
+        deleted = await api(`/catalog/${templateId}/reviews/${reviewId}`, shopper.session({ method: 'DELETE' }));
+      } finally {
+        env.DB.prepare = originalPrepare;
+      }
+      expect(deleted.response.status).toBe(409);
+
+      const history = await env.DB.prepare(
+        'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+      ).bind('product_reviews', reviewId).all();
+      expect(history.results).toHaveLength(0);
+    });
+
     // Moderation deletes (admin override, seller) are not the user editing/
     // deleting their own content -- the owner's own framing was specifically
     // about self-service, so these must not write to the history table.
@@ -1683,6 +1753,37 @@ describe('Authentication', () => {
       method: 'POST', body: JSON.stringify({ email: second.email }),
     }));
     expect(blockedAgain.response.status).toBe(409);
+  });
+
+  // #2123: grant-admin/revoke-admin mint or remove is_admin itself -- real
+  // privilege escalation, previously the one pair of admin mutations in
+  // this file with no throttle at all. Both share one bucket keyed by the
+  // acting admin (not the target), so this test exhausts it via repeated
+  // grant-admin calls (reusable on an already-admin target, per #1797's own
+  // comment above) and then confirms revoke-admin is blocked by the same
+  // bucket without needing its own 20 separate attempts.
+  it('rate-limits repeated grant-admin/revoke-admin calls from the same admin, sharing one bucket', async () => {
+    const admin = await signupBuilder('admin-grant-rate-limit-admin');
+    await api('/auth/admin-bootstrap', admin.session({
+      method: 'POST', body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    }));
+    const target = await signupBuilder('admin-grant-rate-limit-target');
+
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/auth/grant-admin', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email }),
+      }));
+      expect(attempt.response.status).toBe(200);
+    }
+    const limitedGrant = await api('/auth/grant-admin', admin.session({
+      method: 'POST', body: JSON.stringify({ email: target.email }),
+    }));
+    expect(limitedGrant.response.status).toBe(429);
+
+    const limitedRevoke = await api('/auth/revoke-admin', admin.session({
+      method: 'POST', body: JSON.stringify({ email: target.email }),
+    }));
+    expect(limitedRevoke.response.status).toBe(429);
   });
 
   // #2029 (sub-issue of #1201): an admin-initiated, reversible account

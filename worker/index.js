@@ -2558,8 +2558,6 @@ async function handleProductReviews(request, db, route) {
       text = (input.text === null || input.text === '') ? null : stringValue(input.text, 'text');
     }
     if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-    // #1975: snapshot the pre-edit row for disputes before overwriting it.
-    await recordContentEditHistory(db, 'product_reviews', reviewId, 'edit', existing, sessionBuilder.user_id);
     // Same "point-in-time read, real awaited gaps after it" race this file's
     // other author-direct mutations guard against (sign_posts' own PATCH).
     const updated = await db.prepare('UPDATE product_reviews SET rating = ?, text = ? WHERE review_id = ? AND user_id = ?')
@@ -2567,6 +2565,12 @@ async function handleProductReviews(request, db, route) {
     if (updated.meta.changes === 0) {
       throw new HttpError('Review changed concurrently — refetch and retry', 409);
     }
+    // #1975/#2122: snapshot the pre-edit row for disputes -- logged only
+    // after the update is confirmed to have actually happened (a concurrent
+    // delete could otherwise win the race first and leave a false edit
+    // snapshot for an edit that never took effect), same "logged only after
+    // confirmed" idiom the delete_review_override admin branch below uses.
+    await recordContentEditHistory(db, 'product_reviews', reviewId, 'edit', existing, sessionBuilder.user_id);
     const row = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ?').bind(reviewId).first();
     return json({ review: reviewFromRow(row) });
   }
@@ -2594,12 +2598,14 @@ async function handleProductReviews(request, db, route) {
     // always has.
     if (!admin && requester && existing.user_id !== null && existing.user_id === requester.user_id) {
       await checkRateLimit(db, `product-review-delete:${requester.user_id}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
-      await recordContentEditHistory(db, 'product_reviews', reviewId, 'delete', existing, requester.user_id);
       const deletedByAuthor = await db.prepare('DELETE FROM product_reviews WHERE review_id = ? AND user_id = ?')
         .bind(reviewId, requester.user_id).run();
       if (deletedByAuthor.meta.changes === 0) {
         throw new HttpError('Review changed concurrently — refetch and retry', 409);
       }
+      // #1975/#2122: logged only after the delete is confirmed to have
+      // actually happened, same reasoning as the PATCH branch above.
+      await recordContentEditHistory(db, 'product_reviews', reviewId, 'delete', existing, requester.user_id);
       return json({ deleted: true });
     }
     if (admin) {
@@ -3750,6 +3756,7 @@ async function handleBuilders(request, env, db, route, url) {
   // other sensitive account mutation in this file is.
   if (request.method === 'POST' && route.length === 3 && route[2] === 'stripe-account-reset') {
     const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `stripe-account-reset:${admin.user_id}`, STRIPE_ACCOUNT_RESET_RATE_LIMIT_MAX);
     const builder = await requireBuilder(db, route[1]);
     if (!builder.stripe_account_id) {
       throw new HttpError('This builder has no connected Stripe account to reset', 409);
@@ -4503,6 +4510,7 @@ async function handleSellers(request, env, db, route, url) {
   // should be allowed).
   if (request.method === 'POST' && route.length === 3 && route[2] === 'stripe-account-reset') {
     const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `stripe-account-reset:${admin.user_id}`, STRIPE_ACCOUNT_RESET_RATE_LIMIT_MAX);
     const seller = await requireSeller(db, route[1]);
     if (!seller.stripe_account_id) {
       throw new HttpError('This seller has no connected Stripe account to reset', 409);
@@ -10139,6 +10147,14 @@ async function handleTax(request, env, db, route, url) {
   // already-approved/filed/voided row.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-forms') {
     if (!user.is_admin) throw new HttpError('Admin access required', 403);
+    // #2130: generateTax1099Drafts below runs two full-table aggregate
+    // GROUP BY scans plus a real upsert write per qualifying builder/
+    // seller on every call -- the same "real DB cost" shape #2082 already
+    // rate-limited for this handler's three mutation siblings (approve/
+    // file/void), just unconditional here on every GET instead of behind
+    // an admin action. Not the efiling-connection-test branch just above,
+    // whose own comment explicitly says it's safe to call repeatedly.
+    await checkRateLimit(db, `tax-1099-admin:${user.user_id}`, TAX_1099_ADMIN_RATE_LIMIT_MAX);
     const year = queryTaxYear(url.searchParams.get('year'));
     await generateTax1099Drafts(db, year);
     // #1147: LEFT JOIN, not JOIN -- user_id can now be NULL (the payee's
@@ -10616,8 +10632,17 @@ async function handleAdminBootstrap(request, env, db) {
 // could mint real site admins. Same email lookup handleLogin already
 // uses (normalizeEmail against the plain `email` column), so this finds
 // exactly the account that email actually logs into.
+// #2123: grant/revoke-admin mint or remove is_admin itself -- the one pair
+// of admin mutations in this file with no rate limit at all, unlike
+// suspend-account (ACCOUNT_SUSPENSION_RATE_LIMIT_MAX) and nearly every
+// other admin-gated mutation here. Same bucket shape: keyed by the acting
+// admin, not the target account, so one admin can't be throttled out by
+// someone else's grants/revokes.
+const ADMIN_GRANT_RATE_LIMIT_MAX = 20;
+
 async function handleGrantAdmin(request, db) {
   const admin = await requireAdmin(request, db);
+  await checkRateLimit(db, `admin-grant:${admin.user_id}`, ADMIN_GRANT_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const email = normalizeEmail(input.email);
   const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
@@ -10647,6 +10672,7 @@ async function handleGrantAdmin(request, db) {
 // each UPDATE re-evaluates the live COUNT at the moment it runs.
 async function handleRevokeAdmin(request, db) {
   const admin = await requireAdmin(request, db);
+  await checkRateLimit(db, `admin-grant:${admin.user_id}`, ADMIN_GRANT_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const email = normalizeEmail(input.email);
   const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
@@ -10705,6 +10731,10 @@ async function handleListAdmins(request, db) {
 }
 
 const ACCOUNT_SUSPENSION_RATE_LIMIT_MAX = 20;
+// #2124: stripe-account-reset (builder + seller) mutates a live Stripe
+// linkage the same way suspend-account above mutates account standing --
+// rate-limited the same way, unlike its own sibling admin mutations.
+const STRIPE_ACCOUNT_RESET_RATE_LIMIT_MAX = 20;
 
 // #2032 (sub-issue of #1201): the suspend action's optional sign-post/
 // calendar-event removal cascade -- per the owner's own resolved call on
@@ -14827,12 +14857,15 @@ async function handleCalendarEvents(request, db, route) {
     // match already draws, so it shouldn't stay permanently inert just
     // because some earlier scheduledAt on this same row already fired.
     const triggeredAt = scheduledAt === existing.scheduled_at ? existing.triggered_at : null;
-    await recordContentEditHistory(db, 'calendar_events', eventId, 'edit', existing, sessionBuilder.user_id);
     const updated = await db.prepare('UPDATE calendar_events SET text = ?, scheduled_at = ?, triggered_at = ? WHERE event_id = ? AND user_id = ?')
       .bind(text, scheduledAt, triggeredAt, eventId, sessionBuilder.user_id).run();
     if (updated.meta.changes === 0) {
       throw new HttpError('Event changed concurrently — refetch and retry', 409);
     }
+    // #2122: logged only after the update is confirmed to have actually
+    // happened, same "logged only after confirmed" idiom the
+    // delete_calendar_event_override admin branch below uses.
+    await recordContentEditHistory(db, 'calendar_events', eventId, 'edit', existing, sessionBuilder.user_id);
     const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
     return json({ event: calendarEventFromRow(row) });
   }
@@ -14866,12 +14899,14 @@ async function handleCalendarEvents(request, db, route) {
     // exactly as it always has.
     if (existing.user_id !== null && existing.user_id === sessionBuilder.user_id) {
       await checkRateLimit(db, `calendar-event-delete:${sessionBuilder.user_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
-      await recordContentEditHistory(db, 'calendar_events', eventId, 'delete', existing, sessionBuilder.user_id);
       const deletedByAuthor = await db.prepare('DELETE FROM calendar_events WHERE event_id = ? AND user_id = ?')
         .bind(eventId, sessionBuilder.user_id).run();
       if (deletedByAuthor.meta.changes === 0) {
         throw new HttpError('Event changed concurrently — refetch and retry', 409);
       }
+      // #2122: logged only after the delete is confirmed to have actually
+      // happened, same reasoning as the PATCH branch above.
+      await recordContentEditHistory(db, 'calendar_events', eventId, 'delete', existing, sessionBuilder.user_id);
       return json({ deleted: true });
     }
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
@@ -16331,8 +16366,6 @@ async function handleSellerFeedbackEdit(request, env, purchaseId) {
     text = (input.text === null || input.text === '') ? null : stringValue(input.text, 'text');
   }
   if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-  // #1975: snapshot the pre-edit row for disputes before overwriting it.
-  await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'edit', existing, sessionBuilder.user_id);
   // Same "point-in-time read, real awaited gaps after it" race this file's
   // other author-direct mutations guard against — re-verified atomically via
   // the same join authorization used above, not just the eager read.
@@ -16345,6 +16378,10 @@ async function handleSellerFeedbackEdit(request, env, purchaseId) {
   if (updated.meta.changes === 0) {
     throw new HttpError('Feedback changed concurrently — refetch and retry', 409);
   }
+  // #1975/#2122: snapshot the pre-edit row for disputes -- logged only
+  // after the update is confirmed to have actually happened, same "logged
+  // only after confirmed" idiom the admin-DELETE branch below uses.
+  await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'edit', existing, sessionBuilder.user_id);
   const row = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
   return json({ feedback: sellerFeedbackFromRow(row) });
 }
@@ -16378,7 +16415,6 @@ async function handleSellerFeedbackDelete(request, env, purchaseId) {
   const admin = requester && requester.is_admin ? requester : null;
   if (!admin && requester && existing.buyer_user_id !== null && existing.buyer_user_id === requester.user_id) {
     await checkRateLimit(db, `seller-feedback-delete:${requester.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
-    await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'delete', existing, requester.user_id);
     const deletedByAuthor = await db.prepare(`
       DELETE FROM seller_feedback WHERE purchase_id = ? AND EXISTS (
         SELECT 1 FROM purchases p JOIN builders bld ON bld.builder_id = p.buyer_builder_id
@@ -16388,6 +16424,9 @@ async function handleSellerFeedbackDelete(request, env, purchaseId) {
     if (deletedByAuthor.meta.changes === 0) {
       throw new HttpError('Feedback changed concurrently — refetch and retry', 409);
     }
+    // #1975/#2122: logged only after the delete is confirmed to have
+    // actually happened, same reasoning as the PATCH branch above.
+    await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'delete', existing, requester.user_id);
     return json({ deleted: true });
   }
   const resolvedAdmin = admin || await requireAdmin(request, db);
