@@ -287,6 +287,32 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
     expect(deleted.response.status).toBe(409);
     expect(deleted.body.error).toMatch(/backup/);
   });
+
+  // #2111: assertCatalogTemplatesDeletable's blockedByBackup guard is shared
+  // by both DELETE /catalog/:id (test above) and DELETE /catalog/batch --
+  // this exercises the batch call site specifically, which had no coverage
+  // of its own.
+  it('blocks batch-deleting a catalog template still configured as a backup', async () => {
+    const builder = await signupBuilder('backups-batch-delete-template-builder');
+    await createLandletAndClaim('backups-batch-delete-template-landlet', builder);
+    await createTemplate('backups-batch-delete-template-active');
+    await createTemplate('backups-batch-delete-template-backup');
+    await createTemplate('backups-batch-delete-template-unrelated');
+    await placeInstance('backups-batch-delete-template-instance', 'backups-batch-delete-template-landlet', 'backups-batch-delete-template-active', builder);
+    await api('/instances/backups-batch-delete-template-instance/backups', builder.session({
+      method: 'POST', body: JSON.stringify({ templateId: 'backups-batch-delete-template-backup' }),
+    }));
+
+    const deleted = await api('/catalog/batch', {
+      method: 'DELETE',
+      body: JSON.stringify({
+        templateIds: ['backups-batch-delete-template-unrelated', 'backups-batch-delete-template-backup'],
+      }),
+    });
+    expect(deleted.response.status).toBe(409);
+    expect(deleted.body.error).toMatch(/backup/);
+    expect((await api('/catalog/backups-batch-delete-template-unrelated')).response.status).toBe(200);
+  });
 });
 
 describe('sweepSoldOutTemplateInstances consults the backup chain (#2050)', () => {
