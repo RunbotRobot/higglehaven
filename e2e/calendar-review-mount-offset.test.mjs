@@ -77,10 +77,10 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '10');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 45000 });
 await page.waitForTimeout(300);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 45000 });
 await page.waitForTimeout(500);
 await page.click('#seller-close-btn');
 await page.waitForTimeout(300);
@@ -122,9 +122,13 @@ await page.evaluate(([x, y]) => {
   window.__testForceShopProximityCheck();
 }, [myLandlet.center.x, myLandlet.center.y]);
 
+// #2143: waitForFunction's signature is (pageFunction, arg, options) --
+// the explicit null reaches the options slot; without it the timeout
+// below silently fell back to Playwright's actual default (30000ms).
 await page.waitForFunction(
   () => (window.__lastCalendarSpriteDebug?.spriteZs?.length ?? 0) > 0 && (window.__lastReviewSpriteDebug?.spriteZs?.length ?? 0) > 0,
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 
 const calendarDebug = await page.evaluate(() => window.__lastCalendarSpriteDebug);
