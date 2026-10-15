@@ -51,7 +51,7 @@ await page.click('#upload-submit-btn');
 // size needs a generous timeout, same reasoning as the high-poly-model
 // warning path in modelOptimizer.js itself.
 const reachedDimensionsStep = await page
-  .waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 30000 })
+  .waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 })
   .then(() => true)
   .catch(() => false);
 console.log('upload wizard reached the dimensions step without erroring (should be true):', reachedDimensionsStep);
@@ -63,7 +63,7 @@ let productListed = false;
 if (reachedDimensionsStep) {
   await page.waitForTimeout(300);
   await page.click('#upload-submit-btn');
-  await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+  await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
   await page.waitForTimeout(500);
   const sellerListText = await page.textContent('#seller-list');
   productListed = sellerListText.includes(PRODUCT_NAME);
