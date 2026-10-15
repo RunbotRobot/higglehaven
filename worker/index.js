@@ -1354,20 +1354,14 @@ async function handleModelListing(request, env, url) {
     // all five) — a model/image real-but-not-yet-template-referenced in one
     // of these used to read back here as `deletable: true` with an empty
     // reference list, a false "safe to delete" signal for this admin view.
-    const placeholders = modelUrls.map(() => '?').join(', ');
-    const referenced = await env.DB.prepare(`
-      SELECT 'template' AS source, template_id AS id, model_url AS url FROM catalog_templates WHERE model_url IN (${placeholders})
-      UNION ALL
-      SELECT 'template' AS source, template_id AS id, image_url AS url FROM catalog_templates WHERE image_url IN (${placeholders})
-      UNION ALL
-      SELECT 'videoJob' AS source, job_id AS id, model_url AS url FROM video_generation_jobs WHERE model_url IN (${placeholders})
-      UNION ALL
-      SELECT 'controlRoom' AS source, task_id AS id, image_url AS url FROM control_room_tasks WHERE image_url IN (${placeholders})
-      UNION ALL
-      SELECT 'controlRoom' AS source, reply_id AS id, image_url AS url FROM control_room_replies WHERE image_url IN (${placeholders})
-      ORDER BY id
-    `).bind(...modelUrls, ...modelUrls, ...modelUrls, ...modelUrls, ...modelUrls).all();
-    for (const row of referenced.results) {
+    //
+    // #2204: selectModelUrlReferencesChunked (see its own comment) chunks
+    // this same query rather than binding the full modelUrls array once
+    // per UNION branch in a single call -- this list can be up to 100
+    // long (this handler's own `limit` above), which blew D1's 100-bound-
+    // parameter cap once multiplied by 5 branches.
+    const referenced = await selectModelUrlReferencesChunked(env.DB, modelUrls);
+    for (const row of referenced) {
       if (row.source === 'template') templateRefs.get(row.url).push(row.id);
       else if (row.source === 'videoJob') videoJobRefs.get(row.url).push(row.id);
       else controlRoomRefs.get(row.url).push(row.id);
@@ -1505,19 +1499,13 @@ export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAg
       // are a fourth writer into this same bucket/scheme — imageUrlValue
       // explicitly accepts a /uploads/<key> path for these columns, so a
       // Control Room screenshot uploaded that way looked unreferenced too.
-      const placeholders = modelUrls.map(() => '?').join(', ');
-      const referenced = await env.DB.prepare(`
-        SELECT model_url AS url FROM catalog_templates WHERE model_url IN (${placeholders})
-        UNION
-        SELECT image_url AS url FROM catalog_templates WHERE image_url IN (${placeholders})
-        UNION
-        SELECT model_url AS url FROM video_generation_jobs WHERE model_url IN (${placeholders})
-        UNION
-        SELECT image_url AS url FROM control_room_tasks WHERE image_url IN (${placeholders})
-        UNION
-        SELECT image_url AS url FROM control_room_replies WHERE image_url IN (${placeholders})
-      `).bind(...modelUrls, ...modelUrls, ...modelUrls, ...modelUrls, ...modelUrls).all();
-      for (const row of referenced.results) referencedUrls.add(row.url);
+      //
+      // #2204: selectModelUrlReferencesChunked (see its own comment) chunks
+      // this same 5-way check rather than binding the full modelUrls array
+      // once per branch in a single call -- a 100-object R2 page blew D1's
+      // 100-bound-parameter cap once multiplied by 5 branches.
+      const referenced = await selectModelUrlReferencesChunked(env.DB, modelUrls);
+      for (const row of referenced) referencedUrls.add(row.url);
     }
     let examinedWholePage = true;
     for (let i = 0; i < listing.objects.length; i++) {
@@ -1554,20 +1542,14 @@ export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAg
   if (targets.length > 0) {
     // #774/#1644/#1655: same reference-check gap as the scan above —
     // re-checked here too since this query is independent of it.
+    //
+    // #2204: chunked via selectModelUrlReferencesChunked for the same
+    // reason as the scan above — targetUrls can be up to maxDeletes long,
+    // which blew D1's 100-bound-parameter cap once multiplied by 5
+    // branches in a single unchunked query.
     const targetUrls = targets.map((object) => `/uploads/${object.key}`);
-    const placeholders = targetUrls.map(() => '?').join(', ');
-    const stillReferenced = await env.DB.prepare(`
-      SELECT model_url AS url FROM catalog_templates WHERE model_url IN (${placeholders})
-      UNION
-      SELECT image_url AS url FROM catalog_templates WHERE image_url IN (${placeholders})
-      UNION
-      SELECT model_url AS url FROM video_generation_jobs WHERE model_url IN (${placeholders})
-      UNION
-      SELECT image_url AS url FROM control_room_tasks WHERE image_url IN (${placeholders})
-      UNION
-      SELECT image_url AS url FROM control_room_replies WHERE image_url IN (${placeholders})
-    `).bind(...targetUrls, ...targetUrls, ...targetUrls, ...targetUrls, ...targetUrls).all();
-    const rescuedUrls = new Set(stillReferenced.results.map((row) => row.url));
+    const stillReferenced = await selectModelUrlReferencesChunked(env.DB, targetUrls);
+    const rescuedUrls = new Set(stillReferenced.map((row) => row.url));
     toDelete = targets.filter((object) => !rescuedUrls.has(`/uploads/${object.key}`));
   }
   if (!dryRun && toDelete.length > 0) await env.MODELS.delete(toDelete.map((object) => object.key));
@@ -17178,6 +17160,40 @@ async function selectRowsByIdsChunked(db, table, idColumn, ids) {
     if (a.created_at !== b.created_at) return a.created_at < b.created_at ? -1 : 1;
     return a[idColumn] < b[idColumn] ? -1 : a[idColumn] > b[idColumn] ? 1 : 0;
   });
+  return rows;
+}
+
+// #2204: handleModelListing and cleanupUnreferencedModels (its scan loop
+// and its pre-delete re-check) each run the same 5-way UNION ALL --
+// catalog_templates.model_url/image_url, video_generation_jobs.model_url,
+// control_room_tasks/control_room_replies.image_url, see the #774/#1644/
+// #1655 comments on those callers for why all five need checking -- and
+// each one used to bind its own modelUrls/targetUrls array once per UNION
+// branch in a single unchunked query. D1_MAX_BOUND_PARAMETERS is a per-
+// query cap, not a per-array cap: with the same array bound 5 times into
+// one query, the real per-chunk size is a fifth of what
+// selectRowsByIdsChunked/assertReferencesExist above use for their own
+// single-bind-per-value queries, so a straight reuse of that constant
+// would still blow the limit at 100 urls instead of the real ~20.
+async function selectModelUrlReferencesChunked(db, urls) {
+  const chunkSize = Math.floor(D1_MAX_BOUND_PARAMETERS / 5);
+  const rows = [];
+  for (let i = 0; i < urls.length; i += chunkSize) {
+    const chunk = urls.slice(i, i + chunkSize);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(`
+      SELECT 'template' AS source, template_id AS id, model_url AS url FROM catalog_templates WHERE model_url IN (${placeholders})
+      UNION ALL
+      SELECT 'template' AS source, template_id AS id, image_url AS url FROM catalog_templates WHERE image_url IN (${placeholders})
+      UNION ALL
+      SELECT 'videoJob' AS source, job_id AS id, model_url AS url FROM video_generation_jobs WHERE model_url IN (${placeholders})
+      UNION ALL
+      SELECT 'controlRoom' AS source, task_id AS id, image_url AS url FROM control_room_tasks WHERE image_url IN (${placeholders})
+      UNION ALL
+      SELECT 'controlRoom' AS source, reply_id AS id, image_url AS url FROM control_room_replies WHERE image_url IN (${placeholders})
+    `).bind(...chunk, ...chunk, ...chunk, ...chunk, ...chunk).all();
+    rows.push(...results);
+  }
   return rows;
 }
 
