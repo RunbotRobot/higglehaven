@@ -41,10 +41,10 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '10');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 20000 });
 await page.waitForTimeout(500);
 
 async function fetchJson(pathAndQuery, options) {
@@ -124,7 +124,7 @@ console.log('summary text (should mention the 4.0 average and "2 reviews"):', su
 // would use. Distinguished by the absence of "Lovely product" rather than
 // a differing author label.
 await row().locator('.product-review-row').filter({ hasNotText: 'Lovely product' }).locator('.product-review-row-delete').click();
-await page.waitForFunction(() => document.querySelectorAll('.product-review-row').length === 1, { timeout: 5000 });
+await page.waitForFunction(() => document.querySelectorAll('.product-review-row').length === 1, null, { timeout: 15000 });
 const rowCountAfterDelete = await row().locator('.product-review-row').count();
 console.log('rows shown after deleting one via the panel (should be 1):', rowCountAfterDelete);
 

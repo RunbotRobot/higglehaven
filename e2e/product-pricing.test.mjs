@@ -47,10 +47,10 @@ async function uploadProduct({ name, price }) {
   if (price !== undefined) await page.fill('#upload-price', price);
   await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
   await page.click('#upload-submit-btn');
-  await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+  await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
   await page.waitForTimeout(300);
   await page.click('#upload-submit-btn');
-  await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+  await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 20000 });
   await page.waitForTimeout(500);
 }
 
@@ -65,7 +65,7 @@ await page.locator('#upload-price').blur();
 const uploadPriceAfterBlur = await page.locator('#upload-price').inputValue();
 console.log('upload price field after blur (should be "$1,234.50"):', uploadPriceAfterBlur);
 await page.click('#upload-cancel-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 20000 });
 
 // #1601: blank price at upload time is now rejected, not treated as "no
 // price set" — the wizard stays open on an error instead of creating the
@@ -75,7 +75,7 @@ await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-name', 'Suite Blank-Price Rejection Crate');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-submit-btn');
 await page.waitForTimeout(500);
@@ -84,7 +84,7 @@ const blankPriceModalStillOpen = await page.locator('#upload-modal').evaluate((e
 console.log('status text after submitting with a blank price (should mention price):', blankPriceStatus);
 console.log('upload modal stays open after a rejected blank-price submit (should be true):', blankPriceModalStillOpen);
 await page.click('#upload-cancel-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 20000 });
 
 // A priced product at upload time.
 await uploadProduct({ name: PRICED_PRODUCT, price: '12.5' });
@@ -163,7 +163,8 @@ await unpricedRow().locator('.seller-price-input').fill('7.99');
 await unpricedRow().locator('button', { hasText: 'Save Price' }).click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-price-status')).some((el) => el.textContent === 'Saved.'),
-  { timeout: 10000 },
+  null,
+  { timeout: 20000 },
 );
 const unpricedRowPriceTextAfter = await unpricedRow().locator('.seller-row-price').textContent();
 console.log('previously-unpriced product\'s row price text after editing (should be "$7.99"):', unpricedRowPriceTextAfter);
@@ -183,7 +184,8 @@ await unpricedRow().locator('.seller-price-input').fill('');
 await unpricedRow().locator('button', { hasText: 'Save Price' }).click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-row-price')).some((el) => el.textContent === 'Not priced'),
-  { timeout: 10000 },
+  null,
+  { timeout: 20000 },
 );
 const clearedRowPriceText = await unpricedRow().locator('.seller-row-price').textContent();
 console.log('row price text after clearing it back to blank (should be "Not priced"):', clearedRowPriceText);
