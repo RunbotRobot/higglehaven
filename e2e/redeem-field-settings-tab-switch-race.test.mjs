@@ -74,9 +74,18 @@ await page.unroute('**/api/builders/me/redeem');
 // Switching back to Build afterward should still work normally -- the fix
 // only skips a superseded render, not a fresh, current one.
 await page.click('.settings-tab-btn[data-section="build"]');
+// #2145 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real
+// applied timeout was always Playwright's actual default (30000ms), never
+// the smaller number written here. The explicit `null` arg reaches the
+// options slot, and the timeout itself is widened to 60000ms for real
+// headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
+// wait.
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Redeem Higgles') && f.textContent.includes('Available to redeem')),
-  { timeout: 20000 },
+  null,
+  { timeout: 60000 },
 );
 const buildTabWorksNormally = await page.locator('.settings-field', { hasText: 'Redeem Higgles' }).count();
 console.log('Build tab still renders the Redeem Higgles field normally on a fresh, non-superseded switch (should be 1):', buildTabWorksNormally);

@@ -36,9 +36,18 @@ await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="general"]');
 
+// #2145 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real
+// applied timeout was always Playwright's actual default (30000ms), never
+// the smaller number written here. The explicit `null` arg reaches the
+// options slot, and the timeout itself is widened to 60000ms for real
+// headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
+// wait.
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Tax Paperwork')),
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 
 const taxField = page.locator('.settings-field', { hasText: 'Tax Paperwork' });
@@ -75,7 +84,8 @@ await submitBtn.click();
 
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('not configured on this server yet')),
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 const formStatusText = await taxField.locator('.settings-empty-note').last().textContent();
 console.log('Form status after submitting (should surface the real "not configured" 503):', formStatusText);

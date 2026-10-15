@@ -52,9 +52,19 @@ await page.click('.settings-tab-btn[data-section="build"]');
 // exceed a 10s margin under CI's concurrent-suite load. #1388 established
 // 20s as the working margin for this same kind of post-identity async
 // wait; match it here.
+//
+// #2145 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
+// arg, options) -- the 2-argument call this used to be put the options
+// object in the `arg` slot instead, so `options` stayed undefined and the
+// real applied timeout was always Playwright's actual default (30000ms),
+// never the 20000ms written above -- meaning that 10s->20s bump never
+// actually took effect. The explicit `null` arg reaches the options slot,
+// and the timeout itself is widened to 60000ms for real headroom under CI
+// load, same as e2e/helpers.mjs's own account-menu-modal wait.
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('Redeem Higgles') && f.textContent.includes('Available to redeem')),
-  { timeout: 20000 },
+  null,
+  { timeout: 60000 },
 );
 
 const statusText = await page.locator('.settings-field', { hasText: 'Redeem Higgles' }).locator('.settings-empty-note').first().textContent();
@@ -70,7 +80,8 @@ const redeemFormField = page.locator('.settings-field').filter({ has: redeemBtn 
 await redeemBtn.click();
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('temporarily paused')),
-  { timeout: 20000 },
+  null,
+  { timeout: 60000 },
 );
 const afterClickText = await redeemFormField.locator('.settings-empty-note').last().textContent();
 console.log('Status after clicking Redeem (should surface #653\'s real pause message):', afterClickText);
