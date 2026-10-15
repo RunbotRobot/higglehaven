@@ -10131,6 +10131,14 @@ async function handleTax(request, env, db, route, url) {
   // already-approved/filed/voided row.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-forms') {
     if (!user.is_admin) throw new HttpError('Admin access required', 403);
+    // #2130: generateTax1099Drafts below runs two full-table aggregate
+    // GROUP BY scans plus a real upsert write per qualifying builder/
+    // seller on every call -- the same "real DB cost" shape #2082 already
+    // rate-limited for this handler's three mutation siblings (approve/
+    // file/void), just unconditional here on every GET instead of behind
+    // an admin action. Not the efiling-connection-test branch just above,
+    // whose own comment explicitly says it's safe to call repeatedly.
+    await checkRateLimit(db, `tax-1099-admin:${user.user_id}`, TAX_1099_ADMIN_RATE_LIMIT_MAX);
     const year = queryTaxYear(url.searchParams.get('year'));
     await generateTax1099Drafts(db, year);
     // #1147: LEFT JOIN, not JOIN -- user_id can now be NULL (the payee's
