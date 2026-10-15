@@ -2825,7 +2825,11 @@ describe('Authentication', () => {
       body: JSON.stringify({ token: 'not-a-real-token-final', newPassword: 'a fine long password' }),
     });
     expect(limited.response.status).toBe(429);
-  });
+  }, 30000); // #978/#2196: same cumulative-D1-state-under-CI-load shape as
+  // this file's other rate-limit-loop tests -- 21 real round trips late in
+  // this large file's run against one shared D1 instance, reliably fast in
+  // isolation but intermittently past the 20s default under CI load.
+  // Matches #1511/#2097's precedent for a comparable ~20-request loop.
 
   it('requesting a password reset for an unknown email still returns a generic success, with no dev link', async () => {
     const requested = await api('/auth/request-password-reset', {

@@ -316,6 +316,32 @@ describe('Worker API', () => {
     }))).response.status).toBe(400);
   });
 
+  // #2204: handleModelListing and cleanupUnreferencedModels each run a
+  // 5-way UNION ALL (catalog_templates.model_url/image_url, video_
+  // generation_jobs.model_url, control_room_tasks/control_room_replies.
+  // image_url -- see #774/#1644/#1655) and used to bind the full
+  // modelUrls/targetUrls array once per branch in a single query. D1 caps
+  // a query at 100 total bound parameters, so that blew up once a page
+  // held more than 100/5 = 20 objects -- seeds 25 directly via
+  // env.MODELS.put (bypassing the real upload endpoint's own validation/
+  // rate-limiting, irrelevant to what this test is checking) to land
+  // comfortably past that threshold.
+  it('lists and cleans up a page of more than 20 uploaded models without hitting a raw D1 bound-parameter error', async () => {
+    for (let i = 0; i < 25; i++) {
+      await env.MODELS.put(`models/bulk-${i}.glb`, new Uint8Array([i]));
+    }
+    const listing = await api('/models?limit=25', adminSession());
+    expect(listing.response.status).toBe(200);
+    expect(listing.body.models).toHaveLength(25);
+    expect(listing.body.models.every((model) => model.deletable === true)).toBe(true);
+
+    const cleanup = await cleanupUnreferencedModels(env, { maxDeletes: 25, dryRun: true, minAgeMs: 0 });
+    expect(cleanup.targetCount).toBe(25);
+    for (let i = 0; i < 25; i++) {
+      expect(cleanup.targetModelUrls).toContain(`/uploads/models/bulk-${i}.glb`);
+    }
+  });
+
   // #848: scheduled() automatically reclaims unreferenced R2 uploads
   // (previously only reachable via the admin-only POST above) — otherwise
   // concept-image's own guaranteed-unreferenced generated PNGs eventually

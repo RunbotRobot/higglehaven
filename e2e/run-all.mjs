@@ -15,6 +15,18 @@
 // Usage:
 //   node e2e/run-all.mjs                  # run every *.test.mjs file
 //   node e2e/run-all.mjs smoke.test.mjs    # run just this one
+//
+// Each file's own output (migration-apply table, the test's own console
+// output, and on failure its wrangler-dev tail) is captured rather than
+// streamed live, and only a failing file's buffer gets printed — at the very
+// end of the whole run, after every other file has already finished (#2134).
+// Why: CI's log-retrieval tools truncate to roughly the last ~500KB of a
+// job's log regardless of how far back they're asked to go, so on a large
+// shard a file positioned early (e.g. 11th of 40) had its own diagnostics
+// pushed outside that window by everything printed after it, making a real
+// failure undiagnosable from CI output alone. Printing failing files' full
+// detail last, in a run whose own total output this suite's current shard
+// sizes keep well under that ceiling, guarantees it survives instead.
 import { execSync, spawn } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -37,6 +49,26 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 
 function sh(cmd) {
   execSync(cmd, { stdio: 'inherit', cwd: repoRoot });
+}
+
+// Like sh(), but captures the command's combined stdout+stderr instead of
+// streaming it straight to this process's own output — see this file's own
+// top comment (#2134) for why. `2>&1` merges stderr into the same pipe as
+// stdout at the shell level, so the two interleave in their real
+// chronological order rather than arriving as two separately-ordered
+// buffers.
+function execCapture(cmd) {
+  try {
+    // Node's own default maxBuffer (1MB) is comfortably under a single
+    // file's typical output but not a guaranteed ceiling (the migration
+    // table alone is tens of KB) — raised well above anything one file is
+    // expected to print, so a verbose file gets ERR_CHILD_PROCESS_STDIO_
+    // MAXBUFFER instead of this capture silently losing the real failure.
+    const output = execSync(`${cmd} 2>&1`, { cwd: repoRoot, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 });
+    return { output, failed: false };
+  } catch (err) {
+    return { output: typeof err.stdout === 'string' ? err.stdout : '', failed: true };
+  }
 }
 
 // Killing only `workerd serve` isn't enough — the wrangler-dev parent
@@ -67,11 +99,16 @@ async function waitForServer(timeoutMs = 30000) {
 }
 
 async function runOneTest(testFile) {
-  console.log(`\n=== ${testFile} ===`);
+  let log = `\n=== ${testFile} ===\n`;
   killWranglerFamily();
   await new Promise((resolve) => setTimeout(resolve, 1000));
   sh('rm -rf .wrangler/state');
-  sh('npx wrangler d1 migrations apply higglehaven-db --local');
+  const migrationResult = execCapture('npx wrangler d1 migrations apply higglehaven-db --local');
+  log += migrationResult.output;
+  if (migrationResult.failed) {
+    log += `\nFAILED: ${testFile} (migration apply itself failed, before the test ever ran)\n`;
+    return { passed: false, log };
+  }
 
   const wrangler = spawn('npx', ['wrangler', 'dev', '--local', '--ip', '127.0.0.1', '--port', PORT], {
     cwd: repoRoot,
@@ -99,13 +136,14 @@ async function runOneTest(testFile) {
   let passed = false;
   try {
     await waitForServer();
-    execSync(`node ${JSON.stringify(path.join(__dirname, testFile))}`, {
-      stdio: 'inherit',
-      cwd: repoRoot,
-    });
-    passed = true;
+    const testResult = execCapture(`node ${JSON.stringify(path.join(__dirname, testFile))}`);
+    log += testResult.output;
+    passed = !testResult.failed;
+    if (!passed) log += `\nFAILED: ${testFile}\n`;
   } catch (err) {
-    console.error(`FAILED: ${testFile}`);
+    log += `\nFAILED: ${testFile} (${err.message})\n`;
+  }
+  if (!passed) {
     // wrangler dev relays the Worker's own runtime console.* calls back to
     // its CLI output asynchronously (over the inspector protocol, not a
     // direct pipe from the request handler) — reading the captured buffer
@@ -115,20 +153,19 @@ async function runOneTest(testFile) {
     // even though worker/index.js's own catch-all does console.error every
     // unclassified error). A short grace period lets it land first.
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    console.log(`\n--- wrangler dev server output for ${testFile} (tail, may explain the failure above) ---`);
-    console.log(wranglerLog || '(no server output captured)');
-    console.log(`--- end wrangler dev server output for ${testFile} ---\n`);
-  } finally {
-    try {
-      // Negative pid signals the whole detached process group, not just
-      // the immediate wrangler-dev process — see killWranglerFamily above
-      // for why the child (workerd) needs killing too either way.
-      process.kill(-wrangler.pid, 'SIGTERM');
-    } catch { /* already gone */ }
-    killWranglerFamily();
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    log += `\n--- wrangler dev server output for ${testFile} (tail, may explain the failure above) ---\n`;
+    log += wranglerLog || '(no server output captured)';
+    log += `\n--- end wrangler dev server output for ${testFile} ---\n`;
   }
-  return passed;
+  try {
+    // Negative pid signals the whole detached process group, not just
+    // the immediate wrangler-dev process — see killWranglerFamily above
+    // for why the child (workerd) needs killing too either way.
+    process.kill(-wrangler.pid, 'SIGTERM');
+  } catch { /* already gone */ }
+  killWranglerFamily();
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  return { passed, log };
 }
 
 const args = process.argv.slice(2);
@@ -148,14 +185,26 @@ sh('npm run build');
 console.log(`\nRunning ${testsToRun.length} e2e test file(s), fresh D1 per file:\n${testsToRun.join('\n')}`);
 
 const failures = [];
+const failureLogs = [];
 for (const testFile of testsToRun) {
-  const ok = await runOneTest(testFile);
-  if (!ok) failures.push(testFile);
+  const { passed, log } = await runOneTest(testFile);
+  // A one-line progress indicator per file, printed live — the full
+  // diagnostics (buffered above, not streamed) only get printed for a
+  // failing file, and only at the very end of the whole run (#2134).
+  console.log(passed ? `PASS: ${testFile}` : `FAIL: ${testFile} (full output printed at the end of this run)`);
+  if (!passed) {
+    failures.push(testFile);
+    failureLogs.push({ testFile, log });
+  }
 }
 
 console.log('\n=== e2e summary ===');
 console.log(`${testsToRun.length - failures.length}/${testsToRun.length} passed`);
 if (failures.length > 0) {
   console.log('Failed:', failures.join(', '));
+  console.log('\n=== full diagnostics for the failing file(s) above, printed last so CI\'s log-truncation keeps them (#2134) ===');
+  for (const { testFile, log } of failureLogs) {
+    console.log(log);
+  }
   process.exit(1);
 }
