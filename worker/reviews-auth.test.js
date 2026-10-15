@@ -2725,7 +2725,10 @@ describe('Authentication', () => {
       body: JSON.stringify({ token: 'not-a-real-token-final' }),
     });
     expect(limited.response.status).toBe(429);
-  });
+  }, 60000); // #978-class/#2208: 21 real HTTP requests exceeds the 20000ms
+  // default under this file's own size/load, despite passing instantly in
+  // isolation -- same reasoning as #2198/#2199's own precedent for a
+  // comparable request volume in this file.
 
   it('resets a forgotten password via a real token, and signs out every existing session', async () => {
     const email = `auth-reset-${crypto.randomUUID()}@example.com`;
