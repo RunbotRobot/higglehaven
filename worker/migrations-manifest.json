@@ -138,5 +138,6 @@
   "0138_sold_out_markers.sql",
   "0139_builders_notify_sold_out_email.sql",
   "0140_inactivity_release_preserves_versions.sql",
-  "0141_avatar_presence_flying.sql"
+  "0141_product_flags_status_index.sql",
+  "0142_avatar_presence_flying.sql"
 ]
