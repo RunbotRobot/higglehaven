@@ -403,12 +403,55 @@ describe('GET /auth/export-data -- social section (#1986)', () => {
     expect(result.body.social.landletVersions[0].instances).toHaveLength(1);
   });
 
+  // #2185: archived_landlet_versions/archived_version_instances
+  // (migrations/0140) preserve a landlet's version history past its
+  // source landlet changing hands -- a real builder_id column, not an
+  // ownership-join approximation like landletVersions above, so this
+  // exercises the direct match and confirms sourceLandletId round-trips.
+  it('includes archived landlet versions and their instances, by builder_id directly', async () => {
+    const builder = await signupBuilder('export-social-archived-version');
+    const templateId = await createTemplate('export-social-archived-version-template');
+    await env.DB.prepare(`
+      INSERT INTO landlets (landlet_id, name, owner_builder_id, status) VALUES (?, ?, ?, 'greenbelt')
+    `).bind('export-social-archived-version-landlet', 'Export Archived Version Landlet', builder.builderId).run();
+    await env.DB.prepare(`
+      INSERT INTO archived_landlet_versions (version_id, builder_id, source_landlet_id, version_number, name, created_at)
+      VALUES (?, ?, ?, 1, 'archived-v1', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    `).bind('export-social-archived-version', builder.builderId, 'export-social-archived-version-landlet').run();
+    await env.DB.prepare(`
+      INSERT INTO archived_version_instances (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_z_rad)
+      VALUES (?, ?, ?, 1, 2, 0, 0)
+    `).bind('export-social-archived-version', 'export-social-archived-version-instance', templateId).run();
+
+    const result = await api('/auth/export-data', builder.session());
+    expect(result.body.social.archivedLandletVersions).toHaveLength(1);
+    expect(result.body.social.archivedLandletVersions[0].name).toBe('archived-v1');
+    expect(result.body.social.archivedLandletVersions[0].sourceLandletId).toBe('export-social-archived-version-landlet');
+    expect(result.body.social.archivedLandletVersions[0].instanceCount).toBe(1);
+    expect(result.body.social.archivedLandletVersions[0].instances).toHaveLength(1);
+  });
+
+  // #2185: archived_landlet_versions keys directly on builder_id, not
+  // landlet ownership -- confirms another builder's archived version
+  // never leaks into this account's own export.
+  it('scopes archived landlet versions to the requesting builder only, never another builder\'s own', async () => {
+    const owner = await signupBuilder('export-social-archived-version-owner');
+    const other = await signupBuilder('export-social-archived-version-other');
+    await env.DB.prepare(`
+      INSERT INTO archived_landlet_versions (version_id, builder_id, version_number, name, created_at)
+      VALUES (?, ?, 1, 'owner-only', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    `).bind('export-social-archived-version-owner-only', owner.builderId).run();
+
+    const result = await api('/auth/export-data', other.session());
+    expect(result.body.social.archivedLandletVersions).toEqual([]);
+  });
+
   it('keeps every social collection empty for an account with none of this activity', async () => {
     const quiet = await signupBuilder('export-social-quiet');
     const result = await api('/auth/export-data', quiet.session());
     expect(result.body.social).toMatchObject({
       friendships: [], directMessages: [], notifications: [], productReviews: [], sellerFeedback: [],
-      signPosts: [], calendarEvents: [], savedLevelLayouts: [], landletVersions: [],
+      signPosts: [], calendarEvents: [], savedLevelLayouts: [], landletVersions: [], archivedLandletVersions: [],
     });
   });
 });

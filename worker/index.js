@@ -11447,6 +11447,25 @@ async function exportSocialSection(db, builderId, userId) {
     list.push(versionInstanceFromRow(row));
     instancesByVersionId.set(row.version_id, list);
   }
+  // #2185: archived_landlet_versions carries a real builder_id column
+  // (unlike landlet_versions above, which only has landlet_id and needs
+  // the current-ownership join) -- a direct, exact match rather than the
+  // "best available approximation" this function's own doc comment
+  // describes for landlet_versions.
+  const archivedLandletVersions = await db.prepare(`
+    SELECT * FROM archived_landlet_versions WHERE builder_id = ? ORDER BY created_at ASC
+  `).bind(builderId).all();
+  const archivedVersionInstances = archivedLandletVersions.results.length === 0 ? { results: [] } : await db.prepare(`
+    SELECT * FROM archived_version_instances WHERE version_id IN (
+      SELECT version_id FROM archived_landlet_versions WHERE builder_id = ?
+    )
+  `).bind(builderId).all();
+  const instancesByArchivedVersionId = new Map();
+  for (const row of archivedVersionInstances.results) {
+    const list = instancesByArchivedVersionId.get(row.version_id) ?? [];
+    list.push(versionInstanceFromRow(row));
+    instancesByArchivedVersionId.set(row.version_id, list);
+  }
   return {
     friendships: friendships.results.map((row) => friendshipFromRow(row, builderId, new Map(), new Map())),
     directMessages: directMessages.results.map(directMessageFromRow),
@@ -11462,6 +11481,10 @@ async function exportSocialSection(db, builderId, userId) {
     landletVersions: landletVersions.results.map((row) => {
       const instances = instancesByVersionId.get(row.version_id) ?? [];
       return { ...versionFromRow(row), instanceCount: instances.length, instances };
+    }),
+    archivedLandletVersions: archivedLandletVersions.results.map((row) => {
+      const instances = instancesByArchivedVersionId.get(row.version_id) ?? [];
+      return { ...archivedVersionFromRow(row), instanceCount: instances.length, instances };
     }),
   };
 }
@@ -17938,6 +17961,25 @@ function versionFromRow(row) {
   return {
     versionId: row.version_id,
     landletId: row.landlet_id,
+    versionNumber: row.version_number,
+    name: row.name,
+    instanceCount: row.instance_count || 0,
+    metadata: JSON.parse(row.metadata_json || '{}'),
+    createdAt: row.created_at,
+  };
+}
+
+// #2185: archived_landlet_versions (migrations/0140) is a straight
+// re-parent of a landlet_versions row, column-for-column, except
+// landlet_id is replaced by builder_id (the new, permanent owner) and
+// source_landlet_id (informational only, nullable -- see that migration's
+// own comment on why it can't be the identity column). versionInstanceFromRow
+// below is reused as-is for archived_version_instances rows -- every
+// column it reads is shared verbatim between the two tables.
+function archivedVersionFromRow(row) {
+  return {
+    versionId: row.version_id,
+    sourceLandletId: row.source_landlet_id,
     versionNumber: row.version_number,
     name: row.name,
     instanceCount: row.instance_count || 0,
