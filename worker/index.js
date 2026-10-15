@@ -1039,8 +1039,18 @@ async function handleControlRoomTaskCreate(request, env, db) {
   // or a caller who happens to write e.g. "Feedback"/"Owner" silently
   // skips the gate entirely -- exactly the N31 failure mode #909 already
   // fixed for the exact-casing case.
-  const isMessageShaped = kind.toLowerCase() === 'feedback' || kind.toLowerCase() === 'question';
+  const kindLower = kind.toLowerCase();
+  const isMessageShaped = kindLower === 'feedback' || kindLower === 'question';
   const autoAssignNoteNumber = isMessageShaped && explicitNumber == null && explicitNoteNumber == null;
+  // #2205: unlike waitingOn just below, kind itself was never reassigned to
+  // the canonical lowercase form once it matched case-insensitively -- the
+  // gate above worked for a casing variant (e.g. "Question"), but the
+  // original mixed-case value is what got stored, and
+  // admin-control-room.html's needsAnswerBadge() does a strict === against
+  // the stored value, so "Needs your answer" silently never showed for a
+  // case-variant question. Any other value (a genuine GitHub-issue kind)
+  // passes through untouched, same as waitingOn's own canonicalization.
+  const canonicalKind = kindLower === 'feedback' ? 'feedback' : kindLower === 'question' ? 'question' : kind;
 
   // #909: the update handler's own comment above calls its reason
   // requirement "the core of N31's own fix" -- this create path is the
@@ -1078,7 +1088,7 @@ async function handleControlRoomTaskCreate(request, env, db) {
         : '?'}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       taskId,
-      kind,
+      canonicalKind,
       explicitNumber,
       ...(autoAssignNoteNumber ? [] : [explicitNoteNumber]),
       title,
