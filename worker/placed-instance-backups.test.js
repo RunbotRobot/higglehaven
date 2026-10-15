@@ -273,6 +273,198 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
     expect(stillThere.count).toBe(1);
   });
 
+  // #2183: position used to come from a COUNT(*) read in a statement
+  // separate from the INSERT -- two concurrent appends could both read the
+  // same count and both land on the same position. A plain Promise.all of
+  // two real requests doesn't reliably force this interleaving in this
+  // single-worker test harness (confirmed empirically: it still passed
+  // against the un-fixed code), so this uses the same env.DB.prepare
+  // hijack idiom as the ownership-transfer-mid-request races above --
+  // intercepting the INSERT itself and, right before it runs, fires a full
+  // competing append (its own fresh COUNT read + INSERT) via the
+  // unhijacked originalPrepare. Against the old code, the real request's
+  // own position was already bound from an earlier, now-stale COUNT read,
+  // so it collides with the injected competitor's row. Against the fix,
+  // the real INSERT's own COUNT lives in a subquery evaluated at this
+  // exact execution -- after the injected competitor has already
+  // committed -- so it correctly sees the incremented count instead.
+  it('never lands two concurrent appends on the same position', async () => {
+    const builder = await signupBuilder('backups-append-race-builder');
+    await createLandletAndClaim('backups-append-race-landlet', builder);
+    await createTemplate('backups-append-race-template');
+    await createTemplate('backups-append-race-backup-1');
+    await createTemplate('backups-append-race-backup-2');
+    await placeInstance('backups-append-race-instance', 'backups-append-race-landlet', 'backups-append-race-template', builder);
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO placed_instance_backups')) {
+        armed = false;
+        // A single direct write (no preceding read), issued to D1 before
+        // the real statement this hijack intercepted is even dispatched by
+        // its own caller -- a competitor needing a read-then-write round
+        // trip here would lose the race to the real statement's own
+        // single-statement INSERT and never actually land first (confirmed
+        // empirically: an earlier read-then-write version of this
+        // competitor passed even against the un-fixed code, for exactly
+        // that reason). The chain is known-empty at this point in the
+        // test, so position 0 is the correct literal to plant.
+        originalPrepare(
+          'INSERT INTO placed_instance_backups (backup_id, instance_id, position, template_id) VALUES (?, ?, ?, ?)',
+        ).bind('backups-append-race-competitor', 'backups-append-race-instance', 0, 'backups-append-race-backup-2').run();
+      }
+      return originalPrepare(sql);
+    };
+    let added;
+    try {
+      added = await api('/instances/backups-append-race-instance/backups', builder.session({
+        method: 'POST', body: JSON.stringify({ templateId: 'backups-append-race-backup-1' }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(added.response.status).toBe(201);
+
+    const { results } = await env.DB.prepare(
+      'SELECT backup_id, position FROM placed_instance_backups WHERE instance_id = ? ORDER BY position',
+    ).bind('backups-append-race-instance').all();
+    expect(results.map((r) => r.position)).toEqual([0, 1]);
+  });
+
+  // #2183: the gap-closing shift used to run as a statement separate from
+  // both the DELETE it followed and the other deletion's own sequence,
+  // keyed off a position read well before either write -- two concurrent
+  // deletes of different backups on the same chain could each shift using
+  // a stale idea of where the other one's removed row sat. Two earlier
+  // versions of this test (a fire-and-forget hijacked "competitor", then a
+  // single gate synchronizing just the two leading position-reads) both
+  // turned out not to reliably prove anything: tracing the actual bug by
+  // hand shows the gap only appears under one specific ordering of the
+  // *shift* statements specifically, not merely from both reads
+  // overlapping -- when the shift with the lower position threshold
+  // commits first, the other request's own already-bound higher threshold
+  // stops matching rows that the first shift already pulled below it.
+  // (The opposite order is harmless: a higher-threshold shift running
+  // first doesn't touch what the lower-threshold shift reads next, so it
+  // still finds everything it expects.) So this test uses two gates: one
+  // synchronizes both requests' leading `SELECT position ... WHERE
+  // backup_id` reads (so both capture the pre-delete state, not an
+  // already-shifted one -- a read that happens after the other side's
+  // write is simply accurate, not stale, and can never expose this), and
+  // a second specifically orders the two shift statements so the lower-
+  // threshold one's own `.run()` resolves before the higher-threshold
+  // one's is allowed to start -- the exact ordering the trace above
+  // requires. The second gate targets the old code's standalone
+  // `UPDATE ... SET position = position - 1` statement by its own bound
+  // threshold value; it's inert against the fix, which never calls `.run()`
+  // on that statement directly at all -- it's one half of a `db.batch(...)`
+  // pair, dispatched as a single atomic transaction regardless of
+  // ordering, which is exactly why the fix doesn't need this forced
+  // ordering to stay correct.
+  it('keeps positions contiguous when two different backups on the same chain are deleted concurrently', async () => {
+    const builder = await signupBuilder('backups-delete-race2-builder');
+    await createLandletAndClaim('backups-delete-race2-landlet', builder);
+    await createTemplate('backups-delete-race2-template');
+    await createTemplate('backups-delete-race2-backup-1');
+    await createTemplate('backups-delete-race2-backup-2');
+    await createTemplate('backups-delete-race2-backup-3');
+    await createTemplate('backups-delete-race2-backup-4');
+    await placeInstance('backups-delete-race2-instance', 'backups-delete-race2-landlet', 'backups-delete-race2-template', builder);
+    const ids = [];
+    for (const templateId of ['backups-delete-race2-backup-1', 'backups-delete-race2-backup-2', 'backups-delete-race2-backup-3', 'backups-delete-race2-backup-4']) {
+      const added = await api('/instances/backups-delete-race2-instance/backups', builder.session({
+        method: 'POST', body: JSON.stringify({ templateId }),
+      }));
+      ids.push(added.body.backup.backupId);
+    }
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let readArrivals = 0;
+    let releaseReadGate;
+    const readGate = new Promise((resolve) => { releaseReadGate = resolve; });
+    let lowerShiftDone;
+    const lowerShiftDonePromise = new Promise((resolve) => { lowerShiftDone = resolve; });
+    env.DB.prepare = (sql) => {
+      const stmt = originalPrepare(sql);
+      if (sql.includes('SELECT position FROM placed_instance_backups WHERE backup_id')) {
+        return new Proxy(stmt, {
+          get(target, prop, receiver) {
+            if (prop !== 'bind') return Reflect.get(target, prop, receiver);
+            return (...bindArgs) => {
+              const bound = target.bind(...bindArgs);
+              return new Proxy(bound, {
+                get(boundTarget, boundProp, boundReceiver) {
+                  if (boundProp !== 'first') return Reflect.get(boundTarget, boundProp, boundReceiver);
+                  return async (...firstArgs) => {
+                    readArrivals += 1;
+                    if (readArrivals >= 2) releaseReadGate();
+                    await readGate;
+                    return boundTarget.first(...firstArgs);
+                  };
+                },
+              });
+            };
+          },
+        });
+      }
+      // Only the old code's standalone shift ever calls .run() on this
+      // statement directly -- the fix's own identical-looking shift SQL is
+      // one of two db.batch(...) array elements, executed as a single
+      // atomic transaction without either element's .run() ever being
+      // called on its own, so this branch is simply never reached for it.
+      if (sql.includes('UPDATE placed_instance_backups SET position = position - 1')) {
+        return new Proxy(stmt, {
+          get(target, prop, receiver) {
+            if (prop !== 'bind') return Reflect.get(target, prop, receiver);
+            return (...bindArgs) => {
+              const threshold = bindArgs[1];
+              const bound = target.bind(...bindArgs);
+              return new Proxy(bound, {
+                get(boundTarget, boundProp, boundReceiver) {
+                  if (boundProp !== 'run') return Reflect.get(boundTarget, boundProp, boundReceiver);
+                  return async (...runArgs) => {
+                    if (threshold > 1) await lowerShiftDonePromise;
+                    const result = await boundTarget.run(...runArgs);
+                    if (threshold === 1) lowerShiftDone();
+                    return result;
+                  };
+                },
+              });
+            };
+          },
+        });
+      }
+      return stmt;
+    };
+    let results1;
+    let results2;
+    try {
+      [results1, results2] = await Promise.all([
+        api(`/instances/backups-delete-race2-instance/backups/${ids[1]}`, builder.session({ method: 'DELETE' })),
+        api(`/instances/backups-delete-race2-instance/backups/${ids[2]}`, builder.session({ method: 'DELETE' })),
+      ]);
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(results1.response.status).toBe(200);
+    expect(results2.response.status).toBe(200);
+
+    const { results } = await env.DB.prepare(
+      'SELECT backup_id, position FROM placed_instance_backups WHERE instance_id = ? ORDER BY position',
+    ).bind('backups-delete-race2-instance').all();
+    expect(results.map((r) => r.backup_id)).toEqual([ids[0], ids[3]]);
+    expect(results.map((r) => r.position)).toEqual([0, 1]);
+
+    // The chain should still be usable for the next append, same
+    // "stays contiguous for the next append" contract the sequential
+    // delete test above already covers.
+    const appended = await api('/instances/backups-delete-race2-instance/backups', builder.session({
+      method: 'POST', body: JSON.stringify({ templateId: 'backups-delete-race2-backup-1' }),
+    }));
+    expect(appended.body.backup.position).toBe(2);
+  });
+
   it('blocks deleting a catalog template still configured as a backup', async () => {
     const builder = await signupBuilder('backups-delete-template-builder');
     await createLandletAndClaim('backups-delete-template-landlet', builder);
