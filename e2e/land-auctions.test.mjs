@@ -38,7 +38,8 @@ await startForm.locator('input').nth(1).fill('1'); // duration 1 hour
 await sellerPage.click('.auction-start-btn');
 await sellerPage.waitForFunction(
   () => document.querySelector('.settings-field .auction-row')?.textContent.includes('Your auction is live'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const sellerOwnAuctionText = await sellerPage.locator('.auction-row').first().textContent();
 console.log('seller\'s own auction row (should mention "Your auction is live" and "$10.00"):', sellerOwnAuctionText);
@@ -116,7 +117,8 @@ await bidInput.fill('15');
 await auctionsListItems.first().locator('.auction-bid-btn').click();
 await bidderPage.waitForFunction(
   () => document.querySelector('.auction-list .auction-row')?.textContent.includes('$15.00'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const afterBidText = await auctionsListItems.first().textContent();
 console.log('auction after bidding (should mention high bid $15.00, 1 bid):', afterBidText);
@@ -175,7 +177,8 @@ await bidHistoryBtn.click();
 await bidderPage.waitForFunction(
   () => document.querySelector('.auction-bid-history .settings-empty-note') !== null
     && !document.querySelector('.auction-bid-history .settings-empty-note').textContent.includes('Loading'),
-  { timeout: 5000 },
+  null,
+  { timeout: 30000 },
 );
 const bidHistoryErrorText = await auctionsListItems.first().locator('.auction-bid-history').first().textContent();
 console.log('bid history shows an error note when the bids fetch fails (should not be a real bid row):', bidHistoryErrorText);
@@ -189,7 +192,8 @@ await sellerPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await sellerPage.click('.settings-tab-btn[data-section="build"]');
 await sellerPage.waitForFunction(
   () => document.querySelector('.settings-field .auction-row')?.textContent.includes('$15.00'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const sellerSeesBidText = await sellerPage.locator('.auction-row').first().textContent();
 console.log('seller\'s own view after the bid (should mention $15.00):', sellerSeesBidText);
@@ -205,7 +209,8 @@ await sellerPage.click('#notifications-btn');
 await sellerPage.waitForSelector('#notifications-modal.visible', { timeout: 5000 });
 await sellerPage.waitForFunction(
   () => document.querySelector('.notification-row')?.textContent.includes('New bid of $15.00'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const sellerNoticeText = await sellerPage.locator('.notification-row').first().textContent();
 console.log('seller\'s notification for the new bid (should mention "New bid of $15.00"):', sellerNoticeText);
