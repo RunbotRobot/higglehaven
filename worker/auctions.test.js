@@ -951,6 +951,10 @@ describe('Auctions', () => {
     const owner = await signupBuilder('relinquish-owner');
     await createGreenbeltLandlet('auction-relinquish-landlet');
     await claim('auction-relinquish-landlet', owner);
+    const versioned = await api('/landlets/auction-relinquish-landlet/versions', owner.session({
+      method: 'POST', body: JSON.stringify({ name: 'Pre-relinquish version' }),
+    }));
+    const versionId = versioned.body.version.versionId;
     const started = await api('/landlets/auction-relinquish-landlet/auction', owner.session({
       method: 'POST', body: JSON.stringify({ startingBidCents: 0, durationHours: 1 }),
     }));
@@ -968,6 +972,16 @@ describe('Auctions', () => {
 
     const notices = await api('/notifications', owner.session());
     expect(notices.body.notifications.some((n) => n.message.includes('released to greenbelt'))).toBe(true);
+
+    // #1257: a voluntary $0 auction is the seller's own deliberate choice
+    // (unlike an inactivity-triggered one — see that describe block's own
+    // regression test) — it keeps the original full wipe, never archived.
+    const liveVersions = await api('/landlets/auction-relinquish-landlet/versions');
+    expect(liveVersions.body.versions).toEqual([]);
+    const archived = await env.DB.prepare(
+      'SELECT * FROM archived_landlet_versions WHERE version_id = ?',
+    ).bind(versionId).first();
+    expect(archived).toBeNull();
   });
 
   it('keeps an unsold reserved (>$0 starting bid) auction with its seller', async () => {
@@ -1437,6 +1451,56 @@ describe('Inactivity-triggered auctions', () => {
     expect(notifications[0].message).toContain('inactivity-landlet-a');
     expect(notifications[0].message).toContain('automatically put up for a $0 starting-bid auction');
     expect(notifications[0].message).not.toContain('bid to keep it'); // no cancel/reclaim path exists
+  });
+
+  // #1257 (owner-confirmed): unlike a voluntary $0 auction's own no-bid
+  // release (see "releases an unsold $0-starting-bid auction to
+  // greenbelt" above, which still fully wipes landlet_versions), an
+  // inactivity-triggered release wasn't the owner's choice -- their
+  // version history must survive, just moved off the landlet (keyed to
+  // them instead, per migrations/0140's own comment) rather than left in
+  // place or deleted outright.
+  it('archives the owner\'s version history instead of deleting it when an inactivity-triggered auction resolves with no bids', async () => {
+    const owner = await signupBuilder('inactive-preserve-owner');
+    await createGreenbeltLandlet('inactivity-preserve-landlet');
+    await claim('inactivity-preserve-landlet', owner);
+    const versioned = await api('/landlets/inactivity-preserve-landlet/versions', owner.session({
+      method: 'POST', body: JSON.stringify({ name: 'Pre-inactivity version' }),
+    }));
+    expect(versioned.response.status).toBe(201);
+    const versionId = versioned.body.version.versionId;
+    await backdateLastActive(owner.builderId, 31);
+
+    await runScheduled();
+    const auction = await activeAuctionFor('inactivity-preserve-landlet');
+    expect(auction.inactivity_triggered).toBe(1);
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auction.auction_id).run();
+
+    const resolved = await api(`/auctions/${auction.auction_id}/resolve`, { method: 'POST' });
+    expect(resolved.response.status).toBe(200);
+
+    const landlet = await api('/landlets/inactivity-preserve-landlet');
+    expect(landlet.body.landlet.status).toBe('greenbelt');
+    expect(landlet.body.landlet.ownerBuilderId).toBeNull();
+
+    // The original is gone from the landlet (it's released, no longer
+    // attached to anyone's active build)...
+    const liveVersions = await api('/landlets/inactivity-preserve-landlet/versions');
+    expect(liveVersions.body.versions).toEqual([]);
+
+    // ...but survived, re-parented to the owner rather than destroyed.
+    const archived = await env.DB.prepare(
+      'SELECT * FROM archived_landlet_versions WHERE version_id = ?',
+    ).bind(versionId).first();
+    expect(archived).not.toBeNull();
+    expect(archived.builder_id).toBe(owner.builderId);
+    expect(archived.source_landlet_id).toBe('inactivity-preserve-landlet');
+    expect(archived.name).toBe('Pre-inactivity version');
+
+    const archivedInstanceCount = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM archived_version_instances WHERE version_id = ?',
+    ).bind(versionId).first();
+    expect(archivedInstanceCount.n).toBe(0); // no instances were placed before saving this version — just confirming the join didn't error
   });
 
   // #1694: fireNotifications' own all-or-nothing loop used to rethrow (and
