@@ -33,10 +33,18 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '40');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+// #2145 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real
+// applied timeout was always Playwright's actual default (30000ms), never
+// the smaller number written here. The explicit `null` arg reaches the
+// options slot, and the timeout itself is widened to 60000ms for real
+// headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
+// wait.
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 60000 });
 await page.waitForTimeout(300);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 60000 });
 await page.waitForTimeout(500);
 
 async function fetchJson(pathAndQuery, options) {

@@ -310,16 +310,35 @@ async function routeRequest(request, env, ctx) {
     return new Response(null, { status: 204, headers: JSON_HEADERS });
   }
 
+  // #2173: each handler below already catches its own requireAdmin
+  // HttpError and renders an HTML sign-in page for it -- but requireAdmin's
+  // underlying db.prepare(...).first() call can also throw a raw, non-
+  // HttpError runtime/D1 error (a transient DB failure, a binding issue),
+  // which each handler explicitly re-throws. Unlike every /api/ and
+  // /uploads/ route below, nothing here was catching that escape, so it
+  // propagated out of routeRequest entirely -- past withSecurityHeaders,
+  // into a bare unhandled-exception response instead of this app's own
+  // consistent JSON error shape. Same catch-all fallback the /api/ branch
+  // already uses.
   if (url.pathname === '/admin/control-room') {
-    return handleControlRoomAdminPage(request, env);
+    return handleControlRoomAdminPage(request, env).catch((error) => {
+      console.error(error);
+      return json({ error: 'Internal server error' }, 500);
+    });
   }
 
   if (url.pathname === '/admin/action-log') {
-    return handleAdminActionLogPage(request, env);
+    return handleAdminActionLogPage(request, env).catch((error) => {
+      console.error(error);
+      return json({ error: 'Internal server error' }, 500);
+    });
   }
 
   if (url.pathname === '/admin/dashboard') {
-    return handleAdminDashboardPage(request, env);
+    return handleAdminDashboardPage(request, env).catch((error) => {
+      console.error(error);
+      return json({ error: 'Internal server error' }, 500);
+    });
   }
 
   if (url.pathname.startsWith('/api/')) {
@@ -6811,6 +6830,39 @@ async function resolveAuction(db, auction) {
         WHERE landlet_id = ? AND status = 'active' AND auction_id != ?
       `).bind(auction.landlet_id, auction.auction_id),
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
+    );
+    // #1257 (owner-confirmed): an inactivity-triggered release gets a
+    // gentler cleanup than a voluntary $0 auction's own no-bid release —
+    // the builder didn't choose this, so their version history is
+    // archived (moved off the landlet, keyed to them instead — see
+    // migrations/0140's own comment for why a bare skip-the-delete isn't
+    // safe) rather than destroyed outright. A voluntary $0 auction is an
+    // explicit, deliberate "give this away for free" choice, so it keeps
+    // the original full wipe.
+    if (auction.inactivity_triggered) {
+      statements.push(
+        db.prepare(`
+          INSERT INTO archived_landlet_versions (version_id, builder_id, source_landlet_id, version_number, name, metadata_json, created_at)
+          SELECT version_id, ?, landlet_id, version_number, name, metadata_json, created_at
+          FROM landlet_versions WHERE landlet_id = ?
+        `).bind(auction.seller_builder_id, auction.landlet_id),
+        db.prepare(`
+          INSERT INTO archived_version_instances
+            (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
+          SELECT vi.version_id, vi.source_instance_id, vi.template_id, vi.x_m, vi.y_m, vi.z_m,
+                 vi.rotation_x_rad, vi.rotation_y_rad, vi.rotation_z_rad, vi.label, vi.crop_json, vi.scale,
+                 vi.is_community_sign, vi.is_community_calendar
+          FROM version_instances vi
+          JOIN landlet_versions v ON v.version_id = vi.version_id
+          WHERE v.landlet_id = ?
+        `).bind(auction.landlet_id),
+      );
+    }
+    statements.push(
+      // Deletes every landlet_versions row either way — the branch above
+      // has already archived them first when inactivity_triggered, so
+      // this is a straight cascade-cleanup of the now-copied originals,
+      // not a loss. version_instances cascades via its own FK.
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare(`
@@ -13659,8 +13711,8 @@ async function autoAuctionInactiveLandlets(db) {
   const cutoff = new Date(Date.now() - INACTIVITY_AUCTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
   const endsAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(); // matches handleStartAuction's own default duration
   const inserted = await db.prepare(`
-    INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, ends_at)
-    SELECT 'auction-' || lower(hex(randomblob(16))), landlets.landlet_id, landlets.owner_builder_id, 0, ?
+    INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, ends_at, inactivity_triggered)
+    SELECT 'auction-' || lower(hex(randomblob(16))), landlets.landlet_id, landlets.owner_builder_id, 0, ?, 1
     FROM landlets
     JOIN builders ON builders.builder_id = landlets.owner_builder_id
     WHERE landlets.status = 'claimed'
@@ -14292,6 +14344,12 @@ async function handleInstances(request, env, route, url) {
 // sign posts have, since nobody but the owner has any business touching
 // their own backup chain.
 const INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX = 200;
+// #2171: every other ordered/bulk-array endpoint in this file caps its
+// length explicitly (e.g. PUT /landlets/:id/instances at 250, POST
+// /land-candidates/batch at 100) -- this chain had no such cap. 20 matches
+// the scale of a "backup chain" feature (a handful of fallback templates
+// per instance, not a bulk list).
+const INSTANCE_BACKUP_CHAIN_MAX = 20;
 
 function backupFromRow(row) {
   return {
@@ -14327,6 +14385,9 @@ async function handleInstanceBackups(request, db, route) {
     const tail = await db.prepare(
       'SELECT COUNT(*) AS count FROM placed_instance_backups WHERE instance_id = ?',
     ).bind(instanceId).first();
+    if (tail.count >= INSTANCE_BACKUP_CHAIN_MAX) {
+      throw new HttpError(`A backup chain can contain at most ${INSTANCE_BACKUP_CHAIN_MAX} entries`, 400);
+    }
     const backupId = `backup-${crypto.randomUUID()}`;
     // #929/#960 idiom (see handleInstances' own POST above): requireOwnedLandlet
     // above is a point-in-time check, and the awaits since then (readJson,
@@ -15858,15 +15919,33 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
     WHERE pi.template_id = ?
   `).bind(template.template_id).all();
 
-  const deletedCountByBuilder = new Map();
-  for (const { instanceId, landletId, xM, yM, zM, builderId } of affectedInstances) {
-    const { results: chain } = await db.prepare(`
-      SELECT pib.backup_id AS backupId, pib.template_id AS templateId, ct.stock_quantity AS stockQuantity
+  // #2170: one batched IN(...) lookup for every affected instance's backup
+  // chain, instead of a separate query per instance inside the loop below --
+  // this function blocks handlePurchaseFinalize's own request (awaited from
+  // its purchase-commit path), so an O(n) sequential-round-trip sweep over a
+  // popular/free template placed across many landlets risked real checkout
+  // latency. Same batch-then-look-up-in-memory idiom this file already uses
+  // elsewhere (e.g. getInstancesById, the builder-notification-preference
+  // lookup a few lines below this function's own loop).
+  const chainsByInstance = new Map();
+  if (affectedInstances.length > 0) {
+    const instanceIds = affectedInstances.map((i) => i.instanceId);
+    const { results: allChainEntries } = await db.prepare(`
+      SELECT pib.instance_id AS instanceId, pib.backup_id AS backupId, pib.template_id AS templateId, ct.stock_quantity AS stockQuantity
       FROM placed_instance_backups pib
       JOIN catalog_templates ct ON ct.template_id = pib.template_id
-      WHERE pib.instance_id = ?
-      ORDER BY pib.position
-    `).bind(instanceId).all();
+      WHERE pib.instance_id IN (${instanceIds.map(() => '?').join(', ')})
+      ORDER BY pib.instance_id, pib.position
+    `).bind(...instanceIds).all();
+    for (const entry of allChainEntries) {
+      if (!chainsByInstance.has(entry.instanceId)) chainsByInstance.set(entry.instanceId, []);
+      chainsByInstance.get(entry.instanceId).push(entry);
+    }
+  }
+
+  const deletedCountByBuilder = new Map();
+  for (const { instanceId, landletId, xM, yM, zM, builderId } of affectedInstances) {
+    const chain = chainsByInstance.get(instanceId) || [];
     const consumedBackupIds = [];
     const viable = chain.find((entry) => {
       consumedBackupIds.push(entry.backupId);

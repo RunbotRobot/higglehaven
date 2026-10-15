@@ -35,10 +35,10 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '10.00');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
 await page.waitForTimeout(500);
 
 const row = () => page.locator('.seller-row').filter({ hasText: PRODUCT_NAME });
@@ -79,7 +79,8 @@ console.log('Save Price disabled while Save Size is still in flight (should be t
 
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-size-status')).some((el) => el.textContent.includes('notified')),
-  { timeout: 20000 },
+  null,
+  { timeout: 30000 },
 );
 const priceBtnReenabledAfter = !(await row().locator('.seller-price-save-btn').isDisabled());
 console.log('Save Price re-enabled once Save Size finished (should be true):', priceBtnReenabledAfter);
@@ -88,7 +89,8 @@ await row().locator('.seller-price-input').fill('7.99');
 await row().locator('button', { hasText: 'Save Price' }).click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-price-status')).some((el) => el.textContent === 'Saved.'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 
 const { templates } = await page.evaluate(async () => {
