@@ -32,10 +32,10 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '5');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
 await page.waitForTimeout(500);
 
 const productRow = () => page.locator('.seller-row').filter({ hasText: PRODUCT_NAME });
@@ -66,7 +66,8 @@ await page.route('**/api/catalog/*', async (route) => {
 await productRow().locator('.seller-size-save-btn').click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-size-status')).some((el) => el.textContent === 'Saving…'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 
 // Real user behavior — nothing in-flight is canceled by this (closeSellerModal
