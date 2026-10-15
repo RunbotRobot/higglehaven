@@ -45,7 +45,7 @@ await page.click('#upload-submit-btn'); // "Create Product" on the file step
 // Confirms showUploadDimensionPreview has actually started (status text
 // updates to "Loading preview…" right before it's called) and is therefore
 // sitting inside its artificial delay, not a guess at timing.
-await page.waitForFunction(() => document.getElementById('upload-status').textContent.includes('Loading preview'), { timeout: 10000 });
+await page.waitForFunction(() => document.getElementById('upload-status').textContent.includes('Loading preview'), null, { timeout: 30000 });
 
 await page.click('#upload-cancel-btn'); // Cancel while the preview load is still "in flight"
 

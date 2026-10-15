@@ -48,7 +48,7 @@ await page.click('#upload-submit-btn');
 const statusDuringConversion = await page.textContent('#upload-status').catch(() => '');
 console.log('status text sampled during the upload (informational, may already have moved on):', statusDuringConversion);
 
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await page.waitForTimeout(300);
 
 const measuredX = Number(await page.locator('.upload-dimension-input[data-axis="x"]').inputValue());
@@ -57,7 +57,7 @@ const measuredZ = Number(await page.locator('.upload-dimension-input[data-axis="
 console.log('measured dimensions from the converted .glb (should all be > 0):', { measuredX, measuredY, measuredZ });
 
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
 await page.waitForTimeout(500);
 
 const sellerListText = await page.textContent('#seller-list');

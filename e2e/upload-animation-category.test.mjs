@@ -29,7 +29,7 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '5');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await page.waitForTimeout(300);
 
 // Checking "avatar" first, then "animation" — the second check should
@@ -48,7 +48,7 @@ console.log('animation checkbox cleared after checking avatar (should be true):'
 // Leave only "animation" checked for the actual submit below.
 await page.check('#upload-animation-category-checkbox');
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
 await page.waitForTimeout(500);
 
 async function fetchJson(pathAndQuery, options) {
