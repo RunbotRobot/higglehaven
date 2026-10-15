@@ -56,9 +56,23 @@ await page.unroute('**/api/builders/me');
 // Switching back to Build afterward should still work normally — the fix
 // only skips a superseded render, not a fresh, current one.
 await page.click('.settings-tab-btn[data-section="build"]');
+// #2135: waitForFunction's signature is (pageFunction, arg, options) -- the
+// 2-argument call this used to be (fn, { timeout: 10000 })) put the options
+// object in the `arg` slot instead, so `options` stayed undefined and the
+// *real* applied timeout was always Playwright's actual default (30000ms),
+// not the 10000ms written here -- confirmed directly against the CI
+// failure this issue was filed from ("Timeout 30000ms exceeded" at this
+// exact line). That default still wasn't enough margin under CI load, so
+// fixing the arg/options mix-up alone would make it worse (an *honored*
+// 10000ms is less generous than the *dishonored* 30000ms it was actually
+// getting) -- the explicit `null` arg reaches the options slot, and the
+// timeout itself is widened well past the old effective default for real
+// headroom, same as this suite's own account-menu-modal wait (60000ms,
+// e2e/helpers.mjs) for a comparable post-signup/identity-flow margin.
 await page.waitForFunction(
   () => document.getElementById('settings-section').textContent.includes('Land Cap'),
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 const buildTabWorksNormally = (await page.textContent('#settings-section')).includes('Land Cap');
 console.log('Build tab still renders Land Cap normally on a fresh, non-superseded switch (should be true):', buildTabWorksNormally);
