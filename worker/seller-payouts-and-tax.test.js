@@ -1123,6 +1123,90 @@ describe('Seller payouts (#454)', () => {
       expect(forms).toEqual([expect.objectContaining({ formType: '1099-k', status: 'draft', grossIncomeCents: 2000000 })]);
     });
 
+    // #2214: generateTax1099Drafts only ever upserts payees its own
+    // threshold-crossing queries still return -- a draft whose payee later
+    // drops back under the threshold (here, via a refund) stopped
+    // appearing in those queries and so just kept its original,
+    // now-overstated snapshot forever. Covers both form types, since the
+    // underlying bug (and fix) is a parallel pair of queries for each.
+    it('removes a still-draft 1099-K form once a refund drops the seller\'s real total back under the threshold', async () => {
+      const builder = await signupBuilder('tax-1099-k-refund-prune-builder');
+      const seller = await createConnectedSeller('tax-1099-k-refund-prune-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller);
+      await env.DB.prepare('UPDATE purchases SET total_cents = 2000000 WHERE purchase_id = ?').bind(purchaseId).run();
+
+      const year = new Date().getUTCFullYear();
+      const before = await api(`/tax/admin-forms?year=${year}`, adminSession());
+      expect(before.body.forms.find((f) => f.email === seller.email)).toMatchObject({
+        formType: '1099-k', status: 'draft', grossIncomeCents: 2000000,
+      });
+
+      // Refunding for real always 503s in this suite (no Stripe configured)
+      // -- simulate what a real refund would have written, same technique
+      // as the "Tax summary" describe block's own refund-exclusion test.
+      await env.DB.prepare(
+        "UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE purchase_id = ?",
+      ).bind(purchaseId).run();
+
+      const after = await api(`/tax/admin-forms?year=${year}`, adminSession());
+      expect(after.body.forms.find((f) => f.email === seller.email)).toBeUndefined();
+      const row = await env.DB.prepare(
+        "SELECT * FROM tax_1099_forms WHERE user_id = (SELECT user_id FROM users WHERE email = ?) AND tax_year = ?",
+      ).bind(seller.email, year).first();
+      expect(row).toBeNull();
+    });
+
+    it('removes a still-draft 1099-NEC form once a builder\'s qualifying income drops back under the threshold', async () => {
+      const builder = await signupBuilder('tax-1099-nec-refund-prune-builder');
+      const builderMe = await api('/builders/me', builder.session());
+      const year = new Date().getUTCFullYear();
+
+      await grantHiggles(builderMe.body.builder.builderId, 70000); // $700 — over the $600 NEC threshold
+      const before = await api(`/tax/admin-forms?year=${year}`, adminSession());
+      const draft = before.body.forms.find((f) => f.email === builder.email);
+      expect(draft).toMatchObject({ formType: '1099-nec', status: 'draft', grossIncomeCents: 70000 });
+
+      // higgles_earnings_events has no refund concept of its own, and
+      // amount_cents has its own CHECK(amount_cents > 0) -- deleting the
+      // event outright is the simplest way to simulate the underlying
+      // earnings being reversed (e.g. a moderation clawback), dropping
+      // this builder's qualifying total back under $600.
+      await env.DB.prepare('DELETE FROM higgles_earnings_events WHERE builder_id = ?')
+        .bind(builderMe.body.builder.builderId).run();
+
+      const after = await api(`/tax/admin-forms?year=${year}`, adminSession());
+      expect(after.body.forms.find((f) => f.email === builder.email)).toBeUndefined();
+      const row = await env.DB.prepare(
+        "SELECT * FROM tax_1099_forms WHERE user_id = (SELECT user_id FROM users WHERE email = ?) AND tax_year = ? AND form_type = '1099-nec'",
+      ).bind(builder.email, year).first();
+      expect(row).toBeNull();
+    });
+
+    // An approved form must survive the exact same refund/reversal that
+    // would prune an equivalent still-draft form -- #2214's fix only ever
+    // targets status = 'draft' rows, the same guard upsertTax1099Draft's
+    // own WHERE clause already relies on.
+    it('does not prune an already-approved 1099 form when the payee\'s income later drops under the threshold', async () => {
+      const builder = await signupBuilder('tax-1099-approved-survives-refund');
+      const builderMe = await api('/builders/me', builder.session());
+      await env.DB.prepare('UPDATE users SET tax_form_type = ?, tax_form_completed_at = ? WHERE email = ?')
+        .bind('w9', '2026-01-01T00:00:00.000Z', builder.email).run();
+      const year = new Date().getUTCFullYear();
+
+      await grantHiggles(builderMe.body.builder.builderId, 70000);
+      const listed = await api(`/tax/admin-forms?year=${year}`, adminSession());
+      const draft = listed.body.forms.find((f) => f.email === builder.email);
+      const approved = await api(`/tax/admin-forms/${draft.formId}/approve`, adminSession({ method: 'POST' }));
+      expect(approved.response.status).toBe(200);
+
+      await env.DB.prepare('DELETE FROM higgles_earnings_events WHERE builder_id = ?')
+        .bind(builderMe.body.builder.builderId).run();
+
+      const after = await api(`/tax/admin-forms?year=${year}`, adminSession());
+      const stillThere = after.body.forms.find((f) => f.email === builder.email);
+      expect(stillThere).toMatchObject({ status: 'approved', grossIncomeCents: 70000 });
+    });
+
     it('refreshes a draft\'s snapshot on regeneration, but never touches an already-approved form', async () => {
       const builder = await signupBuilder('tax-1099-refresh-builder');
       const builderMe = await api('/builders/me', builder.session());
