@@ -602,6 +602,13 @@
   // sites (Refresh, generateMosaic, generateRing, completeRing, submitBatch,
   // initial load) that can race, and without it an earlier-sent request's
   // stale world snapshot can land after and overwrite a fresher one.
+  // #2099: loadWorld()/saveWorld()/expandWorld() below all race each other --
+  // a refresh, a save, and an expand can each be in flight at once, all
+  // resolving into the very same renderWorld(). Every one of them increments
+  // this single shared token, so whichever call is actually the LATEST one
+  // started always wins the eventual render, regardless of which order their
+  // responses happen to land in -- same shared-token idiom as the Landlets
+  // panel's landletLookupToken (#2062/#2072).
   let worldLoadToken = 0;
 
   function renderWorld(world) {
@@ -649,6 +656,7 @@
       showError('World metadata is not valid JSON');
       return;
     }
+    const myLoadToken = ++worldLoadToken;
     try {
       const body = await apiFetch('/api/world', {
         method: 'PATCH',
@@ -661,16 +669,20 @@
           metadata,
         }),
       });
+      if (myLoadToken !== worldLoadToken) return;
       renderWorld(body.world);
     } catch (error) {
+      if (myLoadToken !== worldLoadToken) return;
       showError(error.message);
     }
   }
 
   async function expandWorld() {
     clearError();
+    const myLoadToken = ++worldLoadToken;
     try {
       const body = await apiFetch('/api/world/expand', { method: 'POST' });
+      if (myLoadToken !== worldLoadToken) return;
       renderWorld(body.world);
       const expansion = body.expansion;
       alert(
@@ -680,6 +692,7 @@
         + 'Rings ready for generation-complete: ' + (expansion.readyRingIds.join(', ') || 'none'),
       );
     } catch (error) {
+      if (myLoadToken !== worldLoadToken) return;
       // A 409 here ("Greenbelt reserve is at or above the expansion
       // threshold") is a normal, expected outcome, not a bug -- surfaced
       // the same as any other error so the admin sees why nothing changed.

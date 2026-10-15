@@ -3973,6 +3973,12 @@ async function myAvatarJson(db, builder) {
   };
 }
 
+// #2103: PUT below had no rate limit at all, unlike handleMyAvatar's own
+// PUT (AVATAR_EQUIP_RATE_LIMIT_MAX #1057) -- this function's own comment
+// already says it mirrors that handler's shape exactly, but never got the
+// rate limit that shape calls for.
+const NOTIFICATION_PREFERENCES_RATE_LIMIT_MAX = 20;
+
 // #2067 (leaf sub-issue of #1973, part of #1947): GET/PUT this account's
 // sold-out-email opt-in, same requireCurrentUser-only bar and GET/PUT
 // shape as handleMyAvatar above -- a communication preference isn't a
@@ -3986,6 +3992,7 @@ async function handleMyNotificationPreferences(request, db) {
   }
 
   if (request.method === 'PUT') {
+    await checkRateLimit(db, `notification-preferences:${builder.builder_id}`, NOTIFICATION_PREFERENCES_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (typeof input.notifySoldOutEmail !== 'boolean') {
       throw new HttpError('notifySoldOutEmail must be a boolean', 400);
@@ -15928,10 +15935,23 @@ async function handleSoldOutMarkers(request, db, route) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     await requireOwnedLandlet(db, landletId, sessionBuilder.builder_id);
     await checkRateLimit(db, `sold-out-marker-dismiss:${sessionBuilder.builder_id}`, SOLD_OUT_MARKER_DISMISS_RATE_LIMIT_MAX);
-    const result = await db.prepare(
-      'UPDATE sold_out_markers SET dismissed_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE marker_id = ? AND landlet_id = ? AND dismissed_at IS NULL',
-    ).bind(markerId, landletId).run();
+    // #2098: same #929/#960/#2091 idiom used throughout this file --
+    // requireOwnedLandlet above is a point-in-time check, and
+    // checkRateLimit is a real awaited gap since then. Fold the ownership
+    // re-check into the UPDATE itself (landlet_id is a direct FK here, so
+    // no placed_instances join is needed, unlike the backup-chain case).
+    const result = await db.prepare(`
+      UPDATE sold_out_markers SET dismissed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE marker_id = ? AND landlet_id = ? AND dismissed_at IS NULL AND EXISTS (
+        SELECT 1 FROM landlets l WHERE l.landlet_id = ? AND l.owner_builder_id IS ?
+      )
+    `).bind(markerId, landletId, landletId, sessionBuilder.builder_id).run();
     if (result.meta.changes === 0) {
+      const stillOwned = await db.prepare('SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?')
+        .bind(landletId, sessionBuilder.builder_id).first();
+      if (!stillOwned) {
+        throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+      }
       throw new HttpError('Marker not found or already dismissed', 404);
     }
     return json({ dismissed: true });

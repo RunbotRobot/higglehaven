@@ -1836,7 +1836,9 @@ already marked shipped, or has been refunded. On success, notifies the
 purchase's buyer (`purchases.buyer_builder_id`) that it has shipped — same
 best-effort notification convention as every other transactional event in
 this app (#1288), skipped silently if there's no `buyer_builder_id` (a
-pre-#1112 purchase, or a buyer who has since self-deleted).
+pre-#1112 purchase, or a buyer who has since self-deleted). Rate-limited to
+20 calls per 15 minutes, bucketed by the acting seller's or admin's own
+user id (see "Rate limiting" above).
 
 ```json
 { "purchase": { "purchaseId": "...", "shippedAt": "2026-01-01T00:00:00.000Z", "...": "..." } }
@@ -1870,7 +1872,9 @@ the purchase has been refunded. On the first confirmation (not a repeat
 visit), notifies the seller that delivery was confirmed and their payout
 was released early — same best-effort notification convention as every
 other transactional event in this app (#1289), skipped if the seller has
-since self-deleted.
+since self-deleted. Rate-limited to 20 calls per 15 minutes, bucketed by
+client IP since this endpoint is unauthenticated (see "Rate limiting"
+above).
 
 ## Catalog templates
 
@@ -7091,6 +7095,14 @@ was already dismissed, rather than silently succeeding against the wrong
 owner's scope. `404 "Marker not found or already dismissed"` covers both
 cases identically (same "no distinguishing a race from a genuine miss"
 shape other dismiss/claim-style actions in this file already use).
+
+#2098: the dismiss UPDATE also re-verifies the landlet is still owned by
+the caller at write time, same `#929`/`#960` idiom every other mutation
+in this file folds into its own write — `requireOwnedLandlet` above is
+only a point-in-time check, and the awaited `checkRateLimit` since then
+is a real gap a landlet reassignment/auction resolution could land in.
+Losing ownership in that gap is `409 "Landlet changed concurrently —
+refetch and retry"`, distinct from the marker-level `404` above.
 
 ### Frontend wiring
 
