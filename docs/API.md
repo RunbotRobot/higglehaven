@@ -6057,6 +6057,8 @@ Requires the session-authenticated owner of the lándlet. Body:
 the current range in that direction (from `0` if none exist yet) and
 recomputes the owning builder's land cap. Errors: `401` no session, `403`
 not the owner, `400` invalid/missing `direction`, `404` lándlet not found.
+Rate-limited per owning builder to 40 calls per 15 minutes (`landlet-level-add:<builderId>`,
+see "Rate limiting" above).
 
 Digging down (never up — the cone only narrows in that direction) is
 capped by docs/SPEC.md §3's two hard limits, both `409`: the new level's
@@ -6080,6 +6082,10 @@ level (in whichever direction `levelIndex` is on) can be removed —
 `409` otherwise, or if `levelIndex` is `0` (never a real row) or the
 lándlet has no levels at all. Frees the level's `capConsumedM2`
 immediately by recomputing the owning builder's land cap afterward.
+Rate-limited per owning builder to 40 calls per 15 minutes
+(`landlet-level-remove:<builderId>`, a separate bucket from the add
+endpoint above, see "Rate limiting" above).
+
 Found via backlog audit (#395): "still the outermost" is re-checked as
 part of the `DELETE`'s own atomic guard, not just the initial read, so a
 concurrent add extending past this level between the read and the delete
