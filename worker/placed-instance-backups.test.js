@@ -364,32 +364,50 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
   // both the DELETE it followed and the other deletion's own sequence,
   // keyed off a position read well before either write -- two concurrent
   // deletes of different backups on the same chain could each shift using
-  // a stale idea of where the other one's removed row sat. Two earlier
-  // versions of this test (a fire-and-forget hijacked "competitor", then a
-  // single gate synchronizing just the two leading position-reads) both
-  // turned out not to reliably prove anything: tracing the actual bug by
-  // hand shows the gap only appears under one specific ordering of the
-  // *shift* statements specifically, not merely from both reads
-  // overlapping -- when the shift with the lower position threshold
-  // commits first, the other request's own already-bound higher threshold
-  // stops matching rows that the first shift already pulled below it.
-  // (The opposite order is harmless: a higher-threshold shift running
-  // first doesn't touch what the lower-threshold shift reads next, so it
-  // still finds everything it expects.) So this test uses two gates: one
-  // synchronizes both requests' leading `SELECT position ... WHERE
-  // backup_id` reads (so both capture the pre-delete state, not an
-  // already-shifted one -- a read that happens after the other side's
-  // write is simply accurate, not stale, and can never expose this), and
-  // a second specifically orders the two shift statements so the lower-
-  // threshold one's own `.run()` resolves before the higher-threshold
-  // one's is allowed to start -- the exact ordering the trace above
-  // requires. The second gate targets the old code's standalone
-  // `UPDATE ... SET position = position - 1` statement by its own bound
-  // threshold value; it's inert against the fix, which never calls `.run()`
-  // on that statement directly at all -- it's one half of a `db.batch(...)`
-  // pair, dispatched as a single atomic transaction regardless of
-  // ordering, which is exactly why the fix doesn't need this forced
-  // ordering to stay correct.
+  // a stale idea of where the other one's removed row sat. #2174/PR #2179
+  // (landed independently, mid-investigation of this issue) already wraps
+  // the DELETE and its shift in one db.batch -- but still keys the shift's
+  // threshold off that same early, separately-read `existing.position`,
+  // just now atomically with the DELETE. That closes the single-request
+  // crash-between-statements window #2174 was about, but not this still-
+  // open cross-request race: two different concurrent deletes' *batches*
+  // simply serialize as two separate transactions, each still trusting its
+  // own now-possibly-stale threshold. Hand-tracing the bug shows the gap
+  // appears under one specific ordering -- when the batch for the lower
+  // position threshold commits before the batch for the higher one, the
+  // second batch's stale threshold no longer matches rows the first batch
+  // already pulled below it. (The reverse order is harmless: a higher-
+  // threshold batch committing first doesn't touch what the lower-
+  // threshold batch's own threshold next matches.) This fix instead folds
+  // a live subquery (re-deriving the target row's current position by
+  // backup_id, inside the same transaction) into the shift itself, so it's
+  // correct regardless of ordering.
+  //
+  // Proving this needs two gates, since the straightforward one (a plain
+  // Promise.all of two real requests) doesn't reliably force either
+  // interleaving in this single-worker test harness: one synchronizes both
+  // requests' leading `SELECT position ... WHERE backup_id` reads (so both
+  // capture the pre-delete snapshot -- a read that happens after the other
+  // side's write is simply accurate, not stale, and can never expose
+  // this), and a second forces the specific batch-commit ordering (lower
+  // threshold's batch resolves before the higher one's is even allowed to
+  // start) that the trace above requires. The second gate hijacks
+  // `env.DB.batch` itself, not an individual statement's `.run()` -- db.batch
+  // takes an array of already-bound statements and dispatches them as one
+  // transaction without calling `.run()` on any of them individually, so a
+  // statement-level hijack (an earlier version of this test) silently never
+  // engages for *any* batched implementation, #2179's included, and ends up
+  // proving nothing either way. Tagging each DELETE statement with its own
+  // bound backupId at `.bind()` time (via a WeakMap, since D1PreparedStatement
+  // doesn't expose its bound params for inspection) lets the `env.DB.batch`
+  // hijack tell the two requests' batches apart and order them deliberately.
+  //
+  // Confirmed empirically against both other candidate fixes: this test
+  // passes against this file's own fix (the live subquery), and fails --
+  // with the exact gap the hand-trace predicts -- against a version with
+  // #2179's batching but still a stale literal threshold, proving the live
+  // subquery closes a real gap #2179 alone leaves open rather than
+  // duplicating it.
   it('keeps positions contiguous when two different backups on the same chain are deleted concurrently', async () => {
     const builder = await signupBuilder('backups-delete-race2-builder');
     await createLandletAndClaim('backups-delete-race2-landlet', builder);
@@ -408,11 +426,13 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
     }
 
     const originalPrepare = env.DB.prepare.bind(env.DB);
+    const originalBatch = env.DB.batch.bind(env.DB);
     let readArrivals = 0;
     let releaseReadGate;
     const readGate = new Promise((resolve) => { releaseReadGate = resolve; });
-    let lowerShiftDone;
-    const lowerShiftDonePromise = new Promise((resolve) => { lowerShiftDone = resolve; });
+    const backupIdByStatement = new WeakMap();
+    let lowerBatchDone;
+    const lowerBatchDonePromise = new Promise((resolve) => { lowerBatchDone = resolve; });
     env.DB.prepare = (sql) => {
       const stmt = originalPrepare(sql);
       if (sql.includes('SELECT position FROM placed_instance_backups WHERE backup_id')) {
@@ -436,34 +456,33 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
           },
         });
       }
-      // Only the old code's standalone shift ever calls .run() on this
-      // statement directly -- the fix's own identical-looking shift SQL is
-      // one of two db.batch(...) array elements, executed as a single
-      // atomic transaction without either element's .run() ever being
-      // called on its own, so this branch is simply never reached for it.
-      if (sql.includes('UPDATE placed_instance_backups SET position = position - 1')) {
+      // Tags the DELETE half of the batch with its own bound backupId so
+      // the env.DB.batch hijack below can tell the two requests' batches
+      // apart -- D1PreparedStatement has no public way to read back bound
+      // params, so this captures it at the one point it's available.
+      if (sql.includes('DELETE FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ? AND EXISTS')) {
         return new Proxy(stmt, {
           get(target, prop, receiver) {
             if (prop !== 'bind') return Reflect.get(target, prop, receiver);
             return (...bindArgs) => {
-              const threshold = bindArgs[1];
               const bound = target.bind(...bindArgs);
-              return new Proxy(bound, {
-                get(boundTarget, boundProp, boundReceiver) {
-                  if (boundProp !== 'run') return Reflect.get(boundTarget, boundProp, boundReceiver);
-                  return async (...runArgs) => {
-                    if (threshold > 1) await lowerShiftDonePromise;
-                    const result = await boundTarget.run(...runArgs);
-                    if (threshold === 1) lowerShiftDone();
-                    return result;
-                  };
-                },
-              });
+              backupIdByStatement.set(bound, bindArgs[0]);
+              return bound;
             };
           },
         });
       }
       return stmt;
+    };
+    env.DB.batch = (stmts) => {
+      const taggedId = stmts.map((s) => backupIdByStatement.get(s)).find(Boolean);
+      if (taggedId === ids[1]) {
+        return originalBatch(stmts).then((result) => { lowerBatchDone(); return result; });
+      }
+      if (taggedId === ids[2]) {
+        return lowerBatchDonePromise.then(() => originalBatch(stmts));
+      }
+      return originalBatch(stmts);
     };
     let results1;
     let results2;
@@ -474,6 +493,7 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
       ]);
     } finally {
       env.DB.prepare = originalPrepare;
+      env.DB.batch = originalBatch;
     }
     expect(results1.response.status).toBe(200);
     expect(results2.response.status).toBe(200);
