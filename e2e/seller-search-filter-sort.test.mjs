@@ -19,10 +19,10 @@ async function uploadProduct(name, price) {
   await page.fill('#upload-price', String(price));
   await page.setInputFiles('#upload-file-input', 'public/models/crate.glb');
   await page.click('#upload-submit-btn');
-  await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+  await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
   await page.waitForTimeout(300);
   await page.click('#upload-submit-btn');
-  await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+  await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
   await page.waitForTimeout(300);
 }
 

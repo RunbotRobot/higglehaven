@@ -33,10 +33,10 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '5');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
 await page.waitForTimeout(500);
 
 const productRow = () => page.locator('.seller-row').filter({ hasText: PRODUCT_NAME });
@@ -108,7 +108,8 @@ await productRow().locator('.seller-no-returns-checkbox-label input').check();
 await productRow().locator('button', { hasText: 'Save Returns Policy' }).click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-no-returns-status')).some((el) => el.textContent === 'Saved.'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const { templates: templatesAfterSecondSave } = await page.evaluate(async () => (await fetch('/api/catalog?limit=100')).json());
 const templateAfterSecondSave = templatesAfterSecondSave.find((t) => t.name === PRODUCT_NAME);

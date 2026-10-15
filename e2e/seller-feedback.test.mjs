@@ -40,10 +40,10 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '10');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
 await page.waitForTimeout(500);
 
 async function fetchJson(pathAndQuery, options) {
@@ -128,7 +128,7 @@ await page.waitForTimeout(300);
 await page.click('.mode-nav-btn[data-mode="sell"]');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
-await page.waitForFunction(() => !document.getElementById('seller-feedback-summary').hidden, { timeout: 5000 });
+await page.waitForFunction(() => !document.getElementById('seller-feedback-summary').hidden, null, { timeout: 30000 });
 const summaryText = await page.locator('#seller-feedback-summary').textContent();
 console.log('feedback summary text after reopening the modal (should mention 4.0 average and "2 ratings"):', summaryText);
 
