@@ -36,10 +36,10 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '40');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 20000 });
 await page.waitForTimeout(500);
 
 async function fetchJson(pathAndQuery, options) {
@@ -94,7 +94,8 @@ console.log('sale row text (should mention "A Refund Shopper" and "You earned"):
 await row().locator('.product-sale-row-refund-btn').click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.product-sale-row-refunded')).some((el) => el.textContent === 'Refunded'),
-  { timeout: 10000 },
+  null,
+  { timeout: 20000 },
 );
 const refundedLabelCount = await row().locator('.product-sale-row-refunded').count();
 const refundBtnCountAfter = await row().locator('.product-sale-row-refund-btn').count();
@@ -117,7 +118,8 @@ await row().locator('.seller-no-returns-checkbox-label input[type="checkbox"]').
 await row().locator('button', { hasText: 'Save Returns Policy' }).click();
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.seller-no-returns-status')).some((el) => el.textContent === 'Saved.'),
-  { timeout: 10000 },
+  null,
+  { timeout: 20000 },
 );
 const noReturnsTextAfter = await row().locator('.seller-row-no-returns').textContent();
 console.log('returns policy row text after opting out (should be "Returns: not accepted"):', noReturnsTextAfter);

@@ -70,9 +70,18 @@ selectionText = await selectByScanningY(260, 320, 400, 10, selectionText);
 console.log('selection status before saving (should say 2 items selected):', selectionText);
 
 await page.click('#save-bundle-item');
+// #2142 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real
+// applied timeout was always Playwright's actual default (30000ms), never
+// the smaller number written here. The explicit `null` arg reaches the
+// options slot, and the timeout itself is widened to 60000ms for real
+// headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
+// wait.
 await page.waitForFunction(
   () => document.getElementById('product-info').textContent.includes('Saved'),
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 const savedStatus = await page.textContent('#product-info');
 console.log('status right after Save Bundle (should mention Saved and 2 items):', savedStatus);

@@ -92,7 +92,8 @@ await page.selectOption('.landlet-picker select', SECOND_LANDLET_ID);
 // should show up quickly.
 await page.waitForFunction(
   () => document.querySelector('.settings-field .auction-row')?.textContent.includes('Your auction is live'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 // Scoped to the "Sell Your Lándlet" field's own DIRECT children — its
 // .auction-row/.auction-start-form sit right under the .settings-field

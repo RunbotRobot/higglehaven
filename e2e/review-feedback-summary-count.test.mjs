@@ -74,7 +74,7 @@ await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
-await page.waitForFunction(() => !document.getElementById('seller-feedback-summary').hidden, { timeout: 5000 });
+await page.waitForFunction(() => !document.getElementById('seller-feedback-summary').hidden, null, { timeout: 15000 });
 const feedbackSummaryText = await page.locator('#seller-feedback-summary').textContent();
 console.log(`seller feedback summary (should mention the real count ${FAKE_FEEDBACK_COUNT}, not the mocked array length 1):`, feedbackSummaryText);
 
@@ -85,10 +85,10 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '10');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await page.waitForTimeout(300);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 20000 });
 await page.waitForTimeout(500);
 
 const row = () => page.locator('.seller-row').filter({ hasText: PRODUCT_NAME });
@@ -97,7 +97,8 @@ await page.waitForTimeout(300);
 await row().locator('.seller-review-toggle').click();
 await page.waitForFunction(
   () => document.querySelectorAll('.product-review-row').length === 2,
-  { timeout: 5000 },
+  null,
+  { timeout: 15000 },
 );
 const reviewSummaryText = await row().locator('.seller-review-summary').textContent();
 console.log(`product review summary (should mention the real count ${FAKE_REVIEW_COUNT}, not the mocked array length 2):`, reviewSummaryText);

@@ -27,7 +27,16 @@ await page.click('#save-bundle-item');
 // launchPage's dialog handler auto-accepts confirm() too — the Save Bundle
 // handler's own confirm() asks whether to share, so this bundle lands in
 // both My Bundles and Community from the start.
-await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Saved'), { timeout: 10000 });
+//
+// #2142 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real
+// applied timeout was always Playwright's actual default (30000ms), never
+// the smaller number written here. The explicit `null` arg reaches the
+// options slot, and the timeout itself is widened to 60000ms for real
+// headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
+// wait.
+await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Saved'), null, { timeout: 60000 });
 
 // Save Bundle's own handler pushes the exact same object reference into
 // both myBundles and communityBundles (see its own code), so renaming

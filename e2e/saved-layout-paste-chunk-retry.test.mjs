@@ -101,10 +101,18 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
-await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, { timeout: 10000 });
+// #2146 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real
+// applied timeout was always Playwright's actual default (30000ms), never
+// the smaller number written here. The explicit `null` arg reaches the
+// options slot, and the timeout itself is widened to 60000ms for real
+// headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
+// wait.
+await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, null, { timeout: 60000 });
 const savedLayoutRow = page.locator('.settings-field', { hasText: 'Saved Layouts' }).locator('.version-row');
 await savedLayoutRow.locator('button', { hasText: 'Preview' }).click();
-await page.waitForFunction(() => document.getElementById('layout-preview-toolbar')?.classList.contains('visible'), { timeout: 15000 });
+await page.waitForFunction(() => document.getElementById('layout-preview-toolbar')?.classList.contains('visible'), null, { timeout: 60000 });
 await page.waitForTimeout(1000);
 
 await page.mouse.move(10, 10);
@@ -138,7 +146,9 @@ await page.route('**/api/instances/batch', async (route) => {
 });
 
 await page.click('#layout-preview-paste-btn');
-await page.waitForFunction(() => document.getElementById('layout-preview-paste-btn') && !document.getElementById('layout-preview-paste-btn').disabled, { timeout: 15000 });
+// #2146 (sub-issue of #2138): same waitForFunction arg/options bug as above
+// -- null arg, 60000ms real timeout.
+await page.waitForFunction(() => document.getElementById('layout-preview-paste-btn') && !document.getElementById('layout-preview-paste-btn').disabled, null, { timeout: 60000 });
 console.log('alert shown after the partial failure:', lastAlertMessage);
 const alertMentionsPartialSuccess = Boolean(lastAlertMessage) && lastAlertMessage.includes('100') && lastAlertMessage.includes('1 failed');
 
@@ -149,7 +159,9 @@ console.log('landlet instance count after the first (partially-failed) paste att
 // way a builder would retry after seeing the alert.
 await page.unroute('**/api/instances/batch');
 await page.click('#layout-preview-paste-btn');
-await page.waitForFunction(() => !document.getElementById('layout-preview-toolbar')?.classList.contains('visible'), { timeout: 15000 });
+// #2146 (sub-issue of #2138): same waitForFunction arg/options bug as above
+// -- null arg, 60000ms real timeout.
+await page.waitForFunction(() => !document.getElementById('layout-preview-toolbar')?.classList.contains('visible'), null, { timeout: 60000 });
 await page.waitForSelector('#add-item-btn', { timeout: 10000 });
 
 const instancesAfterRetry = await fetchAllInstances(landletId);
