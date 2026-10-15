@@ -1613,6 +1613,100 @@ describe('Finite stock tracking (#1948)', () => {
   });
 });
 
+// #2067 (leaf sub-issue of #1973, part of #1947): RESEND_API_KEY is never
+// configured in this test environment (same established convention as the
+// Prompt-mode concept-image describe block's own comment above), so
+// sendEmail always silently no-ops here regardless of this preference --
+// these tests cover everything reachable without a real send: auth
+// gating, validation, persistence, and that the sweep's existing
+// dashboard notification is unaffected either way.
+describe('Sold-out notifications: dashboard + opt-in email (#2067)', () => {
+  async function createTemplateWithStock(templateId, overrides = {}) {
+    return api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId,
+        name: `Notify fixture ${templateId}`,
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 500,
+        ...overrides,
+      }),
+    });
+  }
+
+  async function createLandletAndClaim(landletId, builder) {
+    await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ landletId, name: `Test ${landletId}`, areaM2: 1000, status: 'greenbelt' }),
+    }));
+    await api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
+  }
+
+  it('GET and PUT both require a session', async () => {
+    const get = await api('/builders/me/notification-preferences');
+    expect(get.response.status).toBe(401);
+    const put = await api('/builders/me/notification-preferences', {
+      method: 'PUT',
+      body: JSON.stringify({ notifySoldOutEmail: true }),
+    });
+    expect(put.response.status).toBe(401);
+  });
+
+  it('defaults to false and is reflected on the builder object', async () => {
+    const builder = await signupBuilder('notify-default-builder');
+    expect(builder.builder.notifySoldOutEmail).toBe(false);
+    const prefs = await api('/builders/me/notification-preferences', builder.session());
+    expect(prefs.response.status).toBe(200);
+    expect(prefs.body.notifySoldOutEmail).toBe(false);
+  });
+
+  it('rejects a non-boolean notifySoldOutEmail', async () => {
+    const builder = await signupBuilder('notify-invalid-builder');
+    const invalid = await api('/builders/me/notification-preferences', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({ notifySoldOutEmail: 'yes' }),
+    }));
+    expect(invalid.response.status).toBe(400);
+  });
+
+  it('PUT persists the preference, reflected by both GET endpoints', async () => {
+    const builder = await signupBuilder('notify-persist-builder');
+    const updated = await api('/builders/me/notification-preferences', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({ notifySoldOutEmail: true }),
+    }));
+    expect(updated.response.status).toBe(200);
+    expect(updated.body.notifySoldOutEmail).toBe(true);
+
+    const prefs = await api('/builders/me/notification-preferences', builder.session());
+    expect(prefs.body.notifySoldOutEmail).toBe(true);
+    const me = await api('/builders/me', builder.session());
+    expect(me.body.builder.notifySoldOutEmail).toBe(true);
+  });
+
+  it('sold-out sweep still fires the dashboard notification for an opted-in builder (email itself is unverifiable without RESEND_API_KEY)', async () => {
+    const owner = await signupBuilder('notify-soldout-owner');
+    await api('/builders/me/notification-preferences', owner.session({
+      method: 'PUT',
+      body: JSON.stringify({ notifySoldOutEmail: true }),
+    }));
+    await createLandletAndClaim('notify-soldout-landlet', owner);
+    await createTemplateWithStock('notify-soldout-template', { stockQuantity: 1 });
+    const placed = await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId: 'notify-soldout-instance', landletId: 'notify-soldout-landlet', templateId: 'notify-soldout-template', x: 0, y: 0 }),
+    }));
+    expect(placed.response.status).toBe(201);
+
+    const purchased = await api('/instances/notify-soldout-instance/purchase', owner.session({ method: 'POST' }));
+    expect(purchased.response.status).toBe(201);
+
+    const notices = await api('/notifications', owner.session());
+    expect(notices.body.notifications.some((n) => n.message.includes('just sold out'))).toBe(true);
+  });
+});
+
 describe('Low-stock / days-remaining list (#1949)', () => {
   async function createTemplateWithStock(templateId, overrides = {}) {
     return api('/catalog', {

@@ -3249,6 +3249,14 @@ async function handleBuilders(request, env, db, route, url) {
     return handleMyAnimation(request, db);
   }
 
+  // #2067 (leaf sub-issue of #1973, part of #1947): get/set this
+  // account's opt-in for an email alert on top of the dashboard
+  // notification already fired unconditionally when a placed product
+  // sells out.
+  if (route.length === 3 && route[1] === 'me' && route[2] === 'notification-preferences') {
+    return handleMyNotificationPreferences(request, db);
+  }
+
   // #1949 (sub-issue of #1947): every finite-stock template this builder
   // currently has placed on their own land, annotated with an estimated
   // days-remaining figure -- see handleBuilderLowStock's own comment for
@@ -3774,6 +3782,10 @@ function builderFromRow(row) {
     // it was leaking through GET /api/builders and its ids/label variants,
     // none of which are gated on the caller owning the row).
     higglesBalanceCents: row.higgles_balance_cents,
+    // #2067: own-account-only, same reasoning as higglesBalanceCents above
+    // -- a communication preference has no reason to leak through a
+    // cross-account lookup either.
+    notifySoldOutEmail: !!row.notify_sold_out_email,
   };
 }
 
@@ -3959,6 +3971,33 @@ async function myAvatarJson(db, builder) {
     // either way, nothing for an animation to ever compare equal to.
     skeletonSignature: template?.skeleton_signature || null,
   };
+}
+
+// #2067 (leaf sub-issue of #1973, part of #1947): GET/PUT this account's
+// sold-out-email opt-in, same requireCurrentUser-only bar and GET/PUT
+// shape as handleMyAvatar above -- a communication preference isn't a
+// world/shop-selling action N44 was aimed at either.
+async function handleMyNotificationPreferences(request, db) {
+  const user = await requireCurrentUser(request, db);
+  const builder = await getOrCreateBuilderForUser(db, user);
+
+  if (request.method === 'GET') {
+    return json({ notifySoldOutEmail: !!builder.notify_sold_out_email });
+  }
+
+  if (request.method === 'PUT') {
+    const input = await readJson(request);
+    if (typeof input.notifySoldOutEmail !== 'boolean') {
+      throw new HttpError('notifySoldOutEmail must be a boolean', 400);
+    }
+    await db.prepare(`
+      UPDATE builders SET notify_sold_out_email = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE builder_id = ?
+    `).bind(input.notifySoldOutEmail ? 1 : 0, builder.builder_id).run();
+    return json({ notifySoldOutEmail: input.notifySoldOutEmail });
+  }
+
+  return json({ error: 'Not found' }, 404);
 }
 
 // #1164 (sub-issue of #1161): every "animation"-category template this
@@ -4265,6 +4304,11 @@ async function handleSellers(request, env, db, route, url) {
   }
 
   if (request.method === 'GET' && route.length === 1) {
+    // #2095: GET /api/builders's identical GET route.length===1 branch
+    // above gates on this exact same check (added by #1844) before its
+    // own ids/label/cursor-list sub-cases -- this branch mirrors all
+    // three of those sub-cases but had never picked up the guard.
+    await checkRateLimit(db, `seller-list:${clientIp(request)}`, BUILDER_LIST_RATE_LIMIT_MAX);
     // #1213: same bounded-lookup shape as GET /api/builders's ids/label
     // filters above (#717/#716) — added once a real caller (seller-lookup
     // by name) existed, mirroring that endpoint's own reasoning exactly.
@@ -8768,6 +8812,13 @@ function creditOrbFromRow(row) {
   };
 }
 
+// #2092: every other authenticated, repeatable-write endpoint in this file
+// rate-limits itself -- the collect branch below never did, letting a
+// scripted caller drive unbounded D1 load via repeated claim attempts
+// (including against bogus/already-collected orb ids, which 404 cheaply but
+// still cost a full batch round-trip).
+const CREDIT_ORB_COLLECT_RATE_LIMIT_MAX = 20;
+
 // GET /api/credit-orbs (optionally ?landletId=... to scope to one landlet,
 // per #1994's own "or scoped by landlet" note) -- the frontend's read path
 // for #1995's own rendering/collection sub-issue. Deliberately
@@ -8825,6 +8876,7 @@ async function handleCreditOrbs(request, db, route, url) {
   // themselves a credit for it.
   if (request.method === 'POST' && route.length === 3 && route[2] === 'collect') {
     const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `credit-orb-collect:${sessionBuilder.builder_id}`, CREDIT_ORB_COLLECT_RATE_LIMIT_MAX);
     const orbId = stringValue(route[1], 'orbId');
     const [claim] = await db.batch([
       db.prepare(`
@@ -14278,9 +14330,21 @@ async function handleInstanceBackups(request, db, route) {
       throw new HttpError("order must contain exactly this instance's current backup ids, each once", 400);
     }
     await checkRateLimit(db, `instance-backup-write:${sessionBuilder.builder_id}`, INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX);
-    await db.batch(input.order.map((backupId, position) => db.prepare(
-      'UPDATE placed_instance_backups SET position = ? WHERE backup_id = ? AND instance_id = ?',
-    ).bind(position, backupId, instanceId)));
+    // #2091: same #929/#960 idiom as this handler's own POST above --
+    // requireOwnedLandlet at the top is a point-in-time check, and readJson/
+    // the existingIds SELECT/checkRateLimit above are real awaited gaps a
+    // landlet transfer could land in. Fold the ownership re-check into each
+    // UPDATE itself rather than trusting the earlier check.
+    const updateResults = await db.batch(input.order.map((backupId, position) => db.prepare(`
+      UPDATE placed_instance_backups SET position = ?
+      WHERE backup_id = ? AND instance_id = ? AND EXISTS (
+        SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
+        WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
+      )
+    `).bind(position, backupId, instanceId, instanceId, sessionBuilder.builder_id)));
+    if (updateResults.some((result) => result.meta.changes === 0)) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     const { results } = await db.prepare(
       'SELECT * FROM placed_instance_backups WHERE instance_id = ? ORDER BY position',
     ).bind(instanceId).all();
@@ -14294,10 +14358,20 @@ async function handleInstanceBackups(request, db, route) {
     ).bind(backupId, instanceId).first();
     if (!existing) return json({ error: 'Backup not found' }, 404);
     await checkRateLimit(db, `instance-backup-write:${sessionBuilder.builder_id}`, INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX);
-    const deleted = await db.prepare(
-      'DELETE FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ?',
-    ).bind(backupId, instanceId).run();
-    if (deleted.meta.changes === 0) return json({ error: 'Backup not found' }, 404);
+    // #2091: same #929/#960 idiom as this handler's own POST above / the
+    // identical handleSignPosts moderation-DELETE guard -- fold the
+    // ownership re-check into the DELETE itself rather than trusting the
+    // top-of-handler requireOwnedLandlet, which is only a point-in-time
+    // check against the awaits (readJson/SELECT/checkRateLimit) since then.
+    const deleted = await db.prepare(`
+      DELETE FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ? AND EXISTS (
+        SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
+        WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
+      )
+    `).bind(backupId, instanceId, instanceId, sessionBuilder.builder_id).run();
+    if (deleted.meta.changes === 0) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
     // Closes the gap left behind rather than leaving positions sparse --
     // every position strictly greater than the removed one shifts down by
     // one, keeping the chain contiguous for the next append (which relies
@@ -15625,7 +15699,7 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
   // same "fire outside the batch" reasoning as the seller-commission
   // notification just above.
   if (justSoldOut) {
-    await sweepSoldOutTemplateInstances(db, template);
+    await sweepSoldOutTemplateInstances(env, db, template);
   }
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
@@ -15719,7 +15793,15 @@ async function handleSelfDealingFlags(request, db, route) {
 // time. Only once an instance's own chain is exhausted with nothing viable
 // does it fall back to the original delete+notify behavior exactly as
 // before.
-async function sweepSoldOutTemplateInstances(db, template) {
+// #2067: also emails each builder who ends up on the losing (delete)
+// branch, if they've opted in (notify_sold_out_email) and still have a
+// linked user account with an email on file -- fetched in one extra query
+// scoped to just the builders affected by *this* sweep's deletes, rather
+// than threading the join through the already-busy per-instance loop
+// above. sendEmail is already best-effort (never throws, returns false if
+// unconfigured/failed), so this never risks the sweep itself over a
+// best-effort email.
+async function sweepSoldOutTemplateInstances(env, db, template) {
   const { results: affectedInstances } = await db.prepare(`
     SELECT pi.instance_id AS instanceId, pi.landlet_id AS landletId, pi.x_m AS xM, pi.y_m AS yM, pi.z_m AS zM,
            l.owner_builder_id AS builderId
@@ -15784,9 +15866,28 @@ async function sweepSoldOutTemplateInstances(db, template) {
       deletedCountByBuilder.set(builderId, (deletedCountByBuilder.get(builderId) || 0) + 1);
     }
   }
+  if (deletedCountByBuilder.size === 0) return;
+  const builderIds = [...deletedCountByBuilder.keys()];
+  const { results: preferences } = await db.prepare(`
+    SELECT b.builder_id AS builderId, b.notify_sold_out_email AS notifySoldOutEmail, u.email AS builderEmail
+    FROM builders b
+    LEFT JOIN users u ON u.user_id = b.user_id
+    WHERE b.builder_id IN (${builderIds.map(() => '?').join(', ')})
+  `).bind(...builderIds).all();
+  const preferenceByBuilder = new Map(preferences.map((p) => [p.builderId, p]));
   for (const [builderId, count] of deletedCountByBuilder) {
+    const plural = count === 1 ? 'instance has' : 'instances have';
     await fireNotification(db, builderId,
-      `"${template.name}" just sold out — ${count} placed ${count === 1 ? 'instance has' : 'instances have'} been removed from your land.`);
+      `"${template.name}" just sold out — ${count} placed ${plural} been removed from your land.`);
+    const preference = preferenceByBuilder.get(builderId);
+    if (preference?.notifySoldOutEmail && preference.builderEmail) {
+      await sendEmail(env, {
+        to: preference.builderEmail,
+        subject: `"${template.name}" just sold out`,
+        html: `<p>"${template.name}" just sold out — ${count} placed ${plural} been removed from your land.</p>`,
+        text: `"${template.name}" just sold out — ${count} placed ${plural} been removed from your land.`,
+      });
+    }
   }
 }
 

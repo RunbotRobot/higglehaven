@@ -1077,6 +1077,27 @@ describe('Sellers', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #2095: same gap as #1844's own GET /builders fix just above -- the
+  // ids=/label=/plain-list branches here mirror that endpoint's shape
+  // almost exactly, but never picked up the identical guard. Same
+  // pre-seed-the-bucket-directly idiom as that test, reusing
+  // BUILDER_LIST_RATE_LIMIT_MAX's own 200 since this is the same fix
+  // applied to the same shape, not a new threshold.
+  it('rate-limits repeated GET /sellers calls from the same client', async () => {
+    const ip = `test-${crypto.randomUUID()}`;
+    const bucketKey = `seller-list:${ip}`;
+    const now = Date.now();
+    await env.DB.batch(Array.from({ length: 199 }, () => env.DB.prepare(
+      'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+    ).bind(bucketKey, now)));
+
+    const atLimit = await api('/sellers', { headers: { 'cf-connecting-ip': ip } });
+    expect(atLimit.response.status).toBe(200);
+
+    const limited = await api('/sellers', { headers: { 'cf-connecting-ip': ip } });
+    expect(limited.response.status).toBe(429);
+  });
+
   // #946: getOrCreateSellerForUser used to SELECT-then-conditionally-INSERT,
   // racing two concurrent requests for the same account's seller profile
   // against the partial UNIQUE INDEX on sellers.user_id (migrations/0054)
