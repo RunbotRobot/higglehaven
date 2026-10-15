@@ -6904,7 +6904,11 @@ GET /api/self-dealing-flags
 ```
 
 Admin-only. Lists every `pending` flag, newest first (capped at 200),
-joined against its own purchase for context:
+joined against its own purchase for context. `totalCount` (#2110) is the
+real count of every pending flag, not just the capped page -- lets the
+admin tell "200 of 200" from "200 of 1400" rather than silently losing
+older flags off the end once the cap is reached, same pattern
+`GET /api/sign-posts`/`/api/calendar-events`/`/api/purchases` already use:
 
 ```json
 {
@@ -6919,7 +6923,8 @@ joined against its own purchase for context:
       "builderId": "...",
       "totalCents": 500
     }
-  ]
+  ],
+  "totalCount": 1
 }
 ```
 

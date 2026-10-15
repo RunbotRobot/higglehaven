@@ -128,6 +128,9 @@ describe('Self-dealing flags (#2019)', () => {
       expect(hit).toBeTruthy();
       expect(hit.matchedSignals).toEqual(['email']);
       expect(hit.templateId).toBe('self-dealing-list-template');
+      // #2110: totalCount counts every pending flag, not just the capped
+      // page -- must be at least 1 (this test's own flag).
+      expect(listed.body.totalCount).toBeGreaterThanOrEqual(1);
     });
   });
 
