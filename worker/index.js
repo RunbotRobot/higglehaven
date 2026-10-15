@@ -10794,6 +10794,10 @@ async function handleSuspendAccount(request, db) {
 // rather than a separate SELECT racing a concurrent lift of the same row.
 async function handleUnsuspendAccount(request, db) {
   const admin = await requireAdmin(request, db);
+  // #2118: same admin-action shape as handleSuspendAccount above, which
+  // already has this guard -- reusing its own rate limit bucket/threshold
+  // rather than introducing a new one for the identical kind of action.
+  await checkRateLimit(db, `unsuspend-account:${admin.user_id}`, ACCOUNT_SUSPENSION_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const email = normalizeEmail(input.email);
   const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();

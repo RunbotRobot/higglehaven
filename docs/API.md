@@ -937,7 +937,9 @@ set.
 
 ### `POST /api/auth/unsuspend-account`
 
-`requireAdmin`-gated. Request body: `{ "email" }`. `404` if no account has
+`requireAdmin`-gated. Rate-limited the same as `suspend-account` above
+(#2118: same admin-action shape, same `ACCOUNT_SUSPENSION_RATE_LIMIT_MAX`
+bucket — bound per-admin). Request body: `{ "email" }`. `404` if no account has
 it, `409` if that account has no currently-active suspension to lift. On
 success, sets `liftedAt`/the lifting admin on the active
 `account_suspensions` row, logs via `admin_action_log`
