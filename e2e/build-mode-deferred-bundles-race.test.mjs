@@ -39,12 +39,20 @@ await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
 await page.locator('#catalog-picker-grid button').filter({ hasText: 'Tree' }).click();
 await page.waitForTimeout(300);
 await page.mouse.click(210, 400);
-await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Tree'), { timeout: 10000 });
+// #2142 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real
+// applied timeout was always Playwright's actual default (30000ms), never
+// the smaller number written here. The explicit `null` arg reaches the
+// options slot, and the timeout itself is widened to 60000ms for real
+// headroom under CI load, same as e2e/helpers.mjs's own account-menu-modal
+// wait.
+await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Tree'), null, { timeout: 60000 });
 await page.click('#toggle-multiselect');
 await page.waitForTimeout(300);
 await page.evaluate((n) => { window.prompt = () => n; }, BUNDLE_NAME);
 await page.click('#save-bundle-item');
-await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Saved'), { timeout: 10000 });
+await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Saved'), null, { timeout: 60000 });
 
 // Reopen the picker right away -- the bundle should already show, from
 // Save Bundle's own local update, well before the deferred fetch resolves.
