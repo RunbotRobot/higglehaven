@@ -1755,6 +1755,37 @@ describe('Authentication', () => {
     expect(blockedAgain.response.status).toBe(409);
   });
 
+  // #2123: grant-admin/revoke-admin mint or remove is_admin itself -- real
+  // privilege escalation, previously the one pair of admin mutations in
+  // this file with no throttle at all. Both share one bucket keyed by the
+  // acting admin (not the target), so this test exhausts it via repeated
+  // grant-admin calls (reusable on an already-admin target, per #1797's own
+  // comment above) and then confirms revoke-admin is blocked by the same
+  // bucket without needing its own 20 separate attempts.
+  it('rate-limits repeated grant-admin/revoke-admin calls from the same admin, sharing one bucket', async () => {
+    const admin = await signupBuilder('admin-grant-rate-limit-admin');
+    await api('/auth/admin-bootstrap', admin.session({
+      method: 'POST', body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    }));
+    const target = await signupBuilder('admin-grant-rate-limit-target');
+
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/auth/grant-admin', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email }),
+      }));
+      expect(attempt.response.status).toBe(200);
+    }
+    const limitedGrant = await api('/auth/grant-admin', admin.session({
+      method: 'POST', body: JSON.stringify({ email: target.email }),
+    }));
+    expect(limitedGrant.response.status).toBe(429);
+
+    const limitedRevoke = await api('/auth/revoke-admin', admin.session({
+      method: 'POST', body: JSON.stringify({ email: target.email }),
+    }));
+    expect(limitedRevoke.response.status).toBe(429);
+  });
+
   // #2029 (sub-issue of #1201): an admin-initiated, reversible account
   // suspension -- same email-addressed, admin_action_log-recorded shape as
   // grant-admin/revoke-admin above.

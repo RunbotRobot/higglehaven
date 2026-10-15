@@ -858,7 +858,11 @@ through it). Request body: `{ "email" }`, looked up the same
 case-insensitive way `POST /api/auth/login` matches it. `404` if no
 account has that email. On success, promotes that account and returns
 `{ "user": { ..., "isAdmin": true } }` for the *promoted* account, not the
-caller. Reusable per target account, same as `admin-bootstrap`.
+caller. Reusable per target account, same as `admin-bootstrap`. Rate-limited
+per acting admin (`ADMIN_GRANT_RATE_LIMIT_MAX`, 20 per window, #2123) —
+`POST /api/auth/revoke-admin` (below) shares this same bucket, since both
+mint/remove `is_admin` itself and neither previously had any throttle at
+all despite being this app's most sensitive mutation.
 
 ### `GET /api/auth/admins`
 
@@ -1504,6 +1508,14 @@ account id in `detail_json`) in the same atomic batch as the clear, same
 discipline every other admin mutation in this file follows. Response
 shape matches `GET .../stripe-account` above, reflecting the now-cleared
 state.
+
+Rate-limited per admin (`STRIPE_ACCOUNT_RESET_RATE_LIMIT_MAX`, 20 — same
+bound as `suspend-account`/`unsuspend-account`'s own
+`ACCOUNT_SUSPENSION_RATE_LIMIT_MAX`), in a separate bucket for the
+builder-side and seller-side call (#2124) — this mutates a live Stripe
+linkage the same way those endpoints mutate account standing, and was
+otherwise the one consequential admin mutation in this file missing that
+guard.
 
 **Deliberately makes no judgment call about whether reconnection should be
 allowed** — this is mechanical plumbing only, narrowed down from this
@@ -2541,12 +2553,17 @@ need it or not.
   (no `metadata` involved, so the merge-vs-replace caveat below doesn't
   apply here).
 - **Duplicate** is a plain `POST /api/catalog` carrying the same
-  `dimensions`/`color`/`modelUrl`/`metadata` under a fresh server-generated
-  `templateId`, with `" (copy)"` appended to the name. The model file itself
-  is never re-uploaded — the copy just references the same `modelUrl` — so
-  this is safe to do freely: a builder can try a risky edit (like marking
-  something extensible for the first time) on a duplicate without any
-  chance of disturbing the original or any instances already placed from it.
+  `category`/`subcategory`/`dimensions`/`color`/`modelUrl`/`modelSizeBytes`/
+  `skeletonSignature`/`priceCents`/`stockQuantity`/`metadata` under a fresh
+  server-generated `templateId`, with `" (copy)"` appended to the name
+  (#2107: `stockQuantity` is carried over too, so duplicating a
+  one-of-a-kind product doesn't silently produce an unlimited-stock copy).
+  The model file itself is never re-uploaded — the copy just references the
+  same `modelUrl`, which is why `modelSizeBytes`/`skeletonSignature` (both
+  derived from that same file) ride along unchanged too — so this is safe
+  to do freely: a builder can try a risky edit (like marking something
+  extensible for the first time) on a duplicate without any chance of
+  disturbing the original or any instances already placed from it.
 - **Delete** is a plain `DELETE /api/catalog/:templateId`, gated only by a
   `confirm()` — deleting a template only ever removes its `catalog_templates`
   row, never the underlying R2 object, so it's recoverable by re-registering
@@ -7014,7 +7031,9 @@ doesn't exist) and writes an `admin_action_log` entry. Unlike #2017's
 product-flag resolve action, there is no "approve"/"reject" consequence
 here — a flag is a soft signal, not an accusation, so reviewing one is
 just acknowledgment, optionally with a note for the admin's own record;
-nothing else in this app reacts to a flag's status.
+nothing else in this app reacts to a flag's status. Rate-limited to 20
+calls per 15 minutes, bucketed by the acting admin's own user id (see
+"Rate limiting" above).
 
 ### Counterfeit/policy flags + strike ladder (#2017/#2018)
 
