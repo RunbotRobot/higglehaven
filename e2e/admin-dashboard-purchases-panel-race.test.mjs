@@ -60,10 +60,17 @@ await seedPage.fill('#upload-name', PRODUCT_NAME);
 await seedPage.fill('#upload-price', '25');
 await seedPage.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await seedPage.click('#upload-submit-btn');
-await seedPage.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+// #2139 (sub-issue of #2138): waitForFunction's real signature is
+// (pageFunction, arg, options) -- a 2-arg call with a parameterless
+// pageFunction binds {timeout} to arg, not options, so both calls below
+// always silently ran at Playwright's true default (30000ms) regardless
+// of what was written here. Passing `null` for arg now actually honors
+// the option -- set to 30000 explicitly (the value already secretly in
+// effect) rather than the originally-written 20000/10000.
+await seedPage.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await seedPage.waitForTimeout(300);
 await seedPage.click('#upload-submit-btn');
-await seedPage.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await seedPage.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
 await seedPage.waitForTimeout(500);
 
 async function fetchJson(pathAndQuery, options) {

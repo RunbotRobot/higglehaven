@@ -56,9 +56,19 @@ await page.context().addCookies([{ name: 'hh_session', value: token, url: BASE_U
 await page.goto(`${BASE_URL}/admin/dashboard`, { waitUntil: 'networkidle' });
 await page.click('button[data-panel="models"]');
 
+// #2139 (sub-issue of #2138): waitForFunction's real signature is
+// (pageFunction, arg, options) -- a 2-arg call with a parameterless
+// pageFunction binds {timeout} to arg, not options, so every bare call
+// like this one always silently ran at Playwright's true default
+// (30000ms) regardless of what was written here. Passing `null` for arg
+// now actually honors the option -- set to 30000 explicitly (the value
+// already secretly in effect) rather than the originally-written 10000,
+// since that number was never real and these are all "wait for this to
+// eventually become true" patterns where more margin is safer.
 await page.waitForFunction(
   () => !document.getElementById('modelsStorageCard').textContent.includes('Loading'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const storageCardText = await page.textContent('#modelsStorageCard');
 console.log('storage usage card after loading (should mention "used of" and show a storage bar):', storageCardText.trim());
@@ -82,7 +92,8 @@ await page.fill('#modelsCleanupMax', '100');
 await page.click('#modelsDryRunBtn');
 await page.waitForFunction(
   () => document.getElementById('modelsCleanupResult').textContent.includes('Would delete'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const dryRunResultText = await page.textContent('#modelsCleanupResult');
 console.log('dry run result (should mention the uploaded model\'s own URL):', dryRunResultText.trim());
@@ -102,14 +113,16 @@ await page.fill('#modelsCleanupMax', '100');
 await page.click('#modelsDryRunBtn');
 await page.waitForFunction(
   () => document.getElementById('modelsCleanupResult').textContent.includes('Would delete'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 
 // --- Real run: actually deletes, confirm() auto-accepted above. ---
 await page.click('#modelsRealRunBtn');
 await page.waitForFunction(
   () => document.getElementById('modelsCleanupResult').textContent.includes('Deleted'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const realRunResultText = await page.textContent('#modelsCleanupResult');
 console.log('real run result (should mention Deleted and the uploaded model\'s own URL):', realRunResultText.trim());

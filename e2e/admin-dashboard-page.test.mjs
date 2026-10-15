@@ -172,9 +172,17 @@ const taxNotPlaceholder = await page.locator('#panel-tax .placeholder').count() 
 console.log('tax panel visible after clicking its nav item (should be true):', taxVisible);
 console.log('tax panel no longer shows the "Coming soon" placeholder (should be true):', taxNotPlaceholder);
 
+// #2139 (sub-issue of #2138): waitForFunction's real signature is
+// (pageFunction, arg, options) -- a 2-arg call with a parameterless
+// pageFunction binds {timeout} to arg, not options, so every bare call
+// like this one always silently ran at Playwright's true default
+// (30000ms) regardless of what was written here. Passing `null` for arg
+// now actually honors the option -- set to 30000 explicitly (the value
+// already secretly in effect) rather than the originally-written 10000.
 await page.waitForFunction(
   () => !document.querySelector('#taxTableWrap').textContent.includes('Loading'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const taxLoadedWithoutError = await page.locator('#taxErr').isHidden();
 console.log('tax panel loads its initial (current-year) form list without an error (should be true):', taxLoadedWithoutError);
@@ -183,7 +191,8 @@ console.log('tax panel loads its initial (current-year) form list without an err
 // every Stripe/Didit test suite here) — the connection test should surface
 // that as a real, visible error, not silently fail/succeed.
 await page.click('#taxConnectionTestBtn');
-await page.waitForFunction(() => !document.querySelector('#taxErr').hidden, { timeout: 10000 });
+// #2139: same waitForFunction arg/options fix as above.
+await page.waitForFunction(() => !document.querySelector('#taxErr').hidden, null, { timeout: 30000 });
 const taxConnectionErrorText = await page.textContent('#taxErr');
 console.log('connection test surfaces the unconfigured-vendor message (actual):', taxConnectionErrorText.trim());
 
@@ -214,9 +223,11 @@ await page.click('#taxLoadBtn'); // triggers the delayed, stale, failing call
 await page.waitForTimeout(300); // let it actually start before the second load
 await page.fill('#taxYearInput', String(new Date().getFullYear()));
 await page.click('#taxLoadBtn'); // triggers a second, faster, successful call
+// #2139: same waitForFunction arg/options fix as above.
 await page.waitForFunction(
   () => !document.querySelector('#taxTableWrap').textContent.includes('Loading'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 const taxRaceErrHiddenAfterFastSuccess = await page.locator('#taxErr').isHidden();
 console.log('fast, newer Load succeeds and tax error stays hidden before the stale failure lands (should be true):', taxRaceErrHiddenAfterFastSuccess);
