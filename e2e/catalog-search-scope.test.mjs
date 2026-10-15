@@ -28,9 +28,13 @@ await page.waitForTimeout(800);
 // bundles apart unambiguously.
 await page.evaluate((name) => { window.prompt = () => name; }, BUNDLE_NAME);
 await page.click('#save-bundle-item');
+// #2143: waitForFunction's signature is (pageFunction, arg, options) --
+// the explicit null reaches the options slot; without it the timeout
+// below silently fell back to Playwright's actual default (30000ms).
 await page.waitForFunction(
   () => document.getElementById('product-info').textContent.includes('Saved'),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 
 await page.click('#add-item-btn');
