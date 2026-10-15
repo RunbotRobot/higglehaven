@@ -310,16 +310,35 @@ async function routeRequest(request, env, ctx) {
     return new Response(null, { status: 204, headers: JSON_HEADERS });
   }
 
+  // #2173: each handler below already catches its own requireAdmin
+  // HttpError and renders an HTML sign-in page for it -- but requireAdmin's
+  // underlying db.prepare(...).first() call can also throw a raw, non-
+  // HttpError runtime/D1 error (a transient DB failure, a binding issue),
+  // which each handler explicitly re-throws. Unlike every /api/ and
+  // /uploads/ route below, nothing here was catching that escape, so it
+  // propagated out of routeRequest entirely -- past withSecurityHeaders,
+  // into a bare unhandled-exception response instead of this app's own
+  // consistent JSON error shape. Same catch-all fallback the /api/ branch
+  // already uses.
   if (url.pathname === '/admin/control-room') {
-    return handleControlRoomAdminPage(request, env);
+    return handleControlRoomAdminPage(request, env).catch((error) => {
+      console.error(error);
+      return json({ error: 'Internal server error' }, 500);
+    });
   }
 
   if (url.pathname === '/admin/action-log') {
-    return handleAdminActionLogPage(request, env);
+    return handleAdminActionLogPage(request, env).catch((error) => {
+      console.error(error);
+      return json({ error: 'Internal server error' }, 500);
+    });
   }
 
   if (url.pathname === '/admin/dashboard') {
-    return handleAdminDashboardPage(request, env);
+    return handleAdminDashboardPage(request, env).catch((error) => {
+      console.error(error);
+      return json({ error: 'Internal server error' }, 500);
+    });
   }
 
   if (url.pathname.startsWith('/api/')) {
@@ -14325,6 +14344,12 @@ async function handleInstances(request, env, route, url) {
 // sign posts have, since nobody but the owner has any business touching
 // their own backup chain.
 const INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX = 200;
+// #2171: every other ordered/bulk-array endpoint in this file caps its
+// length explicitly (e.g. PUT /landlets/:id/instances at 250, POST
+// /land-candidates/batch at 100) -- this chain had no such cap. 20 matches
+// the scale of a "backup chain" feature (a handful of fallback templates
+// per instance, not a bulk list).
+const INSTANCE_BACKUP_CHAIN_MAX = 20;
 
 function backupFromRow(row) {
   return {
@@ -14355,14 +14380,27 @@ async function handleInstanceBackups(request, db, route) {
     const input = await readJson(request);
     const templateId = stringValue(input.templateId, 'templateId');
     await assertReferenceExists(db, 'catalog_templates', 'template_id', templateId, 'templateId');
+    // An early, best-effort cap check -- not itself race-free (two
+    // concurrent appends can both read a count one below the max and both
+    // pass), but that only risks the chain briefly exceeding
+    // INSTANCE_BACKUP_CHAIN_MAX by a small amount under a genuine race, not
+    // the position-collision/gap bug #2183 is about. Position itself is no
+    // longer derived from this read -- see the INSERT's own subquery below.
+    const tail = await db.prepare(
+      'SELECT COUNT(*) AS count FROM placed_instance_backups WHERE instance_id = ?',
+    ).bind(instanceId).first();
+    if (tail.count >= INSTANCE_BACKUP_CHAIN_MAX) {
+      throw new HttpError(`A backup chain can contain at most ${INSTANCE_BACKUP_CHAIN_MAX} entries`, 400);
+    }
     const backupId = `backup-${crypto.randomUUID()}`;
     // #929/#960 idiom (see handleInstances' own POST above): requireOwnedLandlet
     // above is a point-in-time check, and the awaits since then (readJson,
-    // assertReferenceExists) are real gaps a landlet transfer could land in --
-    // fold the ownership re-check into the write itself.
+    // assertReferenceExists, the cap check above) are real gaps a landlet
+    // transfer could land in -- fold the ownership re-check into the write
+    // itself.
     //
-    // #2183: position used to come from a COUNT(*) read in a separate
-    // statement before this INSERT -- two concurrent appends could both read
+    // #2183: position used to come from a COUNT(*) read in a statement
+    // separate from this INSERT -- two concurrent appends could both read
     // the same count and both insert at the identical position, since
     // nothing else enforces uniqueness on (instance_id, position). Appends
     // to the end of the chain -- the new entry's position is the chain's own
@@ -14371,7 +14409,8 @@ async function handleInstanceBackups(request, db, route) {
     // race the same way spawnCreditOrbIfDue's own comment describes: D1/
     // SQLite serializes writes, so a second concurrent append's own
     // subquery only ever runs after the first append's INSERT has already
-    // committed, and sees the incremented count.
+    // committed, and sees the incremented count. (The cap check above still
+    // uses its own separate, slightly-stale read -- see that comment.)
     const created = await db.prepare(`
       INSERT INTO placed_instance_backups (backup_id, instance_id, position, template_id)
       SELECT ?, ?, (SELECT COUNT(*) FROM placed_instance_backups WHERE instance_id = ?), ?

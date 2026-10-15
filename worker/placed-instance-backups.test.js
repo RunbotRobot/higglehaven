@@ -182,6 +182,34 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
     expect(appended.body.backup.position).toBe(2);
   });
 
+  // #2171: unlike every other ordered/bulk-array endpoint in worker/index.js
+  // (e.g. PUT /landlets/:id/instances at 250, POST /land-candidates/batch at
+  // 100), this chain had no cap at all. Pre-seeds the chain directly via DB
+  // insert rather than firing 20 real POSTs, same cheap-test idiom
+  // tax-1099-filing-race.test.js's own rate-limit test uses.
+  it('rejects a POST once the chain already holds the maximum of 20 entries', async () => {
+    const builder = await signupBuilder('backups-cap-builder');
+    await createLandletAndClaim('backups-cap-landlet', builder);
+    await createTemplate('backups-cap-template');
+    await createTemplate('backups-cap-backup');
+    await placeInstance('backups-cap-instance', 'backups-cap-landlet', 'backups-cap-template', builder);
+
+    await env.DB.batch(Array.from({ length: 20 }, (_, position) => env.DB.prepare(
+      'INSERT INTO placed_instance_backups (backup_id, instance_id, position, template_id) VALUES (?, ?, ?, ?)',
+    ).bind(`backups-cap-seed-${position}`, 'backups-cap-instance', position, 'backups-cap-backup')));
+
+    const rejected = await api('/instances/backups-cap-instance/backups', builder.session({
+      method: 'POST', body: JSON.stringify({ templateId: 'backups-cap-backup' }),
+    }));
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/at most 20/);
+
+    const stillTwenty = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM placed_instance_backups WHERE instance_id = ?',
+    ).bind('backups-cap-instance').first();
+    expect(stillTwenty.count).toBe(20);
+  });
+
   // #2091: PUT (reorder) and DELETE each only checked requireOwnedLandlet
   // once at the top of the handler, then did further awaited work
   // (readJson/a SELECT/checkRateLimit) before their actual write, unlike
