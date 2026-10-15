@@ -9457,6 +9457,7 @@ async function renderSignPosts() {
     deleteRowBtn.textContent = '×';
     deleteRowBtn.setAttribute('aria-label', 'Delete post');
     deleteRowBtn.addEventListener('click', async () => {
+      if (!confirm('Delete this post? This can\'t be undone.')) return;
       deleteRowBtn.disabled = true;
       try {
         await deleteSignPost(instanceId, post.postId);
@@ -9624,6 +9625,7 @@ async function renderCalendarEvents() {
     deleteRowBtn.textContent = '×';
     deleteRowBtn.setAttribute('aria-label', 'Delete event');
     deleteRowBtn.addEventListener('click', async () => {
+      if (!confirm('Delete this event? This can\'t be undone.')) return;
       deleteRowBtn.disabled = true;
       try {
         await deleteCalendarEvent(instanceId, event.eventId);
@@ -9791,6 +9793,7 @@ async function renderBackupChain() {
     removeBtn.textContent = '×';
     removeBtn.setAttribute('aria-label', 'Remove backup');
     removeBtn.addEventListener('click', async () => {
+      if (!confirm('Remove this backup? This can\'t be undone.')) return;
       removeBtn.disabled = true;
       try {
         await deleteInstanceBackup(instanceId, backup.backupId);
