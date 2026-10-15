@@ -132,7 +132,17 @@ await page.goto(`${BASE_URL}/admin/dashboard`, { waitUntil: 'networkidle' });
 // endpoint handlePurchaseRefund itself re-reads from (GET
 // /api/purchases?danglingSeller=1) until it reflects the cleared value, so
 // the refund click below never races the write.
-async function waitForPaidOutAtCleared(timeoutMs = 10000, intervalMs = 300) {
+// 30000ms, not the original 10000ms: this exact poll already fired its own
+// distinguishing "never read back as cleared" error on the CI run right
+// after it was added (admin-dashboard-purchases-panel-refund-confirm.test.mjs
+// was still the only failure, console output unreachable per usual, but the
+// shape -- isolated, repeated failure of this file alone -- is consistent
+// with the write-visibility lag this poll targets simply being longer than
+// 10s under this shard's real CI load). 30s matches this file's own other
+// margins (the two .action-refund click timeouts below) and this suite's
+// established precedent for heavy-seeding-chain + admin-dashboard CI load
+// (#978/#1224/#1469/#1511).
+async function waitForPaidOutAtCleared(timeoutMs = 30000, intervalMs = 300) {
   const start = Date.now();
   for (;;) {
     const res = await page.evaluate(async (id) => {
@@ -141,9 +151,12 @@ async function waitForPaidOutAtCleared(timeoutMs = 10000, intervalMs = 300) {
       const found = (body.purchases || []).find((p) => p.purchaseId === id);
       return found ? found.paidOutAt : 'not-found';
     }, purchaseId);
-    if (res === null) return;
+    if (res === null) {
+      console.log(`paidOutAt read back as cleared after ${Date.now() - start}ms`);
+      return;
+    }
     if (Date.now() - start >= timeoutMs) {
-      throw new Error(`purchase ${purchaseId}'s paidOutAt never read back as cleared via GET /api/purchases?danglingSeller=1 (last seen: ${JSON.stringify(res)}) -- the external wrangler d1 execute reset may not have become visible to the running server in time`);
+      throw new Error(`purchase ${purchaseId}'s paidOutAt never read back as cleared via GET /api/purchases?danglingSeller=1 within ${timeoutMs}ms (last seen: ${JSON.stringify(res)}) -- the external wrangler d1 execute reset may not have become visible to the running server in time`);
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
