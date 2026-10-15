@@ -4801,11 +4801,13 @@ describe('Landlet levels', () => {
     await seedLevelDirectly();
     const limited = await api('/landlets/levels-remove-rate-limit-landlet/levels/1', owner.session({ method: 'DELETE' }));
     expect(limited.response.status).toBe(429);
-  }, 45000); // #978: same cumulative-D1-state-under-CI-load shape as the
-  // sweep-rate-limit test above and its own "leaves the level row
+  }, 60000); // #978/#2196: same cumulative-D1-state-under-CI-load shape as
+  // the sweep-rate-limit test above and its own "leaves the level row
   // untouched" sibling just below (which already carries this same
   // override) — 40-41 real round trips late in this file's 121-test run,
-  // occasionally pushed past the 20s default under CI load.
+  // occasionally pushed past the 20s default under CI load. #2196: the
+  // prior 45000ms override was itself observed timing out under CI load,
+  // same precedent as #2060's bump for this same describe block.
 
   // #924: the rate-limit check used to run AFTER the level row was already
   // deleted -- a rate-limited caller still got the real, irreversible
@@ -4837,12 +4839,14 @@ describe('Landlet levels', () => {
       'SELECT * FROM landlet_levels WHERE level_id = ?',
     ).bind('levels-remove-rate-limit-untouched-final').all();
     expect(results).toHaveLength(1);
-  }, 45000); // #978/#1511: 40 iterations of a direct DB seed plus a DELETE
-  // call each, late in this file's 121-test run against one shared D1
-  // instance -- reliably finishes in ~2s in isolation but has hit the 20s
-  // default, then the 30s override, under CI load already (#1511: bumped
-  // again to 45000, matching worker/commerce.test.js:2621's precedent for a
-  // comparable request volume).
+  }, 60000); // #978/#1511/#2196: 40 iterations of a direct DB seed plus a
+  // DELETE call each, late in this file's 121-test run against one shared
+  // D1 instance -- reliably finishes in ~2s in isolation but has hit the
+  // 20s default, then the 30s override, under CI load already (#1511:
+  // bumped again to 45000, matching worker/commerce.test.js:2621's
+  // precedent for a comparable request volume). #2196: 45000ms itself was
+  // then observed timing out under CI load, matching #2060's own bump for
+  // this same describe block.
 
   // #634 (sub-issue of #631): list/delete the saved-layout records #633
   // creates above. Reuses this describe block's own growLandCapHeadroom/
