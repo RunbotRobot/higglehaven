@@ -15891,15 +15891,33 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
     WHERE pi.template_id = ?
   `).bind(template.template_id).all();
 
-  const deletedCountByBuilder = new Map();
-  for (const { instanceId, landletId, xM, yM, zM, builderId } of affectedInstances) {
-    const { results: chain } = await db.prepare(`
-      SELECT pib.backup_id AS backupId, pib.template_id AS templateId, ct.stock_quantity AS stockQuantity
+  // #2170: one batched IN(...) lookup for every affected instance's backup
+  // chain, instead of a separate query per instance inside the loop below --
+  // this function blocks handlePurchaseFinalize's own request (awaited from
+  // its purchase-commit path), so an O(n) sequential-round-trip sweep over a
+  // popular/free template placed across many landlets risked real checkout
+  // latency. Same batch-then-look-up-in-memory idiom this file already uses
+  // elsewhere (e.g. getInstancesById, the builder-notification-preference
+  // lookup a few lines below this function's own loop).
+  const chainsByInstance = new Map();
+  if (affectedInstances.length > 0) {
+    const instanceIds = affectedInstances.map((i) => i.instanceId);
+    const { results: allChainEntries } = await db.prepare(`
+      SELECT pib.instance_id AS instanceId, pib.backup_id AS backupId, pib.template_id AS templateId, ct.stock_quantity AS stockQuantity
       FROM placed_instance_backups pib
       JOIN catalog_templates ct ON ct.template_id = pib.template_id
-      WHERE pib.instance_id = ?
-      ORDER BY pib.position
-    `).bind(instanceId).all();
+      WHERE pib.instance_id IN (${instanceIds.map(() => '?').join(', ')})
+      ORDER BY pib.instance_id, pib.position
+    `).bind(...instanceIds).all();
+    for (const entry of allChainEntries) {
+      if (!chainsByInstance.has(entry.instanceId)) chainsByInstance.set(entry.instanceId, []);
+      chainsByInstance.get(entry.instanceId).push(entry);
+    }
+  }
+
+  const deletedCountByBuilder = new Map();
+  for (const { instanceId, landletId, xM, yM, zM, builderId } of affectedInstances) {
+    const chain = chainsByInstance.get(instanceId) || [];
     const consumedBackupIds = [];
     const viable = chain.find((entry) => {
       consumedBackupIds.push(entry.backupId);
