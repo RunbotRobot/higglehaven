@@ -4862,6 +4862,13 @@ function renderSellerList() {
           // guaranteed one via openSellerModal().
           sellerId,
         });
+        // #327: fire-and-forget, deliberately not awaited -- same reasoning
+        // as the upload-flow and resize-save call sites. Without this, the
+        // copy's imageUrl/imageEmbedding stay permanently null (nothing else
+        // ever backfills them), making it unfindable via Prompt-mode
+        // similarity search and forcing every picker render to re-render its
+        // full GLTF model from scratch instead of reusing a stored image.
+        persistCatalogThumbnail(copy);
         activeCatalog.push(copy);
         buildCatalogPickerButtons();
         refreshSellerShowcase();
