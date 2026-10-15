@@ -14479,20 +14479,33 @@ async function handleInstanceBackups(request, db, route) {
     // top-of-handler requireOwnedLandlet, which is only a point-in-time
     // check against the awaits (readJson/SELECT/checkRateLimit) since then.
     //
-    // #2183: the gap-closing shift below used to run as a separate
-    // statement after this DELETE, keyed off `existing.position` -- a plain
-    // SELECT read well before either write. Two concurrent DELETEs of
-    // different backups on the same chain could each shift using a
-    // by-then-stale idea of where the other one's removed row sat,
-    // leaving positions non-contiguous. db.batch runs both statements in
-    // one atomic transaction (same guarantee this file's other db.batch
-    // calls rely on, e.g. handleLandletDraft's PUT above), with the shift
-    // placed first so its own live subquery re-derives the row's position
-    // immediately before the delete that follows it in the same
-    // transaction removes it -- not the possibly-stale `existing.position`
-    // this still only uses for the early 404. The shift carries the same
-    // ownership guard as the delete so an invalid/transferred-landlet
-    // request can't partially shift without actually deleting anything.
+    // #2174/PR #2179 (landed independently, mid-investigation of this
+    // issue) already wrapped this DELETE and a position-shift UPDATE in
+    // one db.batch for crash-safety between the two statements -- but kept
+    // the shift's threshold bound from this same early `existing.position`
+    // read, just now atomically with the DELETE. That closes the single-
+    // request crash window #2174 was about, but not the cross-request race
+    // #2183 is about: two different concurrent deletes' *batches* still
+    // just serialize as two separate transactions, each trusting its own
+    // now-possibly-stale threshold. Confirmed by hand-tracing and then
+    // empirically (see this file's own test): when the batch for the
+    // lower position threshold commits first, the other batch's stale,
+    // already-bound higher threshold stops matching rows the first batch
+    // already pulled below it, leaving a gap.
+    //
+    // Folding a live subquery (re-deriving the target row's current
+    // position by backup_id) into the shift instead makes it correct
+    // regardless of commit ordering -- not the possibly-stale
+    // `existing.position` this still only uses for the early 404. The
+    // shift is placed first in the batch so its own subquery re-derives
+    // the row's position immediately before the delete that follows it in
+    // the same transaction removes it, and carries the same ownership
+    // guard as the delete so an invalid/transferred-landlet request can't
+    // partially shift without actually deleting anything -- the delete
+    // failing (0 changes, whether from a lost ownership race or the row
+    // already being gone) also makes the shift's own subquery return
+    // nothing to compare against, so it naturally matches 0 rows too,
+    // without needing #2179's separate NOT-EXISTS-the-row guard.
     const [, deleted] = await db.batch([
       db.prepare(`
         UPDATE placed_instance_backups SET position = position - 1
