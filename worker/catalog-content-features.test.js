@@ -1595,6 +1595,46 @@ describe('Finite stock tracking (#1948)', () => {
       expect(limited.response.status).toBe(429);
     });
 
+    // #2098: requireOwnedLandlet above is a point-in-time check, and
+    // checkRateLimit is a real awaited gap since then -- same test idiom
+    // as land.test.js's/placed-instance-backups.test.js's own ownership-
+    // race tests, hijacking env.DB.prepare to transfer ownership away
+    // right as checkRateLimit's own INSERT INTO rate_limit_events runs.
+    it('rejects a dismiss on a landlet that was transferred to a new owner mid-request', async () => {
+      const owner = await signupBuilder('marker-dismiss-race-owner');
+      const newOwner = await signupBuilder('marker-dismiss-race-new-owner');
+      await createLandletAndClaim('marker-dismiss-race-landlet', owner);
+      await createTemplateWithStock('marker-dismiss-race-template', { stockQuantity: 1 });
+      await placeInstance('marker-dismiss-race-instance', 'marker-dismiss-race-landlet', 'marker-dismiss-race-template', owner);
+      await api('/instances/marker-dismiss-race-instance/purchase', owner.session({ method: 'POST' }));
+
+      const listed = await api('/landlets/marker-dismiss-race-landlet/sold-out-markers', owner.session());
+      const markerId = listed.body.markers[0].markerId;
+
+      const originalPrepare = env.DB.prepare.bind(env.DB);
+      let armed = true;
+      env.DB.prepare = (sql) => {
+        if (armed && sql.includes('INSERT INTO rate_limit_events')) {
+          armed = false;
+          originalPrepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+            .bind(newOwner.builderId, 'marker-dismiss-race-landlet').run();
+        }
+        return originalPrepare(sql);
+      };
+      let rejected;
+      try {
+        rejected = await api(`/landlets/marker-dismiss-race-landlet/sold-out-markers/${markerId}/dismiss`, owner.session({ method: 'POST' }));
+      } finally {
+        env.DB.prepare = originalPrepare;
+      }
+      expect(rejected.response.status).toBe(409);
+      expect(rejected.body.error).toMatch(/Landlet changed concurrently/);
+
+      const stillUndismissed = await env.DB.prepare('SELECT dismissed_at FROM sold_out_markers WHERE marker_id = ?')
+        .bind(markerId).first();
+      expect(stillUndismissed.dismissed_at).toBe(null);
+    });
+
     it('does not remove or resurrect markers when the sold-out template is later restocked', async () => {
       const owner = await signupBuilder('marker-restock-owner');
       await createLandletAndClaim('marker-restock-landlet', owner);
@@ -1683,6 +1723,25 @@ describe('Sold-out notifications: dashboard + opt-in email (#2067)', () => {
     expect(prefs.body.notifySoldOutEmail).toBe(true);
     const me = await api('/builders/me', builder.session());
     expect(me.body.builder.notifySoldOutEmail).toBe(true);
+  });
+
+  // #2103: PUT had no rate limit at all, unlike handleMyAvatar's own PUT
+  // (#1057) -- same test shape as avatar-ownership.test.js's own
+  // "rate-limits repeated equip attempts from the same account".
+  it('rate-limits repeated PUT attempts from the same account', async () => {
+    const builder = await signupBuilder('notify-rate-limit-builder');
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/builders/me/notification-preferences', builder.session({
+        method: 'PUT',
+        body: JSON.stringify({ notifySoldOutEmail: i % 2 === 0 }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/builders/me/notification-preferences', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({ notifySoldOutEmail: true }),
+    }));
+    expect(limited.response.status).toBe(429);
   });
 
   it('sold-out sweep still fires the dashboard notification for an opted-in builder (email itself is unverifiable without RESEND_API_KEY)', async () => {
