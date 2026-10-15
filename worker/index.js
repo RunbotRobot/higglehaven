@@ -2878,7 +2878,16 @@ async function handleProductFlagsList(request, db, url) {
     ORDER BY lastFlaggedAt DESC
     LIMIT 200
   `).all();
-  return json({ listings: results });
+  // #2110: same totalCount-alongside-the-cap pattern as handleSignPosts/
+  // handleCalendarEvents/handlePurchases -- without it, an admin reviewing
+  // this trust-and-safety queue has no way to tell "200 of 200" from "200
+  // of 1400", silently dropping older pending listings off the end once
+  // the cap is reached. Counts distinct flagged templates, matching what
+  // the capped query above is itself grouped and capped by.
+  const total = await db.prepare(`
+    SELECT COUNT(DISTINCT template_id) AS count FROM product_flags WHERE status = 'pending'
+  `).first();
+  return json({ listings: results, totalCount: total.count });
 }
 
 function reviewFromRow(row) {
@@ -10882,6 +10891,10 @@ async function handleSuspendAccount(request, db) {
 // rather than a separate SELECT racing a concurrent lift of the same row.
 async function handleUnsuspendAccount(request, db) {
   const admin = await requireAdmin(request, db);
+  // #2118: same admin-action shape as handleSuspendAccount above, which
+  // already has this guard -- reusing its own rate limit bucket/threshold
+  // rather than introducing a new one for the identical kind of action.
+  await checkRateLimit(db, `unsuspend-account:${admin.user_id}`, ACCOUNT_SUSPENSION_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const email = normalizeEmail(input.email);
   const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
@@ -15832,8 +15845,15 @@ async function handleSelfDealingFlags(request, db, route) {
       ORDER BY sdf.created_at DESC
       LIMIT 200
     `).all();
+    // #2110: same totalCount-alongside-the-cap pattern as handleSignPosts/
+    // handleCalendarEvents/handlePurchases -- without it, an admin
+    // reviewing this trust-and-safety queue has no way to tell "200 of
+    // 200" from "200 of 1400", silently dropping older pending flags off
+    // the end once the cap is reached.
+    const total = await db.prepare(`SELECT COUNT(*) AS count FROM self_dealing_flags WHERE status = 'pending'`).first();
     return json({
       flags: results.map((row) => ({ ...row, matchedSignals: JSON.parse(row.matchedSignals) })),
+      totalCount: total.count,
     });
   }
 

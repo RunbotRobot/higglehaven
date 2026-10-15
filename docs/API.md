@@ -937,7 +937,9 @@ set.
 
 ### `POST /api/auth/unsuspend-account`
 
-`requireAdmin`-gated. Request body: `{ "email" }`. `404` if no account has
+`requireAdmin`-gated. Rate-limited the same as `suspend-account` above
+(#2118: same admin-action shape, same `ACCOUNT_SUSPENSION_RATE_LIMIT_MAX`
+bucket — bound per-admin). Request body: `{ "email" }`. `404` if no account has
 it, `409` if that account has no currently-active suspension to lift. On
 success, sets `liftedAt`/the lifting admin on the active
 `account_suspensions` row, logs via `admin_action_log`
@@ -6869,6 +6871,80 @@ buyer's first-ever purchase (not established, no prior purchase to count),
 a buyer with refund history (not established), a high-value purchase from
 an established buyer (no auto-resolve), and the no-returns override.
 
+### Product flags (#2017, sub-issue of #1212)
+
+A shopper-facing "flag this listing" mechanism for counterfeit/policy
+violations, zero-cost/consequence-free for the flagger — a single flag
+never auto-hides a listing on its own; it queues into an admin review
+queue while the listing stays live.
+
+```
+POST /api/catalog/:templateId/flags
+{ "reason": "Looks like a counterfeit of another seller's design" }   // optional, ≤280 chars
+```
+
+Requires a session (builder). Rate-limited to 20 calls per 15 minutes,
+bucketed by the flagging builder's own id (see "Rate limiting" above).
+`migrations/0131`'s `UNIQUE(template_id, flagger_builder_id)` is what
+makes the auto-hide threshold below actually count *distinct* flaggers —
+a second flag from the same builder against the same listing hits that
+constraint and surfaces as a plain `409`, not a second vote.
+
+```json
+{ "flagId": "product-flag-...", "pendingCount": 1, "autoHidden": false }
+```
+
+Once a listing's distinct pending flags reach 3, it's auto-hidden:
+`catalog_templates.flagged_hidden_at` is set, which blocks any *new*
+purchase of it (`POST /api/instances/:instanceId/purchase`'s own guard)
+pending admin review, and the seller is notified. Auto-hide deliberately
+does **not** remove the listing from `GET /api/catalog`'s list/detail
+responses or Build mode's own "Add Item" picker — same reasoning
+`isTestModel` already documents above for why hiding a row there breaks
+ordinary (non-admin) placement for everyone, not just the flagged seller.
+
+```
+POST /api/catalog/:templateId/flags/resolve
+{ "action": "approve" }   // or "reject"
+```
+
+Admin-only. Resolves every still-pending flag on this *listing* at once
+(one decision per listing, not one per flag) and writes an
+`admin_action_log` entry. `approve` permanently sets `flagged_hidden_at`
+(if auto-hide hadn't already), increments the listing's seller's
+`sellers.strike_count`, and notifies the seller; `reject` clears
+`flagged_hidden_at` if auto-hide had fired, restoring purchasability.
+Rate-limited the same as the flag-create endpoint above, bucketed by the
+acting admin's own user id instead.
+
+```
+GET /api/product-flags
+```
+
+Admin-only. Lists every listing with at least one pending flag, newest-
+flagged first (capped at 200):
+
+```json
+{
+  "listings": [
+    {
+      "templateId": "...",
+      "templateName": "...",
+      "sellerId": "...",
+      "pendingCount": 2,
+      "firstFlaggedAt": "...",
+      "lastFlaggedAt": "..."
+    }
+  ]
+}
+```
+
+`worker/product-flags.test.js` covers both endpoints: auth/admin
+requirements, the duplicate-flagger `409`, the auto-hide threshold firing
+(and not firing early), the purchase-blocking effect once hidden, the
+approve/reject outcomes (including the strike-count increment and the
+un-hide on reject), and the admin-only list endpoint.
+
 ### Self-dealing flags (#2019, sub-issue of #1212)
 
 A lighter, non-fingerprinting self-dealing signal: every real purchase
@@ -6904,7 +6980,11 @@ GET /api/self-dealing-flags
 ```
 
 Admin-only. Lists every `pending` flag, newest first (capped at 200),
-joined against its own purchase for context:
+joined against its own purchase for context. `totalCount` (#2110) is the
+real count of every pending flag, not just the capped page -- lets the
+admin tell "200 of 200" from "200 of 1400" rather than silently losing
+older flags off the end once the cap is reached, same pattern
+`GET /api/sign-posts`/`/api/calendar-events`/`/api/purchases` already use:
 
 ```json
 {
@@ -6919,7 +6999,8 @@ joined against its own purchase for context:
       "builderId": "...",
       "totalCents": 500
     }
-  ]
+  ],
+  "totalCount": 1
 }
 ```
 

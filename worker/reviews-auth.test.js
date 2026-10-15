@@ -1813,6 +1813,35 @@ describe('Authentication', () => {
       expect(resuspended.response.status).toBe(200);
     });
 
+    // #2118: unsuspend-account had no rate limit at all, unlike its sibling
+    // suspend-account -- same admin-action shape, same
+    // ACCOUNT_SUSPENSION_RATE_LIMIT_MAX bucket (bound per-admin, separate
+    // from suspend-account's own bucket).
+    it('rate-limits repeated unsuspend attempts from the same admin', async () => {
+      const admin = await makeAdmin('unsuspend-rate-limit-admin');
+      for (let i = 0; i < 20; i++) {
+        const target = await signupBuilder(`unsuspend-rate-limit-target-${i}`);
+        await api('/auth/suspend-account', admin.session({
+          method: 'POST', body: JSON.stringify({ email: target.email, reason: 'x' }),
+        }));
+        const attempt = await api('/auth/unsuspend-account', admin.session({
+          method: 'POST', body: JSON.stringify({ email: target.email }),
+        }));
+        expect(attempt.response.status).not.toBe(429);
+      }
+      const extraTarget = await signupBuilder('unsuspend-rate-limit-target-extra');
+      await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: extraTarget.email, reason: 'x' }),
+      }));
+      const limited = await api('/auth/unsuspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: extraTarget.email }),
+      }));
+      expect(limited.response.status).toBe(429);
+    }, 45000); // #978-class: 20 iterations x 3 real HTTP requests each (signup,
+    // suspend, unsuspend) exceeds the 20000ms default under this file's own
+    // size/load, same reasoning worker/commerce.test.js's own precedent for a
+    // comparable request volume.
+
     it('reports suspension status for any admin, but nobody else, null when not suspended', async () => {
       const admin = await makeAdmin('suspension-status-admin');
       const target = await signupBuilder('suspension-status-target');
