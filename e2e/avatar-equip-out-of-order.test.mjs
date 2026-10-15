@@ -59,11 +59,11 @@ async function uploadAvatarProduct(name) {
   await page.fill('#upload-price', '5');
   await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
   await page.click('#upload-submit-btn');
-  await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+  await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
   await page.waitForTimeout(300);
   await page.check('#upload-avatar-category-checkbox');
   await page.click('#upload-submit-btn');
-  await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+  await page.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
   await page.waitForTimeout(500);
 }
 
@@ -123,7 +123,8 @@ await page.click('.settings-tab-btn[data-section="shop"]');
 const myAvatarsField = page.locator('.settings-field', { hasText: 'My Avatars' });
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('My Avatars') && f.querySelectorAll('.version-row').length >= 3),
-  { timeout: 10000 },
+  null,
+  { timeout: 30000 },
 );
 
 // Self-imposed and deterministic (a plain in-page setTimeout, not a real

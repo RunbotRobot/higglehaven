@@ -310,16 +310,35 @@ async function routeRequest(request, env, ctx) {
     return new Response(null, { status: 204, headers: JSON_HEADERS });
   }
 
+  // #2173: each handler below already catches its own requireAdmin
+  // HttpError and renders an HTML sign-in page for it -- but requireAdmin's
+  // underlying db.prepare(...).first() call can also throw a raw, non-
+  // HttpError runtime/D1 error (a transient DB failure, a binding issue),
+  // which each handler explicitly re-throws. Unlike every /api/ and
+  // /uploads/ route below, nothing here was catching that escape, so it
+  // propagated out of routeRequest entirely -- past withSecurityHeaders,
+  // into a bare unhandled-exception response instead of this app's own
+  // consistent JSON error shape. Same catch-all fallback the /api/ branch
+  // already uses.
   if (url.pathname === '/admin/control-room') {
-    return handleControlRoomAdminPage(request, env);
+    return handleControlRoomAdminPage(request, env).catch((error) => {
+      console.error(error);
+      return json({ error: 'Internal server error' }, 500);
+    });
   }
 
   if (url.pathname === '/admin/action-log') {
-    return handleAdminActionLogPage(request, env);
+    return handleAdminActionLogPage(request, env).catch((error) => {
+      console.error(error);
+      return json({ error: 'Internal server error' }, 500);
+    });
   }
 
   if (url.pathname === '/admin/dashboard') {
-    return handleAdminDashboardPage(request, env);
+    return handleAdminDashboardPage(request, env).catch((error) => {
+      console.error(error);
+      return json({ error: 'Internal server error' }, 500);
+    });
   }
 
   if (url.pathname.startsWith('/api/')) {
@@ -14413,6 +14432,12 @@ async function handleInstances(request, env, route, url) {
 // sign posts have, since nobody but the owner has any business touching
 // their own backup chain.
 const INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX = 200;
+// #2171: every other ordered/bulk-array endpoint in this file caps its
+// length explicitly (e.g. PUT /landlets/:id/instances at 250, POST
+// /land-candidates/batch at 100) -- this chain had no such cap. 20 matches
+// the scale of a "backup chain" feature (a handful of fallback templates
+// per instance, not a bulk list).
+const INSTANCE_BACKUP_CHAIN_MAX = 20;
 
 function backupFromRow(row) {
   return {
@@ -14448,6 +14473,9 @@ async function handleInstanceBackups(request, db, route) {
     const tail = await db.prepare(
       'SELECT COUNT(*) AS count FROM placed_instance_backups WHERE instance_id = ?',
     ).bind(instanceId).first();
+    if (tail.count >= INSTANCE_BACKUP_CHAIN_MAX) {
+      throw new HttpError(`A backup chain can contain at most ${INSTANCE_BACKUP_CHAIN_MAX} entries`, 400);
+    }
     const backupId = `backup-${crypto.randomUUID()}`;
     // #929/#960 idiom (see handleInstances' own POST above): requireOwnedLandlet
     // above is a point-in-time check, and the awaits since then (readJson,
@@ -14520,22 +14548,34 @@ async function handleInstanceBackups(request, db, route) {
     // ownership re-check into the DELETE itself rather than trusting the
     // top-of-handler requireOwnedLandlet, which is only a point-in-time
     // check against the awaits (readJson/SELECT/checkRateLimit) since then.
-    const deleted = await db.prepare(`
-      DELETE FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ? AND EXISTS (
-        SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
-        WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
-      )
-    `).bind(backupId, instanceId, instanceId, sessionBuilder.builder_id).run();
+    //
+    // #2174: batched with the position-shift UPDATE below (mirroring the
+    // PUT/reorder branch above) so the two writes commit as one D1
+    // transaction -- previously these were sequential awaited .run() calls,
+    // so an interruption between them could leave the chain with a position
+    // gap, which the next append (keyed off COUNT(*), not MAX(position))
+    // would then collide into. The UPDATE's own NOT EXISTS guard ties its
+    // effect to the DELETE actually having landed earlier in this same
+    // batch/transaction, so a lost ownership race (DELETE's EXISTS guard
+    // fails, 0 rows) leaves positions untouched instead of shifting them
+    // for a row that was never removed.
+    const [deleted] = await db.batch([
+      db.prepare(`
+        DELETE FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ? AND EXISTS (
+          SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
+          WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
+        )
+      `).bind(backupId, instanceId, instanceId, sessionBuilder.builder_id),
+      db.prepare(`
+        UPDATE placed_instance_backups SET position = position - 1
+        WHERE instance_id = ? AND position > ? AND NOT EXISTS (
+          SELECT 1 FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ?
+        )
+      `).bind(instanceId, existing.position, backupId, instanceId),
+    ]);
     if (deleted.meta.changes === 0) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
-    // Closes the gap left behind rather than leaving positions sparse --
-    // every position strictly greater than the removed one shifts down by
-    // one, keeping the chain contiguous for the next append (which relies
-    // on COUNT(*) above, not MAX(position), to pick its own tail slot).
-    await db.prepare(
-      'UPDATE placed_instance_backups SET position = position - 1 WHERE instance_id = ? AND position > ?',
-    ).bind(instanceId, existing.position).run();
     return json({ deleted: true });
   }
 
@@ -15979,15 +16019,33 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
     WHERE pi.template_id = ?
   `).bind(template.template_id).all();
 
-  const deletedCountByBuilder = new Map();
-  for (const { instanceId, landletId, xM, yM, zM, builderId } of affectedInstances) {
-    const { results: chain } = await db.prepare(`
-      SELECT pib.backup_id AS backupId, pib.template_id AS templateId, ct.stock_quantity AS stockQuantity
+  // #2170: one batched IN(...) lookup for every affected instance's backup
+  // chain, instead of a separate query per instance inside the loop below --
+  // this function blocks handlePurchaseFinalize's own request (awaited from
+  // its purchase-commit path), so an O(n) sequential-round-trip sweep over a
+  // popular/free template placed across many landlets risked real checkout
+  // latency. Same batch-then-look-up-in-memory idiom this file already uses
+  // elsewhere (e.g. getInstancesById, the builder-notification-preference
+  // lookup a few lines below this function's own loop).
+  const chainsByInstance = new Map();
+  if (affectedInstances.length > 0) {
+    const instanceIds = affectedInstances.map((i) => i.instanceId);
+    const { results: allChainEntries } = await db.prepare(`
+      SELECT pib.instance_id AS instanceId, pib.backup_id AS backupId, pib.template_id AS templateId, ct.stock_quantity AS stockQuantity
       FROM placed_instance_backups pib
       JOIN catalog_templates ct ON ct.template_id = pib.template_id
-      WHERE pib.instance_id = ?
-      ORDER BY pib.position
-    `).bind(instanceId).all();
+      WHERE pib.instance_id IN (${instanceIds.map(() => '?').join(', ')})
+      ORDER BY pib.instance_id, pib.position
+    `).bind(...instanceIds).all();
+    for (const entry of allChainEntries) {
+      if (!chainsByInstance.has(entry.instanceId)) chainsByInstance.set(entry.instanceId, []);
+      chainsByInstance.get(entry.instanceId).push(entry);
+    }
+  }
+
+  const deletedCountByBuilder = new Map();
+  for (const { instanceId, landletId, xM, yM, zM, builderId } of affectedInstances) {
+    const chain = chainsByInstance.get(instanceId) || [];
     const consumedBackupIds = [];
     const viable = chain.find((entry) => {
       consumedBackupIds.push(entry.backupId);

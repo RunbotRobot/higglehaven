@@ -397,10 +397,14 @@ export async function clearVerifyModalIfShown(page) {
   if (!verifyModalShown) return;
   if (await page.locator('#verify-age-step').isVisible()) {
     await page.check('#verify-age-attest');
-    await page.click('#verify-continue-btn');
+    // #2153: the click's own actionability wait (not just the selector wait
+    // above) can outlast Playwright's 30000ms default under the same
+    // CI-wide contention #1896 already accounts for -- the button stays
+    // disabled until a signup/didit-verification-status round trip resolves.
+    await page.click('#verify-continue-btn', { timeout: 30000 });
   }
   if (await page.locator('#verify-modal.visible').count() > 0) {
-    await page.click('#verify-continue-btn');
+    await page.click('#verify-continue-btn', { timeout: 30000 });
   }
   await page.waitForSelector('#verify-modal:not(.visible)', { state: 'attached', timeout: 15000 });
 }
