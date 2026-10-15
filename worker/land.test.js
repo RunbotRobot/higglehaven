@@ -1263,6 +1263,47 @@ describe('Community signs', () => {
     expect(versions.body.versions).toHaveLength(1);
   });
 
+  // #2184: same "a client-supplied idempotency key reused for genuinely
+  // different content must not fabricate a stale success" fix already
+  // applied to the sibling POST /landlets/:id/versions endpoint (#1874) --
+  // this endpoint's own auto-version side effect never got it, so a retry
+  // with the same idempotencyKey but a genuinely different versionName
+  // used to silently no-op on the version INSERT, leaving the stale first
+  // version's name/metadata both returned and permanently stored.
+  it('creates a genuinely new version, not a silent dupe of the stale one, when the same idempotencyKey is reused for different content', async () => {
+    const mismatchBuilder = await signupBuilder('draft-version-mismatch-builder');
+    const mismatchLandlet = 'draft-version-mismatch-landlet';
+    await createGreenbeltLandlet(mismatchLandlet);
+    const claimed = await api(`/landlets/${mismatchLandlet}/claim`, mismatchBuilder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+
+    const instances = [{
+      instanceId: 'draft-version-mismatch-instance',
+      landletId: mismatchLandlet,
+      templateId: 'placeholder-tree',
+      x: 5,
+      y: 5,
+    }];
+    const first = await api(`/landlets/${mismatchLandlet}/draft`, mismatchBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({ instances, versionName: 'First save', idempotencyKey: 'mismatch-attempt-1' }),
+    }));
+    expect(first.response.status).toBe(200);
+
+    // Same cached key, but a genuinely different versionName -- the stale
+    // key must not cause this to be silently swallowed as the first save.
+    const second = await api(`/landlets/${mismatchLandlet}/draft`, mismatchBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({ instances, versionName: 'Actually, a different save', idempotencyKey: 'mismatch-attempt-1' }),
+    }));
+    expect(second.response.status).toBe(200);
+    expect(second.body.version.versionId).not.toBe(first.body.version.versionId);
+    expect(second.body.version.name).toBe('Actually, a different save');
+
+    const versions = await api(`/landlets/${mismatchLandlet}/versions`, mismatchBuilder.session({}));
+    expect(versions.body.versions).toHaveLength(2);
+  });
+
   // #971: validateInstance's own `label` field used plain `input.label ||
   // null` -- no length cap and no type check at all, unlike every other
   // optional label-shaped field in this file (optionalLabelValue).

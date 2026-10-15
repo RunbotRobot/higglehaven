@@ -1190,7 +1190,7 @@
     if (!confirm(prompt)) return;
     clearMessages();
     try {
-      await apiFetch('/api/tax/admin-forms/' + formId + '/' + action, { method: 'POST' });
+      await apiFetch('/api/tax/admin-forms/' + encodeURIComponent(formId) + '/' + action, { method: 'POST' });
     } catch (error) {
       showError(error.message);
       return;

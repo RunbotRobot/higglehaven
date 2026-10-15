@@ -6032,19 +6032,28 @@ function renderGeneralSettingsSection() {
 async function renderNotificationPreferencesField() {
   if (!currentAuthUser) return;
   const myToken = settingsRenderToken;
-  let prefs;
-  try {
-    prefs = await fetchNotificationPreferences();
-  } catch {
-    return;
-  }
-  if (myToken !== settingsRenderToken) return;
 
   const field = document.createElement('div');
   field.className = 'settings-field';
   const fieldLabel = document.createElement('span');
   fieldLabel.textContent = 'Notifications';
   field.appendChild(fieldLabel);
+  const status = document.createElement('div');
+  status.className = 'settings-empty-note';
+  status.textContent = 'Loading…';
+  field.appendChild(status);
+  settingsSectionEl.appendChild(field);
+
+  let prefs;
+  try {
+    prefs = await fetchNotificationPreferences();
+  } catch (err) {
+    status.textContent = err.message || 'Could not load your notification preferences.';
+    status.classList.add('error');
+    return;
+  }
+  if (myToken !== settingsRenderToken) return;
+  field.removeChild(status);
 
   const row = document.createElement('div');
   row.className = 'settings-radio-row';
@@ -6073,8 +6082,6 @@ async function renderNotificationPreferencesField() {
   note.className = 'settings-empty-note';
   note.textContent = 'You always get a dashboard notification when this happens — this adds an email on top.';
   field.appendChild(note);
-
-  settingsSectionEl.appendChild(field);
 }
 
 // #614: POST /api/tax/id-form (W-9/W-8BEN collection) has existed on the
