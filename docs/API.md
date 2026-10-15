@@ -858,7 +858,11 @@ through it). Request body: `{ "email" }`, looked up the same
 case-insensitive way `POST /api/auth/login` matches it. `404` if no
 account has that email. On success, promotes that account and returns
 `{ "user": { ..., "isAdmin": true } }` for the *promoted* account, not the
-caller. Reusable per target account, same as `admin-bootstrap`.
+caller. Reusable per target account, same as `admin-bootstrap`. Rate-limited
+per acting admin (`ADMIN_GRANT_RATE_LIMIT_MAX`, 20 per window, #2123) —
+`POST /api/auth/revoke-admin` (below) shares this same bucket, since both
+mint/remove `is_admin` itself and neither previously had any throttle at
+all despite being this app's most sensitive mutation.
 
 ### `GET /api/auth/admins`
 
