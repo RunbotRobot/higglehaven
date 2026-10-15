@@ -3249,6 +3249,14 @@ async function handleBuilders(request, env, db, route, url) {
     return handleMyAnimation(request, db);
   }
 
+  // #2067 (leaf sub-issue of #1973, part of #1947): get/set this
+  // account's opt-in for an email alert on top of the dashboard
+  // notification already fired unconditionally when a placed product
+  // sells out.
+  if (route.length === 3 && route[1] === 'me' && route[2] === 'notification-preferences') {
+    return handleMyNotificationPreferences(request, db);
+  }
+
   // #1949 (sub-issue of #1947): every finite-stock template this builder
   // currently has placed on their own land, annotated with an estimated
   // days-remaining figure -- see handleBuilderLowStock's own comment for
@@ -3774,6 +3782,10 @@ function builderFromRow(row) {
     // it was leaking through GET /api/builders and its ids/label variants,
     // none of which are gated on the caller owning the row).
     higglesBalanceCents: row.higgles_balance_cents,
+    // #2067: own-account-only, same reasoning as higglesBalanceCents above
+    // -- a communication preference has no reason to leak through a
+    // cross-account lookup either.
+    notifySoldOutEmail: !!row.notify_sold_out_email,
   };
 }
 
@@ -3959,6 +3971,33 @@ async function myAvatarJson(db, builder) {
     // either way, nothing for an animation to ever compare equal to.
     skeletonSignature: template?.skeleton_signature || null,
   };
+}
+
+// #2067 (leaf sub-issue of #1973, part of #1947): GET/PUT this account's
+// sold-out-email opt-in, same requireCurrentUser-only bar and GET/PUT
+// shape as handleMyAvatar above -- a communication preference isn't a
+// world/shop-selling action N44 was aimed at either.
+async function handleMyNotificationPreferences(request, db) {
+  const user = await requireCurrentUser(request, db);
+  const builder = await getOrCreateBuilderForUser(db, user);
+
+  if (request.method === 'GET') {
+    return json({ notifySoldOutEmail: !!builder.notify_sold_out_email });
+  }
+
+  if (request.method === 'PUT') {
+    const input = await readJson(request);
+    if (typeof input.notifySoldOutEmail !== 'boolean') {
+      throw new HttpError('notifySoldOutEmail must be a boolean', 400);
+    }
+    await db.prepare(`
+      UPDATE builders SET notify_sold_out_email = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE builder_id = ?
+    `).bind(input.notifySoldOutEmail ? 1 : 0, builder.builder_id).run();
+    return json({ notifySoldOutEmail: input.notifySoldOutEmail });
+  }
+
+  return json({ error: 'Not found' }, 404);
 }
 
 // #1164 (sub-issue of #1161): every "animation"-category template this
@@ -15641,7 +15680,7 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
   // same "fire outside the batch" reasoning as the seller-commission
   // notification just above.
   if (justSoldOut) {
-    await sweepSoldOutTemplateInstances(db, template);
+    await sweepSoldOutTemplateInstances(env, db, template);
   }
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
@@ -15735,7 +15774,15 @@ async function handleSelfDealingFlags(request, db, route) {
 // time. Only once an instance's own chain is exhausted with nothing viable
 // does it fall back to the original delete+notify behavior exactly as
 // before.
-async function sweepSoldOutTemplateInstances(db, template) {
+// #2067: also emails each builder who ends up on the losing (delete)
+// branch, if they've opted in (notify_sold_out_email) and still have a
+// linked user account with an email on file -- fetched in one extra query
+// scoped to just the builders affected by *this* sweep's deletes, rather
+// than threading the join through the already-busy per-instance loop
+// above. sendEmail is already best-effort (never throws, returns false if
+// unconfigured/failed), so this never risks the sweep itself over a
+// best-effort email.
+async function sweepSoldOutTemplateInstances(env, db, template) {
   const { results: affectedInstances } = await db.prepare(`
     SELECT pi.instance_id AS instanceId, pi.landlet_id AS landletId, pi.x_m AS xM, pi.y_m AS yM, pi.z_m AS zM,
            l.owner_builder_id AS builderId
@@ -15800,9 +15847,28 @@ async function sweepSoldOutTemplateInstances(db, template) {
       deletedCountByBuilder.set(builderId, (deletedCountByBuilder.get(builderId) || 0) + 1);
     }
   }
+  if (deletedCountByBuilder.size === 0) return;
+  const builderIds = [...deletedCountByBuilder.keys()];
+  const { results: preferences } = await db.prepare(`
+    SELECT b.builder_id AS builderId, b.notify_sold_out_email AS notifySoldOutEmail, u.email AS builderEmail
+    FROM builders b
+    LEFT JOIN users u ON u.user_id = b.user_id
+    WHERE b.builder_id IN (${builderIds.map(() => '?').join(', ')})
+  `).bind(...builderIds).all();
+  const preferenceByBuilder = new Map(preferences.map((p) => [p.builderId, p]));
   for (const [builderId, count] of deletedCountByBuilder) {
+    const plural = count === 1 ? 'instance has' : 'instances have';
     await fireNotification(db, builderId,
-      `"${template.name}" just sold out — ${count} placed ${count === 1 ? 'instance has' : 'instances have'} been removed from your land.`);
+      `"${template.name}" just sold out — ${count} placed ${plural} been removed from your land.`);
+    const preference = preferenceByBuilder.get(builderId);
+    if (preference?.notifySoldOutEmail && preference.builderEmail) {
+      await sendEmail(env, {
+        to: preference.builderEmail,
+        subject: `"${template.name}" just sold out`,
+        html: `<p>"${template.name}" just sold out — ${count} placed ${plural} been removed from your land.</p>`,
+        text: `"${template.name}" just sold out — ${count} placed ${plural} been removed from your land.`,
+      });
+    }
   }
 }
 
