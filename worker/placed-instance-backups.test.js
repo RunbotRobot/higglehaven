@@ -301,6 +301,98 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
     expect(stillThere.count).toBe(1);
   });
 
+  // #2174: DELETE's position-compaction UPDATE used to be a second,
+  // separate .run() after the DELETE -- an interruption between the two
+  // awaits could leave the chain with a position gap forever (nothing ever
+  // revisits it, and the next append picks its slot via COUNT(*), not
+  // MAX(position), so it would then collide into the gap). Fixed by
+  // batching both writes into one db.batch call, same shape as the PUT
+  // (reorder) branch just above it. Confirms (a) the DELETE now goes out as
+  // one db.batch call carrying both statements, not two sequential writes,
+  // and (b) a lost ownership race still leaves every other position
+  // untouched -- the position-shift UPDATE's own NOT EXISTS guard ties its
+  // effect to the DELETE having actually landed earlier in the same batch.
+  it('issues the DELETE and its position-shift as a single batched write, and leaves positions untouched on a lost ownership race', async () => {
+    const owner = await signupBuilder('backups-delete-batch-owner');
+    const newOwner = await signupBuilder('backups-delete-batch-new-owner');
+    await createLandletAndClaim('backups-delete-batch-landlet', owner);
+    await createTemplate('backups-delete-batch-template');
+    await createTemplate('backups-delete-batch-backup-1');
+    await createTemplate('backups-delete-batch-backup-2');
+    await createTemplate('backups-delete-batch-backup-3');
+    await placeInstance('backups-delete-batch-instance', 'backups-delete-batch-landlet', 'backups-delete-batch-template', owner);
+    const first = await api('/instances/backups-delete-batch-instance/backups', owner.session({
+      method: 'POST', body: JSON.stringify({ templateId: 'backups-delete-batch-backup-1' }),
+    }));
+    const second = await api('/instances/backups-delete-batch-instance/backups', owner.session({
+      method: 'POST', body: JSON.stringify({ templateId: 'backups-delete-batch-backup-2' }),
+    }));
+    const third = await api('/instances/backups-delete-batch-instance/backups', owner.session({
+      method: 'POST', body: JSON.stringify({ templateId: 'backups-delete-batch-backup-3' }),
+    }));
+    const id1 = first.body.backup.backupId;
+    const id2 = second.body.backup.backupId;
+    const id3 = third.body.backup.backupId;
+
+    const originalBatch = env.DB.batch.bind(env.DB);
+    let batchCallCount = 0;
+    let lastBatchSize = 0;
+    env.DB.batch = async (statements) => {
+      batchCallCount += 1;
+      lastBatchSize = statements.length;
+      // Simulates the landlet's ownership changing in the exact window
+      // between requireOwnedLandlet's top-of-handler check (already
+      // passed, above) and this db.batch() write -- same idiom as the
+      // "rejects a DELETE..." test above, but on env.DB.batch directly
+      // rather than env.DB.prepare, since the write is now batched.
+      await env.DB.prepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+        .bind(newOwner.builderId, 'backups-delete-batch-landlet').run();
+      return originalBatch(statements);
+    };
+    let rejected;
+    try {
+      rejected = await api(`/instances/backups-delete-batch-instance/backups/${id2}`, owner.session({ method: 'DELETE' }));
+    } finally {
+      env.DB.batch = originalBatch;
+    }
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body.error).toMatch(/Landlet changed concurrently/);
+    // The DELETE went out as exactly one batched call carrying both
+    // statements (the delete itself and the position-shift), not two
+    // separate sequential writes.
+    expect(batchCallCount).toBe(1);
+    expect(lastBatchSize).toBe(2);
+
+    // Restore ownership and confirm every backup -- not just the one that
+    // was supposed to be deleted -- is still at its original position. The
+    // position-shift UPDATE ran inside the same batch as the rejected
+    // DELETE; without its NOT EXISTS guard it would have shifted backup-3
+    // down to position 1 even though backup-2 was never actually removed.
+    await env.DB.prepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+      .bind(owner.builderId, 'backups-delete-batch-landlet').run();
+    const stillOriginal = await env.DB.prepare(
+      'SELECT backup_id, position FROM placed_instance_backups WHERE instance_id = ? ORDER BY position',
+    ).bind('backups-delete-batch-instance').all();
+    expect(stillOriginal.results.map((r) => ({ id: r.backup_id, position: r.position }))).toEqual([
+      { id: id1, position: 0 },
+      { id: id2, position: 1 },
+      { id: id3, position: 2 },
+    ]);
+
+    // A genuinely successful DELETE still compacts positions correctly,
+    // same assertion as the "compacts positions" test above, just via the
+    // now-batched path.
+    const deleted = await api(`/instances/backups-delete-batch-instance/backups/${id2}`, owner.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    const afterDelete = await env.DB.prepare(
+      'SELECT backup_id, position FROM placed_instance_backups WHERE instance_id = ? ORDER BY position',
+    ).bind('backups-delete-batch-instance').all();
+    expect(afterDelete.results.map((r) => ({ id: r.backup_id, position: r.position }))).toEqual([
+      { id: id1, position: 0 },
+      { id: id3, position: 1 },
+    ]);
+  });
+
   it('blocks deleting a catalog template still configured as a backup', async () => {
     const builder = await signupBuilder('backups-delete-template-builder');
     await createLandletAndClaim('backups-delete-template-landlet', builder);

@@ -14460,22 +14460,34 @@ async function handleInstanceBackups(request, db, route) {
     // ownership re-check into the DELETE itself rather than trusting the
     // top-of-handler requireOwnedLandlet, which is only a point-in-time
     // check against the awaits (readJson/SELECT/checkRateLimit) since then.
-    const deleted = await db.prepare(`
-      DELETE FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ? AND EXISTS (
-        SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
-        WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
-      )
-    `).bind(backupId, instanceId, instanceId, sessionBuilder.builder_id).run();
+    //
+    // #2174: batched with the position-shift UPDATE below (mirroring the
+    // PUT/reorder branch above) so the two writes commit as one D1
+    // transaction -- previously these were sequential awaited .run() calls,
+    // so an interruption between them could leave the chain with a position
+    // gap, which the next append (keyed off COUNT(*), not MAX(position))
+    // would then collide into. The UPDATE's own NOT EXISTS guard ties its
+    // effect to the DELETE actually having landed earlier in this same
+    // batch/transaction, so a lost ownership race (DELETE's EXISTS guard
+    // fails, 0 rows) leaves positions untouched instead of shifting them
+    // for a row that was never removed.
+    const [deleted] = await db.batch([
+      db.prepare(`
+        DELETE FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ? AND EXISTS (
+          SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
+          WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
+        )
+      `).bind(backupId, instanceId, instanceId, sessionBuilder.builder_id),
+      db.prepare(`
+        UPDATE placed_instance_backups SET position = position - 1
+        WHERE instance_id = ? AND position > ? AND NOT EXISTS (
+          SELECT 1 FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ?
+        )
+      `).bind(instanceId, existing.position, backupId, instanceId),
+    ]);
     if (deleted.meta.changes === 0) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
-    // Closes the gap left behind rather than leaving positions sparse --
-    // every position strictly greater than the removed one shifts down by
-    // one, keeping the chain contiguous for the next append (which relies
-    // on COUNT(*) above, not MAX(position), to pick its own tail slot).
-    await db.prepare(
-      'UPDATE placed_instance_backups SET position = position - 1 WHERE instance_id = ? AND position > ?',
-    ).bind(instanceId, existing.position).run();
     return json({ deleted: true });
   }
 
