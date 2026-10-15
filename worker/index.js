@@ -7840,6 +7840,18 @@ async function handleStripeWebhook(request, env, db) {
 async function handlePurchaseReversalWebhookEvent(db, event) {
   const paymentIntentId = event.data?.object?.payment_intent;
   if (!paymentIntentId) return;
+  // #2232: charge.refunded fires for ANY refund on a charge, partial or
+  // full -- the Charge object's own `refunded` boolean is the only
+  // authoritative signal for "fully refunded" (it's true only once
+  // amount_refunded reaches the full charge amount). Without this check, a
+  // $1 goodwill partial refund on a $100 purchase clawed back the builder's
+  // entire commission and revoked all ownership that purchase granted, the
+  // same way a genuine full refund does -- even though the buyer kept 99%
+  // of their payment and the product. Dispute events (charge.dispute.*)
+  // carry no `refunded` field at all, so this only applies to
+  // charge.refunded itself; a real chargeback/dispute still claws back in
+  // full immediately, per #1086's own deliberate design.
+  if (event.type === 'charge.refunded' && event.data?.object?.refunded !== true) return;
   const purchase = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
   if (!purchase) return;
 
