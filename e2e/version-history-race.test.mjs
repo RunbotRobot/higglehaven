@@ -44,9 +44,17 @@ async function openBuildSettings() {
 await placeCatalogItem('Tree', 210, 400);
 await openBuildSettings();
 await page.click('.version-action-btn:has-text("Publish")');
+// #2136: waitForFunction's signature is (pageFunction, arg, options) -- a
+// bare (fn, { timeout }) call puts the options object in the `arg` slot
+// instead, so `options` stayed undefined and the real applied timeout was
+// always Playwright's actual default (30000ms), never the smaller number
+// written here. The explicit `null` arg reaches the options slot, and the
+// timeout itself is widened to 60000ms for real headroom under CI load,
+// same as e2e/helpers.mjs's own account-menu-modal wait.
 await page.waitForFunction(
   () => document.getElementById('build-publish-status')?.textContent.includes('Published'),
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 await page.waitForTimeout(500);
 
@@ -56,7 +64,9 @@ await page.waitForTimeout(300);
 await placeCatalogItem('Brick', 250, 420);
 await openBuildSettings();
 await page.click('.version-action-btn:has-text("Publish")');
-await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 2, { timeout: 10000 });
+// #2136: same waitForFunction arg/options bug as above -- null arg, 60000ms
+// real timeout.
+await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 2, null, { timeout: 60000 });
 await page.waitForTimeout(500);
 
 const { landlets } = await fetchJson('/api/landlets?limit=100');
@@ -99,9 +109,12 @@ await olderRow.locator('button', { hasText: 'Set Live' }).click();
 // its own save+activate+re-render round trip is NOT delayed, so it should
 // finish first and correctly show the brand-new version as live.
 await page.click('.version-action-btn:has-text("Publish")');
+// #2136: same waitForFunction arg/options bug as above -- null arg, 60000ms
+// real timeout.
 await page.waitForFunction(
   () => document.getElementById('build-publish-status')?.textContent.includes('Published'),
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 await page.waitForTimeout(300);
 
