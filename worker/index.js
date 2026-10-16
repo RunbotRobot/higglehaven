@@ -8565,8 +8565,19 @@ const TRIPO_TERMINAL_FAILURE_STATUSES = new Set(['failed', 'cancelled', 'banned'
 // gets there first applies the result; the other is a safe no-op.
 async function applyTripoTaskResult(db, env, jobId, task) {
   if (task.status === 'success') {
+    // #2226: sibling case to the #1673 catch below -- Tripo can also report
+    // success with the output/model_url missing entirely (not just an
+    // output URL that fails to download). Without marking the job failed
+    // here too, this left the row stuck at status='processing' until the
+    // cron sweep's own generic "timed out" message, since the thrown error
+    // below was never caught by either caller (the webhook handler, or the
+    // status-poll path).
     if (!task?.output?.model_url) {
-      throw new HttpError('Video-to-3D provider reported success with no output file', 502);
+      await db.prepare(`
+        UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE job_id = ? AND processed_at IS NULL
+      `).bind('Video-to-3D provider reported success with no output file', jobId).run();
+      return;
     }
     // Fetching/storing happens before the atomic claim below (unlike
     // applyDiditDecision, which has no slow step) -- a race between the

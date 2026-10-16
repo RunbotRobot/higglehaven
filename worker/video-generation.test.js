@@ -86,6 +86,12 @@ beforeAll(async () => {
           data: { task_id: taskId, status: 'success', output: { model_url: nextModelDownloadUrl } },
         }), { status: 200 });
       }
+      // #2226: Tripo reporting success with no output/model_url at all --
+      // a distinct sentinel from the normal 'success' case above, which
+      // always includes output, so this doesn't disturb any other test.
+      if (nextTaskStatus === 'success-no-output') {
+        return new Response(JSON.stringify({ code: 0, data: { task_id: taskId, status: 'success' } }), { status: 200 });
+      }
       return new Response(JSON.stringify({ code: 0, data: { task_id: taskId, status: nextTaskStatus } }), { status: 200 });
     }
     if (url === FAKE_MODEL_DOWNLOAD_URL) {
@@ -293,6 +299,25 @@ describe('Video-to-3D job creation (#1619)', () => {
       expect(row.processed_at).not.toBeNull();
     } finally {
       nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
+    }
+  });
+
+  it('#2226: fails the job immediately (not stuck processing) when Tripo reports success with no output file at all', async () => {
+    const builder = await signupBuilderWithCredits('video-gen-no-output');
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    const createdBody = await created.json();
+
+    nextTaskStatus = 'success-no-output';
+    try {
+      const status = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
+      expect(status.body.status).toBe('failed');
+      expect(status.body.error).toMatch(/no output file/);
+
+      const row = await env.DB.prepare('SELECT status, processed_at FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
+      expect(row.status).toBe('failed');
+      expect(row.processed_at).not.toBeNull();
+    } finally {
+      nextTaskStatus = 'success';
     }
   });
 
