@@ -26,24 +26,49 @@ beforeEach(async () => {
 
 let idCounter = 0;
 
-async function seedLandlet(status) {
+// Non-zero default center so a test that gets the orb's landlet-local x_m/
+// y_m confused with its own world position (what #2222's own collect fix
+// has to convert between) fails loudly instead of accidentally passing --
+// landlets.center_x_m/center_y_m both default to 0 in the schema, which
+// would silently paper over exactly that bug.
+const DEFAULT_LANDLET_CENTER_X = 1000;
+const DEFAULT_LANDLET_CENTER_Y = -500;
+
+async function seedLandlet(status, { centerX = DEFAULT_LANDLET_CENTER_X, centerY = DEFAULT_LANDLET_CENTER_Y } = {}) {
   idCounter += 1;
   const landletId = `credit-orb-landlet-${idCounter}`;
   await env.DB.prepare(
-    'INSERT INTO landlets (landlet_id, name, status) VALUES (?, ?, ?)',
-  ).bind(landletId, landletId, status).run();
+    'INSERT INTO landlets (landlet_id, name, status, center_x_m, center_y_m) VALUES (?, ?, ?, ?, ?)',
+  ).bind(landletId, landletId, status, centerX, centerY).run();
   return landletId;
 }
 
-async function seedOrb(landletId, { collected = false, spawnedAgeMs = 0 } = {}) {
+async function seedOrb(landletId, { collected = false, spawnedAgeMs = 0, x = 0, y = 0 } = {}) {
   idCounter += 1;
   const orbId = `credit-orb-test-${idCounter}`;
   const spawnedAt = new Date(Date.now() - spawnedAgeMs).toISOString();
   await env.DB.prepare(`
     INSERT INTO credit_orbs (orb_id, landlet_id, x_m, y_m, z_m, spawned_at, collected_at)
-    VALUES (?, ?, 0, 0, 0, ?, ?)
-  `).bind(orbId, landletId, spawnedAt, collected ? spawnedAt : null).run();
+    VALUES (?, ?, ?, ?, 0, ?, ?)
+  `).bind(orbId, landletId, x, y, spawnedAt, collected ? spawnedAt : null).run();
   return orbId;
+}
+
+// #2222: collect now requires a fresh, nearby avatar_presence row (same
+// table/shape #1098's real POST /presence writes) -- seeds one directly,
+// the same "insert the state a real write would have produced" shortcut
+// presence.test.js's own setPresence already uses. Takes a WORLD position
+// (matching what a real client reports), not a landlet-local one --
+// deliberately no landletId param, since the collect check doesn't use
+// one either (see worker/index.js's own comment on why).
+async function seedPresence(builderId, { x = 0, y = 0, ageMs = 0 } = {}) {
+  const updatedAt = new Date(Date.now() - ageMs).toISOString();
+  await env.DB.prepare(`
+    INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, updated_at)
+    VALUES (?, NULL, ?, ?, 0, 0, ?)
+    ON CONFLICT (builder_id) DO UPDATE SET
+      x = excluded.x, y = excluded.y, updated_at = excluded.updated_at
+  `).bind(builderId, x, y, updatedAt).run();
 }
 
 describe('spawnCreditOrbIfDue (#1994)', () => {
@@ -182,8 +207,9 @@ describe('POST /api/credit-orbs/:orbId/collect (#1995)', () => {
 
   it('marks the orb collected and grants the collecting builder one video-generation credit', async () => {
     const landlet = await seedLandlet('greenbelt');
-    const orbId = await seedOrb(landlet);
+    const orbId = await seedOrb(landlet); // at the landlet's own local (0, 0)
     const builder = await signupBuilder('orb-collector');
+    await seedPresence(builder.builderId, { x: DEFAULT_LANDLET_CENTER_X, y: DEFAULT_LANDLET_CENTER_Y });
 
     const { response, body } = await api(`/credit-orbs/${orbId}/collect`, builder.session({ method: 'POST' }));
     expect(response.status).toBe(200);
@@ -207,6 +233,8 @@ describe('POST /api/credit-orbs/:orbId/collect (#1995)', () => {
     const orbId = await seedOrb(landlet);
     const first = await signupBuilder('orb-first');
     const second = await signupBuilder('orb-second');
+    await seedPresence(first.builderId, { x: DEFAULT_LANDLET_CENTER_X, y: DEFAULT_LANDLET_CENTER_Y });
+    await seedPresence(second.builderId, { x: DEFAULT_LANDLET_CENTER_X, y: DEFAULT_LANDLET_CENTER_Y });
 
     const won = await api(`/credit-orbs/${orbId}/collect`, first.session({ method: 'POST' }));
     expect(won.response.status).toBe(200);
@@ -224,6 +252,8 @@ describe('POST /api/credit-orbs/:orbId/collect (#1995)', () => {
     const orbId = await seedOrb(landlet);
     const a = await signupBuilder('orb-race-a');
     const b = await signupBuilder('orb-race-b');
+    await seedPresence(a.builderId, { x: DEFAULT_LANDLET_CENTER_X, y: DEFAULT_LANDLET_CENTER_Y });
+    await seedPresence(b.builderId, { x: DEFAULT_LANDLET_CENTER_X, y: DEFAULT_LANDLET_CENTER_Y });
 
     const [resultA, resultB] = await Promise.all([
       api(`/credit-orbs/${orbId}/collect`, a.session({ method: 'POST' })),
@@ -244,6 +274,63 @@ describe('POST /api/credit-orbs/:orbId/collect (#1995)', () => {
     const builder = await signupBuilder('orb-missing');
     const { response } = await api('/credit-orbs/not-a-real-orb/collect', builder.session({ method: 'POST' }));
     expect(response.status).toBe(404);
+  });
+
+  // #2222: the presence/proximity gate -- closes the gap where a scripted
+  // caller with no real "walk up to it" gesture at all could still claim
+  // any orb returned by GET /api/credit-orbs.
+  it('403s collecting with no avatar_presence row at all (the scripted-caller exploit)', async () => {
+    const landlet = await seedLandlet('greenbelt');
+    const orbId = await seedOrb(landlet);
+    const builder = await signupBuilder('orb-no-presence');
+
+    const { response } = await api(`/credit-orbs/${orbId}/collect`, builder.session({ method: 'POST' }));
+    expect(response.status).toBe(403);
+
+    const orbRow = await env.DB.prepare('SELECT collected_at FROM credit_orbs WHERE orb_id = ?').bind(orbId).first();
+    expect(orbRow.collected_at).toBeNull();
+  });
+
+  it('403s collecting from too far away, converting the orb\'s landlet-local position to world coordinates correctly', async () => {
+    const landlet = await seedLandlet('greenbelt'); // center at (1000, -500)
+    const orbId = await seedOrb(landlet); // at the landlet's own local (0, 0) -- world (1000, -500)
+    const builder = await signupBuilder('orb-too-far');
+    // Right on top of the landlet-local (0, 0) offset itself, NOT the
+    // orb's real world position -- would wrongly pass if the collect
+    // check compared presence.x/y against the orb's raw x_m/y_m instead
+    // of center_x_m/center_y_m + x_m/y_m.
+    await seedPresence(builder.builderId, { x: 0, y: 0 });
+
+    const { response } = await api(`/credit-orbs/${orbId}/collect`, builder.session({ method: 'POST' }));
+    expect(response.status).toBe(403);
+  });
+
+  it('403s collecting on a stale presence row, even if it was once nearby', async () => {
+    const landlet = await seedLandlet('greenbelt');
+    const orbId = await seedOrb(landlet);
+    const builder = await signupBuilder('orb-stale-presence');
+    await seedPresence(builder.builderId, {
+      x: DEFAULT_LANDLET_CENTER_X, y: DEFAULT_LANDLET_CENTER_Y, ageMs: 60 * 1000, // long past PRESENCE_STALE_AFTER_MS
+    });
+
+    const { response } = await api(`/credit-orbs/${orbId}/collect`, builder.session({ method: 'POST' }));
+    expect(response.status).toBe(403);
+  });
+
+  // Greenbelt landlets (every credit orb's own home, by construction) never
+  // get a reported landletId at all -- updateShopLandletInfo (src/main.js)
+  // only sets one while standing on a *claimed* plot -- so a real
+  // collector's own presence row always has landlet_id: null here. World
+  // proximity alone has to be enough.
+  it('succeeds on world-position proximity alone, with no landletId recorded at all', async () => {
+    const landlet = await seedLandlet('greenbelt');
+    const orbId = await seedOrb(landlet);
+    const builder = await signupBuilder('orb-nearby-presence');
+    await seedPresence(builder.builderId, { x: DEFAULT_LANDLET_CENTER_X + 1, y: DEFAULT_LANDLET_CENTER_Y + 1 });
+
+    const { response, body } = await api(`/credit-orbs/${orbId}/collect`, builder.session({ method: 'POST' }));
+    expect(response.status).toBe(200);
+    expect(body.collected).toBe(true);
   });
 
   it('rate-limits repeated collect attempts by the same builder (#2092)', async () => {
