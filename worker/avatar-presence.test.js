@@ -77,6 +77,32 @@ describe('POST /api/presence', () => {
     expect(reported.body.presence.heading).toBeNull();
   });
 
+  // #2043: docs/SPEC.md's "Flying avatars are invisible to other users" --
+  // this is the write side; GET /presence (worker/presence.test.js) is
+  // where it's actually withheld from other viewers.
+  it('flying is optional, defaults to false, and is stored/returned as a real boolean', async () => {
+    const builder = await signupBuilder('presence-flying-default');
+    const defaulted = await api('/presence', builder.session({
+      method: 'POST', body: JSON.stringify({ x: 0, y: 0, z: 0 }),
+    }));
+    expect(defaulted.response.status).toBe(200);
+    expect(defaulted.body.presence.flying).toBe(false);
+
+    const flying = await api('/presence', builder.session({
+      method: 'POST', body: JSON.stringify({ x: 0, y: 0, z: 0, flying: true }),
+    }));
+    expect(flying.response.status).toBe(200);
+    expect(flying.body.presence.flying).toBe(true);
+    const row = await presenceRow(builder.builderId);
+    expect(row.flying).toBe(1);
+
+    const landedAgain = await api('/presence', builder.session({
+      method: 'POST', body: JSON.stringify({ x: 0, y: 0, z: 0, flying: false }),
+    }));
+    expect(landedAgain.response.status).toBe(200);
+    expect(landedAgain.body.presence.flying).toBe(false);
+  });
+
   it('accepts a real landletId and stores it on the row', async () => {
     const builder = await signupBuilder('presence-real-landlet');
     await createGreenbeltLandlet('presence-real-landlet-id');

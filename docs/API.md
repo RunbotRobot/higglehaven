@@ -1145,6 +1145,11 @@ Shop-mode visitor via landlet ownership, so only the balance needed
 stripping out here. `higglesBalanceCents` stays on `GET /api/builders/me`
 and any other response scoped to the caller's own session.
 
+Unauthenticated, so rate-limited per client IP across all three branches
+(`429` past `BUILDER_LIST_RATE_LIMIT_MAX`, 200 per 15-minute window, #1844)
+— the same limit value gates `GET /api/sellers` below in its own, separate
+per-IP bucket (#2095).
+
 ### `POST /api/builders`
 
 Creates a builder, unlinked to any account (`user_id` stays `NULL`) — the
@@ -1355,6 +1360,11 @@ before that, same caveat #1187 left for builders. Added so a
 shopper/builder can look up a specific seller's shop by name — until now
 the only discovery paths were browsing catalog items by a `sellerId`
 already known, or stumbling on products in-world.
+
+Unauthenticated, so rate-limited per client IP the same way
+`GET /api/builders` above is (`429` past 200 per 15-minute window) — its
+own, separate bucket from that endpoint's, but gated by the same
+`BUILDER_LIST_RATE_LIMIT_MAX` constant (#2095).
 
 ### `POST /api/sellers`
 
@@ -2102,7 +2112,11 @@ at once still warns every builder hosting a placed instance of one of them.
 (#1416): `429` past 20 `PUT`s per 15 minutes, keyed per-seller when
 session-authenticated or per-client-IP otherwise — protecting the same
 notification fan-out, just batched. `POST`/`DELETE` have no such fan-out and
-stay unthrottled.
+stay unthrottled. Same `priceCents`-required rule as the single-item
+`POST /api/catalog` below (#1601, carried over to this batch path by #2242):
+any template in the batch with no pre-existing row and a non-null `sellerId`
+must also set a non-null `priceCents`, or the whole batch is rejected with
+`400`.
 
 `DELETE` accepts 1–100 unique IDs under `templateIds`. Every ID is preflighted
 before deletion; a missing ID returns `404`, and a foreign-key conflict returns
@@ -2154,7 +2168,14 @@ must be a non-negative integer no greater than 100,000,000 (i.e. $1,000,000) —
 same cap `startingBidCents` and a bid's `amountCents` share, ruling out a
 value large enough to lose precision past `Number.isSafeInteger` once
 persisted, or to mint an outsized `higgles_balance_cents` credit through a
-self-purchase or auction win. `name`, `category`, `subcategory`, and `color`
+self-purchase or auction win. `priceCents` is conditionally required (#1601):
+omitting it (or passing `null`) is a `400` whenever `sellerId` is also set on
+a genuinely new template (no pre-existing row with that `templateId`) — a
+free digital product must set `priceCents: 0` explicitly, since a real
+seller listing can't be silently priceless. A template with no `sellerId`
+(a system/placeholder template) is unaffected, and the PATCH/PUT sibling
+below still allows clearing an existing listing's price back to `null`.
+`name`, `category`, `subcategory`, and `color`
 are each capped at 100 characters, same as `label` elsewhere in this API.
 `stockQuantity` (#1948), when present, must be a non-negative integer no
 greater than 1,000,000; omit it (or pass `null`) for the default unlimited
@@ -4314,6 +4335,7 @@ landlet a `landlets` row models.
   "y": 0,
   "z": -4.25,
   "heading": 1.57,
+  "flying": false,
   "updatedAt": "2026-10-01T00:00:00.000Z"
 }
 ```
@@ -4326,6 +4348,13 @@ missing) — never the whole world's positions in one response, both for
 payload size and so a shopper elsewhere isn't visibly tracking someone's
 live position for no reason. The caller's own row is always excluded (they
 already know where they are).
+
+A row whose `flying` is true is also excluded here (#2043, docs/SPEC.md's
+"Flying avatars are invisible to other users" — explicitly deferred by #99
+until live presence existed to apply it to) — withheld server-side rather
+than left to the client's own discretion to hide, so a flying builder's
+position is never even sent to anyone else. `GET /api/presence/me` below
+is unaffected — it's always the caller's own row, flying or not.
 
 A row whose `updated_at` is more than 10 seconds old is excluded as stale
 — treated as "this builder is no longer actually present" rather than a
@@ -4367,7 +4396,7 @@ caller's own row — there is exactly one `avatar_presence` row per
 Request body:
 
 ```json
-{ "x": 12.5, "y": -3.2, "z": 0, "heading": 1.57, "landletId": "some-landlet-id" }
+{ "x": 12.5, "y": -3.2, "z": 0, "heading": 1.57, "landletId": "some-landlet-id", "flying": false }
 ```
 
 - `x`/`y`/`z` are required finite numbers.
@@ -4380,8 +4409,11 @@ Request body:
   is actually near it; an unrecognized id 404s rather than being stored,
   since the `GET` endpoint above scopes its query by this column and
   would otherwise be silently poisoned by a bogus value.
+- `flying` is optional (#2043), defaults to `false` when omitted — anything
+  other than the literal `true` is treated as not-flying, so an older
+  client that never sends this field simply keeps reporting as grounded.
 
-Response: `{ "presence": { "landletId", "x", "y", "z", "heading",
+Response: `{ "presence": { "landletId", "x", "y", "z", "heading", "flying",
 "updatedAt" } }` — the row as stored, after the upsert.
 
 Rate-limited server-side (`presence-report:<builderId>`, 600 per the

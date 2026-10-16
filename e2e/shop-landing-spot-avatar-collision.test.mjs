@@ -60,9 +60,15 @@ console.log('landlet created at the default (0,0) center (status should be 201):
 await pageA.reload({ waitUntil: 'networkidle' });
 await pageA.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 await pageA.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await pageA.click('#shop-fly-btn'); // freezes A's position (#1175)
-await pageA.waitForTimeout(100);
-await pageA.waitForTimeout(2500); // first presence report always fires on its first eligible tick
+// #2043: every fresh Shop-mode spawn starts already airborne, so this tap
+// (toggleShopFlight) starts a real landing, not a no-op freeze -- same
+// discovery e2e/multiplayer-presence.test.mjs's own comment documents.
+// Flying avatars are withheld from GET /api/presence, so A must wait past
+// the landing animation's own fixed duration before it's genuinely
+// grounded, same margin that sibling test uses, rather than the original
+// 100ms (which would leave A mid-descent).
+await pageA.click('#shop-fly-btn'); // freezes A's position (#1175) once landed
+await pageA.waitForTimeout(2500); // past SHOP_FLIGHT_LANDING_DURATION_S (2s) -- now 'grounded'
 
 await chooseIdentity(pageB, { mode: 'build', label: LABEL_B, isNew: true });
 const builderB = (await fetchJson(pageB, '/api/builders/me')).body.builder;
@@ -70,8 +76,12 @@ const builderB = (await fetchJson(pageB, '/api/builders/me')).body.builder;
 await pageB.reload({ waitUntil: 'networkidle' });
 await pageB.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 await pageB.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await pageB.click('#shop-fly-btn'); // freezes B's position (#1175)
-await pageB.waitForTimeout(100);
+// Same reasoning as A's own landing wait above -- B also spawns already
+// flying, so B needs its own dedicated wait past the landing duration too,
+// not just the later shared polling waits below (those cover the poll
+// loop picking B up once grounded, not B's own landing completing).
+await pageB.click('#shop-fly-btn'); // freezes B's position (#1175) once landed
+await pageB.waitForTimeout(2500); // past SHOP_FLIGHT_LANDING_DURATION_S (2s) -- now 'grounded'
 
 // Give both poll loops (1000ms interval) a couple of cycles to pick each
 // other up.

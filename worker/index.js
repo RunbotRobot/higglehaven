@@ -4767,7 +4767,13 @@ async function handlePresence(request, db, route, url) {
       WHERE landlet_id = ? AND builder_id != ? AND updated_at >= ?
       ORDER BY updated_at DESC LIMIT ${PRESENCE_NEARBY_LIMIT}
     `).bind(landletId, sessionBuilder.builder_id, staleBefore).all();
-    return json({ avatars: results.map(avatarPresenceFromRow) });
+    // #2043: docs/SPEC.md's "Flying avatars are invisible to other users" --
+    // the client is the one actually hiding the mesh, but a flying avatar's
+    // position is still withheld here too, not just left to the renderer's
+    // own discretion to respect. Never withhold the caller's own row from
+    // themselves (irrelevant here, this query already excludes builder_id =
+    // self) or from GET .../me (that endpoint is "where was I," unaffected).
+    return json({ avatars: results.filter((row) => !row.flying).map(avatarPresenceFromRow) });
   }
 
   // #1098: upserts the caller's own live position into avatar_presence
@@ -4784,6 +4790,12 @@ async function handlePresence(request, db, route, url) {
     const y = finiteNumber(input.y, 'y');
     const z = finiteNumber(input.z, 'z');
     const heading = input.heading === undefined || input.heading === null ? null : finiteNumber(input.heading, 'heading');
+    // #2043: whether the reporting builder is currently flying, so the
+    // nearby-avatars GET above can withhold them per docs/SPEC.md's
+    // "Flying avatars are invisible to other users" -- optional/defaults
+    // to false so an older client (or a report with no flight state to
+    // report) never accidentally marks someone permanently flying.
+    const flying = input.flying === true;
     let landletId = null;
     if (input.landletId !== undefined && input.landletId !== null) {
       landletId = stringValue(input.landletId, 'landletId');
@@ -4796,12 +4808,12 @@ async function handlePresence(request, db, route, url) {
       await requireLandlet(db, landletId);
     }
     await db.prepare(`
-      INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
       ON CONFLICT(builder_id) DO UPDATE SET
         landlet_id = excluded.landlet_id, x = excluded.x, y = excluded.y, z = excluded.z,
-        heading = excluded.heading, updated_at = excluded.updated_at
-    `).bind(sessionBuilder.builder_id, landletId, x, y, z, heading).run();
+        heading = excluded.heading, flying = excluded.flying, updated_at = excluded.updated_at
+    `).bind(sessionBuilder.builder_id, landletId, x, y, z, heading, flying ? 1 : 0).run();
     const row = await db.prepare('SELECT * FROM avatar_presence WHERE builder_id = ?')
       .bind(sessionBuilder.builder_id).first();
     return json({
@@ -4811,6 +4823,7 @@ async function handlePresence(request, db, route, url) {
         y: row.y,
         z: row.z,
         heading: row.heading,
+        flying: Boolean(row.flying),
         updatedAt: row.updated_at,
       },
     });
@@ -4827,6 +4840,7 @@ function avatarPresenceFromRow(row) {
     y: row.y,
     z: row.z,
     heading: row.heading,
+    flying: Boolean(row.flying),
     updatedAt: row.updated_at,
   };
 }
@@ -10109,6 +10123,55 @@ async function generateTax1099Drafts(db, year) {
       userId: row.user_id, taxYear: year, formType: '1099-k', grossIncomeCents: row.total, generatedAt,
     })),
   ]);
+
+  await pruneStaleTax1099Drafts(db, year, yearStart, yearEnd);
+}
+
+// #2214: a draft's gross_income_cents is only ever set by the upsert above,
+// which only runs for payees the two threshold queries above still return.
+// If enough of a payee's non-refunded income gets refunded after their
+// draft was created to drop their live total back under the threshold,
+// they stop appearing in those queries entirely -- the draft they already
+// have just sits there forever with its original, now-overstated total,
+// since nothing was ever written to shrink or remove it. No 1099 is
+// actually required once income falls back under the reporting threshold,
+// so any remaining 'draft' row (never 'approved'/'filed'/'voided' --
+// upsertTax1099Draft's own WHERE guard already protects those) whose live,
+// refund-aware total no longer meets its own form type's threshold gets
+// deleted outright, the same as if it had never qualified in the first
+// place.
+async function pruneStaleTax1099Drafts(db, year, yearStart, yearEnd) {
+  const [staleNec, staleK] = await Promise.all([
+    db.prepare(`
+      SELECT f.form_id FROM tax_1099_forms f
+      LEFT JOIN (
+        SELECT b.user_id AS user_id, SUM(e.amount_cents) AS total
+        FROM higgles_earnings_events e JOIN builders b ON b.builder_id = e.builder_id
+        WHERE b.user_id IS NOT NULL AND e.created_at >= ? AND e.created_at < ?
+        GROUP BY b.user_id
+      ) live ON live.user_id = f.user_id
+      WHERE f.tax_year = ? AND f.form_type = '1099-nec' AND f.status = 'draft'
+        AND COALESCE(live.total, 0) < ?
+    `).bind(yearStart, yearEnd, year, TAX_1099_NEC_THRESHOLD_CENTS).all(),
+    db.prepare(`
+      SELECT f.form_id FROM tax_1099_forms f
+      LEFT JOIN (
+        SELECT s.user_id AS user_id, SUM(p.total_cents) AS total
+        FROM purchases p JOIN sellers s ON s.seller_id = p.seller_id
+        WHERE s.user_id IS NOT NULL AND p.payment_intent_id IS NOT NULL AND p.refunded_at IS NULL
+          AND p.created_at >= ? AND p.created_at < ?
+        GROUP BY s.user_id
+      ) live ON live.user_id = f.user_id
+      WHERE f.tax_year = ? AND f.form_type = '1099-k' AND f.status = 'draft'
+        AND COALESCE(live.total, 0) < ?
+    `).bind(yearStart, yearEnd, year, TAX_REPORTING_THRESHOLD_CENTS).all(),
+  ]);
+
+  const staleFormIds = [...staleNec.results, ...staleK.results].map((row) => row.form_id);
+  if (staleFormIds.length === 0) return;
+  await db.batch(staleFormIds.map((formId) => db.prepare(
+    `DELETE FROM tax_1099_forms WHERE form_id = ? AND status = 'draft'`,
+  ).bind(formId)));
 }
 
 // ---- 1099 e-filing transmission (#646, sub-issue of #616/#350) —
