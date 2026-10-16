@@ -877,8 +877,8 @@ On success, promotes the calling account to admin and returns
 `{ "user": { ..., "isAdmin": true } }`. Reusable, not one-time — anyone
 who currently holds the secret can promote themselves (or, by sharing it
 briefly, someone else) at any time; there's deliberately no "first admin
-only" ratchet. Revoking admin status has no endpoint either — rare enough
-to do directly against the database.
+only" ratchet. The inverse, revoking admin status, is `POST
+/api/auth/revoke-admin` below (#1819/#1481).
 
 ### `POST /api/auth/grant-admin`
 
@@ -899,6 +899,26 @@ per acting admin (`ADMIN_GRANT_RATE_LIMIT_MAX`, 20 per window, #2123) —
 `POST /api/auth/revoke-admin` (below) shares this same bucket, since both
 mint/remove `is_admin` itself and neither previously had any throttle at
 all despite being this app's most sensitive mutation.
+
+### `POST /api/auth/revoke-admin`
+
+The inverse of `grant-admin` above (#1819, implemented despite #1481's own
+"low confidence" framing of whether it was even needed). `requireAdmin`-gated
+the same way (`401`/`403` the same way), including self-revoke — an admin
+can demote themselves, not just another account. Request body:
+`{ "email" }`, looked up the same case-insensitive way `grant-admin` does.
+`404` if no account has that email, `400` if the account isn't currently an
+admin. Shares `grant-admin`'s own rate-limit bucket (#2123, above).
+
+**Last-operational-admin guard** (#2270/#2307): this app must never end up
+with zero admins and no way back in short of direct D1 access, since a
+suspended or revoked admin can't call `requireAdmin` again. `409` ("Cannot
+revoke the last remaining admin") unless at least one *other* admin exists
+who is both `is_admin = 1` and has no currently-active suspension — the
+same guard `suspend-account` below enforces for the identical reason, so a
+suspended admin doesn't count as a usable backup for either mutation. On
+success, logs to `admin_action_log` (`action_type: "revoke_admin"`) and
+returns `{ "user": { ..., "isAdmin": false } }` for the demoted account.
 
 ### `GET /api/auth/admins`
 
@@ -948,7 +968,14 @@ owner's confirmed default) and must be an integer in `[1, 365]` (`400`
 otherwise) — this becomes `gracePeriodEndsAt` in the response, the point
 #2033's auto-escalation job (below) acts on. `409` if the account
 already has an active (not lifted, not escalated) suspension — lift it via
-`unsuspend-account` first before suspending again. On success, returns
+`unsuspend-account` first before suspending again.
+
+**Last-operational-admin guard** (#2268): also `409` ("Cannot suspend the
+last remaining admin") if the target is currently an admin and no *other*
+admin exists who is both `is_admin = 1` and has no currently-active
+suspension — the same reasoning `revoke-admin`'s own guard above
+documents, since a suspended admin can't call `requireAdmin` at all to
+undo it. On success, returns
 `{ "suspension": { "suspensionId", "userId", "adminUserId", "reason", "evidenceNote", "suspendedAt", "gracePeriodEndsAt" } }`.
 
 Once the suspension row lands, #2031 fires one automated notice through the
