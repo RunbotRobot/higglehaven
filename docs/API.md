@@ -4357,14 +4357,25 @@ landlet a `landlets` row models.
 }
 ```
 
-### `GET /api/presence?landletId=X`
+### `GET /api/presence`
 
 Requires a session. Returns every *other* builder's current position
-reported for landlet/region `X` (`landletId` is required — `400` if
-missing) — never the whole world's positions in one response, both for
-payload size and so a shopper elsewhere isn't visibly tracking someone's
-live position for no reason. The caller's own row is always excluded (they
-already know where they are).
+reported for whichever landlet/region the caller's own most recent
+`avatar_presence` row says they're in — never the whole world's positions
+in one response, both for payload size and so a shopper elsewhere isn't
+visibly tracking someone's live position for no reason. The caller's own
+row is always excluded (they already know where they are).
+
+**#2269**: the landlet queried is derived entirely from the caller's own
+last-reported position (the same row `GET /api/presence/me` below reads),
+never a client-supplied parameter — an earlier version took a `landletId`
+query parameter at face value, which let any verified account enumerate
+landlet ids via the public `GET /api/landlets` and then poll this endpoint
+for any of them, continuously reading everyone else's live position there
+with no proximity or consent requirement at all. `{ "avatars": [] }` if the
+caller has no presence row of their own, or their own row is itself stale
+(see below) — there is no "whose position to report" without a fresh
+anchor of the caller's own.
 
 A row whose `flying` is true is also excluded here (#2043, docs/SPEC.md's
 "Flying avatars are invisible to other users" — explicitly deferred by #99
@@ -4395,10 +4406,10 @@ avatar mesh group per entry on every poll tick.
 
 ### `GET /api/presence/me` — your own last-reported position (#1176)
 
-Requires a session. Unlike `GET /api/presence?landletId=X` above, this
-returns the *caller's own* row — no `landletId` parameter, and no
-staleness filter — since "wherever I was last" is exactly what spawn
-flow's "Go to Last Location" button (below) needs, however long ago that
+Requires a session. Unlike `GET /api/presence` above, this returns the
+*caller's own* row with no staleness filter — since "wherever I was last"
+is exactly what spawn flow's "Go to Last Location" button (below) needs,
+however long ago that
 report actually was. Response: `{ "presence": null }` when the caller has
 never reported a position at all (a brand-new account, or one that's
 never entered Shop mode before), otherwise `{ "presence": <avatar

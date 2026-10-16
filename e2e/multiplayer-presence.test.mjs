@@ -127,12 +127,24 @@ await pageA.waitForTimeout(2500);
 await chooseIdentity(pageB, { mode: 'build', label: LABEL_B, isNew: true });
 const builderB = (await fetchJson(pageB, '/api/builders/me')).body.builder;
 
+// #2269: GET /api/presence now derives the landlet to query from the
+// caller's own last-reported presence row, not a client-supplied query
+// param -- B needs a presence row of its own in this landlet before this
+// GET can see anyone else in it at all, so this reports one directly (B
+// hasn't entered Shop mode yet at this point in the test; the real report
+// loop below is what keeps it current from here on).
+await fetchJson(pageB, '/api/presence', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ x: 0, y: 0, z: 0, heading: 0, landletId: LANDLET_ID }),
+});
+
 // Confirms the real report loop actually wrote a real row — fetched as a
 // genuinely different builder (B), since #1099's own GET excludes the
 // caller's own row, so this couldn't accidentally be reading A's row back
 // through A's own session instead. This is this test's own ground truth
 // for A's (random, #1175) position, read directly rather than assumed.
-const presenceBeforeBJoins = await fetchJson(pageB, `/api/presence?landletId=${LANDLET_ID}`);
+const presenceBeforeBJoins = await fetchJson(pageB, '/api/presence');
 console.log('presence row for builder A, fetched as builder B:', presenceBeforeBJoins.body);
 const aRowSeenByB = presenceBeforeBJoins.body.avatars?.find((a) => a.builderId === builderA.builderId);
 
@@ -158,7 +170,7 @@ await pageB.waitForTimeout(500); // B's own first poll already overlapped the wa
 // B's own ground-truth position, read directly the same way A's was above
 // (now that B has reported at least once too) — fetched as A for the same
 // "not your own row" reason.
-const presenceAfterBJoins = await fetchJson(pageA, `/api/presence?landletId=${LANDLET_ID}`);
+const presenceAfterBJoins = await fetchJson(pageA, '/api/presence');
 const bRowSeenByA = presenceAfterBJoins.body.avatars?.find((a) => a.builderId === builderB.builderId);
 
 const bOthersSeenByA = await pageA.evaluate(() => window.__shopOtherAvatars);
