@@ -179,6 +179,19 @@ describe('Control Room tasks (#N31)', () => {
     expect(replies.body.replies[0]).toMatchObject({ from: 'higglehaven3', text: 'Needs the owner\'s judgment on X.' });
   });
 
+  // #2301: handleControlRoomTaskUpdate's settingWaitingOnOwner branch and
+  // handleControlRoomReplyCreate both stamp lastReplyFrom/lastReplyAt on the
+  // reply they insert (see the tests below this describe block) -- this
+  // create path inserts the identical shape of linked reply but never
+  // stamped these columns, leaving them null despite a real reply landing.
+  it('stamps lastReplyFrom/lastReplyAt on the linked reply inserted by creating a task with waitingOn owner', async () => {
+    const task = await createTask({
+      from: 'higglehaven3', title: 'Needs a design call', waitingOn: 'owner', reason: 'Needs the owner\'s judgment on X.',
+    });
+    expect(task.lastReplyFrom).toBe('higglehaven3');
+    expect(task.lastReplyAt).toBe(task.createdAt);
+  });
+
   it('creates a task with waitingOn set to something other than owner, no reason required', async () => {
     const task = await createTask({ from: 'higglehaven2', title: 'Blocked on another task', waitingOn: 'issue-123' });
     expect(task.waitingOn).toBe('issue-123');
