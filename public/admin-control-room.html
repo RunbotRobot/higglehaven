@@ -44,6 +44,7 @@
   .pill-done { background: #dcefd0; color: #386418; }
   .pill-tag { background: #f3e6cf; color: #7a5a12; }
   .pill-waiting-owner { background: #f6d4cb; color: #8a2a12; font-weight: 800; }
+  .pill-waiting-owner-unexplained { background: #f6a48c; color: #5c1505; font-weight: 800; }
   .pill-waiting-claude { background: #dcefd0; color: #386418; }
   .pill-waiting-subtasks { background: #dce8f6; color: #1a4a7a; font-weight: 800; }
   .pill-blocked-on { background: #f6d4cb; color: #8a2a12; cursor: pointer; text-decoration: underline; }
@@ -316,7 +317,21 @@
   // rather than by pointing at any one of them.
   function waitingBadge(task) {
     if (task.status === 'done') return '';
-    if (task.waitingOn === 'owner') return '<span class="pill pill-waiting-owner">Waiting on: Owner</span>';
+    if (task.waitingOn === 'owner') {
+      // #2254: AGENTS.md documents this exact failure mode -- a queued card
+      // whose owner already spoke last (the real reply thread, not the
+      // note, which is history -- see this file's own note on why `note`
+      // is never a signal to act on by itself) with no session reply
+      // following still sitting at waitingOn: 'owner'. Ordinarily
+      // unreachable through the real API as of this fix (a reply from the
+      // owner while waitingOn is already 'owner' auto-clears it in the same
+      // request, same as a direct-D1 write bypassing that logic), so this
+      // is a safety-net signal for exactly that bypass, not the common case.
+      if (task.status === 'queued' && task.lastReplyFrom === 'owner') {
+        return '<span class="pill pill-waiting-owner-unexplained">Waiting on: Owner (unexplained)</span>';
+      }
+      return '<span class="pill pill-waiting-owner">Waiting on: Owner</span>';
+    }
     if (task.waitingOn === 'subtasks') return '<span class="pill pill-waiting-subtasks">Waiting on: Subtasks</span>';
     if (task.waitingOn && task.waitingOn !== 'claude') {
       return '<span class="pill pill-blocked-on" data-jump-to="' + escapeHtml(task.waitingOn) + '">Blocked on #' + escapeHtml(task.waitingOn) + '</span>';
