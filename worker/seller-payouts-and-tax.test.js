@@ -1021,6 +1021,54 @@ describe('Seller payouts (#454)', () => {
       expect(result.payoutCents).toBe(8000 + 5000);
     });
 
+    // #2339: the payoutCapCents branch (the Stripe-available-balance cap)
+    // is a skip-and-continue bin-pack, same shape as the taxBudgetCents
+    // test above -- a purchase whose own share doesn't fit under the
+    // remaining cap is skipped, but the loop keeps trying later, possibly
+    // smaller, purchases rather than stopping outright.
+    it('selectPurchasesForPayout skips a purchase that does not fit payoutCapCents but still includes a smaller later one', () => {
+      const yearStart = '2026-01-01T00:00:00.000Z';
+      const yearEnd = '2027-01-01T00:00:00.000Z';
+      const large = {
+        purchase_id: 'large', created_at: '2026-03-01T00:00:00.000Z', total_cents: 8000, commission_cents: 0,
+      };
+      const small = {
+        purchase_id: 'small', created_at: '2026-06-15T00:00:00.000Z', total_cents: 3000, commission_cents: 0,
+      };
+      const result = selectPurchasesForPayout([large, small], {
+        payoutCapCents: 3000, // large's own share (8000) alone already exceeds this
+        taxBudgetCents: 1000000, // generous -- the tax budget isn't what this test is about
+        yearStart, yearEnd,
+      });
+      expect(result.included.map((p) => p.purchase_id)).toEqual(['small']);
+      expect(result.payoutCents).toBe(3000);
+    });
+
+    // #2339: a purchase skipped for the Stripe cap must not also consume
+    // taxBudgetCents -- the `continue` on the payoutCapCents check happens
+    // before the tax-budget check runs, so a cap-skipped purchase's own
+    // total_cents should never count against grossIncludedCents. Verified
+    // indirectly: if it wrongly did, the smaller purchase right after it
+    // would be wrongly skippedForTax too.
+    it('does not let a payoutCapCents-skipped purchase consume any of the tax budget', () => {
+      const yearStart = '2026-01-01T00:00:00.000Z';
+      const yearEnd = '2027-01-01T00:00:00.000Z';
+      const large = {
+        purchase_id: 'large', created_at: '2026-03-01T00:00:00.000Z', total_cents: 20000, commission_cents: 0,
+      };
+      const small = {
+        purchase_id: 'small', created_at: '2026-06-15T00:00:00.000Z', total_cents: 3000, commission_cents: 0,
+      };
+      const result = selectPurchasesForPayout([large, small], {
+        payoutCapCents: 3000, // large's own share (20000) alone already exceeds this
+        taxBudgetCents: 3000, // exactly small's total_cents -- would overflow if large's 20000 wrongly counted first
+        yearStart, yearEnd,
+      });
+      expect(result.skippedForTax).toBe(false);
+      expect(result.included.map((p) => p.purchase_id)).toEqual(['small']);
+      expect(result.payoutCents).toBe(3000);
+    });
+
     it('does not block a payout while combined earnings stay under the threshold', async () => {
       const builder = await signupBuilder('tax-gate-under-builder');
       const seller = await createConnectedSeller('tax-gate-under-seller');

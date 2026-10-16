@@ -4793,6 +4793,12 @@ async function handleNotifications(request, db, route, url) {
       `).bind(route[1]).run();
     }
     const updated = await db.prepare('SELECT * FROM notifications WHERE notification_id = ?').bind(route[1]).first();
+    // #2334: not found here means a concurrent self-delete cascade-deleted
+    // this notification between the existence check above and here (three
+    // awaits apart) -- a genuine 404, same shape handleFriendships' own
+    // PATCH/accept branch already guards against, not a fabricated 200 or
+    // an uncaught notificationFromRow(undefined) crash.
+    if (!updated) return json({ error: 'Notification not found' }, 404);
     return json({ notification: notificationFromRow(updated) });
   }
 

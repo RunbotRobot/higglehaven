@@ -1479,6 +1479,40 @@ describe('Notifications', () => {
     expect(missing.response.status).toBe(404);
   });
 
+  // #2334: notifications.builder_id is ON DELETE CASCADE -- a self-delete
+  // (DELETE /builders/:id) cascade-deletes every notification for that
+  // builder. Firing it concurrently with a PATCH on one of those exact
+  // notifications (same shape as the accept-vs-decline friendship race
+  // above) can land the cascade between PATCH's own existence check and
+  // its final re-SELECT, which used to crash with an uncaught
+  // notificationFromRow(undefined) (a raw 500) instead of the clean 404
+  // this should be. Uses a friendship-acceptance notification rather than
+  // seedNotifications' auction-bid one -- an active auction with bids on
+  // this builder's own side (as seller or leading bidder) would itself
+  // block the self-delete below (worker/index.js's own DELETE guard),
+  // which would prevent the race from ever landing.
+  it('never crashes with a raw 500 when a PATCH loses a race to a concurrent self-delete', async () => {
+    const a = await signupBuilder('notif-self-delete-race-a');
+    const b = await signupBuilder('notif-self-delete-race-b');
+    const sent = await api('/friendships', a.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: b.builderId }),
+    }));
+    await api(`/friendships/${sent.body.friendship.friendshipId}`, b.session({
+      method: 'PATCH', body: JSON.stringify({ status: 'accepted' }),
+    }));
+    const before = await api('/notifications', a.session());
+    const targetId = before.body.notifications[0].notificationId;
+
+    const [patchResult] = await Promise.all([
+      api(`/notifications/${targetId}`, a.session({ method: 'PATCH', body: JSON.stringify({ read: true }) })),
+      api(`/builders/${a.builderId}`, a.session({ method: 'DELETE' })),
+    ]);
+
+    // The real bug was an uncaught TypeError surfacing as a raw 500 from
+    // inside this exact call when the self-delete's cascade won the race.
+    expect([200, 404]).toContain(patchResult.response.status);
+  });
+
   it('rejects marking another builder\'s notification read', async () => {
     const { owner, bidder } = await seedNotifications('mark-others');
     const ownerNotices = await api('/notifications', owner.session());
