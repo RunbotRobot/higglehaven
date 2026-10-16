@@ -16719,6 +16719,12 @@ async function handleShopProductReviewClick() {
         return;
       }
       const text = prompt('Add a comment (up to 280 characters), or leave blank:', myReview.text || '');
+      // #2005's own fix only covered the create path right below this one
+      // -- same missing guard, same data-loss consequence on edit.
+      if (text && text.trim().length > 280) {
+        alert('Keep it to 280 characters or fewer.');
+        return;
+      }
       shopProductPreviewReviewBtn.disabled = true;
       try {
         // Cancelling (null) omits `text` entirely so the server keeps the
