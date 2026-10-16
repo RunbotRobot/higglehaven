@@ -5521,6 +5521,38 @@ describe('Landlet levels', () => {
       expect(stillExists).toHaveLength(1);
     });
 
+    // #2315: archived_version_instances (migrations/0140, the inactivity-
+    // reclaim "preserve version history" feature) carries the same
+    // ON DELETE RESTRICT on template_id as version_instances above, but
+    // was added after this precheck's own #1706 audit and never got wired
+    // in -- a template only referenced by an archived version snapshot
+    // used to fall through to the generic "still in use" 409. Inserts
+    // directly into both archived tables (same idiom
+    // export-data.test.js's own "#2185" tests use) rather than driving a
+    // full inactivity-auction resolution, since only the schema shape
+    // matters here, not how a row gets there.
+    it('blocks deleting a template still referenced by an archived version snapshot, with a distinct message (#2315)', async () => {
+      const templateId = await createTemplate('template-2315-archived-version');
+      const owner = await signupBuilder('template-2315-archived-version-owner');
+      await env.DB.prepare(`
+        INSERT INTO archived_landlet_versions (version_id, builder_id, version_number, name, created_at)
+        VALUES (?, ?, 1, 'archived-v1', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      `).bind('template-2315-archived-version', owner.builderId).run();
+      await env.DB.prepare(`
+        INSERT INTO archived_version_instances (version_id, source_instance_id, template_id, x_m, y_m, z_m)
+        VALUES (?, ?, ?, 1, 1, 0)
+      `).bind('template-2315-archived-version', 'template-2315-archived-version-inst', templateId).run();
+
+      const deleted = await api(`/catalog/${templateId}`, { method: 'DELETE' });
+      expect(deleted.response.status).toBe(409);
+      expect(deleted.body.error).toMatch(/referenced by an archived version snapshot/);
+      expect(deleted.body.error).not.toMatch(/still in use/);
+
+      const { results: stillExists } = await env.DB.prepare('SELECT 1 FROM catalog_templates WHERE template_id = ?')
+        .bind(templateId).all();
+      expect(stillExists).toHaveLength(1);
+    });
+
     it('deletes a template cleanly once its only saved-layout reference is gone', async () => {
       const templateId = await createTemplate('template-729-cleared');
       const owner = await signupBuilder('template-729-cleared-owner');

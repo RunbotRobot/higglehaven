@@ -17662,7 +17662,7 @@ export async function assertReferencesExist(db, table, column, values, field) {
 async function assertCatalogTemplatesDeletable(db, templateIds) {
   const uniqueValues = [...new Set(templateIds)];
   const placeholders = uniqueValues.map(() => '?').join(', ');
-  const [inPlacedInstances, inSavedLayouts, inVersions, inBackups] = await Promise.all([
+  const [inPlacedInstances, inSavedLayouts, inVersions, inBackups, inArchivedVersions] = await Promise.all([
     db.prepare(
       `SELECT DISTINCT template_id FROM placed_instances WHERE template_id IN (${placeholders})`,
     ).bind(...uniqueValues).all(),
@@ -17675,11 +17675,20 @@ async function assertCatalogTemplatesDeletable(db, templateIds) {
     db.prepare(
       `SELECT DISTINCT template_id FROM placed_instance_backups WHERE template_id IN (${placeholders})`,
     ).bind(...uniqueValues).all(),
+    // #2315: archived_version_instances (migrations/0140) has the same
+    // ON DELETE RESTRICT on template_id as the four tables above, but was
+    // added after this function's own last audit (#1706) and never got
+    // wired in -- a template only referenced by an inactivity-reclaimed
+    // version snapshot fell through to the generic FK-failure fallback.
+    db.prepare(
+      `SELECT DISTINCT template_id FROM archived_version_instances WHERE template_id IN (${placeholders})`,
+    ).bind(...uniqueValues).all(),
   ]);
   const blockedByPlacedInstance = new Set(inPlacedInstances.results.map((row) => row.template_id));
   const blockedBySavedLayout = new Set(inSavedLayouts.results.map((row) => row.template_id));
   const blockedByVersion = new Set(inVersions.results.map((row) => row.template_id));
   const blockedByBackup = new Set(inBackups.results.map((row) => row.template_id));
+  const blockedByArchivedVersion = new Set(inArchivedVersions.results.map((row) => row.template_id));
   for (const templateId of uniqueValues) {
     if (blockedByPlacedInstance.has(templateId)) {
       throw new HttpError(
@@ -17706,6 +17715,13 @@ async function assertCatalogTemplatesDeletable(db, templateIds) {
       throw new HttpError(
         `Catalog template "${templateId}" cannot be deleted: it is still configured as a placed instance's backup `
         + '(remove it from every backup chain first)',
+        409,
+      );
+    }
+    if (blockedByArchivedVersion.has(templateId)) {
+      throw new HttpError(
+        `Catalog template "${templateId}" cannot be deleted: it is still referenced by an archived version snapshot `
+        + '(a reclaimed landlet\'s preserved version history used it)',
         409,
       );
     }
