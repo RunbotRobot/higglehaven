@@ -77,7 +77,11 @@ async function startAuction(session, label, startingBidDollars) {
   await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
   await page.click('.settings-tab-btn[data-section="build"]');
   const startForm = page.locator('.auction-start-form');
-  await startForm.waitFor({ timeout: 10000 });
+  // #2230: under heavy CI load (many parallel browser contexts), switching
+  // to the build settings tab and rendering this form can take longer than
+  // the original 10000ms margin -- widened the same way #2200/#2203 widened
+  // a sibling timeout for the same CI-load reason.
+  await startForm.waitFor({ timeout: 20000 });
   await startForm.locator('input').nth(0).fill(String(startingBidDollars));
   await startForm.locator('input').nth(1).fill('1'); // duration 1 hour
   await page.click('.auction-start-btn');
