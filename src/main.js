@@ -3563,6 +3563,13 @@ async function handleUploadFileStep() {
 // hands the resulting model off into handleUploadFileStep's own existing
 // optimize -> upload -> measure -> preview chain unmodified -- confirmed
 // in #1621 that a generated mesh needs no special-casing there.
+// #2330: mirrors worker/index.js's own MAX_MONEY_CENTS -- the ceiling
+// nonnegativeInteger()/optionalInteger() enforce on every dollar-amount
+// field server-side. Checked client-side at every price/bid input (same
+// "surface a friendly message, not the raw server one" reasoning #1922
+// already established for the Start Auction form's duration field).
+const MAX_MONEY_CENTS = 100_000_000;
+
 const VIDEO_GEN_FRAME_COUNT = 4;
 const VIDEO_GEN_POLL_INTERVAL_MS = 3000;
 // Matches the client-cadence budget worker/index.js's own
@@ -3755,6 +3762,10 @@ async function handleUploadDimensionsStep() {
   const dollars = parsePriceInputDollars(priceInput);
   if (!Number.isFinite(dollars) || dollars < 0) {
     setUploadStatus('Price must be a non-negative number.', true);
+    return;
+  }
+  if (Math.round(dollars * 100) > MAX_MONEY_CENTS) {
+    setUploadStatus(`Price must be ${formatPriceCents(MAX_MONEY_CENTS)} or less.`, true);
     return;
   }
   const priceCents = Math.round(dollars * 100);
@@ -4738,6 +4749,11 @@ function renderSellerList() {
         const dollars = parsePriceInputDollars(trimmed);
         if (!Number.isFinite(dollars) || dollars < 0) {
           priceStatus.textContent = 'Price must be a non-negative number, or left blank.';
+          priceStatus.classList.add('error');
+          return;
+        }
+        if (Math.round(dollars * 100) > MAX_MONEY_CENTS) {
+          priceStatus.textContent = `Price must be ${formatPriceCents(MAX_MONEY_CENTS)} or less.`;
           priceStatus.classList.add('error');
           return;
         }
@@ -7476,6 +7492,11 @@ async function renderAuctionSection() {
         startStatus.classList.add('error');
         return;
       }
+      if (Math.round(dollars * 100) > MAX_MONEY_CENTS) {
+        startStatus.textContent = `Starting bid must be ${formatHiggles(MAX_MONEY_CENTS)} or less.`;
+        startStatus.classList.add('error');
+        return;
+      }
       if (!Number.isFinite(hours) || hours < 1) {
         startStatus.textContent = 'Duration must be at least 1 hour.';
         startStatus.classList.add('error');
@@ -7764,6 +7785,10 @@ async function renderAuctionSection() {
           return;
         }
         const amountCents = Math.round(dollars * 100);
+        if (amountCents > MAX_MONEY_CENTS) {
+          alert(`Enter a bid of ${formatHiggles(MAX_MONEY_CENTS)} or less.`);
+          return;
+        }
         if (amountCents < minCents) {
           alert(`Enter a bid of at least ${formatHiggles(minCents)}.`);
           return;
