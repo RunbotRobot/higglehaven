@@ -4283,15 +4283,26 @@ function estimateDaysRemaining(template, ownUnitsPerDay, categoryUnitsPerDay) {
 // velocity to be "computed across every builder selling that same
 // template," not just this one builder's own sales.
 async function templateSalesVelocity(db, templateIds) {
-  const placeholders = templateIds.map(() => '?').join(', ');
-  const { results } = await db.prepare(`
-    SELECT template_id AS templateId, SUM(quantity) AS totalSold,
-           MIN(created_at) AS firstSaleAt, MAX(created_at) AS lastSaleAt
-    FROM purchases
-    WHERE template_id IN (${placeholders}) AND refunded_at IS NULL
-    GROUP BY template_id
-  `).bind(...templateIds).all();
-  return new Map(results.map((row) => [row.templateId, salesVelocityPerDay(row)]));
+  const velocityByTemplateId = new Map();
+  // #2321: chunked at D1_MAX_BOUND_PARAMETERS -- a builder can own more than
+  // one landlet (auctions can transfer extra ones in, see the comment on
+  // ownersByBuilderId above) and place well over 100 distinct finite-stock
+  // templates across them, same bug class as #2038/#2204/#2216/#2233/#2283.
+  // Each chunk's own GROUP BY operates on a disjoint subset of template_id,
+  // so merging across chunks needs no further aggregation.
+  for (let i = 0; i < templateIds.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = templateIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(`
+      SELECT template_id AS templateId, SUM(quantity) AS totalSold,
+             MIN(created_at) AS firstSaleAt, MAX(created_at) AS lastSaleAt
+      FROM purchases
+      WHERE template_id IN (${placeholders}) AND refunded_at IS NULL
+      GROUP BY template_id
+    `).bind(...chunk).all();
+    for (const row of results) velocityByTemplateId.set(row.templateId, salesVelocityPerDay(row));
+  }
+  return velocityByTemplateId;
 }
 
 // #1949: the owner-endorsed fallback for a template with no sales history
@@ -11162,11 +11173,25 @@ async function handleListAdmins(request, db) {
   // admin" guard, no uniqueness constraint on this table) -- MIN, not MAX,
   // is the one that actually matches "the exact grant moment" above when a
   // later re-grant lands a second, newer log row.
+  // #2319: that MIN alone goes stale across a real revoke-then-re-grant
+  // cycle (a working path since #1819/#2307) -- admin_action_log is
+  // strictly append-only, so a revoked-then-later-re-granted account's
+  // MIN still returns the original, pre-revoke grant timestamp, spanning
+  // a period the account genuinely was not an admin. Scopes the MIN to
+  // only grant/bootstrap rows after this user's own most recent revoke,
+  // falling back to the unscoped MIN when there's no intervening revoke.
   const { results } = await db.prepare(`
     SELECT users.user_id, users.email, users.username, users.created_at,
-      (SELECT MIN(created_at) FROM admin_action_log
-       WHERE target_type = 'user' AND target_id = users.user_id
-         AND action_type IN ('grant_admin', 'admin_bootstrap')) AS admin_granted_at
+      (SELECT MIN(created_at) FROM admin_action_log AS grants
+       WHERE grants.target_type = 'user' AND grants.target_id = users.user_id
+         AND grants.action_type IN ('grant_admin', 'admin_bootstrap')
+         AND grants.created_at > COALESCE(
+           (SELECT MAX(created_at) FROM admin_action_log AS revokes
+            WHERE revokes.target_type = 'user' AND revokes.target_id = users.user_id
+              AND revokes.action_type = 'revoke_admin'),
+           ''
+         )
+      ) AS admin_granted_at
     FROM users WHERE is_admin = 1
     ORDER BY COALESCE(admin_granted_at, users.created_at) ASC
   `).all();
@@ -17808,7 +17833,7 @@ export async function assertReferencesExist(db, table, column, values, field) {
 async function assertCatalogTemplatesDeletable(db, templateIds) {
   const uniqueValues = [...new Set(templateIds)];
   const placeholders = uniqueValues.map(() => '?').join(', ');
-  const [inPlacedInstances, inSavedLayouts, inVersions, inBackups] = await Promise.all([
+  const [inPlacedInstances, inSavedLayouts, inVersions, inBackups, inArchivedVersions] = await Promise.all([
     db.prepare(
       `SELECT DISTINCT template_id FROM placed_instances WHERE template_id IN (${placeholders})`,
     ).bind(...uniqueValues).all(),
@@ -17821,11 +17846,20 @@ async function assertCatalogTemplatesDeletable(db, templateIds) {
     db.prepare(
       `SELECT DISTINCT template_id FROM placed_instance_backups WHERE template_id IN (${placeholders})`,
     ).bind(...uniqueValues).all(),
+    // #2315: archived_version_instances (migrations/0140) has the same
+    // ON DELETE RESTRICT on template_id as the four tables above, but was
+    // added after this function's own last audit (#1706) and never got
+    // wired in -- a template only referenced by an inactivity-reclaimed
+    // version snapshot fell through to the generic FK-failure fallback.
+    db.prepare(
+      `SELECT DISTINCT template_id FROM archived_version_instances WHERE template_id IN (${placeholders})`,
+    ).bind(...uniqueValues).all(),
   ]);
   const blockedByPlacedInstance = new Set(inPlacedInstances.results.map((row) => row.template_id));
   const blockedBySavedLayout = new Set(inSavedLayouts.results.map((row) => row.template_id));
   const blockedByVersion = new Set(inVersions.results.map((row) => row.template_id));
   const blockedByBackup = new Set(inBackups.results.map((row) => row.template_id));
+  const blockedByArchivedVersion = new Set(inArchivedVersions.results.map((row) => row.template_id));
   for (const templateId of uniqueValues) {
     if (blockedByPlacedInstance.has(templateId)) {
       throw new HttpError(
@@ -17852,6 +17886,13 @@ async function assertCatalogTemplatesDeletable(db, templateIds) {
       throw new HttpError(
         `Catalog template "${templateId}" cannot be deleted: it is still configured as a placed instance's backup `
         + '(remove it from every backup chain first)',
+        409,
+      );
+    }
+    if (blockedByArchivedVersion.has(templateId)) {
+      throw new HttpError(
+        `Catalog template "${templateId}" cannot be deleted: it is still referenced by an archived version snapshot `
+        + '(a reclaimed landlet\'s preserved version history used it)',
         409,
       );
     }
