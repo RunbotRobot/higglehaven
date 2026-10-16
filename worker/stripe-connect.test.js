@@ -274,11 +274,37 @@ describe('Builder Stripe Connect account (#624)', () => {
     // seller-signup path lazily creates the seller one too. Submitting
     // only the builder's own onboarding shouldn't touch the seller row at
     // all, since they're genuinely separate Stripe Connect accounts.
+    //
+    // Mocks Stripe outright (same idiom as the create/self-delete race
+    // tests above) -- without this, the POST below 503s at the
+    // stripeConfigured(env) check before ever reaching the real UPDATE
+    // builders statement, which made the assertion here trivially true
+    // (the seller row was never going to be touched by a request that
+    // never wrote anything at all) rather than actually proving
+    // cross-row independence.
     const seller = await signupSeller('dual-role-stripe');
-    await api('/builders/me/stripe-account', seller.session({
-      method: 'POST',
-      body: JSON.stringify(validPayload()),
-    }));
+    const originalFetch = globalThis.fetch;
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.stripe.com/v1/accounts' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'acct_dual_role_builder', requirements: { currently_due: [] } }), { status: 200 });
+      }
+      return originalFetch(input, init);
+    };
+    let posted;
+    try {
+      posted = await api('/builders/me/stripe-account', seller.session({
+        method: 'POST',
+        body: JSON.stringify(validPayload()),
+      }));
+    } finally {
+      globalThis.fetch = originalFetch;
+      env.STRIPE_SECRET_KEY = undefined;
+    }
+    expect(posted.response.status).toBe(200);
+    const builderStatus = await api('/builders/me/stripe-account', seller.session());
+    expect(builderStatus.body.connected).toBe(true);
     const sellerStatus = await api('/sellers/me/stripe-account', seller.session());
     expect(sellerStatus.body.connected).toBe(false);
   });
