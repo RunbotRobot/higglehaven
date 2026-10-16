@@ -1798,6 +1798,19 @@ async function handleCatalog(request, db, route, url, models, env) {
     // seller silently claim ownership of an unowned/orphaned template by
     // just resubmitting it with their own sellerId.
     const existingSellerIdById = new Map(existingOwnerRows.results.map((row) => [row.template_id, row.seller_id]));
+    // #2242: the single-item POST /api/catalog sibling's own #1601 check
+    // ("priceCents is required" on a genuinely new seller-owned listing --
+    // a free digital product is an explicit $0, not an omitted field)
+    // never got carried over here, so this batch path let a seller create
+    // a for-sale template with a null price. Scoped the same way as that
+    // sibling: only a template with no pre-existing row (a real create,
+    // not an update -- the PATCH/PUT path intentionally still allows
+    // clearing a price back to null) and a sellerId present.
+    for (const template of templates) {
+      if (!existingSellerIdById.has(template.templateId) && template.sellerId && template.priceCents == null) {
+        throw new HttpError('priceCents is required', 400);
+      }
+    }
     await db.batch(templates.map((template) => db.prepare(`
       INSERT INTO catalog_templates
         (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity)
