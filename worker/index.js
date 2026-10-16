@@ -11074,11 +11074,25 @@ async function handleListAdmins(request, db) {
   // admin" guard, no uniqueness constraint on this table) -- MIN, not MAX,
   // is the one that actually matches "the exact grant moment" above when a
   // later re-grant lands a second, newer log row.
+  // #2319: that MIN alone goes stale across a real revoke-then-re-grant
+  // cycle (a working path since #1819/#2307) -- admin_action_log is
+  // strictly append-only, so a revoked-then-later-re-granted account's
+  // MIN still returns the original, pre-revoke grant timestamp, spanning
+  // a period the account genuinely was not an admin. Scopes the MIN to
+  // only grant/bootstrap rows after this user's own most recent revoke,
+  // falling back to the unscoped MIN when there's no intervening revoke.
   const { results } = await db.prepare(`
     SELECT users.user_id, users.email, users.username, users.created_at,
-      (SELECT MIN(created_at) FROM admin_action_log
-       WHERE target_type = 'user' AND target_id = users.user_id
-         AND action_type IN ('grant_admin', 'admin_bootstrap')) AS admin_granted_at
+      (SELECT MIN(created_at) FROM admin_action_log AS grants
+       WHERE grants.target_type = 'user' AND grants.target_id = users.user_id
+         AND grants.action_type IN ('grant_admin', 'admin_bootstrap')
+         AND grants.created_at > COALESCE(
+           (SELECT MAX(created_at) FROM admin_action_log AS revokes
+            WHERE revokes.target_type = 'user' AND revokes.target_id = users.user_id
+              AND revokes.action_type = 'revoke_admin'),
+           ''
+         )
+      ) AS admin_granted_at
     FROM users WHERE is_admin = 1
     ORDER BY COALESCE(admin_granted_at, users.created_at) ASC
   `).all();
