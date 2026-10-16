@@ -292,6 +292,31 @@ describe('Builders', () => {
     expect(retained.deleted_at).toBeTruthy();
   });
 
+  // #2246: releasedLandletIds used to be read off batchResults' own last
+  // position, which the #1003 retained_stripe_accounts INSERT above shifts
+  // whenever stripe_account_id is set -- landing on that INSERT's own
+  // (RETURNING-less, always-empty) result instead of the landlets UPDATE's.
+  // Neither sibling test above combines both conditions, which is exactly
+  // why this went unnoticed: this one deliberately does.
+  it('reports the real releasedLandletIds even when the deleted builder has a connected Stripe account', async () => {
+    const builder = await signupBuilder('release-stripe-combo-builder');
+    await env.DB.prepare(`
+      UPDATE builders SET stripe_account_id = 'acct_release_combo_builder', stripe_onboarding_status = 'complete' WHERE builder_id = ?
+    `).bind(builder.builderId).run();
+
+    await createGreenbeltLandlet('release-stripe-combo-landlet');
+    const claimed = await api('/landlets/release-stripe-combo-landlet/claim', builder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+
+    const deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body.releasedLandletIds).toEqual(['release-stripe-combo-landlet']);
+
+    const released = await api('/landlets/release-stripe-combo-landlet');
+    expect(released.body.landlet.status).toBe('greenbelt');
+    expect(released.body.landlet.ownerBuilderId).toBeNull();
+  });
+
   it('does not snapshot anything on builder deletion when no Stripe account was ever connected', async () => {
     const builder = await signupBuilder('no-stripe-delete-builder');
     const deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
