@@ -1851,6 +1851,33 @@ describe('Authentication', () => {
       expect(alreadySuspended.response.status).toBe(409);
     });
 
+    // #2031: an automated in-app notice, routed through the existing
+    // notifications table -- carries the admin-given reason (not the
+    // admin-only evidenceNote) and points disputes at the third-party CS
+    // agency rather than higglehaven staff directly (docs/SPEC.md §6 P122).
+    it('sends the suspended builder an in-app notification with the reason and grace period, but never the evidenceNote', async () => {
+      const admin = await makeAdmin('suspend-notify-admin');
+      const target = await signupBuilder('suspend-notify-target');
+
+      const suspended = await api('/auth/suspend-account', admin.session({
+        method: 'POST',
+        body: JSON.stringify({
+          email: target.email, reason: 'spam listings', evidenceNote: 'admin-eyes-only detail',
+        }),
+      }));
+      expect(suspended.response.status).toBe(200);
+
+      const { results } = await env.DB.prepare(
+        'SELECT message FROM notifications WHERE builder_id = ?',
+      ).bind(target.builderId).all();
+      expect(results).toHaveLength(1);
+      expect(results[0].message).toContain('suspended');
+      expect(results[0].message).toContain('spam listings');
+      expect(results[0].message).toContain(suspended.body.suspension.gracePeriodEndsAt);
+      expect(results[0].message).toContain('customer service');
+      expect(results[0].message).not.toContain('admin-eyes-only detail');
+    });
+
     it('rejects graceDays outside 1-365, defaults to 30 when omitted', async () => {
       const admin = await makeAdmin('suspend-grace-admin');
       const target = await signupBuilder('suspend-grace-target');
