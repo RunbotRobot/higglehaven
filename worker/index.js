@@ -856,6 +856,8 @@ function controlRoomTaskFromRow(row) {
     waitingOn: row.waiting_on,
     viewed: !!row.viewed,
     awaitingClaude: !!row.awaiting_claude,
+    lastReplyFrom: row.last_reply_from,
+    lastReplyAt: row.last_reply_at,
     imageUrl: row.image_url,
     subIssues: row.sub_issues ? JSON.parse(row.sub_issues) : null,
     subIssueSummaries: row.sub_issue_summaries ? JSON.parse(row.sub_issue_summaries) : null,
@@ -1187,6 +1189,10 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
 
   const now = new Date().toISOString();
   setIfPresent('updated_at', now);
+  // #2254: settingWaitingOnOwner inserts a real linked reply below (the
+  // reason) -- last_reply_from/last_reply_at need to reflect that same
+  // reply, same reasoning as the viewed reset above.
+  if (settingWaitingOnOwner) { setIfPresent('last_reply_from', caller); setIfPresent('last_reply_at', now); }
 
   const statements = [
     db.prepare(`UPDATE control_room_tasks SET ${fields.join(', ')} WHERE task_id = ?`).bind(...values, taskId),
@@ -1216,7 +1222,7 @@ async function handleControlRoomRepliesList(request, env, db, taskId) {
 // case the way handleControlRoomTaskUpdate's `reason` is).
 async function handleControlRoomReplyCreate(request, env, db, taskId) {
   await requireControlRoomAccess(request, env, db);
-  const task = await db.prepare('SELECT task_id FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
+  const task = await db.prepare('SELECT task_id, waiting_on FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
   if (!task) return json({ error: 'Task not found' }, 404);
 
   const body = await readJson(request);
@@ -1224,6 +1230,15 @@ async function handleControlRoomReplyCreate(request, env, db, taskId) {
   const text = controlRoomTextValue(body.text, 'text (message text)');
   const replyId = `reply-${crypto.randomUUID()}`;
   const now = new Date().toISOString();
+
+  // #2254: AGENTS.md documents this exact auto-clear as already shipped
+  // ("every reply typed into that form is always from them -- this happens
+  // unconditionally") but it was never actually built against this real,
+  // N31-era API -- only an owner reply to a task genuinely waitingOn them
+  // clears it, same scoping as handleControlRoomTaskUpdate's own
+  // settingWaitingOnOwner comparison (case-insensitive on both sides, same
+  // #1070/#1449 precedent).
+  const clearsWaitingOnOwner = fromCaller.toLowerCase() === 'owner' && task.waiting_on?.toLowerCase() === 'owner';
 
   await db.batch([
     db.prepare(`
@@ -1234,7 +1249,13 @@ async function handleControlRoomReplyCreate(request, env, db, taskId) {
     // `viewed` -- otherwise a task the owner already reviewed sits with no
     // "New" indicator even though it just got a new reply (AGENTS.md's own
     // Control Room section calls this out as the intended behavior).
-    db.prepare('UPDATE control_room_tasks SET updated_at = ?, viewed = 0 WHERE task_id = ?').bind(now, taskId),
+    // last_reply_from/last_reply_at (#2254) record this same reply for the
+    // "(unexplained)" badge check in waitingBadge().
+    db.prepare(`
+      UPDATE control_room_tasks
+      SET updated_at = ?, viewed = 0, last_reply_from = ?, last_reply_at = ?${clearsWaitingOnOwner ? ", waiting_on = 'claude'" : ''}
+      WHERE task_id = ?
+    `).bind(now, fromCaller, now, taskId),
   ]);
 
   const row = await db.prepare('SELECT * FROM control_room_replies WHERE reply_id = ?').bind(replyId).first();
