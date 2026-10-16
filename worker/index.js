@@ -15898,7 +15898,12 @@ function ownedAnimationStatements(db, buyerBuilderId, templateId, purchaseId) {
   ];
 }
 
-async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isDigitalGood) {
+// Exported so #2267's own regression test can call this directly, the same
+// way writePurchaseRow and resolveFinalizeBuilderId already are -- the real
+// checkout -> finalize flow only ever reaches this fallback via a live
+// Stripe PaymentIntent lookup, which this test suite deliberately never
+// configures.
+export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isDigitalGood) {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   const purchaseId = `purchase-${crypto.randomUUID()}`;
@@ -15959,6 +15964,12 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
     statements.push(...ownedAnimationStatements(db, meta.buyerBuilderId, meta.templateId, purchaseId));
   }
   await db.batch(statements);
+  // #2267: writePurchaseRow's own self-dealing check (below) never ran on
+  // this fallback path, even though every value it needs is already in
+  // scope here -- same "after commit, not inside the batch" placement as
+  // the notification just below, since this is a soft signal to record,
+  // not something that should roll back the purchase row itself.
+  await flagSelfDealingIfMatched(db, purchaseId, buyerBuilderStillExists ? meta.buyerBuilderId : null, sellerId);
   // #1122: fired after the batch above commits, not inside it — builderId's
   // existence was already checked earlier in this function, but a self-
   // delete in the window between that check and this point would otherwise
