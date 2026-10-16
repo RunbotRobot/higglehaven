@@ -11262,8 +11262,12 @@ async function handleSuspendAccount(request, db) {
   // predate the user_id link entirely) just means nothing to notify.
   const suspendedBuilder = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(row.user_id).first();
   if (suspendedBuilder) {
+    // #2351: fireNotification's message is rendered as plain, unparsed text
+    // client-side (appendNotificationRow, src/main.js) -- format the date
+    // here rather than interpolating the raw ISO instant.
+    const gracePeriodEndsAtFormatted = new Date(gracePeriodEndsAt).toLocaleDateString();
     await fireNotification(db, suspendedBuilder.builder_id,
-      `Your account has been suspended. Reason: ${reason}. This suspension is in effect until ${gracePeriodEndsAt} unless lifted sooner. To dispute this, contact our customer service team -- they handle all suspension disputes and appeals.`);
+      `Your account has been suspended. Reason: ${reason}. This suspension is in effect until ${gracePeriodEndsAtFormatted} unless lifted sooner. To dispute this, contact our customer service team -- they handle all suspension disputes and appeals.`);
   }
 
   // #2032: run only after the suspension itself is confirmed landed -- a

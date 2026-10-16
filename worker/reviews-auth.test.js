@@ -1991,7 +1991,12 @@ describe('Authentication', () => {
       expect(results).toHaveLength(1);
       expect(results[0].message).toContain('suspended');
       expect(results[0].message).toContain('spam listings');
-      expect(results[0].message).toContain(suspended.body.suspension.gracePeriodEndsAt);
+      // #2351: the notification formats gracePeriodEndsAt for display rather
+      // than interpolating the raw ISO instant the API response carries.
+      expect(results[0].message).toContain(
+        new Date(suspended.body.suspension.gracePeriodEndsAt).toLocaleDateString(),
+      );
+      expect(results[0].message).not.toContain(suspended.body.suspension.gracePeriodEndsAt);
       expect(results[0].message).toContain('customer service');
       expect(results[0].message).not.toContain('admin-eyes-only detail');
     });
