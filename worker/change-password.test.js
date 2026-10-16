@@ -109,5 +109,45 @@ describe('Change password (#1181)', () => {
       }));
       expect(limited.response.status).toBe(429);
     });
+
+    // #2293: the same #843 invariant handleResetPassword's own DELETE
+    // already enforces, just from the opposite direction -- an in-session
+    // change-password must invalidate any outstanding reset-password
+    // token too, or a still-unexpired reset link requested before the
+    // change (e.g. by an attacker with momentary email access) can
+    // silently undo it afterward and re-hijack the account.
+    it('#2293: changing the password in-session invalidates any outstanding password-reset token for the same account', async () => {
+      const password = 'a fine long original password';
+      const newPassword = 'a fine long replacement password';
+      const email = `change-password-reset-token-${crypto.randomUUID()}@example.com`;
+      const username = `change-pw-rt-${crypto.randomUUID().slice(0, 8)}`;
+      const signedUp = await signup(email, password, { username });
+      const sessionA = extractSessionCookie(signedUp.response);
+
+      const requested = await api('/auth/request-password-reset', {
+        method: 'POST', body: JSON.stringify({ email }),
+      });
+      const token = new URL(requested.body.devResetUrl, 'https://higglehaven.test').searchParams.get('resetPassword');
+
+      const changed = await api('/auth/change-password', withSession(sessionA, {
+        method: 'POST',
+        body: JSON.stringify({ currentPassword: password, newPassword }),
+      }));
+      expect(changed.response.status).toBe(200);
+
+      // The reset link requested before the change must no longer work --
+      // otherwise it could silently undo this change and re-hijack the
+      // account via the stale link.
+      const attackerReset = await api('/auth/reset-password', {
+        method: 'POST', body: JSON.stringify({ token, newPassword: 'attacker-chosen password' }),
+      });
+      expect(attackerReset.response.status).toBe(400);
+
+      // The password this test actually set is still the one that works.
+      const loginWithNewPassword = await api('/auth/login', {
+        method: 'POST', body: JSON.stringify({ email, password: newPassword }),
+      });
+      expect(loginWithNewPassword.response.status).toBe(200);
+    });
   });
 });
