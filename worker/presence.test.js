@@ -33,17 +33,31 @@ async function setPresence(builderId, {
 describe('Avatar presence (#1095)', () => {
   describe('GET /presence', () => {
     it('requires a session', async () => {
-      const anon = await api('/presence?landletId=presence-landlet-anon');
+      const anon = await api('/presence');
       expect(anon.response.status).toBe(401);
     });
 
-    it('requires a landletId', async () => {
-      const builder = await signupBuilder('presence-missing-landlet');
-      const missing = await api('/presence', builder.session());
-      expect(missing.response.status).toBe(400);
+    it('returns an empty list when the caller has no presence row of their own', async () => {
+      const builder = await signupBuilder('presence-no-own-presence');
+      const got = await api('/presence', builder.session());
+      expect(got.response.status).toBe(200);
+      expect(got.body.avatars).toEqual([]);
     });
 
-    it('returns another builder\'s position in the same landlet, excluding the caller\'s own row', async () => {
+    it('returns an empty list when the caller\'s own presence is stale', async () => {
+      const viewer = await signupBuilder('presence-stale-own-viewer');
+      const other = await signupBuilder('presence-stale-own-other');
+      await setPresence(viewer.builderId, {
+        landletId: 'presence-landlet-stale-own', updatedAt: new Date(Date.now() - 60_000).toISOString(),
+      });
+      await setPresence(other.builderId, { landletId: 'presence-landlet-stale-own' });
+
+      const got = await api('/presence', viewer.session());
+      expect(got.response.status).toBe(200);
+      expect(got.body.avatars).toEqual([]);
+    });
+
+    it('returns another builder\'s position in the caller\'s own landlet, excluding the caller\'s own row', async () => {
       const viewer = await signupBuilder('presence-viewer');
       const other = await signupBuilder('presence-other');
       const elsewhere = await signupBuilder('presence-elsewhere');
@@ -53,7 +67,7 @@ describe('Avatar presence (#1095)', () => {
       });
       await setPresence(elsewhere.builderId, { landletId: 'presence-landlet-2' });
 
-      const got = await api('/presence?landletId=presence-landlet-1', viewer.session());
+      const got = await api('/presence', viewer.session());
       expect(got.response.status).toBe(200);
       expect(got.body.avatars).toEqual([{
         builderId: other.builderId,
@@ -67,6 +81,26 @@ describe('Avatar presence (#1095)', () => {
       }]);
     });
 
+    // #2269: the landlet to query comes from the caller's own last-reported
+    // presence row, never a client-supplied parameter -- confirms a
+    // `landletId` on the query string (the exploit this issue describes:
+    // enumerate landlet ids via the public GET /api/landlets, then poll
+    // this endpoint for any of them) is silently ignored rather than
+    // trusted.
+    it('ignores a client-supplied landletId query param and uses the caller\'s own presence instead', async () => {
+      const viewer = await signupBuilder('presence-spoof-viewer');
+      const inMyLandlet = await signupBuilder('presence-spoof-real-other');
+      const inSpoofedLandlet = await signupBuilder('presence-spoof-target-other');
+      await setPresence(viewer.builderId, { landletId: 'presence-landlet-real' });
+      await setPresence(inMyLandlet.builderId, { landletId: 'presence-landlet-real' });
+      await setPresence(inSpoofedLandlet.builderId, { landletId: 'presence-landlet-spoof-target' });
+
+      const got = await api('/presence?landletId=presence-landlet-spoof-target', viewer.session());
+      expect(got.response.status).toBe(200);
+      expect(got.body.avatars).toHaveLength(1);
+      expect(got.body.avatars[0].builderId).toBe(inMyLandlet.builderId);
+    });
+
     // #2043: docs/SPEC.md's "Flying avatars are invisible to other users" --
     // withheld here, server-side, same as a stale report just below, rather
     // than left to the client's own rendering discretion.
@@ -74,23 +108,25 @@ describe('Avatar presence (#1095)', () => {
       const viewer = await signupBuilder('presence-flying-viewer');
       const flyer = await signupBuilder('presence-flying-other');
       const grounded = await signupBuilder('presence-flying-grounded');
+      await setPresence(viewer.builderId, { landletId: 'presence-landlet-flying' });
       await setPresence(flyer.builderId, { landletId: 'presence-landlet-flying', flying: true });
       await setPresence(grounded.builderId, { landletId: 'presence-landlet-flying', flying: false });
 
-      const got = await api('/presence?landletId=presence-landlet-flying', viewer.session());
+      const got = await api('/presence', viewer.session());
       expect(got.response.status).toBe(200);
       expect(got.body.avatars).toHaveLength(1);
       expect(got.body.avatars[0].builderId).toBe(grounded.builderId);
     });
 
-    it('excludes a stale position report', async () => {
+    it('excludes a stale position report from someone else', async () => {
       const viewer = await signupBuilder('presence-stale-viewer');
       const stale = await signupBuilder('presence-stale-other');
+      await setPresence(viewer.builderId, { landletId: 'presence-landlet-stale' });
       await setPresence(stale.builderId, {
         landletId: 'presence-landlet-stale', updatedAt: new Date(Date.now() - 60_000).toISOString(),
       });
 
-      const got = await api('/presence?landletId=presence-landlet-stale', viewer.session());
+      const got = await api('/presence', viewer.session());
       expect(got.response.status).toBe(200);
       expect(got.body.avatars).toEqual([]);
     });
@@ -101,6 +137,7 @@ describe('Avatar presence (#1095)', () => {
     // mesh group per entry on every poll tick.
     it('caps the number of nearby avatars returned, favoring the most recently updated', async () => {
       const viewer = await signupBuilder('presence-cap-viewer');
+      await setPresence(viewer.builderId, { landletId: 'presence-landlet-cap' });
       // Bulk-fabricating 205 other builders via real signup (password
       // hashing per account) is far too slow for a single test — insert
       // the `builders` rows directly instead, the same "produce the state
@@ -118,7 +155,7 @@ describe('Avatar presence (#1095)', () => {
         });
       }
 
-      const got = await api('/presence?landletId=presence-landlet-cap', viewer.session());
+      const got = await api('/presence', viewer.session());
       expect(got.response.status).toBe(200);
       expect(got.body.avatars).toHaveLength(200);
       const returnedIds = new Set(got.body.avatars.map((a) => a.builderId));
@@ -142,10 +179,10 @@ describe('Avatar presence (#1095)', () => {
         'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
       ).bind(bucketKey, now)));
 
-      const atLimit = await api('/presence?landletId=presence-nearby-rate-limit-landlet', viewer.session());
+      const atLimit = await api('/presence', viewer.session());
       expect(atLimit.response.status).toBe(200);
 
-      const limited = await api('/presence?landletId=presence-nearby-rate-limit-landlet', viewer.session());
+      const limited = await api('/presence', viewer.session());
       expect(limited.response.status).toBe(429);
     });
   });
