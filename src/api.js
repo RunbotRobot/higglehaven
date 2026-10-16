@@ -1003,6 +1003,34 @@ export function clearVersionIdempotencyKey(landletId) {
   try { localStorage.removeItem(versionIdempotencyStorageKey(landletId)); } catch (e) { /* ignore */ }
 }
 
+// #2249: same #1721/#1726 reasoning as versionIdempotencyKey above, just for
+// PUT /landlets/:id/draft's own auto-version side effect (the "Restore to
+// Editor" action) -- that endpoint already reads and dedupes on a
+// client-supplied idempotencyKey (#1726/#2184), but replaceLandletDraft
+// never sent one, so a dropped-response retry of a restore minted a fully
+// duplicate version every time. Own storage key (not shared with the
+// Publish flow's) since the two actions can be retried independently.
+function draftIdempotencyStorageKey(landletId) {
+  return `higglehaven-draft-idempotency-${landletId}`;
+}
+
+function draftIdempotencyKey(landletId) {
+  const storageKey = draftIdempotencyStorageKey(landletId);
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (saved && typeof saved.key === 'string' && Date.now() - saved.at < VERSION_IDEMPOTENCY_TTL_MS) {
+      return saved.key;
+    }
+  } catch (e) { /* private-browsing/blocked storage, or corrupt value — mint a fresh one below */ }
+  const key = crypto.randomUUID();
+  try { localStorage.setItem(storageKey, JSON.stringify({ key, at: Date.now() })); } catch (e) { /* ignore */ }
+  return key;
+}
+
+export function clearDraftIdempotencyKey(landletId) {
+  try { localStorage.removeItem(draftIdempotencyStorageKey(landletId)); } catch (e) { /* ignore */ }
+}
+
 // Snapshots the landlet's *current* live instances as a new immutable
 // version — this alone doesn't change what shoppers see (see
 // activateLandletVersion); "Publish" in the UI does both in sequence.
@@ -1040,7 +1068,7 @@ export async function replaceLandletDraft(landletId, { instances, versionName, v
   return requestJson(`/landlets/${encodeURIComponent(landletId)}/draft`, {
     method: 'PUT',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ instances, versionName, versionMetadata }),
+    body: JSON.stringify({ instances, versionName, versionMetadata, idempotencyKey: draftIdempotencyKey(landletId) }),
   });
 }
 

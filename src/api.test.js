@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   confirmCard, createInstancesRemote, deleteInstancesRemote, deleteLandletLevel, fetchAllAuctions, fetchAllLandlets,
-  fetchBundles, fetchCurrentUser, fetchSharedBundles, upsertInstancesRemote,
+  fetchBundles, fetchCurrentUser, fetchSharedBundles, replaceLandletDraft, upsertInstancesRemote,
 } from './api.js';
 
 // fetchAllLandlets makes real fetch() calls against /api/... — mock the
@@ -318,5 +318,30 @@ describe('confirmCard', () => {
     }));
     await confirmCard('seti_abc123');
     expect(sentBody).toEqual({ setupIntentId: 'seti_abc123' });
+  });
+});
+
+// #2249: PUT /landlets/:id/draft's own auto-version side effect already
+// dedupes on a client-supplied idempotencyKey (#1726/#2184) -- a dropped-
+// response retry of a "Restore to Editor" click should no-op server-side
+// instead of minting a duplicate version -- but replaceLandletDraft never
+// sent one at all, so that protection was never reachable from its only
+// caller. This proves the field is now sent and is a non-empty string
+// (matching saveLandletVersion's own already-covered idempotencyKey
+// shape); persistence/dedup-across-retries isn't exercisable here since
+// this suite's pool has no localStorage, same limitation noted on
+// versionIdempotencyKey's own definition in api.js.
+describe('replaceLandletDraft', () => {
+  it('sends a non-empty idempotencyKey alongside instances/versionName/versionMetadata', async () => {
+    let sentBody;
+    vi.stubGlobal('fetch', vi.fn((url, options) => {
+      sentBody = JSON.parse(options.body);
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    }));
+    await replaceLandletDraft('landlet-1', { instances: [{ instanceId: 'i1' }], versionName: 'Restored from "V1"' });
+    expect(sentBody.instances).toEqual([{ instanceId: 'i1' }]);
+    expect(sentBody.versionName).toBe('Restored from "V1"');
+    expect(typeof sentBody.idempotencyKey).toBe('string');
+    expect(sentBody.idempotencyKey.length).toBeGreaterThan(0);
   });
 });
