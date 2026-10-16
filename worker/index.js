@@ -1798,6 +1798,19 @@ async function handleCatalog(request, db, route, url, models, env) {
     // seller silently claim ownership of an unowned/orphaned template by
     // just resubmitting it with their own sellerId.
     const existingSellerIdById = new Map(existingOwnerRows.results.map((row) => [row.template_id, row.seller_id]));
+    // #2242: the single-item POST /api/catalog sibling's own #1601 check
+    // ("priceCents is required" on a genuinely new seller-owned listing --
+    // a free digital product is an explicit $0, not an omitted field)
+    // never got carried over here, so this batch path let a seller create
+    // a for-sale template with a null price. Scoped the same way as that
+    // sibling: only a template with no pre-existing row (a real create,
+    // not an update -- the PATCH/PUT path intentionally still allows
+    // clearing a price back to null) and a sellerId present.
+    for (const template of templates) {
+      if (!existingSellerIdById.has(template.templateId) && template.sellerId && template.priceCents == null) {
+        throw new HttpError('priceCents is required', 400);
+      }
+    }
     await db.batch(templates.map((template) => db.prepare(`
       INSERT INTO catalog_templates
         (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity)
@@ -4733,7 +4746,13 @@ async function handlePresence(request, db, route, url) {
       WHERE landlet_id = ? AND builder_id != ? AND updated_at >= ?
       ORDER BY updated_at DESC LIMIT ${PRESENCE_NEARBY_LIMIT}
     `).bind(landletId, sessionBuilder.builder_id, staleBefore).all();
-    return json({ avatars: results.map(avatarPresenceFromRow) });
+    // #2043: docs/SPEC.md's "Flying avatars are invisible to other users" --
+    // the client is the one actually hiding the mesh, but a flying avatar's
+    // position is still withheld here too, not just left to the renderer's
+    // own discretion to respect. Never withhold the caller's own row from
+    // themselves (irrelevant here, this query already excludes builder_id =
+    // self) or from GET .../me (that endpoint is "where was I," unaffected).
+    return json({ avatars: results.filter((row) => !row.flying).map(avatarPresenceFromRow) });
   }
 
   // #1098: upserts the caller's own live position into avatar_presence
@@ -4750,6 +4769,12 @@ async function handlePresence(request, db, route, url) {
     const y = finiteNumber(input.y, 'y');
     const z = finiteNumber(input.z, 'z');
     const heading = input.heading === undefined || input.heading === null ? null : finiteNumber(input.heading, 'heading');
+    // #2043: whether the reporting builder is currently flying, so the
+    // nearby-avatars GET above can withhold them per docs/SPEC.md's
+    // "Flying avatars are invisible to other users" -- optional/defaults
+    // to false so an older client (or a report with no flight state to
+    // report) never accidentally marks someone permanently flying.
+    const flying = input.flying === true;
     let landletId = null;
     if (input.landletId !== undefined && input.landletId !== null) {
       landletId = stringValue(input.landletId, 'landletId');
@@ -4762,12 +4787,12 @@ async function handlePresence(request, db, route, url) {
       await requireLandlet(db, landletId);
     }
     await db.prepare(`
-      INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
       ON CONFLICT(builder_id) DO UPDATE SET
         landlet_id = excluded.landlet_id, x = excluded.x, y = excluded.y, z = excluded.z,
-        heading = excluded.heading, updated_at = excluded.updated_at
-    `).bind(sessionBuilder.builder_id, landletId, x, y, z, heading).run();
+        heading = excluded.heading, flying = excluded.flying, updated_at = excluded.updated_at
+    `).bind(sessionBuilder.builder_id, landletId, x, y, z, heading, flying ? 1 : 0).run();
     const row = await db.prepare('SELECT * FROM avatar_presence WHERE builder_id = ?')
       .bind(sessionBuilder.builder_id).first();
     return json({
@@ -4777,6 +4802,7 @@ async function handlePresence(request, db, route, url) {
         y: row.y,
         z: row.z,
         heading: row.heading,
+        flying: Boolean(row.flying),
         updatedAt: row.updated_at,
       },
     });
@@ -4793,6 +4819,7 @@ function avatarPresenceFromRow(row) {
     y: row.y,
     z: row.z,
     heading: row.heading,
+    flying: Boolean(row.flying),
     updatedAt: row.updated_at,
   };
 }
@@ -10075,6 +10102,55 @@ async function generateTax1099Drafts(db, year) {
       userId: row.user_id, taxYear: year, formType: '1099-k', grossIncomeCents: row.total, generatedAt,
     })),
   ]);
+
+  await pruneStaleTax1099Drafts(db, year, yearStart, yearEnd);
+}
+
+// #2214: a draft's gross_income_cents is only ever set by the upsert above,
+// which only runs for payees the two threshold queries above still return.
+// If enough of a payee's non-refunded income gets refunded after their
+// draft was created to drop their live total back under the threshold,
+// they stop appearing in those queries entirely -- the draft they already
+// have just sits there forever with its original, now-overstated total,
+// since nothing was ever written to shrink or remove it. No 1099 is
+// actually required once income falls back under the reporting threshold,
+// so any remaining 'draft' row (never 'approved'/'filed'/'voided' --
+// upsertTax1099Draft's own WHERE guard already protects those) whose live,
+// refund-aware total no longer meets its own form type's threshold gets
+// deleted outright, the same as if it had never qualified in the first
+// place.
+async function pruneStaleTax1099Drafts(db, year, yearStart, yearEnd) {
+  const [staleNec, staleK] = await Promise.all([
+    db.prepare(`
+      SELECT f.form_id FROM tax_1099_forms f
+      LEFT JOIN (
+        SELECT b.user_id AS user_id, SUM(e.amount_cents) AS total
+        FROM higgles_earnings_events e JOIN builders b ON b.builder_id = e.builder_id
+        WHERE b.user_id IS NOT NULL AND e.created_at >= ? AND e.created_at < ?
+        GROUP BY b.user_id
+      ) live ON live.user_id = f.user_id
+      WHERE f.tax_year = ? AND f.form_type = '1099-nec' AND f.status = 'draft'
+        AND COALESCE(live.total, 0) < ?
+    `).bind(yearStart, yearEnd, year, TAX_1099_NEC_THRESHOLD_CENTS).all(),
+    db.prepare(`
+      SELECT f.form_id FROM tax_1099_forms f
+      LEFT JOIN (
+        SELECT s.user_id AS user_id, SUM(p.total_cents) AS total
+        FROM purchases p JOIN sellers s ON s.seller_id = p.seller_id
+        WHERE s.user_id IS NOT NULL AND p.payment_intent_id IS NOT NULL AND p.refunded_at IS NULL
+          AND p.created_at >= ? AND p.created_at < ?
+        GROUP BY s.user_id
+      ) live ON live.user_id = f.user_id
+      WHERE f.tax_year = ? AND f.form_type = '1099-k' AND f.status = 'draft'
+        AND COALESCE(live.total, 0) < ?
+    `).bind(yearStart, yearEnd, year, TAX_REPORTING_THRESHOLD_CENTS).all(),
+  ]);
+
+  const staleFormIds = [...staleNec.results, ...staleK.results].map((row) => row.form_id);
+  if (staleFormIds.length === 0) return;
+  await db.batch(staleFormIds.map((formId) => db.prepare(
+    `DELETE FROM tax_1099_forms WHERE form_id = ? AND status = 'draft'`,
+  ).bind(formId)));
 }
 
 // ---- 1099 e-filing transmission (#646, sub-issue of #616/#350) —
@@ -10692,6 +10768,16 @@ async function handleConfirmCard(request, env, db) {
   return json({ user: userFromRow(updated) });
 }
 
+// #2240: this file's own convention is that every authenticated,
+// repeatable mutation gets a checkRateLimit call regardless of how cheap
+// or idempotent it is (handleCardSetupIntent/handleConfirmCard/
+// handleDiditVerificationSession, the structurally closest siblings,
+// all have one) -- this endpoint was the one gap. requireCurrentUser's
+// own session + account_suspensions SELECTs still cost real D1 reads on
+// every call even once already attested, same unthrottled-flood shape
+// #827/#944/#990/#2123 were each filed and fixed for elsewhere.
+const AGE_ATTEST_RATE_LIMIT_MAX = 20;
+
 // #556: lets an existing session attest age after the fact. Signup's own
 // ageAttested checkbox (handleSignup above) only covers brand-new
 // accounts — every account created before that existed, plus the owner's
@@ -10701,6 +10787,7 @@ async function handleConfirmCard(request, env, db) {
 // account is a no-op, not an error.
 async function handleAgeAttest(request, db) {
   const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `age-attest:${user.user_id}`, AGE_ATTEST_RATE_LIMIT_MAX);
   const input = await readJson(request);
   if (input.ageAttested !== true) {
     throw new HttpError('You must confirm you meet the age requirement to continue.', 400);
