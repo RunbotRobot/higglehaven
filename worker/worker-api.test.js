@@ -445,6 +445,52 @@ describe('Worker API', () => {
     expect(systemTemplate.body.template.priceCents).toBeNull();
   });
 
+  // #2242: the batch sibling of the #1601 check above never carried the
+  // same rule over for a genuinely new (not pre-existing) seller-owned
+  // template, letting a seller create a real for-sale listing through
+  // POST /catalog/batch with no price at all.
+  it('requires priceCents on a new seller-owned catalog template created via /catalog/batch', async () => {
+    const seller = await signupSeller('catalog-batch-price-required-seller');
+    const missingPrice = await api('/catalog/batch', seller.session({
+      method: 'POST',
+      body: JSON.stringify({ templates: [{
+        templateId: 'catalog-batch-price-required-missing',
+        name: 'Missing price product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+      }] }),
+    }));
+    expect(missingPrice.response.status).toBe(400);
+    expect(missingPrice.body.error).toMatch(/priceCents/);
+
+    const freeProduct = await api('/catalog/batch', seller.session({
+      method: 'POST',
+      body: JSON.stringify({ templates: [{
+        templateId: 'catalog-batch-price-required-free',
+        name: 'Explicit free product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        sellerId: seller.sellerId,
+        priceCents: 0,
+      }] }),
+    }));
+    expect(freeProduct.response.status).toBe(201);
+    expect(freeProduct.body.templates[0].priceCents).toBe(0);
+
+    const systemTemplate = await api('/catalog/batch', {
+      method: 'POST',
+      body: JSON.stringify({ templates: [{
+        templateId: 'catalog-batch-price-required-system',
+        name: 'System placeholder product',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+      }] }),
+    });
+    expect(systemTemplate.response.status).toBe(201);
+    expect(systemTemplate.body.templates[0].priceCents).toBeNull();
+  });
+
   // #774: image_url (a product thumbnail, written by POST .../thumbnail)
   // shares this same bucket/URL scheme as model_url, but the listing/
   // cleanup/single-delete reference checks above only ever looked at
