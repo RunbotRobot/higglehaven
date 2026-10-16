@@ -178,6 +178,74 @@ describe('Buyer-initiated purchase disputes (#2020)', () => {
     expect(result.response.status).toBe(409);
   });
 
+  // #2224: the old eligibility check read refundedCount fresh at the top of
+  // each independent call with no atomic fold against a concurrent dispute
+  // from the same buyer -- two low-value disputes fired at once could both
+  // observe refundedCount === 0 before either refund committed, both pass
+  // `established`, and both get auto-refunded. Rather than trying to force
+  // genuine request-level interleaving (unreliable here -- real concurrency
+  // via Promise.all doesn't land in the exact window, and intercepting
+  // env.DB.prepare mid-request to hold one call open deadlocks this test
+  // harness's own D1 binding), this directly recreates the state a winning
+  // concurrent request leaves behind: its own claim row already inserted.
+  // dispute_auto_resolve_claims' atomic INSERT ... WHERE NOT EXISTS is what
+  // the real handler relies on to detect exactly this and decline, instead
+  // of re-deriving eligibility from a (by then stale) history read.
+  it('#2224: does not auto-resolve when a concurrent dispute has already claimed this buyer\'s one-time pass', async () => {
+    const buyer = await signupBuilder('dispute-concurrent-buyer');
+    await createGreenbeltLandlet('dispute-concurrent-landlet');
+    await claim('dispute-concurrent-landlet', buyer);
+    await createTemplate('dispute-concurrent-template-a');
+    await createTemplate('dispute-concurrent-template-b');
+    await createTemplate('dispute-concurrent-template-c');
+    // A prior, unrefunded purchase is what makes this buyer "established."
+    await placeAndBuy(buyer, 'dispute-concurrent-landlet', 'dispute-concurrent-template-a', 'dispute-concurrent-instance-a');
+    const purchaseB = await placeAndBuy(buyer, 'dispute-concurrent-landlet', 'dispute-concurrent-template-b', 'dispute-concurrent-instance-b');
+    const purchaseC = await placeAndBuy(buyer, 'dispute-concurrent-landlet', 'dispute-concurrent-template-c', 'dispute-concurrent-instance-c');
+
+    // The exact row a concurrent dispute on purchase B would have already
+    // inserted by the time this request's own INSERT runs.
+    await env.DB.prepare(
+      'INSERT INTO dispute_auto_resolve_claims (builder_id, purchase_id) VALUES (?, ?)',
+    ).bind(buyer.builderId, purchaseB.purchaseId).run();
+
+    const result = await api(`/purchases/${purchaseC.purchaseId}/dispute`, buyer.session({ method: 'POST' }));
+    expect(result.response.status).toBe(200);
+    expect(result.body.autoResolved).toBe(false);
+    expect(result.body.purchase.refundedAt).toBeNull();
+
+    // Nothing about this buyer's purchases got touched -- the claim alone,
+    // not a second write to `purchases`, is what rejected this request.
+    const refundedCount = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM purchases WHERE buyer_builder_id = ? AND refunded_at IS NOT NULL',
+    ).bind(buyer.builderId).first();
+    expect(refundedCount.count).toBe(0);
+  });
+
+  // The claim row is never deleted on success (unlike the didit/video-
+  // generation reservations it borrows its idiom from) -- it's the
+  // permanent "already used their one-time pass" record, so a later
+  // dispute rejects even before checking refundedCount.
+  it('#2224: does not auto-resolve a second low-value dispute from a buyer who already used their one-time pass', async () => {
+    const buyer = await signupBuilder('dispute-reuse-buyer');
+    await createGreenbeltLandlet('dispute-reuse-landlet');
+    await claim('dispute-reuse-landlet', buyer);
+    await createTemplate('dispute-reuse-template-a');
+    await createTemplate('dispute-reuse-template-b');
+    await createTemplate('dispute-reuse-template-c');
+    await placeAndBuy(buyer, 'dispute-reuse-landlet', 'dispute-reuse-template-a', 'dispute-reuse-instance-a');
+    const purchaseB = await placeAndBuy(buyer, 'dispute-reuse-landlet', 'dispute-reuse-template-b', 'dispute-reuse-instance-b');
+    const purchaseC = await placeAndBuy(buyer, 'dispute-reuse-landlet', 'dispute-reuse-template-c', 'dispute-reuse-instance-c');
+
+    const firstResult = await api(`/purchases/${purchaseB.purchaseId}/dispute`, buyer.session({ method: 'POST' }));
+    expect(firstResult.body.autoResolved).toBe(true);
+
+    const secondResult = await api(`/purchases/${purchaseC.purchaseId}/dispute`, buyer.session({ method: 'POST' }));
+    expect(secondResult.response.status).toBe(200);
+    expect(secondResult.body.autoResolved).toBe(false);
+    expect(secondResult.body.purchase.refundedAt).toBeNull();
+  });
+
   it('does not auto-resolve when the seller has opted into no returns', async () => {
     const buyer = await signupBuilder('dispute-noreturns-buyer');
     await createGreenbeltLandlet('dispute-noreturns-landlet');

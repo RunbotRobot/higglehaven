@@ -17111,7 +17111,43 @@ async function handlePurchaseDispute(request, env, purchaseId) {
   }
   const templateName = template?.name || 'A product';
 
-  if (!(await finalizeRefundReversal(env, purchase))) {
+  // #2224: the refundedCount read above is a plain SELECT taken at the top
+  // of each independent call -- two concurrent disputes for different
+  // purchases from the same buyer can both observe refundedCount === 0
+  // before either's refund actually commits, so both pass `established`
+  // and both would otherwise reach finalizeRefundReversal. This claim is
+  // the real atomic guard, the same "claim first, release on failure"
+  // idiom reserveDiditSession/reserveVideoGenerationJob already use for
+  // their own per-builder one-at-a-time locks (migrations/0095,
+  // worker/index.js's INSERT ... WHERE NOT EXISTS above) -- only the
+  // request that wins this INSERT may proceed, and the loser falls
+  // through exactly like today's unestablished/high-value path. Never
+  // deleted on success: it becomes the permanent "this buyer has already
+  // used their one-time auto-resolve pass" record, closing the race
+  // without relying on purchases.refunded_at having committed yet.
+  const claimed = await db.prepare(`
+    INSERT INTO dispute_auto_resolve_claims (builder_id, purchase_id)
+    SELECT ?, ? WHERE NOT EXISTS (
+      SELECT 1 FROM dispute_auto_resolve_claims WHERE builder_id = ?
+    )
+  `).bind(sessionBuilder.builder_id, purchaseId, sessionBuilder.builder_id).run();
+  if (claimed.meta.changes === 0) {
+    return json({ autoResolved: false, purchase: purchaseFromRow(purchase) });
+  }
+
+  let refundSucceeded;
+  try {
+    refundSucceeded = await finalizeRefundReversal(env, purchase);
+  } catch (err) {
+    // The claim above only reserves this buyer's one-time pass for this
+    // attempt -- if finalizeRefundReversal never actually moved any money
+    // (Stripe misconfigured, the outbound refund call itself failed), the
+    // pass must not be permanently burned for nothing.
+    await db.prepare('DELETE FROM dispute_auto_resolve_claims WHERE builder_id = ?').bind(sessionBuilder.builder_id).run();
+    throw err;
+  }
+  if (!refundSucceeded) {
+    await db.prepare('DELETE FROM dispute_auto_resolve_claims WHERE builder_id = ?').bind(sessionBuilder.builder_id).run();
     const current = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
     return json({ autoResolved: false, purchase: purchaseFromRow(current) });
   }
