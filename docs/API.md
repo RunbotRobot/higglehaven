@@ -1000,6 +1000,11 @@ success, sets `liftedAt`/the lifting admin on the active
 can be suspended again afterward — lifting isn't a one-time, permanent
 clearing of the record, just of the currently-active hold.
 
+Once the lift lands, #2297 fires the mirror image of `suspend-account`'s
+own #2031 notice, through the same `notifications` table, to the
+unsuspended user's own builder row, if they have one — same FK-swallow
+skip for a pre-#1092 free-text builder with no linked `user_id`.
+
 ### `GET /api/auth/suspension-status?email=...`
 
 `requireAdmin`-gated. `400` with no `email` query parameter, `404` if no

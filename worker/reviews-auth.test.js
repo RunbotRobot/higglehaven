@@ -1981,6 +1981,31 @@ describe('Authentication', () => {
       expect(resuspended.response.status).toBe(200);
     });
 
+    // #2297: unsuspend-account never told the user their suspension was
+    // lifted, unlike its sibling suspend-account's own #2031 notice.
+    it('sends the unsuspended builder an in-app notification that their suspension was lifted', async () => {
+      const admin = await makeAdmin('unsuspend-notify-admin');
+      const target = await signupBuilder('unsuspend-notify-target');
+
+      await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'x' }),
+      }));
+      const lifted = await api('/auth/unsuspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email }),
+      }));
+      expect(lifted.response.status).toBe(200);
+
+      // One row from suspend-account's own #2031 notice, one from this fix
+      // -- suspend's own message also happens to contain the word "lifted"
+      // ("...unless lifted sooner"), so asserting on count plus the
+      // unsuspend-specific wording avoids a false pass against that row.
+      const { results } = await env.DB.prepare(
+        'SELECT message FROM notifications WHERE builder_id = ? ORDER BY created_at ASC',
+      ).bind(target.builderId).all();
+      expect(results).toHaveLength(2);
+      expect(results[1].message).toContain('suspension has been lifted');
+    });
+
     // #2118: unsuspend-account had no rate limit at all, unlike its sibling
     // suspend-account -- same admin-action shape, same
     // ACCOUNT_SUSPENSION_RATE_LIMIT_MAX bucket (bound per-admin, separate
