@@ -261,3 +261,47 @@ describe('POST /api/credit-orbs/:orbId/collect (#1995)', () => {
     expect(response.status).toBe(429);
   });
 });
+
+// #2223: spawnCreditOrbIfDue only ever targets a 'greenbelt' landlet, and
+// nothing else used to ever delete a credit_orbs row -- an orb left
+// uncollected on a landlet that then got claimed survived forever,
+// permanently wasting part of the rationed daily budget (the client only
+// loads orbs for still-greenbelt landlets, so it became invisible too).
+describe('POST /landlets/:id/claim cleans up an orb left on it (#2223)', () => {
+  it('deletes an uncollected orb that was sitting on the landlet being claimed', async () => {
+    const landlet = await seedLandlet('greenbelt');
+    const orbId = await seedOrb(landlet);
+    const builder = await signupBuilder('orb-cleanup-claimer');
+
+    const { response } = await api(`/landlets/${landlet}/claim`, builder.session({ method: 'POST' }));
+    expect(response.status).toBe(200);
+
+    const row = await env.DB.prepare('SELECT * FROM credit_orbs WHERE orb_id = ?').bind(orbId).first();
+    expect(row).toBeFalsy(); // was the #2223 bug -- used to survive forever, uncollectible
+  });
+
+  it('leaves an already-collected orb on the landlet untouched', async () => {
+    const landlet = await seedLandlet('greenbelt');
+    const orbId = await seedOrb(landlet, { collected: true });
+    const builder = await signupBuilder('orb-cleanup-collected-claimer');
+
+    const { response } = await api(`/landlets/${landlet}/claim`, builder.session({ method: 'POST' }));
+    expect(response.status).toBe(200);
+
+    const row = await env.DB.prepare('SELECT * FROM credit_orbs WHERE orb_id = ?').bind(orbId).first();
+    expect(row).toBeTruthy();
+  });
+
+  it('does not delete an orb elsewhere when a claim attempt fails', async () => {
+    const alreadyClaimed = await seedLandlet('claimed');
+    const otherLandlet = await seedLandlet('greenbelt');
+    const orbId = await seedOrb(otherLandlet);
+    const builder = await signupBuilder('orb-cleanup-conflict-claimer');
+
+    const { response } = await api(`/landlets/${alreadyClaimed}/claim`, builder.session({ method: 'POST' }));
+    expect(response.status).toBe(409);
+
+    const row = await env.DB.prepare('SELECT * FROM credit_orbs WHERE orb_id = ?').bind(orbId).first();
+    expect(row).toBeTruthy();
+  });
+});

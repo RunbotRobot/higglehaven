@@ -3,7 +3,7 @@ import {
 } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
-  cosineSimilarity, writePurchaseRow,
+  cosineSimilarity, writePurchaseRow, escapeHtml,
 } from './index.js';
 import {
   api, signupBuilder, signupSeller, signupAdmin, glbFile,
@@ -1763,6 +1763,20 @@ describe('Sold-out notifications: dashboard + opt-in email (#2067)', () => {
 
     const notices = await api('/notifications', owner.session());
     expect(notices.body.notifications.some((n) => n.message.includes('just sold out'))).toBe(true);
+  });
+
+  // #2212: the sold-out notification email interpolates a seller-supplied
+  // catalog_templates.name into its html body -- RESEND_API_KEY is never
+  // set in tests (see the comment above), so the actual email send can't
+  // be asserted on end to end. This exercises escapeHtml() directly, the
+  // helper that call site now applies to that name before it reaches the
+  // html body, since that's the part of the fix a test here actually can
+  // verify.
+  it('escapeHtml neutralizes HTML-special characters without double-escaping', () => {
+    expect(escapeHtml('<img src=x onerror=alert(1)>')).toBe('&lt;img src=x onerror=alert(1)&gt;');
+    expect(escapeHtml(`"Builder's Best" & Co.`)).toBe('&quot;Builder&#39;s Best&quot; &amp; Co.');
+    expect(escapeHtml(null)).toBe('');
+    expect(escapeHtml(undefined)).toBe('');
   });
 });
 
