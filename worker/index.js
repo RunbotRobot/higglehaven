@@ -3745,6 +3745,13 @@ async function handleBuilders(request, env, db, route, url) {
         RETURNING landlet_id
       `).bind(route[1], route[1]),
     ];
+    // #2246: captured before the conditional retained_stripe_accounts push
+    // below -- batchResults[batchResults.length - 1] used to be read after
+    // that push, so whenever this builder had a stripe_account_id set, the
+    // INSERT's own (RETURNING-less, always-empty) result silently became
+    // "released" instead of this UPDATE's. Pinning the index now means a
+    // later push can never shift which result this name refers to.
+    const landletsReleasedIndex = statements.length - 1;
     // #1003: the connected Stripe account itself is deliberately left alone
     // (owner's call, issue-1003 comment) -- this only snapshots its acct_...
     // id before the row that referenced it disappears, so a later cleanup
@@ -3774,7 +3781,7 @@ async function handleBuilders(request, env, db, route, url) {
     // own departure no longer costs anyone else their history.
     const batchResults = await db.batch(statements);
     const deleted = batchResults[0];
-    const released = batchResults[batchResults.length - 1];
+    const released = batchResults[landletsReleasedIndex];
     if (deleted.meta.changes === 0) {
       // One of the two guards blocked it, or (far narrower window) a
       // concurrent request already deleted this builder out from under
@@ -11155,6 +11162,23 @@ async function handleSuspendAccount(request, db) {
   // this INSERT's own WHERE NOT EXISTS can legitimately insert 0 rows, and
   // a batched log statement would commit regardless, misrecording a
   // suspension that never actually took effect.
+  //
+  // #2268: same "never end up with zero admins and no way back short of
+  // direct D1 access" invariant handleRevokeAdmin's own guard enforces
+  // above -- a suspended account can't call requireAdmin at all (it fails
+  // requireCurrentUser's suspension check before is_admin is ever read),
+  // so suspending the last admin was otherwise unrecoverable through the
+  // app itself, and an unresolved suspension auto-escalates to a full
+  // cascade delete once its grace period lapses (escalateExpiredSuspensions
+  // below). Unlike handleRevokeAdmin, a raw COUNT(is_admin=1) isn't enough
+  // here -- suspending never clears is_admin, so that count alone can't
+  // tell an operational admin from one who is themselves already suspended
+  // (and thus just as unable to call requireAdmin). The guard instead
+  // requires at least one OTHER admin who is_admin=1 AND has no currently-
+  // active suspension of their own. The live reads happen inside this same
+  // atomic INSERT, not in a separate check-then-act step, for the same
+  // "re-evaluates at the moment it runs" reasoning as handleRevokeAdmin's
+  // own comment above.
   const result = await db.prepare(`
     INSERT INTO account_suspensions
       (suspension_id, user_id, admin_user_id, reason, evidence_note, grace_period_ends_at)
@@ -11163,8 +11187,37 @@ async function handleSuspendAccount(request, db) {
       SELECT 1 FROM account_suspensions
       WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
     )
-  `).bind(suspensionId, row.user_id, admin.user_id, reason, evidenceNote, gracePeriodEndsAt, row.user_id).run();
-  if (result.meta.changes === 0) throw new HttpError('That account is already suspended', 409);
+    AND (
+      (SELECT is_admin FROM users WHERE user_id = ?) = 0
+      OR EXISTS (
+        SELECT 1 FROM users AS other_admin
+        WHERE other_admin.is_admin = 1
+          AND other_admin.user_id != ?
+          AND NOT EXISTS (
+            SELECT 1 FROM account_suspensions
+            WHERE account_suspensions.user_id = other_admin.user_id
+              AND lifted_at IS NULL AND escalated_at IS NULL
+          )
+      )
+    )
+  `).bind(suspensionId, row.user_id, admin.user_id, reason, evidenceNote, gracePeriodEndsAt, row.user_id, row.user_id, row.user_id).run();
+  if (result.meta.changes === 0) {
+    const current = await db.prepare('SELECT is_admin FROM users WHERE user_id = ?').bind(row.user_id).first();
+    if (current?.is_admin === 1) {
+      const otherOperationalAdmin = await db.prepare(`
+        SELECT 1 FROM users AS other_admin
+        WHERE other_admin.is_admin = 1
+          AND other_admin.user_id != ?
+          AND NOT EXISTS (
+            SELECT 1 FROM account_suspensions
+            WHERE account_suspensions.user_id = other_admin.user_id
+              AND lifted_at IS NULL AND escalated_at IS NULL
+          )
+      `).bind(row.user_id).first();
+      if (!otherOperationalAdmin) throw new HttpError('Cannot suspend the last remaining admin', 409);
+    }
+    throw new HttpError('That account is already suspended', 409);
+  }
   await adminActionLogStatement(db, admin.user_id, 'suspend_account', 'user', row.user_id, {
     suspensionId, reason, evidenceNote, gracePeriodEndsAt,
   }).run();
