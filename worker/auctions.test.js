@@ -1357,6 +1357,68 @@ describe('Auctions', () => {
       expect(secondBidderAfter.body.builder.higglesBalanceCents).toBe(500); // 1000 - 500
     });
 
+    // #2290: the balance-shortfall fall-through test just above pins down
+    // resolveAuction's first candidate-skip gate (the debit's conditional
+    // UPDATE affecting 0 rows) -- this is the symmetric test for its other,
+    // independent gate (#785's land-cap-conditioned ownership-transfer
+    // UPDATE affecting 0 rows), which had no test of its own exercising a
+    // single auction's fall-through, refund, and skip-notification.
+    it("falls through to the next-highest bidder at resolution if the leading bidder's land cap no longer covers it", async () => {
+      const seller = await signupBuilder('cap-fallthrough-seller');
+      const leadingBidder = await signupBuilder('cap-fallthrough-leading-bidder');
+      const secondBidder = await signupBuilder('cap-fallthrough-second-bidder');
+      await fundHiggles(leadingBidder, 1000);
+      await fundHiggles(secondBidder, 1000);
+      await createGreenbeltLandlet('cap-fallthrough-landlet');
+      await claim('cap-fallthrough-landlet', seller);
+      const started = await api('/landlets/cap-fallthrough-landlet/auction', seller.session({
+        method: 'POST', body: JSON.stringify({}),
+      }));
+      const auctionId = started.body.auction.auctionId;
+
+      await api(`/auctions/${auctionId}/bids`, secondBidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 500 }),
+      }));
+      await api(`/auctions/${auctionId}/bids`, leadingBidder.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 800 }),
+      }));
+
+      // The leading bidder's balance is untouched and fully covers their
+      // bid -- what's simulated here is their land cap dropping out from
+      // under them before resolution (e.g. they claimed or won other land
+      // in between bidding and this auction closing), the same "simulate
+      // directly, since what's under test is resolution's own atomic
+      // response to it" reasoning the balance-path test above uses.
+      await env.DB.prepare('UPDATE builders SET land_cap_m2 = 0 WHERE builder_id = ?')
+        .bind(leadingBidder.builderId).run();
+      await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+      const resolved = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+      expect(resolved.response.status).toBe(200);
+      expect(resolved.body.auction.winningBidId).not.toBeNull();
+
+      const landlet = await api('/landlets/cap-fallthrough-landlet');
+      // The second-highest bidder wins instead, since the leader's own cap
+      // can't actually fit the land.
+      expect(landlet.body.landlet.ownerBuilderId).toBe(secondBidder.builderId);
+
+      const sellerAfter = await api('/builders/me', seller.session());
+      // Credited the second bidder's own 500, never the capped-out leader's 800.
+      expect(sellerAfter.body.builder.higglesBalanceCents).toBe(500);
+      const secondBidderAfter = await api('/builders/me', secondBidder.session());
+      expect(secondBidderAfter.body.builder.higglesBalanceCents).toBe(500); // 1000 - 500
+      // The skipped leader's held 800 is refunded back, not silently lost.
+      const leadingBidderAfter = await api('/builders/me', leadingBidder.session());
+      expect(leadingBidderAfter.body.builder.higglesBalanceCents).toBe(1000);
+
+      // Same "could no longer be honored" skip notification the balance-
+      // path gate already sends (#883, worker/land.test.js).
+      const { results: leaderNotifications } = await env.DB.prepare(
+        'SELECT message FROM notifications WHERE builder_id = ? ORDER BY created_at',
+      ).bind(leadingBidder.builderId).all();
+      expect(leaderNotifications.some((n) => /could no longer be honored/.test(n.message))).toBe(true);
+    });
+
     it('keeps the land with the seller if no bidder can actually cover their bid by resolution time', async () => {
       const seller = await signupBuilder('nobody-can-pay-seller');
       const bidder = await signupBuilder('nobody-can-pay-bidder');
