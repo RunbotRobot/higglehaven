@@ -5141,7 +5141,16 @@ function friendshipFromRow(row, viewerBuilderId, labelsById, landletsById) {
 // shape as the friend-request/accept notifications above), so this needs
 // its own rate-limit bucket, same #369/#899 reasoning.
 const DIRECT_MESSAGE_SEND_RATE_LIMIT_MAX = 20;
-const DIRECT_MESSAGE_MUTATE_RATE_LIMIT_MAX = 20;
+// #2260: mark-read fires no notification and isn't a deliberate, abuse-prone
+// action the way a send is -- unlike notification mark-read (#984), which
+// only ever fires on a human click (tapping one row, or "Mark all read"),
+// this one is auto-fired by the client on every single render of an open DM
+// thread (on open, and again after every message sent), so the same
+// 20/15min budget sized for click frequency starved under ordinary chat
+// activity alone. Sized well above anything that frequency can plausibly
+// hit instead of removing the cap outright, since it's still a real,
+// uncached D1 write per call.
+const DIRECT_MESSAGE_MARK_READ_RATE_LIMIT_MAX = 200;
 
 // DM is gated on a stronger bar than ordinary account verification
 // (assertVerified's trust_tier !== 'none', used everywhere else) — #1002's
@@ -5319,7 +5328,7 @@ async function handleDirectMessages(request, db, route, url) {
     // #1889: session -> rate limit -> readJson -> validate, matching the
     // dominant order this file's other mutating endpoints use (e.g.
     // friendships' PATCH/DELETE, calendar events, sign posts).
-    await checkRateLimit(db, `direct-message-mutate:${sessionBuilder.builder_id}`, DIRECT_MESSAGE_MUTATE_RATE_LIMIT_MAX);
+    await checkRateLimit(db, `direct-message-mark-read:${sessionBuilder.builder_id}`, DIRECT_MESSAGE_MARK_READ_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const withBuilderId = stringValue(input.withBuilderId, 'withBuilderId');
     await db.prepare(`
