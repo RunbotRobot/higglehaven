@@ -16420,16 +16420,21 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
   // elsewhere (e.g. getInstancesById, the builder-notification-preference
   // lookup a few lines below this function's own loop).
   const chainsByInstance = new Map();
-  if (affectedInstances.length > 0) {
-    const instanceIds = affectedInstances.map((i) => i.instanceId);
-    const { results: allChainEntries } = await db.prepare(`
+  // #2283: chunked at D1_MAX_BOUND_PARAMETERS -- a popular/free template can
+  // rack up well over 100 affected instances before selling out, and #2170's
+  // own batched IN(...) lookup never accounted for D1's bound-parameter cap,
+  // same bug class as #2038/#2204/#2216/#2233.
+  for (let i = 0; i < affectedInstances.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = affectedInstances.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const instanceIds = chunk.map((instance) => instance.instanceId);
+    const { results: chainEntries } = await db.prepare(`
       SELECT pib.instance_id AS instanceId, pib.backup_id AS backupId, pib.template_id AS templateId, ct.stock_quantity AS stockQuantity
       FROM placed_instance_backups pib
       JOIN catalog_templates ct ON ct.template_id = pib.template_id
       WHERE pib.instance_id IN (${instanceIds.map(() => '?').join(', ')})
       ORDER BY pib.instance_id, pib.position
     `).bind(...instanceIds).all();
-    for (const entry of allChainEntries) {
+    for (const entry of chainEntries) {
       if (!chainsByInstance.has(entry.instanceId)) chainsByInstance.set(entry.instanceId, []);
       chainsByInstance.get(entry.instanceId).push(entry);
     }
@@ -16487,13 +16492,20 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
   }
   if (deletedCountByBuilder.size === 0) return;
   const builderIds = [...deletedCountByBuilder.keys()];
-  const { results: preferences } = await db.prepare(`
-    SELECT b.builder_id AS builderId, b.notify_sold_out_email AS notifySoldOutEmail, u.email AS builderEmail
-    FROM builders b
-    LEFT JOIN users u ON u.user_id = b.user_id
-    WHERE b.builder_id IN (${builderIds.map(() => '?').join(', ')})
-  `).bind(...builderIds).all();
-  const preferenceByBuilder = new Map(preferences.map((p) => [p.builderId, p]));
+  // #2283: same D1_MAX_BOUND_PARAMETERS chunking as the chain lookup above --
+  // a single sweep can remove instances belonging to well over 100 distinct
+  // builders.
+  const preferenceByBuilder = new Map();
+  for (let i = 0; i < builderIds.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = builderIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const { results: preferences } = await db.prepare(`
+      SELECT b.builder_id AS builderId, b.notify_sold_out_email AS notifySoldOutEmail, u.email AS builderEmail
+      FROM builders b
+      LEFT JOIN users u ON u.user_id = b.user_id
+      WHERE b.builder_id IN (${chunk.map(() => '?').join(', ')})
+    `).bind(...chunk).all();
+    for (const p of preferences) preferenceByBuilder.set(p.builderId, p);
+  }
   for (const [builderId, count] of deletedCountByBuilder) {
     const plural = count === 1 ? 'instance has' : 'instances have';
     await fireNotification(db, builderId,
