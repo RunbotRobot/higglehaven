@@ -3657,6 +3657,13 @@ async function handleBuilders(request, env, db, route, url) {
         RETURNING landlet_id
       `).bind(route[1], route[1]),
     ];
+    // #2246: captured before the conditional retained_stripe_accounts push
+    // below -- batchResults[batchResults.length - 1] used to be read after
+    // that push, so whenever this builder had a stripe_account_id set, the
+    // INSERT's own (RETURNING-less, always-empty) result silently became
+    // "released" instead of this UPDATE's. Pinning the index now means a
+    // later push can never shift which result this name refers to.
+    const landletsReleasedIndex = statements.length - 1;
     // #1003: the connected Stripe account itself is deliberately left alone
     // (owner's call, issue-1003 comment) -- this only snapshots its acct_...
     // id before the row that referenced it disappears, so a later cleanup
@@ -3686,7 +3693,7 @@ async function handleBuilders(request, env, db, route, url) {
     // own departure no longer costs anyone else their history.
     const batchResults = await db.batch(statements);
     const deleted = batchResults[0];
-    const released = batchResults[batchResults.length - 1];
+    const released = batchResults[landletsReleasedIndex];
     if (deleted.meta.changes === 0) {
       // One of the two guards blocked it, or (far narrower window) a
       // concurrent request already deleted this builder out from under
