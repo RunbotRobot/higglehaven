@@ -1084,10 +1084,11 @@ async function handleControlRoomTaskCreate(request, env, db) {
     db.prepare(`
       INSERT INTO control_room_tasks
         (task_id, kind, number, note_number, title, status, session, posted_by, tag, url, pr_url,
-         waiting_on, image_url, sub_issues, sub_issue_summaries, created_at, updated_at)
+         waiting_on, image_url, sub_issues, sub_issue_summaries, created_at, updated_at,
+         last_reply_from, last_reply_at)
       VALUES (?, ?, ?, ${autoAssignNoteNumber
         ? '(SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks)'
-        : '?'}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        : '?'}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       taskId,
       canonicalKind,
@@ -1105,6 +1106,12 @@ async function handleControlRoomTaskCreate(request, env, db) {
       body.subIssues == null ? null : JSON.stringify(subIssuesValue(body.subIssues, 'subIssues')),
       body.subIssueSummaries == null ? null : JSON.stringify(subIssueSummariesValue(body.subIssueSummaries, 'subIssueSummaries')),
       now, now,
+      // #2301: waitingOn:'owner' inserts a real linked reply below (the
+      // reason) -- last_reply_from/last_reply_at need to reflect that same
+      // reply, same reasoning as handleControlRoomTaskUpdate's own
+      // settingWaitingOnOwner branch (#2254).
+      waitingOn === 'owner' ? postedBy : null,
+      waitingOn === 'owner' ? now : null,
     ),
   ];
   if (waitingOn === 'owner') {
