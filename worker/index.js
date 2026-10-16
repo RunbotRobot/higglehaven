@@ -8245,6 +8245,14 @@ async function handleDiditVerificationSession(request, env, db) {
     // pending session; hand back that one instead of ever calling Didit.
     return json({ sessionId: existing.session_id, url: existing.url });
   }
+  // #1886/#2313 (porting the same durable-logging fix from the identical
+  // reservation shape on the Tripo side, handleVideoGenerationJobCreate):
+  // set only once the billed diditRequest call has actually returned a
+  // real session_id -- lets the catch below tell "the outbound call itself
+  // failed" (never billed, or at least no session_id in hand) apart from
+  // "the billed call succeeded but persisting its result failed," which
+  // needs a durable record rather than a silent delete.
+  let billedSessionId = null;
   try {
     const session = await diditRequest(env, 'POST', 'v3/session/', {
       vendor_data: user.user_id,
@@ -8258,6 +8266,7 @@ async function handleDiditVerificationSession(request, env, db) {
     if (!session?.session_id || !session?.url) {
       throw new HttpError('Didit session creation failed — please try again', 502);
     }
+    billedSessionId = session.session_id;
     // The reservation's own session_id was only ever a local placeholder --
     // nothing external has referenced it, so overwriting it with Didit's
     // real one (along with the url a reused session needs, #607) is safe.
@@ -8266,6 +8275,20 @@ async function handleDiditVerificationSession(request, env, db) {
     `).bind(session.session_id, session.url, reservationId).run();
     return json({ sessionId: session.session_id, url: session.url });
   } catch (err) {
+    // #1886/#2313: if billedSessionId is set, the outbound call didn't
+    // fail -- only persisting its result did (a transient D1 write error;
+    // a hard kill between the two never reaches this catch at all, see
+    // reserveDiditSession's own stale-sweep logging above for that case
+    // instead). Deleting the reservation below either way (so this user
+    // isn't permanently blocked) would otherwise discard the only local
+    // record that a real, billed session is now untracked -- log it
+    // durably first.
+    if (billedSessionId) {
+      await adminActionLogStatement(db, null, 'didit_session_id_lost', 'user', user.user_id, {
+        providerSessionId: billedSessionId,
+        error: err instanceof Error ? err.message : String(err),
+      }).run();
+    }
     // The outbound call itself failed (or Didit isn't configured) --
     // release the reservation so it doesn't permanently block this user
     // from ever starting verification again.
@@ -8290,10 +8313,23 @@ export async function reserveDiditSession(db, userId) {
   // retry) lets the NOT EXISTS guard below admit a genuinely fresh
   // reservation instead of blocking on a reservation nothing will ever
   // resolve.
-  await db.prepare(`
+  //
+  // #1886/#2313 (porting the same durable-logging fix from the identical
+  // reservation shape on the Tripo side, reserveVideoGenerationJob): a row
+  // swept here might be exactly the residual gap DIDIT_RESERVATION_TIMEOUT_MS's
+  // own comment documents -- a real, billed Didit call whose result never
+  // got persisted. Log every sweep that actually removes a row, durably,
+  // rather than only ever being reconstructable by reading code.
+  const staleCleanup = await db.prepare(`
     DELETE FROM didit_verification_sessions
     WHERE user_id = ? AND processed_at IS NULL AND session_id LIKE 'pending-%' AND created_at < ?
   `).bind(userId, new Date(Date.now() - DIDIT_RESERVATION_TIMEOUT_MS).toISOString()).run();
+  if (staleCleanup.meta.changes > 0) {
+    await adminActionLogStatement(db, null, 'didit_stale_reservation_swept', 'user', userId, {
+      rowsDeleted: staleCleanup.meta.changes,
+      reservationTimeoutMs: DIDIT_RESERVATION_TIMEOUT_MS,
+    }).run();
+  }
   const reservationId = `pending-${crypto.randomUUID()}`;
   const result = await db.prepare(`
     INSERT INTO didit_verification_sessions (session_id, user_id, status)

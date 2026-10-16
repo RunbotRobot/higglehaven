@@ -283,6 +283,20 @@ describe('Didit verification webhook (#589)', () => {
       const rows = await env.DB.prepare('SELECT * FROM didit_verification_sessions WHERE user_id = ?').bind(userId).all();
       expect(rows.results).toHaveLength(1);
       expect(rows.results[0].session_id).toBe(second.reservationId);
+
+      // #1886/#2313: porting the same durable-logging fix from the
+      // identical reservation shape on the Tripo side
+      // (reserveVideoGenerationJob) -- this sweep can't tell whether the
+      // row it just deleted was a real, billed-but-never-persisted Didit
+      // session or just an abandoned, never-submitted reservation, so it
+      // logs every sweep that actually removes a row.
+      const sweepLog = await env.DB.prepare(
+        'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ? ORDER BY created_at DESC LIMIT 1',
+      ).bind('didit_stale_reservation_swept', userId).first();
+      expect(sweepLog).toBeTruthy();
+      expect(sweepLog.admin_user_id).toBeNull();
+      expect(sweepLog.target_type).toBe('user');
+      expect(JSON.parse(sweepLog.detail_json)).toMatchObject({ rowsDeleted: 1 });
     });
 
     it('does not clear a still-fresh placeholder reservation -- only one that is actually past the timeout', async () => {
@@ -293,6 +307,13 @@ describe('Didit verification webhook (#589)', () => {
       const second = await reserveDiditSession(env.DB, userId);
       expect(second.reservationId).toBeNull();
       expect(second.existing.session_id).toBe(first.reservationId);
+
+      // Nothing was actually swept, so no sweep log either (#2313 only
+      // logs when staleCleanup.meta.changes is actually nonzero).
+      const sweepLog = await env.DB.prepare(
+        'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+      ).bind('didit_stale_reservation_swept', userId).first();
+      expect(sweepLog).toBeFalsy();
     });
   });
 
