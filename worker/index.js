@@ -11203,6 +11203,16 @@ async function handleUnsuspendAccount(request, db) {
     suspensionId: suspension.suspension_id,
   }).run();
 
+  // Mirrors handleSuspendAccount's own #2031 notice above -- the user was
+  // told they were suspended, so they should also be told it's lifted,
+  // rather than only discovering it by trying to log in anyway. Same
+  // FK-swallow skip for a pre-#1092 free-text builder with no user_id link.
+  const unsuspendedBuilder = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(row.user_id).first();
+  if (unsuspendedBuilder) {
+    await fireNotification(db, unsuspendedBuilder.builder_id,
+      'Your account suspension has been lifted. You can use higglehaven again.');
+  }
+
   return json({ suspension: { suspensionId: suspension.suspension_id, userId: row.user_id, liftedAt } });
 }
 
