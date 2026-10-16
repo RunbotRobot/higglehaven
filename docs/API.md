@@ -8672,6 +8672,24 @@ or `'video_generation_task_id_lost'`, `admin_user_id: null` since no admin
 acted) rather than only reconstructable by reading code, so this is
 queryable/alertable on going forward.
 
+**Credit gate (#1993):** each call spends one of the calling builder's own
+`video_generation_credits` (earned by collecting a credit orb — see
+"Credit orbs" below) before ever reaching Tripo. `402` with a human-
+readable, honest-budget message ("No free model-generation credits
+available right now…") if the builder has none; nothing is spent on this
+path. The spend and the balance check are one atomic `UPDATE ... WHERE
+video_generation_credits > 0` — the same race-safe "check and spend in one
+statement" shape `checkRateLimit`'s own `INSERT ... WHERE` uses just above.
+The refund policy: a credit is refunded if the request turns out to have
+lost the concurrent one-pending-per-builder race above (no new job
+actually started, so nothing was really spent) or if the outbound Tripo
+call itself failed or never returned a `task_id` (never billed). Once
+Tripo's task-create call has actually returned a real `task_id`, the
+credit is **not** refunded regardless of what happens afterward —
+persisting that result failing, a later provider-side failure, or the
+15-minute processing-timeout cron sweep — same "billed means billed"
+reasoning the lost-task_id logging above already applies.
+
 `GET /api/video-generation-jobs/:jobId` is session-gated and returns the
 current state of one of the requesting builder's own jobs (`404` if the
 job doesn't exist, `403` if it belongs to a different builder):
