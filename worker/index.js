@@ -7838,6 +7838,17 @@ async function handleStripeWebhook(request, env, db) {
 // refunds is still open for a real chargeback; tracked separately at
 // #1109, not a blocker for this fix.
 async function handlePurchaseReversalWebhookEvent(db, event) {
+  // #2231: charge.dispute.closed fires on every final dispute outcome, not
+  // just a loss -- its own object's `status` is 'won', 'lost', or
+  // 'warning_closed'. 'won' means the card network ruled for the merchant
+  // and returned the withheld funds -- nothing was actually reversed, so
+  // there's nothing to claw back. This only covers the case where no
+  // earlier dispute.created event already clawed back this purchase (the
+  // refunded_at guard below already no-ops that case, same as before --
+  // reversing an already-applied clawback is a separate, non-mechanical
+  // follow-up, not decided here).
+  if (event.type === 'charge.dispute.closed' && event.data?.object?.status === 'won') return;
+
   const paymentIntentId = event.data?.object?.payment_intent;
   if (!paymentIntentId) return;
   const purchase = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
