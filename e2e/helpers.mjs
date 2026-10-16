@@ -357,7 +357,12 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   // bumped by more than the prior two escalations this time, rather than
   // just matching their size, since each matched bump has been outpaced
   // this quickly.
-  await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 60000 });
+  // #2360: outpaced yet again within about two days (seen tripping
+  // axis-preview-close-race-leak.test.mjs, an unrelated file, twice in a
+  // row) -- bumped well past a simple doubling this time, since each of
+  // the last three matched-or-smaller bumps has been outpaced within 1-2
+  // days.
+  await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 120000 });
   await clearVerifyModalIfShown(page);
 
   // N44: an already-showing modal (the branch above that skipped the
