@@ -856,6 +856,8 @@ function controlRoomTaskFromRow(row) {
     waitingOn: row.waiting_on,
     viewed: !!row.viewed,
     awaitingClaude: !!row.awaiting_claude,
+    lastReplyFrom: row.last_reply_from,
+    lastReplyAt: row.last_reply_at,
     imageUrl: row.image_url,
     subIssues: row.sub_issues ? JSON.parse(row.sub_issues) : null,
     subIssueSummaries: row.sub_issue_summaries ? JSON.parse(row.sub_issue_summaries) : null,
@@ -1187,6 +1189,10 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
 
   const now = new Date().toISOString();
   setIfPresent('updated_at', now);
+  // #2254: settingWaitingOnOwner inserts a real linked reply below (the
+  // reason) -- last_reply_from/last_reply_at need to reflect that same
+  // reply, same reasoning as the viewed reset above.
+  if (settingWaitingOnOwner) { setIfPresent('last_reply_from', caller); setIfPresent('last_reply_at', now); }
 
   const statements = [
     db.prepare(`UPDATE control_room_tasks SET ${fields.join(', ')} WHERE task_id = ?`).bind(...values, taskId),
@@ -1216,7 +1222,7 @@ async function handleControlRoomRepliesList(request, env, db, taskId) {
 // case the way handleControlRoomTaskUpdate's `reason` is).
 async function handleControlRoomReplyCreate(request, env, db, taskId) {
   await requireControlRoomAccess(request, env, db);
-  const task = await db.prepare('SELECT task_id FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
+  const task = await db.prepare('SELECT task_id, waiting_on FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
   if (!task) return json({ error: 'Task not found' }, 404);
 
   const body = await readJson(request);
@@ -1224,6 +1230,15 @@ async function handleControlRoomReplyCreate(request, env, db, taskId) {
   const text = controlRoomTextValue(body.text, 'text (message text)');
   const replyId = `reply-${crypto.randomUUID()}`;
   const now = new Date().toISOString();
+
+  // #2254: AGENTS.md documents this exact auto-clear as already shipped
+  // ("every reply typed into that form is always from them -- this happens
+  // unconditionally") but it was never actually built against this real,
+  // N31-era API -- only an owner reply to a task genuinely waitingOn them
+  // clears it, same scoping as handleControlRoomTaskUpdate's own
+  // settingWaitingOnOwner comparison (case-insensitive on both sides, same
+  // #1070/#1449 precedent).
+  const clearsWaitingOnOwner = fromCaller.toLowerCase() === 'owner' && task.waiting_on?.toLowerCase() === 'owner';
 
   await db.batch([
     db.prepare(`
@@ -1234,7 +1249,13 @@ async function handleControlRoomReplyCreate(request, env, db, taskId) {
     // `viewed` -- otherwise a task the owner already reviewed sits with no
     // "New" indicator even though it just got a new reply (AGENTS.md's own
     // Control Room section calls this out as the intended behavior).
-    db.prepare('UPDATE control_room_tasks SET updated_at = ?, viewed = 0 WHERE task_id = ?').bind(now, taskId),
+    // last_reply_from/last_reply_at (#2254) record this same reply for the
+    // "(unexplained)" badge check in waitingBadge().
+    db.prepare(`
+      UPDATE control_room_tasks
+      SET updated_at = ?, viewed = 0, last_reply_from = ?, last_reply_at = ?${clearsWaitingOnOwner ? ", waiting_on = 'claude'" : ''}
+      WHERE task_id = ?
+    `).bind(now, fromCaller, now, taskId),
   ]);
 
   const row = await db.prepare('SELECT * FROM control_room_replies WHERE reply_id = ?').bind(replyId).first();
@@ -4739,8 +4760,24 @@ async function handlePresence(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     await checkRateLimit(db, `presence-nearby:${sessionBuilder.builder_id}`, PRESENCE_NEARBY_RATE_LIMIT_MAX);
-    const landletId = stringValue(url.searchParams.get('landletId'), 'landletId');
     const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
+    // #2269: a client-supplied `landletId` query param used to be trusted
+    // outright -- any verified account could enumerate landlet ids via the
+    // public GET /api/landlets and then poll this endpoint for any of
+    // them, continuously reading everyone else's live position there with
+    // no proximity/consent requirement at all, defeating this function's
+    // own stated "a shopper elsewhere isn't visibly tracking someone's
+    // live position" intent above. Derive the landlet from the caller's
+    // own last-reported avatar_presence row instead -- the same "don't
+    // trust a client-supplied location claim" fix already applied to the
+    // credit-orb collect endpoint (#2222) -- so a caller can only ever see
+    // who's nearby wherever they themselves actually, recently were.
+    const ownPresence = await db.prepare('SELECT landlet_id, updated_at FROM avatar_presence WHERE builder_id = ?')
+      .bind(sessionBuilder.builder_id).first();
+    const landletId = ownPresence && ownPresence.updated_at >= staleBefore ? ownPresence.landlet_id : null;
+    if (landletId === null) {
+      return json({ avatars: [] });
+    }
     const { results } = await db.prepare(`
       SELECT * FROM avatar_presence
       WHERE landlet_id = ? AND builder_id != ? AND updated_at >= ?
@@ -11044,6 +11081,17 @@ async function handleSuspendAccount(request, db) {
     suspensionId, reason, evidenceNote, gracePeriodEndsAt,
   }).run();
 
+  // #2031: an automated in-app notice, not the full admin-only evidenceNote
+  // -- and routes disputes through the third-party CS agency (docs/SPEC.md
+  // §6 P122), never the operator directly. No builder row (never happened
+  // for a real, non-dev-mode account, but some pre-#1092 free-text builders
+  // predate the user_id link entirely) just means nothing to notify.
+  const suspendedBuilder = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(row.user_id).first();
+  if (suspendedBuilder) {
+    await fireNotification(db, suspendedBuilder.builder_id,
+      `Your account has been suspended. Reason: ${reason}. This suspension is in effect until ${gracePeriodEndsAt} unless lifted sooner. To dispute this, contact our customer service team -- they handle all suspension disputes and appeals.`);
+  }
+
   // #2032: run only after the suspension itself is confirmed landed -- a
   // removeContent request against an account that turned out to already be
   // suspended (the 409 above) must not remove anything.
@@ -15850,7 +15898,12 @@ function ownedAnimationStatements(db, buyerBuilderId, templateId, purchaseId) {
   ];
 }
 
-async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isDigitalGood) {
+// Exported so #2267's own regression test can call this directly, the same
+// way writePurchaseRow and resolveFinalizeBuilderId already are -- the real
+// checkout -> finalize flow only ever reaches this fallback via a live
+// Stripe PaymentIntent lookup, which this test suite deliberately never
+// configures.
+export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isDigitalGood) {
   const db = env.DB;
   const { quantity, buyerLabel, unitPriceCents, totalCents, commissionCents, builderShareCents, platformShareCents } = amounts;
   const purchaseId = `purchase-${crypto.randomUUID()}`;
@@ -15911,6 +15964,12 @@ async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntentId, isD
     statements.push(...ownedAnimationStatements(db, meta.buyerBuilderId, meta.templateId, purchaseId));
   }
   await db.batch(statements);
+  // #2267: writePurchaseRow's own self-dealing check (below) never ran on
+  // this fallback path, even though every value it needs is already in
+  // scope here -- same "after commit, not inside the batch" placement as
+  // the notification just below, since this is a soft signal to record,
+  // not something that should roll back the purchase row itself.
+  await flagSelfDealingIfMatched(db, purchaseId, buyerBuilderStillExists ? meta.buyerBuilderId : null, sellerId);
   // #1122: fired after the batch above commits, not inside it — builderId's
   // existence was already checked earlier in this function, but a self-
   // delete in the window between that check and this point would otherwise

@@ -930,8 +930,8 @@ real deletion stays reserved for the account-holder's own self-service
 `requireCurrentUser` (#2030) rejects a currently-active suspension outright
 with a distinct `403`/`suspended: true` — see "Authorization model" above.
 The optional sign-post/calendar-event removal cascade is #2032, documented
-on `suspend-account` below. (The automated notice to the suspended user is
-its own separate, not-yet-landed sub-issue — #2031.)
+on `suspend-account` below. The automated notice to the suspended user
+(#2031) is documented on `suspend-account` below too.
 
 ### `POST /api/auth/suspend-account`
 
@@ -950,6 +950,18 @@ otherwise) — this becomes `gracePeriodEndsAt` in the response, the point
 already has an active (not lifted, not escalated) suspension — lift it via
 `unsuspend-account` first before suspending again. On success, returns
 `{ "suspension": { "suspensionId", "userId", "adminUserId", "reason", "evidenceNote", "suspendedAt", "gracePeriodEndsAt" } }`.
+
+Once the suspension row lands, #2031 fires one automated notice through the
+existing `notifications` table (see "Notifications" above) to the
+suspended user's own builder row, if they have one — carrying `reason`
+verbatim and `gracePeriodEndsAt`, but never `evidenceNote` (that stays
+admin-only), and pointing the user at the third-party customer service
+agency for disputes/appeals rather than higglehaven staff directly, per
+docs/SPEC.md §6's P122 no-personal-contact architecture. No `templateId`
+is set (there's no matching `catalog_templates` row for a suspension
+notice). A pre-#1092 free-text builder with no linked `user_id` has no
+builder row to notify and is silently skipped — the same existing
+FK-swallow `fireNotification` already relies on elsewhere.
 
 An optional `"removeContent": true` in the request body (#2032) also
 removes every sign post and calendar event the suspended user themselves
@@ -3591,9 +3603,14 @@ save regardless of what a prior `PATCH /api/instances/:id` had set.
 Every successful save creates a version, including a save with an empty array.
 The response contains both the replacement `instances` and new `version`
 metadata. SQLite JSON expansion inserts the validated instance array in one
-statement, keeping the complete draft-and-snapshot save to five D1 statements
-(the fifth being #415's own leading ownership/concurrency guard) regardless
-of draft size for free-tier efficiency.
+statement, keeping the atomic draft-and-snapshot batch to five D1 statements
+(the first being #415's own leading ownership/concurrency guard) regardless
+of draft size for free-tier efficiency. Separately, #1695 adds up to two more
+individual `DELETE` statements per instance whose `isCommunitySign`/
+`isCommunityCalendar` flips `true` → `false` in the same save (the #1022
+unflag-cleanup, applied here same as the single-instance and batch instance
+endpoints) — not part of the atomic batch above, and scaling with how many
+instances flip those flags in one save.
 
 Individual instance CRUD calls remain low-level editing operations; this draft
 replacement endpoint is the explicit save boundary that guarantees version
@@ -4340,14 +4357,25 @@ landlet a `landlets` row models.
 }
 ```
 
-### `GET /api/presence?landletId=X`
+### `GET /api/presence`
 
 Requires a session. Returns every *other* builder's current position
-reported for landlet/region `X` (`landletId` is required — `400` if
-missing) — never the whole world's positions in one response, both for
-payload size and so a shopper elsewhere isn't visibly tracking someone's
-live position for no reason. The caller's own row is always excluded (they
-already know where they are).
+reported for whichever landlet/region the caller's own most recent
+`avatar_presence` row says they're in — never the whole world's positions
+in one response, both for payload size and so a shopper elsewhere isn't
+visibly tracking someone's live position for no reason. The caller's own
+row is always excluded (they already know where they are).
+
+**#2269**: the landlet queried is derived entirely from the caller's own
+last-reported position (the same row `GET /api/presence/me` below reads),
+never a client-supplied parameter — an earlier version took a `landletId`
+query parameter at face value, which let any verified account enumerate
+landlet ids via the public `GET /api/landlets` and then poll this endpoint
+for any of them, continuously reading everyone else's live position there
+with no proximity or consent requirement at all. `{ "avatars": [] }` if the
+caller has no presence row of their own, or their own row is itself stale
+(see below) — there is no "whose position to report" without a fresh
+anchor of the caller's own.
 
 A row whose `flying` is true is also excluded here (#2043, docs/SPEC.md's
 "Flying avatars are invisible to other users" — explicitly deferred by #99
@@ -4378,10 +4406,10 @@ avatar mesh group per entry on every poll tick.
 
 ### `GET /api/presence/me` — your own last-reported position (#1176)
 
-Requires a session. Unlike `GET /api/presence?landletId=X` above, this
-returns the *caller's own* row — no `landletId` parameter, and no
-staleness filter — since "wherever I was last" is exactly what spawn
-flow's "Go to Last Location" button (below) needs, however long ago that
+Requires a session. Unlike `GET /api/presence` above, this returns the
+*caller's own* row with no staleness filter — since "wherever I was last"
+is exactly what spawn flow's "Go to Last Location" button (below) needs,
+however long ago that
 report actually was. Response: `{ "presence": null }` when the caller has
 never reported a position at all (a brand-new account, or one that's
 never entered Shop mode before), otherwise `{ "presence": <avatar
@@ -4512,8 +4540,12 @@ field. Request body: `{ "name", "items", "shared"? }`.
 `shared` defaults to `false` (private) if omitted or not literally `true`.
 Each item's `templateId` must reference an existing catalog template
 (checked in one batched query, same pattern as the instance batch
-endpoints); `items` must be a non-empty array, capped at 250 entries like an
-instance batch save. `dx`/`dy`/`dz` and the rotation fields may be negative
+endpoints); `items` must be a non-empty array, capped at 2000 entries (#1974
+raised this from an original 250, which was blocking legitimate large
+builds — the whole bundle is stored as one `items_json` blob in a single
+row write, so the real ceiling is D1's own max row size, not a per-item
+batch-insert count like the instance batch endpoints below still have).
+`dx`/`dy`/`dz` and the rotation fields may be negative
 or zero — only `crop`/`scale` reuse the stricter validation a placed
 instance itself gets (`validateCropShape`/`validateScale`), since those two
 are genuinely sign-constrained.
@@ -9306,6 +9338,19 @@ is always fresh activity worth flagging, so a task the owner already
 reviewed goes back to showing the board's "New" indicator rather than
 sitting with a new reply nobody's alerted to.
 
+Also stamps the parent task's `lastReplyFrom`/`lastReplyAt` (#2254) to
+this reply's own `from`/timestamp — a denormalized "who spoke last"
+pair, same precedent as `noteAuthor`/`noteUpdatedAt`, that the admin
+page's `waitingBadge()` reads to flag a stale "Waiting on: Owner" card
+(see below). **If `from` is `'owner'` (case-insensitive) and the task's
+current `waitingOn` is already `'owner'`, this same call also clears
+`waitingOn` to `'claude'`** — the owner-reply auto-clear AGENTS.md's own
+Control Room section has long documented as the admin page's behavior,
+now actually implemented against this real API rather than just the
+(never-built) compose-form logic that doc originally described. Any
+other `from`, or a task not currently `waitingOn: 'owner'`, leaves
+`waitingOn` untouched.
+
 ### Admin page: `GET /admin/control-room`
 
 The board itself, served same-origin from this same Worker instead of a
@@ -9333,6 +9378,17 @@ data-migration commit for details. Some of the old Artifact board's finer
 UI (per-viewer highlight/minimize toggles, a few small display niceties)
 was not ported in this first pass; the core task/reply/status/waitingOn
 workflow is fully functional, and polish can follow as its own change.
+
+`waitingBadge()` renders a distinct **"Waiting on: Owner (unexplained)"**
+pill (#2254), instead of the plain "Waiting on: Owner" one, when a
+`queued` task's `waitingOn` is `'owner'` but its own `lastReplyFrom` is
+also `'owner'` — i.e. the owner already spoke last in the thread, with
+no session reply following, yet the card still sits blocked on them.
+With the reply-create auto-clear described above, this shouldn't be
+reachable through the ordinary API path (an owner reply to a task
+genuinely `waitingOn: 'owner'` clears it in that same request) — it's a
+safety net for a direct-D1 write bypassing that logic, matching the
+fallback access path AGENTS.md's own Control Room section documents.
 
 ## Admin action log (#996, sub-issue-in-spirit of #813/#814)
 

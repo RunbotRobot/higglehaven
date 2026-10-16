@@ -863,6 +863,85 @@ describe('Control Room replies (#N31)', () => {
     expect(got.response.status).toBe(200);
     expect(got.body.task.viewed).toBe(false);
   });
+
+  // #2254: AGENTS.md documents this auto-clear as already shipped, but it
+  // was never actually built against this real, N31-era API -- only an
+  // owner reply to a task genuinely waitingOn them should clear it.
+  it('auto-clears waitingOn to claude when the owner replies to a task waiting on them', async () => {
+    const task = await createTask();
+    await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven2', waitingOn: 'owner', reason: 'Needs a design call.' }),
+    }));
+    const replied = await api(`/control-room/tasks/${task.id}/replies`, keySession({
+      method: 'POST', body: JSON.stringify({ from: 'owner', text: 'Go with option 2.' }),
+    }));
+    expect(replied.response.status).toBe(201);
+
+    const got = await api(`/control-room/tasks/${task.id}`, keySession());
+    expect(got.body.task.waitingOn).toBe('claude');
+  });
+
+  it('auto-clears waitingOn regardless of the owner reply from-name casing', async () => {
+    const task = await createTask();
+    await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven2', waitingOn: 'owner', reason: 'Needs a design call.' }),
+    }));
+    await api(`/control-room/tasks/${task.id}/replies`, keySession({
+      method: 'POST', body: JSON.stringify({ from: 'Owner', text: 'Go with option 2.' }),
+    }));
+
+    const got = await api(`/control-room/tasks/${task.id}`, keySession());
+    expect(got.body.task.waitingOn).toBe('claude');
+  });
+
+  it('does not touch waitingOn when a non-owner reply arrives', async () => {
+    const task = await createTask();
+    await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven2', waitingOn: 'owner', reason: 'Needs a design call.' }),
+    }));
+    await api(`/control-room/tasks/${task.id}/replies`, keySession({
+      method: 'POST', body: JSON.stringify({ from: 'higglehaven5', text: 'Following up while we wait.' }),
+    }));
+
+    const got = await api(`/control-room/tasks/${task.id}`, keySession());
+    expect(got.body.task.waitingOn).toBe('owner');
+  });
+
+  it('does not clear waitingOn when the owner replies but the task is not waiting on them', async () => {
+    const task = await createTask();
+    await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven2', waitingOn: 'claude' }),
+    }));
+    await api(`/control-room/tasks/${task.id}/replies`, keySession({
+      method: 'POST', body: JSON.stringify({ from: 'owner', text: 'Just a note.' }),
+    }));
+
+    const got = await api(`/control-room/tasks/${task.id}`, keySession());
+    expect(got.body.task.waitingOn).toBe('claude');
+  });
+
+  it('stamps lastReplyFrom/lastReplyAt on a reply-create', async () => {
+    const task = await createTask();
+    expect(task.lastReplyFrom).toBeNull();
+
+    const posted = await api(`/control-room/tasks/${task.id}/replies`, keySession({
+      method: 'POST', body: JSON.stringify({ from: 'higglehaven7', text: 'On it.' }),
+    }));
+    expect(posted.response.status).toBe(201);
+
+    const got = await api(`/control-room/tasks/${task.id}`, keySession());
+    expect(got.body.task.lastReplyFrom).toBe('higglehaven7');
+    expect(got.body.task.lastReplyAt).toBe(posted.body.reply.createdAt);
+  });
+
+  it('stamps lastReplyFrom/lastReplyAt on the linked reply inserted by waitingOn:owner with a reason', async () => {
+    const task = await createTask();
+    const got = await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'higglehaven8', waitingOn: 'owner', reason: 'Needs a design call.' }),
+    }));
+    expect(got.body.task.lastReplyFrom).toBe('higglehaven8');
+    expect(got.body.task.lastReplyAt).toBe(got.body.task.updatedAt);
+  });
 });
 
 // N31 option 3 (owner: "I would like to do option 3. Isn't there a way to
