@@ -19,15 +19,15 @@ beforeAll(async () => {
 });
 
 async function setPresence(builderId, {
-  landletId, x = 0, y = 0, z = 0, heading = 0, updatedAt = new Date().toISOString(),
+  landletId, x = 0, y = 0, z = 0, heading = 0, flying = false, updatedAt = new Date().toISOString(),
 } = {}) {
   await env.DB.prepare(`
-    INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT (builder_id) DO UPDATE SET
       landlet_id = excluded.landlet_id, x = excluded.x, y = excluded.y, z = excluded.z,
-      heading = excluded.heading, updated_at = excluded.updated_at
-  `).bind(builderId, landletId, x, y, z, heading, updatedAt).run();
+      heading = excluded.heading, flying = excluded.flying, updated_at = excluded.updated_at
+  `).bind(builderId, landletId, x, y, z, heading, flying ? 1 : 0, updatedAt).run();
 }
 
 describe('Avatar presence (#1095)', () => {
@@ -62,8 +62,25 @@ describe('Avatar presence (#1095)', () => {
         y: 5,
         z: 6,
         heading: 90,
+        flying: false,
         updatedAt: expect.any(String),
       }]);
+    });
+
+    // #2043: docs/SPEC.md's "Flying avatars are invisible to other users" --
+    // withheld here, server-side, same as a stale report just below, rather
+    // than left to the client's own rendering discretion.
+    it('excludes a flying builder\'s position from the nearby list', async () => {
+      const viewer = await signupBuilder('presence-flying-viewer');
+      const flyer = await signupBuilder('presence-flying-other');
+      const grounded = await signupBuilder('presence-flying-grounded');
+      await setPresence(flyer.builderId, { landletId: 'presence-landlet-flying', flying: true });
+      await setPresence(grounded.builderId, { landletId: 'presence-landlet-flying', flying: false });
+
+      const got = await api('/presence?landletId=presence-landlet-flying', viewer.session());
+      expect(got.response.status).toBe(200);
+      expect(got.body.avatars).toHaveLength(1);
+      expect(got.body.avatars[0].builderId).toBe(grounded.builderId);
     });
 
     it('excludes a stale position report', async () => {
@@ -166,8 +183,20 @@ describe('Avatar presence (#1095)', () => {
         y: 8,
         z: 9,
         heading: 45,
+        flying: false,
         updatedAt: expect.any(String),
       });
+    });
+
+    // Unlike GET /presence above, GET /presence/me never filters by flying
+    // -- it's always the caller's own row, flying or not.
+    it('returns the caller\'s own row even while flying', async () => {
+      const builder = await signupBuilder('presence-me-flying');
+      await setPresence(builder.builderId, { landletId: 'presence-me-flying-landlet', flying: true });
+
+      const got = await api('/presence/me', builder.session());
+      expect(got.response.status).toBe(200);
+      expect(got.body.presence.flying).toBe(true);
     });
 
     it('never returns another builder\'s row', async () => {
