@@ -287,6 +287,21 @@
     return '';
   }
 
+  // #2206: url got the card-title link treatment and imageUrl got a
+  // dedicated thumbnail (#1110), but pr (served from the pr_url column,
+  // see worker/index.js) had no rendering anywhere -- a session's own
+  // pr_url write (routine on task completion, per AGENTS.md's Control Room
+  // conventions) was write-only from the board's own side. Mirrors the
+  // existing url link's <a> treatment; pulls the PR number out of a
+  // github.com .../pull/<n> URL for a readable label, falling back to a
+  // bare "PR" for any other host.
+  function prChip(task) {
+    if (!task.pr) return '';
+    const match = /\/pull\/(\d+)/.exec(task.pr);
+    const label = match ? 'PR #' + match[1] : 'PR';
+    return '<a class="chip" href="' + escapeHtml(task.pr) + '" target="_blank" rel="noopener">' + label + '</a>';
+  }
+
   // Owner feedback (#f16fac53): waitingOn isn't only 'owner'/'claude' — a
   // tracking task (e.g. #326) sets it to another task's own GitHub issue
   // number (as a string, e.g. "583") to mean "blocked on that task", which
@@ -397,6 +412,7 @@
     return '<div class="card' + (isOpen ? ' open' : '') + '" data-task-id="' + safeId + '">' +
       '<div class="card-head" data-toggle="' + safeId + '">' +
         (taskNumberLabel(task) ? '<span class="chip">' + escapeHtml(taskNumberLabel(task)) + '</span>' : '') +
+        prChip(task) +
         (task.viewed ? '' : '<span class="pill pill-unviewed">New</span>') +
         (task.imageUrl ? '<img class="card-thumb" src="' + escapeHtml(task.imageUrl) + '" alt="" />' : '') +
         '<span class="title">' + linkTitle + '</span>' +

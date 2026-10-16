@@ -7580,6 +7580,19 @@ async function requireAdmin(request, db) {
   return user;
 }
 
+// #2212: no server-side HTML-escaping helper existed anywhere in this file
+// before this -- the several escapeHtml() implementations elsewhere in this
+// repo (public/admin-dashboard.html, admin-control-room.html, admin-action-
+// log.html) are each a local, browser-only function, unreachable from here.
+// Needed because an email's own `html` body can carry free-text, seller-
+// supplied content (e.g. a catalog template's name) that was never
+// validated for HTML-safety on the way in.
+export function escapeHtml(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[c]));
+}
+
 // Resend's REST API (https://resend.com/docs/api-reference/emails/send-email)
 // — chosen for a simple, well-documented API and a free tier generous
 // enough for this stage. Returns quietly (no email actually sent) whenever
@@ -11978,22 +11991,37 @@ async function handleLandlets(request, db, route, url) {
     // through this free path, regardless of the claiming builder's own
     // land cap -- auction is the only paid route to more than the starter
     // size, by design.
-    const result = await db.prepare(`
-      UPDATE landlets
-      SET status = 'claimed', owner_builder_id = ?,
-          claimable_at = COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE landlet_id = ?
-        AND status = 'greenbelt'
-        AND owner_builder_id IS NULL
-        AND landlet_type != 'water'
-        AND landlet_class = 1
-        AND NOT EXISTS (
-          SELECT 1 FROM landlets AS owned
-          WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
-            AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
-        )
-    `).bind(builderId, route[1], builderId).run();
+    const [result] = await db.batch([
+      db.prepare(`
+        UPDATE landlets
+        SET status = 'claimed', owner_builder_id = ?,
+            claimable_at = COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = ?
+          AND status = 'greenbelt'
+          AND owner_builder_id IS NULL
+          AND landlet_type != 'water'
+          AND landlet_class = 1
+          AND NOT EXISTS (
+            SELECT 1 FROM landlets AS owned
+            WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+              AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+          )
+      `).bind(builderId, route[1], builderId),
+      // #2223: spawnCreditOrbIfDue only ever targets a 'greenbelt' landlet,
+      // and nothing else in this file ever deletes a credit_orbs row --
+      // without this, an orb that spawned here before this claim landed
+      // survives forever uncollectible (the client only loads orbs for
+      // still-greenbelt landlets), permanently wasting part of the
+      // rationed daily budget. Gated on the same EXISTS check so this is a
+      // no-op when the claim above didn't actually land (a conflict, a
+      // losing race, etc) -- by the time this second statement runs within
+      // the same batch, the first one's write is already committed.
+      db.prepare(`
+        DELETE FROM credit_orbs WHERE landlet_id = ? AND collected_at IS NULL
+          AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND status = 'claimed' AND owner_builder_id = ?)
+      `).bind(route[1], route[1], builderId),
+    ]);
 
     if (result.meta.changes === 0) {
       await explainClaimConflict(db, route[1], builderId);
@@ -16109,10 +16137,14 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
       `"${template.name}" just sold out — ${count} placed ${plural} been removed from your land.`);
     const preference = preferenceByBuilder.get(builderId);
     if (preference?.notifySoldOutEmail && preference.builderEmail) {
+      // #2212: template.name is free-text/seller-supplied -- escape it
+      // before it lands in the html body (the plain-text body and the
+      // subject line, neither of which render as markup, are unaffected).
+      const safeName = escapeHtml(template.name);
       await sendEmail(env, {
         to: preference.builderEmail,
         subject: `"${template.name}" just sold out`,
-        html: `<p>"${template.name}" just sold out — ${count} placed ${plural} been removed from your land.</p>`,
+        html: `<p>"${safeName}" just sold out — ${count} placed ${plural} been removed from your land.</p>`,
         text: `"${template.name}" just sold out — ${count} placed ${plural} been removed from your land.`,
       });
     }
@@ -16326,7 +16358,7 @@ async function handleMarkShipped(request, env, purchaseId) {
     throw new HttpError('Digital goods have nothing to ship', 400);
   }
   if (purchase.shipped_at) {
-    throw new HttpError('This purchase is already marked shipped', 400);
+    throw new HttpError('This purchase is already marked shipped', 409);
   }
   if (purchase.refunded_at) {
     throw new HttpError('This purchase has been refunded', 400);
@@ -16349,7 +16381,7 @@ async function handleMarkShipped(request, env, purchaseId) {
   if (result.meta.changes === 0) {
     const current = await db.prepare('SELECT shipped_at, refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
     if (current.refunded_at) throw new HttpError('This purchase has been refunded', 400);
-    throw new HttpError('This purchase is already marked shipped', 400);
+    throw new HttpError('This purchase is already marked shipped', 409);
   }
   // Logged only once the update above actually succeeded, same reasoning as
   // handlePurchaseRefund's own admin-override log: `admin` is only set on
@@ -16924,7 +16956,7 @@ async function handlePurchaseRefund(request, env, purchaseId) {
     await checkRateLimit(db, `purchase-refund:${admin.user_id}`, STRIPE_RATE_LIMIT_MAX);
   }
   if (purchase.refunded_at) {
-    throw new HttpError('This purchase has already been refunded', 400);
+    throw new HttpError('This purchase has already been refunded', 409);
   }
   // Found via backlog audit: migrations/0072's own comment establishes
   // paid_out_at as meaning this purchase's seller-share has actually left
@@ -16968,7 +17000,7 @@ async function handlePurchaseRefund(request, env, purchaseId) {
     if (current?.paid_out_at) {
       throw new HttpError('This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
     }
-    throw new HttpError('This purchase has already been refunded', 400);
+    throw new HttpError('This purchase has already been refunded', 409);
   }
 
   // #1086: the balance clawback, notification, and avatar-ownership
@@ -17022,7 +17054,7 @@ async function handlePurchaseDispute(request, env, purchaseId) {
     throw new HttpError('Only the buyer of this purchase can dispute it', 400);
   }
   if (purchase.refunded_at) {
-    throw new HttpError('This purchase has already been refunded', 400);
+    throw new HttpError('This purchase has already been refunded', 409);
   }
   if (purchase.paid_out_at) {
     throw new HttpError('This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
@@ -17447,12 +17479,25 @@ async function assertInstanceXYWithinLandlet(db, instances) {
   }
 }
 
+// #2216: this used to bind the full instanceIds array in a single
+// unchunked IN (...) query -- fine for this function's two 100-item-
+// capped batch-endpoint callers (right at D1's own bound-parameter limit,
+// never over it), but PUT /landlets/:id/draft calls this with up to its
+// own 250-item cap, which blew the limit well before reaching that cap.
+// Chunked here, at the source, rather than capped per-caller -- same
+// reasoning selectRowsByIdsChunked's own comment gives for fixing every
+// caller at once instead of bounding each one individually.
 async function getInstancesById(db, instanceIds) {
-  const placeholders = instanceIds.map(() => '?').join(', ');
-  const { results } = await db.prepare(`
-    SELECT * FROM placed_instances WHERE instance_id IN (${placeholders})
-  `).bind(...instanceIds).all();
-  return new Map(results.map((row) => [row.instance_id, instanceFromRow(row)]));
+  const rows = [];
+  for (let i = 0; i < instanceIds.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = instanceIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(`
+      SELECT * FROM placed_instances WHERE instance_id IN (${placeholders})
+    `).bind(...chunk).all();
+    rows.push(...results);
+  }
+  return new Map(rows.map((row) => [row.instance_id, instanceFromRow(row)]));
 }
 
 // Fallback classifier for constraint violations that reach D1 without an

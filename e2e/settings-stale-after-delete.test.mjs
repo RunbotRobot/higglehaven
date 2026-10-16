@@ -30,9 +30,18 @@ await grantHigglesAsAdmin(builderId, GRANTED_CENTS);
 
 await openAccountMenu(page);
 await page.click('#settings-btn');
-await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
+// Widened from 5000/8000ms -- this run observed CI-only intermittent
+// failures (settings-stale-after-delete.test.mjs failing twice in a
+// shard, then failing again -- alongside a *different* file that time
+// -- on a manual re-run) with a clean 2/2 local pass of the exact same
+// files on the exact same commit, matching this fleet's established
+// #978-class pattern of CI-runner-load timing margin rather than a real
+// bug (see e2e/helpers.mjs's own 60000ms account-menu-modal wait, and
+// the #2135/#2136/#2157 precedent of widening tight timeouts for the
+// same symptom).
+await page.waitForSelector('#settings-modal.visible', { timeout: 15000 });
 
-const beforeText = await waitForText(page, '#settings-section', 'Available to redeem: $50.00', { timeout: 8000 });
+const beforeText = await waitForText(page, '#settings-section', 'Available to redeem: $50.00', { timeout: 20000 });
 console.log('Redeem Higgles text before delete (should show the granted $50.00):', beforeText.includes('$50.00'));
 
 // --- Reset Profile (launchPage's own dialog handler auto-accepts confirm()) ---
@@ -40,11 +49,12 @@ console.log('Redeem Higgles text before delete (should show the granted $50.00):
 // ever reset this profile, not the login) to "Reset Profile"; the
 // underlying deleteBuilder behavior this test exercises is unchanged.
 await page.click('#settings-section button:has-text("Reset Profile")');
-await waitForText(page, '#settings-section', 'Reset', { timeout: 8000 });
+await waitForText(page, '#settings-section', 'Reset', { timeout: 20000 });
 
 // No tab switch, no modal reopen -- straight read of whatever's on screen
-// right now, which is exactly what #1124's bug left stale.
-await page.waitForTimeout(500);
+// right now, which is exactly what #1124's bug left stale. Widened from
+// 500ms for the same CI-load margin as above.
+await page.waitForTimeout(1500);
 const afterText = await page.textContent('#settings-section');
 const afterShowsFreshZero = afterText.includes('Available to redeem: $0.00');
 const afterStillShowsStaleBalance = afterText.includes('$50.00');

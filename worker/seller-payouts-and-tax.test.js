@@ -164,7 +164,7 @@ describe('Seller payouts (#454)', () => {
     expect(afterShip.body.nextEligibleAt).toBeTruthy();
 
     const reShipped = await api(`/purchases/${purchaseId}/mark-shipped`, seller.session({ method: 'POST' }));
-    expect(reShipped.response.status).toBe(400);
+    expect(reShipped.response.status).toBe(409);
   });
 
   // #1288: every other "something happened that the other party should
@@ -197,7 +197,7 @@ describe('Seller payouts (#454)', () => {
       api(`/purchases/${purchaseId}/mark-shipped`, seller.session({ method: 'POST' })),
       api(`/purchases/${purchaseId}/mark-shipped`, seller.session({ method: 'POST' })),
     ]);
-    expect([first.response.status, second.response.status].sort()).toEqual([200, 400]);
+    expect([first.response.status, second.response.status].sort()).toEqual([200, 409]);
   });
 
   // #1249: unlike other owner-gated repeatable mutations in this file
