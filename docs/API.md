@@ -3603,9 +3603,14 @@ save regardless of what a prior `PATCH /api/instances/:id` had set.
 Every successful save creates a version, including a save with an empty array.
 The response contains both the replacement `instances` and new `version`
 metadata. SQLite JSON expansion inserts the validated instance array in one
-statement, keeping the complete draft-and-snapshot save to five D1 statements
-(the fifth being #415's own leading ownership/concurrency guard) regardless
-of draft size for free-tier efficiency.
+statement, keeping the atomic draft-and-snapshot batch to five D1 statements
+(the first being #415's own leading ownership/concurrency guard) regardless
+of draft size for free-tier efficiency. Separately, #1695 adds up to two more
+individual `DELETE` statements per instance whose `isCommunitySign`/
+`isCommunityCalendar` flips `true` → `false` in the same save (the #1022
+unflag-cleanup, applied here same as the single-instance and batch instance
+endpoints) — not part of the atomic batch above, and scaling with how many
+instances flip those flags in one save.
 
 Individual instance CRUD calls remain low-level editing operations; this draft
 replacement endpoint is the explicit save boundary that guarantees version
