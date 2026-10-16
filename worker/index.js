@@ -9385,7 +9385,12 @@ async function handleSellerStripeAccount(request, env, db) {
       // best-effort delete it (a Custom account with no completed
       // onboarding can be deleted), then hand back the winning
       // submission's own state instead of this one's.
-      await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch(() => {});
+      // #2304: a failure here previously vanished with no trail at all --
+      // logging it at least leaves an admin something to find and clean up
+      // the orphaned, PII-bearing Stripe account by hand.
+      await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch((error) => {
+        console.error('Failed to clean up race-losing Stripe account', account.id, error);
+      });
       const winner = await db.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(sessionSeller.seller_id).first();
       // #1780: changes === 0 isn't always "a winner" -- this seller's own
       // row can also just be gone (a concurrent self-delete landing before
@@ -9455,7 +9460,10 @@ async function handleBuilderStripeAccount(request, env, db) {
     `).bind(account.id, status, JSON.stringify(requirementsDue), nowIso, nowIso, sessionBuilder.builder_id).run();
 
     if (createdNewAccount && result.meta.changes === 0) {
-      await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch(() => {});
+      // #2304: same logging gap as the seller sibling above.
+      await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch((error) => {
+        console.error('Failed to clean up race-losing Stripe account', account.id, error);
+      });
       const winner = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(sessionBuilder.builder_id).first();
       // #1780: same "a concurrent self-delete, not just a race loser" gap
       // as the seller sibling above.
@@ -11060,11 +11068,26 @@ async function handleRevokeAdmin(request, db) {
   const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
   if (!row) throw new HttpError('No account with that email', 404);
   if (row.is_admin !== 1) throw new HttpError('That account is not currently an admin', 400);
+  // #2307: a raw COUNT(is_admin=1) can't tell an operational admin from one
+  // who is themselves already suspended (and thus just as unable to call
+  // requireAdmin) -- the same reasoning handleSuspendAccount's own guard
+  // above already documents for the identical invariant. Requires at least
+  // one OTHER admin who is_admin=1 AND has no currently-active suspension,
+  // same EXISTS shape #2270 added there.
   const result = await db.prepare(`
     UPDATE users SET is_admin = 0, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE user_id = ? AND is_admin = 1
-      AND (SELECT COUNT(*) FROM users WHERE is_admin = 1) > 1
-  `).bind(row.user_id).run();
+      AND EXISTS (
+        SELECT 1 FROM users AS other_admin
+        WHERE other_admin.is_admin = 1
+          AND other_admin.user_id != ?
+          AND NOT EXISTS (
+            SELECT 1 FROM account_suspensions
+            WHERE account_suspensions.user_id = other_admin.user_id
+              AND lifted_at IS NULL AND escalated_at IS NULL
+          )
+      )
+  `).bind(row.user_id, row.user_id).run();
   if (result.meta.changes === 0) throw new HttpError('Cannot revoke the last remaining admin', 409);
   // Logged only after confirmed (same reasoning as approve_1099_form's own
   // comment above) -- batching this with the UPDATE would commit a log row
