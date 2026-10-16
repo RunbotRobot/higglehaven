@@ -3897,7 +3897,8 @@
         flex-direction: column;
         gap: 10px;
       }
-      .product-review-row {
+      .product-review-row,
+      .seller-feedback-row {
         display: flex;
         align-items: flex-start;
         justify-content: space-between;
@@ -3908,16 +3909,20 @@
         font-size: 13px;
         color: rgb(var(--ink-rgb) / 0.9);
       }
-      .product-review-row-body {
+      .product-review-row-body,
+      .seller-feedback-row-body {
         min-width: 0;
       }
-      .product-review-row-author {
+      .product-review-row-author,
+      .seller-feedback-row-author {
         font-weight: 600;
       }
-      .product-review-row-rating {
+      .product-review-row-rating,
+      .seller-feedback-row-rating {
         color: #ffd93d;
       }
-      .product-review-row-time {
+      .product-review-row-time,
+      .seller-feedback-row-time {
         margin-top: 4px;
         font-size: 11px;
         color: var(--pill-text-soft);
@@ -4512,6 +4517,7 @@
              reviews below) — hidden until renderSellerFeedbackSummary has a
              real count to show. -->
         <div id="seller-feedback-summary" hidden></div>
+        <div id="seller-feedback-list" class="seller-review-list"></div>
         <button id="upload-model-btn" type="button">+ Upload Model</button>
         <div id="seller-view-toggle">
           <button type="button" class="seller-view-btn" data-view="manage">Manage</button>
