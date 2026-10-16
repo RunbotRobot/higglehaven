@@ -41,7 +41,7 @@ await page.waitForFunction(
 const pfStatusText = await page.textContent('#productFlagsStatusLine');
 const pfErrVisible = await page.locator('#productFlagsErr').isVisible();
 const pfTableText = await page.textContent('#productFlagsTableWrap');
-console.log('product flags status line (should say "0 listing(s) with pending flags"):', pfStatusText);
+console.log('product flags status line (should read "0 shown · 0 total"):', pfStatusText);
 console.log('product flags error line visible (should be false):', pfErrVisible);
 console.log('product flags panel body (should say "No pending flags." in a fresh DB):', pfTableText.trim());
 
@@ -55,7 +55,7 @@ console.log('self-dealing flags panel body (should say "No pending flags." in a 
 const pass =
   panelVisible &&
   !pfErrVisible &&
-  pfStatusText.trim() === '0 listing(s) with pending flags' &&
+  /^\d+ shown · \d+ total$/.test(pfStatusText.trim()) &&
   pfTableText.includes('No pending flags.') &&
   !sdErrVisible &&
   /^\d+ shown · \d+ total$/.test(sdStatusText.trim()) &&

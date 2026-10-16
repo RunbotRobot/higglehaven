@@ -6709,7 +6709,20 @@ async function resolveDueAuctions(db) {
        OR ${AUCTION_UNSETTLED_TRANSFER_SQL}
     ORDER BY ends_at LIMIT ?
   `).bind(AUCTION_SWEEP_LIMIT).all();
-  for (const row of results) await resolveAuction(db, row);
+  // #2289: isolate each auction's own resolution, same as
+  // autoAuctionInactiveLandlets/warnInactiveLandletOwners' per-row try/catch
+  // for their own sweeps -- this sweep is called uncaught from the public
+  // GET /api/auctions list endpoint, and ORDER BY ends_at means a poisoned
+  // auction is always first in line, so without isolation one throwing row
+  // 500s the list endpoint for everyone and head-of-line-blocks every other
+  // due auction behind it on every cron tick too (#71's exact symptom).
+  for (const row of results) {
+    try {
+      await resolveAuction(db, row);
+    } catch (err) {
+      console.error('resolveDueAuctions: failed to resolve', row.auction_id, err);
+    }
+  }
 }
 
 // Single-auction version of the same check, used wherever one specific

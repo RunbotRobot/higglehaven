@@ -1155,6 +1155,55 @@ describe('Auctions', () => {
     expect(dueAfterSecondCall.count).toBe(0);
   });
 
+  it('#2289: one auction throwing during resolution does not 500 the list endpoint or block its siblings in the same sweep', async () => {
+    // Poisoned row: status='ended' with a winning_bid_id that doesn't match
+    // any real bid -- matches AUCTION_UNSETTLED_TRANSFER_SQL's "transferred
+    // but never settled" resume condition (#875), so the sweep picks it up
+    // and resolveAuction's resume branch dereferences the (here: undefined)
+    // winner's amount_cents while building the settlement statements,
+    // throwing before resolveAuction ever calls db.batch. ends_at is set
+    // earliest so it sorts first in the sweep's own ORDER BY ends_at --
+    // the exact "poisoned row is always first in line" shape #2289
+    // describes.
+    const poisonedSeller = await signupBuilder('sweep-isolation-poisoned-seller');
+    await env.DB.prepare(
+      `INSERT INTO landlets (landlet_id, name, status, owner_builder_id) VALUES (?, ?, 'claimed', ?)`,
+    ).bind('sweep-isolation-poisoned-landlet', 'Poisoned', poisonedSeller.builderId).run();
+    await env.DB.prepare(`
+      INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, status, winning_bid_id, ends_at)
+      VALUES (?, ?, ?, 100, 'ended', 'sweep-isolation-nonexistent-bid', '1999-01-01T00:00:00.000Z')
+    `).bind('sweep-isolation-poisoned-auction', 'sweep-isolation-poisoned-landlet', poisonedSeller.builderId).run();
+
+    // Healthy sibling: an ordinary $0-starting, no-bid auction, already due.
+    const healthySeller = await signupBuilder('sweep-isolation-healthy-seller');
+    await env.DB.prepare(
+      `INSERT INTO landlets (landlet_id, name, status) VALUES (?, ?, 'claimed')`,
+    ).bind('sweep-isolation-healthy-landlet', 'Healthy').run();
+    await env.DB.prepare(`
+      INSERT INTO auctions (auction_id, landlet_id, seller_builder_id, starting_bid_cents, status, ends_at)
+      VALUES (?, ?, ?, 0, 'active', '2000-01-01T00:00:00.000Z')
+    `).bind('sweep-isolation-healthy-auction', 'sweep-isolation-healthy-landlet', healthySeller.builderId).run();
+
+    const listed = await api('/auctions?status=active');
+    expect(listed.response.status).toBe(200);
+
+    const healthyLandlet = await env.DB.prepare(
+      `SELECT status FROM landlets WHERE landlet_id = ?`,
+    ).bind('sweep-isolation-healthy-landlet').first();
+    // The healthy auction still resolved (released to greenbelt) despite
+    // the poisoned auction throwing earlier in the same sweep.
+    expect(healthyLandlet.status).toBe('greenbelt');
+
+    const poisonedAuction = await env.DB.prepare(
+      `SELECT status, winning_bid_id FROM auctions WHERE auction_id = ?`,
+    ).bind('sweep-isolation-poisoned-auction').first();
+    // The poisoned auction's own row is untouched by the throw (resolving
+    // it correctly is #968's territory, not this fix's) -- it's enough
+    // that it didn't take its sibling down with it.
+    expect(poisonedAuction.status).toBe('ended');
+    expect(poisonedAuction.winning_bid_id).toBe('sweep-isolation-nonexistent-bid');
+  });
+
   it('frees a $0-starting-bid seller to claim another landlet immediately, before the auction resolves', async () => {
     const seller = await signupBuilder('release-zero-seller');
     await createGreenbeltLandlet('release-zero-landlet-a');
