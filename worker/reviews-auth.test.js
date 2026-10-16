@@ -1891,6 +1891,49 @@ describe('Authentication', () => {
       expect(blockedAgain.response.status).toBe(409);
     });
 
+    // #2307: handleRevokeAdmin's own last-admin guard used to count every
+    // is_admin=1 row as "operational" (a raw COUNT), unlike
+    // handleSuspendAccount's own guard just above, which already excludes a
+    // suspended admin from that same count (#2268/#2270). Exercises the
+    // exact gap #2307 found: admin A suspends admin B (allowed, since A
+    // remains operational), then A self-revokes -- which used to succeed
+    // because the stale COUNT still saw both A and B as "is_admin=1",
+    // leaving B (suspended, unable to call requireAdmin at all) as the sole
+    // admin with no API path back in.
+    it('refuses to revoke the last OPERATIONAL admin, not counting a suspended admin as a backup (#2307)', async () => {
+      await env.DB.prepare('UPDATE users SET is_admin = 0 WHERE is_admin = 1').run();
+      const a = await makeAdmin('revoke-admin-operational-a');
+      const b = await signupBuilder('revoke-admin-operational-b');
+      await api('/auth/grant-admin', a.session({
+        method: 'POST', body: JSON.stringify({ email: b.email }),
+      }));
+
+      const suspendB = await api('/auth/suspend-account', a.session({
+        method: 'POST', body: JSON.stringify({ email: b.email, reason: 'test' }),
+      }));
+      expect(suspendB.response.status).toBe(200);
+
+      // A is still the only operational admin -- self-revoke must be
+      // blocked even though B's is_admin flag is still set to 1.
+      const blocked = await api('/auth/revoke-admin', a.session({
+        method: 'POST', body: JSON.stringify({ email: a.email }),
+      }));
+      expect(blocked.response.status).toBe(409);
+      const stillAdmin = await api('/auth/me', a.session());
+      expect(stillAdmin.body.user.isAdmin).toBe(true);
+
+      // Lifting B's suspension restores them as a real operational backup
+      // -- now A's self-revoke succeeds.
+      const unsuspended = await api('/auth/unsuspend-account', a.session({
+        method: 'POST', body: JSON.stringify({ email: b.email }),
+      }));
+      expect(unsuspended.response.status).toBe(200);
+      const revoked = await api('/auth/revoke-admin', a.session({
+        method: 'POST', body: JSON.stringify({ email: a.email }),
+      }));
+      expect(revoked.response.status).toBe(200);
+    });
+
     // #2031: an automated in-app notice, routed through the existing
     // notifications table -- carries the admin-given reason (not the
     // admin-only evidenceNote) and points disputes at the third-party CS
