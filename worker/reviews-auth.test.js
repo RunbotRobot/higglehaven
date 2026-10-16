@@ -2504,7 +2504,11 @@ describe('Authentication', () => {
       method: 'POST', body: JSON.stringify({ ageAttested: true }),
     }));
     expect(limited.response.status).toBe(429);
-  });
+  }, 60000); // #978-class: 21 real HTTP requests exceeds the 20000ms default
+  // under this file's own size/load, despite passing instantly in isolation --
+  // same shape and same fix as card-setup-intent/verify-email's own
+  // #978-class/#2198/#2208 precedent just above and below, never applied to
+  // this test (added later, #2240) until it actually flaked under CI load.
 
   // #589 (sub-issue of #556): government-ID verification via Didit, the
   // higher trust tier. Same never-configured-in-tests shape as Stripe
