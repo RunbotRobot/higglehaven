@@ -11990,22 +11990,37 @@ async function handleLandlets(request, db, route, url) {
     // through this free path, regardless of the claiming builder's own
     // land cap -- auction is the only paid route to more than the starter
     // size, by design.
-    const result = await db.prepare(`
-      UPDATE landlets
-      SET status = 'claimed', owner_builder_id = ?,
-          claimable_at = COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE landlet_id = ?
-        AND status = 'greenbelt'
-        AND owner_builder_id IS NULL
-        AND landlet_type != 'water'
-        AND landlet_class = 1
-        AND NOT EXISTS (
-          SELECT 1 FROM landlets AS owned
-          WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
-            AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
-        )
-    `).bind(builderId, route[1], builderId).run();
+    const [result] = await db.batch([
+      db.prepare(`
+        UPDATE landlets
+        SET status = 'claimed', owner_builder_id = ?,
+            claimable_at = COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE landlet_id = ?
+          AND status = 'greenbelt'
+          AND owner_builder_id IS NULL
+          AND landlet_type != 'water'
+          AND landlet_class = 1
+          AND NOT EXISTS (
+            SELECT 1 FROM landlets AS owned
+            WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
+              AND NOT ${LANDLET_RELEASED_VIA_AUCTION_SQL}
+          )
+      `).bind(builderId, route[1], builderId),
+      // #2223: spawnCreditOrbIfDue only ever targets a 'greenbelt' landlet,
+      // and nothing else in this file ever deletes a credit_orbs row --
+      // without this, an orb that spawned here before this claim landed
+      // survives forever uncollectible (the client only loads orbs for
+      // still-greenbelt landlets), permanently wasting part of the
+      // rationed daily budget. Gated on the same EXISTS check so this is a
+      // no-op when the claim above didn't actually land (a conflict, a
+      // losing race, etc) -- by the time this second statement runs within
+      // the same batch, the first one's write is already committed.
+      db.prepare(`
+        DELETE FROM credit_orbs WHERE landlet_id = ? AND collected_at IS NULL
+          AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND status = 'claimed' AND owner_builder_id = ?)
+      `).bind(route[1], route[1], builderId),
+    ]);
 
     if (result.meta.changes === 0) {
       await explainClaimConflict(db, route[1], builderId);
