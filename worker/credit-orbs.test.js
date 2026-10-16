@@ -392,3 +392,31 @@ describe('POST /landlets/:id/claim cleans up an orb left on it (#2223)', () => {
     expect(row).toBeTruthy();
   });
 });
+
+// #2309: collected_by_builder_id (migrations/0136) was declared as a live
+// FK into builders with no ON DELETE clause at all -- SQLite's default
+// blocks the delete, so DELETE /api/builders/:id used to 409 outright for
+// any builder who had ever collected a credit orb. migrations/0147 drops
+// the live FK (same "historical record must survive the account going
+// away" fix already used for auctions.seller_builder_id/auction_bids.
+// bidder_builder_id/video_generation_jobs.builder_id), so the id now just
+// survives as plain historical data.
+describe('Builder self-delete after collecting a credit orb (#2309)', () => {
+  it('lets a builder delete their own profile after collecting a credit orb, leaving the orb row intact', async () => {
+    const landlet = await seedLandlet('greenbelt');
+    const builder = await signupBuilder('orb-then-self-delete');
+    await seedPresence(builder.builderId, { x: DEFAULT_LANDLET_CENTER_X, y: DEFAULT_LANDLET_CENTER_Y });
+    const orbId = await seedOrb(landlet);
+
+    const collected = await api(`/credit-orbs/${orbId}/collect`, builder.session({ method: 'POST' }));
+    expect(collected.response.status).toBe(200);
+
+    const deleted = await api(`/builders/${builder.builderId}`, builder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+
+    // The orb's own collection record survives, unchanged, as plain
+    // historical data -- not cascaded away, not nulled out.
+    const row = await env.DB.prepare('SELECT * FROM credit_orbs WHERE orb_id = ?').bind(orbId).first();
+    expect(row.collected_by_builder_id).toBe(builder.builderId);
+  });
+});
