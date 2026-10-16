@@ -1600,6 +1600,59 @@ describe('Worker API', () => {
     expect(patched.body).toEqual({ error: 'Catalog template not found' });
   });
 
+  // #2364: a *different* gap in the same handler from #932's own fix above
+  // -- that fix only covers a concurrent DELETE landing before the UPDATE
+  // runs. This handler's own UPDATE already correctly checks meta.changes
+  // for that case, but the re-SELECT right after it (used to build the
+  // response) was never null-checked -- a concurrent DELETE landing in the
+  // real gap between the UPDATE committing and that re-SELECT running
+  // crashed with a raw 500 instead of a clean 404. Wraps the UPDATE
+  // statement's own run() (rather than racing prepare() itself) so the
+  // DELETE only ever fires once the UPDATE has genuinely already matched a
+  // row -- same shape #2354 already fixed for sign_posts/calendar_events.
+  it('returns 404, not a raw 500, when the template is deleted in the gap between the UPDATE and its own re-fetch', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'catalog-patch-refetch-delete-race-template', name: 'Refetch race template',
+        color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    env.DB.prepare = (sql) => {
+      const stmt = originalPrepare(sql);
+      if (sql.includes('UPDATE catalog_templates') && sql.includes('SET name = COALESCE')) {
+        const originalBind = stmt.bind.bind(stmt);
+        stmt.bind = (...args) => {
+          const bound = originalBind(...args);
+          const originalRun = bound.run.bind(bound);
+          bound.run = async () => {
+            const result = await originalRun();
+            await originalPrepare('DELETE FROM catalog_templates WHERE template_id = ?')
+              .bind('catalog-patch-refetch-delete-race-template').run();
+            return result;
+          };
+          return bound;
+        };
+      }
+      return stmt;
+    };
+    let patched;
+    try {
+      patched = await api('/catalog/catalog-patch-refetch-delete-race-template', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'Renamed after refetch race' }),
+      });
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+
+    expect(patched.response.status).toBe(404);
+    expect(patched.body).toEqual({ error: 'Catalog template not found' });
+  });
+
   // Found via backlog audit (#407): the single-item catalog PATCH/DELETE
   // (and review moderation, refunds) already treat a dangling seller_id —
   // left behind by DELETE /api/sellers/:sellerId, per that handler's own
