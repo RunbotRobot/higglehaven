@@ -15914,7 +15914,18 @@ function updateCreditOrbs(dt) {
       // collected it first, not a real error, so this quietly drops the
       // now-stale orb from the scene instead of surfacing anything to the
       // shopper or retrying.
-      removeCreditOrb(orb);
+      if (error.status === 404) {
+        removeCreditOrb(orb);
+        return;
+      }
+      // #2264: everything else (a 429 from CREDIT_ORB_COLLECT_RATE_LIMIT_MAX,
+      // a 500, a plain network blip) used to fall through to the 404
+      // branch above and remove the orb as if it had genuinely been
+      // collected by someone else -- loadCreditOrbsForLandlet only ever
+      // fetches a landlet's orbs once, so a wrongly-removed orb was gone
+      // from this session's view for good. Transient, same as 403: leave
+      // the orb in place and let the next frame retry.
+      orb.collecting = false;
     });
   }
 }
@@ -15926,6 +15937,12 @@ function removeCreditOrb(orb) {
   orb.group.remove(orb.mesh);
   disposeObject3D(orb.mesh);
 }
+
+// #2264: e2e-only hook, same window.__test* convention as
+// window.__testLowStockHighlightedInstanceIds/window.__testSoldOutMarkerMeshIds
+// -- lets a test confirm an orb survives a transient collect failure
+// (429/500/network) instead of being wrongly removed from the scene.
+window.__testActiveCreditOrbIds = () => shopCreditOrbs.map((orb) => orb.orbId);
 
 function showCreditOrbToast() {
   shopCreditOrbToastEl.classList.add('visible');
