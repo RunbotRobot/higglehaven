@@ -1968,4 +1968,33 @@ describe('Low-stock / days-remaining list (#1949)', () => {
     const row = listed.body.templates.find((t) => t.templateId === 'low-stock-no-data-template');
     expect(row).toMatchObject({ stockQuantity: 15, daysRemaining: null, predictability: 'notEnoughData' });
   });
+
+  // #2321: templateSalesVelocity bound every id from the (unbounded) list of
+  // this builder's own finite-stock templates in a single unchunked IN (...)
+  // query -- D1 caps a single query at 100 bound parameters, so a builder
+  // with more than 100 distinct finite-stock templates placed threw a raw
+  // D1 error instead of returning the list. Seeds 101 templates/instances
+  // directly via D1 -- same shape as #2038's own >100-id regression test --
+  // rather than the real create/place flows, since 101 round trips through
+  // the real API would be far slower and the test only cares that the real
+  // endpoint responds cleanly either way.
+  it('does not throw a raw D1 error for a builder with more than 100 distinct finite-stock templates placed', async () => {
+    const builder = await signupBuilder('low-stock-chunk-builder');
+    await createLandletAndClaim('low-stock-chunk-landlet', builder);
+
+    const templateIds = Array.from({ length: 101 }, (_, i) => `low-stock-chunk-template-${i}`);
+    await env.DB.batch(templateIds.map((templateId) => env.DB.prepare(
+      "INSERT INTO catalog_templates (template_id, name, category, color, width_m, depth_m, height_m, stock_quantity) VALUES (?, ?, 'low-stock-chunk-category', '#123456', 1, 1, 1, 10)",
+    ).bind(templateId, `Low-stock chunk fixture ${templateId}`)));
+    await env.DB.batch(templateIds.map((templateId, i) => env.DB.prepare(
+      'INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m) VALUES (?, ?, ?, 1, 1)',
+    ).bind(`low-stock-chunk-instance-${i}`, 'low-stock-chunk-landlet', templateId)));
+
+    const listed = await api('/builders/me/low-stock', builder.session());
+    // The real bug was a raw 500 (D1_ERROR: too many SQL variables) from
+    // inside this exact call.
+    expect(listed.response.status).toBe(200);
+    expect(listed.body.templates).toHaveLength(101);
+    expect(listed.body.templates.every((t) => t.predictability === 'notEnoughData')).toBe(true);
+  });
 });

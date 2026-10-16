@@ -4195,15 +4195,26 @@ function estimateDaysRemaining(template, ownUnitsPerDay, categoryUnitsPerDay) {
 // velocity to be "computed across every builder selling that same
 // template," not just this one builder's own sales.
 async function templateSalesVelocity(db, templateIds) {
-  const placeholders = templateIds.map(() => '?').join(', ');
-  const { results } = await db.prepare(`
-    SELECT template_id AS templateId, SUM(quantity) AS totalSold,
-           MIN(created_at) AS firstSaleAt, MAX(created_at) AS lastSaleAt
-    FROM purchases
-    WHERE template_id IN (${placeholders}) AND refunded_at IS NULL
-    GROUP BY template_id
-  `).bind(...templateIds).all();
-  return new Map(results.map((row) => [row.templateId, salesVelocityPerDay(row)]));
+  const velocityByTemplateId = new Map();
+  // #2321: chunked at D1_MAX_BOUND_PARAMETERS -- a builder can own more than
+  // one landlet (auctions can transfer extra ones in, see the comment on
+  // ownersByBuilderId above) and place well over 100 distinct finite-stock
+  // templates across them, same bug class as #2038/#2204/#2216/#2233/#2283.
+  // Each chunk's own GROUP BY operates on a disjoint subset of template_id,
+  // so merging across chunks needs no further aggregation.
+  for (let i = 0; i < templateIds.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = templateIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(`
+      SELECT template_id AS templateId, SUM(quantity) AS totalSold,
+             MIN(created_at) AS firstSaleAt, MAX(created_at) AS lastSaleAt
+      FROM purchases
+      WHERE template_id IN (${placeholders}) AND refunded_at IS NULL
+      GROUP BY template_id
+    `).bind(...chunk).all();
+    for (const row of results) velocityByTemplateId.set(row.templateId, salesVelocityPerDay(row));
+  }
+  return velocityByTemplateId;
 }
 
 // #1949: the owner-endorsed fallback for a template with no sales history
