@@ -2127,6 +2127,43 @@ describe('Worker API', () => {
     expect(invalid.body).toEqual({ error: 'landType must be buildable or water' });
   });
 
+  // #2369 (sub-issue of #2368, docs/SPEC.md §1's "Macro-geography"):
+  // mirrors landType's own round-trip/validation coverage just above, for
+  // the new (still consumer-less) biome column -- confirms the data model
+  // can hold a real value and rejects a non-string one, without yet
+  // asserting anything about what a real classification would look like,
+  // since nothing produces one yet.
+  it('defaults biome to null, round-trips a real value, and rejects a non-string one', async () => {
+    const defaulted = await createGreenbeltLandlet('default-biome-landlet', { x: 6000, y: 1600 });
+    expect(defaulted.body.landlet.biome).toBeNull();
+
+    const classified = await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'alpine-biome-landlet',
+        name: 'Alpine biome landlet',
+        areaM2: 1000,
+        biome: 'alpine',
+        center: { x: 6000, y: 1700 },
+      }),
+    }));
+    expect(classified.response.status).toBe(201);
+    expect(classified.body.landlet.biome).toBe('alpine');
+
+    const invalid = await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'invalid-biome-landlet',
+        name: 'Invalid biome',
+        areaM2: 1000,
+        biome: 42,
+        center: { x: 6000, y: 1800 },
+      }),
+    }));
+    expect(invalid.response.status).toBe(400);
+    expect(invalid.body).toEqual({ error: 'biome must be a string or null' });
+  });
+
   // #1573: generatedAt/claimableAt went through validateLandlet with no type
   // check at all, so a non-string value (an object/array) reached a raw D1
   // bind and crashed with an unhandled 500 instead of a clean 400 -- unlike
@@ -3164,6 +3201,57 @@ describe('Worker API', () => {
     expect(corrected.body.candidate.landType).toBe('water');
   });
 
+  // #2369 (sub-issue of #2368): mirrors the landType candidate test just
+  // above, for the new biome column -- defaults to null, carries into the
+  // materialized landlet rather than falling back to the landlets table's
+  // own default, and can be corrected while a candidate is still pending.
+  it('defaults a land candidate biome to null and carries it into materialization', async () => {
+    const defaulted = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'default-biome-candidate', name: 'Default biome candidate', areaM2: 4, center: { x: 9000, y: 9400 },
+      }),
+    }));
+    expect(defaulted.response.status).toBe(201);
+    expect(defaulted.body.candidate.biome).toBeNull();
+
+    const classified = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'alpine-biome-candidate', name: 'Alpine biome candidate', areaM2: 4, center: { x: 9000, y: 9500 }, biome: 'alpine',
+      }),
+    }));
+    expect(classified.response.status).toBe(201);
+    expect(classified.body.candidate.biome).toBe('alpine');
+    expect(classified.body.landlet).toBeNull();
+
+    // Same "move a pending candidate's center onto the origin to trigger
+    // materialization" technique the landType test above relies on --
+    // confirms the materialization sweep carries the candidate's own
+    // biome into the landlets row rather than falling back to the
+    // landlets table's own default.
+    const started = await api('/land-candidates/alpine-biome-candidate', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ center: { x: 0, y: 0 } }),
+    }));
+    expect(started.response.status).toBe(200);
+    expect(started.body.candidate.materializedAt).not.toBeNull();
+    expect(started.body.landlet).toMatchObject({ landletId: 'alpine-biome-candidate', biome: 'alpine' });
+
+    // Same reason the water test above frees its own fixture: a real
+    // landlet left sitting on the world origin would otherwise block the
+    // organic-mosaic test's own origin-covering cell later in this file.
+    await env.DB.prepare("DELETE FROM landlet_candidates WHERE landlet_id = 'alpine-biome-candidate'").run();
+    await env.DB.prepare("DELETE FROM landlets WHERE landlet_id = 'alpine-biome-candidate'").run();
+
+    const corrected = await api('/land-candidates/default-biome-candidate', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ biome: 'alpine' }),
+    }));
+    expect(corrected.response.status).toBe(200);
+    expect(corrected.body.candidate.biome).toBe('alpine');
+  });
+
   it('rejects manual/batch land candidates that would overlap existing land (#570)', async () => {
     const base = await api('/land-candidates', adminSession({
       method: 'POST',
@@ -3322,6 +3410,11 @@ describe('Worker API', () => {
     // geometry/classification columns above (migrations/0108).
     await expect(env.DB.prepare(`
       UPDATE landlet_candidates SET landlet_type = 'water'
+      WHERE landlet_id = 'generated-ring-001'
+    `).run()).rejects.toThrow(/generated ring candidates are immutable/);
+    // #2369: biome joined the same immutability list (migrations/0148).
+    await expect(env.DB.prepare(`
+      UPDATE landlet_candidates SET biome = 'alpine'
       WHERE landlet_id = 'generated-ring-001'
     `).run()).rejects.toThrow(/generated ring candidates are immutable/);
     const lifecycleUpdate = await env.DB.prepare(`
