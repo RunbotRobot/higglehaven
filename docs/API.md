@@ -4524,8 +4524,12 @@ field. Request body: `{ "name", "items", "shared"? }`.
 `shared` defaults to `false` (private) if omitted or not literally `true`.
 Each item's `templateId` must reference an existing catalog template
 (checked in one batched query, same pattern as the instance batch
-endpoints); `items` must be a non-empty array, capped at 250 entries like an
-instance batch save. `dx`/`dy`/`dz` and the rotation fields may be negative
+endpoints); `items` must be a non-empty array, capped at 2000 entries (#1974
+raised this from an original 250, which was blocking legitimate large
+builds — the whole bundle is stored as one `items_json` blob in a single
+row write, so the real ceiling is D1's own max row size, not a per-item
+batch-insert count like the instance batch endpoints below still have).
+`dx`/`dy`/`dz` and the rotation fields may be negative
 or zero — only `crop`/`scale` reuse the stricter validation a placed
 instance itself gets (`validateCropShape`/`validateScale`), since those two
 are genuinely sign-constrained.
