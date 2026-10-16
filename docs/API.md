@@ -1145,6 +1145,11 @@ Shop-mode visitor via landlet ownership, so only the balance needed
 stripping out here. `higglesBalanceCents` stays on `GET /api/builders/me`
 and any other response scoped to the caller's own session.
 
+Unauthenticated, so rate-limited per client IP across all three branches
+(`429` past `BUILDER_LIST_RATE_LIMIT_MAX`, 200 per 15-minute window, #1844)
+— the same limit value gates `GET /api/sellers` below in its own, separate
+per-IP bucket (#2095).
+
 ### `POST /api/builders`
 
 Creates a builder, unlinked to any account (`user_id` stays `NULL`) — the
@@ -1355,6 +1360,11 @@ before that, same caveat #1187 left for builders. Added so a
 shopper/builder can look up a specific seller's shop by name — until now
 the only discovery paths were browsing catalog items by a `sellerId`
 already known, or stumbling on products in-world.
+
+Unauthenticated, so rate-limited per client IP the same way
+`GET /api/builders` above is (`429` past 200 per 15-minute window) — its
+own, separate bucket from that endpoint's, but gated by the same
+`BUILDER_LIST_RATE_LIMIT_MAX` constant (#2095).
 
 ### `POST /api/sellers`
 
