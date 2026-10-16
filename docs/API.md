@@ -442,13 +442,11 @@ Identity today), which only ever resets the in-world profile: land,
 balance, and build get released/wiped, but the real login account stays
 active and a fresh builder/seller is auto-created the next time that
 account visits. This endpoint is the other half — it revokes the login
-itself — and deliberately does nothing to the builder/seller profile,
-financial/tax records, or a connected Stripe account; see #1147
-(disconnecting retained financial/tax records from the deleted identity)
-and #1148 (the Stripe Connect account's own fate) for those, and #1149 for
-whether the old reset-only button keeps a separate place in Settings once
-this exists. Work leaves of #1145, not the trunk — none of this closes
-#1145 itself.
+itself. See #1147 (disconnecting retained financial/tax records from the
+deleted identity) for that still-separate piece, and #1149 for whether the
+old reset-only button keeps a separate place in Settings once this
+exists. Work leaves of #1145, not the trunk — none of this closes #1145
+itself.
 
 Session-gated (`401` without one). Requires re-entering the account's
 current password in the body — a stolen/XSS'd session cookie alone must
@@ -458,6 +456,26 @@ on a mismatch, with no other change to the account. Rate-limited per
 account (5 attempts per 15 minutes, same bucket shape as
 `resend-verification` above) so the password check here can't be used to
 brute-force the real password via this endpoint instead of `/auth/login`.
+
+#1148 (owner decision via the Control Room, 2026-10-16) settled the
+account's own builder/seller row(s): rather than leaving them orphaned
+but still live (including a still-connected Stripe account), this
+endpoint now also deletes them, inheriting the exact same real-money
+guards `DELETE /api/builders/:builderId`/`DELETE /api/sellers/:sellerId`
+already have (an active auction holding the account's leading bid, an
+unresolved auction-win/sale payout, an in-flight higgles redemption or
+video-to-3D generation job, or an unpaid real-money purchase on the
+seller side) — reused unchanged from those endpoints via shared
+statement-builders, so a guard fixed on one side can never drift from the
+other. Per the same owner decision, hitting any of those guards **blocks
+the whole account deletion**, not just the builder/seller row: `409` with
+a message naming what's blocking it (e.g. `"Cannot delete your account
+while holding the leading bid on an active auction"`), and nothing about
+the account changes — the user keeps their login, every session stays
+alive, and the builder/seller row stays exactly as it was. The builder's
+own connected Stripe account (if any) is snapshotted into
+`retained_stripe_accounts` exactly as the builder/seller DELETE endpoints
+already do, never touched directly.
 
 On success: the `email` and `username` are rewritten to a placeholder
 unique to that account (`deleted-<last 8 chars of userId>@deleted.invalid`
@@ -473,7 +491,11 @@ from the row, a login attempt against it already gets the same generic
 "Invalid email or password" response issued for any other email that was
 never registered. Every session for the account is deleted in the same
 atomic batch (`db.batch`, mirroring `reset-password`'s own "sign out every
-device" reasoning above), and the response clears the request's own
+device" reasoning above) as the builder/seller deletion and the `users`
+row update itself — the `users`/`sessions` statements are gated on the
+builder/seller guards above having actually passed, so a blocked deletion
+leaves literally everything untouched in one atomic transaction, not a
+separate check-then-act step. The response clears the request's own
 session cookie too. Returns `{ "accountDeleted": true }`.
 
 ### `GET /api/auth/me`
