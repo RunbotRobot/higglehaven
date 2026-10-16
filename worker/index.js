@@ -4834,7 +4834,13 @@ async function handlePresence(request, db, route, url) {
       WHERE landlet_id = ? AND builder_id != ? AND updated_at >= ?
       ORDER BY updated_at DESC LIMIT ${PRESENCE_NEARBY_LIMIT}
     `).bind(landletId, sessionBuilder.builder_id, staleBefore).all();
-    return json({ avatars: results.map(avatarPresenceFromRow) });
+    // #2043: docs/SPEC.md's "Flying avatars are invisible to other users" --
+    // the client is the one actually hiding the mesh, but a flying avatar's
+    // position is still withheld here too, not just left to the renderer's
+    // own discretion to respect. Never withhold the caller's own row from
+    // themselves (irrelevant here, this query already excludes builder_id =
+    // self) or from GET .../me (that endpoint is "where was I," unaffected).
+    return json({ avatars: results.filter((row) => !row.flying).map(avatarPresenceFromRow) });
   }
 
   // #1098: upserts the caller's own live position into avatar_presence
@@ -4851,6 +4857,12 @@ async function handlePresence(request, db, route, url) {
     const y = finiteNumber(input.y, 'y');
     const z = finiteNumber(input.z, 'z');
     const heading = input.heading === undefined || input.heading === null ? null : finiteNumber(input.heading, 'heading');
+    // #2043: whether the reporting builder is currently flying, so the
+    // nearby-avatars GET above can withhold them per docs/SPEC.md's
+    // "Flying avatars are invisible to other users" -- optional/defaults
+    // to false so an older client (or a report with no flight state to
+    // report) never accidentally marks someone permanently flying.
+    const flying = input.flying === true;
     let landletId = null;
     if (input.landletId !== undefined && input.landletId !== null) {
       landletId = stringValue(input.landletId, 'landletId');
@@ -4863,12 +4875,12 @@ async function handlePresence(request, db, route, url) {
       await requireLandlet(db, landletId);
     }
     await db.prepare(`
-      INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
       ON CONFLICT(builder_id) DO UPDATE SET
         landlet_id = excluded.landlet_id, x = excluded.x, y = excluded.y, z = excluded.z,
-        heading = excluded.heading, updated_at = excluded.updated_at
-    `).bind(sessionBuilder.builder_id, landletId, x, y, z, heading).run();
+        heading = excluded.heading, flying = excluded.flying, updated_at = excluded.updated_at
+    `).bind(sessionBuilder.builder_id, landletId, x, y, z, heading, flying ? 1 : 0).run();
     const row = await db.prepare('SELECT * FROM avatar_presence WHERE builder_id = ?')
       .bind(sessionBuilder.builder_id).first();
     return json({
@@ -4878,6 +4890,7 @@ async function handlePresence(request, db, route, url) {
         y: row.y,
         z: row.z,
         heading: row.heading,
+        flying: Boolean(row.flying),
         updatedAt: row.updated_at,
       },
     });
@@ -4894,6 +4907,7 @@ function avatarPresenceFromRow(row) {
     y: row.y,
     z: row.z,
     heading: row.heading,
+    flying: Boolean(row.flying),
     updatedAt: row.updated_at,
   };
 }
