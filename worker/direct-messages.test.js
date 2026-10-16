@@ -334,4 +334,22 @@ describe('Direct messages (#1637)', () => {
     const bobUnread = await api('/direct-messages/unread-count', bob.session());
     expect(bobUnread.body.count).toBe(2); // both messages notified -- the second was never treated as a dedup hit
   });
+
+  // #2260: mark-read is auto-fired by the client on every render of an open
+  // DM thread (on open, and again after every send) -- not just on a
+  // deliberate click the way notification mark-read's own 20/15min limit
+  // is. Exercises comfortably past the old 20-call ceiling to confirm the
+  // bucket was actually raised, not just renamed.
+  it('does not rate-limit mark-read under ordinary repeated-render chat usage', async () => {
+    const alice = await signupIdVerifiedBuilder('dm-mark-read-rate-limit-alice');
+    const bob = await signupIdVerifiedBuilder('dm-mark-read-rate-limit-bob');
+    await becomeFriends(alice, bob);
+
+    for (let i = 0; i < 100; i++) {
+      const attempt = await api('/direct-messages/mark-read', bob.session({
+        method: 'POST', body: JSON.stringify({ withBuilderId: alice.builderId }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+  });
 });

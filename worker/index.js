@@ -3341,6 +3341,12 @@ const SELLER_CREATE_RATE_LIMIT_MAX = 20;
 // (friend requests, bundles, calendar events, saved layouts, ...).
 const BUILDER_RENAME_RATE_LIMIT_MAX = 20;
 const SELLER_RENAME_RATE_LIMIT_MAX = 20;
+// #2302: #864's own audit covered the rename paths above but missed each
+// resource's own DELETE sibling -- a real, heavy, multi-statement batch
+// write (releases every owned landlet, deletes placed instances/version
+// history, or checks unpaid purchases), left with no cap at all.
+const BUILDER_DELETE_RATE_LIMIT_MAX = 20;
+const SELLER_DELETE_RATE_LIMIT_MAX = 20;
 
 // #1844: all three GET branches below (ids=, label=, and the plain
 // paginated list) call recomputeLandCapsBatch, which runs three full-table
@@ -3587,6 +3593,7 @@ async function handleBuilders(request, env, db, route, url) {
     await requireBuilder(db, route[1]);
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(route[1], sessionBuilder.builder_id, 'Not your builder profile');
+    await checkRateLimit(db, `builder-delete:${sessionBuilder.builder_id}`, BUILDER_DELETE_RATE_LIMIT_MAX);
 
     // Whatever this builder currently owns goes back to a fresh, unclaimed
     // plot rather than sitting there under a builder that no longer
@@ -4600,6 +4607,7 @@ async function handleSellers(request, env, db, route, url) {
     await requireSeller(db, route[1]);
     const sessionSeller = await requireSessionSeller(request, db);
     assertOwner(route[1], sessionSeller.seller_id, 'Not your seller profile');
+    await checkRateLimit(db, `seller-delete:${sessionSeller.seller_id}`, SELLER_DELETE_RATE_LIMIT_MAX);
 
     // #732: getOrCreateSellerForUser looks up by user_id, not seller_id — if
     // this seller_id is deleted with real-money proceeds still unpaid, a
@@ -5229,7 +5237,16 @@ function friendshipFromRow(row, viewerBuilderId, labelsById, landletsById) {
 // shape as the friend-request/accept notifications above), so this needs
 // its own rate-limit bucket, same #369/#899 reasoning.
 const DIRECT_MESSAGE_SEND_RATE_LIMIT_MAX = 20;
-const DIRECT_MESSAGE_MUTATE_RATE_LIMIT_MAX = 20;
+// #2260: mark-read fires no notification and isn't a deliberate, abuse-prone
+// action the way a send is -- unlike notification mark-read (#984), which
+// only ever fires on a human click (tapping one row, or "Mark all read"),
+// this one is auto-fired by the client on every single render of an open DM
+// thread (on open, and again after every message sent), so the same
+// 20/15min budget sized for click frequency starved under ordinary chat
+// activity alone. Sized well above anything that frequency can plausibly
+// hit instead of removing the cap outright, since it's still a real,
+// uncached D1 write per call.
+const DIRECT_MESSAGE_MARK_READ_RATE_LIMIT_MAX = 200;
 
 // DM is gated on a stronger bar than ordinary account verification
 // (assertVerified's trust_tier !== 'none', used everywhere else) — #1002's
@@ -5407,7 +5424,7 @@ async function handleDirectMessages(request, db, route, url) {
     // #1889: session -> rate limit -> readJson -> validate, matching the
     // dominant order this file's other mutating endpoints use (e.g.
     // friendships' PATCH/DELETE, calendar events, sign posts).
-    await checkRateLimit(db, `direct-message-mutate:${sessionBuilder.builder_id}`, DIRECT_MESSAGE_MUTATE_RATE_LIMIT_MAX);
+    await checkRateLimit(db, `direct-message-mark-read:${sessionBuilder.builder_id}`, DIRECT_MESSAGE_MARK_READ_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const withBuilderId = stringValue(input.withBuilderId, 'withBuilderId');
     await db.prepare(`
