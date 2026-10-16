@@ -11635,6 +11635,15 @@ async function handleChangePassword(request, db) {
       WHERE user_id = ?
     `).bind(passwordHash, user.user_id),
     db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').bind(user.user_id, currentTokenHash),
+    // #2293: same #843 invariant handleResetPassword's own DELETE already
+    // enforces -- a password-changing event for this account must
+    // invalidate any outstanding reset token too, or an older, still-
+    // unexpired reset link (e.g. minted by an attacker with momentary
+    // email access, never used immediately) remains valid and can
+    // silently undo this very change afterward. #843's fix landed only on
+    // the reset-password side; this is the sibling in-session change path
+    // that never got it.
+    db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').bind(user.user_id),
   ]);
   return json({ changed: true });
 }
