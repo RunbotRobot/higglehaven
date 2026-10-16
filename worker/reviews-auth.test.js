@@ -1851,6 +1851,46 @@ describe('Authentication', () => {
       expect(alreadySuspended.response.status).toBe(409);
     });
 
+    // #2268: the same "never end up with zero admins and no way back short
+    // of direct D1 access" invariant handleRevokeAdmin's own last-admin
+    // guard enforces (see that test above) -- suspending the last admin is
+    // worse than revoking them, since a suspended account can't call
+    // requireAdmin at all (requireCurrentUser's suspension check runs
+    // before is_admin is ever read), leaving no API path back in.
+    //
+    // Same table-wide reset as the revoke-admin test above, for the same
+    // reason: this file's storage isn't reset between `it`s, so without it
+    // this test's "solo" admin would never actually be the last one.
+    it('refuses to suspend the last remaining admin, including via self-suspend', async () => {
+      await env.DB.prepare('UPDATE users SET is_admin = 0 WHERE is_admin = 1').run();
+      const solo = await makeAdmin('suspend-admin-solo');
+
+      const blocked = await api('/auth/suspend-account', solo.session({
+        method: 'POST', body: JSON.stringify({ email: solo.email, reason: 'self-test' }),
+      }));
+      expect(blocked.response.status).toBe(409);
+
+      const stillActive = await api('/auth/me', solo.session());
+      expect(stillActive.response.status).toBe(200);
+
+      // Promoting a second admin lifts the guard -- now either account can
+      // be suspended without hitting the floor.
+      const second = await signupBuilder('suspend-admin-second');
+      await api('/auth/grant-admin', solo.session({
+        method: 'POST', body: JSON.stringify({ email: second.email }),
+      }));
+      const suspendSecond = await api('/auth/suspend-account', solo.session({
+        method: 'POST', body: JSON.stringify({ email: second.email, reason: 'now safe' }),
+      }));
+      expect(suspendSecond.response.status).toBe(200);
+
+      // Back down to one admin (solo) -- the floor applies again.
+      const blockedAgain = await api('/auth/suspend-account', solo.session({
+        method: 'POST', body: JSON.stringify({ email: solo.email, reason: 'self-test-2' }),
+      }));
+      expect(blockedAgain.response.status).toBe(409);
+    });
+
     it('rejects graceDays outside 1-365, defaults to 30 when omitted', async () => {
       const admin = await makeAdmin('suspend-grace-admin');
       const target = await signupBuilder('suspend-grace-target');
