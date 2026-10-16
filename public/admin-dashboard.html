@@ -141,6 +141,7 @@
   <button class="nav-item" data-panel="tax">Tax / 1099 e-filing</button>
   <button class="nav-item" data-panel="purchases">Purchases (admin fallback)</button>
   <button class="nav-item" data-panel="flags">Trust &amp; Safety flags</button>
+  <button class="nav-item" data-panel="accounts">Account suspension</button>
   <button class="nav-item" data-panel="fixtures">Test/Ops Fixtures</button>
   <div class="nav-title">Other admin pages</div>
   <a class="nav-item" href="/admin/control-room">Control Room <span class="ext-arrow">&#8599;</span></a>
@@ -339,6 +340,45 @@
       <button class="secondary" id="selfDealingFlagsRefreshBtn">Refresh</button>
     </div>
     <div id="selfDealingFlagsTableWrap"></div>
+  </section>
+  <section class="panel" id="panel-accounts">
+    <p class="sub">Suspend/unsuspend an account, or check its current suspension status. Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/2299" target="_blank" rel="noopener">#2299</a> — the endpoints themselves landed with <a href="https://github.com/RunbotRobot/higglehaven/issues/1201" target="_blank" rel="noopener">#1201</a>.</p>
+
+    <h2>Suspend account</h2>
+    <p class="err" id="suspendErr" hidden></p>
+    <p class="ok" id="suspendOk" hidden></p>
+    <form id="suspendForm">
+      <div class="toolbar">
+        <input name="email" type="email" placeholder="Account email" aria-label="Account email" required />
+        <input name="reason" placeholder="Reason (required)" aria-label="Reason" required style="flex: 1 1 260px;" />
+      </div>
+      <div class="toolbar">
+        <input name="graceDays" type="number" min="1" max="365" placeholder="Grace period days (default 30)" aria-label="Grace period days" style="flex: 0 0 220px;" />
+        <input name="evidenceNote" placeholder="Evidence note (admin-only, optional)" aria-label="Evidence note" style="flex: 1 1 260px;" />
+        <label style="display:flex;align-items:center;gap:6px;font-size:13px;">
+          <input name="removeContent" type="checkbox" style="flex: 0 0 auto; width: auto;" /> Remove posted content
+        </label>
+      </div>
+      <button type="submit">Suspend</button>
+    </form>
+
+    <h2>Unsuspend account</h2>
+    <p class="err" id="unsuspendErr" hidden></p>
+    <p class="ok" id="unsuspendOk" hidden></p>
+    <form id="unsuspendForm">
+      <div class="toolbar">
+        <input name="email" type="email" placeholder="Account email" aria-label="Account email" required />
+        <button type="submit">Unsuspend</button>
+      </div>
+    </form>
+
+    <h2>Suspension status</h2>
+    <p class="err" id="suspensionStatusErr" hidden></p>
+    <div class="toolbar">
+      <input id="suspensionStatusEmailInput" type="email" placeholder="Account email" aria-label="Account email to look up" />
+      <button id="suspensionStatusBtn">Look up</button>
+    </div>
+    <div id="suspensionStatusResult"></div>
   </section>
   <section class="panel fixtures-panel" id="panel-fixtures">
     <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
@@ -1542,6 +1582,129 @@
   window.__adminDashboardPanels.flags = function initFlagsPanel() {
     loadProductFlags();
     loadSelfDealingFlags();
+  };
+})();
+</script>
+<script>
+// #2299: account suspension panel -- a thin form over handleSuspendAccount/
+// handleUnsuspendAccount/handleSuspensionStatus (worker/index.js), same
+// fetch/error shape as the fixtures panel's grant forms above. No lazy-
+// init fetch needed on open (unlike models/flags) since there's nothing to
+// list until an admin actually looks something up.
+(function () {
+  async function fetchJson(url, options) {
+    const response = await fetch(url, options);
+    let body;
+    try { body = await response.json(); } catch (_) { body = null; }
+    if (!response.ok) throw new Error((body && body.error) || ('Request failed (' + response.status + ')'));
+    return body;
+  }
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value).replace(/[&<>"']/g, (c) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    }[c]));
+  }
+
+  function renderSuspensionStatus(container, suspension) {
+    if (!suspension) {
+      container.innerHTML = '<p class="empty">No active suspension.</p>';
+      return;
+    }
+    container.innerHTML =
+      '<div class="stat-grid">' +
+      '<div class="stat"><div class="n">' + escapeHtml(suspension.suspendedAt || '—') + '</div><div class="l">Suspended at</div></div>' +
+      '<div class="stat"><div class="n">' + escapeHtml(suspension.gracePeriodEndsAt || '—') + '</div><div class="l">Grace period ends</div></div>' +
+      '</div>' +
+      '<p><strong>Reason:</strong> ' + escapeHtml(suspension.reason || '—') + '</p>' +
+      (suspension.evidenceNote ? '<p><strong>Evidence note:</strong> ' + escapeHtml(suspension.evidenceNote) + '</p>' : '');
+  }
+
+  window.__adminDashboardPanels.accounts = function initAccountsPanel() {
+    const suspendForm = document.getElementById('suspendForm');
+    const suspendErr = document.getElementById('suspendErr');
+    const suspendOk = document.getElementById('suspendOk');
+    const unsuspendForm = document.getElementById('unsuspendForm');
+    const unsuspendErr = document.getElementById('unsuspendErr');
+    const unsuspendOk = document.getElementById('unsuspendOk');
+    const statusEmailInput = document.getElementById('suspensionStatusEmailInput');
+    const statusBtn = document.getElementById('suspensionStatusBtn');
+    const statusErr = document.getElementById('suspensionStatusErr');
+    const statusResult = document.getElementById('suspensionStatusResult');
+
+    function clearMsg(errEl, okEl) {
+      errEl.hidden = true; errEl.textContent = '';
+      if (okEl) { okEl.hidden = true; okEl.textContent = ''; }
+    }
+    function showErr(errEl, message) { errEl.hidden = false; errEl.textContent = message; }
+    function showOk(okEl, message) { okEl.hidden = false; okEl.textContent = message; }
+
+    suspendForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearMsg(suspendErr, suspendOk);
+      const email = suspendForm.elements.email.value.trim();
+      const reason = suspendForm.elements.reason.value.trim();
+      const evidenceNote = suspendForm.elements.evidenceNote.value.trim();
+      const graceDaysRaw = suspendForm.elements.graceDays.value.trim();
+      const removeContent = suspendForm.elements.removeContent.checked;
+      const submitBtn = suspendForm.querySelector('button[type="submit"]');
+      submitBtn.disabled = true;
+      try {
+        const body = await fetchJson('/api/auth/suspend-account', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            email, reason,
+            ...(evidenceNote ? { evidenceNote } : {}),
+            ...(graceDaysRaw ? { graceDays: Number(graceDaysRaw) } : {}),
+            ...(removeContent ? { removeContent: true } : {}),
+          }),
+        });
+        showOk(suspendOk, 'Suspended. Grace period ends ' + body.suspension.gracePeriodEndsAt +
+          (body.removedContent ? ' — posted content removed.' : '.'));
+        suspendForm.reset();
+      } catch (error) {
+        showErr(suspendErr, error.message);
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    unsuspendForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearMsg(unsuspendErr, unsuspendOk);
+      const email = unsuspendForm.elements.email.value.trim();
+      const submitBtn = unsuspendForm.querySelector('button[type="submit"]');
+      submitBtn.disabled = true;
+      try {
+        await fetchJson('/api/auth/unsuspend-account', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+        showOk(unsuspendOk, 'Unsuspended.');
+        unsuspendForm.reset();
+      } catch (error) {
+        showErr(unsuspendErr, error.message);
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    statusBtn.addEventListener('click', async () => {
+      clearMsg(statusErr);
+      const email = statusEmailInput.value.trim();
+      if (!email) { showErr(statusErr, 'Enter an email to look up.'); return; }
+      statusBtn.disabled = true;
+      try {
+        const body = await fetchJson('/api/auth/suspension-status?email=' + encodeURIComponent(email));
+        renderSuspensionStatus(statusResult, body.suspension);
+      } catch (error) {
+        showErr(statusErr, error.message);
+      } finally {
+        statusBtn.disabled = false;
+      }
+    });
   };
 })();
 </script>
