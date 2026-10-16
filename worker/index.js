@@ -7864,6 +7864,18 @@ async function handlePurchaseReversalWebhookEvent(db, event) {
 
   const paymentIntentId = event.data?.object?.payment_intent;
   if (!paymentIntentId) return;
+  // #2232: charge.refunded fires for ANY refund on a charge, partial or
+  // full -- the Charge object's own `refunded` boolean is the only
+  // authoritative signal for "fully refunded" (it's true only once
+  // amount_refunded reaches the full charge amount). Without this check, a
+  // $1 goodwill partial refund on a $100 purchase clawed back the builder's
+  // entire commission and revoked all ownership that purchase granted, the
+  // same way a genuine full refund does -- even though the buyer kept 99%
+  // of their payment and the product. Dispute events (charge.dispute.*)
+  // carry no `refunded` field at all, so this only applies to
+  // charge.refunded itself; a real chargeback/dispute still claws back in
+  // full immediately, per #1086's own deliberate design.
+  if (event.type === 'charge.refunded' && event.data?.object?.refunded !== true) return;
   const purchase = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
   if (!purchase) return;
 
@@ -8539,8 +8551,19 @@ const TRIPO_TERMINAL_FAILURE_STATUSES = new Set(['failed', 'cancelled', 'banned'
 // gets there first applies the result; the other is a safe no-op.
 async function applyTripoTaskResult(db, env, jobId, task) {
   if (task.status === 'success') {
+    // #2226: sibling case to the #1673 catch below -- Tripo can also report
+    // success with the output/model_url missing entirely (not just an
+    // output URL that fails to download). Without marking the job failed
+    // here too, this left the row stuck at status='processing' until the
+    // cron sweep's own generic "timed out" message, since the thrown error
+    // below was never caught by either caller (the webhook handler, or the
+    // status-poll path).
     if (!task?.output?.model_url) {
-      throw new HttpError('Video-to-3D provider reported success with no output file', 502);
+      await db.prepare(`
+        UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE job_id = ? AND processed_at IS NULL
+      `).bind('Video-to-3D provider reported success with no output file', jobId).run();
+      return;
     }
     // Fetching/storing happens before the atomic claim below (unlike
     // applyDiditDecision, which has no slow step) -- a race between the
