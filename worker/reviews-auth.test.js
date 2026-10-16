@@ -2368,7 +2368,10 @@ describe('Authentication', () => {
     }
     const limited = await api('/auth/confirm-card', builder.session({ method: 'POST' }));
     expect(limited.response.status).toBe(429);
-  });
+  }, 60000); // #978-class/#2198/#2255: 21 real HTTP requests exceeds the
+  // 20000ms default under this file's own size/load, despite passing
+  // instantly in isolation -- same reasoning as the card-setup-intent test
+  // immediately above.
 
   // #556, owner decision (Control Room, 2026-09-09): "force everyone
   // through the new gates, no grandfathering in" — assertVerified in
