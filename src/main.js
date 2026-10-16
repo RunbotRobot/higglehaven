@@ -6926,9 +6926,20 @@ function renderBuildSettingsSection() {
       publishStatus.classList.remove('error');
       try {
         const full = await fetchLandletVersion(landletId, version.versionId);
+        // #2250: each restore wraps the prior name in this same prefix/
+        // suffix, so a chain of restores grows versionName past the
+        // server's own MAX_LABEL_LENGTH (100, worker/index.js) and the
+        // restore starts failing a 400 that has nothing to do with the
+        // instances actually being restored -- this is an auto-generated
+        // label the user never typed, so truncate it rather than let the
+        // server reject it.
+        const wrappedVersionName = `Restored from "${version.name}"`;
+        const versionName = wrappedVersionName.length > 100
+          ? `${wrappedVersionName.slice(0, 99)}…`
+          : wrappedVersionName;
         await replaceLandletDraft(landletId, {
           instances: full.instances,
-          versionName: `Restored from "${version.name}"`,
+          versionName,
         });
         // Simplest correct way to get the live scene back in sync with
         // whatever the server now holds — the same "something changed
