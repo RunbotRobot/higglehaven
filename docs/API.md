@@ -8615,11 +8615,17 @@ the built-in catalog:
   bodies. Results contain `modelUrl`, `sizeBytes`, `etag`, `uploadedAt`,
   `deletable`, and sorted `referencedByTemplateIds`. Reference metadata is
   resolved with one bounded D1 query for the R2 page, allowing cleanup
-  tooling to distinguish safe deletions without probing each object. An
-  object is "referenced" if any catalog template's `model_url` **or**
-  `image_url` matches it (#774) — the same `MODELS` bucket also holds
+  tooling to distinguish safe deletions without probing each object.
+  `referencedByTemplateIds` covers a catalog template's `model_url` **or**
+  `image_url` matching it (#774) — the same `MODELS` bucket also holds
   content-addressed product thumbnails (`POST .../thumbnail` below), which
-  are tracked only through `image_url`.
+  are tracked only through `image_url`. Two further fields,
+  `referencedByVideoJobIds` and `referencedByControlRoomIds` (#1644/#1655/
+  #1696), cover the same bucket/URL scheme being written by
+  `video_generation_jobs.model_url` and `control_room_tasks`/
+  `control_room_replies.image_url` respectively — `deletable` is `true`
+  only when all three reference lists are empty, not just
+  `referencedByTemplateIds`.
   Listings use a `limit` from 1 to 100, and return the R2-backed opaque
   `nextCursor` for the next page. This is a dev inventory for finding
   uploads that can be reclaimed.
@@ -8662,7 +8668,12 @@ the built-in catalog:
   the actual R2 delete (after confirming the object exists), narrowing the
   window against a template referencing this model being created in
   between. Like the listing/cleanup endpoints above, the referenced-model
-  check matches `model_url` **or** `image_url` (#774). `GET`/`HEAD` above
+  check matches a catalog template's `model_url` **or** `image_url` (#774)
+  — and, same as `GET /api/models`'s own `referencedByVideoJobIds`/
+  `referencedByControlRoomIds` fields, also `video_generation_jobs.model_url`
+  and `control_room_tasks`/`control_room_replies.image_url` (#1644/#1655/
+  #1696); any of these five matching also returns `409`, not just a
+  catalog-template reference. `GET`/`HEAD` above
   stay unauthenticated — serving an
   immutable, content-addressed model back out is not a mutation.
 
