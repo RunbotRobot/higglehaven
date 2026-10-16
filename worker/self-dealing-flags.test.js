@@ -9,6 +9,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import {
   api, signupAdmin, signupBuilder, signupSeller,
 } from './test-helpers.js';
+import { writeOrphanedPurchaseRow } from './index.js';
 
 let adminSession;
 
@@ -217,6 +218,71 @@ describe('Self-dealing flags (#2019)', () => {
         method: 'POST', body: JSON.stringify({}),
       }));
       expect(limited.response.status).toBe(429);
+    });
+  });
+
+  // #2267: writePurchaseRow's own self-dealing check never ran on
+  // writeOrphanedPurchaseRow -- the fallback handlePurchaseFinalize takes
+  // when the instance/template was deleted out from under an in-flight
+  // Stripe payment (#472). Exercised by calling it directly, same reason
+  // worker/purchases.test.js calls resolveFinalizeBuilderId directly -- the
+  // real checkout->finalize flow only reaches this fallback via a live
+  // Stripe PaymentIntent lookup this suite never configures.
+  describe('writeOrphanedPurchaseRow also runs the self-dealing check (#2267)', () => {
+    it('flags a self-dealing purchase even when the instance/template no longer exist', async () => {
+      const seller = await signupSeller('self-dealing-orphan-seller');
+      const buyerBuilder = await api('/builders/me', seller.session());
+      const buyerBuilderId = buyerBuilder.body.builder.builderId;
+
+      await writeOrphanedPurchaseRow(env, {
+        instanceId: 'self-dealing-orphan-instance',
+        templateId: 'self-dealing-orphan-template',
+        sellerId: seller.sellerId,
+        buyerBuilderId,
+      }, {
+        quantity: 1,
+        buyerLabel: 'Self-dealing Orphan Buyer',
+        unitPriceCents: 500,
+        totalCents: 500,
+        commissionCents: 25,
+        builderShareCents: 475,
+        platformShareCents: 25,
+      }, 'pi_self_dealing_orphan_test', true);
+
+      const { results } = await env.DB.prepare(`
+        SELECT sdf.* FROM self_dealing_flags sdf
+        JOIN purchases p ON p.purchase_id = sdf.purchase_id
+        WHERE p.payment_intent_id = ?
+      `).bind('pi_self_dealing_orphan_test').all();
+      expect(results).toHaveLength(1);
+      expect(JSON.parse(results[0].matched_signals)).toEqual(['email']);
+    });
+
+    it('does not flag an ordinary orphaned purchase between two different accounts', async () => {
+      const seller = await signupSeller('self-dealing-orphan-different-seller');
+      const buyer = await signupBuilder('self-dealing-orphan-different-buyer');
+
+      await writeOrphanedPurchaseRow(env, {
+        instanceId: 'self-dealing-orphan-different-instance',
+        templateId: 'self-dealing-orphan-different-template',
+        sellerId: seller.sellerId,
+        buyerBuilderId: buyer.builderId,
+      }, {
+        quantity: 1,
+        buyerLabel: 'Ordinary Orphan Buyer',
+        unitPriceCents: 500,
+        totalCents: 500,
+        commissionCents: 25,
+        builderShareCents: 475,
+        platformShareCents: 25,
+      }, 'pi_self_dealing_orphan_different_test', true);
+
+      const { results } = await env.DB.prepare(`
+        SELECT sdf.* FROM self_dealing_flags sdf
+        JOIN purchases p ON p.purchase_id = sdf.purchase_id
+        WHERE p.payment_intent_id = ?
+      `).bind('pi_self_dealing_orphan_different_test').all();
+      expect(results).toHaveLength(0);
     });
   });
 });
