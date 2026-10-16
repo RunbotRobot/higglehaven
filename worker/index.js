@@ -9280,7 +9280,12 @@ async function handleSellerStripeAccount(request, env, db) {
       // best-effort delete it (a Custom account with no completed
       // onboarding can be deleted), then hand back the winning
       // submission's own state instead of this one's.
-      await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch(() => {});
+      // #2304: a failure here previously vanished with no trail at all --
+      // logging it at least leaves an admin something to find and clean up
+      // the orphaned, PII-bearing Stripe account by hand.
+      await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch((error) => {
+        console.error('Failed to clean up race-losing Stripe account', account.id, error);
+      });
       const winner = await db.prepare('SELECT * FROM sellers WHERE seller_id = ?').bind(sessionSeller.seller_id).first();
       // #1780: changes === 0 isn't always "a winner" -- this seller's own
       // row can also just be gone (a concurrent self-delete landing before
@@ -9350,7 +9355,10 @@ async function handleBuilderStripeAccount(request, env, db) {
     `).bind(account.id, status, JSON.stringify(requirementsDue), nowIso, nowIso, sessionBuilder.builder_id).run();
 
     if (createdNewAccount && result.meta.changes === 0) {
-      await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch(() => {});
+      // #2304: same logging gap as the seller sibling above.
+      await stripeRequest(env, 'DELETE', `accounts/${account.id}`).catch((error) => {
+        console.error('Failed to clean up race-losing Stripe account', account.id, error);
+      });
       const winner = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(sessionBuilder.builder_id).first();
       // #1780: same "a concurrent self-delete, not just a race loser" gap
       // as the seller sibling above.
