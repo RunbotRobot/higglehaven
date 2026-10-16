@@ -961,6 +961,28 @@ describe('Builders', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #2302: same gap as #864's own rename fix above, found on DELETE instead
+  // -- missed by that same audit. Unlike rename, a builder can only be
+  // deleted once, so 20 real sequential deletes isn't possible here; same
+  // pre-seed-the-bucket-directly idiom as the GET /builders rate-limit test
+  // below instead -- fill the bucket to the limit first, then confirm the
+  // one real DELETE this test makes is the blocked one, and that the
+  // builder row survives (the batch never ran).
+  it('rate-limits repeated builder deletions from the same builder', async () => {
+    const deleter = await signupBuilder('builder-delete-rate-limit');
+    const bucketKey = `builder-delete:${deleter.builderId}`;
+    const now = Date.now();
+    await env.DB.batch(Array.from({ length: 20 }, () => env.DB.prepare(
+      'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+    ).bind(bucketKey, now)));
+
+    const limited = await api(`/builders/${deleter.builderId}`, deleter.session({ method: 'DELETE' }));
+    expect(limited.response.status).toBe(429);
+
+    const stillThere = await env.DB.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(deleter.builderId).first();
+    expect(stillThere).toBeTruthy();
+  });
+
   // #1844: unlike the create/rename writes just above, GET /builders (the
   // ids=/label=/plain-list branches) had no rate limit at all, despite each
   // one forcing recomputeLandCapsBatch's three full-table aggregate scans
@@ -1100,6 +1122,25 @@ describe('Sellers', () => {
       method: 'PATCH', body: JSON.stringify({ label: 'One too many' }),
     }));
     expect(limited.response.status).toBe(429);
+  });
+
+  // #2302: same gap as #864's own rename fix above, found on DELETE instead
+  // -- same reasoning as the builder-delete rate-limit test above (a seller
+  // can only be deleted once, so this pre-seeds the bucket to the limit
+  // directly rather than looping 20 real deletes).
+  it('rate-limits repeated seller deletions from the same seller', async () => {
+    const deleter = await signupSeller('seller-delete-rate-limit');
+    const bucketKey = `seller-delete:${deleter.sellerId}`;
+    const now = Date.now();
+    await env.DB.batch(Array.from({ length: 20 }, () => env.DB.prepare(
+      'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+    ).bind(bucketKey, now)));
+
+    const limited = await api(`/sellers/${deleter.sellerId}`, deleter.session({ method: 'DELETE' }));
+    expect(limited.response.status).toBe(429);
+
+    const stillThere = await env.DB.prepare('SELECT 1 FROM sellers WHERE seller_id = ?').bind(deleter.sellerId).first();
+    expect(stillThere).toBeTruthy();
   });
 
   // #2095: same gap as #1844's own GET /builders fix just above -- the
