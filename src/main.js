@@ -9826,11 +9826,22 @@ async function reorderBackupChainRow(backups, fromIndex, toIndex) {
   const [moved] = reordered.splice(fromIndex, 1);
   reordered.splice(toIndex, 0, moved);
   const instanceId = backupChainTargetMesh.userData.instanceId;
+  // Every row's Up/Down button closes over this same `backups` snapshot, so
+  // a second reorder click anywhere in the list (same row or a different
+  // one) before this request resolves would compute its own move against
+  // the same now-stale ordering -- reorderInstanceBackups is a full-replace
+  // PUT, so whichever response lands last would silently discard the other.
+  // Disabling every currently-enabled button for the duration (restoring
+  // only those, not a row's own boundary-disabled Up/Down) closes that
+  // window the same way removeBtn's own disable-during-await already does.
+  const buttonsToRestore = [...backupChainListEl.querySelectorAll('button:not(:disabled)')];
+  buttonsToRestore.forEach((btn) => { btn.disabled = true; });
   try {
     await reorderInstanceBackups(instanceId, reordered.map((backup) => backup.backupId));
     await renderBackupChain();
   } catch (err) {
     alert(err.message || 'Could not reorder the backup chain.');
+    buttonsToRestore.forEach((btn) => { btn.disabled = false; });
   }
 }
 
