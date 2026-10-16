@@ -8830,6 +8830,27 @@ a bogus or already-collected orb id still 404s cheaply but counts against
 the limit, since the cost is the D1 batch round-trip, not a successful
 collect specifically.
 
+**#2222**: also requires the caller's own `avatar_presence` row (#1097/#1098)
+to be fresh (within `PRESENCE_STALE_AFTER_MS`, the same freshness bar the
+"who's nearby" `GET /presence` endpoint already uses) and within
+`CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M` of the orb's world position (its
+`landlet_id`'s own `center_x_m`/`center_y_m` plus its landlet-local
+`x_m`/`y_m`) — `403` otherwise. This closes the gap where a scripted caller
+could skip the client's own "walk up to it" gesture
+(`CREDIT_ORB_COLLECT_RADIUS_M` = 1.5m, src/main.js) entirely and drain the
+whole day's budget via direct API calls, with zero world interaction.
+Deliberately does **not** check `avatar_presence.landlet_id` against the
+orb's own `landlet_id`: `updateShopLandletInfo` (src/main.js) only ever sets
+a reported `landletId` while standing on a *claimed* landlet, and every
+credit orb spawns on a `greenbelt` one by definition — a real collector's
+presence row always has `landlet_id: null` here, so world-position
+proximity alone is the actual "walked up to it" signal. The frontend's own
+`updateCreditOrbs` (src/main.js) treats this `403` as "not synced yet, not a
+real rejection" and retries on the very next frame rather than dropping the
+orb the way it does for a real `404`, since `avatar_presence` is only
+reported every `SHOP_PRESENCE_REPORT_INTERVAL_MS`/`SHOP_PRESENCE_HEARTBEAT_
+INTERVAL_MS` and can lag a few seconds behind a just-completed teleport/walk.
+
 ## Product pricing
 
 `catalog_templates.price_cents` (`priceCents` in the API) existed in the

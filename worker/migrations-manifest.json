@@ -139,5 +139,6 @@
   "0139_builders_notify_sold_out_email.sql",
   "0140_inactivity_release_preserves_versions.sql",
   "0141_product_flags_status_index.sql",
-  "0142_avatar_presence_flying.sql"
+  "0142_dispute_auto_resolve_claims.sql",
+  "0143_avatar_presence_flying.sql"
 ]

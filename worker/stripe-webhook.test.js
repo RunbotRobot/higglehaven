@@ -250,8 +250,11 @@ describe('Stripe purchase-reversal webhooks (#1086)', () => {
     return { builder, purchaseId, builderShareCents };
   }
 
-  function chargeRefundedEvent(paymentIntentId) {
-    return { type: 'charge.refunded', data: { object: { id: 'ch_x', payment_intent: paymentIntentId } } };
+  // #2232: defaults to a fully-refunded charge (refunded: true) -- the only
+  // case that should trigger a full clawback. Pass { refunded: false } to
+  // simulate a partial refund.
+  function chargeRefundedEvent(paymentIntentId, overrides = {}) {
+    return { type: 'charge.refunded', data: { object: { id: 'ch_x', payment_intent: paymentIntentId, refunded: true, ...overrides } } };
   }
 
   function disputeEvent(type, paymentIntentId, overrides = {}) {
@@ -264,6 +267,44 @@ describe('Stripe purchase-reversal webhooks (#1086)', () => {
 
     const response = await postStripeWebhook(chargeRefundedEvent('pi_webhook_refunded'));
     expect(response.status).toBe(200);
+
+    const purchaseRow = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    expect(purchaseRow.refunded_at).not.toBeNull();
+    const after = await builderRow(builder.builderId);
+    expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents - builderShareCents);
+  });
+
+  // #2232: a charge.refunded event with refunded: false is a PARTIAL
+  // refund (Stripe fires this event for any refund amount, not just a
+  // full one) -- treating it as a full reversal clawed back the entire
+  // commission and revoked ownership over e.g. a $1 goodwill refund on a
+  // $100 purchase.
+  it('does not claw back anything on a partial refund (charge.refunded with refunded: false)', async () => {
+    const { builder, purchaseId } = await createRealMoneyPurchase('webhook-partial-refund', 'pi_webhook_partial_refund');
+    const before = await builderRow(builder.builderId);
+
+    const response = await postStripeWebhook(chargeRefundedEvent('pi_webhook_partial_refund', { refunded: false, amount_refunded: 100 }));
+    expect(response.status).toBe(200);
+
+    const purchaseRow = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    expect(purchaseRow.refunded_at).toBeNull();
+    const after = await builderRow(builder.builderId);
+    expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents);
+  });
+
+  // A subsequent charge.refunded delivery reporting the charge is now FULLY
+  // refunded (refunded: true, e.g. once cumulative partial refunds reach
+  // the full amount) must still claw back normally -- the partial-refund
+  // fix must not accidentally suppress a genuine full reversal.
+  it('still claws back once a later charge.refunded event reports the charge as fully refunded', async () => {
+    const { builder, purchaseId, builderShareCents } = await createRealMoneyPurchase('webhook-then-full-refund', 'pi_webhook_then_full_refund');
+    const before = await builderRow(builder.builderId);
+
+    const partial = await postStripeWebhook(chargeRefundedEvent('pi_webhook_then_full_refund', { refunded: false }));
+    expect(partial.status).toBe(200);
+
+    const full = await postStripeWebhook(chargeRefundedEvent('pi_webhook_then_full_refund', { refunded: true }));
+    expect(full.status).toBe(200);
 
     const purchaseRow = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
     expect(purchaseRow.refunded_at).not.toBeNull();
@@ -295,6 +336,25 @@ describe('Stripe purchase-reversal webhooks (#1086)', () => {
     expect(purchaseRow.refunded_at).not.toBeNull();
     const after = await builderRow(builder.builderId);
     expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents - builderShareCents);
+  });
+
+  // #2231: charge.dispute.closed fires on every final outcome, not just a
+  // loss -- a dispute the merchant WON returned the withheld funds, so
+  // there's nothing to claw back. Without this, a fresh 'won' close with
+  // no earlier dispute.created event clawed back a purchase that was
+  // never actually reversed.
+  it('does not claw back the commission on charge.dispute.closed when the dispute was won', async () => {
+    const { builder, purchaseId, builderShareCents } = await createRealMoneyPurchase('webhook-dispute-won', 'pi_webhook_dispute_won');
+    const before = await builderRow(builder.builderId);
+    expect(builderShareCents).toBeGreaterThan(0);
+
+    const response = await postStripeWebhook(disputeEvent('charge.dispute.closed', 'pi_webhook_dispute_won', { status: 'won' }));
+    expect(response.status).toBe(200);
+
+    const purchaseRow = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    expect(purchaseRow.refunded_at).toBeNull();
+    const after = await builderRow(builder.builderId);
+    expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents);
   });
 
   it('is allowed to drive the builder balance negative, same as the /refund endpoint', async () => {

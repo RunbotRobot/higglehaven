@@ -3165,13 +3165,26 @@ async function requireOwnedLandlet(db, landletId, builderId) {
 // below where a single request can touch many distinct landlets — checks
 // every id with one IN (...) query instead of one round trip per landlet
 // (mirrors the assertReferencesExist idiom used elsewhere in this file).
+//
+// #2233: this used to bind the full uniqueIds array in a single unchunked
+// IN (...) query. PUT/POST /instances/batch's own landletIdsToCheck is the
+// *union* of each instance's new landletId and (for an already-placed
+// instance) its old one -- up to 100 of each, so a bulk move of 100
+// instances each to a distinct new landlet can reach 200 unique ids here,
+// well past D1's 100-bound-parameter cap, despite the batch's own 100-item
+// cap never being exceeded. Chunked the same way getInstancesById was
+// fixed for the identical bug class in #2216.
 async function requireOwnedLandlets(db, landletIds, builderId) {
   const uniqueIds = [...new Set(landletIds)];
-  const placeholders = uniqueIds.map(() => '?').join(', ');
-  const { results } = await db.prepare(
-    `SELECT landlet_id, owner_builder_id FROM landlets WHERE landlet_id IN (${placeholders})`,
-  ).bind(...uniqueIds).all();
-  const byId = new Map(results.map((row) => [row.landlet_id, row]));
+  const byId = new Map();
+  for (let i = 0; i < uniqueIds.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = uniqueIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(
+      `SELECT landlet_id, owner_builder_id FROM landlets WHERE landlet_id IN (${placeholders})`,
+    ).bind(...chunk).all();
+    for (const row of results) byId.set(row.landlet_id, row);
+  }
   for (const landletId of uniqueIds) {
     const landlet = byId.get(landletId);
     if (!landlet) throw new HttpError('Landlet not found', 404);
@@ -7852,8 +7865,31 @@ async function handleStripeWebhook(request, env, db) {
 // refunds is still open for a real chargeback; tracked separately at
 // #1109, not a blocker for this fix.
 async function handlePurchaseReversalWebhookEvent(db, event) {
+  // #2231: charge.dispute.closed fires on every final dispute outcome, not
+  // just a loss -- its own object's `status` is 'won', 'lost', or
+  // 'warning_closed'. 'won' means the card network ruled for the merchant
+  // and returned the withheld funds -- nothing was actually reversed, so
+  // there's nothing to claw back. This only covers the case where no
+  // earlier dispute.created event already clawed back this purchase (the
+  // refunded_at guard below already no-ops that case, same as before --
+  // reversing an already-applied clawback is a separate, non-mechanical
+  // follow-up, not decided here).
+  if (event.type === 'charge.dispute.closed' && event.data?.object?.status === 'won') return;
+
   const paymentIntentId = event.data?.object?.payment_intent;
   if (!paymentIntentId) return;
+  // #2232: charge.refunded fires for ANY refund on a charge, partial or
+  // full -- the Charge object's own `refunded` boolean is the only
+  // authoritative signal for "fully refunded" (it's true only once
+  // amount_refunded reaches the full charge amount). Without this check, a
+  // $1 goodwill partial refund on a $100 purchase clawed back the builder's
+  // entire commission and revoked all ownership that purchase granted, the
+  // same way a genuine full refund does -- even though the buyer kept 99%
+  // of their payment and the product. Dispute events (charge.dispute.*)
+  // carry no `refunded` field at all, so this only applies to
+  // charge.refunded itself; a real chargeback/dispute still claws back in
+  // full immediately, per #1086's own deliberate design.
+  if (event.type === 'charge.refunded' && event.data?.object?.refunded !== true) return;
   const purchase = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
   if (!purchase) return;
 
@@ -8900,6 +8936,19 @@ function creditOrbFromRow(row) {
 // still cost a full batch round-trip).
 const CREDIT_ORB_COLLECT_RATE_LIMIT_MAX = 20;
 
+// #2222: the collect branch had no server-side presence/proximity check at
+// all -- a scripted caller could skip the client's own "walk up to it"
+// gesture (src/main.js's CREDIT_ORB_COLLECT_RADIUS_M = 1.5m check) entirely
+// and drain the whole CREDIT_ORB_BUDGET_CENTS_PER_DAY budget via direct API
+// calls. Reuses this file's only other avatar_presence-freshness idiom
+// (PRESENCE_STALE_AFTER_MS, #1767) rather than inventing a second one, and
+// a radius generous enough to tolerate that same staleness window's worth
+// of real movement at SHOP_RUN_SPEED_M_S (2.7m/s, ~27m) on top of the
+// client's own 1.5m collect radius -- the point of this check is requiring
+// *some* fresh, correctly-landletted presence at all (what the scripted
+// exploit has none of), not pixel-perfect anti-cheat precision.
+const CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M = 30;
+
 // GET /api/credit-orbs (optionally ?landletId=... to scope to one landlet,
 // per #1994's own "or scoped by landlet" note) -- the frontend's read path
 // for #1995's own rendering/collection sub-issue. Deliberately
@@ -8959,6 +9008,36 @@ async function handleCreditOrbs(request, db, route, url) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     await checkRateLimit(db, `credit-orb-collect:${sessionBuilder.builder_id}`, CREDIT_ORB_COLLECT_RATE_LIMIT_MAX);
     const orbId = stringValue(route[1], 'orbId');
+    // x_m/y_m are landlet-local offsets (added to the owning landlet's own
+    // center_x_m/center_y_m to get a world position, same convention every
+    // other per-landlet placed thing in this file uses) -- joined here
+    // since avatar_presence (below) only ever stores a world x/y.
+    const orb = await db.prepare(`
+      SELECT credit_orbs.landlet_id, landlets.center_x_m + credit_orbs.x_m AS world_x,
+        landlets.center_y_m + credit_orbs.y_m AS world_y
+      FROM credit_orbs JOIN landlets ON landlets.landlet_id = credit_orbs.landlet_id
+      WHERE credit_orbs.orb_id = ? AND credit_orbs.collected_at IS NULL
+    `).bind(orbId).first();
+    if (!orb) {
+      throw new HttpError('This credit orb is no longer available -- someone else may have already collected it.', 404);
+    }
+    // Deliberately no landlet_id match against avatar_presence here, unlike
+    // the "nearby avatars" GET above -- updateShopLandletInfo (src/main.js)
+    // only ever sets a reported landletId while standing on a *claimed*
+    // landlet (whose land is this), and every credit orb spawns on a
+    // greenbelt one (spawnCreditOrbIfDue's own `WHERE status = 'greenbelt'`)
+    // by definition, so a real collector's own presence row would always
+    // report landlet_id: null here. World-position proximity (below) is
+    // the actual "walked up to it" signal, independent of land ownership.
+    const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
+    const presence = await db.prepare('SELECT x, y, updated_at FROM avatar_presence WHERE builder_id = ?')
+      .bind(sessionBuilder.builder_id).first();
+    const nearby = presence
+      && presence.updated_at >= staleBefore
+      && Math.hypot(presence.x - orb.world_x, presence.y - orb.world_y) <= CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M;
+    if (!nearby) {
+      throw new HttpError('You need to be near this credit orb in the world to collect it', 403);
+    }
     const [claim] = await db.batch([
       db.prepare(`
         UPDATE credit_orbs SET collected_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), collected_by_builder_id = ?
@@ -17082,7 +17161,43 @@ async function handlePurchaseDispute(request, env, purchaseId) {
   }
   const templateName = template?.name || 'A product';
 
-  if (!(await finalizeRefundReversal(env, purchase))) {
+  // #2224: the refundedCount read above is a plain SELECT taken at the top
+  // of each independent call -- two concurrent disputes for different
+  // purchases from the same buyer can both observe refundedCount === 0
+  // before either's refund actually commits, so both pass `established`
+  // and both would otherwise reach finalizeRefundReversal. This claim is
+  // the real atomic guard, the same "claim first, release on failure"
+  // idiom reserveDiditSession/reserveVideoGenerationJob already use for
+  // their own per-builder one-at-a-time locks (migrations/0095,
+  // worker/index.js's INSERT ... WHERE NOT EXISTS above) -- only the
+  // request that wins this INSERT may proceed, and the loser falls
+  // through exactly like today's unestablished/high-value path. Never
+  // deleted on success: it becomes the permanent "this buyer has already
+  // used their one-time auto-resolve pass" record, closing the race
+  // without relying on purchases.refunded_at having committed yet.
+  const claimed = await db.prepare(`
+    INSERT INTO dispute_auto_resolve_claims (builder_id, purchase_id)
+    SELECT ?, ? WHERE NOT EXISTS (
+      SELECT 1 FROM dispute_auto_resolve_claims WHERE builder_id = ?
+    )
+  `).bind(sessionBuilder.builder_id, purchaseId, sessionBuilder.builder_id).run();
+  if (claimed.meta.changes === 0) {
+    return json({ autoResolved: false, purchase: purchaseFromRow(purchase) });
+  }
+
+  let refundSucceeded;
+  try {
+    refundSucceeded = await finalizeRefundReversal(env, purchase);
+  } catch (err) {
+    // The claim above only reserves this buyer's one-time pass for this
+    // attempt -- if finalizeRefundReversal never actually moved any money
+    // (Stripe misconfigured, the outbound refund call itself failed), the
+    // pass must not be permanently burned for nothing.
+    await db.prepare('DELETE FROM dispute_auto_resolve_claims WHERE builder_id = ?').bind(sessionBuilder.builder_id).run();
+    throw err;
+  }
+  if (!refundSucceeded) {
+    await db.prepare('DELETE FROM dispute_auto_resolve_claims WHERE builder_id = ?').bind(sessionBuilder.builder_id).run();
     const current = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
     return json({ autoResolved: false, purchase: purchaseFromRow(current) });
   }

@@ -15896,7 +15896,17 @@ function updateCreditOrbs(dt) {
     collectCreditOrb(orb.orbId).then(() => {
       removeCreditOrb(orb);
       showCreditOrbToast();
-    }).catch(() => {
+    }).catch((error) => {
+      // #2222: a 403 means the server's own avatar_presence record hasn't
+      // caught up with this walk-in yet (SHOP_PRESENCE_REPORT_INTERVAL_MS/
+      // SHOP_PRESENCE_HEARTBEAT_INTERVAL_MS throttle how often that gets
+      // posted) -- not a real rejection, so this leaves the orb in place
+      // and clears the in-flight guard to let the very next frame retry,
+      // the same way it would if collecting had never fired at all.
+      if (error.status === 403) {
+        orb.collecting = false;
+        return;
+      }
       // The server's own atomic claim is authoritative (docs/API.md's
       // "Credit orbs" section) — a 404 here just means another shopper
       // collected it first, not a real error, so this quietly drops the
