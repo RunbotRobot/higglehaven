@@ -1618,6 +1618,17 @@ async function replaceMeshWithCrop(mesh, crop) {
     selectedMeshes.add(newMesh);
     addSelectionOutline(newMesh);
   }
+  // #2342: addLowStockHighlight is keyed on the mesh object itself, and
+  // addInstanceToScene's own "single choke point" comment only covers the
+  // other three ways a mesh enters productMeshes -- this swap is a fourth,
+  // so without this transfer the old mesh's helper/fill (if any) would
+  // orphan permanently in `scene` (updateLowStockHighlights only ever
+  // iterates the current productMeshes, never finds it again) and the
+  // trimmed replacement would silently lose its highlight.
+  if (lowStockHighlights.has(mesh)) {
+    removeLowStockHighlight(mesh);
+    addLowStockHighlight(newMesh);
+  }
   return newMesh;
 }
 
@@ -9078,6 +9089,20 @@ function updateLowStockHighlights(templateIds) {
 // __testProductScreenPositions) -- exposes which currently-placed
 // instances have the low-stock highlight applied right now.
 window.__testLowStockHighlightedInstanceIds = () => [...lowStockHighlights.keys()].map((mesh) => mesh.userData.instanceId);
+
+// #2342: the hook above reads instanceId off the Map's own mesh keys, so it
+// can't by itself distinguish a correctly-tracked live mesh from a stale,
+// already-disposed one left behind by a swap (e.g. replaceMeshWithCrop)
+// that skipped transferring the highlight -- both report the same
+// instanceId. This checks the *live* mesh for a given instanceId (the one
+// actually in productMeshes right now) is the one lowStockHighlights
+// tracks, and the total entry count, so a test can catch either failure
+// mode: wrong mesh tracked, or an orphaned entry nothing ever cleans up.
+window.__testLowStockHighlightTracksLiveMesh = (instanceId) => {
+  const live = productMeshes.find((mesh) => mesh.userData.instanceId === instanceId);
+  return !!live && lowStockHighlights.has(live);
+};
+window.__testLowStockHighlightCount = () => lowStockHighlights.size;
 
 // #2068: grayed-out placeholder markers for sold-out items that used to be
 // placed on this landlet. Unlike lowStockHighlights above (which decorates
