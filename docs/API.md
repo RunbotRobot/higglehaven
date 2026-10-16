@@ -4314,6 +4314,7 @@ landlet a `landlets` row models.
   "y": 0,
   "z": -4.25,
   "heading": 1.57,
+  "flying": false,
   "updatedAt": "2026-10-01T00:00:00.000Z"
 }
 ```
@@ -4326,6 +4327,13 @@ missing) — never the whole world's positions in one response, both for
 payload size and so a shopper elsewhere isn't visibly tracking someone's
 live position for no reason. The caller's own row is always excluded (they
 already know where they are).
+
+A row whose `flying` is true is also excluded here (#2043, docs/SPEC.md's
+"Flying avatars are invisible to other users" — explicitly deferred by #99
+until live presence existed to apply it to) — withheld server-side rather
+than left to the client's own discretion to hide, so a flying builder's
+position is never even sent to anyone else. `GET /api/presence/me` below
+is unaffected — it's always the caller's own row, flying or not.
 
 A row whose `updated_at` is more than 10 seconds old is excluded as stale
 — treated as "this builder is no longer actually present" rather than a
@@ -4367,7 +4375,7 @@ caller's own row — there is exactly one `avatar_presence` row per
 Request body:
 
 ```json
-{ "x": 12.5, "y": -3.2, "z": 0, "heading": 1.57, "landletId": "some-landlet-id" }
+{ "x": 12.5, "y": -3.2, "z": 0, "heading": 1.57, "landletId": "some-landlet-id", "flying": false }
 ```
 
 - `x`/`y`/`z` are required finite numbers.
@@ -4380,8 +4388,11 @@ Request body:
   is actually near it; an unrecognized id 404s rather than being stored,
   since the `GET` endpoint above scopes its query by this column and
   would otherwise be silently poisoned by a bogus value.
+- `flying` is optional (#2043), defaults to `false` when omitted — anything
+  other than the literal `true` is treated as not-flying, so an older
+  client that never sends this field simply keeps reporting as grounded.
 
-Response: `{ "presence": { "landletId", "x", "y", "z", "heading",
+Response: `{ "presence": { "landletId", "x", "y", "z", "heading", "flying",
 "updatedAt" } }` — the row as stored, after the upsert.
 
 Rate-limited server-side (`presence-report:<builderId>`, 600 per the

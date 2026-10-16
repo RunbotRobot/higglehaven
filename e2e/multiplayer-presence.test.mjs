@@ -99,8 +99,24 @@ await pageA.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 // `#shop-status` losing `.visible` too, or the freeze tap below could
 // race the spawn code and get silently undone the instant it finally runs.
 await pageA.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await pageA.click('#shop-fly-btn'); // freezes A's position — see #1175 comment above
-await pageA.waitForTimeout(100);
+// #2043: every fresh Shop-mode spawn actually starts already airborne —
+// 'flying', descending from a real altitude as part of the spawn's own
+// intro -- not 'grounded' as this test's own original comment ("freezes
+// A's position") implied. So this tap (toggleShopFlight) starts a real
+// *landing*, not a takeoff -- confirmed directly: shopFlightState is
+// 'flying' (#shop-fly-btn.active/body.shop-flying both true) from the
+// very first frame after spawn, before any click at all.
+await pageA.click('#shop-fly-btn'); // freezes A's position (stops the orbit) and starts landing — see #1175 comment above
+// docs/SPEC.md's "Flying avatars are invisible to other users" means GET
+// /api/presence now withholds a flying builder's row from anyone else —
+// wait past the landing animation's own fixed duration (same margin
+// e2e/flight.test.mjs's own takeoff/landing test uses) so A is genuinely
+// grounded before the presence checks below run, rather than the
+// original 100ms (which left A still mid-descent, still flying, and
+// thus invisible for the rest of this test). x/y never move during a
+// vertical-only landing with no joystick input, so this doesn't disturb
+// the "frozen position" this test actually needs.
+await pageA.waitForTimeout(2500); // past SHOP_FLIGHT_LANDING_DURATION_S (2s) -- now 'grounded'
 
 // reportOwnPresenceIfNeeded's own throttle always reports on its very
 // first eligible tick regardless of movement (shopLastReportedPosition
@@ -127,8 +143,11 @@ const aRowSeenByB = presenceBeforeBJoins.body.avatars?.find((a) => a.builderId =
 await pageB.reload({ waitUntil: 'networkidle' });
 await pageB.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 await pageB.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
-await pageB.click('#shop-fly-btn'); // freezes B's position — see #1175 comment above
-await pageB.waitForTimeout(100);
+await pageB.click('#shop-fly-btn'); // freezes B's position (stops the orbit) and starts landing — see #1175 comment above
+// #2043: same reasoning as A's own freeze sequence above — B also spawns
+// already flying, so this one tap lands it; wait past the fixed landing
+// duration before B is genuinely grounded (and thus visible to A).
+await pageB.waitForTimeout(2500); // past SHOP_FLIGHT_LANDING_DURATION_S (2s) -- now 'grounded'
 
 // Give both sides' poll loops (SHOP_PRESENCE_POLL_INTERVAL_MS = 1000) a
 // couple of cycles to actually pick each other up and update the
