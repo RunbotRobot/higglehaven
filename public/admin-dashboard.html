@@ -1400,7 +1400,7 @@
     }
     if (myToken !== pfLoadToken) return;
     const listings = body.listings || [];
-    pfStatus.textContent = listings.length + ' listing(s) with pending flags';
+    pfStatus.textContent = listings.length + ' shown · ' + body.totalCount + ' total';
     renderProductFlags(listings);
   }
 
