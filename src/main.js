@@ -11183,12 +11183,28 @@ function appendNotificationRow(notification) {
         await markNotificationRead(notification.notificationId);
         row.classList.remove('unread');
         row.removeEventListener('click', markReadOnClick);
+        row.removeEventListener('keydown', markReadOnKeydown);
+        row.removeAttribute('role');
+        row.removeAttribute('tabindex');
+        row.removeAttribute('aria-label');
         refreshNotificationsBadge();
       } catch (err) {
         console.warn('Could not mark notification read:', err);
       }
     };
+    // #2329: this row has no native button underneath it, so without an
+    // explicit role/tabindex/keydown handler it's reachable by mouse only —
+    // every other interactive control in this file is a real <button>.
+    const markReadOnKeydown = (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      markReadOnClick();
+    };
+    row.setAttribute('role', 'button');
+    row.setAttribute('tabindex', '0');
+    row.setAttribute('aria-label', `Mark notification as read: ${notification.message}`);
     row.addEventListener('click', markReadOnClick);
+    row.addEventListener('keydown', markReadOnKeydown);
   }
   notificationsListEl.appendChild(row);
 }
