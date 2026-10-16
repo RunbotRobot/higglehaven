@@ -8,7 +8,13 @@ async function requestJson(path, options) {
   const response = await fetch(`${API_BASE}${path}`, options);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `${path} failed with HTTP ${response.status}`);
+    const error = new Error(body.error || `${path} failed with HTTP ${response.status}`);
+    // #2222: collectCreditOrb's own caller needs to tell a 403 ("not
+    // actually near it yet, by the server's own record") apart from a 404
+    // ("someone else already collected it") -- the former is worth
+    // retrying once presence catches up, the latter isn't.
+    error.status = response.status;
+    throw error;
   }
   return response.json();
 }
@@ -1654,7 +1660,10 @@ export async function fetchCreditOrbs(landletId) {
 // #1995: claims an orb on proximity auto-collect. The server's own atomic
 // "first builder wins" check is authoritative — a 404 here just means
 // someone else got there first, not a real error, so callers should treat
-// it as a quiet no-op rather than surfacing it to the shopper.
+// it as a quiet no-op rather than surfacing it to the shopper. #2222: a 403
+// means the server's own avatar_presence record hasn't caught up with this
+// walk-in yet -- worth a silent retry, not a drop, see updateCreditOrbs'
+// own catch handler.
 export async function collectCreditOrb(orbId) {
   return requestJson(`/credit-orbs/${encodeURIComponent(orbId)}/collect`, { method: 'POST' });
 }
