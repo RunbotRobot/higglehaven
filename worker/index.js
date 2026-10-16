@@ -3365,6 +3365,231 @@ const SELLER_DELETE_RATE_LIMIT_MAX = 20;
 // not the tight budget a rare authenticated write gets.
 const BUILDER_LIST_RATE_LIMIT_MAX = 200;
 
+// #1148: factored out of DELETE /api/builders/:id (below) so the exact same
+// atomic, real-money-aware guards can be reused unchanged by
+// cascadeDeleteAccount (real account deletion) -- a gap fixed on one side
+// can never silently drift from the other again, the same "sibling-endpoint
+// inconsistency" class this codebase has hit (and fixed) repeatedly
+// elsewhere. Builds the statement array without running it, so a caller
+// combining this with other tables' own statements (cascadeDeleteAccount)
+// can still execute everything in one atomic db.batch().
+async function builderDeletionStatements(db, builderId) {
+  const builder = await db.prepare(
+    'SELECT stripe_account_id, stripe_onboarding_status FROM builders WHERE builder_id = ?',
+  ).bind(builderId).first();
+  const ownedLandletsSql = `
+    SELECT landlet_id FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'
+  `;
+  // #263/#279 guard the leading-bidder and with-bids-selling cases below,
+  // but doing so as separate SELECTs checked *before* this batch (as an
+  // earlier version of this handler did) leaves a window where a bid
+  // placed in between could slip through uncaught — found via backlog
+  // audit. Folded into the DELETE's own WHERE clause instead (the same
+  // atomic conditional-write pattern used elsewhere in this file, e.g.
+  // handlePurchaseRefund/the #270 calendar-trigger fix), and every other
+  // statement in this same D1 batch (one atomic transaction) is gated on
+  // this builder row having actually been removed by it — so if either
+  // guard blocks the delete, none of the land-release side effects below
+  // take hold either, exactly as if the whole request had been rejected
+  // up front instead of partially applied.
+  //
+  // A second race, found via a later backlog audit: resolveAuction's own
+  // "active" -> "ended" status flip commits as its own separate .run()
+  // call, before the batch that actually transfers the landlet/credits
+  // the seller/notifies both sides runs. `a.status = 'active'` alone
+  // stops blocking the instant that flip lands, even though the payout
+  // for that exact auction hasn't happened yet — so a self-delete by
+  // either side landing in that gap used to slip through, then made
+  // resolveAuction's own payout batch fail outright (its notification
+  // insert has a NOT NULL FK to builders) and roll back in its entirety,
+  // permanently stranding the auction at status='ended' with no payout
+  // and no way to ever re-resolve it (nothing re-triggers a resolve on
+  // an already-'ended' row). Closed without a new column: while a
+  // winning payout is genuinely still pending, the landlet's current
+  // owner hasn't been updated to reflect it yet either — the bidder's
+  // side stays owned by whoever had it before (not yet the bidder), and
+  // the seller's side is still owned by the seller (not yet released) —
+  // so checking that directly, alongside the existing 'active' checks,
+  // reuses signal the payout batch itself will flip the moment it
+  // actually lands, closing the window exactly when the real transfer
+  // completes rather than on an arbitrary timer.
+  const builderGone = 'NOT EXISTS (SELECT 1 FROM builders WHERE builder_id = ?)';
+  const statements = [
+    db.prepare(`
+      DELETE FROM builders
+      WHERE builder_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM auctions a
+          JOIN auction_bids b ON b.auction_id = a.auction_id
+          WHERE a.status = 'active' AND b.bidder_builder_id = ?
+            AND b.amount_cents = (SELECT MAX(amount_cents) FROM auction_bids WHERE auction_id = a.auction_id)
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM auctions a
+          JOIN auction_bids b ON b.auction_id = a.auction_id
+          JOIN landlets l ON l.landlet_id = a.landlet_id
+          WHERE a.status = 'ended' AND a.winning_bid_id = b.bid_id AND b.bidder_builder_id = ?
+            AND l.owner_builder_id != ?
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM auctions a
+          WHERE a.seller_builder_id = ? AND a.status = 'active'
+            AND EXISTS (SELECT 1 FROM auction_bids b WHERE b.auction_id = a.auction_id)
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM auctions a
+          JOIN landlets l ON l.landlet_id = a.landlet_id
+          WHERE a.seller_builder_id = ? AND a.status = 'ended' AND a.winning_bid_id IS NOT NULL
+            AND l.owner_builder_id = ?
+        )
+        -- #852: handleBuilderRedeem inserts this claim row before either
+        -- Stripe call, with stripe_payout_id only ever set once the
+        -- payout has actually succeeded (same idiom as purchases'
+        -- paid_out_at/stripe_payout_id pair above) — so a still-NULL
+        -- payout id means a redemption is genuinely mid-flight right now,
+        -- not just claimed-and-forgotten.
+        AND NOT EXISTS (
+          SELECT 1 FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL
+        )
+        -- #1702: same "real, in-flight, billed external operation" shape
+        -- as the higgles_redemptions guard just above, just for a video-
+        -- to-3D generation job (migrations/0119) instead of a payout --
+        -- status = 'processing' means Tripo is still working (and still
+        -- billing) on this job right now. video_generation_jobs.builder_id
+        -- is ON DELETE CASCADE (migrations/0121, #1645), so without this
+        -- guard the job row -- and the only record of a real, already-
+        -- paid-for generation -- would simply vanish out from under the
+        -- in-flight request, with the eventual webhook finding nothing
+        -- to apply its result to and silently no-opping.
+        --
+        -- #1899: #1890/PR #1891 narrowed this to status = 'processing' on
+        -- the premise that a still-'pending' row is never billed yet --
+        -- false. handleVideoGenerationJobCreate calls Tripo's real,
+        -- billed generation/multiview-to-model endpoint *while the row is
+        -- still 'pending'*, only flipping to 'processing' after that call
+        -- already succeeded. Narrowing this guard let a concurrent self-
+        -- delete cascade away a 'pending' row mid-flight, so the request's
+        -- own later UPDATE (status -> 'processing') would silently match
+        -- zero rows and the real Tripo task would go permanently
+        -- untracked -- exactly the data loss #1702 added this guard to
+        -- prevent. Reverted back to the broader processed_at IS NULL.
+        AND NOT EXISTS (
+          SELECT 1 FROM video_generation_jobs WHERE builder_id = ? AND processed_at IS NULL
+        )
+    `).bind(builderId, builderId, builderId, builderId, builderId, builderId, builderId, builderId, builderId),
+    // #879: each of these is scoped by ${ownedLandletsSql}/its own live
+    // WHERE, not a landlet-id list computed before this batch started —
+    // see the comment above ownedLandletsSql's definition for why that
+    // matters. The three DELETEs run before the UPDATE below clears
+    // owner_builder_id, so every one of them still sees the same,
+    // consistent "currently claimed by this builder" set.
+    db.prepare(`DELETE FROM placed_instances WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(builderId, builderId),
+    db.prepare(`DELETE FROM landlet_versions WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(builderId, builderId),
+    db.prepare(`DELETE FROM landlet_levels WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(builderId, builderId),
+    // #1704: still-active auctions of this builder's own are explicitly
+    // cleaned up here now that seller_builder_id no longer cascades
+    // (migrations/0124) -- the #279 guard above already guarantees any
+    // such auction has zero bids, so there's nothing to protect and
+    // nothing left pointing at it worth keeping around (unlike an ended
+    // auction, which may have real, resolved bid history and is
+    // deliberately left alone below).
+    db.prepare(`DELETE FROM auctions WHERE seller_builder_id = ? AND status = 'active' AND ${builderGone}`).bind(builderId, builderId),
+    // RETURNING landlet_id: the response below used to report a
+    // precomputed id list — #879's fix means there's no such list to
+    // report anymore, since what actually gets released is only known
+    // once this statement runs. Reading it straight from this UPDATE's
+    // own result is simpler than a follow-up query, and can't itself go
+    // stale the way a separate SELECT after the batch would.
+    db.prepare(`
+      UPDATE landlets
+      SET status = 'greenbelt', owner_builder_id = NULL, active_version_id = NULL,
+          claimable_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE owner_builder_id = ? AND status = 'claimed' AND ${builderGone}
+      RETURNING landlet_id
+    `).bind(builderId, builderId),
+  ];
+  // #2246: captured before the conditional retained_stripe_accounts push
+  // below -- batchResults[batchResults.length - 1] used to be read after
+  // that push, so whenever this builder had a stripe_account_id set, the
+  // INSERT's own (RETURNING-less, always-empty) result silently became
+  // "released" instead of this UPDATE's. Pinning the index now means a
+  // later push can never shift which result this name refers to.
+  const landletsReleasedIndex = statements.length - 1;
+  // #1003: the connected Stripe account itself is deliberately left alone
+  // (owner's call, issue-1003 comment) -- this only snapshots its acct_...
+  // id before the row that referenced it disappears, so a later cleanup
+  // pass has something to act on. Gated on ${builderGone} exactly like
+  // the other statements in this same batch, so it stays a no-op on
+  // whichever request the guards above actually block.
+  if (builder?.stripe_account_id) {
+    statements.push(db.prepare(`
+      INSERT INTO retained_stripe_accounts (retained_id, source, source_id, stripe_account_id, stripe_onboarding_status)
+      SELECT ?, 'builder', ?, ?, ? WHERE ${builderGone}
+    `).bind(crypto.randomUUID(), builderId, builder.stripe_account_id, builder.stripe_onboarding_status, builderId));
+  }
+  // #1704: auctions.seller_builder_id (and auction_bids.bidder_builder_id,
+  // #1691) are no longer a cascading FK (migrations/0124/0123) -- this
+  // used to rely on the cascade to clean up any auction where this
+  // builder is the seller, but that silently destroyed the ENTIRE
+  // auction (and, via auction_bids' own cascade off auction_id, every
+  // bid on it) the moment the #279/payout-pending guards above cleared,
+  // for every other party who'd bid on it. The still-active, zero-bid
+  // case (nothing worth protecting) is now cleaned up explicitly above
+  // instead; an already-ended auction is left alone entirely and simply
+  // keeps its own dangling seller_builder_id, same as purchases.seller_id's
+  // established "survive the other party leaving" shape -- the #279
+  // guard above still blocks deletion while that auction is active with
+  // bids or its payout is still pending; once resolved, this builder's
+  // own departure no longer costs anyone else their history.
+  return { statements, landletsReleasedIndex };
+}
+
+// #1148: the disambiguation sibling of builderDeletionStatements above --
+// re-checked only after a 0-row match, purely to pick the right message
+// (every statement in that batch already left everything untouched either
+// way). `subject` lets the exact same checks produce either the existing
+// per-builder-endpoint wording ("this builder") or account-deletion wording
+// ("your account") without duplicating the five underlying queries.
+async function builderDeletionBlockMessage(db, builderId, subject) {
+  const leadingBid = await db.prepare(`
+    SELECT a.auction_id FROM auctions a
+    JOIN auction_bids b ON b.auction_id = a.auction_id
+    WHERE a.status = 'active' AND b.bidder_builder_id = ?
+      AND b.amount_cents = (SELECT MAX(amount_cents) FROM auction_bids WHERE auction_id = a.auction_id)
+    LIMIT 1
+  `).bind(builderId).first();
+  if (leadingBid) return `Cannot delete ${subject} while holding the leading bid on an active auction`;
+  const pendingWin = await db.prepare(`
+    SELECT a.auction_id FROM auctions a
+    JOIN auction_bids b ON b.auction_id = a.auction_id
+    JOIN landlets l ON l.landlet_id = a.landlet_id
+    WHERE a.status = 'ended' AND a.winning_bid_id = b.bid_id AND b.bidder_builder_id = ?
+      AND l.owner_builder_id != ?
+    LIMIT 1
+  `).bind(builderId, builderId).first();
+  if (pendingWin) return `Cannot delete ${subject} while their auction win is still being paid out`;
+  const sellingWithBids = await db.prepare(`
+    SELECT a.auction_id FROM auctions a
+    WHERE a.seller_builder_id = ? AND a.status = 'active'
+      AND EXISTS (SELECT 1 FROM auction_bids b WHERE b.auction_id = a.auction_id)
+    LIMIT 1
+  `).bind(builderId).first();
+  if (sellingWithBids) return `Cannot delete ${subject} while their own auction has bids`;
+  const redemptionInFlight = await db.prepare(`
+    SELECT redemption_id FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL LIMIT 1
+  `).bind(builderId).first();
+  if (redemptionInFlight) return `Cannot delete ${subject} while a higgles redemption is still being paid out`;
+  // #1899: same processed_at IS NULL scoping as the batch guard above --
+  // see its own comment for why status = 'processing' alone (#1890/#1891)
+  // isn't sufficient.
+  const videoJobInFlight = await db.prepare(`
+    SELECT job_id FROM video_generation_jobs WHERE builder_id = ? AND processed_at IS NULL LIMIT 1
+  `).bind(builderId).first();
+  if (videoJobInFlight) return `Cannot delete ${subject} while a video-to-3D generation job is still running`;
+  return `Cannot delete ${subject} while their auction sale is still being paid out`;
+}
+
 async function handleBuilders(request, env, db, route, url) {
   // Ahead of the generic POST/PUT/PATCH/DELETE-by-id branches below, not
   // because of a routing conflict (this is GET, those are other methods)
@@ -3626,229 +3851,22 @@ async function handleBuilders(request, env, db, route, url) {
     // database state at the moment this batch's statements actually run
     // — sequentially within one transaction, so nothing else can land in
     // between — rather than a stale read from before the batch started.
-    const ownedLandletsSql = `
-      SELECT landlet_id FROM landlets WHERE owner_builder_id = ? AND status = 'claimed'
-    `;
-
-    // #263/#279 guard the leading-bidder and with-bids-selling cases below,
-    // but doing so as separate SELECTs checked *before* this batch (as an
-    // earlier version of this handler did) leaves a window where a bid
-    // placed in between could slip through uncaught — found via backlog
-    // audit. Folded into the DELETE's own WHERE clause instead (the same
-    // atomic conditional-write pattern used elsewhere in this file, e.g.
-    // handlePurchaseRefund/the #270 calendar-trigger fix), and every other
-    // statement in this same D1 batch (one atomic transaction) is gated on
-    // this builder row having actually been removed by it — so if either
-    // guard blocks the delete, none of the land-release side effects below
-    // take hold either, exactly as if the whole request had been rejected
-    // up front instead of partially applied.
-    //
-    // A second race, found via a later backlog audit: resolveAuction's own
-    // "active" -> "ended" status flip commits as its own separate .run()
-    // call, before the batch that actually transfers the landlet/credits
-    // the seller/notifies both sides runs. `a.status = 'active'` alone
-    // stops blocking the instant that flip lands, even though the payout
-    // for that exact auction hasn't happened yet — so a self-delete by
-    // either side landing in that gap used to slip through, then made
-    // resolveAuction's own payout batch fail outright (its notification
-    // insert has a NOT NULL FK to builders) and roll back in its entirety,
-    // permanently stranding the auction at status='ended' with no payout
-    // and no way to ever re-resolve it (nothing re-triggers a resolve on
-    // an already-'ended' row). Closed without a new column: while a
-    // winning payout is genuinely still pending, the landlet's current
-    // owner hasn't been updated to reflect it yet either — the bidder's
-    // side stays owned by whoever had it before (not yet the bidder), and
-    // the seller's side is still owned by the seller (not yet released) —
-    // so checking that directly, alongside the existing 'active' checks,
-    // reuses signal the payout batch itself will flip the moment it
-    // actually lands, closing the window exactly when the real transfer
-    // completes rather than on an arbitrary timer.
-    const builderGone = 'NOT EXISTS (SELECT 1 FROM builders WHERE builder_id = ?)';
-    const statements = [
-      db.prepare(`
-        DELETE FROM builders
-        WHERE builder_id = ?
-          AND NOT EXISTS (
-            SELECT 1 FROM auctions a
-            JOIN auction_bids b ON b.auction_id = a.auction_id
-            WHERE a.status = 'active' AND b.bidder_builder_id = ?
-              AND b.amount_cents = (SELECT MAX(amount_cents) FROM auction_bids WHERE auction_id = a.auction_id)
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM auctions a
-            JOIN auction_bids b ON b.auction_id = a.auction_id
-            JOIN landlets l ON l.landlet_id = a.landlet_id
-            WHERE a.status = 'ended' AND a.winning_bid_id = b.bid_id AND b.bidder_builder_id = ?
-              AND l.owner_builder_id != ?
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM auctions a
-            WHERE a.seller_builder_id = ? AND a.status = 'active'
-              AND EXISTS (SELECT 1 FROM auction_bids b WHERE b.auction_id = a.auction_id)
-          )
-          AND NOT EXISTS (
-            SELECT 1 FROM auctions a
-            JOIN landlets l ON l.landlet_id = a.landlet_id
-            WHERE a.seller_builder_id = ? AND a.status = 'ended' AND a.winning_bid_id IS NOT NULL
-              AND l.owner_builder_id = ?
-          )
-          -- #852: handleBuilderRedeem inserts this claim row before either
-          -- Stripe call, with stripe_payout_id only ever set once the
-          -- payout has actually succeeded (same idiom as purchases'
-          -- paid_out_at/stripe_payout_id pair above) — so a still-NULL
-          -- payout id means a redemption is genuinely mid-flight right now,
-          -- not just claimed-and-forgotten.
-          AND NOT EXISTS (
-            SELECT 1 FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL
-          )
-          -- #1702: same "real, in-flight, billed external operation" shape
-          -- as the higgles_redemptions guard just above, just for a video-
-          -- to-3D generation job (migrations/0119) instead of a payout --
-          -- status = 'processing' means Tripo is still working (and still
-          -- billing) on this job right now. video_generation_jobs.builder_id
-          -- is ON DELETE CASCADE (migrations/0121, #1645), so without this
-          -- guard the job row -- and the only record of a real, already-
-          -- paid-for generation -- would simply vanish out from under the
-          -- in-flight request, with the eventual webhook finding nothing
-          -- to apply its result to and silently no-opping.
-          --
-          -- #1899: #1890/PR #1891 narrowed this to status = 'processing' on
-          -- the premise that a still-'pending' row is never billed yet --
-          -- false. handleVideoGenerationJobCreate calls Tripo's real,
-          -- billed generation/multiview-to-model endpoint *while the row is
-          -- still 'pending'*, only flipping to 'processing' after that call
-          -- already succeeded. Narrowing this guard let a concurrent self-
-          -- delete cascade away a 'pending' row mid-flight, so the request's
-          -- own later UPDATE (status -> 'processing') would silently match
-          -- zero rows and the real Tripo task would go permanently
-          -- untracked -- exactly the data loss #1702 added this guard to
-          -- prevent. Reverted back to the broader processed_at IS NULL.
-          AND NOT EXISTS (
-            SELECT 1 FROM video_generation_jobs WHERE builder_id = ? AND processed_at IS NULL
-          )
-      `).bind(route[1], route[1], route[1], route[1], route[1], route[1], route[1], route[1], route[1]),
-      // #879: each of these is scoped by ${ownedLandletsSql}/its own live
-      // WHERE, not a landlet-id list computed before this batch started —
-      // see the comment above ownedLandletsSql's definition for why that
-      // matters. The three DELETEs run before the UPDATE below clears
-      // owner_builder_id, so every one of them still sees the same,
-      // consistent "currently claimed by this builder" set.
-      db.prepare(`DELETE FROM placed_instances WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(route[1], route[1]),
-      db.prepare(`DELETE FROM landlet_versions WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(route[1], route[1]),
-      db.prepare(`DELETE FROM landlet_levels WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(route[1], route[1]),
-      // #1704: still-active auctions of this builder's own are explicitly
-      // cleaned up here now that seller_builder_id no longer cascades
-      // (migrations/0124) -- the #279 guard above already guarantees any
-      // such auction has zero bids, so there's nothing to protect and
-      // nothing left pointing at it worth keeping around (unlike an ended
-      // auction, which may have real, resolved bid history and is
-      // deliberately left alone below).
-      db.prepare(`DELETE FROM auctions WHERE seller_builder_id = ? AND status = 'active' AND ${builderGone}`).bind(route[1], route[1]),
-      // RETURNING landlet_id: the response below used to report a
-      // precomputed id list — #879's fix means there's no such list to
-      // report anymore, since what actually gets released is only known
-      // once this statement runs. Reading it straight from this UPDATE's
-      // own result is simpler than a follow-up query, and can't itself go
-      // stale the way a separate SELECT after the batch would.
-      db.prepare(`
-        UPDATE landlets
-        SET status = 'greenbelt', owner_builder_id = NULL, active_version_id = NULL,
-            claimable_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE owner_builder_id = ? AND status = 'claimed' AND ${builderGone}
-        RETURNING landlet_id
-      `).bind(route[1], route[1]),
-    ];
-    // #2246: captured before the conditional retained_stripe_accounts push
-    // below -- batchResults[batchResults.length - 1] used to be read after
-    // that push, so whenever this builder had a stripe_account_id set, the
-    // INSERT's own (RETURNING-less, always-empty) result silently became
-    // "released" instead of this UPDATE's. Pinning the index now means a
-    // later push can never shift which result this name refers to.
-    const landletsReleasedIndex = statements.length - 1;
-    // #1003: the connected Stripe account itself is deliberately left alone
-    // (owner's call, issue-1003 comment) -- this only snapshots its acct_...
-    // id before the row that referenced it disappears, so a later cleanup
-    // pass has something to act on. Gated on ${builderGone} exactly like
-    // the other statements in this same batch, so it stays a no-op on
-    // whichever request the guards above actually block.
-    if (sessionBuilder.stripe_account_id) {
-      statements.push(db.prepare(`
-        INSERT INTO retained_stripe_accounts (retained_id, source, source_id, stripe_account_id, stripe_onboarding_status)
-        SELECT ?, 'builder', ?, ?, ? WHERE ${builderGone}
-      `).bind(crypto.randomUUID(), route[1], sessionBuilder.stripe_account_id, sessionBuilder.stripe_onboarding_status, route[1]));
-    }
-
-    // #1704: auctions.seller_builder_id (and auction_bids.bidder_builder_id,
-    // #1691) are no longer a cascading FK (migrations/0124/0123) -- this
-    // used to rely on the cascade to clean up any auction where this
-    // builder is the seller, but that silently destroyed the ENTIRE
-    // auction (and, via auction_bids' own cascade off auction_id, every
-    // bid on it) the moment the #279/payout-pending guards above cleared,
-    // for every other party who'd bid on it. The still-active, zero-bid
-    // case (nothing worth protecting) is now cleaned up explicitly above
-    // instead; an already-ended auction is left alone entirely and simply
-    // keeps its own dangling seller_builder_id, same as purchases.seller_id's
-    // established "survive the other party leaving" shape -- the #279
-    // guard above still blocks deletion while that auction is active with
-    // bids or its payout is still pending; once resolved, this builder's
-    // own departure no longer costs anyone else their history.
+    // #1148: this statement-builder (and its disambiguation sibling
+    // builderDeletionBlockMessage below) is also reused unchanged by
+    // cascadeDeleteAccount (real account deletion) -- see that function's
+    // own comment for why a single shared implementation matters here.
+    const { statements, landletsReleasedIndex } = await builderDeletionStatements(db, route[1]);
     const batchResults = await db.batch(statements);
     const deleted = batchResults[0];
     const released = batchResults[landletsReleasedIndex];
     if (deleted.meta.changes === 0) {
-      // One of the two guards blocked it, or (far narrower window) a
+      // One of the guards blocked it, or (far narrower window) a
       // concurrent request already deleted this builder out from under
       // us — re-check purely to pick the right error message; every
       // statement above already left everything else untouched either way.
       const stillExists = await db.prepare('SELECT builder_id FROM builders WHERE builder_id = ?').bind(route[1]).first();
       if (!stillExists) throw new HttpError('Builder not found', 404);
-      const leadingBid = await db.prepare(`
-        SELECT a.auction_id FROM auctions a
-        JOIN auction_bids b ON b.auction_id = a.auction_id
-        WHERE a.status = 'active' AND b.bidder_builder_id = ?
-          AND b.amount_cents = (SELECT MAX(amount_cents) FROM auction_bids WHERE auction_id = a.auction_id)
-        LIMIT 1
-      `).bind(route[1]).first();
-      if (leadingBid) {
-        throw new HttpError('Cannot delete this builder while holding the leading bid on an active auction', 409);
-      }
-      const pendingWin = await db.prepare(`
-        SELECT a.auction_id FROM auctions a
-        JOIN auction_bids b ON b.auction_id = a.auction_id
-        JOIN landlets l ON l.landlet_id = a.landlet_id
-        WHERE a.status = 'ended' AND a.winning_bid_id = b.bid_id AND b.bidder_builder_id = ?
-          AND l.owner_builder_id != ?
-        LIMIT 1
-      `).bind(route[1], route[1]).first();
-      if (pendingWin) {
-        throw new HttpError('Cannot delete this builder while their auction win is still being paid out', 409);
-      }
-      const sellingWithBids = await db.prepare(`
-        SELECT a.auction_id FROM auctions a
-        WHERE a.seller_builder_id = ? AND a.status = 'active'
-          AND EXISTS (SELECT 1 FROM auction_bids b WHERE b.auction_id = a.auction_id)
-        LIMIT 1
-      `).bind(route[1]).first();
-      if (sellingWithBids) {
-        throw new HttpError('Cannot delete this builder while their own auction has bids', 409);
-      }
-      const redemptionInFlight = await db.prepare(`
-        SELECT redemption_id FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL LIMIT 1
-      `).bind(route[1]).first();
-      if (redemptionInFlight) {
-        throw new HttpError('Cannot delete this builder while a higgles redemption is still being paid out', 409);
-      }
-      // #1899: same processed_at IS NULL scoping as the batch guard above --
-      // see its own comment for why status = 'processing' alone (#1890/#1891)
-      // isn't sufficient.
-      const videoJobInFlight = await db.prepare(`
-        SELECT job_id FROM video_generation_jobs WHERE builder_id = ? AND processed_at IS NULL LIMIT 1
-      `).bind(route[1]).first();
-      if (videoJobInFlight) {
-        throw new HttpError('Cannot delete this builder while a video-to-3D generation job is still running', 409);
-      }
-      throw new HttpError('Cannot delete this builder while their auction sale is still being paid out', 409);
+      throw new HttpError(await builderDeletionBlockMessage(db, route[1], 'this builder'), 409);
     }
     return json({ deleted: true, releasedLandletIds: released.results.map((row) => row.landlet_id) });
   }
@@ -4480,6 +4498,62 @@ async function existingSellerIds(db, sellerIds) {
   return new Set(results.map((row) => row.seller_id));
 }
 
+// #1148: factored out of DELETE /api/sellers/:id (below), the same way
+// builderDeletionStatements is factored out of the builder DELETE above —
+// reused unchanged by cascadeDeleteAccount (real account deletion).
+async function sellerDeletionStatements(db, sellerId) {
+  const seller = await db.prepare(
+    'SELECT stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?',
+  ).bind(sellerId).first();
+  // #732: getOrCreateSellerForUser looks up by user_id, not seller_id — if
+  // this seller_id is deleted with real-money proceeds still unpaid, a
+  // later GET /sellers/me mints a brand-new seller_id (Stripe account
+  // unset) and the old seller_id's unpaid purchases become unreachable
+  // through the app forever, with no record left of which Stripe account
+  // the money is sitting in. Same "don't strand real money" guard the
+  // builder-deletion handler above already has for auction payouts —
+  // folded into the DELETE's own WHERE clause (not a separate SELECT
+  // first) to close the same check-then-delete race that guard's own
+  // comment calls out.
+  //
+  // #745: `paid_out_at IS NULL` alone isn't enough — claimPurchasesForPayout
+  // stamps paid_out_at *before* the Stripe payout call resolves, so a
+  // purchase mid-flight (claimed, but the outbound Stripe request hasn't
+  // succeeded or failed yet) reads as "already paid out" to a guard that
+  // only checks paid_out_at, letting deletion through during that window.
+  // If the Stripe call then fails, releasePurchaseClaim resets paid_out_at
+  // back to NULL on a purchase whose seller_id now points at a deleted
+  // row — the exact "stranded real money" outcome this guard exists to
+  // prevent. stripe_payout_id is only ever set once a payout has actually
+  // succeeded (right after this same claim, never before it), so
+  // requiring it too closes the window: a claimed-but-unconfirmed
+  // purchase still blocks deletion, the same as a never-claimed one.
+  const sellerGone = 'NOT EXISTS (SELECT 1 FROM sellers WHERE seller_id = ?)';
+  const statements = [
+    db.prepare(`
+      DELETE FROM sellers
+      WHERE seller_id = ?
+        AND NOT EXISTS (
+          SELECT 1 FROM purchases
+          WHERE seller_id = ?
+            AND payment_intent_id IS NOT NULL
+            AND refunded_at IS NULL
+            AND (paid_out_at IS NULL OR stripe_payout_id IS NULL)
+        )
+    `).bind(sellerId, sellerId),
+  ];
+  // #1003: same snapshot-before-losing-the-live-row shape as the builder
+  // DELETE handler above -- see that handler's own comment for why the
+  // Stripe account itself is left untouched here.
+  if (seller?.stripe_account_id) {
+    statements.push(db.prepare(`
+      INSERT INTO retained_stripe_accounts (retained_id, source, source_id, stripe_account_id, stripe_onboarding_status)
+      SELECT ?, 'seller', ?, ?, ? WHERE ${sellerGone}
+    `).bind(crypto.randomUUID(), sellerId, seller.stripe_account_id, seller.stripe_onboarding_status, sellerId));
+  }
+  return { statements };
+}
+
 // A genuinely separate roster from builders (see 0037_sellers.sql) —
 // catalog_templates.seller_id references this table's IDs now, not a
 // builder's. Simpler than handleBuilders: a seller owns no land, so
@@ -4638,41 +4712,10 @@ async function handleSellers(request, env, db, route, url) {
     // first) to close the same check-then-delete race that guard's own
     // comment calls out.
     //
-    // #745: `paid_out_at IS NULL` alone isn't enough — claimPurchasesForPayout
-    // stamps paid_out_at *before* the Stripe payout call resolves, so a
-    // purchase mid-flight (claimed, but the outbound Stripe request hasn't
-    // succeeded or failed yet) reads as "already paid out" to a guard that
-    // only checks paid_out_at, letting deletion through during that window.
-    // If the Stripe call then fails, releasePurchaseClaim resets paid_out_at
-    // back to NULL on a purchase whose seller_id now points at a deleted
-    // row — the exact "stranded real money" outcome this guard exists to
-    // prevent. stripe_payout_id is only ever set once a payout has actually
-    // succeeded (right after this same claim, never before it), so
-    // requiring it too closes the window: a claimed-but-unconfirmed
-    // purchase still blocks deletion, the same as a never-claimed one.
-    const sellerGone = 'NOT EXISTS (SELECT 1 FROM sellers WHERE seller_id = ?)';
-    const sellerStatements = [
-      db.prepare(`
-        DELETE FROM sellers
-        WHERE seller_id = ?
-          AND NOT EXISTS (
-            SELECT 1 FROM purchases
-            WHERE seller_id = ?
-              AND payment_intent_id IS NOT NULL
-              AND refunded_at IS NULL
-              AND (paid_out_at IS NULL OR stripe_payout_id IS NULL)
-          )
-      `).bind(route[1], route[1]),
-    ];
-    // #1003: same snapshot-before-losing-the-live-row shape as the builder
-    // DELETE handler above -- see that handler's own comment for why the
-    // Stripe account itself is left untouched here.
-    if (sessionSeller.stripe_account_id) {
-      sellerStatements.push(db.prepare(`
-        INSERT INTO retained_stripe_accounts (retained_id, source, source_id, stripe_account_id, stripe_onboarding_status)
-        SELECT ?, 'seller', ?, ?, ? WHERE ${sellerGone}
-      `).bind(crypto.randomUUID(), route[1], sessionSeller.stripe_account_id, sessionSeller.stripe_onboarding_status, route[1]));
-    }
+    // #1148: factored into sellerDeletionStatements below so the exact same
+    // guard is reused unchanged by cascadeDeleteAccount (real account
+    // deletion) -- see that function's own comment.
+    const { statements: sellerStatements } = await sellerDeletionStatements(db, route[1]);
     const [{ meta }] = await db.batch(sellerStatements);
     if (meta.changes === 0) {
       const stillExists = await db.prepare('SELECT seller_id FROM sellers WHERE seller_id = ?').bind(route[1]).first();
@@ -11358,8 +11401,12 @@ async function handleSuspendAccount(request, db) {
   // predate the user_id link entirely) just means nothing to notify.
   const suspendedBuilder = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(row.user_id).first();
   if (suspendedBuilder) {
+    // #2351: fireNotification's message is rendered as plain, unparsed text
+    // client-side (appendNotificationRow, src/main.js) -- format the date
+    // here rather than interpolating the raw ISO instant.
+    const gracePeriodEndsAtFormatted = new Date(gracePeriodEndsAt).toLocaleDateString();
     await fireNotification(db, suspendedBuilder.builder_id,
-      `Your account has been suspended. Reason: ${reason}. This suspension is in effect until ${gracePeriodEndsAt} unless lifted sooner. To dispute this, contact our customer service team -- they handle all suspension disputes and appeals.`);
+      `Your account has been suspended. Reason: ${reason}. This suspension is in effect until ${gracePeriodEndsAtFormatted} unless lifted sooner. To dispute this, contact our customer service team -- they handle all suspension disputes and appeals.`);
   }
 
   // #2032: run only after the suspension itself is confirmed landed -- a
@@ -11696,10 +11743,11 @@ async function handleLogout(request, db, url) {
 // profile -- the real login account (this `users` row) stayed active and a
 // fresh builder/seller got auto-created on next visit. This is the users-
 // row half of #1145's full breakdown: revoke login, free the email/
-// username for reuse, and sign out every device. It deliberately does NOT
-// touch builders/sellers, financial/tax records, or the Stripe Connect
-// account -- those are #1147/#1148's own scope, and whether the old
-// reset-only button still has a separate place in Settings is #1149's.
+// username for reuse, and sign out every device. #1148's own owner
+// decision (2026-10-16, via the Control Room) settled the rest: this DOES
+// now cascade into deleting the user's own builder/seller row(s) too (see
+// cascadeDeleteAccount below) -- whether the old reset-only button still
+// has a separate place in Settings is #1149's.
 //
 // A stolen/XSS'd session cookie alone must not be enough to irreversibly
 // kill an account, so this requires re-entering the current password, the
@@ -11715,6 +11763,21 @@ const DELETE_ACCOUNT_RATE_LIMIT_MAX = 5;
 // lifted, rather than re-deriving a second, potentially-divergent
 // implementation -- the whole point of building suspension on top of
 // this existing shape in the first place, per #1201's own owner comment.
+//
+// #1148 (owner decision, 2026-10-16, via the Control Room): a real account
+// deletion also deletes the user's own builder/seller row(s), inheriting
+// whichever of builderDeletionStatements/sellerDeletionStatements' own
+// real-money-aware guards apply (an active auction with the leading bid,
+// an unresolved payout, an in-flight redemption or video-generation job)
+// -- reused unchanged from the HTTP DELETE endpoints above/below them so a
+// guard fixed on one side can never drift from the other again. Per the
+// same owner decision, hitting any of those guards BLOCKS the whole
+// account deletion with a clear error (not a partial deletion forced
+// through) -- so the users UPDATE/sessions DELETE below are gated on the
+// builder/seller rows (whichever exist) having actually been removed
+// first, inside the same atomic db.batch() as everything else: if either
+// guard blocks, this WHERE simply matches nothing, leaving the account
+// (and its session) exactly as live as it was before the call.
 async function cascadeDeleteAccount(db, userId) {
   // Freed rather than hard-deleted, per #1145's "email/username freed ...
   // per the owner's chosen approach" -- rewritten to a placeholder unique
@@ -11736,20 +11799,81 @@ async function cascadeDeleteAccount(db, userId) {
   // plaintext that could satisfy verifyPassword against this row again.
   const revokedPasswordHash = await hashPassword(crypto.randomUUID());
 
-  await db.batch([
+  const builderRow = await db.prepare('SELECT builder_id FROM builders WHERE user_id = ?').bind(userId).first();
+  const sellerRow = await db.prepare('SELECT seller_id FROM sellers WHERE user_id = ?').bind(userId).first();
+  const builderId = builderRow?.builder_id ?? null;
+  const sellerId = sellerRow?.seller_id ?? null;
+
+  const statements = [];
+  let landletsReleasedIndex = -1;
+  if (builderId) {
+    const built = await builderDeletionStatements(db, builderId);
+    landletsReleasedIndex = statements.length + built.landletsReleasedIndex;
+    statements.push(...built.statements);
+  }
+  if (sellerId) {
+    const built = await sellerDeletionStatements(db, sellerId);
+    statements.push(...built.statements);
+  }
+
+  // Each clause below defaults to "ok" (1 = 1) when there's no builder/
+  // seller to worry about at all, and otherwise requires that row to have
+  // actually been removed by the statements above -- same ${xGone} idiom
+  // those statements already use internally, just extended to gate the
+  // account-level statements too.
+  const builderOkClause = builderId ? 'NOT EXISTS (SELECT 1 FROM builders WHERE builder_id = ?)' : '1 = 1';
+  const sellerOkClause = sellerId ? 'NOT EXISTS (SELECT 1 FROM sellers WHERE seller_id = ?)' : '1 = 1';
+  const guardBinds = [...(builderId ? [builderId] : []), ...(sellerId ? [sellerId] : [])];
+
+  const usersUpdateIndex = statements.length;
+  statements.push(
     db.prepare(`
       UPDATE users SET
         email = ?, email_canonical = NULL, username = ?, password_hash = ?,
         failed_login_attempts = 0, locked_until = NULL,
         deleted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(deletedEmail, deletedUsername, revokedPasswordHash, userId),
+      WHERE user_id = ? AND ${builderOkClause} AND ${sellerOkClause}
+    `).bind(deletedEmail, deletedUsername, revokedPasswordHash, userId, ...guardBinds),
     // Same "sign out every device" reasoning handleResetPassword's own
     // session wipe already uses -- there is no more final an account
-    // action than this one to leave a live session riding on.
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(userId),
-  ]);
+    // action than this one to leave a live session riding on. Gated the
+    // same way as the UPDATE just above: a blocked deletion must leave
+    // every session alive too, not silently sign the caller out anyway.
+    db.prepare(`
+      DELETE FROM sessions WHERE user_id = ? AND ${builderOkClause} AND ${sellerOkClause}
+    `).bind(userId, ...guardBinds),
+  );
+
+  const batchResults = await db.batch(statements);
+  if (batchResults[usersUpdateIndex].meta.changes === 0) {
+    // Mirrors the disambiguation blocks the HTTP builder/seller DELETE
+    // endpoints already have (re-checked only to pick the right message --
+    // every statement above already left everything untouched either way,
+    // same atomic-batch reasoning builderDeletionStatements' own comment
+    // gives). Builder checked first, matching the order its own statements
+    // were added to the batch above.
+    if (builderId) {
+      const builderStillExists = await db.prepare('SELECT builder_id FROM builders WHERE builder_id = ?').bind(builderId).first();
+      if (builderStillExists) throw new HttpError(await builderDeletionBlockMessage(db, builderId, 'your account'), 409);
+    }
+    if (sellerId) {
+      const sellerStillExists = await db.prepare('SELECT seller_id FROM sellers WHERE seller_id = ?').bind(sellerId).first();
+      if (sellerStillExists) {
+        throw new HttpError("Cannot delete your account while a real-money purchase's proceeds are still unpaid — request a payout first", 409);
+      }
+    }
+    // Neither row still exists, so this wasn't actually a real-money block
+    // -- a narrow concurrent-delete race (e.g. this same account already
+    // deleted by another in-flight request). Retry-safe, same posture as
+    // the builder/seller endpoints' own "concurrent delete" case.
+    throw new HttpError('Account deletion did not complete -- please retry', 409);
+  }
+  return {
+    releasedLandletIds: landletsReleasedIndex >= 0
+      ? batchResults[landletsReleasedIndex].results.map((row) => row.landlet_id)
+      : [],
+  };
 }
 
 async function handleDeleteAccount(request, db, url) {
