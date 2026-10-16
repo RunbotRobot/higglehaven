@@ -786,3 +786,64 @@ describe('sweepSoldOutTemplateInstances consults the backup chain (#2050)', () =
     expect(markers.body.markers).toMatchObject([{ templateId: 'sweep-all-exhausted-active' }]);
   });
 });
+
+// #2283: sweepSoldOutTemplateInstances binds every affected instance's own
+// chain-lookup, and every affected builder's own notification-preference
+// lookup, in a single unchunked IN (...) query -- D1 caps a single query at
+// 100 bound parameters, so a template placed across more than 100 distinct
+// instances/builders threw a raw D1 error from inside the purchase-finalize
+// path instead of completing the sweep. Seeds the other 149 affected
+// instances (each on its own landlet owned by its own builder, to also push
+// the builderIds query past 100) directly via D1 -- same shape as #2233's
+// own >100-id regression test -- rather than the real claim/place flows,
+// since 149 real landlets would be far slower to create and the test only
+// cares that the real purchase-triggered sweep completes cleanly either way.
+describe('sweepSoldOutTemplateInstances chunks its IN(...) queries past 100 entries (#2283)', () => {
+  it('sweeps 150 affected instances/builders without a raw D1 "too many SQL variables" error', async () => {
+    await createTemplate('sweep-chunk-template', { stockQuantity: 1 });
+
+    const seededBuilderIds = Array.from({ length: 149 }, (_, i) => `sweep-chunk-builder-${i}`);
+    const seededLandletIds = Array.from({ length: 149 }, (_, i) => `sweep-chunk-landlet-${i}`);
+    const seededInstanceIds = Array.from({ length: 149 }, (_, i) => `sweep-chunk-instance-${i}`);
+    await env.DB.batch(seededBuilderIds.map((builderId) => env.DB.prepare(
+      'INSERT INTO builders (builder_id, label) VALUES (?, ?)',
+    ).bind(builderId, builderId)));
+    await env.DB.batch(seededLandletIds.map((landletId, i) => env.DB.prepare(
+      "INSERT INTO landlets (landlet_id, name, status, owner_builder_id) VALUES (?, ?, 'claimed', ?)",
+    ).bind(landletId, `Test ${landletId}`, seededBuilderIds[i])));
+    await env.DB.batch(seededInstanceIds.map((instanceId, i) => env.DB.prepare(
+      'INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m) VALUES (?, ?, ?, 1, 1)',
+    ).bind(instanceId, seededLandletIds[i], 'sweep-chunk-template')));
+
+    // The 150th affected instance -- placed and purchased for real, since
+    // this is the one that actually triggers the sweep (dropping the
+    // template's stock_quantity to 0).
+    const buyer = await signupBuilder('sweep-chunk-buyer');
+    await createLandletAndClaim('sweep-chunk-buyer-landlet', buyer);
+    await placeInstance('sweep-chunk-buyer-instance', 'sweep-chunk-buyer-landlet', 'sweep-chunk-template', buyer);
+
+    const sale = await api('/instances/sweep-chunk-buyer-instance/purchase', buyer.session({ method: 'POST' }));
+    // The real bug was a raw 500 (D1_ERROR: too many SQL variables) from
+    // inside this exact call, past the point the purchase itself commits.
+    expect(sale.response.status).toBe(201);
+
+    const remaining = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM placed_instances WHERE template_id = ?',
+    ).bind('sweep-chunk-template').first();
+    expect(remaining.count).toBe(0);
+
+    const markerCount = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM sold_out_markers WHERE template_id = ?',
+    ).bind('sweep-chunk-template').first();
+    expect(markerCount.count).toBe(150);
+
+    // Matches on the message text alone (it embeds the template's own name,
+    // which embeds its unique templateId) rather than an IN (...) over all
+    // 150 builder ids -- that would just reintroduce this same test's own
+    // bug inside its own assertion.
+    const notificationCount = await env.DB.prepare(
+      "SELECT COUNT(*) AS count FROM notifications WHERE message LIKE '%sweep-chunk-template%just sold out%'",
+    ).first();
+    expect(notificationCount.count).toBe(150);
+  });
+});
