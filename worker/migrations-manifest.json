@@ -143,5 +143,6 @@
   "0143_calendar_events_sign_posts_user_id_indexes.sql",
   "0144_avatar_presence_flying.sql",
   "0145_catalog_category_subcategory_color_nocase_indexes.sql",
-  "0146_control_room_last_reply.sql"
+  "0146_control_room_last_reply.sql",
+  "0147_credit_orbs_collected_by_builder_id_no_fk.sql"
 ]
