@@ -3927,8 +3927,19 @@ function hasDuplicateProductName(name, excludeTemplateId) {
 // costs nothing beyond what's already on each template. Search matches
 // name first (the issue's own stated minimum) plus category/subcategory
 // as a cheap stretch, since they're already in hand.
+// #2325: GET /api/catalog?category= matches case-insensitively (COLLATE
+// NOCASE, migration 0145) -- dedup/compare the same way here so two
+// differently-cased templates for what the server treats as one category
+// don't splinter into separate filter options that only ever show their
+// own casing's listings.
 function populateSellerCategoryFilterOptions(templates) {
-  const categories = [...new Set(templates.map((t) => t.category).filter(Boolean))].sort();
+  const categoriesByKey = new Map();
+  for (const t of templates) {
+    if (!t.category) continue;
+    const key = t.category.toLowerCase();
+    if (!categoriesByKey.has(key)) categoriesByKey.set(key, t.category);
+  }
+  const categories = [...categoriesByKey.values()].sort();
   const previous = sellerCategoryFilterSelect.value;
   sellerCategoryFilterSelect.innerHTML = '';
   const allOption = document.createElement('option');
@@ -3941,7 +3952,7 @@ function populateSellerCategoryFilterOptions(templates) {
     option.textContent = category;
     sellerCategoryFilterSelect.appendChild(option);
   }
-  sellerCategoryFilterSelect.value = categories.includes(previous) ? previous : '';
+  sellerCategoryFilterSelect.value = categories.some((c) => c.toLowerCase() === previous.toLowerCase()) ? previous : '';
 }
 
 function filterAndSortSellerProducts(templates) {
@@ -3954,7 +3965,7 @@ function filterAndSortSellerProducts(templates) {
       (t.category || '').toLowerCase().includes(query) ||
       (t.subcategory || '').toLowerCase().includes(query));
   }
-  if (category) filtered = filtered.filter((t) => t.category === category);
+  if (category) filtered = filtered.filter((t) => (t.category || '').toLowerCase() === category.toLowerCase());
   const sort = sellerSortSelect.value;
   filtered = filtered.slice().sort((a, b) => {
     if (sort === 'price-asc') return (a.priceCents ?? Infinity) - (b.priceCents ?? Infinity);
