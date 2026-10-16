@@ -11065,6 +11065,17 @@ async function handleSuspendAccount(request, db) {
     suspensionId, reason, evidenceNote, gracePeriodEndsAt,
   }).run();
 
+  // #2031: an automated in-app notice, not the full admin-only evidenceNote
+  // -- and routes disputes through the third-party CS agency (docs/SPEC.md
+  // §6 P122), never the operator directly. No builder row (never happened
+  // for a real, non-dev-mode account, but some pre-#1092 free-text builders
+  // predate the user_id link entirely) just means nothing to notify.
+  const suspendedBuilder = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(row.user_id).first();
+  if (suspendedBuilder) {
+    await fireNotification(db, suspendedBuilder.builder_id,
+      `Your account has been suspended. Reason: ${reason}. This suspension is in effect until ${gracePeriodEndsAt} unless lifted sooner. To dispute this, contact our customer service team -- they handle all suspension disputes and appeals.`);
+  }
+
   // #2032: run only after the suspension itself is confirmed landed -- a
   // removeContent request against an account that turned out to already be
   // suspended (the 409 above) must not remove anything.
