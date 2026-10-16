@@ -9274,6 +9274,19 @@ is always fresh activity worth flagging, so a task the owner already
 reviewed goes back to showing the board's "New" indicator rather than
 sitting with a new reply nobody's alerted to.
 
+Also stamps the parent task's `lastReplyFrom`/`lastReplyAt` (#2254) to
+this reply's own `from`/timestamp — a denormalized "who spoke last"
+pair, same precedent as `noteAuthor`/`noteUpdatedAt`, that the admin
+page's `waitingBadge()` reads to flag a stale "Waiting on: Owner" card
+(see below). **If `from` is `'owner'` (case-insensitive) and the task's
+current `waitingOn` is already `'owner'`, this same call also clears
+`waitingOn` to `'claude'`** — the owner-reply auto-clear AGENTS.md's own
+Control Room section has long documented as the admin page's behavior,
+now actually implemented against this real API rather than just the
+(never-built) compose-form logic that doc originally described. Any
+other `from`, or a task not currently `waitingOn: 'owner'`, leaves
+`waitingOn` untouched.
+
 ### Admin page: `GET /admin/control-room`
 
 The board itself, served same-origin from this same Worker instead of a
@@ -9301,6 +9314,17 @@ data-migration commit for details. Some of the old Artifact board's finer
 UI (per-viewer highlight/minimize toggles, a few small display niceties)
 was not ported in this first pass; the core task/reply/status/waitingOn
 workflow is fully functional, and polish can follow as its own change.
+
+`waitingBadge()` renders a distinct **"Waiting on: Owner (unexplained)"**
+pill (#2254), instead of the plain "Waiting on: Owner" one, when a
+`queued` task's `waitingOn` is `'owner'` but its own `lastReplyFrom` is
+also `'owner'` — i.e. the owner already spoke last in the thread, with
+no session reply following, yet the card still sits blocked on them.
+With the reply-create auto-clear described above, this shouldn't be
+reachable through the ordinary API path (an owner reply to a task
+genuinely `waitingOn: 'owner'` clears it in that same request) — it's a
+safety net for a direct-D1 write bypassing that logic, matching the
+fallback access path AGENTS.md's own Control Room section documents.
 
 ## Admin action log (#996, sub-issue-in-spirit of #813/#814)
 
