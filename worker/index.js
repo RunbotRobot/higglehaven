@@ -4739,8 +4739,24 @@ async function handlePresence(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     await checkRateLimit(db, `presence-nearby:${sessionBuilder.builder_id}`, PRESENCE_NEARBY_RATE_LIMIT_MAX);
-    const landletId = stringValue(url.searchParams.get('landletId'), 'landletId');
     const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
+    // #2269: a client-supplied `landletId` query param used to be trusted
+    // outright -- any verified account could enumerate landlet ids via the
+    // public GET /api/landlets and then poll this endpoint for any of
+    // them, continuously reading everyone else's live position there with
+    // no proximity/consent requirement at all, defeating this function's
+    // own stated "a shopper elsewhere isn't visibly tracking someone's
+    // live position" intent above. Derive the landlet from the caller's
+    // own last-reported avatar_presence row instead -- the same "don't
+    // trust a client-supplied location claim" fix already applied to the
+    // credit-orb collect endpoint (#2222) -- so a caller can only ever see
+    // who's nearby wherever they themselves actually, recently were.
+    const ownPresence = await db.prepare('SELECT landlet_id, updated_at FROM avatar_presence WHERE builder_id = ?')
+      .bind(sessionBuilder.builder_id).first();
+    const landletId = ownPresence && ownPresence.updated_at >= staleBefore ? ownPresence.landlet_id : null;
+    if (landletId === null) {
+      return json({ avatars: [] });
+    }
     const { results } = await db.prepare(`
       SELECT * FROM avatar_presence
       WHERE landlet_id = ? AND builder_id != ? AND updated_at >= ?

@@ -15663,7 +15663,7 @@ async function pollNearbyPresenceIfNeeded(now) {
   const myPresencePollToken = ++presencePollToken;
   let avatars;
   try {
-    avatars = await fetchNearbyPresence(landletId);
+    avatars = await fetchNearbyPresence();
   } catch {
     return; // best-effort -- try again next poll tick, same as a dropped report
   }
