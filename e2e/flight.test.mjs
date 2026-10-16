@@ -84,6 +84,24 @@ const upBtnBox = await page.locator('#shop-up-btn').boundingBox();
 await page.mouse.move(upBtnBox.x + upBtnBox.width / 2, upBtnBox.y + upBtnBox.height / 2);
 await page.mouse.down();
 const upBtnActiveWhileHeld = await page.evaluate(() => document.getElementById('shop-up-btn').classList.contains('active'));
+
+// #2361: the button is only 52x40px — a held thumb commonly drifts off its
+// small hit area without lifting. setPointerCapture keeps pointerup/
+// pointercancel routed to this element regardless of where the pointer
+// physically is, but per MDN's own documentation of setPointerCapture,
+// pointerleave still fires based on the pointer's actual screen position
+// — bindShopVerticalButton used to treat that as a release, silently
+// stopping ascent while the finger was still physically down. Chromium's
+// real input pipeline doesn't reliably reproduce a captured pointer
+// crossing a boundary from a simulated page.mouse.move in this harness,
+// so dispatch the actual pointerleave event the bug is about directly at
+// the button, exercising bindShopVerticalButton's own handler exactly as
+// the browser would if/when it fires one — same as a drifted touch would.
+await page.evaluate(() => {
+  document.getElementById('shop-up-btn').dispatchEvent(new PointerEvent('pointerleave', { pointerId: 1, bubbles: false }));
+});
+const upBtnActiveAfterDriftOff = await page.evaluate(() => document.getElementById('shop-up-btn').classList.contains('active'));
+
 await page.waitForTimeout(500);
 await page.mouse.up();
 const upBtnActiveAfterRelease = await page.evaluate(() => document.getElementById('shop-up-btn').classList.contains('active'));
@@ -109,6 +127,7 @@ console.log('#shop-fly-btn.active immediately after the takeoff tap (should be t
 console.log('#shop-fly-btn-icon right after the takeoff tap (should be bird-standing.png, i.e. "press to land"):', flyBtnIconRightAfterTakeoffTap);
 console.log('#shop-vertical-controls visible during takeoff (should be true):', verticalControlsVisibleDuringTakeoff);
 console.log('#shop-up-btn.active while held (should be true):', upBtnActiveWhileHeld);
+console.log('#shop-up-btn.active after drifting off the button while still held (should still be true — #2361):', upBtnActiveAfterDriftOff);
 console.log('#shop-up-btn.active after release (should be false):', upBtnActiveAfterRelease);
 console.log('shop-flying cleared immediately after the landing tap (should be false):', flyingClassRightAfterLandingTap);
 console.log('#shop-fly-btn.active cleared immediately after the landing tap (should be false):', flyBtnActiveRightAfterLandingTap);
@@ -125,6 +144,7 @@ const pass =
   flyBtnIconRightAfterTakeoffTap === 'bird-standing.png' &&
   verticalControlsVisibleDuringTakeoff &&
   upBtnActiveWhileHeld &&
+  upBtnActiveAfterDriftOff &&
   !upBtnActiveAfterRelease &&
   !flyingClassRightAfterLandingTap &&
   !flyBtnActiveRightAfterLandingTap &&
