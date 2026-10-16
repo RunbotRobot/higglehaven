@@ -1649,6 +1649,41 @@ describe('Authentication', () => {
     expect(listed.adminGrantedAt).not.toBe('2099-01-01T00:00:00.000Z');
   });
 
+  // #2319: unlike the redundant-re-grant case just above (never actually
+  // revoked in between), a REAL revoke-then-re-grant cycle must NOT keep
+  // reporting the original, pre-revoke grant timestamp -- that span
+  // genuinely was not an admin tenure. admin_action_log is append-only, so
+  // the plain MIN the #1797 test above exercises would otherwise still
+  // return the stale first grant.
+  it('reports adminGrantedAt from the re-grant, not a stale pre-revoke grant, after a real revoke cycle', async () => {
+    const admin = await signupBuilder('admin-granted-at-revoke-admin');
+    await api('/auth/admin-bootstrap', admin.session({
+      method: 'POST', body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    }));
+    const target = await signupBuilder('admin-granted-at-revoke-target');
+    const firstGrant = await api('/auth/grant-admin', admin.session({
+      method: 'POST', body: JSON.stringify({ email: target.email }),
+    }));
+    const targetUserId = firstGrant.body.user.userId;
+    const firstGrantedAt = (await api('/auth/admins', admin.session()))
+      .body.admins.find((a) => a.userId === targetUserId).adminGrantedAt;
+
+    const revoked = await api('/auth/revoke-admin', admin.session({
+      method: 'POST', body: JSON.stringify({ email: target.email }),
+    }));
+    expect(revoked.response.status).toBe(200);
+
+    const reGrant = await api('/auth/grant-admin', admin.session({
+      method: 'POST', body: JSON.stringify({ email: target.email }),
+    }));
+    expect(reGrant.response.status).toBe(200);
+
+    const listed = (await api('/auth/admins', admin.session()))
+      .body.admins.find((a) => a.userId === targetUserId);
+    expect(listed.adminGrantedAt).not.toBe(firstGrantedAt);
+    expect(new Date(listed.adminGrantedAt).getTime()).toBeGreaterThan(new Date(firstGrantedAt).getTime());
+  });
+
   // #1819: the missing inverse of grant-admin (#1481) -- same auth gating
   // (401/403) as grant-admin's own test above, plus the one invariant
   // #1819 asked this endpoint to enforce: an admin can revoke their own
