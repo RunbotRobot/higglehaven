@@ -10176,6 +10176,55 @@ async function generateTax1099Drafts(db, year) {
       userId: row.user_id, taxYear: year, formType: '1099-k', grossIncomeCents: row.total, generatedAt,
     })),
   ]);
+
+  await pruneStaleTax1099Drafts(db, year, yearStart, yearEnd);
+}
+
+// #2214: a draft's gross_income_cents is only ever set by the upsert above,
+// which only runs for payees the two threshold queries above still return.
+// If enough of a payee's non-refunded income gets refunded after their
+// draft was created to drop their live total back under the threshold,
+// they stop appearing in those queries entirely -- the draft they already
+// have just sits there forever with its original, now-overstated total,
+// since nothing was ever written to shrink or remove it. No 1099 is
+// actually required once income falls back under the reporting threshold,
+// so any remaining 'draft' row (never 'approved'/'filed'/'voided' --
+// upsertTax1099Draft's own WHERE guard already protects those) whose live,
+// refund-aware total no longer meets its own form type's threshold gets
+// deleted outright, the same as if it had never qualified in the first
+// place.
+async function pruneStaleTax1099Drafts(db, year, yearStart, yearEnd) {
+  const [staleNec, staleK] = await Promise.all([
+    db.prepare(`
+      SELECT f.form_id FROM tax_1099_forms f
+      LEFT JOIN (
+        SELECT b.user_id AS user_id, SUM(e.amount_cents) AS total
+        FROM higgles_earnings_events e JOIN builders b ON b.builder_id = e.builder_id
+        WHERE b.user_id IS NOT NULL AND e.created_at >= ? AND e.created_at < ?
+        GROUP BY b.user_id
+      ) live ON live.user_id = f.user_id
+      WHERE f.tax_year = ? AND f.form_type = '1099-nec' AND f.status = 'draft'
+        AND COALESCE(live.total, 0) < ?
+    `).bind(yearStart, yearEnd, year, TAX_1099_NEC_THRESHOLD_CENTS).all(),
+    db.prepare(`
+      SELECT f.form_id FROM tax_1099_forms f
+      LEFT JOIN (
+        SELECT s.user_id AS user_id, SUM(p.total_cents) AS total
+        FROM purchases p JOIN sellers s ON s.seller_id = p.seller_id
+        WHERE s.user_id IS NOT NULL AND p.payment_intent_id IS NOT NULL AND p.refunded_at IS NULL
+          AND p.created_at >= ? AND p.created_at < ?
+        GROUP BY s.user_id
+      ) live ON live.user_id = f.user_id
+      WHERE f.tax_year = ? AND f.form_type = '1099-k' AND f.status = 'draft'
+        AND COALESCE(live.total, 0) < ?
+    `).bind(yearStart, yearEnd, year, TAX_REPORTING_THRESHOLD_CENTS).all(),
+  ]);
+
+  const staleFormIds = [...staleNec.results, ...staleK.results].map((row) => row.form_id);
+  if (staleFormIds.length === 0) return;
+  await db.batch(staleFormIds.map((formId) => db.prepare(
+    `DELETE FROM tax_1099_forms WHERE form_id = ? AND status = 'draft'`,
+  ).bind(formId)));
 }
 
 // ---- 1099 e-filing transmission (#646, sub-issue of #616/#350) —
