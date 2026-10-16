@@ -105,10 +105,22 @@ console.log('rows shown after adding a second backup (should be 2):', rowsAfterS
 // Reorder: move the second row (table) up to first place via its own ▲
 // button -- the real moderation path, not the API directly.
 await page.locator('.backup-chain-row').filter({ hasText: 'Table' }).locator('.backup-chain-row-up').click();
+// #2280: every row's Up/Down button disables itself (not just the moved
+// row's) the instant any reorder fires, since every row closes over the
+// same backups snapshot and the PUT is a full-replace -- a second click
+// anywhere in the list before this one resolves would otherwise silently
+// discard whichever reorder's response lands first. The click() above
+// already ran the handler's synchronous disabling before resolving (JS
+// runs to the first await in one tick), so this read is reliable without
+// a wait.
+const rowButtonsDisabledMidReorder = await page.locator('.backup-chain-row button:not(:disabled)').count();
+console.log('every row button disabled while a reorder is in flight (should be 0):', rowButtonsDisabledMidReorder);
 await page.waitForFunction(() => {
   const first = document.querySelector('.backup-chain-row');
   return first && first.textContent.includes('Table');
 }, { timeout: 5000 });
+const rowButtonsReenabledAfterReorder = await page.locator('.backup-chain-row button:not(:disabled)').count();
+console.log('row buttons re-enabled again once the reorder completes (should be > 0):', rowButtonsReenabledAfterReorder);
 const firstRowAfterReorder = await page.locator('.backup-chain-row').first().textContent();
 console.log('first row after moving table up (should now mention "Table"):', firstRowAfterReorder);
 
@@ -155,6 +167,8 @@ const pass = enabledWhenSelected === false &&
   firstRowText.includes('Tree') &&
   backupsAfterFirstAdd.length === 1 && backupsAfterFirstAdd[0].templateId === 'placeholder-tree' &&
   rowsAfterSecondAdd === 2 &&
+  rowButtonsDisabledMidReorder === 0 &&
+  rowButtonsReenabledAfterReorder > 0 &&
   firstRowAfterReorder.includes('Table') &&
   backupsAfterReorder.length === 2 &&
   backupsAfterReorder[0].templateId === 'placeholder-table' &&
