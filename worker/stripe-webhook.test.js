@@ -297,6 +297,25 @@ describe('Stripe purchase-reversal webhooks (#1086)', () => {
     expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents - builderShareCents);
   });
 
+  // #2231: charge.dispute.closed fires on every final outcome, not just a
+  // loss -- a dispute the merchant WON returned the withheld funds, so
+  // there's nothing to claw back. Without this, a fresh 'won' close with
+  // no earlier dispute.created event clawed back a purchase that was
+  // never actually reversed.
+  it('does not claw back the commission on charge.dispute.closed when the dispute was won', async () => {
+    const { builder, purchaseId, builderShareCents } = await createRealMoneyPurchase('webhook-dispute-won', 'pi_webhook_dispute_won');
+    const before = await builderRow(builder.builderId);
+    expect(builderShareCents).toBeGreaterThan(0);
+
+    const response = await postStripeWebhook(disputeEvent('charge.dispute.closed', 'pi_webhook_dispute_won', { status: 'won' }));
+    expect(response.status).toBe(200);
+
+    const purchaseRow = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    expect(purchaseRow.refunded_at).toBeNull();
+    const after = await builderRow(builder.builderId);
+    expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents);
+  });
+
   it('is allowed to drive the builder balance negative, same as the /refund endpoint', async () => {
     const { builder, purchaseId } = await createRealMoneyPurchase('webhook-negative-balance', 'pi_webhook_negative_balance');
     await env.DB.prepare('UPDATE builders SET higgles_balance_cents = 0 WHERE builder_id = ?').bind(builder.builderId).run();
