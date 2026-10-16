@@ -877,8 +877,8 @@ On success, promotes the calling account to admin and returns
 `{ "user": { ..., "isAdmin": true } }`. Reusable, not one-time — anyone
 who currently holds the secret can promote themselves (or, by sharing it
 briefly, someone else) at any time; there's deliberately no "first admin
-only" ratchet. Revoking admin status has no endpoint either — rare enough
-to do directly against the database.
+only" ratchet. The inverse, revoking admin status, is `POST
+/api/auth/revoke-admin` below (#1819/#1481).
 
 ### `POST /api/auth/grant-admin`
 
@@ -899,6 +899,26 @@ per acting admin (`ADMIN_GRANT_RATE_LIMIT_MAX`, 20 per window, #2123) —
 `POST /api/auth/revoke-admin` (below) shares this same bucket, since both
 mint/remove `is_admin` itself and neither previously had any throttle at
 all despite being this app's most sensitive mutation.
+
+### `POST /api/auth/revoke-admin`
+
+The inverse of `grant-admin` above (#1819, implemented despite #1481's own
+"low confidence" framing of whether it was even needed). `requireAdmin`-gated
+the same way (`401`/`403` the same way), including self-revoke — an admin
+can demote themselves, not just another account. Request body:
+`{ "email" }`, looked up the same case-insensitive way `grant-admin` does.
+`404` if no account has that email, `400` if the account isn't currently an
+admin. Shares `grant-admin`'s own rate-limit bucket (#2123, above).
+
+**Last-operational-admin guard** (#2270/#2307): this app must never end up
+with zero admins and no way back in short of direct D1 access, since a
+suspended or revoked admin can't call `requireAdmin` again. `409` ("Cannot
+revoke the last remaining admin") unless at least one *other* admin exists
+who is both `is_admin = 1` and has no currently-active suspension — the
+same guard `suspend-account` below enforces for the identical reason, so a
+suspended admin doesn't count as a usable backup for either mutation. On
+success, logs to `admin_action_log` (`action_type: "revoke_admin"`) and
+returns `{ "user": { ..., "isAdmin": false } }` for the demoted account.
 
 ### `GET /api/auth/admins`
 
@@ -948,7 +968,14 @@ owner's confirmed default) and must be an integer in `[1, 365]` (`400`
 otherwise) — this becomes `gracePeriodEndsAt` in the response, the point
 #2033's auto-escalation job (below) acts on. `409` if the account
 already has an active (not lifted, not escalated) suspension — lift it via
-`unsuspend-account` first before suspending again. On success, returns
+`unsuspend-account` first before suspending again.
+
+**Last-operational-admin guard** (#2268): also `409` ("Cannot suspend the
+last remaining admin") if the target is currently an admin and no *other*
+admin exists who is both `is_admin = 1` and has no currently-active
+suspension — the same reasoning `revoke-admin`'s own guard above
+documents, since a suspended admin can't call `requireAdmin` at all to
+undo it. On success, returns
 `{ "suspension": { "suspensionId", "userId", "adminUserId", "reason", "evidenceNote", "suspendedAt", "gracePeriodEndsAt" } }`.
 
 Once the suspension row lands, #2031 fires one automated notice through the
@@ -8711,6 +8738,24 @@ durable `admin_action_log` row (`action_type: 'video_generation_stale_reservatio
 or `'video_generation_task_id_lost'`, `admin_user_id: null` since no admin
 acted) rather than only reconstructable by reading code, so this is
 queryable/alertable on going forward.
+
+**Credit gate (#1993):** each call spends one of the calling builder's own
+`video_generation_credits` (earned by collecting a credit orb — see
+"Credit orbs" below) before ever reaching Tripo. `402` with a human-
+readable, honest-budget message ("No free model-generation credits
+available right now…") if the builder has none; nothing is spent on this
+path. The spend and the balance check are one atomic `UPDATE ... WHERE
+video_generation_credits > 0` — the same race-safe "check and spend in one
+statement" shape `checkRateLimit`'s own `INSERT ... WHERE` uses just above.
+The refund policy: a credit is refunded if the request turns out to have
+lost the concurrent one-pending-per-builder race above (no new job
+actually started, so nothing was really spent) or if the outbound Tripo
+call itself failed or never returned a `task_id` (never billed). Once
+Tripo's task-create call has actually returned a real `task_id`, the
+credit is **not** refunded regardless of what happens afterward —
+persisting that result failing, a later provider-side failure, or the
+15-minute processing-timeout cron sweep — same "billed means billed"
+reasoning the lost-task_id logging above already applies.
 
 `GET /api/video-generation-jobs/:jobId` is session-gated and returns the
 current state of one of the requesting builder's own jobs (`404` if the
