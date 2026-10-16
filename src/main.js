@@ -91,6 +91,7 @@ import {
   fetchLandletVersion,
   activateLandletVersion,
   replaceLandletDraft,
+  clearDraftIdempotencyKey,
   fetchBundles,
   fetchSharedBundles,
   createBundle,
@@ -6930,6 +6931,7 @@ function renderBuildSettingsSection() {
           instances: full.instances,
           versionName: `Restored from "${version.name}"`,
         });
+        clearDraftIdempotencyKey(landletId);
         // Simplest correct way to get the live scene back in sync with
         // whatever the server now holds — the same "something changed
         // server-side, reload" pattern claimBackBtn already uses
