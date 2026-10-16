@@ -3165,13 +3165,26 @@ async function requireOwnedLandlet(db, landletId, builderId) {
 // below where a single request can touch many distinct landlets — checks
 // every id with one IN (...) query instead of one round trip per landlet
 // (mirrors the assertReferencesExist idiom used elsewhere in this file).
+//
+// #2233: this used to bind the full uniqueIds array in a single unchunked
+// IN (...) query. PUT/POST /instances/batch's own landletIdsToCheck is the
+// *union* of each instance's new landletId and (for an already-placed
+// instance) its old one -- up to 100 of each, so a bulk move of 100
+// instances each to a distinct new landlet can reach 200 unique ids here,
+// well past D1's 100-bound-parameter cap, despite the batch's own 100-item
+// cap never being exceeded. Chunked the same way getInstancesById was
+// fixed for the identical bug class in #2216.
 async function requireOwnedLandlets(db, landletIds, builderId) {
   const uniqueIds = [...new Set(landletIds)];
-  const placeholders = uniqueIds.map(() => '?').join(', ');
-  const { results } = await db.prepare(
-    `SELECT landlet_id, owner_builder_id FROM landlets WHERE landlet_id IN (${placeholders})`,
-  ).bind(...uniqueIds).all();
-  const byId = new Map(results.map((row) => [row.landlet_id, row]));
+  const byId = new Map();
+  for (let i = 0; i < uniqueIds.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = uniqueIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(
+      `SELECT landlet_id, owner_builder_id FROM landlets WHERE landlet_id IN (${placeholders})`,
+    ).bind(...chunk).all();
+    for (const row of results) byId.set(row.landlet_id, row);
+  }
   for (const landletId of uniqueIds) {
     const landlet = byId.get(landletId);
     if (!landlet) throw new HttpError('Landlet not found', 404);

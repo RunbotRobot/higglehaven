@@ -1799,6 +1799,58 @@ describe('Worker API', () => {
     })).response.status).toBe(400);
   });
 
+  // #2233: PUT /instances/batch's own ownership check (requireOwnedLandlets)
+  // used to bind every distinct landlet id touched by the request in one
+  // unchunked IN (...) query. This endpoint caps instances.length at 100,
+  // but the ids checked are the *union* of each instance's new landletId
+  // and (for an already-placed instance) its old one -- moving 100
+  // existing instances to 100 different new landlets in one PUT reaches
+  // 200 unique ids, past D1's 100-bound-parameter cap. Seeds landlets and
+  // the pre-existing instances directly via D1 (bypassing the real
+  // claim/place flows -- irrelevant to what's under test, and this
+  // builder legitimately owns none of them, same as the real bug: the
+  // crash happened before the ownership check could even return its
+  // ordinary, clean rejection) rather than the real endpoints, since 200
+  // real landlets would be far slower to create and the test only cares
+  // that this returns a clean 4xx, not a raw D1 500, either way.
+  it('cleanly rejects, rather than raw-D1-erroring, a batch move touching more than 100 distinct landlets', async () => {
+    const batchBuilder = await signupBuilder('instance-batch-many-landlets-builder');
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'many-landlets-template',
+        name: 'Many-landlets fixture',
+        color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 },
+        priceCents: 500,
+      }),
+    });
+
+    const oldLandletIds = Array.from({ length: 100 }, (_, i) => `many-landlets-old-${i}`);
+    const newLandletIds = Array.from({ length: 100 }, (_, i) => `many-landlets-new-${i}`);
+    await env.DB.batch([...oldLandletIds, ...newLandletIds].map((landletId) => env.DB.prepare(
+      'INSERT INTO landlets (landlet_id, name) VALUES (?, ?)',
+    ).bind(landletId, `Test ${landletId}`)));
+    const instanceIds = Array.from({ length: 100 }, (_, i) => `many-landlets-instance-${i}`);
+    await env.DB.batch(instanceIds.map((instanceId, i) => env.DB.prepare(
+      'INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m) VALUES (?, ?, ?, 1, 1)',
+    ).bind(instanceId, oldLandletIds[i], 'many-landlets-template')));
+
+    const moved = await api('/instances/batch', batchBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: instanceIds.map((instanceId, i) => ({
+          instanceId, landletId: newLandletIds[i], templateId: 'many-landlets-template', x: 1, y: 1,
+        })),
+      }),
+    }));
+    // Not owned by batchBuilder either way -- the real bug was a raw 500
+    // (D1_ERROR: too many SQL variables) happening before this ordinary
+    // ownership rejection could run at all.
+    expect(moved.response.status).toBe(403);
+    expect(moved.body.error).toMatch(/Not your landlet/);
+  });
+
   it('checks ownership of every distinct landlet in an instance batch, not just one of them', async () => {
     const ownerBuilder = await signupBuilder('instance-batch-owner');
     const otherBuilder = await signupBuilder('instance-batch-other');
