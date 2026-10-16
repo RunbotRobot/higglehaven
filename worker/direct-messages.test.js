@@ -352,4 +352,52 @@ describe('Direct messages (#1637)', () => {
       expect(attempt.response.status).not.toBe(429);
     }
   });
+
+  // #2326: GET /direct-messages is documented and implemented as cursor-
+  // paginated the same way as GET /friendships (worker/profiles.test.js's
+  // own "paginates GET /friendships with a descending cursor" test below),
+  // but had no equivalent test exercising the real cursor/index path --
+  // e2e/dm-load-more.test.mjs mocks the backend entirely, well under
+  // either rate limit (20/15min) like the friendships test does.
+  it('paginates GET /direct-messages with a descending cursor', async () => {
+    const alice = await signupIdVerifiedBuilder('dm-page-alice');
+    const bob = await signupIdVerifiedBuilder('dm-page-bob');
+    await becomeFriends(alice, bob);
+
+    for (const text of ['page message 1', 'page message 2', 'page message 3']) {
+      await api('/direct-messages', alice.session({
+        method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text }),
+      }));
+    }
+
+    const whole = await api(`/direct-messages?withBuilderId=${bob.builderId}`, alice.session());
+    expect(whole.body.nextCursor).toBeNull();
+    expect(whole.body.messages).toHaveLength(3);
+
+    const paged = [];
+    let cursor;
+    for (;;) {
+      const query = new URLSearchParams({ withBuilderId: bob.builderId, limit: '1' });
+      if (cursor) query.set('cursor', cursor);
+      const page = await api(`/direct-messages?${query}`, alice.session());
+      expect(page.response.status).toBe(200);
+      expect(page.body.messages.length).toBeLessThanOrEqual(1);
+      paged.push(...page.body.messages);
+      if (!page.body.nextCursor) break;
+      cursor = page.body.nextCursor;
+    }
+    expect(paged.map((m) => m.messageId)).toEqual(whole.body.messages.map((m) => m.messageId));
+  });
+
+  // #2326: same "schema-only change, check the index exists" shape as
+  // worker/profiles.test.js's own friendships index test -- confirms the
+  // composite sort-covering indexes from migrations/0120_direct_messages.sql
+  // actually exist, since direct_messages' GET query is this table's own
+  // `(sender_builder_id = ? AND recipient_builder_id = ?) OR (...)
+  // ... ORDER BY created_at DESC, message_id DESC` just like friendships'.
+  it('indexes direct_messages on each side of the sender/recipient OR, covering the sort', async () => {
+    const indexes = (await env.DB.prepare('PRAGMA index_list(direct_messages)').all()).results;
+    expect(indexes.some((idx) => idx.name === 'idx_direct_messages_sender')).toBe(true);
+    expect(indexes.some((idx) => idx.name === 'idx_direct_messages_recipient')).toBe(true);
+  });
 });
