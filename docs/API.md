@@ -930,8 +930,8 @@ real deletion stays reserved for the account-holder's own self-service
 `requireCurrentUser` (#2030) rejects a currently-active suspension outright
 with a distinct `403`/`suspended: true` — see "Authorization model" above.
 The optional sign-post/calendar-event removal cascade is #2032, documented
-on `suspend-account` below. (The automated notice to the suspended user is
-its own separate, not-yet-landed sub-issue — #2031.)
+on `suspend-account` below. The automated notice to the suspended user
+(#2031) is documented on `suspend-account` below too.
 
 ### `POST /api/auth/suspend-account`
 
@@ -950,6 +950,18 @@ otherwise) — this becomes `gracePeriodEndsAt` in the response, the point
 already has an active (not lifted, not escalated) suspension — lift it via
 `unsuspend-account` first before suspending again. On success, returns
 `{ "suspension": { "suspensionId", "userId", "adminUserId", "reason", "evidenceNote", "suspendedAt", "gracePeriodEndsAt" } }`.
+
+Once the suspension row lands, #2031 fires one automated notice through the
+existing `notifications` table (see "Notifications" above) to the
+suspended user's own builder row, if they have one — carrying `reason`
+verbatim and `gracePeriodEndsAt`, but never `evidenceNote` (that stays
+admin-only), and pointing the user at the third-party customer service
+agency for disputes/appeals rather than higglehaven staff directly, per
+docs/SPEC.md §6's P122 no-personal-contact architecture. No `templateId`
+is set (there's no matching `catalog_templates` row for a suspension
+notice). A pre-#1092 free-text builder with no linked `user_id` has no
+builder row to notify and is silently skipped — the same existing
+FK-swallow `fireNotification` already relies on elsewhere.
 
 An optional `"removeContent": true` in the request body (#2032) also
 removes every sign post and calendar event the suspended user themselves
@@ -4512,8 +4524,12 @@ field. Request body: `{ "name", "items", "shared"? }`.
 `shared` defaults to `false` (private) if omitted or not literally `true`.
 Each item's `templateId` must reference an existing catalog template
 (checked in one batched query, same pattern as the instance batch
-endpoints); `items` must be a non-empty array, capped at 250 entries like an
-instance batch save. `dx`/`dy`/`dz` and the rotation fields may be negative
+endpoints); `items` must be a non-empty array, capped at 2000 entries (#1974
+raised this from an original 250, which was blocking legitimate large
+builds — the whole bundle is stored as one `items_json` blob in a single
+row write, so the real ceiling is D1's own max row size, not a per-item
+batch-insert count like the instance batch endpoints below still have).
+`dx`/`dy`/`dz` and the rotation fields may be negative
 or zero — only `crop`/`scale` reuse the stricter validation a placed
 instance itself gets (`validateCropShape`/`validateScale`), since those two
 are genuinely sign-constrained.
