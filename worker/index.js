@@ -3253,6 +3253,12 @@ const SELLER_CREATE_RATE_LIMIT_MAX = 20;
 // (friend requests, bundles, calendar events, saved layouts, ...).
 const BUILDER_RENAME_RATE_LIMIT_MAX = 20;
 const SELLER_RENAME_RATE_LIMIT_MAX = 20;
+// #2302: #864's own audit covered the rename paths above but missed each
+// resource's own DELETE sibling -- a real, heavy, multi-statement batch
+// write (releases every owned landlet, deletes placed instances/version
+// history, or checks unpaid purchases), left with no cap at all.
+const BUILDER_DELETE_RATE_LIMIT_MAX = 20;
+const SELLER_DELETE_RATE_LIMIT_MAX = 20;
 
 // #1844: all three GET branches below (ids=, label=, and the plain
 // paginated list) call recomputeLandCapsBatch, which runs three full-table
@@ -3499,6 +3505,7 @@ async function handleBuilders(request, env, db, route, url) {
     await requireBuilder(db, route[1]);
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(route[1], sessionBuilder.builder_id, 'Not your builder profile');
+    await checkRateLimit(db, `builder-delete:${sessionBuilder.builder_id}`, BUILDER_DELETE_RATE_LIMIT_MAX);
 
     // Whatever this builder currently owns goes back to a fresh, unclaimed
     // plot rather than sitting there under a builder that no longer
@@ -4512,6 +4519,7 @@ async function handleSellers(request, env, db, route, url) {
     await requireSeller(db, route[1]);
     const sessionSeller = await requireSessionSeller(request, db);
     assertOwner(route[1], sessionSeller.seller_id, 'Not your seller profile');
+    await checkRateLimit(db, `seller-delete:${sessionSeller.seller_id}`, SELLER_DELETE_RATE_LIMIT_MAX);
 
     // #732: getOrCreateSellerForUser looks up by user_id, not seller_id — if
     // this seller_id is deleted with real-money proceeds still unpaid, a
