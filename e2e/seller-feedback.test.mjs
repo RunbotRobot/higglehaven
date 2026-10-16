@@ -7,10 +7,10 @@
 // modal's Review button (see product-reviews.test.mjs's own comment) —
 // isn't reachable without real in-world camera movement, so this exercises
 // the feedback API directly (the same one that flow calls,
-// createSellerFeedback in src/api.js) and covers the one real piece of UI
-// this feature has: the Seller modal's own aggregate display
-// (#seller-feedback-summary, renderSellerFeedbackSummary), fetched fresh
-// on every modal open.
+// createSellerFeedback in src/api.js) and covers the Seller modal's own
+// rendering of it: the aggregate display (#seller-feedback-summary) and,
+// since #2286, the individual entries themselves (#seller-feedback-list),
+// both via renderSellerFeedbackSummary, fetched fresh on every modal open.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
@@ -132,6 +132,19 @@ await page.waitForFunction(() => !document.getElementById('seller-feedback-summa
 const summaryText = await page.locator('#seller-feedback-summary').textContent();
 console.log('feedback summary text after reopening the modal (should mention 4.0 average and "2 ratings"):', summaryText);
 
+// #2286: the individual feedback entries themselves (author, rating,
+// free-text comment, date) were fetched but never rendered anywhere until
+// now — renderSellerFeedbackSummary's own list container, mirroring
+// renderReviews' product-review-row markup for product reviews.
+const feedbackRows = await page.locator('#seller-feedback-list .product-review-row').allTextContents();
+console.log('rendered feedback row count (should be 2):', feedbackRows.length);
+const rowWithText = feedbackRows.find((t) => t.includes('Shipped fast, exactly as described!'));
+console.log('one row shows the free-text comment from the 5-star entry:', !!rowWithText);
+console.log('that row also shows 5 filled stars:', rowWithText?.includes('★★★★★'));
+const rowWithoutText = feedbackRows.find((t) => !t.includes('Shipped fast'));
+console.log('the other row (3-star, no text submitted) still renders without that comment:', !!rowWithoutText);
+console.log('that row shows 3 filled stars:', rowWithoutText?.includes('★★★☆☆'));
+
 // The deliberate 409 above is a real, expected HTTP error response —
 // Chromium logs it to the console as "Failed to load resource" independent
 // of anything this app's own code does, the same expected fallout
@@ -149,5 +162,8 @@ const pass = !!template &&
   averageRating === 4 &&
   count === 2 &&
   summaryText.includes('4.0') && summaryText.includes('2 ratings') &&
+  feedbackRows.length === 2 &&
+  !!rowWithText && rowWithText.includes('★★★★★') &&
+  !!rowWithoutText && rowWithoutText.includes('★★★☆☆') &&
   unexpectedErrors.length === 0;
 await finish(browser, { pass, label: 'Seller Feedback: purchase-gated creation + Seller-modal aggregate summary (#1096)', errors });

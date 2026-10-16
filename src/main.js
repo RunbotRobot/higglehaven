@@ -3869,6 +3869,7 @@ uploadSubmitBtn.addEventListener('click', () => {
 // stuck unmanageable.
 const sellerModalEl = document.getElementById('seller-modal');
 const sellerFeedbackSummaryEl = document.getElementById('seller-feedback-summary');
+const sellerFeedbackListEl = document.getElementById('seller-feedback-list');
 const sellerListEl = document.getElementById('seller-list');
 const sellerListViewEl = document.getElementById('seller-list-view');
 const sellerViewToggleEl = document.getElementById('seller-view-toggle');
@@ -5570,13 +5571,47 @@ async function renderSellerFeedbackSummary(id) {
   } catch (err) {
     console.warn('Could not load seller feedback summary:', err);
     sellerFeedbackSummaryEl.hidden = true;
+    sellerFeedbackListEl.innerHTML = '';
     return;
   }
   sellerFeedbackSummaryEl.hidden = feedback.length === 0;
+  sellerFeedbackListEl.innerHTML = '';
   if (feedback.length === 0) return;
   const stars = '★'.repeat(Math.round(averageRating)) + '☆'.repeat(5 - Math.round(averageRating));
   sellerFeedbackSummaryEl.textContent =
     `Seller feedback: ${stars} ${averageRating.toFixed(1)} average (${count} rating${count === 1 ? '' : 's'})`;
+  // #2286: the individual entries (author, rating, free-text comment, date)
+  // were fetched above but never rendered anywhere -- mirrors renderReviews'
+  // own product-review-row markup for the structurally identical shape,
+  // minus its delete button (no self-moderation route exists for seller
+  // feedback from the rated seller's own side, see handleSellerFeedbackDelete's
+  // own comment in worker/index.js).
+  for (const entry of feedback) {
+    const row = document.createElement('div');
+    row.className = 'product-review-row';
+    const body = document.createElement('div');
+    body.className = 'product-review-row-body';
+    const author = document.createElement('div');
+    author.className = 'product-review-row-author';
+    author.textContent = entry.authorLabel;
+    body.appendChild(author);
+    const rating = document.createElement('div');
+    rating.className = 'product-review-row-rating';
+    rating.textContent = '★'.repeat(entry.rating) + '☆'.repeat(5 - entry.rating);
+    body.appendChild(rating);
+    if (entry.text) {
+      const text = document.createElement('div');
+      text.textContent = entry.text;
+      body.appendChild(text);
+    }
+    const time = document.createElement('div');
+    time.className = 'product-review-row-time';
+    const date = new Date(entry.createdAt);
+    time.textContent = Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
+    body.appendChild(time);
+    row.appendChild(body);
+    sellerFeedbackListEl.appendChild(row);
+  }
 }
 
 async function openSellerModal() {
