@@ -10793,6 +10793,16 @@ async function handleConfirmCard(request, env, db) {
   return json({ user: userFromRow(updated) });
 }
 
+// #2240: this file's own convention is that every authenticated,
+// repeatable mutation gets a checkRateLimit call regardless of how cheap
+// or idempotent it is (handleCardSetupIntent/handleConfirmCard/
+// handleDiditVerificationSession, the structurally closest siblings,
+// all have one) -- this endpoint was the one gap. requireCurrentUser's
+// own session + account_suspensions SELECTs still cost real D1 reads on
+// every call even once already attested, same unthrottled-flood shape
+// #827/#944/#990/#2123 were each filed and fixed for elsewhere.
+const AGE_ATTEST_RATE_LIMIT_MAX = 20;
+
 // #556: lets an existing session attest age after the fact. Signup's own
 // ageAttested checkbox (handleSignup above) only covers brand-new
 // accounts — every account created before that existed, plus the owner's
@@ -10802,6 +10812,7 @@ async function handleConfirmCard(request, env, db) {
 // account is a no-op, not an error.
 async function handleAgeAttest(request, db) {
   const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `age-attest:${user.user_id}`, AGE_ATTEST_RATE_LIMIT_MAX);
   const input = await readJson(request);
   if (input.ageAttested !== true) {
     throw new HttpError('You must confirm you meet the age requirement to continue.', 400);

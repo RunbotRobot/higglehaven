@@ -2447,6 +2447,25 @@ describe('Authentication', () => {
     expect(allowed.response.status).toBe(200);
   });
 
+  // #2240: this endpoint had no rate limit at all, unlike every structurally
+  // comparable sibling (card-setup-intent, confirm-card, didit-verification-
+  // session) -- an already-attested account repeatedly re-POSTing is a
+  // no-op (idempotent per the test above) but still cost real D1 reads on
+  // every call with nothing throttling it.
+  it('rate-limits repeated authenticated age-attest calls', async () => {
+    const builder = await signupBuilder('age-attest-rate-limit-builder');
+    for (let i = 0; i < 20; i++) {
+      const attempt = await api('/auth/age-attest', builder.session({
+        method: 'POST', body: JSON.stringify({ ageAttested: true }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/auth/age-attest', builder.session({
+      method: 'POST', body: JSON.stringify({ ageAttested: true }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
+
   // #589 (sub-issue of #556): government-ID verification via Didit, the
   // higher trust tier. Same never-configured-in-tests shape as Stripe
   // above — DIDIT_API_KEY/DIDIT_WEBHOOK_SECRET are never set in this
