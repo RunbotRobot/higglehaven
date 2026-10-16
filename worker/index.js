@@ -9958,16 +9958,18 @@ async function handleSellerPayouts(request, env, db) {
     // real-money gross income for the year crosses the #613 reporting
     // threshold with no W-9/W-8BEN on file (#614), block access to the
     // *excess* above the line — not the whole balance, per the owner's own
-    // Control Room framing. A real-money payout is the only existing
-    // "access" endpoint this actually applies to today: higgles themselves
-    // are never gated here because nothing in this codebase yet lets a
-    // builder spend or withdraw a higgles balance at all (an auction win
-    // never debits the winning bidder's own balance — see resolveAuction's
-    // own comment — and #349's higgle-to-cash redemption isn't built), so
-    // there's no higgles "access" action to block yet. Computed before the
-    // Stripe-configuration/onboarding checks below so a caller who's
-    // already fully over the line without paperwork gets this specific
-    // error rather than an unrelated 503/400 masking it.
+    // Control Room framing. This is a real-money-only gate for now —
+    // higgles spend/withdrawal isn't gated here, even though both actions
+    // exist elsewhere in this codebase: an auction win *does* atomically
+    // debit the winning bidder's own balance (#629, see resolveAuction),
+    // and #349's higgle-to-cash redemption *is* built (#625,
+    // handleBuilderRedeem) — currently paused via
+    // REDEMPTION_PAUSED_PENDING_PROVENANCE (#653/#836) rather than unbuilt.
+    // #615's own scoping left extending this tax gate to cover either of
+    // those as an explicit open question, not yet resolved. Computed
+    // before the Stripe-configuration/onboarding checks below so a caller
+    // who's already fully over the line without paperwork gets this
+    // specific error rather than an unrelated 503/400 masking it.
     const builder = await getOrCreateBuilderForUser(db, user);
     const taxYear = new Date().getUTCFullYear();
     const grossIncome = await annualGrossIncome(
