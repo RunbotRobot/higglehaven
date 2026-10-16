@@ -3253,13 +3253,26 @@ async function requireOwnedLandlet(db, landletId, builderId) {
 // below where a single request can touch many distinct landlets — checks
 // every id with one IN (...) query instead of one round trip per landlet
 // (mirrors the assertReferencesExist idiom used elsewhere in this file).
+//
+// #2233: this used to bind the full uniqueIds array in a single unchunked
+// IN (...) query. PUT/POST /instances/batch's own landletIdsToCheck is the
+// *union* of each instance's new landletId and (for an already-placed
+// instance) its old one -- up to 100 of each, so a bulk move of 100
+// instances each to a distinct new landlet can reach 200 unique ids here,
+// well past D1's 100-bound-parameter cap, despite the batch's own 100-item
+// cap never being exceeded. Chunked the same way getInstancesById was
+// fixed for the identical bug class in #2216.
 async function requireOwnedLandlets(db, landletIds, builderId) {
   const uniqueIds = [...new Set(landletIds)];
-  const placeholders = uniqueIds.map(() => '?').join(', ');
-  const { results } = await db.prepare(
-    `SELECT landlet_id, owner_builder_id FROM landlets WHERE landlet_id IN (${placeholders})`,
-  ).bind(...uniqueIds).all();
-  const byId = new Map(results.map((row) => [row.landlet_id, row]));
+  const byId = new Map();
+  for (let i = 0; i < uniqueIds.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = uniqueIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(
+      `SELECT landlet_id, owner_builder_id FROM landlets WHERE landlet_id IN (${placeholders})`,
+    ).bind(...chunk).all();
+    for (const row of results) byId.set(row.landlet_id, row);
+  }
   for (const landletId of uniqueIds) {
     const landlet = byId.get(landletId);
     if (!landlet) throw new HttpError('Landlet not found', 404);
@@ -7939,6 +7952,18 @@ async function handlePurchaseReversalWebhookEvent(db, event) {
 
   const paymentIntentId = event.data?.object?.payment_intent;
   if (!paymentIntentId) return;
+  // #2232: charge.refunded fires for ANY refund on a charge, partial or
+  // full -- the Charge object's own `refunded` boolean is the only
+  // authoritative signal for "fully refunded" (it's true only once
+  // amount_refunded reaches the full charge amount). Without this check, a
+  // $1 goodwill partial refund on a $100 purchase clawed back the builder's
+  // entire commission and revoked all ownership that purchase granted, the
+  // same way a genuine full refund does -- even though the buyer kept 99%
+  // of their payment and the product. Dispute events (charge.dispute.*)
+  // carry no `refunded` field at all, so this only applies to
+  // charge.refunded itself; a real chargeback/dispute still claws back in
+  // full immediately, per #1086's own deliberate design.
+  if (event.type === 'charge.refunded' && event.data?.object?.refunded !== true) return;
   const purchase = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
   if (!purchase) return;
 
@@ -8614,8 +8639,19 @@ const TRIPO_TERMINAL_FAILURE_STATUSES = new Set(['failed', 'cancelled', 'banned'
 // gets there first applies the result; the other is a safe no-op.
 async function applyTripoTaskResult(db, env, jobId, task) {
   if (task.status === 'success') {
+    // #2226: sibling case to the #1673 catch below -- Tripo can also report
+    // success with the output/model_url missing entirely (not just an
+    // output URL that fails to download). Without marking the job failed
+    // here too, this left the row stuck at status='processing' until the
+    // cron sweep's own generic "timed out" message, since the thrown error
+    // below was never caught by either caller (the webhook handler, or the
+    // status-poll path).
     if (!task?.output?.model_url) {
-      throw new HttpError('Video-to-3D provider reported success with no output file', 502);
+      await db.prepare(`
+        UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE job_id = ? AND processed_at IS NULL
+      `).bind('Video-to-3D provider reported success with no output file', jobId).run();
+      return;
     }
     // Fetching/storing happens before the atomic claim below (unlike
     // applyDiditDecision, which has no slow step) -- a race between the
