@@ -2102,7 +2102,11 @@ at once still warns every builder hosting a placed instance of one of them.
 (#1416): `429` past 20 `PUT`s per 15 minutes, keyed per-seller when
 session-authenticated or per-client-IP otherwise — protecting the same
 notification fan-out, just batched. `POST`/`DELETE` have no such fan-out and
-stay unthrottled.
+stay unthrottled. Same `priceCents`-required rule as the single-item
+`POST /api/catalog` below (#1601, carried over to this batch path by #2242):
+any template in the batch with no pre-existing row and a non-null `sellerId`
+must also set a non-null `priceCents`, or the whole batch is rejected with
+`400`.
 
 `DELETE` accepts 1–100 unique IDs under `templateIds`. Every ID is preflighted
 before deletion; a missing ID returns `404`, and a foreign-key conflict returns
@@ -2154,7 +2158,14 @@ must be a non-negative integer no greater than 100,000,000 (i.e. $1,000,000) —
 same cap `startingBidCents` and a bid's `amountCents` share, ruling out a
 value large enough to lose precision past `Number.isSafeInteger` once
 persisted, or to mint an outsized `higgles_balance_cents` credit through a
-self-purchase or auction win. `name`, `category`, `subcategory`, and `color`
+self-purchase or auction win. `priceCents` is conditionally required (#1601):
+omitting it (or passing `null`) is a `400` whenever `sellerId` is also set on
+a genuinely new template (no pre-existing row with that `templateId`) — a
+free digital product must set `priceCents: 0` explicitly, since a real
+seller listing can't be silently priceless. A template with no `sellerId`
+(a system/placeholder template) is unaffected, and the PATCH/PUT sibling
+below still allows clearing an existing listing's price back to `null`.
+`name`, `category`, `subcategory`, and `color`
 are each capped at 100 characters, same as `label` elsewhere in this API.
 `stockQuantity` (#1948), when present, must be a non-negative integer no
 greater than 1,000,000; omit it (or pass `null`) for the default unlimited
