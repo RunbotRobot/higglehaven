@@ -4292,9 +4292,13 @@ Marks every one of the caller's own received-and-unread messages from
 the request body here, unlike a single-row `PATCH` by id, since this
 marks a whole thread at once) — mirrors `POST
 /api/notifications/mark-all-read`'s own bulk shape. Always returns
-`{ "ok": true }`, even if nothing was unread. `429` after 20 calls per
+`{ "ok": true }`, even if nothing was unread. `429` after 200 calls per
 15 minutes from the same calling builder, under its own bucket separate
-from the send endpoint's.
+from the send endpoint's — a much higher ceiling than most mutate
+buckets (#2260) because the frontend auto-fires this on every render of
+an open DM thread (on open, and again after every message sent), not
+just on a deliberate user action the way notification mark-read's own
+20/15min limit is.
 
 ### Frontend wiring
 
