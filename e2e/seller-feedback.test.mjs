@@ -134,9 +134,12 @@ console.log('feedback summary text after reopening the modal (should mention 4.0
 
 // #2286: the individual feedback entries themselves (author, rating,
 // free-text comment, date) were fetched but never rendered anywhere until
-// now — renderSellerFeedbackSummary's own list container, mirroring
-// renderReviews' product-review-row markup for product reviews.
-const feedbackRows = await page.locator('#seller-feedback-list .product-review-row').allTextContents();
+// now — renderSellerFeedbackSummary's own list container, visually
+// mirroring renderReviews' product-review-row markup for product reviews
+// but under its own seller-feedback-row class (#2292 regression fix: this
+// list can coexist in the DOM with an actual product-review-row list from
+// the same modal, so they can't share a class name).
+const feedbackRows = await page.locator('#seller-feedback-list .seller-feedback-row').allTextContents();
 console.log('rendered feedback row count (should be 2):', feedbackRows.length);
 const rowWithText = feedbackRows.find((t) => t.includes('Shipped fast, exactly as described!'));
 console.log('one row shows the free-text comment from the 5-star entry:', !!rowWithText);

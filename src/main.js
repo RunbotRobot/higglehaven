@@ -5588,15 +5588,22 @@ async function renderSellerFeedbackSummary(id) {
   // own comment in worker/index.js).
   for (const entry of feedback) {
     const row = document.createElement('div');
-    row.className = 'product-review-row';
+    // #2292 regression fix: must NOT reuse product-review-row -- the Seller
+    // modal shows this list alongside a per-product review panel that uses
+    // that exact class (renderReviews), and review-feedback-summary-count
+    // .test.mjs's own `.product-review-row` count assertion (scoped to
+    // product reviews only) broke the moment both sets of rows shared a
+    // class name in the same DOM. Own classes throughout, same visual
+    // styling via a shared CSS rule (index.html).
+    row.className = 'seller-feedback-row';
     const body = document.createElement('div');
-    body.className = 'product-review-row-body';
+    body.className = 'seller-feedback-row-body';
     const author = document.createElement('div');
-    author.className = 'product-review-row-author';
+    author.className = 'seller-feedback-row-author';
     author.textContent = entry.authorLabel;
     body.appendChild(author);
     const rating = document.createElement('div');
-    rating.className = 'product-review-row-rating';
+    rating.className = 'seller-feedback-row-rating';
     rating.textContent = '★'.repeat(entry.rating) + '☆'.repeat(5 - entry.rating);
     body.appendChild(rating);
     if (entry.text) {
@@ -5605,7 +5612,7 @@ async function renderSellerFeedbackSummary(id) {
       body.appendChild(text);
     }
     const time = document.createElement('div');
-    time.className = 'product-review-row-time';
+    time.className = 'seller-feedback-row-time';
     const date = new Date(entry.createdAt);
     time.textContent = Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
     body.appendChild(time);
