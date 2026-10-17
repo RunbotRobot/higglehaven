@@ -12121,8 +12121,13 @@ async function exportSocialSection(db, builderId, userId) {
     list.push(versionInstanceFromRow(row));
     instancesByArchivedVersionId.set(row.version_id, list);
   }
+  const friendshipOtherBuilderIds = friendships.results.map((row) =>
+    row.requester_builder_id === builderId ? row.recipient_builder_id : row.requester_builder_id);
+  const friendshipLabelsById = await labelsByBuilderId(db, friendshipOtherBuilderIds);
+  const friendshipLandletsById = await ownedLandletsByBuilderId(db, friendshipOtherBuilderIds);
   return {
-    friendships: friendships.results.map((row) => friendshipFromRow(row, builderId, new Map(), new Map())),
+    friendships: friendships.results.map((row) =>
+      friendshipFromRow(row, builderId, friendshipLabelsById, friendshipLandletsById)),
     directMessages: directMessages.results.map(directMessageFromRow),
     notifications: notifications.results.map(notificationFromRow),
     productReviews: productReviews.results.map(reviewFromRow),
@@ -13783,6 +13788,11 @@ async function handleLandCandidates(request, db, route, url) {
     const updated = await db.prepare(`
       SELECT * FROM landlet_candidates WHERE landlet_id = ?
     `).bind(route[1]).first();
+    // #2391: the UPDATE above is guarded, but this re-SELECT isn't -- a
+    // concurrent DELETE (allowed here since materialized_at/ring_id were
+    // both still NULL a moment ago) can remove the row in the await gap
+    // between the update batch and this read.
+    if (!updated) throw new HttpError('Land candidate not found', 409);
     const materialized = updated.materialized_at ? await requireLandlet(db, route[1]) : null;
     return json({
       candidate: candidateFromRow(updated),
