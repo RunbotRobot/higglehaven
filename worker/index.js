@@ -14804,6 +14804,13 @@ async function handleInstances(request, env, route, url) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instance.instanceId).first();
+    // #2392: not found here means a concurrent auction transfer (which
+    // wipes every placed_instances row on the landlet, see
+    // buildAuctionWinnerSettlementStatements) landed in the single await
+    // gap between the guarded INSERT above and this re-SELECT -- a genuine
+    // 404, same race shape #2334 already fixed for notifications, not an
+    // uncaught instanceFromRow(undefined) crash.
+    if (!stored) return json({ error: 'Instance not found' }, 404);
     return json({ instance: instanceFromRow(stored) }, 201);
   }
 
@@ -14905,6 +14912,13 @@ async function handleInstances(request, env, route, url) {
       await db.prepare('DELETE FROM calendar_events WHERE instance_id = ?').bind(route[1]).run();
     }
     const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(route[1]).first();
+    // #2392: not found here means a concurrent auction transfer (which
+    // wipes every placed_instances row on the landlet, see
+    // buildAuctionWinnerSettlementStatements) landed in the await gap
+    // between the guarded UPDATE above and this re-SELECT -- a genuine
+    // 404, same race shape #2334 already fixed for notifications, not an
+    // uncaught instanceFromRow(undefined) crash.
+    if (!stored) return json({ error: 'Instance not found' }, 404);
     return json({ instance: instanceFromRow(stored) });
   }
 
