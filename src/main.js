@@ -15104,6 +15104,19 @@ function updateShopFlight(dt) {
       // of a solid object) but for the *landing spot itself*, against a
       // live player instead of static geometry.
       const openSpot = nearestOpenLandingSpot(shopAvatarPosition.x, shopAvatarPosition.y);
+      // #2362: obstructionTopZ/minAltitudeM above were computed at the
+      // pre-nudge (x, y) -- if the nudge actually moved the avatar, that
+      // floor belongs to the spot it's leaving, not the one it's landing
+      // on. Recompute it for the real landing spot, or the avatar can end
+      // up clipped into (floating above, or sunk into) whatever's really
+      // there instead of resting on its own top surface, the same way
+      // #1090 already rests it correctly when there's no nudge at all.
+      if (openSpot.x !== shopAvatarPosition.x || openSpot.y !== shopAvatarPosition.y) {
+        const nudgedObstructionTopZ = shopLandingObstructionTopZ(openSpot.x, openSpot.y);
+        shopFlightAltitudeM = nudgedObstructionTopZ === null
+          ? 0
+          : nudgedObstructionTopZ + curvatureDropM(Math.hypot(openSpot.x, openSpot.y));
+      }
       shopAvatarPosition.x = openSpot.x;
       shopAvatarPosition.y = openSpot.y;
       // #2080: nearestOpenLandingSpot only checks clearance from other
