@@ -1562,10 +1562,12 @@ function meshDimensions(mesh) {
 // the instance's own object rather than swapping object identity, so every
 // other per-object hook (entry.objects, sign/calendar/review registration,
 // userData) keeps working completely unchanged — only this proxy's and the
-// real model's own children's `.visible` flags toggle (see
-// setInstanceLodState below). Box-fallback/flooring instances (object.isMesh
-// true, from createMeshForInstance's own box-fallback branches) return null
-// here: they're already a single cheap box, nothing left to simplify.
+// real model's own children's `.visible`/hit-testable state toggle (see
+// setInstanceLodState below, which also establishes the correct initial
+// raycast state right after this returns — see its own call site). Box-
+// fallback/flooring instances (object.isMesh true, from
+// createMeshForInstance's own box-fallback branches) return null here:
+// they're already a single cheap box, nothing left to simplify.
 function buildInstanceLodProxy(object) {
   if (object.isMesh) return null;
   const { width, depth, height } = meshDimensions(object);
@@ -1573,27 +1575,44 @@ function buildInstanceLodProxy(object) {
   const material = new THREE.MeshStandardMaterial({ color: object.userData.template.color });
   const proxy = new THREE.Mesh(geometry, material);
   proxy.visible = false;
-  // THREE.Raycaster's own intersectObject(s) doesn't check `.visible` —
-  // only an object's own raycast() implementation decides whether it's
-  // hit-testable. Without this, a tap/click raycast against the real
-  // model's parent object (e.g. shopReviews' own tap-to-open handler)
-  // could land on this invisible stand-in instead of (or in front of) the
-  // real geometry it's standing in for while hidden in the near band.
-  proxy.raycast = () => {};
   return proxy;
+}
+
+// #2399: THREE.Raycaster's own tree walk (see intersect() in its source)
+// never checks `.visible` — only `.layers`, and then each object's own
+// raycast() return value. A plain no-op raycast override returns
+// `undefined`, not `false`, which still lets the walk recurse into that
+// object's own children — not enough to hide a real model's top-level
+// child when it's often a Group wrapping several meshes, not a single
+// Mesh. Returning exactly `false` stops that recursion outright, so a
+// hidden object (and everything under it) never contributes a hit;
+// deleting our own override restores whatever raycast method that
+// object's own class actually defines (Mesh.prototype.raycast, or the
+// inert Object3D.prototype.raycast for a plain Group), without having to
+// know or store which one that was.
+function setLodChildHitTestable(child, hitTestable) {
+  if (hitTestable) delete child.raycast;
+  else child.raycast = () => false;
 }
 
 // #2378: true switches an instance to its simplified middle-band proxy;
 // false restores full detail. A no-op for an instance with no proxy
 // (buildInstanceLodProxy returned null for it, stored as
 // object.userData.lodProxy in loadShopLandletInstances) — a box/flooring
-// instance has nothing to switch.
+// instance has nothing to switch. Keeps hit-testability in sync with
+// visibility on both sides (#2399) — without this, the visible side of a
+// switch could tap-miss (invisible proxy/model still absorbing the hit)
+// while the hidden side keeps catching every tap meant for whichever
+// object the shopper can actually see.
 function setInstanceLodState(object, isMiddle) {
   const proxy = object.userData.lodProxy;
   if (!proxy) return;
   proxy.visible = isMiddle;
+  setLodChildHitTestable(proxy, isMiddle);
   for (const child of object.children) {
-    if (child !== proxy) child.visible = !isMiddle;
+    if (child === proxy) continue;
+    child.visible = !isMiddle;
+    setLodChildHitTestable(child, !isMiddle);
   }
 }
 
@@ -14540,6 +14559,41 @@ window.__testShopInstanceLodBand = (instanceId) => {
     const proxy = object.userData.lodProxy;
     if (!proxy) return 'none';
     return proxy.visible ? 'middle' : 'near';
+  }
+  return null;
+};
+// #2399: read-only test hook exercising the *real* raycast pipeline (the
+// same THREE.Raycaster/shopReviews.map(r => r.mesh) pair the tap-to-inspect
+// click handler below uses) against a ray aimed straight down through the
+// exact center of the proxy's own world-space bounding box -- computed via
+// THREE.Box3 rather than assumed local coordinates, so it works regardless
+// of whether the proxy or the real model is currently visible. Reports
+// which representation actually absorbed the hit ('proxy', 'real', or
+// 'none' for no hit at all), independent of findTappedShopProduct's own
+// walk-up-to-the-shared-parent resolution (which would mask this -- both
+// representations share the same top-level `object`, so tapping either one
+// still resolves to the same product; this hook is what actually shows
+// setInstanceLodState's own hit-testable toggle working, or not). Always
+// inert unless a test calls it, same convention as the other window.__test*
+// hooks here.
+window.__testShopInstanceLodHitSource = (instanceId) => {
+  for (const entry of shopLandlets.values()) {
+    const object = entry.objects.find((o) => o.userData.instanceId === instanceId);
+    if (!object) continue;
+    const proxy = object.userData.lodProxy;
+    if (!proxy) return null;
+    const box = new THREE.Box3().setFromObject(proxy);
+    const center = box.getCenter(new THREE.Vector3());
+    const origin = new THREE.Vector3(center.x, center.y, box.max.z + 10);
+    const downRaycaster = new THREE.Raycaster(origin, new THREE.Vector3(0, 0, -1));
+    const hits = downRaycaster.intersectObjects(shopReviews.map((r) => r.mesh), true);
+    if (hits.length === 0) return 'none';
+    let current = hits[0].object;
+    while (current) {
+      if (current === proxy) return 'proxy';
+      current = current.parent;
+    }
+    return 'real';
   }
   return null;
 };
