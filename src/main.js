@@ -1533,6 +1533,48 @@ function meshDimensions(mesh) {
   };
 }
 
+// #2378 (docs/SPEC.md §1's near/middle-LOD/far-panoramic-backdrop chunk
+// loading, #2377): a cheap box stand-in for a model-loaded instance's full
+// geometry, shown at the middle LOD band instead of leaving full detail
+// loaded all the way out to the unload radius. Added as an extra child of
+// the instance's own object rather than swapping object identity, so every
+// other per-object hook (entry.objects, sign/calendar/review registration,
+// userData) keeps working completely unchanged — only this proxy's and the
+// real model's own children's `.visible` flags toggle (see
+// setInstanceLodState below). Box-fallback/flooring instances (object.isMesh
+// true, from createMeshForInstance's own box-fallback branches) return null
+// here: they're already a single cheap box, nothing left to simplify.
+function buildInstanceLodProxy(object) {
+  if (object.isMesh) return null;
+  const { width, depth, height } = meshDimensions(object);
+  const geometry = new THREE.BoxGeometry(width, depth, height);
+  const material = new THREE.MeshStandardMaterial({ color: object.userData.template.color });
+  const proxy = new THREE.Mesh(geometry, material);
+  proxy.visible = false;
+  // THREE.Raycaster's own intersectObject(s) doesn't check `.visible` —
+  // only an object's own raycast() implementation decides whether it's
+  // hit-testable. Without this, a tap/click raycast against the real
+  // model's parent object (e.g. shopReviews' own tap-to-open handler)
+  // could land on this invisible stand-in instead of (or in front of) the
+  // real geometry it's standing in for while hidden in the near band.
+  proxy.raycast = () => {};
+  return proxy;
+}
+
+// #2378: true switches an instance to its simplified middle-band proxy;
+// false restores full detail. A no-op for an instance with no proxy
+// (buildInstanceLodProxy returned null for it, stored as
+// object.userData.lodProxy in loadShopLandletInstances) — a box/flooring
+// instance has nothing to switch.
+function setInstanceLodState(object, isMiddle) {
+  const proxy = object.userData.lodProxy;
+  if (!proxy) return;
+  proxy.visible = isMiddle;
+  for (const child of object.children) {
+    if (child !== proxy) child.visible = !isMiddle;
+  }
+}
+
 const AXIS_DIMENSION_KEY = { x: 'width', y: 'depth', z: 'height' };
 const AXIS_LIST = ['x', 'y', 'z'];
 
@@ -13193,20 +13235,36 @@ const SHOP_IDLE_HEAD_TURN_INTERVAL_MAX_S = 5;
 const SHOP_IDLE_HEAD_TURN_EASE_PER_S = 1.5;
 const SHOP_JOYSTICK_MAX_PX = 46;
 const SHOP_JOYSTICK_DEADZONE_PX = 6;
-// This binary load/unload distance is the only "chunk loading" that exists
-// today — docs/SPEC.md §1's fuller near/middle-LOD/far-panoramic-backdrop
-// banding (see #133/#137) isn't built, so there's no per-band curvature
-// concern to check yet. And even if it were: worker/earthCurvature.js's
-// curvatureDropM says the real curved surface sags a mere ~0.3-0.6mm below
-// the flat plane at these two radii, ~2cm even out at 500m, and still only
-// ~8cm at a hypothetical 1km world radius (this world starts at ~31.6m and
-// grows just 10m per expansion, so reaching even 500m is already a very
-// mature world) — all comfortably imperceptible against a 60m-tall wall/
-// dome backdrop and typical camera distances. Revisit only once a real
-// chunked LOD/backdrop system actually exists to hang a per-band decision
-// on; there's nothing here today for curvature to change.
+// This near/far load-unload distance (plus the middle-LOD band just below,
+// #2378 of docs/SPEC.md §1's fuller near/middle-LOD/far-panoramic-backdrop
+// system, #2377) is the only "chunk loading" that exists today — the far
+// band's own pre-rendered panoramic backdrop isn't built yet (still just
+// the flat sky-dome color beyond SHOP_UNLOAD_RADIUS_M), so there's no
+// per-band curvature concern to check for it yet. And even if there were:
+// worker/earthCurvature.js's curvatureDropM says the real curved surface
+// sags a mere ~0.3-0.6mm below the flat plane at these radii, ~2cm even out
+// at 500m, and still only ~8cm at a hypothetical 1km world radius (this
+// world starts at ~31.6m and grows just 10m per expansion, so reaching even
+// 500m is already a very mature world) — all comfortably imperceptible
+// against a 60m-tall wall/dome backdrop and typical camera distances. The
+// same conclusion covers the middle-LOD band's own two thresholds below,
+// since both sit inside this already-analyzed 60-90m range. Revisit only
+// once the far band's actual backdrop rendering exists to hang a per-band
+// decision on; there's nothing here today for curvature to change.
 const SHOP_LOAD_RADIUS_M = 60;
 const SHOP_UNLOAD_RADIUS_M = 90;
+// #2378: a middle LOD band between the near (full detail, above) and far
+// (unload, above) radii, giving the simplified-proxy swap its own
+// enter/exit hysteresis gap — the same enter-at-one-distance/exit-at-a-
+// closer-one shape SHOP_LOAD_RADIUS_M/SHOP_UNLOAD_RADIUS_M already use for
+// the near/far transition, so an avatar hovering right at one boundary
+// doesn't thrash the LOD swap every frame. Both sit strictly inside
+// [SHOP_LOAD_RADIUS_M, SHOP_UNLOAD_RADIUS_M] so the full progression reads
+// as near (0-65m, full detail) → middle (65-90m experienced range, but the
+// swap only actually triggers past 75m until the avatar comes back under
+// 65m) → far (unload past 90m).
+const SHOP_MIDDLE_LOD_ENTER_RADIUS_M = 75; // switch to the simplified proxy once past this
+const SHOP_MIDDLE_LOD_EXIT_RADIUS_M = 65; // switch back to full detail once back under this
 // docs/SPEC.md §1's "vertical chunk-loading uses the same near/middle/far
 // LOD banding as horizontal distance" (#171, sub-issue of #167's vertical-
 // construction tracking) has nothing to hang a per-band decision on yet,
@@ -14427,6 +14485,26 @@ window.__testForceShopProximityCheck = () => {
   positionShopCamera();
   updateShopProximity();
 };
+// #2378: read-only test hook reporting an instance's actual rendered LOD
+// state, rather than just entry.lod's own intended-state tracking -- reads
+// object.userData.lodProxy.visible directly (the real signal
+// setInstanceLodState toggles), so a bug in that toggle itself still shows
+// up here even if entry.lod flipped correctly. Returns 'near' (full detail
+// visible), 'middle' (simplified proxy visible), 'none' (no proxy at all --
+// a box/flooring fallback instance, nothing to simplify), or null if the
+// instance isn't currently loaded. Same minimal-exposure-for-verification
+// precedent as window.__shopInstanceDisposedCount (#1427) and
+// window.__testShopAvatarPosition above. Always inert unless a test calls it.
+window.__testShopInstanceLodBand = (instanceId) => {
+  for (const entry of shopLandlets.values()) {
+    const object = entry.objects.find((o) => o.userData.instanceId === instanceId);
+    if (!object) continue;
+    const proxy = object.userData.lodProxy;
+    if (!proxy) return 'none';
+    return proxy.visible ? 'middle' : 'near';
+  }
+  return null;
+};
 // #1495: reports whether any material on the current shop avatar is still
 // flagged transparent -- used to confirm setShopAvatarOpacity's "Go to Last
 // Location" fade sequence actually restores this when it completes, rather
@@ -15583,12 +15661,24 @@ function updateShopProximity() {
     if (entry.record.status === 'claimed') {
       if (!entry.loaded && distance < SHOP_LOAD_RADIUS_M) {
         entry.loaded = true; // set before awaiting so a second tick can't double-load
+        entry.lod = 'near'; // SHOP_LOAD_RADIUS_M < SHOP_MIDDLE_LOD_EXIT_RADIUS_M, so a fresh load always starts near
         // Each load gets its own token (see loadShopLandletInstances) so a
         // fast unload-then-reload cycle can't let an earlier, still in-flight
         // fetch resurrect itself once entry.loaded flips back to true.
         loadShopLandletInstances(entry, ++entry.loadToken);
       } else if (entry.loaded && distance > SHOP_UNLOAD_RADIUS_M) {
         unloadShopLandletInstances(entry);
+      } else if (entry.loaded) {
+        // #2378: the middle LOD band's own enter/exit hysteresis, same
+        // "only flip once past the gap, not right at a shared boundary"
+        // shape the near/far load-unload check above already uses.
+        if (entry.lod !== 'middle' && distance > SHOP_MIDDLE_LOD_ENTER_RADIUS_M) {
+          entry.lod = 'middle';
+          for (const object of entry.objects) setInstanceLodState(object, true);
+        } else if (entry.lod !== 'near' && distance < SHOP_MIDDLE_LOD_EXIT_RADIUS_M) {
+          entry.lod = 'near';
+          for (const object of entry.objects) setInstanceLodState(object, false);
+        }
       }
     } else if (entry.record.status === 'greenbelt') {
       // #1995: credit orbs only ever spawn into greenbelt landlets
@@ -15936,6 +16026,17 @@ async function loadShopLandletInstances(entry, myToken) {
     entry.group.add(object);
     entry.objects.push(object);
     growShopDomeIfNeeded(object);
+    // #2378: built/attached after growShopDomeIfNeeded above, not before —
+    // the proxy's box dimensions approximate the model's declared template
+    // size, which can differ slightly from the real mesh's own rendered
+    // bounds, so keeping it out of that one Box3.setFromObject(object) call
+    // avoids any chance of it skewing the dome-growth calculation.
+    const lodProxy = buildInstanceLodProxy(object);
+    if (lodProxy) {
+      object.userData.lodProxy = lodProxy;
+      object.add(lodProxy);
+    }
+    setInstanceLodState(object, entry.lod === 'middle');
     if (object.userData.isCommunitySign) registerShopSign(object, entry);
     if (object.userData.isCommunityCalendar) registerShopCalendar(object, entry);
     // Unlike signs/calendar above, reviews have no builder opt-in flag at
@@ -17243,6 +17344,7 @@ function disposeObject3D(object) {
 
 function unloadShopLandletInstances(entry) {
   entry.loaded = false;
+  entry.lod = 'near'; // #2378: reset so a later reload always starts at full detail, same reasoning as entry.loaded's own reset here
   entry.loadToken++; // invalidate any in-flight loadShopLandletInstances call, reload or not
   for (const object of entry.objects) {
     entry.group.remove(object);
@@ -17639,6 +17741,9 @@ async function enterShopMode() {
     scene.add(group);
     shopLandlets.set(record.landletId, {
       record, group, loaded: false, loadToken: 0, objects: [],
+      // #2378: 'near' (full detail) or 'middle' (simplified proxy) — only
+      // meaningful while loaded is true; see updateShopProximity.
+      lod: 'near',
       // #1995: orbs' own load state, independent of loaded/loadToken/
       // objects above -- see updateShopProximity's own comment on why.
       orbsLoaded: false, orbLoadToken: 0,
