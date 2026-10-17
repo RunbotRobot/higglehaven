@@ -12033,8 +12033,13 @@ async function exportSocialSection(db, builderId, userId) {
     list.push(versionInstanceFromRow(row));
     instancesByArchivedVersionId.set(row.version_id, list);
   }
+  const friendshipOtherBuilderIds = friendships.results.map((row) =>
+    row.requester_builder_id === builderId ? row.recipient_builder_id : row.requester_builder_id);
+  const friendshipLabelsById = await labelsByBuilderId(db, friendshipOtherBuilderIds);
+  const friendshipLandletsById = await ownedLandletsByBuilderId(db, friendshipOtherBuilderIds);
   return {
-    friendships: friendships.results.map((row) => friendshipFromRow(row, builderId, new Map(), new Map())),
+    friendships: friendships.results.map((row) =>
+      friendshipFromRow(row, builderId, friendshipLabelsById, friendshipLandletsById)),
     directMessages: directMessages.results.map(directMessageFromRow),
     notifications: notifications.results.map(notificationFromRow),
     productReviews: productReviews.results.map(reviewFromRow),
