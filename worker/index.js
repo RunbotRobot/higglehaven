@@ -6441,12 +6441,25 @@ async function handleAuctionBids(request, db, route) {
     // at INSERT time and folds it into the same atomic statement as the
     // existing highest-bid guard, so this bid only actually lands if the
     // builder is still under cap the instant it's written.
+    // #2412: the two guards below (highest-bid, land-cap) were the only
+    // ones folded into this atomic write -- nothing re-checked that the
+    // auction itself was still active at INSERT time, so a concurrent
+    // resolution (resolveDueAuctions' sweep, another caller's /resolve,
+    // or just another GET triggering resolveAuctionIfDue) landing in the
+    // gap between the up-front check above and this INSERT could let a
+    // bid attach to an auction that has already ended. Folding the same
+    // live EXISTS check resolveAuction's own atomic status-flip guard
+    // uses closes that window the same way every other auction-racing
+    // write in this file already does.
     const inserted = await db.prepare(`
       INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents)
       SELECT ?, ?, ?, ?
-      WHERE NOT EXISTS (
-        SELECT 1 FROM auction_bids WHERE auction_id = ? AND amount_cents >= ?
+      WHERE EXISTS (
+        SELECT 1 FROM auctions WHERE auction_id = ? AND status = 'active'
       )
+        AND NOT EXISTS (
+          SELECT 1 FROM auction_bids WHERE auction_id = ? AND amount_cents >= ?
+        )
         AND (
           SELECT b.land_cap_m2 FROM builders b WHERE b.builder_id = ?
         ) + ? >= (
@@ -6464,10 +6477,14 @@ async function handleAuctionBids(request, db, route) {
             ), 0)
         )
     `).bind(
-      bidId, auctionId, builderId, amountCents, auctionId, amountCents,
+      bidId, auctionId, builderId, amountCents, auctionId, auctionId, amountCents,
       builderId, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2, auctionedLandlet.area_m2, builderId, builderId,
     ).run();
     if (inserted.meta.changes === 0) {
+      const currentAuction = await db.prepare('SELECT status FROM auctions WHERE auction_id = ?').bind(auctionId).first();
+      if (currentAuction.status !== 'active') {
+        throw new HttpError('This auction has already ended', 409);
+      }
       const currentHighest = await db.prepare(`
         SELECT amount_cents FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
       `).bind(auctionId).first();
