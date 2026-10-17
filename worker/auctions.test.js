@@ -768,6 +768,55 @@ describe('Auctions', () => {
     expect(instances.body.instances).toEqual([]);
   });
 
+  // #2392: the update test above races resolve against the whole PATCH
+  // call, which tends to land before the write-time ownership guard even
+  // runs (yielding 403, or the clean 404 from the initial existence
+  // check). This test widens the specific gap #2392 was actually about —
+  // between the guarded UPDATE committing and the final re-SELECT that
+  // builds the response — by unflagging both isCommunitySign and
+  // isCommunityCalendar, which adds two more awaited DELETEs in between
+  // (worker/index.js's own #1022 cleanup). Before #2392's fix, a resolve
+  // landing in that narrower window fed a null row into
+  // instanceFromRow(), crashing with a raw 500 instead of a clean 404 —
+  // not covered by the test above's expected-status set, same as #2334's
+  // own regression test for the identical crash shape in notifications.
+  it('does not crash with a raw 500 if an auction transfer wipes the instance between the update and its final re-SELECT', async () => {
+    const owner = await signupBuilder('instance-update-reselect-race-owner');
+    const bidder = await signupBuilder('instance-update-reselect-race-bidder');
+    await fundHiggles(bidder);
+    await createGreenbeltLandlet('instance-update-reselect-race-landlet');
+    await claim('instance-update-reselect-race-landlet', owner);
+    await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'instance-update-reselect-race-instance', landletId: 'instance-update-reselect-race-landlet',
+        templateId: 'placeholder-tree', x: 1, y: 1, isCommunitySign: true, isCommunityCalendar: true,
+      }),
+    }));
+    const started = await api('/landlets/instance-update-reselect-race-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 1500 }),
+    }));
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const [updated] = await Promise.all([
+      api('/instances/instance-update-reselect-race-instance', owner.session({
+        method: 'PATCH',
+        body: JSON.stringify({ isCommunitySign: false, isCommunityCalendar: false }),
+      })),
+      api(`/auctions/${auctionId}/resolve`, { method: 'POST' }),
+    ]);
+    // Same legitimate-outcome set as the plain update race above -- the
+    // real regression this guards against is a 500, not any of these.
+    expect([200, 403, 404, 409]).toContain(updated.response.status);
+
+    const landlet = await api('/landlets/instance-update-reselect-race-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+  });
+
   // #456: the update test above only exercises the "instance stays on the
   // same landlet" path — this one specifically exercises the second
   // requireOwnedLandlet branch (instance.landletId !== existing.landlet_id),
