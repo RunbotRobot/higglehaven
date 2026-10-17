@@ -12867,8 +12867,8 @@ async function handleLandlets(request, db, route, url) {
     const inserted = await db.prepare(`
       INSERT INTO landlets
         (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, landlet_class,
-         polygon_json, generated_at, claimable_at, metadata_json, landlet_type, max_world_radius_m)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         polygon_json, generated_at, claimable_at, metadata_json, landlet_type, biome, max_world_radius_m)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       WHERE ? = 0 OR NOT EXISTS (
         SELECT 1 FROM landlets AS owned
         WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
@@ -12985,7 +12985,7 @@ async function handleLandlets(request, db, route, url) {
       UPDATE landlets
       SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, status = ?, owner_builder_id = ?,
           landlet_class = ?, polygon_json = ?, generated_at = ?, claimable_at = ?, metadata_json = ?,
-          landlet_type = ?, max_world_radius_m = ?,
+          landlet_type = ?, biome = ?, max_world_radius_m = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE landlet_id = ? AND status = ? AND owner_builder_id IS ?
         AND (
@@ -12994,7 +12994,7 @@ async function handleLandlets(request, db, route, url) {
     `).bind(
       landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status,
       landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt,
-      landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType,
+      landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType, landlet.biome ?? null,
       landletMaxWorldRadius(candidateRowFromLandlet(landlet)), route[1],
       existing.status, existing.owner_builder_id,
       renamingTo, renamingTo, route[1],
@@ -13646,12 +13646,12 @@ async function handleLandCandidates(request, db, route, url) {
     row.ring_id = existing.ring_id;
     const update = db.prepare(`
       UPDATE landlet_candidates
-      SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, landlet_class = ?, landlet_type = ?,
+      SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, landlet_class = ?, landlet_type = ?, biome = ?,
           polygon_json = ?, metadata_json = ?, min_world_radius_m = ?, max_world_radius_m = ?
       WHERE landlet_id = ? AND materialized_at IS NULL
     `).bind(
       landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.landClass, landlet.landType,
-      JSON.stringify(landlet.polygon), JSON.stringify(landlet.metadata),
+      landlet.biome ?? null, JSON.stringify(landlet.polygon), JSON.stringify(landlet.metadata),
       landletMinWorldRadius(row), landletMaxWorldRadius(row), route[1],
     );
     const results = await db.batch([
@@ -13869,6 +13869,7 @@ function candidateRowFromLandlet(landlet) {
     center_y_m: landlet.center.y,
     landlet_class: landlet.landClass,
     landlet_type: landlet.landType,
+    biome: landlet.biome ?? null,
     polygon_json: JSON.stringify(landlet.polygon),
     metadata_json: JSON.stringify(landlet.metadata),
   };
@@ -13877,12 +13878,13 @@ function candidateRowFromLandlet(landlet) {
 function candidateInsertStatement(db, row) {
   return db.prepare(`
     INSERT INTO landlet_candidates
-      (landlet_id, name, area_m2, center_x_m, center_y_m, landlet_class, landlet_type, polygon_json, metadata_json,
-       min_world_radius_m, max_world_radius_m, ring_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (landlet_id, name, area_m2, center_x_m, center_y_m, landlet_class, landlet_type, biome, polygon_json,
+       metadata_json, min_world_radius_m, max_world_radius_m, ring_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.landlet_class, row.landlet_type,
-    row.polygon_json, row.metadata_json, landletMinWorldRadius(row), landletMaxWorldRadius(row), row.ring_id || null,
+    row.biome ?? null, row.polygon_json, row.metadata_json, landletMinWorldRadius(row), landletMaxWorldRadius(row),
+    row.ring_id || null,
   );
 }
 
@@ -13917,9 +13919,9 @@ function candidateMaterializationSweepStatements(db, landletIds) {
     db.prepare(`
       INSERT INTO landlets
         (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, landlet_class,
-         landlet_type, polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
+         landlet_type, biome, polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
       SELECT landlet_id, name, area_m2, center_x_m, center_y_m, 'generating', NULL, landlet_class,
-             landlet_type, polygon_json, NULL, NULL, metadata_json, max_world_radius_m
+             landlet_type, biome, polygon_json, NULL, NULL, metadata_json, max_world_radius_m
       FROM landlet_candidates
       WHERE landlet_id IN (${placeholders})
         AND materialized_at IS NULL
@@ -18462,6 +18464,7 @@ function validateLandlet(input, fallbackId) {
     ownerBuilderId: input.ownerBuilderId || null,
     landClass: positiveInteger(input.landClass ?? 1, 'landClass'),
     landType: landletLandType(input.landType || 'buildable'),
+    biome: landletBiome(input.biome ?? null),
     polygon: validatePolygon(input.polygon || []),
     generatedAt: optionalIsoDateString(input.generatedAt, 'generatedAt'),
     claimableAt: optionalIsoDateString(input.claimableAt, 'claimableAt'),
@@ -18600,7 +18603,7 @@ function instanceParams(instance) {
 }
 
 function landletParams(landlet) {
-  return [landlet.landletId, landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status, landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt, landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType];
+  return [landlet.landletId, landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status, landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt, landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType, landlet.biome ?? null];
 }
 
 function templateFromRow(row) {
@@ -18674,6 +18677,7 @@ function landletFromRow(row) {
     ownerBuilderId: row.owner_builder_id,
     landClass: row.landlet_class ?? 1,
     landType: row.landlet_type ?? 'buildable',
+    biome: row.biome ?? null,
     polygon: JSON.parse(row.polygon_json || '[]'),
     generatedAt: row.generated_at,
     claimableAt: row.claimable_at,
@@ -18692,6 +18696,7 @@ function candidateFromRow(row) {
     center: { x: row.center_x_m, y: row.center_y_m },
     landClass: row.landlet_class,
     landType: row.landlet_type ?? 'buildable',
+    biome: row.biome ?? null,
     polygon: JSON.parse(row.polygon_json || '[]'),
     metadata: JSON.parse(row.metadata_json || '{}'),
     materializedAt: row.materialized_at,
@@ -18812,6 +18817,19 @@ function landletStatus(value) {
 function landletLandType(value) {
   if (!['buildable', 'water'].includes(value)) {
     throw new HttpError('landType must be buildable or water', 400);
+  }
+  return value;
+}
+
+// #2369: a landlet's real biome classification (#2370/#2371, not yet
+// built) -- nullable rather than a fixed enum, same reasoning as
+// migrations/0148's own comment: the actual value set is #2370's
+// classification-design call, not this field's to pre-decide. Only
+// shape-validated here (a string, or no value at all), the same minimal
+// bar `metadata` gets elsewhere in this function.
+function landletBiome(value) {
+  if (value !== null && typeof value !== 'string') {
+    throw new HttpError('biome must be a string or null', 400);
   }
   return value;
 }

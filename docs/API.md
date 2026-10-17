@@ -3157,7 +3157,7 @@ Response:
 ### `PATCH /api/land-candidates/:landletId`
 
 Corrects a pending candidate's `name`, `areaM2`, `center`, `landClass`,
-`landType`, `polygon`, or `metadata` before generation begins. The current
+`landType`, `biome`, `polygon`, or `metadata` before generation begins. The current
 implementation merges request fields with the existing candidate before
 validation. The route ID cannot be changed. Materialized candidates return
 `409`; their geometry is already represented by the corresponding generating
@@ -3170,18 +3170,21 @@ contains both `candidate` and `landlet`; `landlet` is null if it remains queued.
 ### `POST /api/land-candidates`
 
 Queues a candidate using the same `name`, `areaM2`, `center`, `landClass`,
-`landType`, `polygon`, and `metadata` fields as a landlet. `landType`
+`landType`, `biome`, `polygon`, and `metadata` fields as a landlet. `landType`
 defaults to `buildable` and must be `buildable` or `water` (same
-`landletLandType` validation as the landlet endpoint above). Unlike
+`landletLandType` validation as the landlet endpoint above). `biome` (#2369)
+defaults to `null` and must be a string or `null` — no fixed enum yet, same
+as the landlet endpoint's own `biome` field. Unlike
 `generate-ring`/`generate-mosaic` above (#2014), this endpoint never
 auto-classifies anything from real geo data — it only ever stores whatever
-`landType` the caller explicitly passes, since it takes arbitrary admin
-input rather than a self-consistent generator's own output. If it already
-overlaps the current world circle, the API immediately creates its
+`landType`/`biome` the caller explicitly passes, since it takes arbitrary
+admin input rather than a self-consistent generator's own output. If it
+already overlaps the current world circle, the API immediately creates its
 generating landlet,
-carrying the candidate's own `landType` into it rather than defaulting the
-materialized landlet to `buildable` regardless of the candidate's type.
-Otherwise it remains lightweight until a later expansion first overlaps it.
+carrying the candidate's own `landType`/`biome` into it rather than
+defaulting the materialized landlet to `buildable`/`null` regardless of the
+candidate's own values. Otherwise it remains lightweight until a later
+expansion first overlaps it.
 
 The `201` response contains both `candidate` and `landlet`; `landlet` is null
 while the candidate remains queued.
@@ -3248,6 +3251,7 @@ state can build on a stable backend shape.
   "ownerBuilderId": null,
   "landClass": 1,
   "landType": "buildable",
+  "biome": null,
   "polygon": [],
   "generatedAt": null,
   "claimableAt": null,
@@ -3358,6 +3362,13 @@ Validation notes:
   (`POST .../claim` rejects it with `409`, see below). Nothing in world
   generation produces a `'water'` landlet yet — this field exists so the
   claim system and data model are ready for whenever it does.
+- `biome` (#2369, sub-issue of #2368's macro-geography follow-up) defaults
+  to `null` and must be a string or `null` — deliberately no fixed enum
+  yet, unlike `landType`'s closed `buildable`/`water` set, since the real
+  classification values are a separate, not-yet-built sub-issue's own
+  design call. Nothing produces a real value yet either; this field exists
+  so the data model is ready for whenever it does, the same scope cut
+  `landType` made before #219/#220 shipped its own consumers.
 - `polygon` defaults to an empty array and holds at most 100 points (#964).
   When present, each point must contain finite `x` and `y` values in meters.
 
