@@ -3985,7 +3985,7 @@ function populateSellerCategoryFilterOptions(templates) {
     const key = t.category.toLowerCase();
     if (!categoriesByKey.has(key)) categoriesByKey.set(key, t.category);
   }
-  const categories = [...categoriesByKey.values()].sort();
+  const categories = [...categoriesByKey.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   const previous = sellerCategoryFilterSelect.value;
   sellerCategoryFilterSelect.innerHTML = '';
   const allOption = document.createElement('option');
