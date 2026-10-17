@@ -83,6 +83,61 @@ describe('Stripe account.updated webhook (#766)', () => {
     expect(row.stripe_onboarding_status).toBe('complete');
   });
 
+  // #2418: during a secret rotation Stripe keeps the old secret active for
+  // up to 24h and signs each event with BOTH secrets, sending every
+  // resulting v1 signature in the same header -- this server must accept
+  // the event as long as ANY v1 value matches its own current secret, not
+  // just whichever one happens to appear last.
+  it('accepts a webhook whose header carries multiple v1 signatures, as long as one matches (#2418)', async () => {
+    const seller = await signupSeller('stripe-webhook-multi-v1');
+    await env.DB.prepare(
+      "UPDATE sellers SET stripe_account_id = 'acct_multi_v1', stripe_onboarding_status = 'complete' WHERE seller_id = ?",
+    ).bind(seller.sellerId).run();
+
+    const ts = Math.floor(Date.now() / 1000);
+    const event = accountUpdatedEvent('acct_multi_v1', {
+      requirements: { disabled_reason: 'requirements.past_due', currently_due: ['individual.verification.document'] },
+    });
+    const rawBody = JSON.stringify(event);
+    const realSignature = await signStripePayload(ts, rawBody);
+    // The real signature appears FIRST and a wrong one LAST — the pre-
+    // #2418 Object.fromEntries parsing kept only the LAST v1 value, so
+    // this exact ordering is what it got wrong (a real signature that
+    // isn't the final v1 entry); this test pins the real fix (checking
+    // every v1 value) rather than happening to use the one ordering the
+    // old, buggy code tolerated by accident.
+    const headers = { 'content-type': 'application/json' };
+    headers['stripe-signature'] = `t=${ts},v1=${realSignature},v1=${'a'.repeat(64)}`;
+    const response = await SELF.fetch('https://higglehaven.test/api/auth/stripe-webhook', {
+      method: 'POST', headers, body: rawBody,
+    });
+    expect(response.status).toBe(200);
+
+    const row = await env.DB.prepare('SELECT stripe_onboarding_status FROM sellers WHERE seller_id = ?')
+      .bind(seller.sellerId).first();
+    expect(row.stripe_onboarding_status).toBe('action_needed');
+  });
+
+  it('still rejects a webhook with multiple v1 signatures when none of them match', async () => {
+    const seller = await signupSeller('stripe-webhook-multi-v1-bad');
+    await env.DB.prepare(
+      "UPDATE sellers SET stripe_account_id = 'acct_multi_v1_bad', stripe_onboarding_status = 'complete' WHERE seller_id = ?",
+    ).bind(seller.sellerId).run();
+
+    const ts = Math.floor(Date.now() / 1000);
+    const rawBody = JSON.stringify(accountUpdatedEvent('acct_multi_v1_bad'));
+    const headers = { 'content-type': 'application/json' };
+    headers['stripe-signature'] = `t=${ts},v1=${'a'.repeat(64)},v1=${'b'.repeat(64)}`;
+    const response = await SELF.fetch('https://higglehaven.test/api/auth/stripe-webhook', {
+      method: 'POST', headers, body: rawBody,
+    });
+    expect(response.status).toBe(401);
+
+    const row = await env.DB.prepare('SELECT stripe_onboarding_status FROM sellers WHERE seller_id = ?')
+      .bind(seller.sellerId).first();
+    expect(row.stripe_onboarding_status).toBe('complete');
+  });
+
   // #872: Stripe's own webhook-verification guidance is to reject a
   // signature whose timestamp is too old, even when the HMAC itself is
   // valid -- otherwise a captured payload could be replayed indefinitely.
