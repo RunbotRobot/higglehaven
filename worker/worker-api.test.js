@@ -1600,6 +1600,59 @@ describe('Worker API', () => {
     expect(patched.body).toEqual({ error: 'Catalog template not found' });
   });
 
+  // #2364: a *different* gap in the same handler from #932's own fix above
+  // -- that fix only covers a concurrent DELETE landing before the UPDATE
+  // runs. This handler's own UPDATE already correctly checks meta.changes
+  // for that case, but the re-SELECT right after it (used to build the
+  // response) was never null-checked -- a concurrent DELETE landing in the
+  // real gap between the UPDATE committing and that re-SELECT running
+  // crashed with a raw 500 instead of a clean 404. Wraps the UPDATE
+  // statement's own run() (rather than racing prepare() itself) so the
+  // DELETE only ever fires once the UPDATE has genuinely already matched a
+  // row -- same shape #2354 already fixed for sign_posts/calendar_events.
+  it('returns 404, not a raw 500, when the template is deleted in the gap between the UPDATE and its own re-fetch', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'catalog-patch-refetch-delete-race-template', name: 'Refetch race template',
+        color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    env.DB.prepare = (sql) => {
+      const stmt = originalPrepare(sql);
+      if (sql.includes('UPDATE catalog_templates') && sql.includes('SET name = COALESCE')) {
+        const originalBind = stmt.bind.bind(stmt);
+        stmt.bind = (...args) => {
+          const bound = originalBind(...args);
+          const originalRun = bound.run.bind(bound);
+          bound.run = async () => {
+            const result = await originalRun();
+            await originalPrepare('DELETE FROM catalog_templates WHERE template_id = ?')
+              .bind('catalog-patch-refetch-delete-race-template').run();
+            return result;
+          };
+          return bound;
+        };
+      }
+      return stmt;
+    };
+    let patched;
+    try {
+      patched = await api('/catalog/catalog-patch-refetch-delete-race-template', {
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'Renamed after refetch race' }),
+      });
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+
+    expect(patched.response.status).toBe(404);
+    expect(patched.body).toEqual({ error: 'Catalog template not found' });
+  });
+
   // Found via backlog audit (#407): the single-item catalog PATCH/DELETE
   // (and review moderation, refunds) already treat a dangling seller_id —
   // left behind by DELETE /api/sellers/:sellerId, per that handler's own
@@ -2125,6 +2178,43 @@ describe('Worker API', () => {
     }));
     expect(invalid.response.status).toBe(400);
     expect(invalid.body).toEqual({ error: 'landType must be buildable or water' });
+  });
+
+  // #2369 (sub-issue of #2368, docs/SPEC.md §1's "Macro-geography"):
+  // mirrors landType's own round-trip/validation coverage just above, for
+  // the new (still consumer-less) biome column -- confirms the data model
+  // can hold a real value and rejects a non-string one, without yet
+  // asserting anything about what a real classification would look like,
+  // since nothing produces one yet.
+  it('defaults biome to null, round-trips a real value, and rejects a non-string one', async () => {
+    const defaulted = await createGreenbeltLandlet('default-biome-landlet', { x: 6000, y: 1600 });
+    expect(defaulted.body.landlet.biome).toBeNull();
+
+    const classified = await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'alpine-biome-landlet',
+        name: 'Alpine biome landlet',
+        areaM2: 1000,
+        biome: 'alpine',
+        center: { x: 6000, y: 1700 },
+      }),
+    }));
+    expect(classified.response.status).toBe(201);
+    expect(classified.body.landlet.biome).toBe('alpine');
+
+    const invalid = await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'invalid-biome-landlet',
+        name: 'Invalid biome',
+        areaM2: 1000,
+        biome: 42,
+        center: { x: 6000, y: 1800 },
+      }),
+    }));
+    expect(invalid.response.status).toBe(400);
+    expect(invalid.body).toEqual({ error: 'biome must be a string or null' });
   });
 
   // #1573: generatedAt/claimableAt went through validateLandlet with no type
@@ -3164,6 +3254,57 @@ describe('Worker API', () => {
     expect(corrected.body.candidate.landType).toBe('water');
   });
 
+  // #2369 (sub-issue of #2368): mirrors the landType candidate test just
+  // above, for the new biome column -- defaults to null, carries into the
+  // materialized landlet rather than falling back to the landlets table's
+  // own default, and can be corrected while a candidate is still pending.
+  it('defaults a land candidate biome to null and carries it into materialization', async () => {
+    const defaulted = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'default-biome-candidate', name: 'Default biome candidate', areaM2: 4, center: { x: 9000, y: 9400 },
+      }),
+    }));
+    expect(defaulted.response.status).toBe(201);
+    expect(defaulted.body.candidate.biome).toBeNull();
+
+    const classified = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'alpine-biome-candidate', name: 'Alpine biome candidate', areaM2: 4, center: { x: 9000, y: 9500 }, biome: 'alpine',
+      }),
+    }));
+    expect(classified.response.status).toBe(201);
+    expect(classified.body.candidate.biome).toBe('alpine');
+    expect(classified.body.landlet).toBeNull();
+
+    // Same "move a pending candidate's center onto the origin to trigger
+    // materialization" technique the landType test above relies on --
+    // confirms the materialization sweep carries the candidate's own
+    // biome into the landlets row rather than falling back to the
+    // landlets table's own default.
+    const started = await api('/land-candidates/alpine-biome-candidate', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ center: { x: 0, y: 0 } }),
+    }));
+    expect(started.response.status).toBe(200);
+    expect(started.body.candidate.materializedAt).not.toBeNull();
+    expect(started.body.landlet).toMatchObject({ landletId: 'alpine-biome-candidate', biome: 'alpine' });
+
+    // Same reason the water test above frees its own fixture: a real
+    // landlet left sitting on the world origin would otherwise block the
+    // organic-mosaic test's own origin-covering cell later in this file.
+    await env.DB.prepare("DELETE FROM landlet_candidates WHERE landlet_id = 'alpine-biome-candidate'").run();
+    await env.DB.prepare("DELETE FROM landlets WHERE landlet_id = 'alpine-biome-candidate'").run();
+
+    const corrected = await api('/land-candidates/default-biome-candidate', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ biome: 'alpine' }),
+    }));
+    expect(corrected.response.status).toBe(200);
+    expect(corrected.body.candidate.biome).toBe('alpine');
+  });
+
   it('rejects manual/batch land candidates that would overlap existing land (#570)', async () => {
     const base = await api('/land-candidates', adminSession({
       method: 'POST',
@@ -3322,6 +3463,11 @@ describe('Worker API', () => {
     // geometry/classification columns above (migrations/0108).
     await expect(env.DB.prepare(`
       UPDATE landlet_candidates SET landlet_type = 'water'
+      WHERE landlet_id = 'generated-ring-001'
+    `).run()).rejects.toThrow(/generated ring candidates are immutable/);
+    // #2369: biome joined the same immutability list (migrations/0148).
+    await expect(env.DB.prepare(`
+      UPDATE landlet_candidates SET biome = 'alpine'
       WHERE landlet_id = 'generated-ring-001'
     `).run()).rejects.toThrow(/generated ring candidates are immutable/);
     const lifecycleUpdate = await env.DB.prepare(`

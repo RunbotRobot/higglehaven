@@ -18,6 +18,7 @@ const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || null;
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
+const BENCH_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'bench.glb');
 
 const browser = await chromium.launch(CHROMIUM_PATH ? { executablePath: CHROMIUM_PATH } : {});
 const errors = [];
@@ -41,6 +42,12 @@ async function uploadModel(localPath) {
 
 const uploaded = await uploadModel(CRATE_MODEL_PATH);
 console.log('uploaded an unreferenced test model (should not be deduplicated against a prior run):', uploaded);
+// #2355: a second, distinct unreferenced upload -- used only for the
+// single-row "Delete" button below, kept separate from `uploaded` (which
+// the bulk cleanup flow further down still exercises) so the two don't
+// interfere with each other.
+const uploadedForRowDelete = await uploadModel(BENCH_MODEL_PATH);
+console.log('uploaded a second unreferenced test model for the per-row delete button:', uploadedForRowDelete);
 
 const sessionCookie = await ensureAdminSession(); // "hh_session=<token>"
 const [, token] = sessionCookie.split('=');
@@ -82,6 +89,25 @@ await page.waitForFunction(
 const rowText = await page.locator('#modelsTableWrap tr', { hasText: uploaded.modelUrl }).textContent();
 console.log('uploaded model\'s own row (should be tagged "unreferenced"):', rowText.trim());
 const rowTaggedUnreferenced = rowText.includes('unreferenced');
+
+// --- Single-row delete (#2355): deletes just this one unreferenced
+// upload via its own row's "Delete" button, independent of the bulk
+// cleanup flow below -- confirm() auto-accepted above. ---
+await page.waitForFunction(
+  (modelUrl) => document.getElementById('modelsTableWrap').textContent.includes(modelUrl),
+  uploadedForRowDelete.modelUrl,
+  { timeout: 10000 },
+);
+await page.click(`.model-delete-btn[data-model-url="${uploadedForRowDelete.modelUrl}"]`);
+await page.waitForFunction(
+  (modelUrl) => !document.getElementById('modelsTableWrap').textContent.includes(modelUrl),
+  uploadedForRowDelete.modelUrl,
+  { timeout: 10000 },
+);
+const rowDeleteRemovedOnlyThatRow = !(await page.locator('#modelsTableWrap').textContent()).includes(uploadedForRowDelete.modelUrl);
+const otherUploadStillListedAfterRowDelete = (await page.locator('#modelsTableWrap').textContent()).includes(uploaded.modelUrl);
+console.log('row-deleted model gone from the list (should be true):', rowDeleteRemovedOnlyThatRow);
+console.log('the other, unrelated upload is still listed (should be true):', otherUploadStillListedAfterRowDelete);
 
 const realRunDisabledBeforeAnyDryRun = await page.locator('#modelsRealRunBtn').isDisabled();
 console.log('"Delete now" starts disabled before any dry run has ever run (should be true):', realRunDisabledBeforeAnyDryRun);
@@ -139,6 +165,8 @@ console.log('model gone from the list after the real run (should be true):', gon
 const pass = storageCardText.includes('used of') &&
   storageBarVisible &&
   rowTaggedUnreferenced &&
+  rowDeleteRemovedOnlyThatRow &&
+  otherUploadStillListedAfterRowDelete &&
   realRunDisabledBeforeAnyDryRun &&
   dryRunMentionsUpload &&
   realRunEnabledAfterDryRun &&
@@ -149,6 +177,6 @@ const pass = storageCardText.includes('used of') &&
   errors.length === 0;
 await finish(browser, {
   pass,
-  label: 'Admin Dashboard R2 model storage panel (#1820): usage, listing with reference status, dry-run-gated cleanup',
+  label: 'Admin Dashboard R2 model storage panel (#1820): usage, listing with reference status, single-row delete (#2355), dry-run-gated cleanup',
   errors,
 });

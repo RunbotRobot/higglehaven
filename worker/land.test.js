@@ -1637,6 +1637,37 @@ describe('Community signs', () => {
     expect(editMissing.response.status).toBe(404);
   });
 
+  // #2354: never crashes with a raw 500 when the author's own PATCH loses
+  // a race to a concurrent admin-override DELETE (#781) on the same post --
+  // same shape as the friendship accept-vs-decline race elsewhere in this
+  // suite, fired together rather than awaited one at a time.
+  it('never crashes with a raw 500 when a PATCH loses a race to a concurrent admin delete', async () => {
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-patch-delete-race-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 4, y: 6, isCommunitySign: true,
+      }),
+    }));
+    const posted = await api('/instances/sign-patch-delete-race-instance/posts', signsShopper.session({
+      method: 'POST', body: JSON.stringify({ text: 'Original text' }),
+    }));
+    const postId = posted.body.post.postId;
+
+    const [patchResult] = await Promise.all([
+      api(`/instances/sign-patch-delete-race-instance/posts/${postId}`, signsShopper.session({
+        method: 'PATCH', body: JSON.stringify({ text: 'Raced edit' }),
+      })),
+      api(`/instances/sign-patch-delete-race-instance/posts/${postId}`, adminSession({ method: 'DELETE' })),
+    ]);
+
+    // The real bug was an uncaught TypeError surfacing as a raw 500 from
+    // inside this exact call when the admin delete won the race.
+    expect([200, 404, 409]).toContain(patchResult.response.status);
+  });
+
   // #944-shaped gap, found the same way for the new PATCH branch -- no
   // rate limit at all would let an authenticated author rewrite their own
   // post in an unthrottled loop.
@@ -2843,6 +2874,24 @@ describe('Community calendar', () => {
         method: 'PATCH', body: JSON.stringify({ text: 'Nope' }),
       }));
       expect(wrongAccount.response.status).toBe(403);
+    });
+
+    // #2354: never crashes with a raw 500 when the author's own PATCH loses
+    // a race to a concurrent admin-override DELETE (same shape as the
+    // sign-posts race test above), fired together rather than awaited one
+    // at a time.
+    it('never crashes with a raw 500 when a PATCH loses a race to a concurrent admin delete', async () => {
+      const { owner, instanceId } = await setupCalendar('patch-delete-race');
+      const eventId = await postEvent(instanceId, owner, { text: 'Original text' });
+
+      const [patchResult] = await Promise.all([
+        api(`/instances/${instanceId}/events/${eventId}`, owner.session({
+          method: 'PATCH', body: JSON.stringify({ text: 'Raced edit' }),
+        })),
+        api(`/instances/${instanceId}/events/${eventId}`, adminSession({ method: 'DELETE' })),
+      ]);
+
+      expect([200, 404, 409]).toContain(patchResult.response.status);
     });
 
     it('keeps an omitted field as-is on edit, and lets scheduledAt be explicitly cleared', async () => {

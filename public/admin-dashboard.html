@@ -1804,10 +1804,34 @@
           '<td>' + formatBytes(row.sizeBytes) + '</td>' +
           '<td>' + escapeHtml(row.uploadedAt || '—') + '</td>' +
           '<td class="ref-ids">' + (refs.length ? escapeHtml(refs.join(' · ')) : (row.deletable ? '<span class="deletable-tag">unreferenced</span>' : '—')) + '</td>' +
+          '<td>' + (row.deletable ? '<button class="secondary model-delete-btn" data-model-url="' + escapeHtml(row.modelUrl) + '">Delete</button>' : '—') + '</td>' +
           '</tr>';
       }).join('');
       tableWrap.innerHTML =
-        '<table><thead><tr><th>Model URL</th><th>Size</th><th>Uploaded</th><th>Referenced by</th></tr></thead><tbody>' + body + '</tbody></table>';
+        '<table><thead><tr><th>Model URL</th><th>Size</th><th>Uploaded</th><th>Referenced by</th><th></th></tr></thead><tbody>' + body + '</tbody></table>';
+      tableWrap.querySelectorAll('.model-delete-btn').forEach((btn) => {
+        btn.addEventListener('click', () => deleteModel(btn.dataset.modelUrl));
+      });
+    }
+
+    // #2355: the one single-object escape hatch docs/API.md describes for
+    // reclaiming one specific unreferenced upload, same DELETE /uploads/:key
+    // endpoint the admin-only bulk cleanup flow above already exercises --
+    // this just wires it to one row instead of a bucket-wide sweep. Only
+    // ever enabled (see renderTable's own `row.deletable` check) for a row
+    // the server already reports as unreferenced; the DELETE handler's own
+    // last-step referenced-model re-check is still the real guard.
+    async function deleteModel(modelUrl) {
+      if (!window.confirm('Permanently delete ' + modelUrl + ' from R2? This cannot be undone.')) return;
+      clearErr(errLine);
+      try {
+        await fetchJson(modelUrl, { method: 'DELETE' });
+        rows = rows.filter((row) => row.modelUrl !== modelUrl);
+        renderTable();
+        loadStorage();
+      } catch (error) {
+        showErr(errLine, error.message);
+      }
     }
 
     async function loadModelsPage(cursor) {
