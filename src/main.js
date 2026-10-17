@@ -1270,30 +1270,46 @@ function flatGroundHitPoint(hit) {
 // fallback for — so rather than invent a speculative per-biome system
 // with nothing real to key off (the same call PR #238 already made for
 // this same issue), this just replaces the flat single-color ground
-// fill with a textured "default/unclassified" one. A real per-biome
-// material lookup can slot in wherever createGroundTexture() is called
-// once #219's pipeline actually reaches a landlets column, without
-// touching any of its callers.
+// fill with a textured "default/unclassified" one.
+//
+// #2371 (sub-issue of #2368) is that real per-biome lookup, now that
+// #2369/#2370 actually landed a `biome` column with real ingested data
+// behind it. 'lowland' deliberately keeps the exact same palette as the
+// default/unclassified bucket below: it's the common, ordinary case
+// (#2370's own real ingestion run classified 87% of its sampled area as
+// lowland), not a visual change from today's world. near_water/upland/
+// alpine each get their own base color/speckle palette, picked by eye
+// against each band's real-world character (marshy/lush near water,
+// progressively drier/rockier moving upslope) — the same "lower fidelity
+// bar" (docs/SPEC.md §8) every other real-world classification in this
+// app already uses, not a precise biome model.
 //
 // Generated on a canvas rather than loaded from an image asset (matching
 // makeDimensionLabelSprite's own CanvasTexture precedent elsewhere in
-// this file) — small random dabs in a few close shades of green over a
-// base fill read as mottled grass without needing real art. colorSpace
-// must be set explicitly: THREE.Texture defaults to NoColorSpace, which
-// reads a canvas's colors washed-out/oversaturated against everything
-// else in the scene using the sRGB pipeline.
-let cachedGroundTexture = null;
-function createGroundTexture() {
-  if (cachedGroundTexture) return cachedGroundTexture;
+// this file) — small random dabs in a few close shades over a base fill
+// read as mottled ground without needing real art. colorSpace must be
+// set explicitly: THREE.Texture defaults to NoColorSpace, which reads a
+// canvas's colors washed-out/oversaturated against everything else in
+// the scene using the sRGB pipeline.
+const DEFAULT_GROUND_TEXTURE_PALETTE = { base: '#6ca42e', speckles: ['#7cb83a', '#5c9424', '#82c244', '#568c20'] };
+const GROUND_TEXTURE_PALETTES = {
+  near_water: { base: '#4a8f6b', speckles: ['#5aa87d', '#3d7a5a', '#6bc294', '#2f6548'] },
+  upland: { base: '#8a9a4a', speckles: ['#9aab56', '#78873c', '#a7b863', '#687532'] },
+  alpine: { base: '#9c9488', speckles: ['#aba398', '#8a8276', '#b8b0a4', '#766e64'] },
+};
+const cachedGroundTextures = new Map(); // palette key ('default' or a real biome) -> CanvasTexture
+function createGroundTexture(biome = null) {
+  const key = GROUND_TEXTURE_PALETTES[biome] ? biome : 'default';
+  if (cachedGroundTextures.has(key)) return cachedGroundTextures.get(key);
+  const { base, speckles } = GROUND_TEXTURE_PALETTES[biome] ?? DEFAULT_GROUND_TEXTURE_PALETTE;
   const canvas = document.createElement('canvas');
   canvas.width = 256;
   canvas.height = 256;
   const ctx = canvas.getContext('2d');
-  ctx.fillStyle = '#6ca42e';
+  ctx.fillStyle = base;
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  const speckleColors = ['#7cb83a', '#5c9424', '#82c244', '#568c20'];
   for (let i = 0; i < 4000; i++) {
-    ctx.fillStyle = speckleColors[i % speckleColors.length];
+    ctx.fillStyle = speckles[i % speckles.length];
     const w = 1 + Math.random() * 2;
     const h = 3 + Math.random() * 4;
     ctx.fillRect(Math.random() * canvas.width, Math.random() * canvas.height, w, h);
@@ -1303,7 +1319,7 @@ function createGroundTexture() {
   texture.wrapT = THREE.RepeatWrapping;
   texture.repeat.set(8, 8);
   texture.colorSpace = THREE.SRGBColorSpace;
-  cachedGroundTexture = texture;
+  cachedGroundTextures.set(key, texture);
   return texture;
 }
 
@@ -1356,6 +1372,12 @@ function applyLandletShape(landletRecord) {
   normalizeGroundShapeUVs(landlet.geometry);
   curveGroundGeometry(landlet.geometry);
   oldGeometry.dispose();
+  // #2371: landletMaterial starts out on the default/unclassified texture
+  // (created before any real landlet is known) -- swap to this landlet's
+  // own real biome once it's actually loaded. Textures themselves are
+  // cached by createGroundTexture, so there's nothing to dispose here.
+  landlet.material.map = createGroundTexture(landletRecord.biome);
+  landlet.material.needsUpdate = true;
 }
 
 function findTemplate(templateId) {
@@ -17621,15 +17643,17 @@ async function enterShopMode() {
 
     const group = new THREE.Group();
     group.position.set(record.center.x, record.center.y, 0);
-    // #220: only the default/unclassified case (an unclaimed 'greenbelt'
-    // plot — the same "no real biome data" bucket wildGround/the Build-mode
-    // plane fall into) gets the textured ground. claimed/generating/water
-    // keep their own flat SHOP_PLOT_COLORS fill — those are ownership-status
-    // indicators, not a ground biome, and need to stay instantly readable
-    // as a single solid color at a glance across the whole world.
+    // #220/#2371: only an unclaimed 'greenbelt' plot gets the textured
+    // ground — claimed/generating/water keep their own flat
+    // SHOP_PLOT_COLORS fill, since those are ownership-status indicators,
+    // not a ground biome, and need to stay instantly readable as a single
+    // solid color at a glance across the whole world. A greenbelt plot's
+    // own texture now varies by its real biome (#2370's ingested data),
+    // falling back to the same default/unclassified look #220 originally
+    // shipped when no real classification exists at its location yet.
     const plotColorKey = plotColorKeyForLandlet(record);
     const groundMaterial = plotColorKey === 'greenbelt'
-      ? new THREE.MeshStandardMaterial({ map: createGroundTexture() })
+      ? new THREE.MeshStandardMaterial({ map: createGroundTexture(record.biome) })
       : new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[plotColorKey] ?? 0x4caf50 });
     const groundGeometry = new THREE.ShapeGeometry(shapeForLandlet(record));
     if (plotColorKey === 'greenbelt') normalizeGroundShapeUVs(groundGeometry);

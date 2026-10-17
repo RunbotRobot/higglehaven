@@ -13430,6 +13430,23 @@ async function applyRealWaterClassification(db, candidates) {
   }));
 }
 
+// #2371 (sub-issue of #2368): mirrors applyRealWaterClassification's exact
+// shape just above, for biome. Unlike water (an upgrade-only binary toward
+// 'water', never downgrading back to 'buildable'), biome has no ordering
+// to preserve -- the `if (candidate.biome) return` guard below plays the
+// same "don't clobber an already-set value" role water's own `landType
+// === 'water'` early-return does, just without a direction attached to
+// it. Every plot/cell outside current data coverage is left exactly at
+// today's default (undefined, normalized to null by candidateRowFromLandlet),
+// matching water's own "no data = default" precedent.
+async function applyRealBiomeClassification(db, candidates) {
+  await Promise.all(candidates.map(async (candidate) => {
+    if (candidate.biome) return;
+    const biome = await biomeAt(db, candidate.center.x, candidate.center.y);
+    if (biome) candidate.biome = biome;
+  }));
+}
+
 // Split out from the generate-mosaic handler below so #1085's automatic
 // path (generateAutoMosaicIfFreshWorld) can reuse the exact same
 // generation/validation/overlap-guard logic without an admin session —
@@ -13439,6 +13456,7 @@ async function applyRealWaterClassification(db, candidates) {
 async function generateLandletMosaicCandidates(db, { prefix, count }, adminUserId) {
   const mosaicCells = generateOrganicMosaic({ prefix, count });
   await applyRealWaterClassification(db, mosaicCells);
+  await applyRealBiomeClassification(db, mosaicCells);
   const generated = mosaicCells.map((candidate) =>
     validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
 
@@ -13995,6 +14013,7 @@ async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, 
     throw new HttpError('Generated ring would overlap existing land candidates', 409);
   }
   await applyRealWaterClassification(db, generated.landlets);
+  await applyRealBiomeClassification(db, generated.landlets);
   const landlets = generated.landlets.map((candidate) =>
     validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
   const rows = landlets.map((landlet) => ({ ...candidateRowFromLandlet(landlet), ring_id: prefix }));
