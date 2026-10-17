@@ -8710,6 +8710,17 @@ export async function reserveVideoGenerationJob(db, builderId) {
   return { reservationId: jobId, existing: null };
 }
 
+// #2410: handleVideoGenerationJobCreate's own dedup pre-check (below,
+// before the real-cost rate limit) must not treat a stale 'pending' row --
+// the exact row reserveVideoGenerationJob's own sweep above exists to
+// recover -- as still in flight. Without this, that pre-check intercepts
+// every subsequent request for this builder forever, since it never routes
+// through reserveVideoGenerationJob (or its sweep) at all once it does.
+function isStaleVideoGenerationReservation(row) {
+  return row.status === 'pending'
+    && new Date(row.created_at).getTime() < Date.now() - VIDEO_GENERATION_RESERVATION_TIMEOUT_MS;
+}
+
 // Downloads Tripo's own (third-party, time-limited) output URL and
 // re-stores the bytes in the same MODELS R2 bucket/content-addressed
 // shape POST /api/models (handleModelUpload) already produces, so the
@@ -8921,7 +8932,7 @@ async function handleVideoGenerationJobCreate(request, env, db) {
   // this pre-check can't see -- same residual gap Didit's own
   // reserveDiditSession has for the identical reason.)
   const latest = await latestVideoGenerationJob(db, sessionBuilder.builder_id);
-  if (latest && latest.processed_at === null) {
+  if (latest && latest.processed_at === null && !isStaleVideoGenerationReservation(latest)) {
     return json({ jobId: latest.job_id, status: latest.status });
   }
   await checkRateLimit(db, `video-generation:${sessionBuilder.builder_id}`, VIDEO_GENERATION_RATE_LIMIT_MAX);
