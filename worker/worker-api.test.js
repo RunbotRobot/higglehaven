@@ -3408,6 +3408,52 @@ describe('Worker API', () => {
     await env.DB.prepare("DELETE FROM landlets WHERE landlet_id = 'inside-candidate'").run();
   });
 
+  // #2391: the UPDATE in PATCH's own handler is guarded (checked above via
+  // the ring-member case), but the re-SELECT right after it wasn't -- a
+  // concurrent DELETE landing in that window (allowed here since
+  // materialized_at/ring_id are both still NULL) left `updated` undefined
+  // and crashed on `updated.materialized_at` instead of returning a clean
+  // 409. Injected at the re-SELECT itself (the only db.prepare call between
+  // the update batch and the read), same technique
+  // land.test.js's own #1327 sign-post-flag race test uses.
+  it('returns 409, not a raw crash, if the candidate is deleted between the update and its re-read', async () => {
+    const created = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'patch-delete-race-candidate', name: 'Patch delete race candidate', areaM2: 4, center: { x: -5000, y: -5000 },
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    expect(created.body.candidate.materializedAt).toBeNull();
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    // The handler issues this exact SELECT twice -- once for the initial
+    // existence check, once for the post-update re-read this test targets
+    // -- so only the second occurrence should trigger the race.
+    let matchesSeen = 0;
+    env.DB.prepare = (sql) => {
+      if (sql.includes('SELECT * FROM landlet_candidates WHERE landlet_id = ?')) {
+        matchesSeen += 1;
+        if (matchesSeen === 2) {
+          originalPrepare('DELETE FROM landlet_candidates WHERE landlet_id = ? AND materialized_at IS NULL')
+            .bind('patch-delete-race-candidate').run();
+        }
+      }
+      return originalPrepare(sql);
+    };
+    let raced;
+    try {
+      raced = await api('/land-candidates/patch-delete-race-candidate', adminSession({
+        method: 'PATCH',
+        body: JSON.stringify({ name: 'Renamed mid-race' }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(raced.response.status).toBe(409);
+    expect(raced.body).toEqual({ error: 'Land candidate not found' });
+  });
+
   it('procedurally queues an exact-area ring outside the world boundary', async () => {
     const generated = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',

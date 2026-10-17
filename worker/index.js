@@ -13675,6 +13675,11 @@ async function handleLandCandidates(request, db, route, url) {
     const updated = await db.prepare(`
       SELECT * FROM landlet_candidates WHERE landlet_id = ?
     `).bind(route[1]).first();
+    // #2391: the UPDATE above is guarded, but this re-SELECT isn't -- a
+    // concurrent DELETE (allowed here since materialized_at/ring_id were
+    // both still NULL a moment ago) can remove the row in the await gap
+    // between the update batch and this read.
+    if (!updated) throw new HttpError('Land candidate not found', 409);
     const materialized = updated.materialized_at ? await requireLandlet(db, route[1]) : null;
     return json({
       candidate: candidateFromRow(updated),
