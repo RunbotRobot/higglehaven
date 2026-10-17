@@ -1,13 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  classifyBiome,
   classifyPreHumanWaterType,
   destinationPoint,
   distanceToPolygonM,
   haversineDistanceM,
   initialBearingDeg,
   latLonToWorld,
+  LOWLAND_MAX_ELEVATION_M,
+  NEAR_WATER_BIOME_RADIUS_M,
   pointInPolygon,
   PRE_1916_LAKE_WASHINGTON_LEVEL_M,
+  UPLAND_MAX_ELEVATION_M,
   worldToLatLon,
 } from './geoData.js';
 
@@ -119,5 +123,37 @@ describe('classifyPreHumanWaterType', () => {
         reclamationRadiusM: 400,
       })
     ).toBe('buildable');
+  });
+});
+
+// #2370 (sub-issue of #2368): the coarse v1 biome heuristic -- proximity
+// to today's real shoreline wins over elevation, then simple elevation
+// bands for everything else.
+describe('classifyBiome', () => {
+  it('classifies anything within the near-water radius as near_water regardless of elevation', () => {
+    expect(
+      classifyBiome({ elevationM: 500, distanceToShorelineM: NEAR_WATER_BIOME_RADIUS_M - 1 })
+    ).toBe('near_water');
+    expect(
+      classifyBiome({ elevationM: 0, distanceToShorelineM: 0 })
+    ).toBe('near_water');
+  });
+
+  it('classifies low elevation away from water as lowland', () => {
+    expect(
+      classifyBiome({ elevationM: LOWLAND_MAX_ELEVATION_M - 1, distanceToShorelineM: NEAR_WATER_BIOME_RADIUS_M + 1 })
+    ).toBe('lowland');
+  });
+
+  it('classifies mid elevation away from water as upland', () => {
+    expect(
+      classifyBiome({ elevationM: LOWLAND_MAX_ELEVATION_M + 1, distanceToShorelineM: NEAR_WATER_BIOME_RADIUS_M + 1 })
+    ).toBe('upland');
+  });
+
+  it('classifies high elevation away from water as alpine', () => {
+    expect(
+      classifyBiome({ elevationM: UPLAND_MAX_ELEVATION_M + 1, distanceToShorelineM: NEAR_WATER_BIOME_RADIUS_M + 1 })
+    ).toBe('alpine');
   });
 });
