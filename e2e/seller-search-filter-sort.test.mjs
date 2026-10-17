@@ -107,6 +107,40 @@ await page.waitForTimeout(200);
 const labelsAfterRecasedFilter = await visibleRowLabels();
 console.log('both products (one "placeholder", one "PLACEHOLDER") still show under the one merged option (should be 2):', labelsAfterRecasedFilter.length);
 
+// #2398: the dropdown's own display order is a plain default .sort() --
+// case-sensitive (UTF-16 code point order, every uppercase letter before
+// every lowercase one), unlike filterAndSortSellerProducts' own
+// localeCompare a few lines below it in the same file. Recase each
+// product to a category chosen so the two sort orders disagree: a plain
+// .sort() would put 'Zebra' (capital Z) before 'apple', while a real
+// case-insensitive alphabetical sort puts 'apple' first.
+const alphaTemplateId = await page.evaluate(async () => {
+  const res = await fetch('/api/catalog?limit=100');
+  const { templates } = await res.json();
+  return templates.find((t) => t.name === 'Alpha Widget')?.templateId;
+});
+await page.evaluate(async (id) => {
+  await fetch(`/api/catalog/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ category: 'apple' }),
+  });
+}, alphaTemplateId);
+await page.evaluate(async (id) => {
+  await fetch(`/api/catalog/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ category: 'Zebra' }),
+  });
+}, zetaTemplateId);
+await page.reload({ waitUntil: 'networkidle' });
+await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: false });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
+await page.waitForTimeout(300);
+
+const categoryOptionsCaseOrder = await page.$$eval('#seller-category-filter option', (els) => els.map((el) => el.value));
+console.log('category dropdown sorts case-insensitively, "apple" before "Zebra" (should be ["", "apple", "Zebra"]):', categoryOptionsCaseOrder);
+
 const pass =
   labelsDefault.length === 2 && labelsDefault[0] === 'Alpha Widget' && labelsDefault[1] === 'Zeta Gadget' &&
   categoryOptions.includes('') && categoryOptions.includes('placeholder') &&
@@ -119,5 +153,7 @@ const pass =
   recasePatch.status === 200 &&
   categoryOptionsAfterRecase.length === 2 &&
   labelsAfterRecasedFilter.length === 2 &&
+  categoryOptionsCaseOrder.length === 3 &&
+  categoryOptionsCaseOrder[1] === 'apple' && categoryOptionsCaseOrder[2] === 'Zebra' &&
   errors.length === 0;
 await finish(browser, { pass, label: 'seller product list search/filter/sort (#542)', errors });

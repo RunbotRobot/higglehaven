@@ -2988,6 +2988,12 @@ Each generated cell's `landType` (#2014) is `water` instead of the usual
 ingested into `geo_water_cells` (`scripts/ingest-geo-data.mjs`,
 migrations/0128) — forward-generation only, never retroactive.
 
+Each generated cell's `biome` (#2371) is similarly set from real ingested
+data in `geo_biome_cells` (migrations/0149) when its center falls near a
+classified cell — `near_water`, `lowland`, `upland`, or `alpine` — rather
+than staying `null`. Same forward-generation-only scope as `landType`
+above, and never overwrites a `biome` a cell was already generated with.
+
 ### `POST /api/land-candidates/generate-ring`
 
 Procedurally creates one gap-free band of class-1, 1,000 m² land candidates.
@@ -3041,6 +3047,11 @@ plot's `landType` becomes `water` instead of `buildable` when its center
 falls near a real ingested water cell, regardless of `distribution` or any
 explicit `landType` already set via `adjacentToRingId`-derived plots (this
 only ever upgrades toward `water`, never downgrades one already requested).
+
+Same real biome classification as `generate-mosaic` above (#2371): a
+plot's `biome` is set from real ingested `geo_biome_cells` data when its
+center falls near a classified cell, unless the plot was already generated
+with an explicit `biome` (never overwritten).
 
 ## Land candidate rings
 
