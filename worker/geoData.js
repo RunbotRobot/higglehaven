@@ -161,6 +161,29 @@ export function classifyPreHumanWaterType({
   return 'buildable';
 }
 
+// #2370 (sub-issue of #2368, docs/SPEC.md §1's "Macro-geography": biome
+// alongside water/rivers/mountains): a coarse v1 biome heuristic --
+// proximity to today's real waterbody shoreline first, then simple
+// elevation bands for everything else. Not a botanically precise model,
+// matching this app's own "lower fidelity bar" (docs/SPEC.md §8) and the
+// same "representative, not precise" spirit PRE_1916_LAKE_WASHINGTON_LEVEL_M
+// above already uses. Thresholds are round numbers chosen by eye against
+// this region's real terrain (Seattle's notable hills top out around
+// 100-150m; nothing in the current anchor area is genuinely alpine, so
+// that top band is really "the highest tier sampled here," not a literal
+// claim) -- a starting classification real data can be looked at and
+// refined later, not a final model.
+export const NEAR_WATER_BIOME_RADIUS_M = 100;
+export const LOWLAND_MAX_ELEVATION_M = 30;
+export const UPLAND_MAX_ELEVATION_M = 120;
+
+export function classifyBiome({ elevationM, distanceToShorelineM }) {
+  if (distanceToShorelineM <= NEAR_WATER_BIOME_RADIUS_M) return 'near_water';
+  if (elevationM < LOWLAND_MAX_ELEVATION_M) return 'lowland';
+  if (elevationM < UPLAND_MAX_ELEVATION_M) return 'upland';
+  return 'alpine';
+}
+
 // Minimum distance from a point to any edge of a polygon (world meters) —
 // classifyPreHumanWaterType's distanceToShorelineM input when the point
 // isn't already inside the polygon.

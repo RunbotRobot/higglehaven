@@ -145,5 +145,6 @@
   "0145_catalog_category_subcategory_color_nocase_indexes.sql",
   "0146_control_room_last_reply.sql",
   "0147_credit_orbs_collected_by_builder_id_no_fk.sql",
-  "0148_landlet_biome.sql"
+  "0148_landlet_biome.sql",
+  "0149_geo_biome_cells.sql"
 ]

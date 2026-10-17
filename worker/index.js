@@ -13476,6 +13476,26 @@ export async function isNearWaterCell(db, x, y) {
   return !!row;
 }
 
+// #2370 (sub-issue of #2368): the real biome classification at a point,
+// from geo_biome_cells (migrations/0149), or null when no sampled cell is
+// close enough to have an opinion -- #2369's own biome column is nullable
+// for exactly this "genuinely unclassified" case, not defaulted to a
+// band. Unlike isNearWaterCell's plain boolean (water only ever needs
+// "is there a cell here or not"), biome needs to know *which* band, so
+// this returns the nearest matching cell's own value -- ORDER BY the same
+// squared-distance expression the WHERE clause already computes, rather
+// than a second computed column, since D1/SQLite has no CTE-free way to
+// reuse it without repeating the expression.
+export async function biomeAt(db, x, y) {
+  const row = await db.prepare(`
+    SELECT biome FROM geo_biome_cells
+    WHERE (x_m - ?) * (x_m - ?) + (y_m - ?) * (y_m - ?) <= spacing_m * spacing_m
+    ORDER BY (x_m - ?) * (x_m - ?) + (y_m - ?) * (y_m - ?) ASC
+    LIMIT 1
+  `).bind(x, x, y, y, x, x, y, y).first();
+  return row ? row.biome : null;
+}
+
 // #2014 (sub-issue of #2012): the one real consumer of isNearWaterCell.
 // Every freshly-generated plot/cell from either generator defaults to
 // 'buildable' today (generateOrganicMosaic never sets landType at all;
@@ -14602,11 +14622,11 @@ function candidateMaterializationStatements(db, candidates) {
     db.prepare(`
       INSERT INTO landlets
         (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, landlet_class,
-         polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
-      VALUES (?, ?, ?, ?, ?, 'generating', NULL, ?, ?, NULL, NULL, ?, ?)
+         landlet_type, biome, polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
+      VALUES (?, ?, ?, ?, ?, 'generating', NULL, ?, ?, ?, ?, NULL, NULL, ?, ?)
     `).bind(
       row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.landlet_class,
-      row.polygon_json, row.metadata_json, landletMaxWorldRadius(row),
+      row.landlet_type, row.biome, row.polygon_json, row.metadata_json, landletMaxWorldRadius(row),
     ),
     db.prepare(`
       UPDATE landlet_candidates SET materialized_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
