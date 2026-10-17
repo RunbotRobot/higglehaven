@@ -264,6 +264,13 @@ describe('GET /auth/export-data -- social section (#1986)', () => {
     const alice = await signupIdVerifiedBuilder('export-social-alice');
     const bob = await signupIdVerifiedBuilder('export-social-bob');
     await becomeFriends(alice, bob);
+    // #2384: a real other-side label/landlet, same as GET /api/friendships
+    // would report for this exact accepted pair -- exportSocialSection used
+    // to pass two brand-new empty Maps into friendshipFromRow instead of
+    // real lookups, so these always came back null regardless of status.
+    await env.DB.prepare(`
+      INSERT INTO landlets (landlet_id, name, owner_builder_id, status) VALUES (?, ?, ?, 'claimed')
+    `).bind('export-social-bob-landlet', 'Export Social Bob Landlet', bob.builderId).run();
     const sent = await api('/direct-messages', alice.session({
       method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text: 'Hi Bob, from the export test' }),
     }));
@@ -272,11 +279,16 @@ describe('GET /auth/export-data -- social section (#1986)', () => {
     const aliceExport = await api('/auth/export-data', alice.session());
     expect(aliceExport.body.social.friendships).toHaveLength(1);
     expect(aliceExport.body.social.friendships[0].otherBuilderId).toBe(bob.builderId);
+    expect(aliceExport.body.social.friendships[0].otherLabel).toBe('export-social-bob');
+    expect(aliceExport.body.social.friendships[0].otherLandlet).toMatchObject({
+      landletId: 'export-social-bob-landlet',
+    });
     expect(aliceExport.body.social.directMessages).toHaveLength(1);
     expect(aliceExport.body.social.directMessages[0].text).toBe('Hi Bob, from the export test');
 
     const bobExport = await api('/auth/export-data', bob.session());
     expect(bobExport.body.social.friendships).toHaveLength(1);
+    expect(bobExport.body.social.friendships[0].otherLabel).toBe('export-social-alice');
     expect(bobExport.body.social.directMessages).toHaveLength(1);
     expect(bobExport.body.social.notifications.some((n) => n.message.includes('sent you a message'))).toBe(true);
   });
