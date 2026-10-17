@@ -44,7 +44,7 @@ describe('Direct messages (#1637)', () => {
     expect(rejected.response.status).toBe(403);
   });
 
-  it('rejects a send to a recipient who is not id_verified', async () => {
+  it('rejects a send to a recipient who is not id_verified, with no idVerificationRequired flag', async () => {
     const alice = await signupIdVerifiedBuilder('dm-recipient-unverified-alice');
     const bob = await signupBuilder('dm-recipient-unverified-bob'); // only credit_card
     await becomeFriends(alice, bob);
@@ -53,6 +53,10 @@ describe('Direct messages (#1637)', () => {
       method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text: 'hi' }),
     }));
     expect(rejected.response.status).toBe(403);
+    // #2414: unlike the caller's-own-tier check below, there's nothing
+    // alice's account can do about bob's verification -- the flag that
+    // tells a client "go verify your own identity" must not appear here.
+    expect(rejected.body.idVerificationRequired).toBeUndefined();
   });
 
   it('rejects a send between two id_verified builders who are not friends', async () => {
@@ -63,6 +67,35 @@ describe('Direct messages (#1637)', () => {
       method: 'POST', body: JSON.stringify({ recipientBuilderId: bob.builderId, text: 'hi' }),
     }));
     expect(rejected.response.status).toBe(403);
+  });
+
+  // #2415: trust_tier is never exposed through any public lookup -- the
+  // friendship check must run before the recipient's trust_tier check so a
+  // non-friend always gets the identical generic "friendship required"
+  // response regardless of whether the stranger has completed ID
+  // verification. Before the fix, checking trust_tier first let the error
+  // message itself leak that private status to anyone who merely knew the
+  // target's builderId (discoverable via the public GET /api/builders?label=
+  // lookup, with no friendship required to use it).
+  it('does not leak a non-friend stranger\'s verification status through a different error message', async () => {
+    const alice = await signupIdVerifiedBuilder('dm-leak-alice');
+    const bobUnverified = await signupBuilder('dm-leak-bob-unverified'); // only credit_card, not a friend
+    const carolVerified = await signupIdVerifiedBuilder('dm-leak-carol-verified'); // id_verified, not a friend
+
+    const toUnverifiedStranger = await api('/direct-messages', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: bobUnverified.builderId, text: 'hi' }),
+    }));
+    const toVerifiedStranger = await api('/direct-messages', alice.session({
+      method: 'POST', body: JSON.stringify({ recipientBuilderId: carolVerified.builderId, text: 'hi' }),
+    }));
+
+    expect(toUnverifiedStranger.response.status).toBe(403);
+    expect(toVerifiedStranger.response.status).toBe(403);
+    // Both strangers -- verified or not -- must produce the exact same
+    // friendship-required response, so the response itself reveals nothing
+    // about either one's actual verification status.
+    expect(toUnverifiedStranger.body.error).toBe(toVerifiedStranger.body.error);
+    expect(toUnverifiedStranger.body.error).toMatch(/accepted friendship/i);
   });
 
   it('rejects sending to yourself', async () => {
