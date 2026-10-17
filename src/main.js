@@ -1618,6 +1618,17 @@ async function replaceMeshWithCrop(mesh, crop) {
     selectedMeshes.add(newMesh);
     addSelectionOutline(newMesh);
   }
+  // #2342: addLowStockHighlight is keyed on the mesh object itself, and
+  // addInstanceToScene's own "single choke point" comment only covers the
+  // other three ways a mesh enters productMeshes -- this swap is a fourth,
+  // so without this transfer the old mesh's helper/fill (if any) would
+  // orphan permanently in `scene` (updateLowStockHighlights only ever
+  // iterates the current productMeshes, never finds it again) and the
+  // trimmed replacement would silently lose its highlight.
+  if (lowStockHighlights.has(mesh)) {
+    removeLowStockHighlight(mesh);
+    addLowStockHighlight(newMesh);
+  }
   return newMesh;
 }
 
@@ -3920,8 +3931,19 @@ function hasDuplicateProductName(name, excludeTemplateId) {
 // costs nothing beyond what's already on each template. Search matches
 // name first (the issue's own stated minimum) plus category/subcategory
 // as a cheap stretch, since they're already in hand.
+// #2325: GET /api/catalog?category= matches case-insensitively (COLLATE
+// NOCASE, migration 0145) -- dedup/compare the same way here so two
+// differently-cased templates for what the server treats as one category
+// don't splinter into separate filter options that only ever show their
+// own casing's listings.
 function populateSellerCategoryFilterOptions(templates) {
-  const categories = [...new Set(templates.map((t) => t.category).filter(Boolean))].sort();
+  const categoriesByKey = new Map();
+  for (const t of templates) {
+    if (!t.category) continue;
+    const key = t.category.toLowerCase();
+    if (!categoriesByKey.has(key)) categoriesByKey.set(key, t.category);
+  }
+  const categories = [...categoriesByKey.values()].sort();
   const previous = sellerCategoryFilterSelect.value;
   sellerCategoryFilterSelect.innerHTML = '';
   const allOption = document.createElement('option');
@@ -3934,7 +3956,7 @@ function populateSellerCategoryFilterOptions(templates) {
     option.textContent = category;
     sellerCategoryFilterSelect.appendChild(option);
   }
-  sellerCategoryFilterSelect.value = categories.includes(previous) ? previous : '';
+  sellerCategoryFilterSelect.value = categories.some((c) => c.toLowerCase() === previous.toLowerCase()) ? previous : '';
 }
 
 function filterAndSortSellerProducts(templates) {
@@ -3947,7 +3969,7 @@ function filterAndSortSellerProducts(templates) {
       (t.category || '').toLowerCase().includes(query) ||
       (t.subcategory || '').toLowerCase().includes(query));
   }
-  if (category) filtered = filtered.filter((t) => t.category === category);
+  if (category) filtered = filtered.filter((t) => (t.category || '').toLowerCase() === category.toLowerCase());
   const sort = sellerSortSelect.value;
   filtered = filtered.slice().sort((a, b) => {
     if (sort === 'price-asc') return (a.priceCents ?? Infinity) - (b.priceCents ?? Infinity);
@@ -6215,31 +6237,36 @@ async function renderTaxPaperworkField() {
   }
   formField.appendChild(typeRow);
 
+  // #2344: maxLength here mirrors this form's own server-side caps --
+  // legalName/addressLine1 go through taxFormTextValue's 200-char
+  // MAX_TAX_FORM_TEXT_LENGTH, every other field through labelValue's
+  // 100-char MAX_LABEL_LENGTH (worker/index.js's validateTaxIdForm).
   const commonFields = [
-    ['legalName', 'Legal name', 'text'],
-    ['addressLine1', 'Street address', 'text'],
-    ['city', 'City', 'text'],
+    ['legalName', 'Legal name', 'text', 200],
+    ['addressLine1', 'Street address', 'text', 200],
+    ['city', 'City', 'text', 100],
   ];
   const w9Fields = [
-    ['state', 'State', 'text'],
-    ['postalCode', 'ZIP code', 'text'],
-    ['taxIdNumber', 'SSN or EIN', 'text'],
+    ['state', 'State', 'text', 100],
+    ['postalCode', 'ZIP code', 'text', 100],
+    ['taxIdNumber', 'SSN or EIN', 'text', 100],
   ];
   const w8benFields = [
-    ['country', 'Country', 'text'],
-    ['countryOfCitizenship', 'Country of citizenship', 'text'],
-    ['foreignTaxId', 'Foreign tax ID', 'text'],
+    ['country', 'Country', 'text', 100],
+    ['countryOfCitizenship', 'Country of citizenship', 'text', 100],
+    ['foreignTaxId', 'Foreign tax ID', 'text', 100],
   ];
   const form = document.createElement('div');
   form.className = 'stripe-onboarding-form';
   const inputs = {};
   function addFormInputs(specs) {
     const labels = [];
-    for (const [key, fieldLabel, type] of specs) {
+    for (const [key, fieldLabel, type, maxLength] of specs) {
       const label = document.createElement('label');
       label.textContent = fieldLabel;
       const input = document.createElement('input');
       input.type = type;
+      input.maxLength = maxLength;
       label.appendChild(input);
       form.appendChild(label);
       inputs[key] = input;
@@ -9091,6 +9118,20 @@ function updateLowStockHighlights(templateIds) {
 // instances have the low-stock highlight applied right now.
 window.__testLowStockHighlightedInstanceIds = () => [...lowStockHighlights.keys()].map((mesh) => mesh.userData.instanceId);
 
+// #2342: the hook above reads instanceId off the Map's own mesh keys, so it
+// can't by itself distinguish a correctly-tracked live mesh from a stale,
+// already-disposed one left behind by a swap (e.g. replaceMeshWithCrop)
+// that skipped transferring the highlight -- both report the same
+// instanceId. This checks the *live* mesh for a given instanceId (the one
+// actually in productMeshes right now) is the one lowStockHighlights
+// tracks, and the total entry count, so a test can catch either failure
+// mode: wrong mesh tracked, or an orphaned entry nothing ever cleans up.
+window.__testLowStockHighlightTracksLiveMesh = (instanceId) => {
+  const live = productMeshes.find((mesh) => mesh.userData.instanceId === instanceId);
+  return !!live && lowStockHighlights.has(live);
+};
+window.__testLowStockHighlightCount = () => lowStockHighlights.size;
+
 // #2068: grayed-out placeholder markers for sold-out items that used to be
 // placed on this landlet. Unlike lowStockHighlights above (which decorates
 // an EXISTING, still-live mesh), there's no live instance left to attach
@@ -11199,12 +11240,28 @@ function appendNotificationRow(notification) {
         await markNotificationRead(notification.notificationId);
         row.classList.remove('unread');
         row.removeEventListener('click', markReadOnClick);
+        row.removeEventListener('keydown', markReadOnKeydown);
+        row.removeAttribute('role');
+        row.removeAttribute('tabindex');
+        row.removeAttribute('aria-label');
         refreshNotificationsBadge();
       } catch (err) {
         console.warn('Could not mark notification read:', err);
       }
     };
+    // #2329: this row has no native button underneath it, so without an
+    // explicit role/tabindex/keydown handler it's reachable by mouse only —
+    // every other interactive control in this file is a real <button>.
+    const markReadOnKeydown = (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      markReadOnClick();
+    };
+    row.setAttribute('role', 'button');
+    row.setAttribute('tabindex', '0');
+    row.setAttribute('aria-label', `Mark notification as read: ${notification.message}`);
     row.addEventListener('click', markReadOnClick);
+    row.addEventListener('keydown', markReadOnKeydown);
   }
   notificationsListEl.appendChild(row);
 }
@@ -13852,7 +13909,6 @@ function bindShopVerticalButton(el, direction) {
   };
   el.addEventListener('pointerup', end);
   el.addEventListener('pointercancel', end);
-  el.addEventListener('pointerleave', end);
 }
 bindShopVerticalButton(shopUpBtn, 1);
 bindShopVerticalButton(shopDownBtn, -1);

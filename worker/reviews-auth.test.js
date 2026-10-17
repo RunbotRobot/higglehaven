@@ -1326,6 +1326,50 @@ describe('Product reviews', () => {
       expect(history.results).toHaveLength(0);
     });
 
+    // #2364: unlike the "race before the UPDATE" tests above, this one
+    // needs the concurrent DELETE to land strictly *after* the UPDATE
+    // commits but before this handler's own re-SELECT -- the exact gap
+    // #2354 found and fixed for sign_posts/calendar_events' identical
+    // shape. Wraps the UPDATE statement's own run() (rather than racing
+    // prepare() itself) so the DELETE only ever fires once the UPDATE has
+    // genuinely already matched a row.
+    it('never crashes with a raw 500 when its own re-fetch loses a race to a concurrent delete', async () => {
+      const templateId = await createTemplate('review-refetch-delete-race');
+      const shopper = await signupBuilder('review-refetch-delete-race-shopper');
+      await createPurchase(templateId, shopper);
+      const reviewId = await postReview(templateId, shopper, { rating: 4, text: 'Before the race.' });
+
+      const originalPrepare = env.DB.prepare.bind(env.DB);
+      env.DB.prepare = (sql) => {
+        const stmt = originalPrepare(sql);
+        if (sql === 'UPDATE product_reviews SET rating = ?, text = ? WHERE review_id = ? AND user_id = ?') {
+          const originalBind = stmt.bind.bind(stmt);
+          stmt.bind = (...args) => {
+            const bound = originalBind(...args);
+            const originalRun = bound.run.bind(bound);
+            bound.run = async () => {
+              const result = await originalRun();
+              await originalPrepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
+              return result;
+            };
+            return bound;
+          };
+        }
+        return stmt;
+      };
+      let edited;
+      try {
+        edited = await api(`/catalog/${templateId}/reviews/${reviewId}`, shopper.session({
+          method: 'PATCH', body: JSON.stringify({ rating: 1, text: 'After the race.' }),
+        }));
+      } finally {
+        env.DB.prepare = originalPrepare;
+      }
+      // The real bug was an uncaught TypeError (raw 500) when the re-SELECT
+      // after an already-successful UPDATE found the row already gone.
+      expect(edited.response.status).toBe(404);
+    });
+
     // Moderation deletes (admin override, seller) are not the user editing/
     // deleting their own content -- the owner's own framing was specifically
     // about self-service, so these must not write to the history table.
@@ -1991,7 +2035,12 @@ describe('Authentication', () => {
       expect(results).toHaveLength(1);
       expect(results[0].message).toContain('suspended');
       expect(results[0].message).toContain('spam listings');
-      expect(results[0].message).toContain(suspended.body.suspension.gracePeriodEndsAt);
+      // #2351: the notification formats gracePeriodEndsAt for display rather
+      // than interpolating the raw ISO instant the API response carries.
+      expect(results[0].message).toContain(
+        new Date(suspended.body.suspension.gracePeriodEndsAt).toLocaleDateString(),
+      );
+      expect(results[0].message).not.toContain(suspended.body.suspension.gracePeriodEndsAt);
       expect(results[0].message).toContain('customer service');
       expect(results[0].message).not.toContain('admin-eyes-only detail');
     });

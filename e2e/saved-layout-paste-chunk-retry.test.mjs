@@ -119,7 +119,16 @@ await page.mouse.move(10, 10);
 await page.mouse.down();
 await page.mouse.move(410, 850, { steps: 10 });
 await page.mouse.up();
-await page.waitForTimeout(300);
+// #2353: a fixed 300ms wait isn't always enough margin under CI load for a
+// 101-instance marquee-drag selection to finish updating (more raycasting/
+// DOM work per selection-count update than the 1-instance sibling test in
+// e2e/saved-layout-paste.test.mjs) -- wait for the real condition instead,
+// same waitForFunction idiom this file already uses elsewhere.
+await page.waitForFunction(
+  (count) => document.getElementById('layout-preview-selection-count')?.textContent?.includes(String(count)),
+  INSTANCE_COUNT,
+  { timeout: 15000 },
+);
 const selectionAfterDrag = await page.locator('#layout-preview-selection-count').textContent();
 console.log(`selection count after marquee-drag (should include "${INSTANCE_COUNT} selected"):`, selectionAfterDrag);
 

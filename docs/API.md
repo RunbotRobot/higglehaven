@@ -442,13 +442,11 @@ Identity today), which only ever resets the in-world profile: land,
 balance, and build get released/wiped, but the real login account stays
 active and a fresh builder/seller is auto-created the next time that
 account visits. This endpoint is the other half — it revokes the login
-itself — and deliberately does nothing to the builder/seller profile,
-financial/tax records, or a connected Stripe account; see #1147
-(disconnecting retained financial/tax records from the deleted identity)
-and #1148 (the Stripe Connect account's own fate) for those, and #1149 for
-whether the old reset-only button keeps a separate place in Settings once
-this exists. Work leaves of #1145, not the trunk — none of this closes
-#1145 itself.
+itself. See #1147 (disconnecting retained financial/tax records from the
+deleted identity) for that still-separate piece, and #1149 for whether the
+old reset-only button keeps a separate place in Settings once this
+exists. Work leaves of #1145, not the trunk — none of this closes #1145
+itself.
 
 Session-gated (`401` without one). Requires re-entering the account's
 current password in the body — a stolen/XSS'd session cookie alone must
@@ -458,6 +456,26 @@ on a mismatch, with no other change to the account. Rate-limited per
 account (5 attempts per 15 minutes, same bucket shape as
 `resend-verification` above) so the password check here can't be used to
 brute-force the real password via this endpoint instead of `/auth/login`.
+
+#1148 (owner decision via the Control Room, 2026-10-16) settled the
+account's own builder/seller row(s): rather than leaving them orphaned
+but still live (including a still-connected Stripe account), this
+endpoint now also deletes them, inheriting the exact same real-money
+guards `DELETE /api/builders/:builderId`/`DELETE /api/sellers/:sellerId`
+already have (an active auction holding the account's leading bid, an
+unresolved auction-win/sale payout, an in-flight higgles redemption or
+video-to-3D generation job, or an unpaid real-money purchase on the
+seller side) — reused unchanged from those endpoints via shared
+statement-builders, so a guard fixed on one side can never drift from the
+other. Per the same owner decision, hitting any of those guards **blocks
+the whole account deletion**, not just the builder/seller row: `409` with
+a message naming what's blocking it (e.g. `"Cannot delete your account
+while holding the leading bid on an active auction"`), and nothing about
+the account changes — the user keeps their login, every session stays
+alive, and the builder/seller row stays exactly as it was. The builder's
+own connected Stripe account (if any) is snapshotted into
+`retained_stripe_accounts` exactly as the builder/seller DELETE endpoints
+already do, never touched directly.
 
 On success: the `email` and `username` are rewritten to a placeholder
 unique to that account (`deleted-<last 8 chars of userId>@deleted.invalid`
@@ -473,7 +491,11 @@ from the row, a login attempt against it already gets the same generic
 "Invalid email or password" response issued for any other email that was
 never registered. Every session for the account is deleted in the same
 atomic batch (`db.batch`, mirroring `reset-password`'s own "sign out every
-device" reasoning above), and the response clears the request's own
+device" reasoning above) as the builder/seller deletion and the `users`
+row update itself — the `users`/`sessions` statements are gated on the
+builder/seller guards above having actually passed, so a blocked deletion
+leaves literally everything untouched in one atomic transaction, not a
+separate check-then-act step. The response clears the request's own
 session cookie too. Returns `{ "accountDeleted": true }`.
 
 ### `GET /api/auth/me`
@@ -3135,7 +3157,7 @@ Response:
 ### `PATCH /api/land-candidates/:landletId`
 
 Corrects a pending candidate's `name`, `areaM2`, `center`, `landClass`,
-`landType`, `polygon`, or `metadata` before generation begins. The current
+`landType`, `biome`, `polygon`, or `metadata` before generation begins. The current
 implementation merges request fields with the existing candidate before
 validation. The route ID cannot be changed. Materialized candidates return
 `409`; their geometry is already represented by the corresponding generating
@@ -3148,18 +3170,21 @@ contains both `candidate` and `landlet`; `landlet` is null if it remains queued.
 ### `POST /api/land-candidates`
 
 Queues a candidate using the same `name`, `areaM2`, `center`, `landClass`,
-`landType`, `polygon`, and `metadata` fields as a landlet. `landType`
+`landType`, `biome`, `polygon`, and `metadata` fields as a landlet. `landType`
 defaults to `buildable` and must be `buildable` or `water` (same
-`landletLandType` validation as the landlet endpoint above). Unlike
+`landletLandType` validation as the landlet endpoint above). `biome` (#2369)
+defaults to `null` and must be a string or `null` — no fixed enum yet, same
+as the landlet endpoint's own `biome` field. Unlike
 `generate-ring`/`generate-mosaic` above (#2014), this endpoint never
 auto-classifies anything from real geo data — it only ever stores whatever
-`landType` the caller explicitly passes, since it takes arbitrary admin
-input rather than a self-consistent generator's own output. If it already
-overlaps the current world circle, the API immediately creates its
+`landType`/`biome` the caller explicitly passes, since it takes arbitrary
+admin input rather than a self-consistent generator's own output. If it
+already overlaps the current world circle, the API immediately creates its
 generating landlet,
-carrying the candidate's own `landType` into it rather than defaulting the
-materialized landlet to `buildable` regardless of the candidate's type.
-Otherwise it remains lightweight until a later expansion first overlaps it.
+carrying the candidate's own `landType`/`biome` into it rather than
+defaulting the materialized landlet to `buildable`/`null` regardless of the
+candidate's own values. Otherwise it remains lightweight until a later
+expansion first overlaps it.
 
 The `201` response contains both `candidate` and `landlet`; `landlet` is null
 while the candidate remains queued.
@@ -3226,6 +3251,7 @@ state can build on a stable backend shape.
   "ownerBuilderId": null,
   "landClass": 1,
   "landType": "buildable",
+  "biome": null,
   "polygon": [],
   "generatedAt": null,
   "claimableAt": null,
@@ -3336,6 +3362,13 @@ Validation notes:
   (`POST .../claim` rejects it with `409`, see below). Nothing in world
   generation produces a `'water'` landlet yet — this field exists so the
   claim system and data model are ready for whenever it does.
+- `biome` (#2369, sub-issue of #2368's macro-geography follow-up) defaults
+  to `null` and must be a string or `null` — deliberately no fixed enum
+  yet, unlike `landType`'s closed `buildable`/`water` set, since the real
+  classification values are a separate, not-yet-built sub-issue's own
+  design call. Nothing produces a real value yet either; this field exists
+  so the data model is ready for whenever it does, the same scope cut
+  `landType` made before #219/#220 shipped its own consumers.
 - `polygon` defaults to an empty array and holds at most 100 points (#964).
   When present, each point must contain finite `x` and `y` values in meters.
 
@@ -8548,11 +8581,17 @@ the built-in catalog:
   bodies. Results contain `modelUrl`, `sizeBytes`, `etag`, `uploadedAt`,
   `deletable`, and sorted `referencedByTemplateIds`. Reference metadata is
   resolved with one bounded D1 query for the R2 page, allowing cleanup
-  tooling to distinguish safe deletions without probing each object. An
-  object is "referenced" if any catalog template's `model_url` **or**
-  `image_url` matches it (#774) — the same `MODELS` bucket also holds
+  tooling to distinguish safe deletions without probing each object.
+  `referencedByTemplateIds` covers a catalog template's `model_url` **or**
+  `image_url` matching it (#774) — the same `MODELS` bucket also holds
   content-addressed product thumbnails (`POST .../thumbnail` below), which
-  are tracked only through `image_url`.
+  are tracked only through `image_url`. Two further fields,
+  `referencedByVideoJobIds` and `referencedByControlRoomIds` (#1644/#1655/
+  #1696), cover the same bucket/URL scheme being written by
+  `video_generation_jobs.model_url` and `control_room_tasks`/
+  `control_room_replies.image_url` respectively — `deletable` is `true`
+  only when all three reference lists are empty, not just
+  `referencedByTemplateIds`.
   Listings use a `limit` from 1 to 100, and return the R2-backed opaque
   `nextCursor` for the next page. This is a dev inventory for finding
   uploads that can be reclaimed.
@@ -8595,7 +8634,12 @@ the built-in catalog:
   the actual R2 delete (after confirming the object exists), narrowing the
   window against a template referencing this model being created in
   between. Like the listing/cleanup endpoints above, the referenced-model
-  check matches `model_url` **or** `image_url` (#774). `GET`/`HEAD` above
+  check matches a catalog template's `model_url` **or** `image_url` (#774)
+  — and, same as `GET /api/models`'s own `referencedByVideoJobIds`/
+  `referencedByControlRoomIds` fields, also `video_generation_jobs.model_url`
+  and `control_room_tasks`/`control_room_replies.image_url` (#1644/#1655/
+  #1696); any of these five matching also returns `409`, not just a
+  catalog-template reference. `GET`/`HEAD` above
   stay unauthenticated — serving an
   immutable, content-addressed model back out is not a mutation.
 

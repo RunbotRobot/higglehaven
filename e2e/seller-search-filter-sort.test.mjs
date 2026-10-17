@@ -75,6 +75,38 @@ await page.waitForTimeout(200);
 const labelsCleared = await visibleRowLabels();
 console.log('clearing the search restores both products (should be 2):', labelsCleared.length);
 
+// #2325: GET /api/catalog?category= matches case-insensitively, but no
+// free-text category input exists in this upload wizard -- set one
+// product's category to a differently-cased variant of 'placeholder'
+// directly against the seller's own session, same idiom as other e2e
+// tests reaching a state the shipped UI has no field for yet.
+const zetaTemplateId = await page.evaluate(async () => {
+  const res = await fetch('/api/catalog?limit=100');
+  const { templates } = await res.json();
+  return templates.find((t) => t.name === 'Zeta Gadget')?.templateId;
+});
+console.log('found Zeta Gadget\'s own templateId (should be non-empty):', zetaTemplateId);
+const recasePatch = await page.evaluate(async (id) => {
+  const res = await fetch(`/api/catalog/${id}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ category: 'PLACEHOLDER' }),
+  });
+  return { status: res.status, category: (await res.json()).template?.category };
+}, zetaTemplateId);
+console.log('recased Zeta Gadget to PLACEHOLDER (should be 200, "PLACEHOLDER"):', recasePatch.status, recasePatch.category);
+await page.reload({ waitUntil: 'networkidle' });
+await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: false });
+await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
+await page.waitForTimeout(300);
+
+const categoryOptionsAfterRecase = await page.$$eval('#seller-category-filter option', (els) => els.map((el) => el.value));
+console.log('still just one "placeholder"-family option despite mixed casing, not two (should be ["", "placeholder"] in some casing):', categoryOptionsAfterRecase);
+await page.selectOption('#seller-category-filter', { index: 1 });
+await page.waitForTimeout(200);
+const labelsAfterRecasedFilter = await visibleRowLabels();
+console.log('both products (one "placeholder", one "PLACEHOLDER") still show under the one merged option (should be 2):', labelsAfterRecasedFilter.length);
+
 const pass =
   labelsDefault.length === 2 && labelsDefault[0] === 'Alpha Widget' && labelsDefault[1] === 'Zeta Gadget' &&
   categoryOptions.includes('') && categoryOptions.includes('placeholder') &&
@@ -84,5 +116,8 @@ const pass =
   labelsSearched.length === 1 && labelsSearched[0] === 'Zeta Gadget' &&
   labelsNoMatch.length === 0 && statusTextNoMatch.toLowerCase().includes('no products match') &&
   labelsCleared.length === 2 &&
+  recasePatch.status === 200 &&
+  categoryOptionsAfterRecase.length === 2 &&
+  labelsAfterRecasedFilter.length === 2 &&
   errors.length === 0;
 await finish(browser, { pass, label: 'seller product list search/filter/sort (#542)', errors });
