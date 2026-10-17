@@ -3927,8 +3927,19 @@ function hasDuplicateProductName(name, excludeTemplateId) {
 // costs nothing beyond what's already on each template. Search matches
 // name first (the issue's own stated minimum) plus category/subcategory
 // as a cheap stretch, since they're already in hand.
+// #2325: GET /api/catalog?category= matches case-insensitively (COLLATE
+// NOCASE, migration 0145) -- dedup/compare the same way here so two
+// differently-cased templates for what the server treats as one category
+// don't splinter into separate filter options that only ever show their
+// own casing's listings.
 function populateSellerCategoryFilterOptions(templates) {
-  const categories = [...new Set(templates.map((t) => t.category).filter(Boolean))].sort();
+  const categoriesByKey = new Map();
+  for (const t of templates) {
+    if (!t.category) continue;
+    const key = t.category.toLowerCase();
+    if (!categoriesByKey.has(key)) categoriesByKey.set(key, t.category);
+  }
+  const categories = [...categoriesByKey.values()].sort();
   const previous = sellerCategoryFilterSelect.value;
   sellerCategoryFilterSelect.innerHTML = '';
   const allOption = document.createElement('option');
@@ -3941,7 +3952,7 @@ function populateSellerCategoryFilterOptions(templates) {
     option.textContent = category;
     sellerCategoryFilterSelect.appendChild(option);
   }
-  sellerCategoryFilterSelect.value = categories.includes(previous) ? previous : '';
+  sellerCategoryFilterSelect.value = categories.some((c) => c.toLowerCase() === previous.toLowerCase()) ? previous : '';
 }
 
 function filterAndSortSellerProducts(templates) {
@@ -3954,7 +3965,7 @@ function filterAndSortSellerProducts(templates) {
       (t.category || '').toLowerCase().includes(query) ||
       (t.subcategory || '').toLowerCase().includes(query));
   }
-  if (category) filtered = filtered.filter((t) => t.category === category);
+  if (category) filtered = filtered.filter((t) => (t.category || '').toLowerCase() === category.toLowerCase());
   const sort = sellerSortSelect.value;
   filtered = filtered.slice().sort((a, b) => {
     if (sort === 'price-asc') return (a.priceCents ?? Infinity) - (b.priceCents ?? Infinity);
@@ -6218,31 +6229,36 @@ async function renderTaxPaperworkField() {
   }
   formField.appendChild(typeRow);
 
+  // #2344: maxLength here mirrors this form's own server-side caps --
+  // legalName/addressLine1 go through taxFormTextValue's 200-char
+  // MAX_TAX_FORM_TEXT_LENGTH, every other field through labelValue's
+  // 100-char MAX_LABEL_LENGTH (worker/index.js's validateTaxIdForm).
   const commonFields = [
-    ['legalName', 'Legal name', 'text'],
-    ['addressLine1', 'Street address', 'text'],
-    ['city', 'City', 'text'],
+    ['legalName', 'Legal name', 'text', 200],
+    ['addressLine1', 'Street address', 'text', 200],
+    ['city', 'City', 'text', 100],
   ];
   const w9Fields = [
-    ['state', 'State', 'text'],
-    ['postalCode', 'ZIP code', 'text'],
-    ['taxIdNumber', 'SSN or EIN', 'text'],
+    ['state', 'State', 'text', 100],
+    ['postalCode', 'ZIP code', 'text', 100],
+    ['taxIdNumber', 'SSN or EIN', 'text', 100],
   ];
   const w8benFields = [
-    ['country', 'Country', 'text'],
-    ['countryOfCitizenship', 'Country of citizenship', 'text'],
-    ['foreignTaxId', 'Foreign tax ID', 'text'],
+    ['country', 'Country', 'text', 100],
+    ['countryOfCitizenship', 'Country of citizenship', 'text', 100],
+    ['foreignTaxId', 'Foreign tax ID', 'text', 100],
   ];
   const form = document.createElement('div');
   form.className = 'stripe-onboarding-form';
   const inputs = {};
   function addFormInputs(specs) {
     const labels = [];
-    for (const [key, fieldLabel, type] of specs) {
+    for (const [key, fieldLabel, type, maxLength] of specs) {
       const label = document.createElement('label');
       label.textContent = fieldLabel;
       const input = document.createElement('input');
       input.type = type;
+      input.maxLength = maxLength;
       label.appendChild(input);
       form.appendChild(label);
       inputs[key] = input;
