@@ -13893,7 +13893,6 @@ function bindShopVerticalButton(el, direction) {
   };
   el.addEventListener('pointerup', end);
   el.addEventListener('pointercancel', end);
-  el.addEventListener('pointerleave', end);
 }
 bindShopVerticalButton(shopUpBtn, 1);
 bindShopVerticalButton(shopDownBtn, -1);
