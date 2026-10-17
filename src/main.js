@@ -2806,6 +2806,10 @@ function renderBundlePicker() {
         event.stopPropagation();
         const next = prompt('Rename this bundle', bundle.name);
         if (!next || !next.trim() || next.trim() === bundle.name) return;
+        if (next.trim().length > 100) {
+          alert('Keep it to 100 characters or fewer.');
+          return;
+        }
         renameBtn.disabled = true;
         const myLoadToken = ++bundlePickerLoadToken;
         try {
@@ -4889,6 +4893,10 @@ function renderSellerList() {
       const next = prompt('Rename this product', template.name);
       if (!next || !next.trim() || next.trim() === template.name) return;
       const trimmedNext = next.trim();
+      if (trimmedNext.length > 100) {
+        alert('Keep it to 100 characters or fewer.');
+        return;
+      }
       if (hasDuplicateProductName(trimmedNext, template.templateId) &&
         !confirm(`You already have another product named "${trimmedNext}". Rename anyway?`)) return;
       rowStatus.textContent = '';
@@ -6484,6 +6492,10 @@ async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, d
   renameBtn.addEventListener('click', async () => {
     const next = prompt(`Rename your ${kind.toLowerCase()} identity`, profile.label);
     if (!next || !next.trim() || next.trim() === profile.label) return;
+    if (next.trim().length > 100) {
+      alert('Keep it to 100 characters or fewer.');
+      return;
+    }
     status.textContent = '';
     status.classList.remove('error');
     renameBtn.disabled = true;
@@ -9485,6 +9497,10 @@ saveBundleBtn.addEventListener('click', async () => {
   const meshes = [...selectedMeshes];
   const name = prompt('Name this bundle', '');
   if (!name || !name.trim()) return;
+  if (name.trim().length > 100) {
+    alert('Keep it to 100 characters or fewer.');
+    return;
+  }
   // Private by default (docs/SPEC.md's Bundles section) — sharing is an
   // explicit extra step, not the default, so a plain confirm() dialog
   // (declined by default on most platforms) rather than folding it into
