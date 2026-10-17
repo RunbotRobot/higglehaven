@@ -18,19 +18,30 @@
 //     from — the lake only ever shrank in 1916, never grew, so today's
 //     water was certainly water before too).
 //
-// Not attempted here (explicitly out of scope per #219's own text): writing
-// results into the landlets table (#218's data model) or wiring this into
-// actual landlet generation — this only produces the dataset a future
-// generation step can consult. Re-run this offline as the world's radius
-// grows (matching docs/SPEC.md §37's own "regenerated offline on major
-// changes" LOD-backdrop convention) rather than fetching live per-request.
+// #2370 (sub-issue of #2368, following up on #2012's explicit deferral of
+// biome once water was wired into real generation) extended this same
+// script to also derive a coarse biome classification (near_water/
+// lowland/upland/alpine, see geoData.js's classifyBiome) from the same
+// grid pass -- every sampled point now needs a real elevation reading
+// (not just points near today's shoreline, water's own optimization),
+// since biome's elevation bands apply everywhere, not only near a lake.
+//
+// Not attempted here (explicitly out of scope per #219's own text, still
+// true for biome per #2370's own scope): writing results into the
+// landlets table (#218's data model, #2369's biome column) or wiring this
+// into actual landlet generation — this only produces the datasets a
+// future generation step can consult. Re-run this offline as the world's
+// radius grows (matching docs/SPEC.md §37's own "regenerated offline on
+// major changes" LOD-backdrop convention) rather than fetching live
+// per-request.
 //
 // Usage:
-//   node scripts/ingest-geo-data.mjs [--radius=2000] [--spacing=25] [--out=data/geo/pre-human-water-cells.json]
+//   node scripts/ingest-geo-data.mjs [--radius=2000] [--spacing=25] [--out=data/geo/pre-human-water-cells.json] [--biome-out=data/geo/biome-cells.json]
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  classifyBiome,
   classifyPreHumanWaterType,
   distanceToPolygonM,
   latLonToWorld,
@@ -52,6 +63,7 @@ const RADIUS_M = parseArg('radius', 2000); // how far from the world origin to s
 const SPACING_M = parseArg('spacing', 25); // grid spacing between sample points
 const RECLAMATION_RADIUS_M = parseArg('reclamation-radius', 400); // see geoData.js's classifyPreHumanWaterType doc
 const OUT_PATH = (process.argv.find((a) => a.startsWith('--out=')) || '--out=data/geo/pre-human-water-cells.json').slice('--out='.length);
+const BIOME_OUT_PATH = (process.argv.find((a) => a.startsWith('--biome-out=')) || '--biome-out=data/geo/biome-cells.json').slice('--biome-out='.length);
 
 const NHD_WATERBODY_URL = 'https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/12/query';
 const EPQS_URL = 'https://epqs.nationalmap.gov/v1/json';
@@ -145,32 +157,37 @@ async function main() {
   console.log(`Fetched ${polygons.length} current waterbody polygon(s) from NHD.`);
 
   const cells = [];
+  const biomeCells = [];
   let elevationFetches = 0;
+  let elevationFailures = 0;
   for (let x = -RADIUS_M; x <= RADIUS_M; x += SPACING_M) {
     for (let y = -RADIUS_M; y <= RADIUS_M; y += SPACING_M) {
       if (Math.hypot(x, y) > RADIUS_M) continue;
       const point = { x, y };
       const { inCurrentWaterbody, distanceToShorelineM } = classifyAgainstPolygons(point, polygons);
 
+      // #2370: elevation is now fetched for every sampled point, not only
+      // those within RECLAMATION_RADIUS_M of today's shoreline -- biome's
+      // own elevation bands apply everywhere, unlike classifyPreHumanWaterType,
+      // which only ever consults elevationM when distanceToShorelineM is
+      // within reclamationRadiusM (so reusing this same fetch for water's
+      // own classification below is exactly equivalent to the old
+      // conditional fetch, just without the early skip).
       let elevationM = null;
-      // Only spend a live elevation request where it can actually change
-      // the outcome: already-underwater points are 'water' regardless, and
-      // points well outside the reclamation radius are 'buildable'
-      // regardless (see classifyPreHumanWaterType's own doc comment).
-      if (!inCurrentWaterbody && distanceToShorelineM <= RECLAMATION_RADIUS_M) {
-        const { lat, lon } = worldToLatLon(x, y, { originLat: WORLD_ORIGIN_LATITUDE, originLon: WORLD_ORIGIN_LONGITUDE });
-        try {
-          elevationM = await fetchElevationM(lat, lon);
-          elevationFetches += 1;
-        } catch (err) {
-          // Elevation genuinely unknown for this point after retries — stay
-          // conservative (never fabricate a 'water' classification we
-          // can't actually back with real data) and just leave it
-          // 'buildable', logging so a re-run can be targeted at the gap.
-          console.warn(`Elevation lookup failed for (${lat}, ${lon}), leaving buildable: ${err.message}`);
-        }
-        await sleep(150);
+      const { lat, lon } = worldToLatLon(x, y, { originLat: WORLD_ORIGIN_LATITUDE, originLon: WORLD_ORIGIN_LONGITUDE });
+      try {
+        elevationM = await fetchElevationM(lat, lon);
+        elevationFetches += 1;
+      } catch (err) {
+        // Elevation genuinely unknown for this point after retries — stay
+        // conservative (never fabricate a classification we can't back
+        // with real data): water defaults to 'buildable' via the Infinity
+        // fallback below, and this point is simply omitted from the biome
+        // output entirely rather than guessing a band.
+        elevationFailures += 1;
+        console.warn(`Elevation lookup failed for (${lat}, ${lon}), leaving buildable/unclassified: ${err.message}`);
       }
+      await sleep(150);
 
       const landType = classifyPreHumanWaterType({
         elevationM: elevationM ?? Infinity,
@@ -179,11 +196,16 @@ async function main() {
         reclamationRadiusM: RECLAMATION_RADIUS_M,
       });
       if (landType === 'water') cells.push({ x, y, landType });
+
+      if (elevationM !== null) {
+        const biome = classifyBiome({ elevationM, distanceToShorelineM });
+        biomeCells.push({ x, y, biome });
+      }
     }
-    if (elevationFetches > 0) console.log(`  ...row x=${x}: ${elevationFetches} elevation lookup(s) so far, ${cells.length} water cell(s) so far`);
+    console.log(`  ...row x=${x}: ${elevationFetches} elevation lookup(s) so far, ${cells.length} water cell(s), ${biomeCells.length} biome cell(s) so far`);
   }
 
-  console.log(`Classified grid: ${cells.length} water cell(s), ${elevationFetches} live elevation lookup(s).`);
+  console.log(`Classified grid: ${cells.length} water cell(s), ${biomeCells.length} biome cell(s), ${elevationFetches} live elevation lookup(s), ${elevationFailures} failure(s).`);
 
   const output = {
     generatedAt: new Date().toISOString(),
@@ -205,6 +227,25 @@ async function main() {
   await mkdir(path.dirname(outPath), { recursive: true });
   await writeFile(outPath, JSON.stringify(output, null, 2));
   console.log(`Wrote ${outPath}`);
+
+  const biomeOutput = {
+    generatedAt: new Date().toISOString(),
+    originLat: WORLD_ORIGIN_LATITUDE,
+    originLon: WORLD_ORIGIN_LONGITUDE,
+    radiusM: RADIUS_M,
+    spacingM: SPACING_M,
+    // Dense format, unlike the water output above: every successfully-
+    // classified sampled point is listed, since biome has no single safe
+    // default to omit from (there's no "unclassified is obviously X" the
+    // way "not a water cell" obviously means buildable) -- #2369's own
+    // nullable biome column leaves a landlet with no nearby cell data
+    // simply unclassified (null), not defaulted to one of these bands.
+    cells: biomeCells,
+  };
+  const biomeOutPath = path.isAbsolute(BIOME_OUT_PATH) ? BIOME_OUT_PATH : path.join(repoRoot, BIOME_OUT_PATH);
+  await mkdir(path.dirname(biomeOutPath), { recursive: true });
+  await writeFile(biomeOutPath, JSON.stringify(biomeOutput, null, 2));
+  console.log(`Wrote ${biomeOutPath}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
