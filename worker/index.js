@@ -15311,6 +15311,12 @@ async function handleSignPosts(request, db, route) {
       throw new HttpError('Post changed concurrently — refetch and retry', 409);
     }
     const row = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ?').bind(postId).first();
+    // #2354: meta.changes above only confirms the UPDATE matched a row at
+    // the moment it ran -- a concurrent admin-override DELETE (below) can
+    // still land in the real awaited gap between that UPDATE committing
+    // and this re-SELECT running, same shape #2334 already fixed for
+    // notifications' own PATCH.
+    if (!row) return json({ error: 'Post not found' }, 404);
     return json({ post: signPostFromRow(row) });
   }
 
@@ -15579,6 +15585,11 @@ async function handleCalendarEvents(request, db, route) {
     // delete_calendar_event_override admin branch below uses.
     await recordContentEditHistory(db, 'calendar_events', eventId, 'edit', existing, sessionBuilder.user_id);
     const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
+    // #2354: same concurrent-admin-override-DELETE race #2334 already
+    // fixed for notifications' own PATCH -- the meta.changes check above
+    // only confirms the UPDATE itself matched, not that the row still
+    // exists by the time this re-SELECT runs.
+    if (!row) return json({ error: 'Event not found' }, 404);
     return json({ event: calendarEventFromRow(row) });
   }
 
