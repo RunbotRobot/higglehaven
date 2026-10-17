@@ -6229,31 +6229,36 @@ async function renderTaxPaperworkField() {
   }
   formField.appendChild(typeRow);
 
+  // #2344: maxLength here mirrors this form's own server-side caps --
+  // legalName/addressLine1 go through taxFormTextValue's 200-char
+  // MAX_TAX_FORM_TEXT_LENGTH, every other field through labelValue's
+  // 100-char MAX_LABEL_LENGTH (worker/index.js's validateTaxIdForm).
   const commonFields = [
-    ['legalName', 'Legal name', 'text'],
-    ['addressLine1', 'Street address', 'text'],
-    ['city', 'City', 'text'],
+    ['legalName', 'Legal name', 'text', 200],
+    ['addressLine1', 'Street address', 'text', 200],
+    ['city', 'City', 'text', 100],
   ];
   const w9Fields = [
-    ['state', 'State', 'text'],
-    ['postalCode', 'ZIP code', 'text'],
-    ['taxIdNumber', 'SSN or EIN', 'text'],
+    ['state', 'State', 'text', 100],
+    ['postalCode', 'ZIP code', 'text', 100],
+    ['taxIdNumber', 'SSN or EIN', 'text', 100],
   ];
   const w8benFields = [
-    ['country', 'Country', 'text'],
-    ['countryOfCitizenship', 'Country of citizenship', 'text'],
-    ['foreignTaxId', 'Foreign tax ID', 'text'],
+    ['country', 'Country', 'text', 100],
+    ['countryOfCitizenship', 'Country of citizenship', 'text', 100],
+    ['foreignTaxId', 'Foreign tax ID', 'text', 100],
   ];
   const form = document.createElement('div');
   form.className = 'stripe-onboarding-form';
   const inputs = {};
   function addFormInputs(specs) {
     const labels = [];
-    for (const [key, fieldLabel, type] of specs) {
+    for (const [key, fieldLabel, type, maxLength] of specs) {
       const label = document.createElement('label');
       label.textContent = fieldLabel;
       const input = document.createElement('input');
       input.type = type;
+      input.maxLength = maxLength;
       label.appendChild(input);
       form.appendChild(label);
       inputs[key] = input;
