@@ -2372,6 +2372,11 @@ async function handleCatalog(request, db, route, url, models, env) {
     // object, so imageUrl/imageEmbedding/createdAt/updatedAt come back
     // populated like every sibling endpoint on this resource.
     const stored = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
+    // #2364: same concurrent-delete race #2354/#932 already guard against on
+    // this resource's own UPDATE above -- that check only confirms the row
+    // existed when the UPDATE ran, not that it still does by the time this
+    // re-SELECT runs (e.g. a concurrent DELETE from the same seller session).
+    if (!stored) return json({ error: 'Catalog template not found' }, 404);
     return json({ template: templateFromRow(stored) });
   }
 
@@ -2624,6 +2629,13 @@ async function handleProductReviews(request, db, route) {
     // confirmed" idiom the delete_review_override admin branch below uses.
     await recordContentEditHistory(db, 'product_reviews', reviewId, 'edit', existing, sessionBuilder.user_id);
     const row = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ?').bind(reviewId).first();
+    // #2364: the UPDATE's own meta.changes check above only confirms it
+    // matched a row at the moment it ran -- a concurrent admin DELETE (the
+    // sibling branch below) landing in the awaited gap since (readJson/
+    // checkRateLimit/recordContentEditHistory) can remove the row before
+    // this re-SELECT runs. Same guard #2354 added for sign_posts/
+    // calendar_events' identical shape.
+    if (!row) return json({ error: 'Review not found' }, 404);
     return json({ review: reviewFromRow(row) });
   }
 
@@ -17153,6 +17165,11 @@ async function handleSellerFeedbackEdit(request, env, purchaseId) {
   // only after confirmed" idiom the admin-DELETE branch below uses.
   await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'edit', existing, sessionBuilder.user_id);
   const row = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
+  // #2364: same concurrent-admin-delete race #2354 fixed for sign_posts/
+  // calendar_events -- the UPDATE's own meta.changes check above only
+  // confirms it matched a row at the moment it ran, not that it still
+  // exists by the time this re-SELECT runs.
+  if (!row) return json({ error: 'Feedback not found' }, 404);
   return json({ feedback: sellerFeedbackFromRow(row) });
 }
 
