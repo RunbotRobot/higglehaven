@@ -359,6 +359,16 @@
     return '<span class="pill pill-needs-answer">Needs your answer</span>';
   }
 
+  // #2403: the status pill printed the raw snake_case status value
+  // (e.g. "in_progress") as its own display text -- every other place this
+  // same tri-state value appears in this file (tab bar, action buttons)
+  // already shows a human label. Keep task.status itself for the CSS class
+  // so .pill-in_progress styling is untouched; only the text changes.
+  const STATUS_LABELS = { queued: 'Queued', in_progress: 'In progress', done: 'Done' };
+  function statusLabel(status) {
+    return STATUS_LABELS[status] || status;
+  }
+
   function matchesSearch(task) {
     if (!searchTerm) return true;
     const haystack = [task.title, task.note, task.session, task.tag, task.from]
@@ -431,7 +441,7 @@
         (task.viewed ? '' : '<span class="pill pill-unviewed">New</span>') +
         (task.imageUrl ? '<img class="card-thumb" src="' + escapeHtml(task.imageUrl) + '" alt="" />' : '') +
         '<span class="title">' + linkTitle + '</span>' +
-        '<span class="pill pill-' + escapeHtml(task.status) + '">' + escapeHtml(task.status) + '</span>' +
+        '<span class="pill pill-' + escapeHtml(task.status) + '">' + escapeHtml(statusLabel(task.status)) + '</span>' +
         (task.tag ? '<span class="pill pill-tag">' + escapeHtml(task.tag) + '</span>' : '') +
         needsAnswerBadge(task) +
         waitingBadge(task) +
