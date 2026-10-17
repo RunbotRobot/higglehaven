@@ -4185,6 +4185,62 @@ describe('Worker API', () => {
     expect(landlet.status).toBe('generating');
   });
 
+  // #2382: candidateMaterializationStatements (the materialization path
+  // expandWorldOnce's own post-expansion sweep uses just below, for a
+  // candidate that overlaps the *new* radius rather than one caught by the
+  // #849 race above) had its own, separate INSERT column list -- missing
+  // landlet_type/biome entirely, unlike candidateMaterializationSweepStatements
+  // (every other materialization call site), so a water- or biome-classified
+  // candidate silently lost that classification and fell back to the
+  // landlets table's own 'buildable'/null default the moment it materialized
+  // through this specific path. Isolate world_settings with its own radius,
+  // disjoint from #849's and #1055's, so this test's own pending candidate
+  // is the only one in the expand window.
+  it('#2382: a candidate materializing via world/expand keeps its own landType and biome', async () => {
+    await env.DB.prepare(`
+      UPDATE world_settings
+      SET radius_m = 290000, expansion_increment_m = 10, greenbelt_min_ratio = 1
+      WHERE world_id = 'default-world'
+    `).run();
+    await env.DB.prepare(`
+      INSERT INTO landlets
+        (landlet_id, name, area_m2, center_x_m, center_y_m, status, landlet_class, polygon_json, metadata_json)
+      VALUES ('issue-2382-ratio-pad', 'Ratio pad', 4, 900000, 0, 'generating', 1, '[]', '{}')
+    `).run();
+
+    // A 2x2 square centered at (290005, 0) has min_world_radius_m ~= 290004:
+    // above the pre-expand radius (290000, so it must not already be
+    // materialized) but below the post-expand radius (290010, so expand
+    // below must materialize it through expandWorldOnce's own
+    // candidateMaterializationStatements call, the exact path #2382 fixed.
+    const created = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'issue-2382-candidate', name: 'Issue 2382 candidate', areaM2: 4,
+        center: { x: 290005, y: 0 }, landType: 'water', biome: 'alpine',
+        polygon: [
+          { x: -1, y: -1 }, { x: 1, y: -1 }, { x: 1, y: 1 }, { x: -1, y: 1 },
+        ],
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    expect(created.body.candidate.materializedAt).toBeNull();
+
+    const expanded = await api('/world/expand', adminSession({ method: 'POST' }));
+    expect(expanded.response.status).toBe(200);
+    expect(expanded.body.expansion.newRadiusM).toBe(290010);
+
+    const row = await env.DB.prepare(
+      'SELECT materialized_at FROM landlet_candidates WHERE landlet_id = ?',
+    ).bind('issue-2382-candidate').first();
+    expect(row.materialized_at).not.toBeNull();
+    const landlet = await env.DB.prepare(
+      'SELECT landlet_type, biome FROM landlets WHERE landlet_id = ?',
+    ).bind('issue-2382-candidate').first();
+    expect(landlet.landlet_type).toBe('water');
+    expect(landlet.biome).toBe('alpine');
+  });
+
   // #1055: the single-landlet generation-complete endpoint used to decide
   // "is this landlet now enclosed" from a JS-side settings.radius_m
   // snapshot read before the db.batch() that updates it ever started -- the

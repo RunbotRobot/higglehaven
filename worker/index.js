@@ -14514,11 +14514,11 @@ function candidateMaterializationStatements(db, candidates) {
     db.prepare(`
       INSERT INTO landlets
         (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, landlet_class,
-         polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
-      VALUES (?, ?, ?, ?, ?, 'generating', NULL, ?, ?, NULL, NULL, ?, ?)
+         landlet_type, biome, polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
+      VALUES (?, ?, ?, ?, ?, 'generating', NULL, ?, ?, ?, ?, NULL, NULL, ?, ?)
     `).bind(
       row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.landlet_class,
-      row.polygon_json, row.metadata_json, landletMaxWorldRadius(row),
+      row.landlet_type, row.biome, row.polygon_json, row.metadata_json, landletMaxWorldRadius(row),
     ),
     db.prepare(`
       UPDATE landlet_candidates SET materialized_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
