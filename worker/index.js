@@ -5349,10 +5349,19 @@ async function handleDirectMessages(request, db, route, url) {
       WHERE b.builder_id = ?
     `).bind(recipientBuilderId).first();
     if (!recipient) throw new HttpError(`recipientBuilderId "${recipientBuilderId}" does not exist`, 400);
-    if (recipient.trust_tier !== 'id_verified') {
-      throw new HttpError('The recipient must be ID-verified to receive direct messages', 403, { idVerificationRequired: true });
-    }
+    // #2415: friendship must be checked before the recipient's trust_tier --
+    // trust_tier is never exposed through any public lookup (publicBuilderFromRow,
+    // #807), but checking it first let any id_verified builder probe an
+    // arbitrary stranger's verification status via the two 403s' distinct
+    // messages, with no friendship or consent from the target.
     await assertAcceptedFriendship(db, senderBuilderId, recipientBuilderId);
+    if (recipient.trust_tier !== 'id_verified') {
+      // #2414: no idVerificationRequired flag here -- unlike assertIdVerified's
+      // check of the caller's OWN tier above, there's nothing the caller's
+      // account can do about someone else's verification (docs/API.md's
+      // "Direct messages" section).
+      throw new HttpError('The recipient must be ID-verified to receive direct messages', 403);
+    }
     // #1719: a retry (network blip after this exact write already landed)
     // finds it here instead of delivering the same text twice — mirrors
     // writePurchaseRow's own idempotency check, keyed off message_id
