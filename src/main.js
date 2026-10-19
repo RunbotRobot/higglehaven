@@ -12550,9 +12550,19 @@ async function pollDiditVerificationStatus() {
         return;
       }
     } catch (err) {
-      // A transient failure here shouldn't give up outright — keep
-      // polling until the deadline, the same "best-effort background
-      // refresh" spirit as refreshAccountAuthUI's own trust-tier fetch.
+      // #2405: a 401 here means this browser's session ended (or never
+      // existed, e.g. the Didit mobile-handoff return landing in a
+      // different browser) -- not a transient blip, and retrying it for
+      // the full 5 minutes never resolves since no session means the
+      // builder's real status can't be fetched from here. Stop and ask
+      // for a login instead of looking stuck.
+      if (err.status === 401) {
+        setAuthStatus('Log in to check your verification status.');
+        return;
+      }
+      // Any other failure shouldn't give up outright — keep polling
+      // until the deadline, the same "best-effort background refresh"
+      // spirit as refreshAccountAuthUI's own trust-tier fetch.
       console.warn('Could not check Didit verification status:', err);
     }
     if (Date.now() >= deadline) {
@@ -12907,8 +12917,18 @@ const authInitPromise = (async () => {
     // this browser has an active session; openAuthModal only needs to
     // actually show it (a fresh page load starts with the modal closed).
     openAuthModal();
-    setAuthStatus('Checking verification status…');
-    await pollDiditVerificationStatus();
+    // #2405: Didit's hosted flow supports a "continue on your phone" QR
+    // handoff, so this return leg can land in a browser/device with no
+    // session for the account that started verification. Polling a
+    // session-gated endpoint from there just 401s on every tick for 5
+    // minutes behind a login form — tell the user to log in instead of
+    // pretending a check is actually happening.
+    if (!currentAuthUser) {
+      setAuthStatus('Log in to check your verification status.');
+    } else {
+      setAuthStatus('Checking verification status…');
+      await pollDiditVerificationStatus();
+    }
   } else if (resetToken) {
     pendingResetToken = resetToken;
     // Forced to the logged-out form view even if this browser happens to
