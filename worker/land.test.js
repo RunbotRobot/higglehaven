@@ -1668,6 +1668,56 @@ describe('Community signs', () => {
     expect([200, 404, 409]).toContain(patchResult.response.status);
   });
 
+  // #2429: same re-SELECT race #2354 fixed above for this handler's own
+  // PATCH, never applied to this POST/create branch -- a concurrent admin
+  // delete landing between the guarded INSERT committing and this
+  // handler's own re-SELECT running used to crash with a raw 500 instead
+  // of a clean 404. Wraps the INSERT statement's own run() (rather than
+  // racing prepare() itself) so the DELETE only ever fires once the
+  // INSERT has genuinely already landed.
+  it('never crashes with a raw 500 when its own POST re-fetch loses a race to a concurrent delete', async () => {
+    await api('/instances', signsBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'sign-post-refetch-delete-race-instance',
+        landletId: signsLandlet,
+        templateId: 'placeholder-tree',
+        x: 4, y: 7, isCommunitySign: true,
+      }),
+    }));
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    env.DB.prepare = (sql) => {
+      const stmt = originalPrepare(sql);
+      if (sql.includes('INSERT INTO sign_posts')) {
+        const originalBind = stmt.bind.bind(stmt);
+        stmt.bind = (...args) => {
+          const bound = originalBind(...args);
+          const originalRun = bound.run.bind(bound);
+          bound.run = async () => {
+            const result = await originalRun();
+            await originalPrepare('DELETE FROM sign_posts WHERE instance_id = ?')
+              .bind('sign-post-refetch-delete-race-instance').run();
+            return result;
+          };
+          return bound;
+        };
+      }
+      return stmt;
+    };
+    let posted;
+    try {
+      posted = await api('/instances/sign-post-refetch-delete-race-instance/posts', signsShopper.session({
+        method: 'POST', body: JSON.stringify({ text: 'Raced out from under me.' }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    // The real bug was an uncaught TypeError (raw 500) when the re-SELECT
+    // after an already-successful INSERT found the row already gone.
+    expect(posted.response.status).toBe(404);
+  });
+
   // #944-shaped gap, found the same way for the new PATCH branch -- no
   // rate limit at all would let an authenticated author rewrite their own
   // post in an unthrottled loop.
@@ -2892,6 +2942,47 @@ describe('Community calendar', () => {
       ]);
 
       expect([200, 404, 409]).toContain(patchResult.response.status);
+    });
+
+    // #2429: same re-SELECT race #2354 fixed above for this handler's own
+    // PATCH, never applied to this POST/create branch -- a concurrent admin
+    // delete landing between the guarded INSERT committing and this
+    // handler's own re-SELECT running used to crash with a raw 500 instead
+    // of a clean 404. Wraps the INSERT statement's own run() (rather than
+    // racing prepare() itself) so the DELETE only ever fires once the
+    // INSERT has genuinely already landed.
+    it('never crashes with a raw 500 when its own POST re-fetch loses a race to a concurrent delete', async () => {
+      const { owner, instanceId } = await setupCalendar('post-refetch-delete-race');
+
+      const originalPrepare = env.DB.prepare.bind(env.DB);
+      env.DB.prepare = (sql) => {
+        const stmt = originalPrepare(sql);
+        if (sql.includes('INSERT INTO calendar_events')) {
+          const originalBind = stmt.bind.bind(stmt);
+          stmt.bind = (...args) => {
+            const bound = originalBind(...args);
+            const originalRun = bound.run.bind(bound);
+            bound.run = async () => {
+              const result = await originalRun();
+              await originalPrepare('DELETE FROM calendar_events WHERE instance_id = ?').bind(instanceId).run();
+              return result;
+            };
+            return bound;
+          };
+        }
+        return stmt;
+      };
+      let posted;
+      try {
+        posted = await api(`/instances/${instanceId}/events`, owner.session({
+          method: 'POST', body: JSON.stringify({ text: 'Raced out from under me.' }),
+        }));
+      } finally {
+        env.DB.prepare = originalPrepare;
+      }
+      // The real bug was an uncaught TypeError (raw 500) when the re-SELECT
+      // after an already-successful INSERT found the row already gone.
+      expect(posted.response.status).toBe(404);
     });
 
     it('keeps an omitted field as-is on edit, and lets scheduledAt be explicitly cleared', async () => {

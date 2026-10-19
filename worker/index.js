@@ -2577,6 +2577,11 @@ async function handleProductReviews(request, db, route) {
       }
     }
     const row = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ?').bind(reviewId).first();
+    // #2429: same re-SELECT race #2364 fixed for this resource's PATCH
+    // sibling, never applied to this POST/create branch -- a concurrent
+    // admin delete landing in the awaited gap since the INSERT above can
+    // remove the row before this re-SELECT runs.
+    if (!row) return json({ error: 'Review not found' }, 404);
     return json({ review: reviewFromRow(row) }, 201);
   }
 
@@ -15375,6 +15380,12 @@ async function handleSignPosts(request, db, route) {
       throw new HttpError('This placed instance is not marked as a community sign', 400);
     }
     const row = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ?').bind(postId).first();
+    // #2429: same re-SELECT race #2354 fixed for this resource's PATCH
+    // sibling, never applied to this POST/create branch -- a concurrent
+    // admin delete, or a concurrent PATCH unflagging is_community_sign (see
+    // #1327's own comment above), can remove the row before this re-SELECT
+    // runs.
+    if (!row) return json({ error: 'Post not found' }, 404);
     return json({ post: signPostFromRow(row) }, 201);
   }
 
@@ -15629,6 +15640,11 @@ async function handleCalendarEvents(request, db, route) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
     const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
+    // #2429: same re-SELECT race #2354 fixed for this resource's PATCH
+    // sibling, never applied to this POST/create branch -- a concurrent
+    // admin delete, or a concurrent PATCH unflagging is_community_calendar,
+    // can remove the row before this re-SELECT runs.
+    if (!row) return json({ error: 'Event not found' }, 404);
     return json({ event: calendarEventFromRow(row) }, 201);
   }
 
@@ -17191,6 +17207,10 @@ async function handleSellerFeedbackCreate(request, env, purchaseId) {
       `"${authorLabel}" left ${rating}-star feedback on a purchase from you.`);
   }
   const row = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.feedback_id = ?`).bind(feedbackId).first();
+  // #2429: same re-SELECT race #2364 fixed for this resource's PATCH
+  // sibling, never applied to this POST/create branch -- a concurrent
+  // admin delete can remove the row before this re-SELECT runs.
+  if (!row) return json({ error: 'Feedback not found' }, 404);
   return json({ feedback: sellerFeedbackFromRow(row) }, 201);
 }
 
