@@ -5616,7 +5616,13 @@ async function handleBundles(request, db, route, url) {
       UPDATE bundles SET name = COALESCE(?, name), shared = COALESCE(?, shared), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE bundle_id = ?
     `).bind(name, shared, route[1]).run();
     if (result.meta.changes === 0) return json({ error: 'Bundle not found' }, 404);
+    // #2426: result.meta.changes === 0 only proves the UPDATE matched a row
+    // at the moment it ran -- a concurrent DELETE landing in the single
+    // await gap between that UPDATE committing and this re-SELECT removes
+    // the row anyway, so bundleFromRow(undefined) would otherwise throw a
+    // raw 500 instead of a clean 404. Same idiom as #2334/#2354/#2364.
     const updated = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(route[1]).first();
+    if (!updated) return json({ error: 'Bundle not found' }, 404);
     return json({ bundle: bundleFromRow(updated) });
   }
 
