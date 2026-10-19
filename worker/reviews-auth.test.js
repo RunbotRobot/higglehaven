@@ -185,6 +185,86 @@ describe('Product reviews', () => {
     expect(third.response.status).toBe(201);
   });
 
+  // #2422: same "network blip, then a retry with the same key" protection
+  // bundles/sign-posts/calendar-events/direct-messages already have --
+  // without it, a retry hits the eligibility check a successful first
+  // attempt already consumed (the purchase is no longer eligible once
+  // reviewed), either 400ing on a request that actually already
+  // succeeded, or -- the worse case tested just below -- silently
+  // creating a second, distinct review against a different eligible
+  // purchase.
+  it('does not create a duplicate review when the same idempotencyKey is retried', async () => {
+    const templateId = await createTemplate('review-idempotency');
+    const shopper = await signupBuilder('review-idempotency-shopper');
+    await createPurchase(templateId, shopper);
+
+    const first = await api(`/catalog/${templateId}/reviews`, shopper.session({
+      method: 'POST', body: JSON.stringify({ rating: 5, text: 'Great!', idempotencyKey: 'retry-test-key' }),
+    }));
+    expect(first.response.status).toBe(201);
+
+    const retried = await api(`/catalog/${templateId}/reviews`, shopper.session({
+      method: 'POST', body: JSON.stringify({ rating: 5, text: 'Great!', idempotencyKey: 'retry-test-key' }),
+    }));
+    expect(retried.response.status).toBe(200);
+    expect(retried.body.review.reviewId).toBe(first.body.review.reviewId);
+
+    const listed = await api(`/catalog/${templateId}/reviews`);
+    expect(listed.body.reviews).toHaveLength(1);
+  });
+
+  // The worse failure mode a bare eligibility-order fix wouldn't catch: a
+  // shopper with TWO unreviewed purchases of the same product retries
+  // their first review submission -- without idempotency dedup, the
+  // eligibility SELECT would simply pick the second purchase instead of
+  // returning the first review, silently creating an unintended second
+  // review nobody asked for.
+  it('returns the original review on retry rather than reviewing a second eligible purchase', async () => {
+    const templateId = await createTemplate('review-idempotency-second-purchase');
+    const shopper = await signupBuilder('review-idem-2nd-purchase-shopper');
+    await createPurchase(templateId, shopper);
+    await createPurchase(templateId, shopper);
+
+    const first = await api(`/catalog/${templateId}/reviews`, shopper.session({
+      method: 'POST', body: JSON.stringify({ rating: 4, text: 'Solid.', idempotencyKey: 'retry-second-purchase-key' }),
+    }));
+    expect(first.response.status).toBe(201);
+
+    const retried = await api(`/catalog/${templateId}/reviews`, shopper.session({
+      method: 'POST', body: JSON.stringify({ rating: 4, text: 'Solid.', idempotencyKey: 'retry-second-purchase-key' }),
+    }));
+    expect(retried.response.status).toBe(200);
+    expect(retried.body.review.reviewId).toBe(first.body.review.reviewId);
+
+    const listed = await api(`/catalog/${templateId}/reviews`);
+    expect(listed.body.reviews).toHaveLength(1);
+  });
+
+  // A genuinely different second submission (different content, even
+  // under the same stale key) must still go through normally -- this
+  // isn't a dedup-everything guard, only same-key-same-content retries,
+  // same convention bundles' own idempotency key test (#1873) establishes.
+  it('treats a same-key resubmit with different content as a genuinely new review attempt', async () => {
+    const templateId = await createTemplate('review-idempotency-content-mismatch');
+    const shopper = await signupBuilder('review-idem-content-mismatch-shopper');
+    await createPurchase(templateId, shopper);
+    await createPurchase(templateId, shopper);
+
+    const first = await api(`/catalog/${templateId}/reviews`, shopper.session({
+      method: 'POST', body: JSON.stringify({ rating: 5, text: 'First take.', idempotencyKey: 'mismatch-key' }),
+    }));
+    expect(first.response.status).toBe(201);
+
+    const second = await api(`/catalog/${templateId}/reviews`, shopper.session({
+      method: 'POST', body: JSON.stringify({ rating: 1, text: 'Changed my mind.', idempotencyKey: 'mismatch-key' }),
+    }));
+    expect(second.response.status).toBe(201);
+    expect(second.body.review.reviewId).not.toBe(first.body.review.reviewId);
+
+    const listed = await api(`/catalog/${templateId}/reviews`);
+    expect(listed.body.reviews).toHaveLength(2);
+  });
+
   it('rejects a concurrent burst against the same purchase to exactly one review — regression test for a check-then-act race', async () => {
     // The real atomicity guard is the INSERT's own WHERE NOT EXISTS against
     // purchase_id — without it, concurrent submits against the same

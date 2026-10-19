@@ -2450,6 +2450,18 @@ const PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX = 20;
 // new author-only edit branch below.
 const PRODUCT_REVIEW_EDIT_RATE_LIMIT_MAX = 20;
 
+// #2422: same "a dropped POST response and the innocent manual retry it
+// invites" protection signPostIdempotencyKey/calendarEventIdempotencyKey
+// already give their own structurally identical POSTs. Scoped by
+// templateId+builderId rather than a purchase_id, since purchase_id isn't
+// known until after the eligibility lookup the retry would otherwise fail
+// against (a successful first attempt already consumed the purchase it
+// reviewed).
+function productReviewIdempotencyKey(templateId, builderId, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  return `review:${templateId}:${builderId}:${rawKey}`;
+}
+
 async function handleProductReviews(request, db, route) {
   const templateId = route[1];
 
@@ -2492,6 +2504,33 @@ async function handleProductReviews(request, db, route) {
     await checkRateLimit(db, `product-review-create:${sessionBuilder.builder_id}`, PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const authorLabel = sessionBuilder.label;
+    const rating = Number(input.rating);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      throw new HttpError('rating must be an integer from 1 to 5', 400);
+    }
+    const text = input.text === undefined || input.text === null || input.text === ''
+      ? null
+      : stringValue(input.text, 'text');
+    if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    // #2422: a retry that reuses the same (validated) client-supplied key
+    // finds its own already-landed row here and returns it instead of
+    // hitting the eligibility check below -- which a successful first
+    // attempt already consumed the one purchase it reviewed against, so a
+    // naive retry would otherwise either 400 ("no eligible purchase") or,
+    // if the shopper has a second unreviewed purchase of this same
+    // product, silently create a second, distinct review that was never
+    // the retry's intent. Checked before the eligibility lookup for
+    // exactly that reason. Same content-match-before-reuse guard
+    // signPostIdempotencyKey/#1778 already established for its own sibling.
+    const idempotencyKey = productReviewIdempotencyKey(templateId, sessionBuilder.builder_id, input.idempotencyKey);
+    let existingReview = null;
+    if (idempotencyKey) {
+      existingReview = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?')
+        .bind(idempotencyKey, templateId).first();
+      if (existingReview && existingReview.rating === rating && existingReview.text === text) {
+        return json({ review: reviewFromRow(existingReview) });
+      }
+    }
     // The caller's own oldest unreviewed, unrefunded purchase of this
     // template — a real foreign key, not a label match. This SELECT alone
     // isn't the actual guard against double-reviewing (see the INSERT's own
@@ -2506,14 +2545,6 @@ async function handleProductReviews(request, db, route) {
     if (!purchase) {
       throw new HttpError('Only a shopper who has purchased this product, and not yet reviewed that purchase, can review it', 400);
     }
-    const rating = Number(input.rating);
-    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-      throw new HttpError('rating must be an integer from 1 to 5', 400);
-    }
-    const text = input.text === undefined || input.text === null || input.text === ''
-      ? null
-      : stringValue(input.text, 'text');
-    if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
     // One review per purchase (migrations/0100, replacing migrations/0059's
     // per-label guard) — the SELECT above is a point-in-time read, not a
     // consumption check, so without this the same purchase could otherwise
@@ -2531,7 +2562,7 @@ async function handleProductReviews(request, db, route) {
     // WHERE clause, closes that race the same way the double-review guard
     // already does. `changes === 0` means one of the two guards blocked
     // the insert; re-reading disambiguates which for a clearer error.
-    const reviewId = `review-${crypto.randomUUID()}`;
+    const reviewId = (idempotencyKey && !existingReview) ? idempotencyKey : `review-${crypto.randomUUID()}`;
     // #1975: records who actually wrote this review (sessionBuilder.user_id),
     // the same sign_posts.user_id pattern (#1830/migrations/0125) — lets the
     // PATCH/DELETE branches below check real ownership instead of having no
