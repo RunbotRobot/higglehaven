@@ -13340,6 +13340,20 @@ const SHOP_PRESENCE_HEADING_THRESHOLD_RAD = 0.05;
 // fresh regardless of movement, with 3x margin under that 10s cutoff so
 // even one dropped heartbeat doesn't go stale.
 const SHOP_PRESENCE_HEARTBEAT_INTERVAL_MS = 3000;
+// #2436: pollNearbyPresenceIfNeeded's own eviction below used to drop a
+// shopOtherAvatars entry the instant one poll came back without it -- a
+// single poll's own response can land without a still-present avatar
+// (phase relationship between this avatar's 1000ms poll and the other's
+// 1500ms report cadence, or the polling avatar's own report row briefly
+// aging past PRESENCE_STALE_AFTER_MS during a throttled background-tab
+// requestAnimationFrame loop), and if that gap lands on exactly the frame
+// a landing's nearestOpenLandingSpot/landingSpotOccupiedByAvatar check
+// runs (#2044), the collision-avoidance nudge is skipped outright rather
+// than delayed. Requiring 2 consecutive missed polls before actually
+// removing the entry costs at most one extra poll interval of a stale
+// ghost avatar lingering (a cosmetic, self-correcting cost) in exchange
+// for never losing that avatar on a single transient gap.
+const SHOP_OTHER_AVATAR_MISSED_POLLS_BEFORE_REMOVE = 2;
 // Community signs (docs/SPEC.md §6, docs/API.md's "Community signs") —
 // shopper-authored posts fade in as the camera approaches a sign and back
 // out past it, rather than a hard show/hide cutoff, the same
@@ -15973,9 +15987,14 @@ async function pollNearbyPresenceIfNeeded(now) {
     entry.toZ = avatar.z;
     entry.toHeading = avatar.heading ?? entry.fromHeading;
     entry.receivedAt = now;
+    entry.missedPolls = 0;
   }
   for (const [builderId, entry] of shopOtherAvatars) {
     if (seenBuilderIds.has(builderId)) continue;
+    // #2436: don't remove on the first miss -- see this constant's own
+    // comment above.
+    entry.missedPolls = (entry.missedPolls || 0) + 1;
+    if (entry.missedPolls < SHOP_OTHER_AVATAR_MISSED_POLLS_BEFORE_REMOVE) continue;
     scene.remove(entry.group);
     disposeObject3D(entry.group);
     shopOtherAvatars.delete(builderId);
