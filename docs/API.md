@@ -9555,6 +9555,61 @@ values; a further case confirms a brief joystick deflection hard-cuts
 `shopSitBlend` back to 0 on the very next frame, matching the instant-
 ease-out discipline described above.
 
+### Randomized sit/lean selection and timing (#2480)
+
+Sub-issue of #2475, depending on at least one of the sit/lean pose sub-
+issues landing first (sit, #2478, has; lean, #2479, hadn't as of this
+writing — see the note below on scope). docs/SPEC.md §2 asks for the idle
+state machine to work "with randomization," matching how the existing
+stand sway already randomizes its sway period and head-turn interval
+(`SHOP_IDLE_SWAY_PERIOD_MIN_S`/`MAX_S`, `SHOP_IDLE_HEAD_TURN_INTERVAL_MIN_S`/
+`MAX_S`). Two independent randomizations, both in `src/main.js`:
+
+- **Which target gets picked.** `findShopIdleInteractionTarget` used to be
+  deterministic nearest-wins within whichever kind (sit outranking lean).
+  It now collects every in-range candidate of the preferred kind into an
+  array and picks uniformly at random among them (`Math.random()`), so
+  standing idle near several sittable/leanable items doesn't always settle
+  into the exact same one. Sit still always outranks lean when both have
+  at least one in-range candidate; the random pick only applies within
+  whichever kind is chosen. A single in-range candidate (the common case,
+  and every existing test's own setup) reduces to the old deterministic
+  behavior — nothing to pick among.
+- **When the sit pose actually starts.** `shopSitSettleDelayS` is
+  randomized (`SHOP_SIT_SETTLE_DELAY_MIN_S`..`SHOP_SIT_SETTLE_DELAY_MAX_S`,
+  0 to 2 seconds) the instant a fresh idle episode selects a `'sit'`
+  target, and `shopSitBlend` stays suppressed at 0 until
+  `shopSitSettleElapsedS` (real idle time with that target selected) first
+  reaches it — so the avatar doesn't always commit to sitting at the exact
+  same instant idle sway begins; sometimes it lingers standing a bit
+  first. `shopIdleInteractionTarget` itself is still set immediately at
+  idle start either way (unaffected — this only gates the pose's own
+  blend, not the target selection #2477 already covers), and both values
+  re-randomize fresh on every new episode, including re-selecting the same
+  target next time around.
+
+**Scope note:** lean (#2479) hadn't landed on this branch yet when this
+sub-issue was picked up, which #2480's own issue text allows for ("depends
+on at least one of the sit or lean pose sub-issues landing first"). The
+settle-delay timing randomization above is implemented for sit only;
+whoever lands lean should apply the same pattern (a randomized settle
+delay gating its own blend) to keep both poses' timing equally varied, per
+this issue's "across repeated idle cycles" line covering both. The target-
+selection randomization is kind-agnostic and already covers lean the
+moment it exists, with no further change needed there.
+
+#### Testing note
+
+`e2e/shop-idle-sit-randomization.test.mjs` places several sittable chairs
+within range of one spot, repeatedly drives `window.__testFindShopIdleInteractionTarget`
+in a loop, and confirms more than one of them gets picked at least once
+(not just "something non-null" every time, which the old deterministic
+code already satisfied) — then drives repeated real idle episodes via
+`window.__testShopSitPose()`'s new `settleDelayS`/`settleElapsedS` fields
+and confirms the delay itself takes more than one distinct value across
+several episodes, and that `blend` stays at 0 until `settleElapsedS`
+reaches `settleDelayS` within a single episode.
+
 ## Control Room API (N31)
 
 The multi-session "Control Room" coordination board (a shared task/reply

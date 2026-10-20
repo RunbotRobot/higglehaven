@@ -14984,6 +14984,20 @@ let shopSitBlend = 0;
 // moving target to smooth out.
 let shopSitYawOffset = 0;
 let shopSitHeightOffset = 0;
+// #2480 (sub-issue of #2475): randomized once per sit episode, the instant
+// a 'sit' target is selected (same moment shopIdleInteractionTarget itself
+// gets set) -- shopSitBlend stays suppressed at 0 until this many seconds
+// of that same episode have elapsed, so the avatar doesn't always commit
+// to sitting at the exact same instant idle sway begins; sometimes it
+// lingers standing a bit first. Timing-side counterpart to the random
+// target selection in findShopIdleInteractionTarget above. Lean (#2479)
+// doesn't exist on this branch yet -- whoever lands it should apply the
+// same settle-delay pattern to its own blend once it does, per #2480's own
+// "across repeated idle cycles" scope covering both poses equally.
+const SHOP_SIT_SETTLE_DELAY_MIN_S = 0;
+const SHOP_SIT_SETTLE_DELAY_MAX_S = 2;
+let shopSitSettleDelayS = 0;
+let shopSitSettleElapsedS = 0; // seconds of real idle time with a 'sit' target selected, this episode
 
 // Flight state (docs/SPEC.md §2) — see updateShopFlight/toggleShopFlight.
 // 'grounded' | 'takingOff' | 'flying' | 'landing'. Toggling mid-transition
@@ -15100,6 +15114,7 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     shopSitBlend = 0; // #2478: instant ease-out, same as shopIdleBlend/shopAfkBlend just above
     shopSitYawOffset = 0;
     shopSitHeightOffset = 0;
+    shopSitSettleElapsedS = 0; // #2480: re-armed for the next sit episode's own randomized delay
   } else {
     // #2477: fires exactly once per idle episode, the instant elapsed time
     // first crosses SHOP_IDLE_DELAY_S -- not every frame afterward, since
@@ -15110,16 +15125,25 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     const idleTarget = shopIdleElapsedS >= SHOP_IDLE_DELAY_S ? 1 : 0;
     if (!wasIdle && idleTarget === 1) {
       shopIdleInteractionTarget = findShopIdleInteractionTarget(shopAvatarPosition.x, shopAvatarPosition.y);
+      // #2480: re-randomized every time a fresh episode selects a new sit
+      // target (including re-selecting the same chair next time around) —
+      // see this constant's own declaration for why.
+      shopSitSettleDelayS = THREE.MathUtils.randFloat(SHOP_SIT_SETTLE_DELAY_MIN_S, SHOP_SIT_SETTLE_DELAY_MAX_S);
+      shopSitSettleElapsedS = 0;
     }
     shopIdleBlend += (idleTarget - shopIdleBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
     const afkTarget = shopIdleElapsedS >= SHOP_AFK_DELAY_S ? 1 : 0;
     shopAfkBlend += (afkTarget - shopAfkBlend) * Math.min(1, SHOP_AFK_BLEND_PER_S * dt);
 
-    // #2478: eases in only when this idle episode's own selected target
-    // (above) is a sit one — stays at 0, same as always, for a lean target
-    // or no target at all (ordinary stand sway keeps running regardless,
-    // same "fall back to stand sway unchanged" scope #2477 already cut).
-    const sitTarget = shopIdleInteractionTarget?.kind === 'sit' ? 1 : 0;
+    // #2478/#2480: eases in only once this idle episode's own selected
+    // target (above) is a sit one *and* its own randomized settle delay
+    // has elapsed — stays at 0, same as always, for a lean target, no
+    // target, or a sit target still within its settle delay (ordinary
+    // stand sway keeps running regardless, same "fall back to stand sway
+    // unchanged" scope #2477 already cut).
+    if (shopIdleInteractionTarget?.kind === 'sit') shopSitSettleElapsedS += dt;
+    const sitTarget =
+      shopIdleInteractionTarget?.kind === 'sit' && shopSitSettleElapsedS >= shopSitSettleDelayS ? 1 : 0;
     shopSitBlend += (sitTarget - shopSitBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
     if (shopIdleInteractionTarget?.kind === 'sit') {
       // Hip height (local z = SHOP_AVATAR_LEG_LENGTH_M above the group's
@@ -15780,12 +15804,20 @@ function shopLandingObstructionTopZ(x, y) {
 // added to it, not any rotation.
 //
 // Prefers sit over lean when both are in range (sitting reads as a
-// stronger "resting" signal than leaning), then nearest within whichever
-// kind — simple nearest-wins, no pathfinding, matching #2044's own
-// "keep it simple" precedent for the sibling landing-spot search above.
+// stronger "resting" signal than leaning); within whichever kind,
+// #2480 (sub-issue of #2475) picks uniformly at random among every
+// in-range candidate of that kind, rather than deterministic nearest-
+// wins -- so standing idle in the same spot near several chairs doesn't
+// always settle into the exact same one, matching docs/SPEC.md §2's own
+// "with randomization" line (the same spirit as the existing stand-sway's
+// randomized sway period/head-turn interval just below, applied here to
+// *which* target gets picked instead of an ongoing motion parameter).
+// Still no pathfinding, matching #2044's own "keep it simple" precedent
+// for the sibling landing-spot search above.
 const SHOP_IDLE_INTERACTION_SEARCH_RADIUS_M = 3;
 function findShopIdleInteractionTarget(x, y) {
-  let best = null;
+  const sitCandidates = [];
+  const leanCandidates = [];
   for (const entry of shopLandlets.values()) {
     if (!entry.loaded) continue;
     for (const mesh of entry.objects) {
@@ -15800,10 +15832,8 @@ function findShopIdleInteractionTarget(x, y) {
         const worldY = entry.group.position.y + mesh.position.y + (target.offsetXM * sin + target.offsetYM * cos);
         const distance = Math.hypot(worldX - x, worldY - y);
         if (distance > SHOP_IDLE_INTERACTION_SEARCH_RADIUS_M) continue;
-        if (best && (best.kind === 'sit' && kind === 'lean')) continue; // sit already found elsewhere — lean never outranks it
-        if (best && best.kind === kind && best.distance <= distance) continue; // already have a closer one of this same kind
         const { height } = meshDimensions(mesh);
-        best = {
+        (kind === 'sit' ? sitCandidates : leanCandidates).push({
           kind,
           instanceId: mesh.userData.instanceId,
           worldX,
@@ -15811,11 +15841,13 @@ function findShopIdleInteractionTarget(x, y) {
           worldZ: mesh.position.z - height / 2 + target.heightM,
           worldFacingRad: mesh.rotation.z + target.facingRad,
           distance,
-        };
+        });
       }
     }
   }
-  return best;
+  const candidates = sitCandidates.length > 0 ? sitCandidates : leanCandidates;
+  if (candidates.length === 0) return null;
+  return candidates[Math.floor(Math.random() * candidates.length)];
 }
 // #2477: e2e-only hook, same convention as window.__testNearestOpenLandingSpot
 // above -- lets a test drive the real search function directly against
@@ -15838,6 +15870,12 @@ window.__testShopSitPose = () => ({
   heightOffset: shopSitHeightOffset,
   legRotationRad: shopAvatar.legPivotL.rotation.x,
   armRotationRad: shopAvatar.armPivotL.rotation.x,
+  // #2480: this episode's own randomized settle delay/elapsed (see their
+  // declarations above) -- lets a test confirm the delay itself varies
+  // across repeated episodes, and that shopSitBlend really does stay 0
+  // until shopSitSettleElapsedS catches up to it.
+  settleDelayS: shopSitSettleDelayS,
+  settleElapsedS: shopSitSettleElapsedS,
 });
 
 // #2044: the spec line SHOP_FLIGHT_TAKEOFF_DURATION_S's own comment above
@@ -18494,6 +18532,8 @@ async function enterShopMode() {
   shopSitBlend = 0;
   shopSitYawOffset = 0;
   shopSitHeightOffset = 0;
+  shopSitSettleDelayS = 0;
+  shopSitSettleElapsedS = 0;
   // #1175 (docs/SPEC.md §1/§2): every spawn — not just a first-ever visit —
   // starts already flying, above a random world location, facing the
   // world center, and slowly orbiting it clockwise until the shopper gives
