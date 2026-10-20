@@ -3183,6 +3183,7 @@ const uploadHintBtn = document.getElementById('upload-hint-btn');
 const uploadModeVideoBtn = document.getElementById('upload-mode-video-btn');
 const uploadModeFileBtn = document.getElementById('upload-mode-file-btn');
 const uploadVideoSectionEl = document.getElementById('upload-video-section');
+const uploadVideoCreditsEl = document.getElementById('upload-video-credits');
 const uploadVideoInput = document.getElementById('upload-video-input');
 const uploadRetryVideoBtn = document.getElementById('upload-retry-video-btn');
 const uploadStatusEl = document.getElementById('upload-status');
@@ -3283,6 +3284,23 @@ function disposeUploadDimensionPreview() {
   uploadDimensionPreview = null;
 }
 
+// #2442: `builders.video_generation_credits` (migrations/0127) was never
+// surfaced anywhere in the Upload Model modal -- a seller had no way to
+// tell they were out of free generations before actually attempting one
+// and hitting VIDEO_GENERATION_NO_CREDITS_MESSAGE's 402. Best-effort: a
+// failed fetch (offline, logged out mid-flow) just leaves the line blank
+// rather than blocking entry into video mode over it.
+async function refreshUploadVideoCredits() {
+  uploadVideoCreditsEl.textContent = '';
+  try {
+    const { videoGenerationCredits } = await fetchMyBuilder();
+    uploadVideoCreditsEl.textContent =
+      `${videoGenerationCredits} free model generation${videoGenerationCredits === 1 ? '' : 's'} remaining`;
+  } catch (err) {
+    console.warn('Failed to load the video-generation credit balance:', err);
+  }
+}
+
 // Switches step 'file' between its two mutually-exclusive input methods.
 // #1602's info-tooltip popups (upload-hint, upload-video-hint) are
 // siblings of their own field row, not nested inside it, so each one is
@@ -3297,6 +3315,12 @@ function setUploadFileMode(mode) {
   uploadModeVideoBtn.hidden = mode !== 'file';
   uploadVideoSectionEl.hidden = mode !== 'video';
   uploadSubmitBtn.textContent = mode === 'video' ? 'Generate Model' : 'Add Product';
+  // #2442: refreshed every time video mode is (re-)entered, not just once
+  // per modal open -- a generation attempt since the last time this
+  // section was shown (success or the 402 no-credits rejection) changes
+  // the real balance, and uploadRetryVideoBtn can land back here more than
+  // once in the same modal session.
+  if (mode === 'video') refreshUploadVideoCredits();
 }
 uploadModeVideoBtn.addEventListener('click', () => setUploadFileMode('video'));
 uploadModeFileBtn.addEventListener('click', () => setUploadFileMode('file'));
@@ -13081,14 +13105,15 @@ const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, generating: 0
 function plotColorKeyForLandlet(landlet) {
   return landlet.landType === 'water' ? 'water' : landlet.status;
 }
-// docs/SPEC.md §2's confirmed ground speeds: 1.8 m/s walking, 2.7 m/s
-// (~6 mph, v16 — raised from the original 2.2 m/s for a run that actually
-// reads as one) running. There's no separate run input (a run key/button)
+// docs/SPEC.md §2's confirmed ground speeds: 1.8 m/s walking, 4.4704 m/s
+// (10 mph, v17 — raised from 2.7 m/s/~6 mph, which the owner found still
+// read as a slow walk against a measured brick wall; "feels right" over
+// "is realistic") running. There's no separate run input (a run key/button)
 // — the move joystick's own deflection doubles as intensity, so pushing it
 // all the way out runs and a gentle nudge walks, the same analog feel a
 // real joystick gamepad gives a run.
 const SHOP_WALK_SPEED_M_S = 1.8;
-const SHOP_RUN_SPEED_M_S = 2.7; // docs/SPEC.md §2 (v16): ~6 mph, a more noticeable gap from walking
+const SHOP_RUN_SPEED_M_S = 4.4704; // docs/SPEC.md §2 (v17): 10 mph
 const SHOP_LOOK_SPEED_RAD_S = 1.8;
 const SHOP_MIN_HEIGHT_M = 1.5;
 // Flight (docs/SPEC.md §2) — see updateShopFlight/bindShopFlyToggle.

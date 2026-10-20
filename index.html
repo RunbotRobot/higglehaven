@@ -1781,6 +1781,12 @@
         font-size: 12px;
         color: rgb(var(--ink-rgb) / 0.65);
       }
+      /* #2442: the free-generations-remaining line above the video picker
+         -- same small/muted treatment as #upload-animations-detected. */
+      #upload-video-credits {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
       /* Same row-layout checkbox pattern as #upload-digital-good-label
          above — see #680/#681's "avatar" catalog category. */
       #upload-avatar-category-label {
@@ -4400,6 +4406,7 @@
             &#128249; Or generate a model from a video instead
           </button>
           <div id="upload-video-section" hidden>
+            <div id="upload-video-credits"></div>
             <div class="field-with-tooltip">
               <label id="upload-video-label">
                 Short video of the object
