@@ -301,6 +301,50 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
     expect(stillThere.count).toBe(1);
   });
 
+  // #2428: not found here means a concurrent DELETE of the hosting instance
+  // (migrations/0137's own ON DELETE CASCADE on instance_id) landed in the
+  // single await gap between the guarded INSERT committing and this
+  // handler's own re-SELECT -- same race shape #2334/#2392 already cover
+  // elsewhere, previously an uncaught backupFromRow(undefined) crash instead
+  // of a clean 404. Same env.DB.prepare hijack idiom as the ownership-
+  // transfer-mid-request races above, but targeting the POST branch's own
+  // re-SELECT (the one statement in this file matching this exact SQL)
+  // rather than an early statement, since the gap being tested is strictly
+  // between the INSERT and that re-SELECT.
+  it('does not crash with a raw 500 if the hosting instance is deleted concurrently between the POST\'s INSERT and its re-SELECT', async () => {
+    const builder = await signupBuilder('backups-post-reselect-race-builder');
+    await createLandletAndClaim('backups-post-reselect-race-landlet', builder);
+    await createTemplate('backups-post-reselect-race-template');
+    await createTemplate('backups-post-reselect-race-backup');
+    await placeInstance('backups-post-reselect-race-instance', 'backups-post-reselect-race-landlet', 'backups-post-reselect-race-template', builder);
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql === 'SELECT * FROM placed_instance_backups WHERE backup_id = ?') {
+        armed = false;
+        originalPrepare('DELETE FROM placed_instances WHERE instance_id = ?')
+          .bind('backups-post-reselect-race-instance').run();
+      }
+      return originalPrepare(sql);
+    };
+    let added;
+    try {
+      added = await api('/instances/backups-post-reselect-race-instance/backups', builder.session({
+        method: 'POST', body: JSON.stringify({ templateId: 'backups-post-reselect-race-backup' }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(added.response.status).toBe(404);
+    expect(added.body.error).toMatch(/not found/i);
+
+    const orphaned = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM placed_instance_backups WHERE instance_id = ?',
+    ).bind('backups-post-reselect-race-instance').first();
+    expect(orphaned.count).toBe(0);
+  });
+
   // #2183: position used to come from a COUNT(*) read in a statement
   // separate from the INSERT -- two concurrent appends could both read the
   // same count and both land on the same position. A plain Promise.all of

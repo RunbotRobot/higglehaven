@@ -15231,6 +15231,12 @@ async function handleInstanceBackups(request, db, route) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
     const row = await db.prepare('SELECT * FROM placed_instance_backups WHERE backup_id = ?').bind(backupId).first();
+    // #2428: not found here means a concurrent DELETE of the hosting
+    // instance (migrations/0137's own ON DELETE CASCADE on instance_id)
+    // landed in the single await gap between the guarded INSERT above and
+    // this re-SELECT -- a genuine 404, same race shape #2334/#2392 already
+    // fixed elsewhere, not an uncaught backupFromRow(undefined) crash.
+    if (!row) return json({ error: 'Placed instance backup not found' }, 404);
     return json({ backup: backupFromRow(row) }, 201);
   }
 
