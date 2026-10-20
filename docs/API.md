@@ -768,10 +768,11 @@ sections populate correctly (including the no-seller-yet and
 seller-exists cases), never leaks a raw Didit payload, rate-limits (11th
 attempt is `429`), and the `social` section's every collection — including
 the real-purchase-id join for reviews/feedback, the real-`user_id` filter
-for sign posts (and that it excludes another account's), the best-effort
-label match for calendar events, saved-layout/landlet-version instances
-nesting correctly under their parent, and an all-empty baseline for an
-account with none of this activity.
+for sign posts and calendar events (and, for calendar events, that a
+legacy pre-migration-0135 row with no `user_id` is correctly excluded
+even when its free-text label matches), saved-layout/landlet-version
+instances nesting correctly under their parent, and an all-empty baseline
+for an account with none of this activity.
 
 Also covered by `e2e/auth.test.mjs`: the full real-UI signup → verify-email
 link → logout → login and forgot-password → reset link → reset → old-
