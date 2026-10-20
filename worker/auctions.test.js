@@ -206,6 +206,46 @@ describe('Auctions', () => {
     expect([first.response.status, second.response.status].sort()).toEqual([201, 409]);
   });
 
+  // #2427: not found here means a concurrent self-delete removed this
+  // just-created, still-zero-bid auction (builderDeletionStatements' own
+  // DELETE FROM auctions -- the #279 guard only blocks a self-delete once
+  // an auction has a bid) in the single await gap between the guarded
+  // INSERT committing and this handler's own re-SELECT -- same race shape
+  // #2334/#2392/#2428 already cover elsewhere, previously an uncaught
+  // auctionFromRow(undefined) crash instead of a clean 409. Same
+  // env.DB.prepare hijack idiom as #2428's own test: intercepts the
+  // handler's own re-SELECT and deletes the row right before it runs.
+  it('does not crash with a raw 500 if the auction is deleted concurrently between the POST\'s INSERT and its re-SELECT', async () => {
+    const owner = await signupBuilder('auction-post-reselect-race-owner');
+    await createGreenbeltLandlet('auction-post-reselect-race-landlet');
+    await claim('auction-post-reselect-race-landlet', owner);
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql === 'SELECT * FROM auctions WHERE auction_id = ?') {
+        armed = false;
+        originalPrepare('DELETE FROM auctions WHERE landlet_id = ?')
+          .bind('auction-post-reselect-race-landlet').run();
+      }
+      return originalPrepare(sql);
+    };
+    let started;
+    try {
+      started = await api('/landlets/auction-post-reselect-race-landlet/auction', owner.session({
+        method: 'POST', body: JSON.stringify({}),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(started.response.status).toBe(409);
+
+    const remaining = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM auctions WHERE landlet_id = ?',
+    ).bind('auction-post-reselect-race-landlet').first();
+    expect(remaining.count).toBe(0);
+  });
+
   it('accepts a custom starting bid and duration', async () => {
     const owner = await signupBuilder('custom-auction-owner');
     await createGreenbeltLandlet('auction-custom-landlet');
