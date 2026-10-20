@@ -6227,6 +6227,25 @@ async function handleLandletLevels(request, db, route) {
     if (deleted.meta.changes === 0) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
+    // #2470: minZ/maxZ above were computed from the pre-DELETE snapshot
+    // taken before the rate-limit check and the DELETE's own awaited
+    // round-trips — fine for the rate-limit-bucket decision that snapshot
+    // feeds (outOfRange above), but a concurrent level add in the *other*
+    // direction during that gap (e.g. this request removes the outermost
+    // "up" level while another tab adds a new "down" level) would still
+    // leave minZ/maxZ reflecting the old, now-wrong extent here, after the
+    // DELETE has actually committed. The outermost-level guard folded into
+    // the DELETE's own WHERE clause above only protects the direction being
+    // removed, so it doesn't catch this. Re-deriving the range from a fresh
+    // read of the now-committed landlet_levels table — same formula, same
+    // half-level-height slack — keeps the sweep below scoped to the real,
+    // live extent instead of a window that may have shifted out from under
+    // it.
+    const remainingAfterDelete = await db.prepare('SELECT level_index FROM landlet_levels WHERE landlet_id = ?')
+      .bind(landletId).all();
+    const freshRemainingIndices = remainingAfterDelete.results.map((row) => row.level_index);
+    const freshMinZ = Math.min(0, ...freshRemainingIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M;
+    const freshMaxZ = Math.max(0, ...freshRemainingIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M;
     // #522 (owner-confirmed, 2026-09-09): any instance left sitting in the
     // z-range this level was providing is removed from active shoppable
     // space rather than silently drifting out of bounds — nothing else
@@ -6256,7 +6275,7 @@ async function handleLandletLevels(request, db, route) {
     // earlier snapshot — closes that window down to this batch's own commit
     // latency.
     const freshOutOfRange = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)')
-      .bind(landletId, minZ, maxZ).all();
+      .bind(landletId, freshMinZ, freshMaxZ).all();
     const statements = [];
     if (freshOutOfRange.results.length > 0) {
       const savedLayoutId = `saved-layout-${crypto.randomUUID()}`;
@@ -6282,7 +6301,7 @@ async function handleLandletLevels(request, db, route) {
       }
     }
     statements.push(
-      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)').bind(landletId, minZ, maxZ),
+      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)').bind(landletId, freshMinZ, freshMaxZ),
     );
     await db.batch(statements);
     await recomputeLandCap(db, landlet.owner_builder_id);
