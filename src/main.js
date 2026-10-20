@@ -3361,6 +3361,13 @@ function closeUploadModal() {
   uploadModalEl.classList.remove('visible');
   resetUploadModalToFileStep();
   closeModalA11y(uploadModalEl);
+  // #2515: this modal only ever opens stacked on top of the still-visible
+  // Seller modal (openUploadModal never hides it) -- closeModalA11y above
+  // only clears activeModalEl, so without re-arming here the Seller modal
+  // is left on screen but untrapped, same bug class #1679 fixed for the
+  // Friends-map/DM pair.
+  sellerModalEl.classList.add('visible');
+  openModalA11y(sellerModalEl, closeSellerModal);
 }
 
 uploadModelBtn.addEventListener('click', openUploadModal);
@@ -17858,6 +17865,11 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
 function closeRefundPolicyModal() {
   refundPolicyModalEl.classList.remove('visible');
   closeModalA11y(refundPolicyModalEl);
+  // #2515: same gap as closeUploadModal's own #2515 fix -- this modal only
+  // ever opens stacked on top of the still-visible Shop Product Preview
+  // modal, so re-arm its trap rather than leaving it on screen untrapped.
+  shopProductPreviewModalEl.classList.add('visible');
+  openModalA11y(shopProductPreviewModalEl, closeShopProductPreviewModal);
 }
 function handleShopReturnPolicyClick() {
   refundPolicyModalEl.classList.add('visible');
