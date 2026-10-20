@@ -5883,18 +5883,27 @@ updateSellerViewToggleUI();
 // seller has at least one piece of feedback, same "nothing to show yet"
 // convention #productInfoEl's own comment documents, rather than a
 // permanent "No feedback yet" placeholder taking up space.
+// #2514: singleton summary element, so one shared counter (not a per-row
+// one like renderReviews' own reviewLoadToken) is the right shape here —
+// guards against a double-clicked Sell/Manage button's two openSellerModal()
+// calls racing each other and letting the first (now-stale) fetch overwrite
+// what the second, newer one already rendered.
+let sellerFeedbackLoadToken = 0;
 async function renderSellerFeedbackSummary(id) {
+  const myLoadToken = ++sellerFeedbackLoadToken;
   let feedback;
   let averageRating;
   let count;
   try {
     ({ feedback, averageRating, count } = await fetchSellerFeedback(id));
   } catch (err) {
+    if (myLoadToken !== sellerFeedbackLoadToken) return; // superseded while fetching
     console.warn('Could not load seller feedback summary:', err);
     sellerFeedbackSummaryEl.hidden = true;
     sellerFeedbackListEl.innerHTML = '';
     return;
   }
+  if (myLoadToken !== sellerFeedbackLoadToken) return; // superseded — a newer call owns the summary now
   sellerFeedbackSummaryEl.hidden = feedback.length === 0;
   sellerFeedbackListEl.innerHTML = '';
   if (feedback.length === 0) return;
