@@ -31,8 +31,13 @@ await sellerPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await sellerPage.click('.settings-tab-btn[data-section="build"]');
 await sellerPage.waitForTimeout(500);
 
+// #2437: this panel's render involves two sequential awaited round-trips
+// (fetchAllLandlets then fetchAuctions, both via the local wrangler dev
+// worker) before the form appears -- under CI load that can outrun a tight
+// margin. 30000ms matches the comparable wait just below (the auction-row
+// "live" state, also behind its own round-trip).
 const startForm = sellerPage.locator('.auction-start-form');
-await startForm.waitFor({ timeout: 10000 });
+await startForm.waitFor({ timeout: 30000 });
 await startForm.locator('input').nth(0).fill('10'); // starting bid $10
 await startForm.locator('input').nth(1).fill('1'); // duration 1 hour
 await sellerPage.click('.auction-start-btn');
