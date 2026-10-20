@@ -8709,17 +8709,36 @@ const DIDIT_TERMINAL_STATUSES = { Approved: true, Declined: false, Abandoned: fa
 // the webhook or a poll gets there first applies the change; the other is
 // a safe no-op, so this can't double-apply from a race or a repeat
 // webhook delivery.
+// #2484: the session claim and the trust_tier raise used to be two
+// sequential awaited .run() calls -- an interruption between them (a
+// transient D1 error, or the isolate hitting a CPU/time limit) could leave
+// processed_at already set with trust_tier never raised, and since every
+// retry's own claim above short-circuits on processed_at IS NOT NULL, that
+// stranded state had no retry path at all. Batched into one D1 transaction
+// (same shape as #2174) so the two writes can no longer split. The users
+// UPDATE's own EXISTS guard reads the session row *as this same batch just
+// left it* (D1 batch statements run sequentially within one transaction),
+// so it only fires when this call's own claim actually landed (or had
+// already landed from an earlier, fully-completed call -- a replayed
+// webhook re-applying the same value is a safe no-op either way); it's
+// only ever included in the batch when `approved` is true in the first
+// place, so a decline never reaches it.
 async function applyDiditDecision(db, sessionId, userId, approved) {
-  const result = await db.prepare(`
-    UPDATE didit_verification_sessions SET status = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE session_id = ? AND processed_at IS NULL
-  `).bind(approved ? 'approved' : 'declined', sessionId).run();
-  if (result.meta.changes === 0) return;
+  const statements = [
+    db.prepare(`
+      UPDATE didit_verification_sessions SET status = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE session_id = ? AND processed_at IS NULL
+    `).bind(approved ? 'approved' : 'declined', sessionId),
+  ];
   if (approved) {
-    await db.prepare(`
-      UPDATE users SET trust_tier = 'id_verified', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE user_id = ?
-    `).bind(userId).run();
+    statements.push(db.prepare(`
+      UPDATE users SET trust_tier = 'id_verified', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE user_id = ? AND EXISTS (
+        SELECT 1 FROM didit_verification_sessions WHERE session_id = ? AND status = 'approved' AND processed_at IS NOT NULL
+      )
+    `).bind(userId, sessionId));
   }
+  await db.batch(statements);
 }
 
 // Shared by handleDiditVerificationStatus (poll the current session) and
