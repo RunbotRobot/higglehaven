@@ -6414,7 +6414,10 @@ deletion release-to-greenbelt path, both `resolveAuction` branches
 auction), and admin `POST .../reassign-owner` (#1280) — matching the
 existing "a new owner gets the land, not the previous owner's stuff on
 it" reasoning already applied to `placed_instances`/`landlet_versions`
-there.
+there. `sold_out_markers` (#2068) joined this same cleanup at all four
+sites as of #2508 — it had been left out when that table was introduced,
+so a new owner briefly saw the previous owner's undismissed "sold out,
+removed" markers on a landlet that changed hands.
 
 ### Instance placement is bounded by purchased levels (#394)
 
