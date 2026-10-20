@@ -14550,6 +14550,16 @@ window.__testTeleportShopAvatar = (x, y, z) => {
 // unless a test calls it" convention as every other window.__test* hook
 // here.
 window.__testShopAvatarPosition = () => ({ x: shopAvatarPosition.x, y: shopAvatarPosition.y, z: shopAvatarPosition.z });
+// #2423: read-only counterpart for shopFlightState itself -- a test waiting
+// for a real landing/takeoff to finish can't just wait out
+// SHOP_FLIGHT_*_DURATION_S in real time and assume that's enough: dt each
+// frame is clamped to 0.1s (updateShopMovement's own "clamp against
+// tab-switch-sized gaps" comment), so under a CPU-starved CI run where
+// requestAnimationFrame ticks arrive sparsely, *simulated* flight time can
+// fall arbitrarily far behind real time -- a fixed real-time wait sized for
+// the simulated duration is never actually guaranteed to be enough. Polling
+// this instead of guessing a bigger timeout is the robust fix.
+window.__testShopFlightState = () => shopFlightState;
 // #1479: forces an immediate, synchronous load/unload decision rather than
 // waiting on the next real requestAnimationFrame tick to notice a teleport
 // on its own. window.__testTeleportShopAvatar's own comment above explains
