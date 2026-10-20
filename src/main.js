@@ -13408,6 +13408,18 @@ const SIGN_MAX_VISIBLE_POSTS = 5;
 // avatar height is the intended collection gesture, not a bug.
 const CREDIT_ORB_COLLECT_RADIUS_M = 1.5;
 const CREDIT_ORB_FLOAT_HEIGHT_M = 1.2;
+// #2443: how far above local ground (shopFlightAltitudeM, not world z --
+// a landlet's own group sits at a fixed world z of exactly 0 regardless of
+// distance from the origin, per #1871's "addLandletToScene" group.position
+// call, while shopAvatarPosition.z is deliberately sunk by
+// curvatureDropM(distance from origin) as a pure rendering trick; comparing
+// world z values would conflate that offset with real altitude) the avatar
+// can be and still have this count as a ground walk-in rather than flying
+// over it. Reuses CREDIT_ORB_COLLECT_RADIUS_M's own scale as a reasonable
+// near-ground margin (covers the walk cycle's own small vertical bob and any
+// ground-incline slack) -- tight enough that a real flight altitude no
+// longer collects, per the owner's own report.
+const CREDIT_ORB_COLLECT_ALTITUDE_TOLERANCE_M = CREDIT_ORB_COLLECT_RADIUS_M;
 const CREDIT_ORB_RADIUS_M = 0.25;
 const CREDIT_ORB_ROTATION_SPEED_RAD_S = 1.4;
 // Shimmer: emissiveIntensity oscillates between these two bounds rather
@@ -16324,13 +16336,19 @@ function updateCreditOrbs(dt) {
     // behind the avatar, well outside CREDIT_ORB_COLLECT_RADIUS_M on its
     // own, so camera.position would never read as "standing on it" at this
     // tight a radius the way it still works for signs/calendars' much wider
-    // SIGN_INTERACT_RADIUS_M (8m). Horizontal-only (x/y), ignoring z, since
-    // CREDIT_ORB_FLOAT_HEIGHT_M's own float-above-ground offset shouldn't
-    // count against "walked into it."
+    // SIGN_INTERACT_RADIUS_M (8m).
     const world = orb.mesh.getWorldPosition(scratchCreditOrbWorldPos);
     const dx = world.x - shopAvatarPosition.x;
     const dy = world.y - shopAvatarPosition.y;
     if (Math.hypot(dx, dy) > CREDIT_ORB_COLLECT_RADIUS_M) continue;
+    // #2443: horizontal proximity alone also fired for flying directly over
+    // an orb at any altitude, since height above ground was never checked.
+    // shopFlightAltitudeM (not world z -- see CREDIT_ORB_COLLECT_ALTITUDE_
+    // TOLERANCE_M's own comment on why) is the curvature-independent "how
+    // high above local ground" signal already tracked for flight, so this
+    // excludes real flight altitude without touching an ordinary ground
+    // walk-in.
+    if (Math.abs(shopFlightAltitudeM) > CREDIT_ORB_COLLECT_ALTITUDE_TOLERANCE_M) continue;
     orb.collecting = true;
     collectCreditOrb(orb.orbId).then(() => {
       // #2441: spawned before removeCreditOrb disposes the real orb.mesh
