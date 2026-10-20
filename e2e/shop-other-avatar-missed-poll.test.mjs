@@ -96,27 +96,61 @@ await pageA.route('**/api/presence', async (route) => {
   await route.continue();
 });
 
+// Waits until the route handler above has actually observed `count` GET
+// /api/presence requests from A, rather than guessing a wall-clock sleep
+// long enough to cover that many poll ticks -- the poll loop's own interval
+// (SHOP_PRESENCE_POLL_INTERVAL_MS) is a minimum gap between tick starts,
+// not a guarantee of how many ticks land in a given wall-clock window under
+// real (possibly CI-loaded) timing. Tying the wait to the actual observed
+// count is exactly the fix this test is itself about: don't assume a fixed
+// number of polls happened just because "enough time" seemingly passed.
+async function waitForPresencePollCount(count, timeoutMs = 20000) {
+  const start = Date.now();
+  while (getPresenceCount < count) {
+    if (Date.now() - start > timeoutMs) {
+      throw new Error(`Timed out waiting for ${count} GET /api/presence poll(s) -- stuck at ${getPresenceCount}`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  // The route handler resolving the request (Node-side) is not the same
+  // moment the client has fully received and processed that response into
+  // shopOtherAvatars -- under heavy load both the network round-trip and
+  // the client's own JS turn can be delayed well past a token buffer, so
+  // this margin is deliberately generous rather than tuned to the
+  // untroubled case.
+  await pageA.waitForTimeout(2000);
+}
+
 // --- One forced-empty poll: B must survive it -- this is the actual fix. ---
 missesToForce = 1;
 getPresenceCount = 0;
-await pageA.waitForTimeout(1200); // past one poll tick (1000ms)
+await waitForPresencePollCount(1);
 const seenAfterOneMiss = await pageA.evaluate(() => window.__shopOtherAvatars);
 const bEntryAfterOneMiss = seenAfterOneMiss?.find((a) => a.builderId === builderB.builderId);
 console.log('B as seen by A right after exactly one forced-empty poll (should SURVIVE):', bEntryAfterOneMiss);
 
 // --- A real poll afterward recovers normally -- B stays correctly tracked,
-// not left in some half-missed limbo state. ---
-await pageA.waitForTimeout(1200);
+// not left in some half-missed limbo state. Any poll past the first one is
+// real (missesToForce is still 1), so waiting for a second observed poll
+// guarantees at least one real recovery poll happened.
+await waitForPresencePollCount(2);
 const seenAfterRecovery = await pageA.evaluate(() => window.__shopOtherAvatars);
 const bEntryAfterRecovery = seenAfterRecovery?.find((a) => a.builderId === builderB.builderId);
 console.log('B as seen by A after a real poll recovers from the one miss:', bEntryAfterRecovery);
 
 // --- Two consecutive forced-empty polls: B must now actually be removed --
 // confirms the debounce doesn't become a permanent "never removes a
-// genuinely departed avatar" leak. ---
-missesToForce = 2;
+// genuinely departed avatar" leak. Keeps forcing empty responses well past
+// the second miss (B never actually left in this simulation -- it's still
+// really there and still really polling/reporting), rather than stopping at
+// exactly 2 and hoping to read state before the very next real poll lands
+// and legitimately re-adds B as a "new" avatar again. That race is real:
+// the next real tick follows the forced ones by only about one poll
+// interval, so a generous read-after margin here would otherwise just
+// catch the resurrection, not the eviction.
+missesToForce = 1000;
 getPresenceCount = 0;
-await pageA.waitForTimeout(2200); // past two poll ticks
+await waitForPresencePollCount(2);
 const seenAfterTwoMisses = await pageA.evaluate(() => window.__shopOtherAvatars);
 const bEntryAfterTwoMisses = seenAfterTwoMisses?.find((a) => a.builderId === builderB.builderId);
 console.log('B as seen by A after two consecutive forced-empty polls (should be GONE):', bEntryAfterTwoMisses);
