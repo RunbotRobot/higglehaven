@@ -8,7 +8,13 @@ async function requestJson(path, options) {
   const response = await fetch(`${API_BASE}${path}`, options);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    const error = new Error(body.error || `${path} failed with HTTP ${response.status}`);
+    // #2440: previously `${path} failed with HTTP ${response.status}` --
+    // raw request-plumbing language with no theming, shown verbatim to the
+    // user whenever a response comes back !ok with no (or malformed)
+    // {error} body of its own. Only the display text changed; `error.status`
+    // below is unaffected and still carries the real HTTP status for any
+    // caller-side logic (e.g. the #2222 403-vs-404 distinction noted below).
+    const error = new Error(body.error || "Couldn't complete that — higglehaven ran into a problem on its end. Please try again in a moment.");
     // #2222: collectCreditOrb's own caller needs to tell a 403 ("not
     // actually near it yet, by the server's own record") apart from a 404
     // ("someone else already collected it") -- the former is worth
@@ -670,7 +676,8 @@ export async function uploadModelFile(file) {
   const response = await fetch(`${API_BASE}/models`, { method: 'POST', body: form });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `Model upload failed with HTTP ${response.status}`);
+    // #2440: previously `Model upload failed with HTTP ${response.status}` -- see requestJson's own #2440 comment above.
+    throw new Error(body.error || "Couldn't upload that model — higglehaven ran into a problem on its end. Please try again in a moment.");
   }
   return response.json(); // { modelUrl, sourceName, sizeBytes }
 }
@@ -684,7 +691,8 @@ export async function createVideoGenerationJob(framesForm) {
   const response = await fetch(`${API_BASE}/video-generation-jobs`, { method: 'POST', body: framesForm });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `Video generation request failed with HTTP ${response.status}`);
+    // #2440: previously `Video generation request failed with HTTP ${response.status}` -- see requestJson's own #2440 comment above.
+    throw new Error(body.error || "Couldn't start turning that video into a 3D model — higglehaven ran into a problem on its end. Please try again in a moment.");
   }
   return response.json(); // { jobId, status }
 }

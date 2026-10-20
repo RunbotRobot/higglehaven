@@ -2344,7 +2344,7 @@ describe('Worker API', () => {
       }),
     });
     expect(duplicateTemplate.response.status).toBe(409);
-    expect(duplicateTemplate.body).toEqual({ error: 'Resource already exists' });
+    expect(duplicateTemplate.body).toEqual({ error: 'That already exists.' });
 
     const instanceBody = JSON.stringify({
       instanceId: 'invalid-reference-instance',
