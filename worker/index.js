@@ -2245,6 +2245,12 @@ async function handleCatalog(request, db, route, url, models, env) {
     // updatedAt, unlike every sibling create/update handler in this file
     // (and this resource's own POST/PUT batch sibling just below).
     const stored = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(template.templateId).first();
+    // #2487: same concurrent-delete race #2364 already guards against on
+    // this resource's own PATCH/PUT sibling below -- a predictable,
+    // client-derivable id (catalogTemplateIdempotencyKey) means a DELETE for
+    // this exact id can land in the gap between the INSERT above and this
+    // re-SELECT.
+    if (!stored) return json({ error: 'Catalog template not found' }, 404);
     return json({ template: templateFromRow(stored) }, 201);
   }
 

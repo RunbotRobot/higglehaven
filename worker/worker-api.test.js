@@ -1653,6 +1653,52 @@ describe('Worker API', () => {
     expect(patched.body).toEqual({ error: 'Catalog template not found' });
   });
 
+  // #2487: same re-SELECT-without-a-null-check gap #2364 already fixed for
+  // this resource's own PATCH sibling above, but on the POST/create branch
+  // instead -- a concurrent DELETE landing between the INSERT above and its
+  // own re-SELECT (used to build the 201 response) crashed with a raw 500
+  // instead of a clean 404. Reachable for real, not just synthetically: the
+  // create id is a predictable, client-derivable idempotency-key hash
+  // (catalogTemplateIdempotencyKey), so a client's own DELETE for that exact
+  // id can genuinely land in this window. Same wrap-the-triggering-
+  // statement's-own-run() technique as the #2364 test above.
+  it('returns 404, not a raw 500, when the template is deleted in the gap between its own INSERT and re-fetch', async () => {
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    env.DB.prepare = (sql) => {
+      const stmt = originalPrepare(sql);
+      if (sql.includes('INSERT INTO catalog_templates')) {
+        const originalBind = stmt.bind.bind(stmt);
+        stmt.bind = (...args) => {
+          const bound = originalBind(...args);
+          const originalRun = bound.run.bind(bound);
+          bound.run = async () => {
+            const result = await originalRun();
+            await originalPrepare('DELETE FROM catalog_templates WHERE template_id = ?')
+              .bind('catalog-post-insert-delete-race-template').run();
+            return result;
+          };
+          return bound;
+        };
+      }
+      return stmt;
+    };
+    let created;
+    try {
+      created = await api('/catalog', {
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'catalog-post-insert-delete-race-template', name: 'Insert race template',
+          color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+        }),
+      });
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+
+    expect(created.response.status).toBe(404);
+    expect(created.body).toEqual({ error: 'Catalog template not found' });
+  });
+
   // Found via backlog audit (#407): the single-item catalog PATCH/DELETE
   // (and review moderation, refunds) already treat a dangling seller_id —
   // left behind by DELETE /api/sellers/:sellerId, per that handler's own
