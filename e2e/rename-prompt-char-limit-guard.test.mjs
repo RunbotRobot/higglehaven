@@ -1,13 +1,16 @@
-// Regression test for #2345: four native prompt()-based rename/create flows
-// (builder/seller identity rename, product rename, bundle create, bundle
-// rename) all feed labelValue()'s MAX_LABEL_LENGTH = 100 server-side cap
-// with no client-side compensation -- unlike the 280-char sign-post/review/
-// calendar-event text fields, which already established the "pre-submit
-// length check + alert()" pattern (#1920/#2005/#2015) this test confirms
-// got applied here too. Each flow is exercised the same way: an over-100-
-// char value triggers the client-side alert with no mutation reaching the
-// server, then a valid value still works normally (not a regression to
-// "nothing can ever be renamed").
+// Regression test for #2345 (plus its #2463 sibling): five native
+// prompt()-based rename/create flows (builder/seller identity rename,
+// product rename, bundle create, bundle rename, and landlet rename via the
+// "My Lands" panel) all feed labelValue()'s MAX_LABEL_LENGTH = 100
+// server-side cap with no client-side compensation -- unlike the 280-char
+// sign-post/review/calendar-event text fields, which already established
+// the "pre-submit length check + alert()" pattern (#1920/#2005/#2015) this
+// test confirms got applied here too. #2345 covered the first four; #2463
+// found the landlet-rename flow (added earlier, in #1150) had been missed
+// from that original sweep. Each flow is exercised the same way: an
+// over-100-char value triggers the client-side alert with no mutation
+// reaching the server, then a valid value still works normally (not a
+// regression to "nothing can ever be renamed").
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
@@ -67,7 +70,36 @@ console.log('builder identity renamed normally with a valid value (should be tru
 await page.click('#settings-close-btn');
 await page.waitForTimeout(300);
 
-// --- 2. Bundle create (Build mode, multiselect + Save Bundle) ---
+// --- 2. Landlet rename ("My Lands" panel, Build mode account menu) (#2463) ---
+await openAccountMenu(page);
+await page.click('#my-lands-btn');
+await page.waitForSelector('#my-lands-modal.visible', { timeout: 5000 });
+const myLandsRow = page.locator('#my-lands-list .version-row').first();
+await myLandsRow.waitFor({ timeout: 10000 });
+const ORIGINAL_LAND_NAME = (await myLandsRow.locator('.my-lands-open-link').textContent()).trim();
+const myLandsRenameBtn = myLandsRow.locator('.version-action-btn', { hasText: 'Rename' });
+
+dialogScript = [OVERLONG];
+await myLandsRenameBtn.click();
+await page.waitForTimeout(300);
+const landNameAfterOverlong = await myLandsRow.locator('.my-lands-open-link').textContent();
+console.log('landlet name unchanged after an over-100-char rename attempt (should be true):', landNameAfterOverlong.trim() === ORIGINAL_LAND_NAME);
+
+const NEW_LAND_NAME = 'Renamed Valid Land';
+dialogScript = [NEW_LAND_NAME];
+await myLandsRenameBtn.click();
+await page.waitForFunction(
+  (name) => document.querySelector('#my-lands-list .my-lands-open-link')?.textContent === name,
+  NEW_LAND_NAME,
+  { timeout: 10000 },
+);
+const landNameAfterValidRename = await myLandsRow.locator('.my-lands-open-link').textContent();
+console.log('landlet renamed normally with a valid value (should be true):', landNameAfterValidRename.trim() === NEW_LAND_NAME);
+
+await page.click('#my-lands-close-btn');
+await page.waitForTimeout(300);
+
+// --- 3. Bundle create (Build mode, multiselect + Save Bundle) ---
 await page.click('#add-item-btn');
 await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
 await page.locator('#catalog-picker-grid button').filter({ hasText: 'Tree' }).click();
@@ -90,7 +122,7 @@ await page.click('#save-bundle-item');
 await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Saved'), null, { timeout: 60000 });
 console.log('bundle saved normally with a valid name (should reach here without timing out)');
 
-// --- 3. Bundle rename (catalog picker's My Bundles tab) ---
+// --- 4. Bundle rename (catalog picker's My Bundles tab) ---
 await page.click('#add-item-btn');
 await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
 await page.click('.bundle-tab-btn[data-bundle-tab="mine"]');
@@ -117,7 +149,7 @@ console.log('bundle renamed normally with a valid value (should be true):', bund
 await page.click('#catalog-picker-close-btn');
 await page.waitForTimeout(300);
 
-// --- 4. Product rename (Sell mode, seller row "Rename") ---
+// --- 5. Product rename (Sell mode, seller row "Rename") ---
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
@@ -157,19 +189,21 @@ const productRowAfterValidRename = await page.locator('.seller-row').filter({ ha
 console.log('product renamed normally with a valid value (should be 1):', productRowAfterValidRename);
 
 const guardAlerts = dialogLog.filter((msg) => /100 characters/.test(msg));
-console.log('total over-100-char guard alerts seen across all 4 flows (should be 4):', guardAlerts.length);
+console.log('total over-100-char guard alerts seen across all 5 flows (should be 5):', guardAlerts.length);
 
 const pass = builderLabelAfterOverlong.trim() === LABEL &&
   builderLabelAfterValidRename.trim() === NEW_BUILDER_LABEL &&
+  landNameAfterOverlong.trim() === ORIGINAL_LAND_NAME &&
+  landNameAfterValidRename.trim() === NEW_LAND_NAME &&
   noBundleSavedAfterOverlong &&
   bundleNameAfterOverlong.includes(NEW_BUNDLE_NAME) &&
   bundleNameAfterValidRename.includes(RENAMED_BUNDLE_NAME) &&
   productNameAfterOverlong.includes(PRODUCT_NAME) &&
   productRowAfterValidRename === 1 &&
-  guardAlerts.length === 4 &&
+  guardAlerts.length === 5 &&
   errors.length === 0;
 await finish(browser, {
   pass,
-  label: '#2345: builder identity/bundle create/bundle rename/product rename all enforce a 100-char client-side guard, matching #1920\'s established pattern',
+  label: '#2345/#2463: builder identity/landlet/bundle create/bundle rename/product rename all enforce a 100-char client-side guard, matching #1920\'s established pattern',
   errors,
 });

@@ -4035,6 +4035,12 @@ function builderFromRow(row) {
     // -- a communication preference has no reason to leak through a
     // cross-account lookup either.
     notifySoldOutEmail: !!row.notify_sold_out_email,
+    // #2442: own-account-only, same reasoning as higglesBalanceCents above
+    // -- this balance (migrations/0127) was never surfaced anywhere in the
+    // response shape at all, so the Upload Model modal had nothing to read
+    // to show a builder how many free video-to-3D generations they have
+    // left before they actually attempt one.
+    videoGenerationCredits: row.video_generation_credits,
   };
 }
 
@@ -5190,6 +5196,13 @@ async function handleFriendships(request, db, route, url) {
     await fireNotification(db, recipientBuilderId,
       `${sessionBuilder.label} sent you a friend request.`);
     const row = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).first();
+    // #2469: a concurrent DELETE (the recipient declining the request we
+    // just notified them about, or either side's own self-delete cascade)
+    // can remove this row in the await gap since the INSERT -- a genuine
+    // 404, same race shape #2334/#2354/#2364/#2391/#2392/#2429/#2430
+    // already fixed elsewhere, not an uncaught friendshipFromRow(undefined)
+    // crash.
+    if (!row) return json({ error: 'Friendship not found' }, 404);
     const labelsById = await labelsByBuilderId(db, [recipientBuilderId]);
     const landletsById = await ownedLandletsByBuilderId(db, [recipientBuilderId]);
     return json({ friendship: friendshipFromRow(row, requesterBuilderId, labelsById, landletsById) }, 201);
@@ -5706,6 +5719,13 @@ async function handleBundles(request, db, route, url) {
       INSERT INTO bundles (bundle_id, builder_id, name, items_json, shared) VALUES (?, ?, ?, ?, ?)
     `).bind(bundleId, builderId, name, JSON.stringify(items), shared ? 1 : 0).run();
     const row = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(bundleId).first();
+    // #2469: a concurrent DELETE of this same bundle (the id is
+    // predictable from the idempotency key, so a same-owner retry/second
+    // tab can target it) or a self-delete cascade can remove this row in
+    // the await gap since the INSERT -- same race shape #2426 already
+    // fixed for this resource's own PATCH, not an uncaught
+    // bundleFromRow(undefined) crash.
+    if (!row) return json({ error: 'Bundle not found' }, 404);
     return json({ bundle: bundleFromRow(row) }, 201);
   }
 
@@ -5927,6 +5947,10 @@ async function handleStartAuction(request, db, landletId) {
     throw new HttpError('This landlet already has an active auction', 409);
   }
   const row = await db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auctionId).first();
+  // #2427: a concurrent self-delete can remove this just-created, still-
+  // zero-bid auction (builderDeletionStatements) between the INSERT above
+  // and this re-SELECT, same idiom as #2334/#2354/#2364/#2391/#2392.
+  if (!row) throw new HttpError('This landlet no longer has an active auction — it may have been removed concurrently', 409);
   return json({ auction: await auctionFromRow(db, row) }, 201);
 }
 
@@ -6152,6 +6176,15 @@ async function handleLandletLevels(request, db, route) {
     }
     await recomputeLandCap(db, landlet.owner_builder_id);
     const row = await db.prepare('SELECT * FROM landlet_levels WHERE level_id = ?').bind(levelId).first();
+    // #2469: a concurrent removal of this exact (deterministically-indexed,
+    // outermost) level from a second tab, a builder self-delete cascade, a
+    // concurrent auction resolution (resolveAuction's own
+    // DELETE FROM landlet_levels), or an admin reassign-owner can remove
+    // this row in the await gap since the INSERT (or recomputeLandCap just
+    // above) -- a genuine race, not an uncaught levelFromRow(undefined)
+    // crash. Same idiom as #2334/#2354/#2364/#2391/#2392/#2429/#2430, 409
+    // to match this branch's own "changed -- please retry" message above.
+    if (!row) throw new HttpError('This landlet\'s levels changed — please retry', 409);
     return json({ level: levelFromRow(row) }, 201);
   }
 
@@ -9320,11 +9353,13 @@ const CREDIT_ORB_COLLECT_RATE_LIMIT_MAX = 20;
 // calls. Reuses this file's only other avatar_presence-freshness idiom
 // (PRESENCE_STALE_AFTER_MS, #1767) rather than inventing a second one, and
 // a radius generous enough to tolerate that same staleness window's worth
-// of real movement at SHOP_RUN_SPEED_M_S (2.7m/s, ~27m) on top of the
-// client's own 1.5m collect radius -- the point of this check is requiring
-// *some* fresh, correctly-landletted presence at all (what the scripted
-// exploit has none of), not pixel-perfect anti-cheat precision.
-const CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M = 30;
+// of real movement at SHOP_RUN_SPEED_M_S (#2481: 4.4704m/s/10mph as of
+// #2444, ~45m -- was 2.7m/s/~27m when this constant was first set, see
+// #2481) on top of the client's own 1.5m collect radius -- the point of
+// this check is requiring *some* fresh, correctly-landletted presence at
+// all (what the scripted exploit has none of), not pixel-perfect
+// anti-cheat precision.
+const CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M = 50;
 
 // GET /api/credit-orbs (optionally ?landletId=... to scope to one landlet,
 // per #1994's own "or scoped by landlet" note) -- the frontend's read path
@@ -11080,6 +11115,12 @@ async function handleConfirmCard(request, env, db) {
       WHERE user_id = ?
     `).bind(user.user_id).run();
     const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+    // #2430: a concurrent account deletion (self-delete from another
+    // session, or escalateExpiredSuspensions' own cascade) landing in the
+    // await gap since the UPDATE above can remove this row before this
+    // re-SELECT runs -- same race shape #2334/#2354/#2364/#2391/#2392
+    // already fixed elsewhere, not an uncaught userFromRow(undefined) crash.
+    if (!updated) return json({ error: 'Account no longer exists' }, 404);
     return json({ user: userFromRow(updated) });
   }
   // #1072: this used to trust a client-supplied paymentMethodId directly,
@@ -11128,6 +11169,10 @@ async function handleConfirmCard(request, env, db) {
     throw new HttpError('Only credit cards are accepted for this step — debit and prepaid cards can\'t be used.', 400);
   }
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  // #2430: same concurrent-account-deletion race as handleConfirmCard's own
+  // re-SELECT above -- a concurrent delete landing in the await gap since
+  // the UPDATE can remove this row before this re-SELECT runs.
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(updated) });
 }
 
@@ -11162,6 +11207,12 @@ async function handleAgeAttest(request, db) {
     `).bind(new Date().toISOString(), user.user_id).run();
   }
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  // #2430: same concurrent-account-deletion race as handleConfirmCard's own
+  // re-SELECT above (self-delete from another session, or
+  // escalateExpiredSuspensions' own cascade) -- can remove this row in the
+  // await gap since the UPDATE (or, when already attested, since the
+  // requireCurrentUser read at the top of this handler).
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(updated) });
 }
 
@@ -11734,6 +11785,13 @@ async function handleChangeEmail(request, env, db) {
   if (result.meta.changes === 0) throw new HttpError('Email is already registered', 409);
   const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, email);
   const row = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  // #2430: the UPDATE's own meta.changes check above only confirms it
+  // matched a row (and won the email-collision race) at the moment it ran
+  // -- a concurrent account deletion landing in the await gap since (the
+  // issueEmailVerification call above) can still remove the row before
+  // this re-SELECT runs, same race shape #2334/#2354/#2364/#2391/#2392
+  // already fixed elsewhere.
+  if (!row) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(row), verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
 }
 
@@ -11807,6 +11865,12 @@ async function handleLogin(request, db, url) {
 
   const sessionToken = await createSession(db, row.user_id);
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(row.user_id).first();
+  // #2430: a concurrent account deletion (another session's own self-
+  // delete, or escalateExpiredSuspensions' own cascade) landing in the
+  // await gap since the UPDATE above (or createSession just before) can
+  // remove this row before this re-SELECT runs, same race shape
+  // #2334/#2354/#2364/#2391/#2392 already fixed elsewhere.
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json(
     { user: userFromRow(updated) },
     200,
@@ -18409,11 +18473,17 @@ async function getInstancesById(db, instanceIds) {
 // 4xx. Checked only after `HttpError` in the top-level catch, so routes
 // with a more specific pre-check (assertReferenceExists above) keep their
 // own message instead of falling through to this generic one.
+// #2440: the three generic (non-ring-specific) messages below used to name
+// the underlying SQL constraint type directly ("UNIQUE constraint failed"
+// -> "Resource already exists", etc.) -- raw backend language the frontend
+// shows verbatim via `alert(err.message || ...)`. Reworded to plain,
+// in-app phrasing with the same meaning; the ring-specific messages above
+// were already written this way and are left unchanged.
 function databaseHttpError(error) {
   const message = errorMessages(error);
 
   if (message.includes('UNIQUE constraint failed')) {
-    return new HttpError('Resource already exists', 409);
+    return new HttpError('That already exists.', 409);
   }
   if (message.includes('generated ring radial overlap')) {
     return new HttpError('Generated ring would overlap existing generated rings', 409);
@@ -18428,10 +18498,10 @@ function databaseHttpError(error) {
     return new HttpError('Generated ring candidates cannot be changed individually', 409);
   }
   if (message.includes('FOREIGN KEY constraint failed')) {
-    return new HttpError('Referenced resource does not exist or is still in use', 409);
+    return new HttpError("That didn't go through — something it depends on is missing, or something else still depends on it.", 409);
   }
   if (message.includes('CHECK constraint failed') || message.includes('NOT NULL constraint failed')) {
-    return new HttpError('Request violates a database constraint', 400);
+    return new HttpError('That request has an invalid or missing value — please check the details and try again.', 400);
   }
 
   return null;
