@@ -18658,6 +18658,47 @@ function assertValidExtensible(metadata, dimensions) {
   }
 }
 
+// docs/SPEC.md §2's context-aware idle state machine ("sit, lean, stand") --
+// only "stand" is built today (src/main.js's updateShopAvatarIdle); #2476
+// (sub-issue of the #2475 tracking issue) adds the data model a later
+// targeting/pose system needs: where on a marked product an avatar sits or
+// leans, and which way it faces while doing so. Coordinates are in the
+// template's own local, un-rotated model space -- the same centered-at-
+// origin space createMeshForInstance's BoxGeometry/model loading already
+// use (x/y span +/- half the template's own width/depth, z spans 0 to its
+// own height) -- so a later targeting system combines this with a placed
+// instance's own x_m/y_m/z_m/rotation_z_rad to get a world-space target,
+// the same way extensible's minM above is expressed in the template's own
+// space rather than any one instance's.
+function assertValidInteractionTarget(target, dimensions, key) {
+  if (typeof target !== 'object' || target === null || Array.isArray(target)) {
+    throw new HttpError(`metadata.${key} must be an object`, 400);
+  }
+  const { offsetXM, offsetYM, heightM, facingRad } = target;
+  if (!Number.isFinite(offsetXM) || Math.abs(offsetXM) > dimensions.width / 2) {
+    throw new HttpError(`metadata.${key}.offsetXM must be a number within +/- half this template's own width`, 400);
+  }
+  if (!Number.isFinite(offsetYM) || Math.abs(offsetYM) > dimensions.depth / 2) {
+    throw new HttpError(`metadata.${key}.offsetYM must be a number within +/- half this template's own depth`, 400);
+  }
+  if (!Number.isFinite(heightM) || heightM < 0 || heightM > dimensions.height) {
+    throw new HttpError(`metadata.${key}.heightM must be a number between 0 and this template's own height`, 400);
+  }
+  if (!Number.isFinite(facingRad)) {
+    throw new HttpError(`metadata.${key}.facingRad must be a finite number`, 400);
+  }
+}
+
+function assertValidSitTarget(metadata, dimensions) {
+  if (metadata.sitTarget === undefined) return;
+  assertValidInteractionTarget(metadata.sitTarget, dimensions, 'sitTarget');
+}
+
+function assertValidLeanTarget(metadata, dimensions) {
+  if (metadata.leanTarget === undefined) return;
+  assertValidInteractionTarget(metadata.leanTarget, dimensions, 'leanTarget');
+}
+
 // #327: decodes and size-caps the flat PNG thumbnail POST /api/catalog/
 // :templateId/thumbnail receives. A JSON data-URL body (not multipart)
 // deliberately, unlike handleModelUpload's raw .glb upload — this is a
@@ -18815,6 +18856,8 @@ function validateTemplate(input, fallbackId) {
   assertValidNoReturns(template.metadata);
   assertValidDomesticOnly(template.metadata);
   assertValidExtensible(template.metadata, template.dimensions);
+  assertValidSitTarget(template.metadata, template.dimensions);
+  assertValidLeanTarget(template.metadata, template.dimensions);
   return template;
 }
 
