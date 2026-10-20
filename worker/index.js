@@ -16626,7 +16626,14 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash),
   ];
-  if (builderId) {
+  // #2439: a free listing (price_cents 0, reachable since
+  // computePurchaseAmounts only rejects a null price, not a zero one)
+  // produces builderShareCents === 0 — crediting that is a no-op, but
+  // higgles_earnings_events.amount_cents has its own CHECK (amount_cents
+  // > 0) (migration 0093), so unconditionally inserting a zero-amount row
+  // turned what should be a clean $0 sale into an uncaught "CHECK
+  // constraint failed", surfacing as a generic 400 via databaseHttpError.
+  if (builderId && builderShareCents > 0) {
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(builderShareCents, builderId),
@@ -16794,7 +16801,14 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash),
   ];
-  if (builderId) {
+  // #2439: same zero-commission guard as handlePurchaseFinalize's own
+  // identical block above — a free listing (price_cents 0) makes
+  // builderShareCents 0, and crediting that is a no-op, but
+  // higgles_earnings_events.amount_cents' own CHECK (amount_cents > 0)
+  // (migration 0093) turned an unconditional insert of that zero-amount
+  // row into an uncaught "CHECK constraint failed" on an otherwise-clean
+  // $0 purchase.
+  if (builderId && builderShareCents > 0) {
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(builderShareCents, builderId),
@@ -18644,6 +18658,47 @@ function assertValidExtensible(metadata, dimensions) {
   }
 }
 
+// docs/SPEC.md §2's context-aware idle state machine ("sit, lean, stand") --
+// only "stand" is built today (src/main.js's updateShopAvatarIdle); #2476
+// (sub-issue of the #2475 tracking issue) adds the data model a later
+// targeting/pose system needs: where on a marked product an avatar sits or
+// leans, and which way it faces while doing so. Coordinates are in the
+// template's own local, un-rotated model space -- the same centered-at-
+// origin space createMeshForInstance's BoxGeometry/model loading already
+// use (x/y span +/- half the template's own width/depth, z spans 0 to its
+// own height) -- so a later targeting system combines this with a placed
+// instance's own x_m/y_m/z_m/rotation_z_rad to get a world-space target,
+// the same way extensible's minM above is expressed in the template's own
+// space rather than any one instance's.
+function assertValidInteractionTarget(target, dimensions, key) {
+  if (typeof target !== 'object' || target === null || Array.isArray(target)) {
+    throw new HttpError(`metadata.${key} must be an object`, 400);
+  }
+  const { offsetXM, offsetYM, heightM, facingRad } = target;
+  if (!Number.isFinite(offsetXM) || Math.abs(offsetXM) > dimensions.width / 2) {
+    throw new HttpError(`metadata.${key}.offsetXM must be a number within +/- half this template's own width`, 400);
+  }
+  if (!Number.isFinite(offsetYM) || Math.abs(offsetYM) > dimensions.depth / 2) {
+    throw new HttpError(`metadata.${key}.offsetYM must be a number within +/- half this template's own depth`, 400);
+  }
+  if (!Number.isFinite(heightM) || heightM < 0 || heightM > dimensions.height) {
+    throw new HttpError(`metadata.${key}.heightM must be a number between 0 and this template's own height`, 400);
+  }
+  if (!Number.isFinite(facingRad)) {
+    throw new HttpError(`metadata.${key}.facingRad must be a finite number`, 400);
+  }
+}
+
+function assertValidSitTarget(metadata, dimensions) {
+  if (metadata.sitTarget === undefined) return;
+  assertValidInteractionTarget(metadata.sitTarget, dimensions, 'sitTarget');
+}
+
+function assertValidLeanTarget(metadata, dimensions) {
+  if (metadata.leanTarget === undefined) return;
+  assertValidInteractionTarget(metadata.leanTarget, dimensions, 'leanTarget');
+}
+
 // #327: decodes and size-caps the flat PNG thumbnail POST /api/catalog/
 // :templateId/thumbnail receives. A JSON data-URL body (not multipart)
 // deliberately, unlike handleModelUpload's raw .glb upload — this is a
@@ -18801,6 +18856,8 @@ function validateTemplate(input, fallbackId) {
   assertValidNoReturns(template.metadata);
   assertValidDomesticOnly(template.metadata);
   assertValidExtensible(template.metadata, template.dimensions);
+  assertValidSitTarget(template.metadata, template.dimensions);
+  assertValidLeanTarget(template.metadata, template.dimensions);
   return template;
 }
 

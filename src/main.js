@@ -5269,6 +5269,170 @@ function renderSellerList() {
 
     extensibilityPanel.appendChild(saveBtn);
 
+    // Sit/lean interaction targets (docs/SPEC.md §2, docs/API.md's
+    // "Sit/lean interaction targets (#2476)") — schema/metadata-only piece
+    // of the #2475 tracking issue; the actual targeting/pose logic is a
+    // later sub-issue. Same collapsed-panel-with-a-Save-step idiom as
+    // Extensibility above, with two independent sections (a product can
+    // be sittable, leanable, both, or neither).
+    const SIT_LEAN_TARGETS = [
+      { key: 'sitTarget', label: 'Sittable', className: 'seller-sit-target' },
+      { key: 'leanTarget', label: 'Leanable', className: 'seller-lean-target' },
+    ];
+    const existingSitLean = {};
+    for (const { key } of SIT_LEAN_TARGETS) existingSitLean[key] = template.metadata?.[key] || null;
+    const anySitLeanOn = () => SIT_LEAN_TARGETS.some(({ key }) => !!existingSitLean[key]);
+
+    const sitLeanToggle = document.createElement('button');
+    sitLeanToggle.className = 'seller-extensibility-toggle seller-sit-lean-toggle';
+    sitLeanToggle.type = 'button';
+    sitLeanToggle.textContent = `${anySitLeanOn() ? 'Sit/Lean Target (on)' : 'Sit/Lean Target'} ▾`;
+    details.appendChild(sitLeanToggle);
+
+    const sitLeanPanel = document.createElement('div');
+    sitLeanPanel.className = 'seller-sit-lean-panel';
+    sitLeanPanel.hidden = true;
+    details.appendChild(sitLeanPanel);
+
+    sitLeanToggle.addEventListener('click', () => {
+      sitLeanPanel.hidden = !sitLeanPanel.hidden;
+      sitLeanToggle.textContent = `${anySitLeanOn() ? 'Sit/Lean Target (on)' : 'Sit/Lean Target'} ${sitLeanPanel.hidden ? '▾' : '▴'}`;
+    });
+
+    const sitLeanFields = {};
+    for (const { key, label, className } of SIT_LEAN_TARGETS) {
+      const existing = existingSitLean[key];
+
+      const checkboxLabel = document.createElement('label');
+      checkboxLabel.className = `${className}-checkbox-label`;
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = !!existing;
+      checkboxLabel.appendChild(checkbox);
+      checkboxLabel.appendChild(document.createTextNode(label));
+      sitLeanPanel.appendChild(checkboxLabel);
+
+      const offsetXInput = document.createElement('input');
+      offsetXInput.className = `${className}-offset-x-input`;
+      offsetXInput.type = 'number';
+      offsetXInput.step = '0.01';
+      offsetXInput.placeholder = `offset X (${unitSuffix()})`;
+      offsetXInput.disabled = !checkbox.checked;
+      if (existing) offsetXInput.value = toDisplayLength(existing.offsetXM).toFixed(2);
+
+      const offsetYInput = document.createElement('input');
+      offsetYInput.className = `${className}-offset-y-input`;
+      offsetYInput.type = 'number';
+      offsetYInput.step = '0.01';
+      offsetYInput.placeholder = `offset Y (${unitSuffix()})`;
+      offsetYInput.disabled = !checkbox.checked;
+      if (existing) offsetYInput.value = toDisplayLength(existing.offsetYM).toFixed(2);
+
+      const heightInput = document.createElement('input');
+      heightInput.className = `${className}-height-input`;
+      heightInput.type = 'number';
+      heightInput.step = '0.01';
+      heightInput.min = '0';
+      heightInput.placeholder = `height (${unitSuffix()})`;
+      heightInput.disabled = !checkbox.checked;
+      if (existing) heightInput.value = toDisplayLength(existing.heightM).toFixed(2);
+
+      const facingInput = document.createElement('input');
+      facingInput.className = `${className}-facing-input`;
+      facingInput.type = 'number';
+      facingInput.step = '0.01';
+      facingInput.placeholder = 'facing (radians)';
+      facingInput.disabled = !checkbox.checked;
+      if (existing) facingInput.value = existing.facingRad.toFixed(2);
+
+      checkbox.addEventListener('change', () => {
+        offsetXInput.disabled = !checkbox.checked;
+        offsetYInput.disabled = !checkbox.checked;
+        heightInput.disabled = !checkbox.checked;
+        facingInput.disabled = !checkbox.checked;
+      });
+
+      const row = document.createElement('div');
+      row.className = `${className}-row`;
+      row.appendChild(offsetXInput);
+      row.appendChild(offsetYInput);
+      row.appendChild(heightInput);
+      row.appendChild(facingInput);
+      sitLeanPanel.appendChild(row);
+
+      sitLeanFields[key] = { checkbox, offsetXInput, offsetYInput, heightInput, facingInput };
+    }
+
+    const sitLeanStatus = document.createElement('div');
+    sitLeanStatus.className = 'seller-sit-lean-status';
+
+    const sitLeanSaveBtn = document.createElement('button');
+    sitLeanSaveBtn.className = 'seller-sit-lean-save-btn metadata-save-btn';
+    sitLeanSaveBtn.type = 'button';
+    sitLeanSaveBtn.textContent = 'Save Sit/Lean Target';
+    metadataSaveButtons.push(sitLeanSaveBtn);
+
+    sitLeanSaveBtn.addEventListener('click', async () => {
+      if (isMetadataSaveBusy()) return;
+      sitLeanStatus.textContent = '';
+      sitLeanStatus.classList.remove('error');
+      const nextTargets = {};
+      for (const { key, label } of SIT_LEAN_TARGETS) {
+        const { checkbox, offsetXInput, offsetYInput, heightInput, facingInput } = sitLeanFields[key];
+        if (!checkbox.checked) continue;
+        const offsetXM = fromDisplayLength(Number(offsetXInput.value));
+        const offsetYM = fromDisplayLength(Number(offsetYInput.value));
+        const heightM = fromDisplayLength(Number(heightInput.value));
+        const facingRad = Number(facingInput.value);
+        if (!Number.isFinite(offsetXM) || Math.abs(offsetXM) > template.dimensions.width / 2) {
+          sitLeanStatus.textContent = `${label} offset X must be within +/- half this product's own width.`;
+          sitLeanStatus.classList.add('error');
+          return;
+        }
+        if (!Number.isFinite(offsetYM) || Math.abs(offsetYM) > template.dimensions.depth / 2) {
+          sitLeanStatus.textContent = `${label} offset Y must be within +/- half this product's own depth.`;
+          sitLeanStatus.classList.add('error');
+          return;
+        }
+        if (!Number.isFinite(heightM) || heightM < 0 || heightM > template.dimensions.height) {
+          sitLeanStatus.textContent = `${label} height must be between 0 and this product's own height.`;
+          sitLeanStatus.classList.add('error');
+          return;
+        }
+        if (!Number.isFinite(facingRad)) {
+          sitLeanStatus.textContent = `${label} facing must be a number.`;
+          sitLeanStatus.classList.add('error');
+          return;
+        }
+        nextTargets[key] = { offsetXM, offsetYM, heightM, facingRad };
+      }
+      setMetadataSaveBusy(true);
+      for (const btn of metadataSaveButtons) btn.disabled = true;
+      try {
+        // A full replace, not a merge -- same reasoning as Extensibility's
+        // own save handler above.
+        const nextMetadata = { ...template.metadata };
+        for (const { key } of SIT_LEAN_TARGETS) {
+          if (nextTargets[key]) nextMetadata[key] = nextTargets[key];
+          else delete nextMetadata[key];
+        }
+        const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
+        Object.assign(template, updated);
+        for (const { key } of SIT_LEAN_TARGETS) existingSitLean[key] = nextTargets[key] || null;
+        sitLeanStatus.textContent = 'Saved.';
+        sitLeanToggle.textContent = `${anySitLeanOn() ? 'Sit/Lean Target (on)' : 'Sit/Lean Target'} ${sitLeanPanel.hidden ? '▾' : '▴'}`;
+      } catch (err) {
+        sitLeanStatus.textContent = err.message || 'Could not save.';
+        sitLeanStatus.classList.add('error');
+      } finally {
+        setMetadataSaveBusy(false);
+        syncMetadataSaveButtonsDisabled(template.templateId); // #457, see above
+      }
+    });
+
+    sitLeanPanel.appendChild(sitLeanSaveBtn);
+    sitLeanPanel.appendChild(sitLeanStatus);
+
     // Product reviews (docs/SPEC.md §5, docs/API.md's "Product reviews") —
     // shopper-authored, tied to this product itself rather than to any one
     // placed instance of it, so this is the seller's own moderation view,
