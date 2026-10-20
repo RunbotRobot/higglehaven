@@ -1450,6 +1450,49 @@ describe('Product reviews', () => {
       expect(edited.response.status).toBe(404);
     });
 
+    // #2429: same re-SELECT race #2364 fixed above for this handler's own
+    // PATCH, never applied to this POST/create branch -- a concurrent
+    // admin delete landing between the guarded INSERT committing and this
+    // handler's own re-SELECT running used to crash with a raw 500 instead
+    // of a clean 404. Wraps the INSERT statement's own run() (rather than
+    // racing prepare() itself) so the DELETE only ever fires once the
+    // INSERT has genuinely already landed.
+    it('never crashes with a raw 500 when its own POST re-fetch loses a race to a concurrent delete', async () => {
+      const templateId = await createTemplate('review-post-refetch-delete-race');
+      const shopper = await signupBuilder('review-post-refetch-delete-race-shopper');
+      await createPurchase(templateId, shopper);
+
+      const originalPrepare = env.DB.prepare.bind(env.DB);
+      env.DB.prepare = (sql) => {
+        const stmt = originalPrepare(sql);
+        if (sql.includes('INSERT INTO product_reviews')) {
+          const originalBind = stmt.bind.bind(stmt);
+          stmt.bind = (...args) => {
+            const bound = originalBind(...args);
+            const originalRun = bound.run.bind(bound);
+            bound.run = async () => {
+              const result = await originalRun();
+              await originalPrepare('DELETE FROM product_reviews WHERE template_id = ?').bind(templateId).run();
+              return result;
+            };
+            return bound;
+          };
+        }
+        return stmt;
+      };
+      let posted;
+      try {
+        posted = await api(`/catalog/${templateId}/reviews`, shopper.session({
+          method: 'POST', body: JSON.stringify({ rating: 4, text: 'Raced out from under me.' }),
+        }));
+      } finally {
+        env.DB.prepare = originalPrepare;
+      }
+      // The real bug was an uncaught TypeError (raw 500) when the re-SELECT
+      // after an already-successful INSERT found the row already gone.
+      expect(posted.response.status).toBe(404);
+    });
+
     // Moderation deletes (admin override, seller) are not the user editing/
     // deleting their own content -- the owner's own framing was specifically
     // about self-service, so these must not write to the history table.
