@@ -13956,7 +13956,21 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     // field but blends it so softly that the radial structure stops being
     // perceptible, without touching the swirl/shear-band fix (#1204) or the
     // per-octave aliasing fade (#1633) at all.
-    float cloudMask = smoothstep(-0.3, 1.3, clouds);
+    // owner-report-2026-10-20 (round 2, post-deploy): even with the
+    // drift term now bounded (see samplePos above) and this threshold
+    // already once widened by #2450, a sharp-edged patch is still
+    // occasionally visible near the wall/dome boundary. heightFrac is
+    // already fairly low there (uFadeLowZ sits well below the boundary,
+    // but the ramp isn't finished by the time visibility is still
+    // substantial at that height -- see heightFrac's own definition
+    // above), so a locally steep spot in the (now-bounded, but not
+    // perfectly flat) noise field is still enough to read as a hard edge
+    // once multiplied back up by a non-trivial heightFrac. Widening this
+    // threshold again trades a little more of the cloud layer's own
+    // contrast for a softer worst case everywhere, same direction as
+    // #2450's own change and with the same confirmed-safe-to-widen
+    // precedent noted below for apexFade.
+    float cloudMask = smoothstep(-0.6, 1.6, clouds);
     // Kept from before (#1204/#1585) as a modest extra safety margin right
     // at the literal pole specifically — on its own this barely moves the
     // result (confirmed: widening or disabling it entirely, independent of
