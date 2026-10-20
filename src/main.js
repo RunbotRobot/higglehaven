@@ -13516,6 +13516,17 @@ const SHOP_IDLE_ARM_SWAY_AMPLITUDE_RAD = 0.05;
 const SHOP_IDLE_HEAD_TURN_MAX_RAD = 0.4; // a natural glance range, not a full look-behind
 const SHOP_IDLE_HEAD_TURN_INTERVAL_MIN_S = 2.5;
 const SHOP_IDLE_HEAD_TURN_INTERVAL_MAX_S = 5;
+// #2478 (sub-issue of #2475): the seated pose. No knee joint on this
+// primitive rig (createShopAvatar's own comment -- each leg is one rigid
+// hip-to-foot cylinder), so "sitting" is approximated as the whole leg
+// swinging forward from the hip toward horizontal, same single-joint
+// simplification the walk cycle already uses -- not a full right angle, so
+// the silhouette doesn't read as the legs sticking straight out stiff.
+const SHOP_SIT_LEG_ROTATION_RAD = (Math.PI / 2) * 0.88;
+// Forearms resting toward the lap rather than hanging straight down —
+// gentler than the legs' own rotation since there's no elbow to bend
+// either and a full 90 degrees would plant the hands on the floor instead.
+const SHOP_SIT_ARM_ROTATION_RAD = (Math.PI / 2) * 0.55;
 const SHOP_IDLE_HEAD_TURN_EASE_PER_S = 1.5;
 const SHOP_JOYSTICK_MAX_PX = 46;
 const SHOP_JOYSTICK_DEADZONE_PX = 6;
@@ -14952,6 +14963,27 @@ let shopIdleHeadIntervalS = THREE.MathUtils.randFloat(SHOP_IDLE_HEAD_TURN_INTERV
 // this value, matching #2477's own "fall back to stand sway unchanged"
 // scope -- this sub-issue is selection only, not the pose itself.
 let shopIdleInteractionTarget = null;
+// #2478 (sub-issue of #2475): how much of the seated pose is currently
+// showing -- 0 whenever the selected interaction target (just above) isn't
+// a 'sit' one (ordinary stand sway runs instead), eased toward 1 at the
+// same SHOP_IDLE_BLEND_PER_S rate the stand sway above already uses, and
+// hard-cut back to 0 the instant real input resumes — same ease-in-on-
+// stillness/instant-ease-out-on-movement discipline as shopIdleBlend
+// itself (a separate blend, not a reuse of shopIdleBlend, since idle sway
+// still runs underneath a seated pose too — see updateShopAvatarIdle).
+let shopSitBlend = 0;
+// Visual-only offsets layered on top of the avatar's own authoritative
+// shopAvatarFacing/shopAvatarPosition at the point they're actually
+// rendered (same additive convention shopIdleSwayYawOffset above already
+// uses for yaw) -- so sitting never touches movement, collision,
+// curvature, or camera-follow code, all of which key off the real
+// shopAvatarFacing/shopAvatarPosition directly. Both are pure functions of
+// shopSitBlend and the current idle target recomputed fresh each frame
+// (see updateShopAvatarIdle), not independently-eased state of their own —
+// the avatar doesn't move at all while idle, so there's nothing chasing a
+// moving target to smooth out.
+let shopSitYawOffset = 0;
+let shopSitHeightOffset = 0;
 
 // Flight state (docs/SPEC.md §2) — see updateShopFlight/toggleShopFlight.
 // 'grounded' | 'takingOff' | 'flying' | 'landing'. Toggling mid-transition
@@ -15065,6 +15097,9 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     shopIdleBlend = 0;
     shopAfkBlend = 0;
     shopIdleInteractionTarget = null; // re-arm (#2477) for the next idle episode
+    shopSitBlend = 0; // #2478: instant ease-out, same as shopIdleBlend/shopAfkBlend just above
+    shopSitYawOffset = 0;
+    shopSitHeightOffset = 0;
   } else {
     // #2477: fires exactly once per idle episode, the instant elapsed time
     // first crosses SHOP_IDLE_DELAY_S -- not every frame afterward, since
@@ -15079,6 +15114,37 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     shopIdleBlend += (idleTarget - shopIdleBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
     const afkTarget = shopIdleElapsedS >= SHOP_AFK_DELAY_S ? 1 : 0;
     shopAfkBlend += (afkTarget - shopAfkBlend) * Math.min(1, SHOP_AFK_BLEND_PER_S * dt);
+
+    // #2478: eases in only when this idle episode's own selected target
+    // (above) is a sit one — stays at 0, same as always, for a lean target
+    // or no target at all (ordinary stand sway keeps running regardless,
+    // same "fall back to stand sway unchanged" scope #2477 already cut).
+    const sitTarget = shopIdleInteractionTarget?.kind === 'sit' ? 1 : 0;
+    shopSitBlend += (sitTarget - shopSitBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
+    if (shopIdleInteractionTarget?.kind === 'sit') {
+      // Hip height (local z = SHOP_AVATAR_LEG_LENGTH_M above the group's
+      // own origin, same convention createShopAvatar's own comment
+      // documents) needs to land exactly on the target's own worldZ (the
+      // seat surface, already the right height for *hips*, not feet — see
+      // findShopIdleInteractionTarget's own heightM comment) once fully
+      // blended in; solving that backwards for the group-position offset
+      // this adds on top of the real (unmoved) shopAvatarPosition.z gives
+      // this term, same shape regardless of whether the seat sits above or
+      // below standing hip height.
+      shopSitHeightOffset =
+        (shopIdleInteractionTarget.worldZ - SHOP_AVATAR_LEG_LENGTH_M - shopAvatarPosition.z) * shopSitBlend;
+      // Shortest-angle delta so turning to face a target behind the
+      // avatar doesn't spin the long way around — same atan2-of-sin/cos
+      // idiom the real facing turn above (shopAvatarFacing) already uses.
+      const yawDelta = Math.atan2(
+        Math.sin(shopIdleInteractionTarget.worldFacingRad - shopAvatarFacing),
+        Math.cos(shopIdleInteractionTarget.worldFacingRad - shopAvatarFacing),
+      );
+      shopSitYawOffset = yawDelta * shopSitBlend;
+    } else {
+      shopSitHeightOffset = 0;
+      shopSitYawOffset = 0;
+    }
   }
   shopAvatar.afkSprite.material.opacity = shopAfkBlend;
 
@@ -15101,6 +15167,16 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
   shopAvatar.armPivotL.rotation.x += armIdleSway;
   shopAvatar.armPivotR.rotation.x -= armIdleSway;
   shopAvatar.headPivot.rotation.z = shopIdleHeadCurrentRad;
+
+  // #2478: layered on top of the counter-swing arm sway and the (always
+  // ~0 while idle) walk-cycle leg rotation just above/in updateShopAvatarPose
+  // — both pivots turn the same direction (unlike the arms' own idle
+  // counter-sway) since a seated silhouette has both legs/arms forward
+  // together, not alternating.
+  shopAvatar.legPivotL.rotation.x += SHOP_SIT_LEG_ROTATION_RAD * shopSitBlend;
+  shopAvatar.legPivotR.rotation.x += SHOP_SIT_LEG_ROTATION_RAD * shopSitBlend;
+  shopAvatar.armPivotL.rotation.x += SHOP_SIT_ARM_ROTATION_RAD * shopSitBlend;
+  shopAvatar.armPivotR.rotation.x += SHOP_SIT_ARM_ROTATION_RAD * shopSitBlend;
 }
 
 // Shared by walking's own floor clamp and the camera-follow height — keeps
@@ -15750,6 +15826,19 @@ window.__testFindShopIdleInteractionTarget = (x, y) => findShopIdleInteractionTa
 // episode (null if not idle, or idle with nothing in range) -- see
 // shopIdleInteractionTarget's own declaration above.
 window.__testShopIdleInteractionTarget = () => shopIdleInteractionTarget;
+// #2478: same "expose computed state purely for verification" convention
+// as window.__shopAvatarOrientation/__testShopIdleInteractionTarget above
+// -- lets an e2e test confirm the seated pose actually engages (the blend
+// itself, the visual-only yaw/height offsets, and the leg/arm pivots
+// actually bending into the seated silhouette) without needing pixel
+// inspection.
+window.__testShopSitPose = () => ({
+  blend: shopSitBlend,
+  yawOffset: shopSitYawOffset,
+  heightOffset: shopSitHeightOffset,
+  legRotationRad: shopAvatar.legPivotL.rotation.x,
+  armRotationRad: shopAvatar.armPivotL.rotation.x,
+});
 
 // #2044: the spec line SHOP_FLIGHT_TAKEOFF_DURATION_S's own comment above
 // flags as deferred ("occupied landing spots offset to nearest open
@@ -16007,7 +16096,7 @@ function updateShopMovement(now) {
   // facing direction.
   const targetAvatarPitch = airborne ? SHOP_AVATAR_FLIGHT_PITCH_RAD : 0;
   shopAvatarPitch += (targetAvatarPitch - shopAvatarPitch) * Math.min(1, SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S * dt);
-  scratchAvatarYawQuat.setFromAxisAngle(SHOP_AVATAR_YAW_AXIS, shopAvatarFacing + shopIdleSwayYawOffset);
+  scratchAvatarYawQuat.setFromAxisAngle(SHOP_AVATAR_YAW_AXIS, shopAvatarFacing + shopIdleSwayYawOffset + shopSitYawOffset);
   scratchAvatarPitchQuat.setFromAxisAngle(SHOP_AVATAR_PITCH_AXIS, shopAvatarPitch);
   shopAvatar.group.quaternion.copy(scratchAvatarYawQuat).multiply(scratchAvatarPitchQuat);
   // #1168: same reasoning as window.__shopAvatarMetrics above — this file's
@@ -16027,6 +16116,10 @@ function updateShopMovement(now) {
   // the AFK sprite's own opacity is otherwise only checkable by eye.
   window.__shopAfkOpacity = shopAvatar.afkSprite.material.opacity;
   shopAvatar.group.position.copy(shopAvatarPosition);
+  // #2478: visual-only (see shopSitHeightOffset's own declaration for why
+  // this never touches the real shopAvatarPosition.z that positionShopCamera
+  // and collision/curvature code key off just below/above).
+  shopAvatar.group.position.z += shopSitHeightOffset;
   positionShopCamera();
 
   if (now - shopLastProximityCheck >= SHOP_PROXIMITY_INTERVAL_MS) {
@@ -18397,6 +18490,10 @@ async function enterShopMode() {
   shopIdleHeadCurrentRad = 0;
   shopIdleHeadTargetRad = 0;
   shopIdleHeadTimerS = 0;
+  shopIdleInteractionTarget = null;
+  shopSitBlend = 0;
+  shopSitYawOffset = 0;
+  shopSitHeightOffset = 0;
   // #1175 (docs/SPEC.md §1/§2): every spawn — not just a first-ever visit —
   // starts already flying, above a random world location, facing the
   // world center, and slowly orbiting it clockwise until the shopper gives
