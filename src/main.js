@@ -3170,6 +3170,7 @@ const uploadHintBtn = document.getElementById('upload-hint-btn');
 const uploadModeVideoBtn = document.getElementById('upload-mode-video-btn');
 const uploadModeFileBtn = document.getElementById('upload-mode-file-btn');
 const uploadVideoSectionEl = document.getElementById('upload-video-section');
+const uploadVideoCreditsEl = document.getElementById('upload-video-credits');
 const uploadVideoInput = document.getElementById('upload-video-input');
 const uploadRetryVideoBtn = document.getElementById('upload-retry-video-btn');
 const uploadStatusEl = document.getElementById('upload-status');
@@ -3270,6 +3271,23 @@ function disposeUploadDimensionPreview() {
   uploadDimensionPreview = null;
 }
 
+// #2442: `builders.video_generation_credits` (migrations/0127) was never
+// surfaced anywhere in the Upload Model modal -- a seller had no way to
+// tell they were out of free generations before actually attempting one
+// and hitting VIDEO_GENERATION_NO_CREDITS_MESSAGE's 402. Best-effort: a
+// failed fetch (offline, logged out mid-flow) just leaves the line blank
+// rather than blocking entry into video mode over it.
+async function refreshUploadVideoCredits() {
+  uploadVideoCreditsEl.textContent = '';
+  try {
+    const { videoGenerationCredits } = await fetchMyBuilder();
+    uploadVideoCreditsEl.textContent =
+      `${videoGenerationCredits} free model generation${videoGenerationCredits === 1 ? '' : 's'} remaining`;
+  } catch (err) {
+    console.warn('Failed to load the video-generation credit balance:', err);
+  }
+}
+
 // Switches step 'file' between its two mutually-exclusive input methods.
 // #1602's info-tooltip popups (upload-hint, upload-video-hint) are
 // siblings of their own field row, not nested inside it, so each one is
@@ -3284,6 +3302,12 @@ function setUploadFileMode(mode) {
   uploadModeVideoBtn.hidden = mode !== 'file';
   uploadVideoSectionEl.hidden = mode !== 'video';
   uploadSubmitBtn.textContent = mode === 'video' ? 'Generate Model' : 'Add Product';
+  // #2442: refreshed every time video mode is (re-)entered, not just once
+  // per modal open -- a generation attempt since the last time this
+  // section was shown (success or the 402 no-credits rejection) changes
+  // the real balance, and uploadRetryVideoBtn can land back here more than
+  // once in the same modal session.
+  if (mode === 'video') refreshUploadVideoCredits();
 }
 uploadModeVideoBtn.addEventListener('click', () => setUploadFileMode('video'));
 uploadModeFileBtn.addEventListener('click', () => setUploadFileMode('file'));

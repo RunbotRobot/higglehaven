@@ -4035,6 +4035,12 @@ function builderFromRow(row) {
     // -- a communication preference has no reason to leak through a
     // cross-account lookup either.
     notifySoldOutEmail: !!row.notify_sold_out_email,
+    // #2442: own-account-only, same reasoning as higglesBalanceCents above
+    // -- this balance (migrations/0127) was never surfaced anywhere in the
+    // response shape at all, so the Upload Model modal had nothing to read
+    // to show a builder how many free video-to-3D generations they have
+    // left before they actually attempt one.
+    videoGenerationCredits: row.video_generation_credits,
   };
 }
 
