@@ -386,6 +386,33 @@ describe('Bundles', () => {
     expect(final).toMatchObject({ name: 'Raced rename', shared: true });
   });
 
+  // #2426: #310/#315 only guarded the UPDATE itself (via meta.changes) against
+  // a concurrent DELETE landing between the initial existence check and the
+  // UPDATE -- it never covered the second gap, between that UPDATE committing
+  // and the follow-up re-SELECT used to build the response. A DELETE landing
+  // in *that* gap used to feed undefined into bundleFromRow(), throwing an
+  // uncaught 500 instead of a clean 404 -- same bug class as #2334/#2354/#2364.
+  it('does not crash with a raw 500 if a concurrent delete removes the bundle between the update and its re-SELECT', async () => {
+    const owner = await signupBuilder('bundle-patch-delete-race-owner');
+    const created = await api('/bundles', owner.session({ method: 'POST', body: JSON.stringify(bundleBody()) }));
+    const bundleId = created.body.bundle.bundleId;
+
+    const [renamed, deleted] = await Promise.all([
+      api(`/bundles/${bundleId}`, owner.session({
+        method: 'PATCH', body: JSON.stringify({ name: 'Raced away' }),
+      })),
+      api(`/bundles/${bundleId}`, owner.session({ method: 'DELETE' })),
+    ]);
+    // The real regression this guards against is a 500 -- either the PATCH's
+    // re-SELECT won the race (200) or the DELETE did (404), depending on
+    // interleaving, and both are legitimate outcomes.
+    expect([200, 404]).toContain(renamed.response.status);
+    expect(deleted.response.status).toBe(200);
+
+    const list = await api('/bundles', owner.session());
+    expect(list.body.bundles.find((b) => b.bundleId === bundleId)).toBeUndefined();
+  });
+
   it('deletes a bundle only for its owner, and 404s a nonexistent one', async () => {
     const owner = await signupBuilder('bundle-delete-owner');
     const other = await signupBuilder('bundle-delete-other');
