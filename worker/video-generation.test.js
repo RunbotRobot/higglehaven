@@ -395,6 +395,34 @@ describe('Video-to-3D job creation (#1619)', () => {
     }
   });
 
+  // #2410: the dedup pre-check just above (`latest.processed_at === null`)
+  // used to treat a stale 'pending' row the exact same as a genuinely
+  // in-flight one -- intercepting it forever, before reserveVideoGenerationJob
+  // (and its own #1782 stale-sweep) ever ran. Unlike the happy-path create
+  // above, which flips straight to 'processing' synchronously, this
+  // reproduces the real crash window by reserving a 'pending' row directly
+  // (bypassing the HTTP handler) and backdating it past
+  // VIDEO_GENERATION_RESERVATION_TIMEOUT_MS, the same way the
+  // reserveVideoGenerationJob-level stale-sweep test above does.
+  it('#2410: does not dedup against a stale pending row -- starts a fresh job instead', async () => {
+    const builder = await signupBuilderWithCredits('video-gen-stale-dedup');
+    const stale = await reserveVideoGenerationJob(env.DB, builder.builderId);
+    await env.DB.prepare(`
+      UPDATE video_generation_jobs SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 minutes') WHERE job_id = ?
+    `).bind(stale.reservationId).run();
+
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.jobId).not.toBe(stale.reservationId);
+
+    // The stale placeholder is gone (swept by reserveVideoGenerationJob),
+    // leaving exactly the fresh job behind.
+    const rows = await env.DB.prepare('SELECT * FROM video_generation_jobs WHERE builder_id = ?').bind(builder.builderId).all();
+    expect(rows.results).toHaveLength(1);
+    expect(rows.results[0].job_id).toBe(createdBody.jobId);
+  });
+
   it('rate-limits repeated job-creation attempts from the same builder', async () => {
     const builder = await signupBuilderWithCredits('video-gen-rate-limit');
     // Each attempt must land as a distinct job (not the dedup path above),
