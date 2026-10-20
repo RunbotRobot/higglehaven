@@ -13367,6 +13367,10 @@ const SHOP_PROXIMITY_INTERVAL_MS = 400;
 // this client re-renders other avatars, not how often it writes its own.
 const SHOP_PRESENCE_REPORT_INTERVAL_MS = 1500;
 const SHOP_PRESENCE_POLL_INTERVAL_MS = 1000;
+// #2436: how many consecutive polls an avatar must be missing from before
+// pollNearbyPresenceIfNeeded actually despawns it -- see that function's
+// own comment for why a single missed poll isn't enough.
+const SHOP_OTHER_AVATAR_MISSED_POLLS_BEFORE_DESPAWN = 2;
 // Below this, a report would just be re-sending the same position/heading
 // the server already has -- skip it entirely (client-side throttling,
 // #1098's own POST endpoint explicitly left to this sub-issue) rather than
@@ -16091,9 +16095,21 @@ async function pollNearbyPresenceIfNeeded(now) {
     entry.toZ = avatar.z;
     entry.toHeading = avatar.heading ?? entry.fromHeading;
     entry.receivedAt = now;
+    entry.missedPolls = 0; // #2436: seen again -- clear any pending despawn countdown
   }
+  // #2436: a single poll missing an avatar that's genuinely still nearby
+  // (report/poll cadence phase gap, or the avatar's own report briefly
+  // going stale) used to despawn it outright -- including on the exact
+  // frame updateShopFlight's landing branch reads shopOtherAvatars to run
+  // the #2044 collision-avoidance nudge, silently skipping it. Requiring
+  // SHOP_OTHER_AVATAR_MISSED_POLLS_BEFORE_DESPAWN consecutive misses before
+  // actually removing the avatar costs at most a couple of poll intervals
+  // of a stale ghost avatar lingering -- far cheaper than a missed landing
+  // nudge, which never gets a second chance once that frame has passed.
   for (const [builderId, entry] of shopOtherAvatars) {
     if (seenBuilderIds.has(builderId)) continue;
+    entry.missedPolls = (entry.missedPolls ?? 0) + 1;
+    if (entry.missedPolls < SHOP_OTHER_AVATAR_MISSED_POLLS_BEFORE_DESPAWN) continue;
     scene.remove(entry.group);
     disposeObject3D(entry.group);
     shopOtherAvatars.delete(builderId);
