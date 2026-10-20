@@ -3539,6 +3539,13 @@ async function builderDeletionStatements(db, builderId) {
     db.prepare(`DELETE FROM placed_instances WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(builderId, builderId),
     db.prepare(`DELETE FROM landlet_versions WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(builderId, builderId),
     db.prepare(`DELETE FROM landlet_levels WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(builderId, builderId),
+    // #2508: sold_out_markers is scoped to a builder's own land the same
+    // way as the three deletes just above (its own migration's comment:
+    // "a marker's only purpose is showing a builder something about their
+    // own land"), but was never added to this release-to-greenbelt cleanup
+    // when #2068 introduced it -- left a new claimant seeing the previous
+    // owner's stale "removed, sold out" markers.
+    db.prepare(`DELETE FROM sold_out_markers WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(builderId, builderId),
     // #1704: still-active auctions of this builder's own are explicitly
     // cleaned up here now that seller_builder_id no longer cascades
     // (migrations/0124) -- the #279 guard above already guarantees any
@@ -7013,6 +7020,10 @@ function buildAuctionWinnerSettlementStatements(db, auction, winner) {
     db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
     db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
     db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(auction.landlet_id),
+    // #2508: same "new owner inherits the previous owner's stuff" cleanup
+    // as the three deletes just above, for sold_out_markers -- missed when
+    // #2068 introduced the table, after this cleanup shape was established.
+    db.prepare('DELETE FROM sold_out_markers WHERE landlet_id = ?').bind(auction.landlet_id),
     db.prepare(`
       UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
     `).bind(winner.amount_cents, auction.seller_builder_id),
@@ -7269,6 +7280,10 @@ async function resolveAuction(db, auction) {
       // not a loss. version_instances cascades via its own FK.
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(auction.landlet_id),
+      // #2508: same "new owner inherits the previous owner's stuff" cleanup
+      // as the two deletes just above, for sold_out_markers -- missed when
+      // #2068 introduced the table, after this cleanup shape was established.
+      db.prepare('DELETE FROM sold_out_markers WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare(`
         UPDATE landlets
         SET status = 'greenbelt', owner_builder_id = NULL, active_version_id = NULL,
@@ -13063,6 +13078,10 @@ async function handleLandlets(request, db, route, url) {
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(route[1]),
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(route[1]),
       db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(route[1]),
+      // #2508: same "new owner inherits the previous owner's stuff" cleanup
+      // as the three deletes just above, for sold_out_markers -- missed when
+      // #2068 introduced the table, after this cleanup shape was established.
+      db.prepare('DELETE FROM sold_out_markers WHERE landlet_id = ?').bind(route[1]),
       adminActionLogStatement(db, admin.user_id, 'reassign_landlet_owner', 'landlet', route[1], {
         fromBuilderId: existing.owner_builder_id, toBuilderId: newOwnerBuilderId,
         ...(auctionToCancel ? { cancelledAuctionId: auctionToCancel.auction_id } : {}),

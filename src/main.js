@@ -13904,7 +13904,30 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     // world has grown large.
     vec2 normalizedXY = vWorldPosition.xy / max(uWorldRadius, 1.0);
     vec2 swirled = mat2(c, -s, s, c) * normalizedXY;
-    vec2 samplePos = swirled * 2.5 + vec2(uTime * 0.05, heightFrac * 3.0 - uTime * 0.015);
+    // owner-report-2026-10-20 (regression on #2450): this offset used to be
+    // vec2(uTime * 0.05, heightFrac * 3.0 - uTime * 0.015) -- i.e. its own
+    // magnitude grew linearly with elapsed time forever, exactly the same
+    // unbounded-growth shape #1204 already fixed once for the swirl term
+    // just above (which is why that term is now safe: it's only ever
+    // consumed via sin/cos, so it's inherently periodic). This offset
+    // wasn't, so the fbm sample neighborhood wandered forever through
+    // fresh noise-space. #2450's widened cloudMask hides an ordinary
+    // *steady-state* gradient near the pole, but it can't hide an
+    // arbitrarily steep one -- and an unbounded random walk through noise
+    // space will eventually (by chance) wander back into one, reproducing
+    // the original artifact after a few minutes (confirmed via simulated-
+    // duration testing with a dilated RAF clock, same technique #1204's
+    // own "verified clean up to ~27.7 hours" claim must have used: the
+    // artifact's severity visibly fluctuates and worsens over the first
+    // ~20 simulated minutes rather than settling down). Fixed the same way
+    // #1204 fixed the shear term: a bounded oscillating envelope instead
+    // of unbounded linear growth, matching the original's instantaneous
+    // rate at t=0 so a short session still looks identical to before, and
+    // sharing shearOmega's own 600s cycle length for consistency.
+    float driftAmplitudeX = 4.7746482927; // 0.05 / shearOmega, matches d/dt at t=0
+    float driftAmplitudeY = -1.4323944878; // -0.015 / shearOmega, matches d/dt at t=0
+    vec2 drift = vec2(driftAmplitudeX, driftAmplitudeY) * sin(shearOmega * uTime);
+    vec2 samplePos = swirled * 2.5 + vec2(drift.x, heightFrac * 3.0 + drift.y);
     float clouds = fbm(samplePos);
     // #1190/#1585/#1799/owner-report-2026-10-20: three prior fixes in this
     // area (apex-streak footprint-fade tuning, shear-band envelope capping,
@@ -18266,7 +18289,20 @@ async function enterShopMode() {
   // the wall's radius, Y — the pole axis before Z-up rotation — to how far
   // it currently rises) so growShopDomeIfNeeded can grow it later with a
   // single scale change, no geometry rebuild.
-  const domeGeometry = new THREE.SphereGeometry(1, 48, 24, 0, Math.PI * 2, 0, Math.PI / 2);
+  //
+  // owner-report-2026-10-20: widthSegments here used to be 48 against the
+  // wall's own 64 radialSegments just above. Matching *radius* alone
+  // isn't enough for a seamless rim -- a cylinder/sphere's circular edges
+  // are really inscribed N-gons (vertices sit exactly on the circle,
+  // straight edges between them sag slightly inward), so a 48-gon and a
+  // 64-gon inscribed in the very same circle still sag by different
+  // amounts between vertices and only touch exactly at the handful of
+  // angles where a vertex of one happens to land near a vertex of the
+  // other. That periodic sag-mismatch is what read as jaggedness right at
+  // the wall/dome border. Matching widthSegments to the wall's own
+  // radialSegments makes the two rims the same 64-gon at the same angles,
+  // closing the gap.
+  const domeGeometry = new THREE.SphereGeometry(1, 64, 24, 0, Math.PI * 2, 0, Math.PI / 2);
   paintVerticalGradient(domeGeometry, (localY, out) => {
     const t = THREE.MathUtils.clamp(localY, 0, 1);
     out.copy(SHOP_HAZY_HORIZON_COLOR).lerp(SHOP_SKY_DOME_COLOR, t);
