@@ -14983,11 +14983,15 @@ function setShopFlyBtnFlying(flying) {
   shopFlyBtnIcon.style.transform = `scale(${SHOP_FLY_BTN_ICON_ZOOM})`;
 }
 
-// Toggling mid-transition (takingOff/landing) is ignored rather than
-// queued or reversed — let the current one finish, then the next press
-// starts cleanly from a real grounded/flying state. Landing captures its
-// own starting altitude (shopFlightLandingStartAltitudeM) so its descent
-// ramps from wherever the player actually was, not always the same height.
+// Toggling mid-takeoff is ignored — let it finish, then the next press
+// starts cleanly from a real flying state (resuming mid-ascent isn't
+// needed: taking off is already what a tap during it would ask for).
+// Landing captures its own starting altitude (shopFlightLandingStartAltitudeM)
+// so its descent ramps from wherever the player actually was, not always
+// the same height. #2446: toggling mid-landing resumes flight immediately
+// from the current altitude instead of being ignored like takeoff — a
+// player who tapped fly by mistake, or wants back up before fully
+// grounding, shouldn't have to wait out the whole descent first.
 function toggleShopFlight() {
   // #1175/#1176: a deliberate tap of the fly button is navigation input
   // same as any joystick deflection — stop the hands-off spawn orbit
@@ -15011,6 +15015,14 @@ function toggleShopFlight() {
     // while actually 'flying' — see updateShopFlight), so the ascend/
     // descend controls hide the instant it starts, not once it finishes.
     setShopFlyBtnFlying(false);
+  } else if (shopFlightState === 'landing') {
+    // #2446: shopFlightAltitudeM is already the live, current altitude —
+    // updateShopFlight's own 'landing' branch has been writing it every
+    // frame since the descent started — so resuming 'flying' here needs no
+    // ramp/elapsed-time reset of its own, unlike takeoff: the 'flying'
+    // branch above never reads shopFlightTransitionElapsedS at all.
+    shopFlightState = 'flying';
+    setShopFlyBtnFlying(true);
   }
 }
 
