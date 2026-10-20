@@ -5947,6 +5947,10 @@ async function handleStartAuction(request, db, landletId) {
     throw new HttpError('This landlet already has an active auction', 409);
   }
   const row = await db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auctionId).first();
+  // #2427: a concurrent self-delete can remove this just-created, still-
+  // zero-bid auction (builderDeletionStatements) between the INSERT above
+  // and this re-SELECT, same idiom as #2334/#2354/#2364/#2391/#2392.
+  if (!row) throw new HttpError('This landlet no longer has an active auction — it may have been removed concurrently', 409);
   return json({ auction: await auctionFromRow(db, row) }, 201);
 }
 
