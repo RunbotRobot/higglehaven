@@ -2450,6 +2450,18 @@ const PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX = 20;
 // new author-only edit branch below.
 const PRODUCT_REVIEW_EDIT_RATE_LIMIT_MAX = 20;
 
+// #2422: same "a dropped POST response and the innocent manual retry it
+// invites" protection signPostIdempotencyKey/calendarEventIdempotencyKey
+// already give their own structurally identical POSTs. Scoped by
+// templateId+builderId rather than a purchase_id, since purchase_id isn't
+// known until after the eligibility lookup the retry would otherwise fail
+// against (a successful first attempt already consumed the purchase it
+// reviewed).
+function productReviewIdempotencyKey(templateId, builderId, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  return `review:${templateId}:${builderId}:${rawKey}`;
+}
+
 async function handleProductReviews(request, db, route) {
   const templateId = route[1];
 
@@ -2492,6 +2504,33 @@ async function handleProductReviews(request, db, route) {
     await checkRateLimit(db, `product-review-create:${sessionBuilder.builder_id}`, PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const authorLabel = sessionBuilder.label;
+    const rating = Number(input.rating);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      throw new HttpError('rating must be an integer from 1 to 5', 400);
+    }
+    const text = input.text === undefined || input.text === null || input.text === ''
+      ? null
+      : stringValue(input.text, 'text');
+    if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    // #2422: a retry that reuses the same (validated) client-supplied key
+    // finds its own already-landed row here and returns it instead of
+    // hitting the eligibility check below -- which a successful first
+    // attempt already consumed the one purchase it reviewed against, so a
+    // naive retry would otherwise either 400 ("no eligible purchase") or,
+    // if the shopper has a second unreviewed purchase of this same
+    // product, silently create a second, distinct review that was never
+    // the retry's intent. Checked before the eligibility lookup for
+    // exactly that reason. Same content-match-before-reuse guard
+    // signPostIdempotencyKey/#1778 already established for its own sibling.
+    const idempotencyKey = productReviewIdempotencyKey(templateId, sessionBuilder.builder_id, input.idempotencyKey);
+    let existingReview = null;
+    if (idempotencyKey) {
+      existingReview = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?')
+        .bind(idempotencyKey, templateId).first();
+      if (existingReview && existingReview.rating === rating && existingReview.text === text) {
+        return json({ review: reviewFromRow(existingReview) });
+      }
+    }
     // The caller's own oldest unreviewed, unrefunded purchase of this
     // template — a real foreign key, not a label match. This SELECT alone
     // isn't the actual guard against double-reviewing (see the INSERT's own
@@ -2506,14 +2545,6 @@ async function handleProductReviews(request, db, route) {
     if (!purchase) {
       throw new HttpError('Only a shopper who has purchased this product, and not yet reviewed that purchase, can review it', 400);
     }
-    const rating = Number(input.rating);
-    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-      throw new HttpError('rating must be an integer from 1 to 5', 400);
-    }
-    const text = input.text === undefined || input.text === null || input.text === ''
-      ? null
-      : stringValue(input.text, 'text');
-    if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
     // One review per purchase (migrations/0100, replacing migrations/0059's
     // per-label guard) — the SELECT above is a point-in-time read, not a
     // consumption check, so without this the same purchase could otherwise
@@ -2531,7 +2562,7 @@ async function handleProductReviews(request, db, route) {
     // WHERE clause, closes that race the same way the double-review guard
     // already does. `changes === 0` means one of the two guards blocked
     // the insert; re-reading disambiguates which for a clearer error.
-    const reviewId = `review-${crypto.randomUUID()}`;
+    const reviewId = (idempotencyKey && !existingReview) ? idempotencyKey : `review-${crypto.randomUUID()}`;
     // #1975: records who actually wrote this review (sessionBuilder.user_id),
     // the same sign_posts.user_id pattern (#1830/migrations/0125) — lets the
     // PATCH/DELETE branches below check real ownership instead of having no
@@ -2788,6 +2819,11 @@ async function handleProductFlags(request, db, route) {
     if (action !== 'approve' && action !== 'reject') {
       throw new HttpError("action must be 'approve' or 'reject'", 400);
     }
+    // #2018: lets an admin skip straight to the strike ladder's permanent-
+    // removal rung for a single severe violation (confirmed counterfeit,
+    // fraud, minor-safety), regardless of the seller's prior strike count --
+    // only meaningful on approve, silently ignored otherwise.
+    const severe = input.severe === true;
     const template = await db.prepare('SELECT template_id, seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     if (!template) return json({ error: 'Catalog template not found' }, 404);
     // Resolves every still-pending flag on this listing at once -- a flag is
@@ -2826,6 +2862,12 @@ async function handleProductFlags(request, db, route) {
           await fireNotification(db, owner.builder_id,
             'A product listing of yours was removed after an admin-confirmed counterfeit/policy-violation flag. A strike was added to your account.');
         }
+        // #2018: the strike ladder itself -- reads the just-incremented
+        // count fresh, so it always acts on the real post-increment total.
+        await applyStrikeLadderConsequence(db, {
+          sellerId: template.seller_id, ownerBuilderId: owner?.builder_id ?? null,
+          adminUserId: admin.user_id, severe, templateId,
+        });
       }
     } else {
       // Reject restores purchasability if auto-hide had already kicked in
@@ -2840,6 +2882,83 @@ async function handleProductFlags(request, db, route) {
   }
 
   return json({ error: 'Not found' }, 404);
+}
+
+// #2018 (sub-issue of #1212, owner-settled shape on #1212's own comment
+// thread, 2026-10-13): warning (1st violation) -> temporary suspension
+// (2nd violation, or 1st *severe* one) -> permanent removal (3rd
+// violation, or any single severe one, skipping the ladder entirely).
+// "Permanent" reuses #1201's own suspension tool at its maximum graceDays
+// (365) rather than a separate hard-delete mechanism -- #1201's own
+// resolution ruled out admin-initiated hard deletion outright, and #2033's
+// own auto-escalation (once it lands) is what actually turns an unlifted
+// suspension into a real deletion; this rung's job is only to start that
+// clock and make sure a later, lesser violation never pulls it backward.
+const STRIKE_LADDER_TEMPORARY_GRACE_DAYS = 7;
+const STRIKE_LADDER_PERMANENT_GRACE_DAYS = 365;
+
+async function applyStrikeLadderConsequence(db, { sellerId, ownerBuilderId, adminUserId, severe, templateId }) {
+  const seller = await db.prepare('SELECT user_id, strike_count FROM sellers WHERE seller_id = ?').bind(sellerId).first();
+  // No linked account to act on -- same "dangling seller" tolerance this
+  // file already extends elsewhere (e.g. handleSellerFeedbackDelete).
+  if (!seller || !seller.user_id) return;
+  if (!severe && seller.strike_count <= 1) {
+    if (ownerBuilderId) {
+      await fireNotification(db, ownerBuilderId,
+        'Warning: a counterfeit/policy-violation flag against one of your listings was confirmed by an admin. A repeat violation will result in a temporary account suspension.');
+    }
+    return;
+  }
+  const permanent = severe || seller.strike_count >= 3;
+  const graceDays = permanent ? STRIKE_LADDER_PERMANENT_GRACE_DAYS : STRIKE_LADDER_TEMPORARY_GRACE_DAYS;
+  const reason = permanent
+    ? `Strike ladder: permanent removal (${severe ? 'severe violation' : `strike ${seller.strike_count}`}) -- template ${templateId}`
+    : `Strike ladder: temporary suspension (strike ${seller.strike_count}) -- template ${templateId}`;
+  await applySuspensionLadderRung(db, { userId: seller.user_id, adminUserId, reason, graceDays });
+  if (ownerBuilderId) {
+    await fireNotification(db, ownerBuilderId, permanent
+      ? 'Your account has been suspended indefinitely after a confirmed counterfeit/policy violation. This suspension will not be lifted.'
+      : `Your account has been temporarily suspended for ${STRIKE_LADDER_TEMPORARY_GRACE_DAYS} days after a confirmed counterfeit/policy violation.`);
+  }
+}
+
+// Distinct from handleSuspendAccount's own plain insert-only path (which
+// must keep 409ing on an already-active suspension, per that endpoint's
+// existing contract) -- the strike ladder is the one caller that can
+// legitimately land on an account its own earlier rung already suspended
+// (e.g. the 2nd-violation 7-day suspension, followed later by a 3rd/severe
+// violation), and escalating the existing row forward -- never shortening
+// it -- is the correct behavior there, not a 409 or a second, conflicting
+// active row.
+async function applySuspensionLadderRung(db, { userId, adminUserId, reason, graceDays }) {
+  const gracePeriodEndsAt = new Date(Date.now() + graceDays * 24 * 60 * 60 * 1000).toISOString();
+  const suspensionId = `suspension-${crypto.randomUUID()}`;
+  const inserted = await db.prepare(`
+    INSERT INTO account_suspensions (suspension_id, user_id, admin_user_id, reason, grace_period_ends_at)
+    SELECT ?, ?, ?, ?, ?
+    WHERE NOT EXISTS (
+      SELECT 1 FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+    )
+  `).bind(suspensionId, userId, adminUserId, reason, gracePeriodEndsAt, userId).run();
+  if (inserted.meta.changes === 1) {
+    await adminActionLogStatement(db, adminUserId, 'suspend_account', 'user', userId, {
+      suspensionId, reason, gracePeriodEndsAt,
+    }).run();
+    return;
+  }
+  const active = await db.prepare(`
+    SELECT * FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+  `).bind(userId).first();
+  if (!active || active.grace_period_ends_at >= gracePeriodEndsAt) return;
+  const updated = await db.prepare(`
+    UPDATE account_suspensions SET grace_period_ends_at = ?
+    WHERE suspension_id = ? AND grace_period_ends_at < ?
+  `).bind(gracePeriodEndsAt, active.suspension_id, gracePeriodEndsAt).run();
+  if (updated.meta.changes === 1) {
+    await adminActionLogStatement(db, adminUserId, 'escalate_suspension', 'user', userId, {
+      suspensionId: active.suspension_id, reason, newGracePeriodEndsAt: gracePeriodEndsAt,
+    }).run();
+  }
 }
 
 async function handleProductFlagsList(request, db, url) {
@@ -6461,12 +6580,25 @@ async function handleAuctionBids(request, db, route) {
     // at INSERT time and folds it into the same atomic statement as the
     // existing highest-bid guard, so this bid only actually lands if the
     // builder is still under cap the instant it's written.
+    // #2412: the two guards below (highest-bid, land-cap) were the only
+    // ones folded into this atomic write -- nothing re-checked that the
+    // auction itself was still active at INSERT time, so a concurrent
+    // resolution (resolveDueAuctions' sweep, another caller's /resolve,
+    // or just another GET triggering resolveAuctionIfDue) landing in the
+    // gap between the up-front check above and this INSERT could let a
+    // bid attach to an auction that has already ended. Folding the same
+    // live EXISTS check resolveAuction's own atomic status-flip guard
+    // uses closes that window the same way every other auction-racing
+    // write in this file already does.
     const inserted = await db.prepare(`
       INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents)
       SELECT ?, ?, ?, ?
-      WHERE NOT EXISTS (
-        SELECT 1 FROM auction_bids WHERE auction_id = ? AND amount_cents >= ?
+      WHERE EXISTS (
+        SELECT 1 FROM auctions WHERE auction_id = ? AND status = 'active'
       )
+        AND NOT EXISTS (
+          SELECT 1 FROM auction_bids WHERE auction_id = ? AND amount_cents >= ?
+        )
         AND (
           SELECT b.land_cap_m2 FROM builders b WHERE b.builder_id = ?
         ) + ? >= (
@@ -6484,10 +6616,14 @@ async function handleAuctionBids(request, db, route) {
             ), 0)
         )
     `).bind(
-      bidId, auctionId, builderId, amountCents, auctionId, amountCents,
+      bidId, auctionId, builderId, amountCents, auctionId, auctionId, amountCents,
       builderId, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2, auctionedLandlet.area_m2, builderId, builderId,
     ).run();
     if (inserted.meta.changes === 0) {
+      const currentAuction = await db.prepare('SELECT status FROM auctions WHERE auction_id = ?').bind(auctionId).first();
+      if (currentAuction.status !== 'active') {
+        throw new HttpError('This auction has already ended', 409);
+      }
       const currentHighest = await db.prepare(`
         SELECT amount_cents FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
       `).bind(auctionId).first();
@@ -15143,6 +15279,12 @@ async function handleInstanceBackups(request, db, route) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
     const row = await db.prepare('SELECT * FROM placed_instance_backups WHERE backup_id = ?').bind(backupId).first();
+    // #2428: not found here means a concurrent DELETE of the hosting
+    // instance (migrations/0137's own ON DELETE CASCADE on instance_id)
+    // landed in the single await gap between the guarded INSERT above and
+    // this re-SELECT -- a genuine 404, same race shape #2334/#2392 already
+    // fixed elsewhere, not an uncaught backupFromRow(undefined) crash.
+    if (!row) return json({ error: 'Placed instance backup not found' }, 404);
     return json({ backup: backupFromRow(row) }, 201);
   }
 

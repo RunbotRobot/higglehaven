@@ -13030,6 +13030,7 @@ const shopDownBtn = document.getElementById('shop-down-btn');
 const shopSignHintEl = document.getElementById('shop-sign-hint');
 const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
 const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
+const shopCreditOrbOfflineNoticeEl = document.getElementById('shop-credit-orb-offline-notice');
 const shopProductPreviewModalEl = document.getElementById('shop-product-preview-modal');
 const shopProductPreviewCloseBtn = document.getElementById('shop-product-preview-close-btn');
 const shopProductPreviewCanvas = document.getElementById('shop-product-preview-canvas');
@@ -13407,6 +13408,18 @@ const SIGN_MAX_VISIBLE_POSTS = 5;
 // avatar height is the intended collection gesture, not a bug.
 const CREDIT_ORB_COLLECT_RADIUS_M = 1.5;
 const CREDIT_ORB_FLOAT_HEIGHT_M = 1.2;
+// #2443: how far above local ground (shopFlightAltitudeM, not world z --
+// a landlet's own group sits at a fixed world z of exactly 0 regardless of
+// distance from the origin, per #1871's "addLandletToScene" group.position
+// call, while shopAvatarPosition.z is deliberately sunk by
+// curvatureDropM(distance from origin) as a pure rendering trick; comparing
+// world z values would conflate that offset with real altitude) the avatar
+// can be and still have this count as a ground walk-in rather than flying
+// over it. Reuses CREDIT_ORB_COLLECT_RADIUS_M's own scale as a reasonable
+// near-ground margin (covers the walk cycle's own small vertical bob and any
+// ground-incline slack) -- tight enough that a real flight altitude no
+// longer collects, per the owner's own report.
+const CREDIT_ORB_COLLECT_ALTITUDE_TOLERANCE_M = CREDIT_ORB_COLLECT_RADIUS_M;
 const CREDIT_ORB_RADIUS_M = 0.25;
 const CREDIT_ORB_ROTATION_SPEED_RAD_S = 1.4;
 // Shimmer: emissiveIntensity oscillates between these two bounds rather
@@ -13420,6 +13433,13 @@ const CREDIT_ORB_SHIMMER_MAX = 1.8;
 // opacity-transition show/auto-hide shape (see its CSS comment in
 // index.html) rather than a hard show/hide cutoff.
 const CREDIT_ORB_TOAST_VISIBLE_MS = 3000;
+// #2447: how long an unbroken streak of genuine network failures (fetch()
+// itself rejecting, never a real HTTP response -- see isNetworkError)
+// collecting any orb has to persist before this reads as "offline" rather
+// than a single dropped frame. A real HTTP response of any status (403/
+// 404/429/500) proves the server is reachable and resets this streak --
+// only true network errors count toward it.
+const CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS = 3000;
 // The world wall: an opaque ring standing at exactly the current world
 // radius, tall enough that nothing generating out beyond it (still
 // unclaimable — see the availability circle in docs/SPEC.md) is visible
@@ -14983,11 +15003,15 @@ function setShopFlyBtnFlying(flying) {
   shopFlyBtnIcon.style.transform = `scale(${SHOP_FLY_BTN_ICON_ZOOM})`;
 }
 
-// Toggling mid-transition (takingOff/landing) is ignored rather than
-// queued or reversed — let the current one finish, then the next press
-// starts cleanly from a real grounded/flying state. Landing captures its
-// own starting altitude (shopFlightLandingStartAltitudeM) so its descent
-// ramps from wherever the player actually was, not always the same height.
+// Toggling mid-takeoff is ignored — let it finish, then the next press
+// starts cleanly from a real flying state (resuming mid-ascent isn't
+// needed: taking off is already what a tap during it would ask for).
+// Landing captures its own starting altitude (shopFlightLandingStartAltitudeM)
+// so its descent ramps from wherever the player actually was, not always
+// the same height. #2446: toggling mid-landing resumes flight immediately
+// from the current altitude instead of being ignored like takeoff — a
+// player who tapped fly by mistake, or wants back up before fully
+// grounding, shouldn't have to wait out the whole descent first.
 function toggleShopFlight() {
   // #1175/#1176: a deliberate tap of the fly button is navigation input
   // same as any joystick deflection — stop the hands-off spawn orbit
@@ -15011,6 +15035,14 @@ function toggleShopFlight() {
     // while actually 'flying' — see updateShopFlight), so the ascend/
     // descend controls hide the instant it starts, not once it finishes.
     setShopFlyBtnFlying(false);
+  } else if (shopFlightState === 'landing') {
+    // #2446: shopFlightAltitudeM is already the live, current altitude —
+    // updateShopFlight's own 'landing' branch has been writing it every
+    // frame since the descent started — so resuming 'flying' here needs no
+    // ramp/elapsed-time reset of its own, unlike takeoff: the 'flying'
+    // branch above never reads shopFlightTransitionElapsedS at all.
+    shopFlightState = 'flying';
+    setShopFlyBtnFlying(true);
   }
 }
 
@@ -15683,6 +15715,7 @@ function updateShopMovement(now) {
   updateCalendarFade();
   updateReviewFade();
   updateCreditOrbs(dt);
+  updateCreditOrbPopEffects(dt);
   if (now - lastScheduledEventCheck >= SCHEDULED_EVENT_CHECK_INTERVAL_MS) {
     lastScheduledEventCheck = now;
     checkScheduledCalendarEvents();
@@ -16245,6 +16278,41 @@ function createCreditOrbMesh() {
   return mesh;
 }
 
+// #2441: a brief scale-up-then-fade pop, played on a detached clone of the
+// just-collected orb's own mesh rather than the real orb -- same "own
+// geometry/material, disposed once its short lifespan ends" shape as
+// spawnConfettiBurst/updateConfettiBursts below, just for a single growing,
+// fading sphere instead of a particle burst. Spawned on a clone (never
+// orb.mesh itself, which removeCreditOrb disposes immediately after) so
+// this purely cosmetic effect never has to finish before collection logic/
+// collision moves on.
+const CREDIT_ORB_POP_LIFESPAN_S = 0.4;
+const CREDIT_ORB_POP_END_SCALE = 2.5;
+const creditOrbPopEffects = [];
+
+function spawnCreditOrbPopEffect(orb) {
+  const mesh = new THREE.Mesh(orb.mesh.geometry.clone(), orb.mesh.material.clone());
+  mesh.material.transparent = true;
+  mesh.position.copy(orb.mesh.position);
+  orb.group.add(mesh);
+  creditOrbPopEffects.push({ mesh, group: orb.group, elapsed: 0 });
+}
+
+function updateCreditOrbPopEffects(dt) {
+  for (const effect of [...creditOrbPopEffects]) {
+    effect.elapsed += dt;
+    const t = THREE.MathUtils.clamp(effect.elapsed / CREDIT_ORB_POP_LIFESPAN_S, 0, 1);
+    effect.mesh.scale.setScalar(1 + (CREDIT_ORB_POP_END_SCALE - 1) * t);
+    effect.mesh.material.opacity = 1 - t;
+    if (effect.elapsed >= CREDIT_ORB_POP_LIFESPAN_S) {
+      effect.group.remove(effect.mesh);
+      effect.mesh.geometry.dispose();
+      effect.mesh.material.dispose();
+      creditOrbPopEffects.splice(creditOrbPopEffects.indexOf(effect), 1);
+    }
+  }
+}
+
 let creditOrbShimmerElapsedS = 0;
 const scratchCreditOrbWorldPos = new THREE.Vector3();
 
@@ -16268,15 +16336,26 @@ function updateCreditOrbs(dt) {
     // behind the avatar, well outside CREDIT_ORB_COLLECT_RADIUS_M on its
     // own, so camera.position would never read as "standing on it" at this
     // tight a radius the way it still works for signs/calendars' much wider
-    // SIGN_INTERACT_RADIUS_M (8m). Horizontal-only (x/y), ignoring z, since
-    // CREDIT_ORB_FLOAT_HEIGHT_M's own float-above-ground offset shouldn't
-    // count against "walked into it."
+    // SIGN_INTERACT_RADIUS_M (8m).
     const world = orb.mesh.getWorldPosition(scratchCreditOrbWorldPos);
     const dx = world.x - shopAvatarPosition.x;
     const dy = world.y - shopAvatarPosition.y;
     if (Math.hypot(dx, dy) > CREDIT_ORB_COLLECT_RADIUS_M) continue;
+    // #2443: horizontal proximity alone also fired for flying directly over
+    // an orb at any altitude, since height above ground was never checked.
+    // shopFlightAltitudeM (not world z -- see CREDIT_ORB_COLLECT_ALTITUDE_
+    // TOLERANCE_M's own comment on why) is the curvature-independent "how
+    // high above local ground" signal already tracked for flight, so this
+    // excludes real flight altitude without touching an ordinary ground
+    // walk-in.
+    if (Math.abs(shopFlightAltitudeM) > CREDIT_ORB_COLLECT_ALTITUDE_TOLERANCE_M) continue;
     orb.collecting = true;
     collectCreditOrb(orb.orbId).then(() => {
+      // #2441: spawned before removeCreditOrb disposes the real orb.mesh
+      // below -- this clones it first, so the pop has its own geometry/
+      // material to animate independently of the disposal.
+      markCreditOrbCollectReachedServer();
+      spawnCreditOrbPopEffect(orb);
       removeCreditOrb(orb);
       showCreditOrbToast();
     }).catch((error) => {
@@ -16287,6 +16366,7 @@ function updateCreditOrbs(dt) {
       // and clears the in-flight guard to let the very next frame retry,
       // the same way it would if collecting had never fired at all.
       if (error.status === 403) {
+        markCreditOrbCollectReachedServer();
         orb.collecting = false;
         return;
       }
@@ -16296,6 +16376,7 @@ function updateCreditOrbs(dt) {
       // now-stale orb from the scene instead of surfacing anything to the
       // shopper or retrying.
       if (error.status === 404) {
+        markCreditOrbCollectReachedServer();
         removeCreditOrb(orb);
         return;
       }
@@ -16306,8 +16387,42 @@ function updateCreditOrbs(dt) {
       // fetches a landlet's orbs once, so a wrongly-removed orb was gone
       // from this session's view for good. Transient, same as 403: leave
       // the orb in place and let the next frame retry.
+      // #2447: a 429/500 is still a real HTTP response (error.status is
+      // set), proving the server was reachable -- only a genuine network
+      // failure (isNetworkError, fetch() itself rejecting with no response
+      // at all) counts as evidence of actually being offline.
+      if (isNetworkError(error)) {
+        markCreditOrbCollectFailedToReachServer();
+      } else {
+        markCreditOrbCollectReachedServer();
+      }
       orb.collecting = false;
     });
+  }
+}
+
+// #2447: null while no genuine network failure is currently in progress;
+// set to the timestamp of the *first* one in an unbroken streak once one
+// starts, across every orb's own collect attempts (this is a connectivity
+// signal, not a per-orb one). markCreditOrbCollectReachedServer resets it
+// the moment any attempt gets a real response, same as it clears the
+// notice -- a single dropped frame shouldn't flash anything, only a
+// sustained outage should.
+let creditOrbOfflineStreakStartedAt = null;
+
+function markCreditOrbCollectReachedServer() {
+  creditOrbOfflineStreakStartedAt = null;
+  shopCreditOrbOfflineNoticeEl.classList.remove('visible');
+}
+
+function markCreditOrbCollectFailedToReachServer() {
+  const now = performance.now();
+  if (creditOrbOfflineStreakStartedAt === null) {
+    creditOrbOfflineStreakStartedAt = now;
+    return;
+  }
+  if (now - creditOrbOfflineStreakStartedAt >= CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS) {
+    shopCreditOrbOfflineNoticeEl.classList.add('visible');
   }
 }
 
@@ -16324,6 +16439,11 @@ function removeCreditOrb(orb) {
 // -- lets a test confirm an orb survives a transient collect failure
 // (429/500/network) instead of being wrongly removed from the scene.
 window.__testActiveCreditOrbIds = () => shopCreditOrbs.map((orb) => orb.orbId);
+// #2441: same e2e-only convention as window.__testActiveCreditOrbIds just
+// above -- lets a test confirm a pop effect actually spawned on collection
+// (and, after waiting out CREDIT_ORB_POP_LIFESPAN_S, that it cleaned itself
+// up again) without depending on fragile pixel-level visual assertions.
+window.__testActiveCreditOrbPopEffectCount = () => creditOrbPopEffects.length;
 
 function showCreditOrbToast() {
   shopCreditOrbToastEl.classList.add('visible');
