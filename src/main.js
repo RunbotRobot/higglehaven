@@ -12130,6 +12130,10 @@ async function renderMyLands() {
     renameBtn.addEventListener('click', async () => {
       const next = prompt('Rename this land', landlet.name);
       if (!next || !next.trim() || next.trim() === landlet.name) return;
+      if (next.trim().length > 100) {
+        alert('Keep it to 100 characters or fewer.');
+        return;
+      }
       myLandsStatusEl.textContent = '';
       myLandsStatusEl.classList.remove('error');
       renameBtn.disabled = true;
