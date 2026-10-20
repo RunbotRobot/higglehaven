@@ -9417,10 +9417,12 @@ A seller sets either via its own row's "Edit Sit/Lean Target" panel
 the metadata key entirely rather than persisting a stale target, the same
 clear-to-absent convention `extensible`/`noReturns` already use.
 
-**Deferred, not built here:** the actual targeting logic (finding the
-nearest valid sit/lean target on landing from flight, or on idle) and the
-seated/leaning poses themselves are separate #2475 sub-issues — this is
-schema/metadata plus the minimal build-UI to set it, nothing more.
+**Deferred at the time this section was written:** the actual targeting
+logic and the seated/leaning poses themselves were separate #2475
+sub-issues — that was schema/metadata plus the minimal build-UI to set it,
+nothing more. The targeting half is now built; see "Sit/lean proximity
+targeting (#2477)" below. The poses themselves (#2478/#2479) and the
+randomization pass (#2480) remain open.
 
 #### Testing note
 
@@ -9429,11 +9431,60 @@ describe block covers the non-object/missing-field rejections, an
 out-of-footprint offset, an out-of-range height, a valid value
 round-tripping through `GET` for both `sitTarget` and `leanTarget`
 independently, and clearing one via a full `metadata` replace — the same
-matrix "Shipping" above covers for `domesticOnly`. No e2e coverage yet:
-same reasoning as Shipping's own panel above (structurally identical
-collapsed-panel-with-a-Save-step idiom to the already-e2e-covered
-Extensibility panel) — worth a real e2e pass once the targeting/pose
-sub-issues give this panel something visible to actually verify.
+matrix "Shipping" above covers for `domesticOnly`. No e2e coverage of the
+build-UI panel itself: same reasoning as Shipping's own panel above
+(structurally identical collapsed-panel-with-a-Save-step idiom to the
+already-e2e-covered Extensibility panel).
+
+### Sit/lean proximity targeting (#2477)
+
+Sub-issue of #2475, depending on the metadata from #2476 above. When the
+existing idle timer (`SHOP_IDLE_DELAY_S` in `src/main.js`) fires —
+`updateShopAvatarIdle`'s own `hasActiveInput === false` branch, the instant
+`shopIdleElapsedS` first crosses that threshold, not on every frame
+afterward — `findShopIdleInteractionTarget` searches every loaded placed
+item (`shopLandlets`' own `entry.objects`, the same set
+`shopPositionBlocked`/`shopLandingObstructionTopZ` already read) for the
+nearest `sitTarget`/`leanTarget` (per #2476 above) within
+`SHOP_IDLE_INTERACTION_SEARCH_RADIUS_M` (3m) of the avatar's current
+position, and caches the result in `shopIdleInteractionTarget` for the
+rest of that idle episode — re-armed to `null` the instant real movement
+resumes.
+
+A target's `offsetXM`/`offsetYM`/`facingRad` (#2476's own metadata) are in
+the template's own local, un-rotated model space, so the search rotates
+the offset by the placed instance's own `rotation.z` before adding it to
+the instance's world position, and combines `facingRad` with that same
+rotation for the resulting world-space facing. `heightM` only needs the
+instance's own ground level (`mesh.position.z - height / 2`, the same
+`itemZMin` term `shopLandingObstructionTopZ` already computes) added to
+it, since it's already expressed ground-up in that local space — no
+rotation involved there.
+
+A `sitTarget` always outranks any in-range `leanTarget` (sitting reads as
+a stronger "resting" signal than leaning); within the same kind, nearest
+wins. No pathfinding — same "keep it simple" precedent #2044's own landing-
+spot search already established for a comparably-scoped proximity search
+in this file.
+
+**Scope, deliberately narrow:** this is selection only. `shopIdleInteractionTarget`
+is computed and exposed for the sit/lean pose sub-issues (#2478/#2479) to
+consume later — today's existing "stand" sway runs completely unaffected
+by whatever this returns, matching the issue's own "fall back to stand
+sway unchanged" framing. There is no pose change, no facing change, no
+visible behavior difference yet.
+
+#### Testing note
+
+`e2e/shop-idle-sit-lean-targeting.test.mjs` places a real chair instance
+with a `sitTarget` via the real build/catalog APIs, teleports the avatar
+within range, and polls `window.__testShopIdleInteractionTarget()` (a
+read-only test hook mirroring the cached value, alongside
+`window.__testFindShopIdleInteractionTarget(x, y)` for driving the search
+function directly) until the idle episode populates it, confirming the
+rotated world position/facing match a hand-computed expectation; a second
+case confirms a target outside the search radius is correctly ignored
+(returns `null`, not just "something").
 
 ## Control Room API (N31)
 
