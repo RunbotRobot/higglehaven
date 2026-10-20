@@ -4885,8 +4885,14 @@ async function handleNotifications(request, db, route, url) {
     await checkRateLimit(db, `notification-mutate:${sessionBuilder.builder_id}`, NOTIFICATION_MUTATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (input.read === true) {
+      // #2509: guarded on read_at IS NULL, matching every sibling mark-read
+      // write (mark-all-read just below, direct-message mark-read, the
+      // sold-out-marker dismiss) -- without it, a second PATCH (e.g. a fast
+      // double-tap/Enter-plus-click before the first request's response
+      // clears the click handler) re-stamps read_at to a later time than
+      // when the user actually first read it.
       await db.prepare(`
-        UPDATE notifications SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE notification_id = ?
+        UPDATE notifications SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE notification_id = ? AND read_at IS NULL
       `).bind(route[1]).run();
     }
     const updated = await db.prepare('SELECT * FROM notifications WHERE notification_id = ?').bind(route[1]).first();
