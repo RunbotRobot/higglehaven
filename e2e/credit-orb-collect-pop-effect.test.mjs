@@ -45,10 +45,16 @@ await page.waitForTimeout(100);
 await page.mouse.up();
 await page.waitForTimeout(100);
 
-await page.evaluate(([x, y]) => {
-  window.__testTeleportShopAvatar(x, y);
+// #2443: explicit z=0 (rather than omitting z, which leaves whatever
+// altitude the avatar last had -- still SHOP_SPAWN_START_ALTITUDE_M's 80m
+// here, since breaking the hands-off spawn orbit above only frees x/y, not
+// altitude) genuinely grounds the avatar, matching
+// e2e/credit-orb-collect.test.mjs's own #2443 fix -- collection now
+// requires real ground-level altitude, not just horizontal proximity.
+await page.evaluate(([x, y, z]) => {
+  window.__testTeleportShopAvatar(x, y, z);
   window.__testForceShopProximityCheck();
-}, [myLandlet.center.x, myLandlet.center.y]);
+}, [myLandlet.center.x, myLandlet.center.y, 0]);
 await page.waitForTimeout(500);
 
 const popEffectsBeforeCollecting = await page.evaluate(() => window.__testActiveCreditOrbPopEffectCount());
@@ -63,9 +69,31 @@ await page.evaluate(([x, y]) => {
   window.__testForceShopProximityCheck();
 }, [orbWorldX, orbWorldY]);
 
-await page.waitForSelector('#shop-credit-orb-toast.visible', { timeout: 5000 });
-
-const popEffectsRightAfterCollecting = await page.evaluate(() => window.__testActiveCreditOrbPopEffectCount());
+// A plain `waitForSelector` followed by a separate `evaluate` call races two
+// Node<->browser round trips against CREDIT_ORB_POP_LIFESPAN_S (0.4s) --
+// under real load, the gap between the two round trips alone can exceed
+// that lifespan, so the pop effect can already be spliced out of
+// creditOrbPopEffects by the time the second call reads it, even though it
+// was genuinely spawned (synchronously, in the very same .then() callback
+// that sets the toast visible) and is still well within its own lifespan at
+// that moment. Reading the pop effect count inside the same in-page
+// requestAnimationFrame-driven poll that detects the toast becoming visible
+// eliminates that gap entirely -- both reads happen in the same tick, with
+// zero round-trip in between.
+const popEffectsRightAfterCollecting = await page.evaluate(() => new Promise((resolve) => {
+  const deadline = performance.now() + 5000;
+  (function poll() {
+    if (document.getElementById('shop-credit-orb-toast')?.classList.contains('visible')) {
+      resolve(window.__testActiveCreditOrbPopEffectCount());
+      return;
+    }
+    if (performance.now() > deadline) {
+      resolve(-1); // sentinel: toast never became visible within the timeout
+      return;
+    }
+    requestAnimationFrame(poll);
+  })();
+}));
 console.log('pop effect spawned right after collecting (should be 1):', popEffectsRightAfterCollecting);
 
 // CREDIT_ORB_POP_LIFESPAN_S is 0.4s -- waiting well past it confirms
