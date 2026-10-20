@@ -11086,6 +11086,12 @@ async function handleConfirmCard(request, env, db) {
       WHERE user_id = ?
     `).bind(user.user_id).run();
     const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+    // #2430: a concurrent account deletion (self-delete from another
+    // session, or escalateExpiredSuspensions' own cascade) landing in the
+    // await gap since the UPDATE above can remove this row before this
+    // re-SELECT runs -- same race shape #2334/#2354/#2364/#2391/#2392
+    // already fixed elsewhere, not an uncaught userFromRow(undefined) crash.
+    if (!updated) return json({ error: 'Account no longer exists' }, 404);
     return json({ user: userFromRow(updated) });
   }
   // #1072: this used to trust a client-supplied paymentMethodId directly,
@@ -11134,6 +11140,10 @@ async function handleConfirmCard(request, env, db) {
     throw new HttpError('Only credit cards are accepted for this step — debit and prepaid cards can\'t be used.', 400);
   }
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  // #2430: same concurrent-account-deletion race as handleConfirmCard's own
+  // re-SELECT above -- a concurrent delete landing in the await gap since
+  // the UPDATE can remove this row before this re-SELECT runs.
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(updated) });
 }
 
@@ -11168,6 +11178,12 @@ async function handleAgeAttest(request, db) {
     `).bind(new Date().toISOString(), user.user_id).run();
   }
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  // #2430: same concurrent-account-deletion race as handleConfirmCard's own
+  // re-SELECT above (self-delete from another session, or
+  // escalateExpiredSuspensions' own cascade) -- can remove this row in the
+  // await gap since the UPDATE (or, when already attested, since the
+  // requireCurrentUser read at the top of this handler).
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(updated) });
 }
 
@@ -11740,6 +11756,13 @@ async function handleChangeEmail(request, env, db) {
   if (result.meta.changes === 0) throw new HttpError('Email is already registered', 409);
   const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, email);
   const row = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  // #2430: the UPDATE's own meta.changes check above only confirms it
+  // matched a row (and won the email-collision race) at the moment it ran
+  // -- a concurrent account deletion landing in the await gap since (the
+  // issueEmailVerification call above) can still remove the row before
+  // this re-SELECT runs, same race shape #2334/#2354/#2364/#2391/#2392
+  // already fixed elsewhere.
+  if (!row) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(row), verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
 }
 
@@ -11813,6 +11836,12 @@ async function handleLogin(request, db, url) {
 
   const sessionToken = await createSession(db, row.user_id);
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(row.user_id).first();
+  // #2430: a concurrent account deletion (another session's own self-
+  // delete, or escalateExpiredSuspensions' own cascade) landing in the
+  // await gap since the UPDATE above (or createSession just before) can
+  // remove this row before this re-SELECT runs, same race shape
+  // #2334/#2354/#2364/#2391/#2392 already fixed elsewhere.
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json(
     { user: userFromRow(updated) },
     200,
@@ -18401,11 +18430,17 @@ async function getInstancesById(db, instanceIds) {
 // 4xx. Checked only after `HttpError` in the top-level catch, so routes
 // with a more specific pre-check (assertReferenceExists above) keep their
 // own message instead of falling through to this generic one.
+// #2440: the three generic (non-ring-specific) messages below used to name
+// the underlying SQL constraint type directly ("UNIQUE constraint failed"
+// -> "Resource already exists", etc.) -- raw backend language the frontend
+// shows verbatim via `alert(err.message || ...)`. Reworded to plain,
+// in-app phrasing with the same meaning; the ring-specific messages above
+// were already written this way and are left unchanged.
 function databaseHttpError(error) {
   const message = errorMessages(error);
 
   if (message.includes('UNIQUE constraint failed')) {
-    return new HttpError('Resource already exists', 409);
+    return new HttpError('That already exists.', 409);
   }
   if (message.includes('generated ring radial overlap')) {
     return new HttpError('Generated ring would overlap existing generated rings', 409);
@@ -18420,10 +18455,10 @@ function databaseHttpError(error) {
     return new HttpError('Generated ring candidates cannot be changed individually', 409);
   }
   if (message.includes('FOREIGN KEY constraint failed')) {
-    return new HttpError('Referenced resource does not exist or is still in use', 409);
+    return new HttpError("That didn't go through — something it depends on is missing, or something else still depends on it.", 409);
   }
   if (message.includes('CHECK constraint failed') || message.includes('NOT NULL constraint failed')) {
-    return new HttpError('Request violates a database constraint', 400);
+    return new HttpError('That request has an invalid or missing value — please check the details and try again.', 400);
   }
 
   return null;
