@@ -62,10 +62,17 @@ await page.route('**/api/credit-orbs/*/collect', (route) => {
 
 const orbWorldX = myLandlet.center.x + ORB_X;
 const orbWorldY = myLandlet.center.y + ORB_Y;
-await page.evaluate(([x, y]) => {
-  window.__testTeleportShopAvatar(x, y);
+// #2443: explicit z=0 (rather than omitting z, which leaves whatever
+// altitude the avatar last had -- still SHOP_SPAWN_START_ALTITUDE_M's 80m
+// here, since breaking the hands-off spawn orbit above only frees x/y, not
+// altitude) genuinely grounds the avatar, matching
+// e2e/credit-orb-collect.test.mjs's own #2443 fix -- collection (and so
+// this test's own simulated collect attempts) now requires real
+// ground-level altitude, not just horizontal proximity.
+await page.evaluate(([x, y, z]) => {
+  window.__testTeleportShopAvatar(x, y, z);
   window.__testForceShopProximityCheck();
-}, [orbWorldX, orbWorldY]);
+}, [orbWorldX, orbWorldY, 0]);
 
 // Standing on the orb for well under CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS
 // (3000ms) -- a brief failure streak shouldn't flash the notice yet.

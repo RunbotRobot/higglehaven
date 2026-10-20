@@ -5205,6 +5205,13 @@ async function handleFriendships(request, db, route, url) {
     await fireNotification(db, recipientBuilderId,
       `${sessionBuilder.label} sent you a friend request.`);
     const row = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).first();
+    // #2469: a concurrent DELETE (the recipient declining the request we
+    // just notified them about, or either side's own self-delete cascade)
+    // can remove this row in the await gap since the INSERT -- a genuine
+    // 404, same race shape #2334/#2354/#2364/#2391/#2392/#2429/#2430
+    // already fixed elsewhere, not an uncaught friendshipFromRow(undefined)
+    // crash.
+    if (!row) return json({ error: 'Friendship not found' }, 404);
     const labelsById = await labelsByBuilderId(db, [recipientBuilderId]);
     const landletsById = await ownedLandletsByBuilderId(db, [recipientBuilderId]);
     return json({ friendship: friendshipFromRow(row, requesterBuilderId, labelsById, landletsById) }, 201);
@@ -5721,6 +5728,13 @@ async function handleBundles(request, db, route, url) {
       INSERT INTO bundles (bundle_id, builder_id, name, items_json, shared) VALUES (?, ?, ?, ?, ?)
     `).bind(bundleId, builderId, name, JSON.stringify(items), shared ? 1 : 0).run();
     const row = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(bundleId).first();
+    // #2469: a concurrent DELETE of this same bundle (the id is
+    // predictable from the idempotency key, so a same-owner retry/second
+    // tab can target it) or a self-delete cascade can remove this row in
+    // the await gap since the INSERT -- same race shape #2426 already
+    // fixed for this resource's own PATCH, not an uncaught
+    // bundleFromRow(undefined) crash.
+    if (!row) return json({ error: 'Bundle not found' }, 404);
     return json({ bundle: bundleFromRow(row) }, 201);
   }
 
@@ -5942,6 +5956,10 @@ async function handleStartAuction(request, db, landletId) {
     throw new HttpError('This landlet already has an active auction', 409);
   }
   const row = await db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auctionId).first();
+  // #2427: a concurrent self-delete can remove this just-created, still-
+  // zero-bid auction (builderDeletionStatements) between the INSERT above
+  // and this re-SELECT, same idiom as #2334/#2354/#2364/#2391/#2392.
+  if (!row) throw new HttpError('This landlet no longer has an active auction — it may have been removed concurrently', 409);
   return json({ auction: await auctionFromRow(db, row) }, 201);
 }
 
@@ -6167,6 +6185,15 @@ async function handleLandletLevels(request, db, route) {
     }
     await recomputeLandCap(db, landlet.owner_builder_id);
     const row = await db.prepare('SELECT * FROM landlet_levels WHERE level_id = ?').bind(levelId).first();
+    // #2469: a concurrent removal of this exact (deterministically-indexed,
+    // outermost) level from a second tab, a builder self-delete cascade, a
+    // concurrent auction resolution (resolveAuction's own
+    // DELETE FROM landlet_levels), or an admin reassign-owner can remove
+    // this row in the await gap since the INSERT (or recomputeLandCap just
+    // above) -- a genuine race, not an uncaught levelFromRow(undefined)
+    // crash. Same idiom as #2334/#2354/#2364/#2391/#2392/#2429/#2430, 409
+    // to match this branch's own "changed -- please retry" message above.
+    if (!row) throw new HttpError('This landlet\'s levels changed — please retry', 409);
     return json({ level: levelFromRow(row) }, 201);
   }
 
@@ -9335,11 +9362,13 @@ const CREDIT_ORB_COLLECT_RATE_LIMIT_MAX = 20;
 // calls. Reuses this file's only other avatar_presence-freshness idiom
 // (PRESENCE_STALE_AFTER_MS, #1767) rather than inventing a second one, and
 // a radius generous enough to tolerate that same staleness window's worth
-// of real movement at SHOP_RUN_SPEED_M_S (2.7m/s, ~27m) on top of the
-// client's own 1.5m collect radius -- the point of this check is requiring
-// *some* fresh, correctly-landletted presence at all (what the scripted
-// exploit has none of), not pixel-perfect anti-cheat precision.
-const CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M = 30;
+// of real movement at SHOP_RUN_SPEED_M_S (#2481: 4.4704m/s/10mph as of
+// #2444, ~45m -- was 2.7m/s/~27m when this constant was first set, see
+// #2481) on top of the client's own 1.5m collect radius -- the point of
+// this check is requiring *some* fresh, correctly-landletted presence at
+// all (what the scripted exploit has none of), not pixel-perfect
+// anti-cheat precision.
+const CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M = 50;
 
 // GET /api/credit-orbs (optionally ?landletId=... to scope to one landlet,
 // per #1994's own "or scoped by landlet" note) -- the frontend's read path
