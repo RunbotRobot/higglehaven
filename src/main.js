@@ -15683,6 +15683,7 @@ function updateShopMovement(now) {
   updateCalendarFade();
   updateReviewFade();
   updateCreditOrbs(dt);
+  updateCreditOrbPopEffects(dt);
   if (now - lastScheduledEventCheck >= SCHEDULED_EVENT_CHECK_INTERVAL_MS) {
     lastScheduledEventCheck = now;
     checkScheduledCalendarEvents();
@@ -16245,6 +16246,41 @@ function createCreditOrbMesh() {
   return mesh;
 }
 
+// #2441: a brief scale-up-then-fade pop, played on a detached clone of the
+// just-collected orb's own mesh rather than the real orb -- same "own
+// geometry/material, disposed once its short lifespan ends" shape as
+// spawnConfettiBurst/updateConfettiBursts below, just for a single growing,
+// fading sphere instead of a particle burst. Spawned on a clone (never
+// orb.mesh itself, which removeCreditOrb disposes immediately after) so
+// this purely cosmetic effect never has to finish before collection logic/
+// collision moves on.
+const CREDIT_ORB_POP_LIFESPAN_S = 0.4;
+const CREDIT_ORB_POP_END_SCALE = 2.5;
+const creditOrbPopEffects = [];
+
+function spawnCreditOrbPopEffect(orb) {
+  const mesh = new THREE.Mesh(orb.mesh.geometry.clone(), orb.mesh.material.clone());
+  mesh.material.transparent = true;
+  mesh.position.copy(orb.mesh.position);
+  orb.group.add(mesh);
+  creditOrbPopEffects.push({ mesh, group: orb.group, elapsed: 0 });
+}
+
+function updateCreditOrbPopEffects(dt) {
+  for (const effect of [...creditOrbPopEffects]) {
+    effect.elapsed += dt;
+    const t = THREE.MathUtils.clamp(effect.elapsed / CREDIT_ORB_POP_LIFESPAN_S, 0, 1);
+    effect.mesh.scale.setScalar(1 + (CREDIT_ORB_POP_END_SCALE - 1) * t);
+    effect.mesh.material.opacity = 1 - t;
+    if (effect.elapsed >= CREDIT_ORB_POP_LIFESPAN_S) {
+      effect.group.remove(effect.mesh);
+      effect.mesh.geometry.dispose();
+      effect.mesh.material.dispose();
+      creditOrbPopEffects.splice(creditOrbPopEffects.indexOf(effect), 1);
+    }
+  }
+}
+
 let creditOrbShimmerElapsedS = 0;
 const scratchCreditOrbWorldPos = new THREE.Vector3();
 
@@ -16277,6 +16313,10 @@ function updateCreditOrbs(dt) {
     if (Math.hypot(dx, dy) > CREDIT_ORB_COLLECT_RADIUS_M) continue;
     orb.collecting = true;
     collectCreditOrb(orb.orbId).then(() => {
+      // #2441: spawned before removeCreditOrb disposes the real orb.mesh
+      // below -- this clones it first, so the pop has its own geometry/
+      // material to animate independently of the disposal.
+      spawnCreditOrbPopEffect(orb);
       removeCreditOrb(orb);
       showCreditOrbToast();
     }).catch((error) => {
@@ -16324,6 +16364,11 @@ function removeCreditOrb(orb) {
 // -- lets a test confirm an orb survives a transient collect failure
 // (429/500/network) instead of being wrongly removed from the scene.
 window.__testActiveCreditOrbIds = () => shopCreditOrbs.map((orb) => orb.orbId);
+// #2441: same e2e-only convention as window.__testActiveCreditOrbIds just
+// above -- lets a test confirm a pop effect actually spawned on collection
+// (and, after waiting out CREDIT_ORB_POP_LIFESPAN_S, that it cleaned itself
+// up again) without depending on fragile pixel-level visual assertions.
+window.__testActiveCreditOrbPopEffectCount = () => creditOrbPopEffects.length;
 
 function showCreditOrbToast() {
   shopCreditOrbToastEl.classList.add('visible');
