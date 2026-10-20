@@ -12291,22 +12291,19 @@ const EXPORT_DATA_RATE_LIMIT_MAX = 10;
 
 // #1986 (sub-issue of #1983): the `social` section of handleExportData
 // below. Most of these tables genuinely key off builder_id/user_id, but
-// two don't, and this returns the best available approximation rather
-// than silently omitting them:
-// - calendar_events has no author column at all (unlike sign_posts, which
-//   got a real user_id in #1830/migrations/0125) -- only a free-text
-//   author_label stamped from the poster's label at post time (#289). A
-//   label match against this account's CURRENT label is the best signal
-//   available; it misses events posted under a since-changed label and
-//   could, in principle, catch another account that happens to share
-//   today's label with a past poster. Flagged here rather than guessed
-//   past silently -- a real author_id column is the actual fix, tracked
-//   separately from this export feature.
+// one doesn't, and this returns the best available approximation rather
+// than silently omitting it:
 // - landlet_versions/version_instances have no author column either --
 //   only landlet_id. "Authored by this builder" is approximated as
 //   "versions of landlets this builder currently owns," since landlet
 //   ownership itself can change hands (auction, admin reassignment) and
 //   nothing records who actually created a given version.
+// calendar_events used to be in this same "no real author column" bucket
+// (a free-text author_label match against this account's CURRENT label,
+// per #289) -- migrations/0135_calendar_events_user_id.sql (#1975) closed
+// that gap with a real user_id FK, same shape as sign_posts (#1830/
+// migrations/0125). See the calendarEvents query below for the real
+// filter now in use.
 async function exportSocialSection(db, builderId, userId) {
   const friendships = await db.prepare(`
     SELECT * FROM friendships WHERE requester_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
