@@ -8030,7 +8030,12 @@ async function generateConceptImageBytes(env, prompt) {
     headers: { authorization: `Bearer ${env.OPENAI_API_KEY}`, 'content-type': 'application/json' },
     body: JSON.stringify({ model: 'gpt-image-1', prompt, size: '1024x1024', n: 1 }),
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page (HTML, empty, or truncated) makes
+  // response.json() itself throw before the !response.ok check below ever
+  // runs, otherwise surfacing as an uncaught 500 instead of this function's
+  // own intended 502.
+  const data = await response.json().catch(() => null);
   // #1548: same response-shape validation fetchTax1099EfilingToken/transmitTax1099Form
   // already do for their own third-party JSON -- without it, a 200 response with an
   // unexpected shape throws an uncaught TypeError instead of a clean 502.
@@ -8097,7 +8102,11 @@ async function stripeRequest(env, method, path, params, idempotencyKey, stripeAc
     headers,
     body: params ? new URLSearchParams(flattenStripeParams(params, '')) : undefined,
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502/400.
+  const data = await response.json().catch(() => null);
   if (!response.ok) {
     throw new HttpError(data?.error?.message || 'Stripe request failed', response.status >= 500 ? 502 : 400);
   }
@@ -8416,7 +8425,11 @@ async function diditRequest(env, method, path, body) {
     headers: { 'x-api-key': env.DIDIT_API_KEY, 'content-type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502/400.
+  const data = await response.json().catch(() => null);
   if (!response.ok) {
     throw new HttpError(data?.message || 'Didit request failed', response.status >= 500 ? 502 : 400);
   }
@@ -10634,7 +10647,11 @@ async function fetchTax1099EfilingToken(env) {
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(unsigned));
   const jws = `${unsigned}.${base64UrlEncode(new Uint8Array(signature))}`;
   const response = await fetch(TAX_1099_EFILING_TOKEN_URL, { headers: { authentication: jws } });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502.
+  const data = await response.json().catch(() => null);
   if (!response.ok || !data?.AccessToken) {
     throw new HttpError(data?.StatusMessage || '1099 e-filing authentication failed', 502);
   }
@@ -10679,7 +10696,15 @@ async function transmitTax1099Form(env, { form, payeeEmail, payeeTaxId }) {
     headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502. Orthogonal to
+  // #1475's own ambiguous-post-transmission-failure question (whether the
+  // vendor actually received this submission before failing) -- this only
+  // changes an unparseable response from a raw 500 into the same clean 502
+  // every other failure here already gets, not what a 502 then implies.
+  const data = await response.json().catch(() => null);
   if (!response.ok || !data?.SubmissionId) {
     throw new HttpError(data?.StatusMessage || '1099 e-filing transmission failed', 502);
   }
