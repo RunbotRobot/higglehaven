@@ -13508,6 +13508,14 @@ const SHOP_IDLE_HEAD_TURN_MAX_RAD = 0.4; // a natural glance range, not a full l
 const SHOP_IDLE_HEAD_TURN_INTERVAL_MIN_S = 2.5;
 const SHOP_IDLE_HEAD_TURN_INTERVAL_MAX_S = 5;
 const SHOP_IDLE_HEAD_TURN_EASE_PER_S = 1.5;
+// #2479 (sub-issue of #2475): lean pose -- how far the whole body tilts
+// back against a leanTarget's surface at full idle blend. Same local-X
+// axis/eased-toward-a-target idiom as SHOP_AVATAR_FLIGHT_PITCH_RAD just
+// above, opposite sign (that one tilts forward into a dive; this tilts
+// backward into a wall behind the avatar, matching a leanTarget's own
+// facingRad -- "the direction the avatar faces while leaning," i.e. away
+// from whatever it's leaning against).
+const SHOP_LEAN_PITCH_RAD = (12 * Math.PI) / 180;
 const SHOP_JOYSTICK_MAX_PX = 46;
 const SHOP_JOYSTICK_DEADZONE_PX = 6;
 // This near/far load-unload distance (plus the middle-LOD band just below,
@@ -14943,6 +14951,20 @@ let shopIdleHeadIntervalS = THREE.MathUtils.randFloat(SHOP_IDLE_HEAD_TURN_INTERV
 // this value, matching #2477's own "fall back to stand sway unchanged"
 // scope -- this sub-issue is selection only, not the pose itself.
 let shopIdleInteractionTarget = null;
+// #2479: lean pose -- the avatar's own authoritative position
+// (shopAvatarPosition) at the instant a leanTarget is selected above,
+// frozen as this blend's start point. Combined every frame in
+// updateShopAvatarIdle with the target's own worldX/Y/Z via shopIdleBlend
+// to ease the avatar bodily toward the surface it's leaning against --
+// positionShopCamera reads shopAvatarPosition directly, so this has to
+// move the real position, not just the rendered mesh, or the camera would
+// stay anchored to the pre-lean spot while the visible body drifted away
+// from it. Null whenever no lean is active (re-armed alongside
+// shopIdleInteractionTarget). shopLeanFacingDeltaRad is the shortest-path
+// facing delta toward the target's own worldFacingRad, applied the same
+// way shopIdleSwayYawOffset already is below.
+let shopLeanStart = null;
+let shopLeanFacingDeltaRad = 0;
 
 // Flight state (docs/SPEC.md §2) — see updateShopFlight/toggleShopFlight.
 // 'grounded' | 'takingOff' | 'flying' | 'landing'. Toggling mid-transition
@@ -15056,6 +15078,8 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     shopIdleBlend = 0;
     shopAfkBlend = 0;
     shopIdleInteractionTarget = null; // re-arm (#2477) for the next idle episode
+    shopLeanStart = null; // re-arm (#2479) alongside it
+    shopLeanFacingDeltaRad = 0;
   } else {
     // #2477: fires exactly once per idle episode, the instant elapsed time
     // first crosses SHOP_IDLE_DELAY_S -- not every frame afterward, since
@@ -15066,12 +15090,35 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     const idleTarget = shopIdleElapsedS >= SHOP_IDLE_DELAY_S ? 1 : 0;
     if (!wasIdle && idleTarget === 1) {
       shopIdleInteractionTarget = findShopIdleInteractionTarget(shopAvatarPosition.x, shopAvatarPosition.y);
+      // #2479: captured once per episode, same "idle means nothing else is
+      // moving shopAvatarPosition/shopAvatarFacing anyway" reasoning
+      // shopIdleInteractionTarget's own caching already relies on.
+      if (shopIdleInteractionTarget?.kind === 'lean') {
+        shopLeanStart = { x: shopAvatarPosition.x, y: shopAvatarPosition.y, z: shopAvatarPosition.z };
+        shopLeanFacingDeltaRad = shortestAngleDelta(shopAvatarFacing, shopIdleInteractionTarget.worldFacingRad);
+      } else {
+        shopLeanStart = null;
+        shopLeanFacingDeltaRad = 0;
+      }
     }
     shopIdleBlend += (idleTarget - shopIdleBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
     const afkTarget = shopIdleElapsedS >= SHOP_AFK_DELAY_S ? 1 : 0;
     shopAfkBlend += (afkTarget - shopAfkBlend) * Math.min(1, SHOP_AFK_BLEND_PER_S * dt);
   }
   shopAvatar.afkSprite.material.opacity = shopAfkBlend;
+
+  // #2479: re-derived from the frozen shopLeanStart baseline every frame
+  // (not accumulated onto the previous frame's own already-blended value)
+  // so it tracks shopIdleBlend's own ease-in/hard-cut-out exactly, the same
+  // way the sway/head-turn terms below do. Runs after the ground-level z
+  // reset above (shopFlightAltitudeM - curvatureDropM(...)) in the caller,
+  // so it's this blended value that sticks for the frame.
+  if (shopLeanStart) {
+    const blend = shopIdleBlend;
+    shopAvatarPosition.x = shopLeanStart.x + (shopIdleInteractionTarget.worldX - shopLeanStart.x) * blend;
+    shopAvatarPosition.y = shopLeanStart.y + (shopIdleInteractionTarget.worldY - shopLeanStart.y) * blend;
+    shopAvatarPosition.z = shopLeanStart.z + (shopIdleInteractionTarget.worldZ - shopLeanStart.z) * blend;
+  }
 
   shopIdleSwayPhase += (dt / shopIdleSwayPeriodS) * Math.PI * 2;
   if (shopIdleSwayPhase >= Math.PI * 2) {
@@ -15996,9 +16043,15 @@ function updateShopMovement(now) {
   // independent `.rotation.x`/`.rotation.z` Euler fields (the old code
   // here) can't express this and always tilted the same way regardless of
   // facing direction.
-  const targetAvatarPitch = airborne ? SHOP_AVATAR_FLIGHT_PITCH_RAD : 0;
+  // #2479: leanBlend is shopIdleBlend's own ease-in/hard-cut-out, gated to
+  // only the frames a lean target is actually active for this idle episode
+  // -- 0 whenever shopIdleInteractionTarget is null or 'sit', same as
+  // shopLeanStart/shopLeanFacingDeltaRad above, so the terms below are
+  // harmless no-ops outside an actual lean.
+  const leanBlend = shopIdleInteractionTarget?.kind === 'lean' ? shopIdleBlend : 0;
+  const targetAvatarPitch = airborne ? SHOP_AVATAR_FLIGHT_PITCH_RAD : SHOP_LEAN_PITCH_RAD * leanBlend;
   shopAvatarPitch += (targetAvatarPitch - shopAvatarPitch) * Math.min(1, SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S * dt);
-  scratchAvatarYawQuat.setFromAxisAngle(SHOP_AVATAR_YAW_AXIS, shopAvatarFacing + shopIdleSwayYawOffset);
+  scratchAvatarYawQuat.setFromAxisAngle(SHOP_AVATAR_YAW_AXIS, shopAvatarFacing + shopIdleSwayYawOffset + shopLeanFacingDeltaRad * leanBlend);
   scratchAvatarPitchQuat.setFromAxisAngle(SHOP_AVATAR_PITCH_AXIS, shopAvatarPitch);
   shopAvatar.group.quaternion.copy(scratchAvatarYawQuat).multiply(scratchAvatarPitchQuat);
   // #1168: same reasoning as window.__shopAvatarMetrics above — this file's
@@ -16007,8 +16060,10 @@ function updateShopMovement(now) {
   // plain, frame-updated snapshot (not the live THREE.Quaternion itself,
   // which Playwright's page.evaluate can't structured-clone) is enough for
   // a test to confirm the tilt direction actually tracks shopAvatarFacing
-  // rather than staying fixed.
-  window.__shopAvatarOrientation = { facingRad: shopAvatarFacing, pitchRad: shopAvatarPitch, quaternion: shopAvatar.group.quaternion.toArray() };
+  // rather than staying fixed. leanBlend (#2479) lets a test confirm the
+  // lean pose is actually easing in/out rather than just checking the
+  // position/facing ended up in the right place.
+  window.__shopAvatarOrientation = { facingRad: shopAvatarFacing, pitchRad: shopAvatarPitch, quaternion: shopAvatar.group.quaternion.toArray(), leanBlend };
   // #1588: same reasoning as window.__shopAvatarOrientation above — shopYaw
   // (the free-look camera's own heading) has no other way for a test to
   // read it, and the camera-lock-to-facing setting needs to confirm it
