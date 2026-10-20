@@ -5063,6 +5063,12 @@ async function handlePresence(request, db, route, url) {
     `).bind(sessionBuilder.builder_id, landletId, x, y, z, heading, flying ? 1 : 0).run();
     const row = await db.prepare('SELECT * FROM avatar_presence WHERE builder_id = ?')
       .bind(sessionBuilder.builder_id).first();
+    // #2492: not found here means a concurrent self-delete (migrations/0100's
+    // own ON DELETE CASCADE on builder_id) landed in the single await gap
+    // between the upsert above and this re-SELECT -- a genuine 404, same
+    // race shape #2334/#2354/#2391/#2428/#2429 already fixed elsewhere, not
+    // an uncaught null-dereference crash.
+    if (!row) return json({ error: 'Your account was deleted concurrently — please sign in again' }, 404);
     return json({
       presence: {
         landletId: row.landlet_id,
@@ -8064,7 +8070,12 @@ async function generateConceptImageBytes(env, prompt) {
     headers: { authorization: `Bearer ${env.OPENAI_API_KEY}`, 'content-type': 'application/json' },
     body: JSON.stringify({ model: 'gpt-image-1', prompt, size: '1024x1024', n: 1 }),
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page (HTML, empty, or truncated) makes
+  // response.json() itself throw before the !response.ok check below ever
+  // runs, otherwise surfacing as an uncaught 500 instead of this function's
+  // own intended 502.
+  const data = await response.json().catch(() => null);
   // #1548: same response-shape validation fetchTax1099EfilingToken/transmitTax1099Form
   // already do for their own third-party JSON -- without it, a 200 response with an
   // unexpected shape throws an uncaught TypeError instead of a clean 502.
@@ -8131,7 +8142,11 @@ async function stripeRequest(env, method, path, params, idempotencyKey, stripeAc
     headers,
     body: params ? new URLSearchParams(flattenStripeParams(params, '')) : undefined,
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502/400.
+  const data = await response.json().catch(() => null);
   if (!response.ok) {
     throw new HttpError(data?.error?.message || 'Stripe request failed', response.status >= 500 ? 502 : 400);
   }
@@ -8450,7 +8465,11 @@ async function diditRequest(env, method, path, body) {
     headers: { 'x-api-key': env.DIDIT_API_KEY, 'content-type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502/400.
+  const data = await response.json().catch(() => null);
   if (!response.ok) {
     throw new HttpError(data?.message || 'Didit request failed', response.status >= 500 ? 502 : 400);
   }
@@ -8981,6 +9000,17 @@ export async function reserveVideoGenerationJob(db, builderId) {
   return { reservationId: jobId, existing: null };
 }
 
+// #2410: handleVideoGenerationJobCreate's own dedup pre-check (below,
+// before the real-cost rate limit) must not treat a stale 'pending' row --
+// the exact row reserveVideoGenerationJob's own sweep above exists to
+// recover -- as still in flight. Without this, that pre-check intercepts
+// every subsequent request for this builder forever, since it never routes
+// through reserveVideoGenerationJob (or its sweep) at all once it does.
+function isStaleVideoGenerationReservation(row) {
+  return row.status === 'pending'
+    && new Date(row.created_at).getTime() < Date.now() - VIDEO_GENERATION_RESERVATION_TIMEOUT_MS;
+}
+
 // Downloads Tripo's own (third-party, time-limited) output URL and
 // re-stores the bytes in the same MODELS R2 bucket/content-addressed
 // shape POST /api/models (handleModelUpload) already produces, so the
@@ -9192,7 +9222,7 @@ async function handleVideoGenerationJobCreate(request, env, db) {
   // this pre-check can't see -- same residual gap Didit's own
   // reserveDiditSession has for the identical reason.)
   const latest = await latestVideoGenerationJob(db, sessionBuilder.builder_id);
-  if (latest && latest.processed_at === null) {
+  if (latest && latest.processed_at === null && !isStaleVideoGenerationReservation(latest)) {
     return json({ jobId: latest.job_id, status: latest.status });
   }
   await checkRateLimit(db, `video-generation:${sessionBuilder.builder_id}`, VIDEO_GENERATION_RATE_LIMIT_MAX);
@@ -10724,7 +10754,11 @@ async function fetchTax1099EfilingToken(env) {
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(unsigned));
   const jws = `${unsigned}.${base64UrlEncode(new Uint8Array(signature))}`;
   const response = await fetch(TAX_1099_EFILING_TOKEN_URL, { headers: { authentication: jws } });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502.
+  const data = await response.json().catch(() => null);
   if (!response.ok || !data?.AccessToken) {
     throw new HttpError(data?.StatusMessage || '1099 e-filing authentication failed', 502);
   }
@@ -10769,7 +10803,15 @@ async function transmitTax1099Form(env, { form, payeeEmail, payeeTaxId }) {
     headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502. Orthogonal to
+  // #1475's own ambiguous-post-transmission-failure question (whether the
+  // vendor actually received this submission before failing) -- this only
+  // changes an unparseable response from a raw 500 into the same clean 502
+  // every other failure here already gets, not what a 502 then implies.
+  const data = await response.json().catch(() => null);
   if (!response.ok || !data?.SubmissionId) {
     throw new HttpError(data?.StatusMessage || '1099 e-filing transmission failed', 502);
   }
