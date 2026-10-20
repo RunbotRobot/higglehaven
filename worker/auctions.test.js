@@ -553,6 +553,61 @@ describe('Auctions', () => {
     expect(auctionSettlementEventId('auction-abc')).not.toBe(auctionSettlementEventId('auction-xyz'));
   });
 
+  // #2495: a genuine $0 winning bid (allowed on a $0-starting-bid auction,
+  // e.g. the inactivity-release cron's own give-away auctions) used to
+  // crash the settlement batch on higgles_earnings_events' CHECK
+  // (amount_cents > 0) -- resolution rolled back entirely, leaving
+  // ownership transferred but the earnings row never recorded and the
+  // old owner's build content never wiped. Migration 0150 relaxed the
+  // CHECK to (>= 0); this confirms resolution now completes cleanly and
+  // the resumability/dedupe signal (#875) still records a real, if $0,
+  // earnings-ledger row rather than being permanently skipped.
+  it('#2495: resolves cleanly when the winning bid is $0, instead of crashing settlement', async () => {
+    const owner = await signupBuilder('zero-bid-resolve-owner');
+    const bidder = await signupBuilder('zero-bid-resolve-bidder');
+    await createGreenbeltLandlet('zero-bid-resolve-landlet');
+    await claim('zero-bid-resolve-landlet', owner);
+    await api('/instances', owner.session({
+      method: 'POST',
+      body: JSON.stringify({ landletId: 'zero-bid-resolve-landlet', templateId: 'placeholder-tree', x: 1, y: 1 }),
+    }));
+    const started = await api('/landlets/zero-bid-resolve-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({ startingBidCents: 0 }),
+    }));
+    const auctionId = started.body.auction.auctionId;
+    const placedBid = await api(`/auctions/${auctionId}/bids`, bidder.session({
+      method: 'POST', body: JSON.stringify({ amountCents: 0 }),
+    }));
+    const bidId = placedBid.body.bid.bidId;
+    await env.DB.prepare(`UPDATE auctions SET ends_at = '2000-01-01T00:00:00.000Z' WHERE auction_id = ?`).bind(auctionId).run();
+
+    const resolved = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+    expect(resolved.response.status).toBe(200);
+    expect(resolved.body.auction.status).toBe('ended');
+    expect(resolved.body.auction.winningBidId).toBe(bidId);
+
+    const landlet = await api('/landlets/zero-bid-resolve-landlet');
+    expect(landlet.body.landlet.ownerBuilderId).toBe(bidder.builderId);
+    const instances = await api('/instances?landletId=zero-bid-resolve-landlet');
+    expect(instances.body.instances).toEqual([]);
+
+    const earningsRow = await env.DB.prepare(
+      'SELECT * FROM higgles_earnings_events WHERE event_id = ?',
+    ).bind(auctionSettlementEventId(auctionId)).first();
+    expect(earningsRow).toBeTruthy();
+    expect(earningsRow.amount_cents).toBe(0);
+
+    // Resolving again must not re-trigger settlement or re-fire the
+    // winner notification -- the $0 earnings row above is still a valid,
+    // real "already settled" marker.
+    const resolvedAgain = await api(`/auctions/${auctionId}/resolve`, { method: 'POST' });
+    expect(resolvedAgain.response.status).toBe(200);
+    const earningsCount = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM higgles_earnings_events WHERE builder_id = ?',
+    ).bind(owner.builderId).first();
+    expect(earningsCount.n).toBe(1);
+  });
+
   // #415: a draft save's ownership check (at the top of the handler) and
   // its actual write (a batch several awaits later) used to straddle a
   // resolving auction's own ownership-transfer-and-wipe batch, the same
