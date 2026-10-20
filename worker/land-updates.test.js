@@ -997,6 +997,14 @@ describe('Admin landlet ownership reassignment (#1177)', () => {
     await env.DB.prepare(`
       INSERT INTO landlet_versions (version_id, landlet_id, version_number, name) VALUES (?, ?, ?, ?)
     `).bind('reassign-cleanup-version', 'reassign-cleanup-landlet', 1, 'Version 1').run();
+    // #2508: sold_out_markers never got added to this reassign-owner cleanup
+    // when #2068 introduced the table -- seeded directly here the same way
+    // landlet_levels/landlet_versions are above, since no API path produces
+    // a marker without a real stock-sellout sweep.
+    await env.DB.prepare(`
+      INSERT INTO sold_out_markers (marker_id, landlet_id, x_m, y_m, z_m, template_id, template_name)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind('reassign-cleanup-marker', 'reassign-cleanup-landlet', 1, 1, 0, 'placeholder-tree', 'Placeholder Tree').run();
 
     const reassigned = await api('/landlets/reassign-cleanup-landlet/reassign-owner', adminSession({
       method: 'POST', body: JSON.stringify({ ownerBuilderId: target.builderId }),
@@ -1010,9 +1018,12 @@ describe('Admin landlet ownership reassignment (#1177)', () => {
       .bind('reassign-cleanup-landlet').all();
     const versions = await env.DB.prepare('SELECT * FROM landlet_versions WHERE landlet_id = ?')
       .bind('reassign-cleanup-landlet').all();
+    const markers = await env.DB.prepare('SELECT * FROM sold_out_markers WHERE landlet_id = ?')
+      .bind('reassign-cleanup-landlet').all();
     expect(instances.results).toEqual([]);
     expect(levels.results).toEqual([]);
     expect(versions.results).toEqual([]);
+    expect(markers.results).toEqual([]);
 
     // The level's cap_consumed_m2 no longer counts toward the new owner's
     // land cap, now that it's been cleared as part of the same reassignment
