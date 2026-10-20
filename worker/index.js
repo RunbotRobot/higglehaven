@@ -5056,6 +5056,12 @@ async function handlePresence(request, db, route, url) {
     `).bind(sessionBuilder.builder_id, landletId, x, y, z, heading, flying ? 1 : 0).run();
     const row = await db.prepare('SELECT * FROM avatar_presence WHERE builder_id = ?')
       .bind(sessionBuilder.builder_id).first();
+    // #2492: not found here means a concurrent self-delete (migrations/0100's
+    // own ON DELETE CASCADE on builder_id) landed in the single await gap
+    // between the upsert above and this re-SELECT -- a genuine 404, same
+    // race shape #2334/#2354/#2391/#2428/#2429 already fixed elsewhere, not
+    // an uncaught null-dereference crash.
+    if (!row) return json({ error: 'Your account was deleted concurrently — please sign in again' }, 404);
     return json({
       presence: {
         landletId: row.landlet_id,

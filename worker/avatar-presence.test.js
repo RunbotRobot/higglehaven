@@ -68,6 +68,38 @@ describe('POST /api/presence', () => {
     expect(results[0].x).toBe(10);
   });
 
+  // #2492: not found here means a concurrent self-delete (migrations/0100's
+  // own ON DELETE CASCADE on builder_id) landed in the single await gap
+  // between the upsert and this handler's own re-SELECT -- same race shape
+  // #2334/#2354/#2391/#2428/#2429 already cover elsewhere, previously an
+  // uncaught null-dereference crash instead of a clean 404. Same
+  // env.DB.prepare hijack idiom as other POST-then-reselect race tests in
+  // this suite, targeting the exact re-SELECT SQL (the only call site in
+  // this file matching this exact string).
+  it('does not crash with a raw 500 if the caller is deleted concurrently between the upsert and its re-SELECT', async () => {
+    const builder = await signupBuilder('presence-post-reselect-race');
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql === 'SELECT * FROM avatar_presence WHERE builder_id = ?') {
+        armed = false;
+        originalPrepare('DELETE FROM builders WHERE builder_id = ?').bind(builder.builderId).run();
+      }
+      return originalPrepare(sql);
+    };
+    let reported;
+    try {
+      reported = await api('/presence', builder.session({
+        method: 'POST', body: JSON.stringify({ x: 1, y: 2, z: 3 }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(reported.response.status).toBe(404);
+    expect(reported.body.error).toMatch(/deleted concurrently/i);
+  });
+
   it('heading is optional and stored as null when omitted', async () => {
     const builder = await signupBuilder('presence-no-heading');
     const reported = await api('/presence', builder.session({
