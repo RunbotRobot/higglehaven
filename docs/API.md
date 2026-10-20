@@ -768,10 +768,11 @@ sections populate correctly (including the no-seller-yet and
 seller-exists cases), never leaks a raw Didit payload, rate-limits (11th
 attempt is `429`), and the `social` section's every collection — including
 the real-purchase-id join for reviews/feedback, the real-`user_id` filter
-for sign posts (and that it excludes another account's), the best-effort
-label match for calendar events, saved-layout/landlet-version instances
-nesting correctly under their parent, and an all-empty baseline for an
-account with none of this activity.
+for sign posts and calendar events (and, for calendar events, that a
+legacy pre-migration-0135 row with no `user_id` is correctly excluded
+even when its free-text label matches), saved-layout/landlet-version
+instances nesting correctly under their parent, and an all-empty baseline
+for an account with none of this activity.
 
 Also covered by `e2e/auth.test.mjs`: the full real-UI signup → verify-email
 link → logout → login and forgot-password → reset link → reset → old-
@@ -6414,7 +6415,10 @@ deletion release-to-greenbelt path, both `resolveAuction` branches
 auction), and admin `POST .../reassign-owner` (#1280) — matching the
 existing "a new owner gets the land, not the previous owner's stuff on
 it" reasoning already applied to `placed_instances`/`landlet_versions`
-there.
+there. `sold_out_markers` (#2068) joined this same cleanup at all four
+sites as of #2508 — it had been left out when that table was introduced,
+so a new owner briefly saw the previous owner's undismissed "sold out,
+removed" markers on a landlet that changed hands.
 
 ### Instance placement is bounded by purchased levels (#394)
 
@@ -9417,10 +9421,12 @@ A seller sets either via its own row's "Edit Sit/Lean Target" panel
 the metadata key entirely rather than persisting a stale target, the same
 clear-to-absent convention `extensible`/`noReturns` already use.
 
-**Deferred, not built here:** the actual targeting logic (finding the
-nearest valid sit/lean target on landing from flight, or on idle) and the
-seated/leaning poses themselves are separate #2475 sub-issues — this is
-schema/metadata plus the minimal build-UI to set it, nothing more.
+**Deferred at the time this section was written:** the actual targeting
+logic and the seated/leaning poses themselves were separate #2475
+sub-issues — that was schema/metadata plus the minimal build-UI to set it,
+nothing more. The targeting half is now built; see "Sit/lean proximity
+targeting (#2477)" below. The poses themselves (#2478/#2479) and the
+randomization pass (#2480) remain open.
 
 #### Testing note
 
@@ -9429,11 +9435,125 @@ describe block covers the non-object/missing-field rejections, an
 out-of-footprint offset, an out-of-range height, a valid value
 round-tripping through `GET` for both `sitTarget` and `leanTarget`
 independently, and clearing one via a full `metadata` replace — the same
-matrix "Shipping" above covers for `domesticOnly`. No e2e coverage yet:
-same reasoning as Shipping's own panel above (structurally identical
-collapsed-panel-with-a-Save-step idiom to the already-e2e-covered
-Extensibility panel) — worth a real e2e pass once the targeting/pose
-sub-issues give this panel something visible to actually verify.
+matrix "Shipping" above covers for `domesticOnly`. No e2e coverage of the
+build-UI panel itself: same reasoning as Shipping's own panel above
+(structurally identical collapsed-panel-with-a-Save-step idiom to the
+already-e2e-covered Extensibility panel).
+
+### Sit/lean proximity targeting (#2477)
+
+Sub-issue of #2475, depending on the metadata from #2476 above. When the
+existing idle timer (`SHOP_IDLE_DELAY_S` in `src/main.js`) fires —
+`updateShopAvatarIdle`'s own `hasActiveInput === false` branch, the instant
+`shopIdleElapsedS` first crosses that threshold, not on every frame
+afterward — `findShopIdleInteractionTarget` searches every loaded placed
+item (`shopLandlets`' own `entry.objects`, the same set
+`shopPositionBlocked`/`shopLandingObstructionTopZ` already read) for the
+nearest `sitTarget`/`leanTarget` (per #2476 above) within
+`SHOP_IDLE_INTERACTION_SEARCH_RADIUS_M` (3m) of the avatar's current
+position, and caches the result in `shopIdleInteractionTarget` for the
+rest of that idle episode — re-armed to `null` the instant real movement
+resumes.
+
+A target's `offsetXM`/`offsetYM`/`facingRad` (#2476's own metadata) are in
+the template's own local, un-rotated model space, so the search rotates
+the offset by the placed instance's own `rotation.z` before adding it to
+the instance's world position, and combines `facingRad` with that same
+rotation for the resulting world-space facing. `heightM` only needs the
+instance's own ground level (`mesh.position.z - height / 2`, the same
+`itemZMin` term `shopLandingObstructionTopZ` already computes) added to
+it, since it's already expressed ground-up in that local space — no
+rotation involved there.
+
+A `sitTarget` always outranks any in-range `leanTarget` (sitting reads as
+a stronger "resting" signal than leaning); within the same kind, nearest
+wins. No pathfinding — same "keep it simple" precedent #2044's own landing-
+spot search already established for a comparably-scoped proximity search
+in this file.
+
+**Scope, deliberately narrow:** this is selection only. `shopIdleInteractionTarget`
+is computed and exposed for the sit/lean pose sub-issues (#2478/#2479) to
+consume later — today's existing "stand" sway runs completely unaffected
+by whatever this returns, matching the issue's own "fall back to stand
+sway unchanged" framing. There is no pose change, no facing change, no
+visible behavior difference yet.
+
+#### Testing note
+
+`e2e/shop-idle-sit-lean-targeting.test.mjs` places a real chair instance
+with a `sitTarget` via the real build/catalog APIs, teleports the avatar
+within range, and polls `window.__testShopIdleInteractionTarget()` (a
+read-only test hook mirroring the cached value, alongside
+`window.__testFindShopIdleInteractionTarget(x, y)` for driving the search
+function directly) until the idle episode populates it, confirming the
+rotated world position/facing match a hand-computed expectation; a second
+case confirms a target outside the search radius is correctly ignored
+(returns `null`, not just "something").
+
+### Sit pose + transition (#2478)
+
+Sub-issue of #2475, consuming the `shopIdleInteractionTarget` #2477 above
+selects. When that idle episode's own cached target has `kind: 'sit'`,
+`updateShopAvatarIdle` (`src/main.js`) eases a second blend,
+`shopSitBlend`, from 0 toward 1 at the same `SHOP_IDLE_BLEND_PER_S` rate
+the existing stand sway already uses — a separate blend, not a reuse of
+`shopIdleBlend`, since stand sway keeps running underneath the seated
+pose too (the idle head-turn/weight-shift never stops). `shopSitBlend`
+hard-cuts back to 0 the instant real input resumes, same as every other
+idle blend in this function (`shopIdleBlend`/`shopAfkBlend`).
+
+The seated pose itself is procedural, not a dedicated animation clip —
+same "fall back gracefully for an avatar model with no clip" approach the
+issue asked for, and consistent with how "stand" sway already works on
+this primitive, knee-less rig (`createShopAvatar`'s own comment: each leg
+is one rigid hip-to-foot cylinder, no separate shin segment). Four things
+ease in together, all scaled directly by `shopSitBlend` (no separate
+per-term easing needed — the avatar doesn't move at all while idle, so
+there's no moving target to chase):
+
+- **Legs** rotate forward from the hip pivot by `SHOP_SIT_LEG_ROTATION_RAD`
+  (~79°, deliberately short of a full 90° so the silhouette doesn't read
+  as stiff) — the same hip-pivot rotation the walk cycle already drives,
+  just forward instead of swinging.
+- **Arms** rotate forward from the shoulder pivot by
+  `SHOP_SIT_ARM_ROTATION_RAD` (~50°) toward the lap, on top of (additive
+  with) the existing idle arm counter-sway.
+- **Height**: `shopSitHeightOffset` is a *visual-only* z offset — added to
+  the rendered `shopAvatar.group.position.z` right after it's copied from
+  the real `shopAvatarPosition`, never to `shopAvatarPosition` itself —
+  solved so the rig's own hip height (`SHOP_AVATAR_LEG_LENGTH_M` above the
+  group's local origin) lands exactly on the target's `worldZ` (the seat
+  surface) once `shopSitBlend` reaches 1, whatever that seat's height
+  relative to normal standing hip height.
+- **Facing**: `shopSitYawOffset` is likewise a visual-only offset, added
+  only to the rendered quaternion (alongside the existing
+  `shopIdleSwayYawOffset` idle head-turn-adjacent sway) — the shortest
+  angular delta from the avatar's real `shopAvatarFacing` to the target's
+  `worldFacingRad`, scaled by `shopSitBlend`.
+
+**Deliberately visual-only, not a real reposition:** neither offset ever
+touches `shopAvatarPosition`/`shopAvatarFacing` themselves. Those stay
+exactly where the shopper was standing when the idle episode began —
+`findShopIdleInteractionTarget`'s own 3m search radius (#2477) keeps that
+gap small enough to read as "settling into" a nearby seat without an
+actual walk-to-the-chair animation, while leaving collision, the
+curvature-aware z recompute, and camera-follow (`positionShopCamera`,
+anchored to the real `shopAvatarPosition`) completely unaffected — same
+"fall back gracefully" spirit as the clip-less pose itself, just applied
+to positioning instead of animation. A real walk-to-seat is future work,
+not this sub-issue's scope.
+
+#### Testing note
+
+`e2e/shop-idle-sit-pose.test.mjs` places a real chair with a `sitTarget`,
+teleports the avatar into range, waits out the idle delay, then polls the
+read-only `window.__testShopSitPose()` hook (mirroring `shopSitBlend` and
+both visual-only offsets, plus the live leg/arm pivot rotations) until the
+blend substantially engages, confirming the leg/arm rotations and the
+height/yaw offsets all land close to their fully-blended hand-computed
+values; a further case confirms a brief joystick deflection hard-cuts
+`shopSitBlend` back to 0 on the very next frame, matching the instant-
+ease-out discipline described above.
 
 ## Control Room API (N31)
 

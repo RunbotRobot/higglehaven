@@ -1071,6 +1071,25 @@ describe('Land cap', () => {
     expect(granted.body.landCapM2).toBe(1029);
   });
 
+  // #2495: higgles_earnings_events.amount_cents used to CHECK (> 0), so a
+  // $0 grant (nonnegativeInteger allows it) crashed on the INSERT. Migration
+  // 0150 relaxed it to (>= 0) -- this grant should now succeed and record a
+  // genuine, if no-op, $0 earnings-ledger row.
+  it('#2495: a $0 land-cap grant does not crash on the earnings-ledger CHECK', async () => {
+    const builder = await createBuilder('Land Cap Zero Grant Builder');
+    const granted = await api(`/builders/${builder}/land-cap-grants`, adminSession({
+      method: 'POST', body: JSON.stringify({ amountCents: 0 }),
+    }));
+    expect(granted.response.status).toBe(201);
+    expect(granted.body.landCapM2).toBe(1000);
+
+    const { results } = await env.DB.prepare(
+      'SELECT * FROM higgles_earnings_events WHERE builder_id = ?',
+    ).bind(builder).all();
+    expect(results).toHaveLength(1);
+    expect(results[0].amount_cents).toBe(0);
+  });
+
   // #629: bidding now also requires the bidder to hold enough
   // higgles_balance_cents to cover their bid — deliberately independent of
   // land-cap-grants above, which only ever touches the earnings ledger

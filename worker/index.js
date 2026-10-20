@@ -6,13 +6,12 @@ import { generateLandletRing, powerLawPlots } from './landGenerator.js';
 import { generateOrganicMosaic } from './organicLandGenerator.js';
 import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from './earthCurvature.js';
 import migrationsManifest from './migrations-manifest.json';
-
-const JSON_HEADERS = {
-  'content-type': 'application/json; charset=utf-8',
-  'access-control-allow-origin': '*',
-  'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
-  'access-control-allow-headers': 'content-type',
-};
+// #2501: cross-cutting helpers used from nearly every route handler below,
+// extracted into worker/lib/ -- see each module's own comment for the
+// call-site counts that justified pulling it out of this file.
+import { json, HttpError, JSON_HEADERS, clientIp } from './lib/http.js';
+import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './lib/rate-limit.js';
+import { adminActionLogStatement } from './lib/admin-log.js';
 
 // #1360: generic hardening every response from this Worker should carry,
 // regardless of path — applied in one place (fetch's own wrapper below)
@@ -2245,6 +2244,12 @@ async function handleCatalog(request, db, route, url, models, env) {
     // updatedAt, unlike every sibling create/update handler in this file
     // (and this resource's own POST/PUT batch sibling just below).
     const stored = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(template.templateId).first();
+    // #2487: same concurrent-delete race #2364 already guards against on
+    // this resource's own PATCH/PUT sibling below -- a predictable,
+    // client-derivable id (catalogTemplateIdempotencyKey) means a DELETE for
+    // this exact id can land in the gap between the INSERT above and this
+    // re-SELECT.
+    if (!stored) return json({ error: 'Catalog template not found' }, 404);
     return json({ template: templateFromRow(stored) }, 201);
   }
 
@@ -2873,7 +2878,16 @@ async function handleProductFlags(request, db, route) {
       // Reject restores purchasability if auto-hide had already kicked in
       // for this listing -- never touched if an admin escalated straight to
       // removal without auto-hide ever firing.
-      await db.prepare('UPDATE catalog_templates SET flagged_hidden_at = NULL WHERE template_id = ?').bind(templateId).run();
+      // #2467: but never when an earlier flag batch on this same listing was
+      // already `approve`d -- that hide is permanent (see the approve branch's
+      // own comment above), and nothing records *why* flagged_hidden_at is set,
+      // so an unscoped UPDATE here would silently undo a confirmed-counterfeit
+      // removal the moment any later, even weak/empty-reason, flag on the same
+      // listing gets rejected.
+      await db.prepare(`
+        UPDATE catalog_templates SET flagged_hidden_at = NULL
+        WHERE template_id = ? AND NOT EXISTS (SELECT 1 FROM product_flags WHERE template_id = ? AND status = 'approved')
+      `).bind(templateId, templateId).run();
     }
     await adminActionLogStatement(db, admin.user_id, `${resolvedStatus}_product_flags`, 'catalog_template', templateId, {
       flagsResolved: resolved.meta.changes,
@@ -3534,6 +3548,13 @@ async function builderDeletionStatements(db, builderId) {
     db.prepare(`DELETE FROM placed_instances WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(builderId, builderId),
     db.prepare(`DELETE FROM landlet_versions WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(builderId, builderId),
     db.prepare(`DELETE FROM landlet_levels WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(builderId, builderId),
+    // #2508: sold_out_markers is scoped to a builder's own land the same
+    // way as the three deletes just above (its own migration's comment:
+    // "a marker's only purpose is showing a builder something about their
+    // own land"), but was never added to this release-to-greenbelt cleanup
+    // when #2068 introduced it -- left a new claimant seeing the previous
+    // owner's stale "removed, sold out" markers.
+    db.prepare(`DELETE FROM sold_out_markers WHERE ${builderGone} AND landlet_id IN (${ownedLandletsSql})`).bind(builderId, builderId),
     // #1704: still-active auctions of this builder's own are explicitly
     // cleaned up here now that seller_builder_id no longer cascades
     // (migrations/0124) -- the #279 guard above already guarantees any
@@ -7014,6 +7035,10 @@ function buildAuctionWinnerSettlementStatements(db, auction, winner) {
     db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(auction.landlet_id),
     db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
     db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(auction.landlet_id),
+    // #2508: same "new owner inherits the previous owner's stuff" cleanup
+    // as the three deletes just above, for sold_out_markers -- missed when
+    // #2068 introduced the table, after this cleanup shape was established.
+    db.prepare('DELETE FROM sold_out_markers WHERE landlet_id = ?').bind(auction.landlet_id),
     db.prepare(`
       UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?
     `).bind(winner.amount_cents, auction.seller_builder_id),
@@ -7270,6 +7295,10 @@ async function resolveAuction(db, auction) {
       // not a loss. version_instances cascades via its own FK.
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(auction.landlet_id),
+      // #2508: same "new owner inherits the previous owner's stuff" cleanup
+      // as the two deletes just above, for sold_out_markers -- missed when
+      // #2068 introduced the table, after this cleanup shape was established.
+      db.prepare('DELETE FROM sold_out_markers WHERE landlet_id = ?').bind(auction.landlet_id),
       db.prepare(`
         UPDATE landlets
         SET status = 'greenbelt', owner_builder_id = NULL, active_version_id = NULL,
@@ -7357,26 +7386,6 @@ async function fireNotifications(db, notifications) {
   for (const { builderId, message, templateId } of notifications) {
     await fireNotification(db, builderId, message, templateId);
   }
-}
-
-// #814: accountability record for an admin-gated mutation — who did what,
-// not just whether it was allowed. Returns a statement (same shape as
-// notificationStatement above) so call sites can batch it atomically
-// alongside their own mutation rather than risk the mutation succeeding
-// with no log row if a separate .run() failed. detail is any small
-// JSON-serializable context worth keeping (e.g. the affected email/amount);
-// optional since not every action needs it.
-function adminActionLogStatement(db, adminUserId, actionType, targetType, targetId, detail) {
-  return db.prepare(
-    'INSERT INTO admin_action_log (log_id, admin_user_id, action_type, target_type, target_id, detail_json) VALUES (?, ?, ?, ?, ?, ?)',
-  ).bind(
-    `admin-action-${crypto.randomUUID()}`,
-    adminUserId,
-    actionType,
-    targetType ?? null,
-    targetId ?? null,
-    detail !== undefined ? JSON.stringify(detail) : null,
-  );
 }
 
 // #996: admin_action_log (#814) was write-only from its own first
@@ -7568,57 +7577,6 @@ const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour — shorter than email verification since a leaked reset link is higher-stakes
 const FAILED_LOGIN_LOCK_THRESHOLD = 5;
 const FAILED_LOGIN_LOCK_DURATION_MS = 15 * 60 * 1000;
-
-// Fixed-window rate limiting (migrations/0057) for the auth endpoints that
-// are both unauthenticated and repeatable and (once RESEND_API_KEY is
-// configured) can trigger a real outbound email to an arbitrary address:
-// signup and password-reset-request. Login already has its own real
-// per-account lockout (failed_login_attempts/locked_until above).
-// resend-verification (#363) is session-gated rather than IP+email
-// bucketed like the two above — it doesn't have an arbitrary-address
-// enumeration angle to guard against, but still needs a cap keyed by the
-// caller's own user id, or one logged-in user could loop it indefinitely.
-//
-// Bucketed by client IP + the specific email being targeted, not IP alone
-// — this limits hammering one target from one source without any new
-// Cloudflare bindings, and (deliberately) means the existing test suite's
-// per-case unique emails never collide with each other in the same D1.
-// Deliberately scoped: this stops targeted retry/harassment of one email
-// address, not an IP spraying signups across many distinct addresses —
-// that broader case is already substantially covered today by the
-// private-preview access-gate passphrase (see checkAccessGate) blocking
-// these endpoints from anyone who doesn't already have it, and would need
-// something like Cloudflare Turnstile/Bot Management if the gate ever
-// comes off, not just a bigger version of this.
-const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
-
-function clientIp(request) {
-  return request.headers.get('cf-connecting-ip') || 'unknown';
-}
-
-async function checkRateLimit(db, bucketKey, maxAttempts) {
-  const now = Date.now();
-  // A separate SELECT-then-INSERT here would be a check-then-act race:
-  // concurrent requests sharing a bucket (e.g. a burst from one IP) could
-  // all read the same under-the-limit count before any of their inserts
-  // committed, letting a burst blow well past maxAttempts. Folding the
-  // count check into the INSERT's own WHERE clause makes the whole
-  // check-and-increment one atomic statement instead — nothing can
-  // interleave inside it. `changes` is 0 exactly when the subquery's count
-  // was already at or over the limit, i.e. the guard blocked the insert.
-  // Old rows outside the window are filtered here rather than actively
-  // deleted per call now — actual cleanup is pruneExpiredAuthState's job
-  // (run from the same cron as world growth), so a rate-limit check no
-  // longer needs its own separate write just to stay tidy.
-  const result = await db.prepare(`
-    INSERT INTO rate_limit_events (bucket_key, created_at)
-    SELECT ?1, ?2
-    WHERE (SELECT COUNT(*) FROM rate_limit_events WHERE bucket_key = ?1 AND created_at >= ?3) < ?4
-  `).bind(bucketKey, now, now - RATE_LIMIT_WINDOW_MS, maxAttempts).run();
-  if (result.meta.changes === 0) {
-    throw new HttpError('Too many attempts. Please wait a while and try again.', 429);
-  }
-}
 
 // checkRateLimit only ever prunes the one bucket it's currently checking —
 // a bucket that's hit once and never revisited (e.g. signup/reset attempts
@@ -8715,17 +8673,36 @@ const DIDIT_TERMINAL_STATUSES = { Approved: true, Declined: false, Abandoned: fa
 // the webhook or a poll gets there first applies the change; the other is
 // a safe no-op, so this can't double-apply from a race or a repeat
 // webhook delivery.
+// #2484: the session claim and the trust_tier raise used to be two
+// sequential awaited .run() calls -- an interruption between them (a
+// transient D1 error, or the isolate hitting a CPU/time limit) could leave
+// processed_at already set with trust_tier never raised, and since every
+// retry's own claim above short-circuits on processed_at IS NOT NULL, that
+// stranded state had no retry path at all. Batched into one D1 transaction
+// (same shape as #2174) so the two writes can no longer split. The users
+// UPDATE's own EXISTS guard reads the session row *as this same batch just
+// left it* (D1 batch statements run sequentially within one transaction),
+// so it only fires when this call's own claim actually landed (or had
+// already landed from an earlier, fully-completed call -- a replayed
+// webhook re-applying the same value is a safe no-op either way); it's
+// only ever included in the batch when `approved` is true in the first
+// place, so a decline never reaches it.
 async function applyDiditDecision(db, sessionId, userId, approved) {
-  const result = await db.prepare(`
-    UPDATE didit_verification_sessions SET status = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE session_id = ? AND processed_at IS NULL
-  `).bind(approved ? 'approved' : 'declined', sessionId).run();
-  if (result.meta.changes === 0) return;
+  const statements = [
+    db.prepare(`
+      UPDATE didit_verification_sessions SET status = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE session_id = ? AND processed_at IS NULL
+    `).bind(approved ? 'approved' : 'declined', sessionId),
+  ];
   if (approved) {
-    await db.prepare(`
-      UPDATE users SET trust_tier = 'id_verified', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE user_id = ?
-    `).bind(userId).run();
+    statements.push(db.prepare(`
+      UPDATE users SET trust_tier = 'id_verified', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE user_id = ? AND EXISTS (
+        SELECT 1 FROM didit_verification_sessions WHERE session_id = ? AND status = 'approved' AND processed_at IS NOT NULL
+      )
+    `).bind(userId, sessionId));
   }
+  await db.batch(statements);
 }
 
 // Shared by handleDiditVerificationStatus (poll the current session) and
@@ -12278,22 +12255,19 @@ const EXPORT_DATA_RATE_LIMIT_MAX = 10;
 
 // #1986 (sub-issue of #1983): the `social` section of handleExportData
 // below. Most of these tables genuinely key off builder_id/user_id, but
-// two don't, and this returns the best available approximation rather
-// than silently omitting them:
-// - calendar_events has no author column at all (unlike sign_posts, which
-//   got a real user_id in #1830/migrations/0125) -- only a free-text
-//   author_label stamped from the poster's label at post time (#289). A
-//   label match against this account's CURRENT label is the best signal
-//   available; it misses events posted under a since-changed label and
-//   could, in principle, catch another account that happens to share
-//   today's label with a past poster. Flagged here rather than guessed
-//   past silently -- a real author_id column is the actual fix, tracked
-//   separately from this export feature.
+// one doesn't, and this returns the best available approximation rather
+// than silently omitting it:
 // - landlet_versions/version_instances have no author column either --
 //   only landlet_id. "Authored by this builder" is approximated as
 //   "versions of landlets this builder currently owns," since landlet
 //   ownership itself can change hands (auction, admin reassignment) and
 //   nothing records who actually created a given version.
+// calendar_events used to be in this same "no real author column" bucket
+// (a free-text author_label match against this account's CURRENT label,
+// per #289) -- migrations/0135_calendar_events_user_id.sql (#1975) closed
+// that gap with a real user_id FK, same shape as sign_posts (#1830/
+// migrations/0125). See the calendarEvents query below for the real
+// filter now in use.
 async function exportSocialSection(db, builderId, userId) {
   const friendships = await db.prepare(`
     SELECT * FROM friendships WHERE requester_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
@@ -13116,6 +13090,10 @@ async function handleLandlets(request, db, route, url) {
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ?').bind(route[1]),
       db.prepare('DELETE FROM landlet_versions WHERE landlet_id = ?').bind(route[1]),
       db.prepare('DELETE FROM landlet_levels WHERE landlet_id = ?').bind(route[1]),
+      // #2508: same "new owner inherits the previous owner's stuff" cleanup
+      // as the three deletes just above, for sold_out_markers -- missed when
+      // #2068 introduced the table, after this cleanup shape was established.
+      db.prepare('DELETE FROM sold_out_markers WHERE landlet_id = ?').bind(route[1]),
       adminActionLogStatement(db, admin.user_id, 'reassign_landlet_owner', 'landlet', route[1], {
         fromBuilderId: existing.owner_builder_id, toBuilderId: newOwnerBuilderId,
         ...(auctionToCancel ? { cancelledAuctionId: auctionToCancel.auction_id } : {}),
@@ -19668,18 +19646,5 @@ function decodeCatalogPriceCursor(value) {
     return { priceCents: decoded[0], templateId: decoded[1] };
   } catch {
     throw new HttpError('cursor is invalid', 400);
-  }
-}
-
-function json(payload, status = 200, extraHeaders) {
-  const headers = extraHeaders ? { ...JSON_HEADERS, ...extraHeaders } : JSON_HEADERS;
-  return new Response(JSON.stringify(payload, null, 2), { status, headers });
-}
-
-class HttpError extends Error {
-  constructor(message, status, extra) {
-    super(message);
-    this.status = status;
-    this.extra = extra;
   }
 }

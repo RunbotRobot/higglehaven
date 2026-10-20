@@ -137,6 +137,70 @@ describe('Didit verification webhook (#589)', () => {
     expect(session.status).toBe('declined');
   });
 
+  // #2484: the session claim and the trust_tier raise used to be two
+  // separate sequential .run() calls -- an interruption between them could
+  // strand a user "approved" but never actually id_verified, with every
+  // later retry short-circuiting on the already-set processed_at. Fixed by
+  // batching both writes into one db.batch call (same shape #2174 already
+  // established for a different two-write path). Confirms it's issued as
+  // exactly one batched call carrying both statements, not two separate
+  // writes, same mocking idiom #2174's own regression test uses.
+  it('issues the session claim and trust_tier raise as a single batched write on approval', async () => {
+    const builder = await signupBuilder('didit-webhook-batched-approve');
+    const sessionId = await insertPendingSession(builder.email);
+
+    const originalBatch = env.DB.batch.bind(env.DB);
+    let batchCallCount = 0;
+    let lastBatchSize = 0;
+    env.DB.batch = async (statements) => {
+      batchCallCount += 1;
+      lastBatchSize = statements.length;
+      return originalBatch(statements);
+    };
+    let response;
+    try {
+      response = await postDiditWebhook({ session_id: sessionId, status: 'Approved' });
+    } finally {
+      env.DB.batch = originalBatch;
+    }
+    expect(response.status).toBe(200);
+    expect(batchCallCount).toBe(1);
+    expect(lastBatchSize).toBe(2);
+
+    const user = await env.DB.prepare('SELECT trust_tier FROM users WHERE email = ?').bind(builder.email).first();
+    expect(user.trust_tier).toBe('id_verified');
+  });
+
+  // Same shape as the approval case just above, but a decline's batch
+  // should carry only the session-claim statement -- the trust_tier
+  // statement is never even constructed, matching the original code's own
+  // `if (approved)` gate.
+  it('issues only the session claim as a single batched write on decline', async () => {
+    const builder = await signupBuilder('didit-webhook-batched-decline');
+    const sessionId = await insertPendingSession(builder.email);
+
+    const originalBatch = env.DB.batch.bind(env.DB);
+    let batchCallCount = 0;
+    let lastBatchSize = 0;
+    env.DB.batch = async (statements) => {
+      batchCallCount += 1;
+      lastBatchSize = statements.length;
+      return originalBatch(statements);
+    };
+    let response;
+    try {
+      response = await postDiditWebhook({ session_id: sessionId, status: 'Declined' });
+    } finally {
+      env.DB.batch = originalBatch;
+    }
+    expect(response.status).toBe(200);
+    expect(batchCallCount).toBe(1);
+    expect(lastBatchSize).toBe(1);
+
+    const user = await env.DB.prepare('SELECT trust_tier FROM users WHERE email = ?').bind(builder.email).first();
+    expect(user.trust_tier).toBe('credit_card');
+  });
+
   // #1037: GET /api/auth/didit-verification-status forwards straight
   // through to a live outbound Didit API call whenever the caller's latest
   // session is still locally pending -- previously with no local throttle

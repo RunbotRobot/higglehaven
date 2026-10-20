@@ -333,7 +333,38 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   await page.fill('#auth-signup-email', email);
   await page.fill('#auth-signup-password', 'e2e-test-password-123');
   await page.check('#auth-signup-age-attest');
-  await page.click('#auth-signup-form button[type="submit"]');
+  // #2400: this used to be a single flat page.waitForSelector margin on
+  // '#auth-modal:not(.visible)' right after the click below, mechanically
+  // bumped six times as fleet-wide CI concurrency grew (#1388 -> #1896 ->
+  // #2048 -> #2087 -> #2360, each escalation outpaced within 1-2 days, the
+  // last one within under 3 hours -- see that history preserved on #2360's
+  // own closing comment). The actual variable cost was almost entirely one
+  // network round trip, POST /api/auth/signup (src/api.js's signUp): its
+  // handler (worker/index.js's handleSignup) does ~5 D1 round trips plus a
+  // CPU-bound PBKDF2 hash, confirmed via #2400's own investigation to be
+  // the dominant, CI-load-sensitive cost -- everything after that resolves
+  // (set currentAuthUser, notifyAuthResult, closeAuthModal) is synchronous/
+  // in-memory and shouldn't scale with CI load the way the network request
+  // does. Splitting the wait into those two stages means only the real
+  // network wait needs a large margin (the one actually exposed to runner
+  // contention), set once, generously, rather than needing the same
+  // repeated-escalation treatment every time contention grows a bit
+  // further -- fleet-wide contention would have to grow by multiples of
+  // anything observed so far (the largest single jump, #2360's, was still
+  // well under a minute) to threaten this one. The modal-close wait right
+  // after stays tight, so a genuine new bug (the modal failing to close at
+  // all) still fails fast instead of hiding behind the same oversized
+  // margin the network wait needs.
+  const [signupResponse] = await Promise.all([
+    page.waitForResponse(
+      (response) => response.request().method() === 'POST' && response.url() === `${BASE_URL}/api/auth/signup`,
+      { timeout: 300000 },
+    ),
+    page.click('#auth-signup-form button[type="submit"]'),
+  ]);
+  if (!signupResponse.ok()) {
+    throw new Error(`chooseIdentity: POST /api/auth/signup failed with HTTP ${signupResponse.status()}`);
+  }
   // The signup handler only auto-closes the modal once there's no dev-mode
   // verify-link status to show (see its own comment) — the test env never
   // configures RESEND_API_KEY, so that status always appears here. Either
@@ -343,26 +374,10 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   // state: 'attached' (not the default 'visible') — the modal element
   // itself is always attached to the DOM and this selector specifically
   // matches it once it's HIDDEN (no .visible class, so display:none),
-  // which Playwright's default "wait for visible" can never satisfy.
-  // #1388: 10000ms was tight enough to intermittently time out under CI
-  // load -- seen tripping two completely unrelated test files (friends.test.mjs,
-  // friends-map.test.mjs) at this exact call site, not a bug in either
-  // feature. 20000ms matched the margin waitForLoadState('networkidle')
-  // just below already used for its own slower post-action wait.
-  // #1896: CI-wide contention has since grown past even that 20000ms
-  // margin (seen tripping simulated-purchases.test.mjs, twice in a row, with
-  // no change anywhere near this call site) -- bumped again to 30000ms.
-  // #2048: outpaced again within about a week (seen tripping five more
-  // unrelated files across one run's original attempt and two re-runs) --
-  // bumped by more than the prior two escalations this time, rather than
-  // just matching their size, since each matched bump has been outpaced
-  // this quickly.
-  // #2360: outpaced yet again within about two days (seen tripping
-  // axis-preview-close-race-leak.test.mjs, an unrelated file, twice in a
-  // row) -- bumped well past a simple doubling this time, since each of
-  // the last three matched-or-smaller bumps has been outpaced within 1-2
-  // days.
-  await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 120000 });
+  // which Playwright's default "wait for visible" can never satisfy. The
+  // response above already absorbed the real network+hash cost, so this
+  // only needs to cover the synchronous continuation after it.
+  await page.waitForSelector('#auth-modal:not(.visible)', { state: 'attached', timeout: 10000 });
   await clearVerifyModalIfShown(page);
 
   // N44: an already-showing modal (the branch above that skipped the
