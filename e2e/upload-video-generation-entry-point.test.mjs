@@ -46,9 +46,15 @@ await page.click('#upload-mode-video-btn');
 const videoSectionVisibleAfterToggle = await page.evaluate(() => !document.getElementById('upload-video-section').hidden);
 const fileRowHiddenAfterToggle = await page.evaluate(() => document.getElementById('upload-file-field-row').hidden);
 const submitLabelInVideoMode = await page.textContent('#upload-submit-btn');
+// #2442: a fresh builder starts with 0 video_generation_credits
+// (migrations/0127's own default) -- refreshUploadVideoCredits runs as
+// part of entering video mode, so this should already be populated right
+// after the toggle, with no extra wait.
+const videoCreditsTextAfterToggle = (await page.textContent('#upload-video-credits')).trim();
 console.log('video section visible after toggling (should be true):', videoSectionVisibleAfterToggle);
 console.log('manual file row hidden after toggling (should be true):', fileRowHiddenAfterToggle);
 console.log('submit button reads "Generate Model" in video mode (should be true):', submitLabelInVideoMode.trim() === 'Generate Model');
+console.log('video-credits line after toggling into video mode (should be "0 free model generations remaining", #2442):', videoCreditsTextAfterToggle);
 
 await page.setInputFiles('#upload-video-input', FIXTURE_PATH);
 await page.click('#upload-submit-btn');
@@ -100,6 +106,7 @@ console.log('unexpected page errors (should be empty):', unexpectedErrors);
 
 const pass = fileRowVisibleInitially && videoSectionHiddenInitially && videoSectionVisibleAfterToggle
   && fileRowHiddenAfterToggle && submitLabelInVideoMode.trim() === 'Generate Model'
+  && videoCreditsTextAfterToggle === '0 free model generations remaining'
   && reachedTerminalStatus && submitReenabled && backToFileMode && unexpectedErrors.length === 0;
 await finish(browser, {
   pass,
