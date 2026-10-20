@@ -16626,7 +16626,14 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash),
   ];
-  if (builderId) {
+  // #2439: a free listing (price_cents 0, reachable since
+  // computePurchaseAmounts only rejects a null price, not a zero one)
+  // produces builderShareCents === 0 — crediting that is a no-op, but
+  // higgles_earnings_events.amount_cents has its own CHECK (amount_cents
+  // > 0) (migration 0093), so unconditionally inserting a zero-amount row
+  // turned what should be a clean $0 sale into an uncaught "CHECK
+  // constraint failed", surfacing as a generic 400 via databaseHttpError.
+  if (builderId && builderShareCents > 0) {
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(builderShareCents, builderId),
@@ -16794,7 +16801,14 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash),
   ];
-  if (builderId) {
+  // #2439: same zero-commission guard as handlePurchaseFinalize's own
+  // identical block above — a free listing (price_cents 0) makes
+  // builderShareCents 0, and crediting that is a no-op, but
+  // higgles_earnings_events.amount_cents' own CHECK (amount_cents > 0)
+  // (migration 0093) turned an unconditional insert of that zero-amount
+  // row into an uncaught "CHECK constraint failed" on an otherwise-clean
+  // $0 purchase.
+  if (builderId && builderShareCents > 0) {
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(builderShareCents, builderId),
