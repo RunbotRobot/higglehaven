@@ -13068,14 +13068,15 @@ const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, generating: 0
 function plotColorKeyForLandlet(landlet) {
   return landlet.landType === 'water' ? 'water' : landlet.status;
 }
-// docs/SPEC.md §2's confirmed ground speeds: 1.8 m/s walking, 2.7 m/s
-// (~6 mph, v16 — raised from the original 2.2 m/s for a run that actually
-// reads as one) running. There's no separate run input (a run key/button)
+// docs/SPEC.md §2's confirmed ground speeds: 1.8 m/s walking, 4.4704 m/s
+// (10 mph, v17 — raised from 2.7 m/s/~6 mph, which the owner found still
+// read as a slow walk against a measured brick wall; "feels right" over
+// "is realistic") running. There's no separate run input (a run key/button)
 // — the move joystick's own deflection doubles as intensity, so pushing it
 // all the way out runs and a gentle nudge walks, the same analog feel a
 // real joystick gamepad gives a run.
 const SHOP_WALK_SPEED_M_S = 1.8;
-const SHOP_RUN_SPEED_M_S = 2.7; // docs/SPEC.md §2 (v16): ~6 mph, a more noticeable gap from walking
+const SHOP_RUN_SPEED_M_S = 4.4704; // docs/SPEC.md §2 (v17): 10 mph
 const SHOP_LOOK_SPEED_RAD_S = 1.8;
 const SHOP_MIN_HEIGHT_M = 1.5;
 // Flight (docs/SPEC.md §2) — see updateShopFlight/bindShopFlyToggle.
