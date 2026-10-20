@@ -161,6 +161,12 @@ await card.locator('.pill-in_progress').waitFor({ timeout: 10000 });
 const readyForClaudePillShowsOnInProgress = await card.locator('.card-head .pill-waiting-claude').isVisible();
 console.log('in-progress task with no explicit waitingOn shows no "Ready for Claude" pill (should be false):', readyForClaudePillShowsOnInProgress);
 
+// #2403: the status pill's own visible text used to print the raw
+// snake_case enum value ("in_progress") instead of a human label, unlike
+// every other place this same status shows as text in this file.
+const statusPillText = await card.locator('.card-head .pill-in_progress').textContent();
+console.log('status pill reads "In progress", not the raw "in_progress" (actual):', statusPillText.trim());
+
 await card.locator('button[data-action="status"][data-value="done"]').click();
 await card.locator('.pill-done').waitFor({ timeout: 10000 });
 console.log('status flipped to done: true');
@@ -630,6 +636,7 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   markedViewedButtonText.trim() === 'Mark unviewed' &&
   markedUnviewedButtonText.trim() === 'Mark viewed' &&
   !readyForClaudePillShowsOnInProgress &&
+  statusPillText.trim() === 'In progress' &&
   blockedPillText === ('Blocked on #' + blockingNumber) &&
   blockingCardIsOpen &&
   filteredBlockingCardIsOpen &&
