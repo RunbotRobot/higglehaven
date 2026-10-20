@@ -53,10 +53,19 @@ await page.waitForTimeout(100);
 // e2e/shop-walk-after-landing-on-object.test.mjs already use for the
 // identical reason (a real load decision, not a teleport alone, populates
 // the per-frame-scanned list updateCreditOrbs reads).
-await page.evaluate(([x, y]) => {
-  window.__testTeleportShopAvatar(x, y);
+//
+// #2443: explicit z=0 (rather than omitting z, which leaves whatever
+// altitude the avatar last had) genuinely grounds the avatar here --
+// breaking the hands-off spawn orbit above only frees shopAvatarPosition's
+// x/y for this hook to drive, it doesn't land the avatar, which stays
+// mid-air at SHOP_SPAWN_START_ALTITUDE_M (80m) until a real landing
+// sequence runs. Collection must now happen from a genuine ground walk-in
+// (updateCreditOrbs' own altitude check, added for #2443), not by
+// happening to still be airborne at spawn.
+await page.evaluate(([x, y, z]) => {
+  window.__testTeleportShopAvatar(x, y, z);
   window.__testForceShopProximityCheck();
-}, [myLandlet.center.x, myLandlet.center.y]);
+}, [myLandlet.center.x, myLandlet.center.y, 0]);
 await page.waitForTimeout(500);
 
 const listedBeforeWalkingOver = await fetchJson(`/api/credit-orbs?landletId=${encodeURIComponent(LANDLET_ID)}`);
