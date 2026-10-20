@@ -9353,11 +9353,13 @@ const CREDIT_ORB_COLLECT_RATE_LIMIT_MAX = 20;
 // calls. Reuses this file's only other avatar_presence-freshness idiom
 // (PRESENCE_STALE_AFTER_MS, #1767) rather than inventing a second one, and
 // a radius generous enough to tolerate that same staleness window's worth
-// of real movement at SHOP_RUN_SPEED_M_S (2.7m/s, ~27m) on top of the
-// client's own 1.5m collect radius -- the point of this check is requiring
-// *some* fresh, correctly-landletted presence at all (what the scripted
-// exploit has none of), not pixel-perfect anti-cheat precision.
-const CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M = 30;
+// of real movement at SHOP_RUN_SPEED_M_S (#2481: 4.4704m/s/10mph as of
+// #2444, ~45m -- was 2.7m/s/~27m when this constant was first set, see
+// #2481) on top of the client's own 1.5m collect radius -- the point of
+// this check is requiring *some* fresh, correctly-landletted presence at
+// all (what the scripted exploit has none of), not pixel-perfect
+// anti-cheat precision.
+const CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M = 50;
 
 // GET /api/credit-orbs (optionally ?landletId=... to scope to one landlet,
 // per #1994's own "or scoped by landlet" note) -- the frontend's read path
