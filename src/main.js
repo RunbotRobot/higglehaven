@@ -13685,26 +13685,41 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     vec2 swirled = mat2(c, -s, s, c) * normalizedXY;
     vec2 samplePos = swirled * 2.5 + vec2(uTime * 0.05, heightFrac * 3.0 - uTime * 0.015);
     float clouds = fbm(samplePos);
-    // A narrow smoothstep range here reads as a near-binary edge — cloud or
-    // not, with barely any blend in between — which combined with how pale
-    // both colors already are shows up as a hard visible line at the
-    // boundary rather than a soft wisp. Widening it spreads the transition
-    // across much more of the noise field's own range.
-    float cloudMask = smoothstep(0.25, 0.95, clouds);
-    // #1190: the fbm() octave fade above suppresses each octave once its
-    // own period aliases (confirmed via direct visual debugging this
-    // *is* firing, aggressively, for the higher octaves near the apex) —
-    // but the lowest surviving octave can still alias on its own right at
-    // the literal pole, where even a single noise-space cycle collapses
-    // into a handful of screen pixels. Fading the whole cloud overlay out
-    // by proximity to true zenith (not a further per-octave tweak, which
-    // #1190's own investigation already tried and found didn't track the
-    // actual aliasing) sidesteps that degenerate case entirely: right at
-    // the pole, the overlay converges to 0 and only vColor's own smooth,
-    // noise-free gradient remains — nothing left there to alias.
-    // length(normalizedXY) is the pole-distance in sin(angle-from-zenith)
-    // terms, independent of the current world radius (see normalizedXY's
-    // own comment) — 0 at the apex, growing toward the horizon.
+    // #1190/#1585/#1799/owner-report-2026-10-20: three prior fixes in this
+    // area (apex-streak footprint-fade tuning, shear-band envelope capping,
+    // footprint-threshold widening/narrowing) all targeted *aliasing* —
+    // undersampled high-frequency noise. Direct visual debugging this time
+    // (rendering fbm()'s raw, unprocessed output with visibility forced to
+    // 0/1 at a time) found something different: even the *smooth*,
+    // correctly-resolved, non-aliased base octave shows a soft radial
+    // "spoke" pattern converging on the pole. This isn't noise undersampling
+    // at all — it's an unavoidable consequence of rotating the flattened
+    // (x,y) world position (normalizedXY below) around the pole: every
+    // azimuth's sample position approaches the *same* noise-space point as
+    // world-space radius shrinks toward the pole (a sphere's pole is a
+    // single point — any 2D flattening must collapse every azimuth there),
+    // so a smooth noise gradient near that point reads as straight
+    // "contour" lines radiating outward once you're close enough. No amount
+    // of per-octave aliasing suppression touches this, because it's present
+    // in the lowest octave too, which that mechanism never fades.
+    // What actually fixes the *visible* symptom: the previous narrow
+    // smoothstep(0.25, 0.95, clouds) turned this smooth radial gradient
+    // into a near-binary cloud/no-cloud mask, and it's that hard threshold
+    // — not the underlying gradient — that reads as sharp "spokes"/"bands"
+    // rather than a soft, barely-noticeable undulation. Widening the
+    // threshold dramatically (confirmed via a full yaw sweep at a fixed
+    // steep pitch, not just one camera angle) keeps the same underlying
+    // field but blends it so softly that the radial structure stops being
+    // perceptible, without touching the swirl/shear-band fix (#1204) or the
+    // per-octave aliasing fade (#1633) at all.
+    float cloudMask = smoothstep(-0.3, 1.3, clouds);
+    // Kept from before (#1204/#1585) as a modest extra safety margin right
+    // at the literal pole specifically — on its own this barely moves the
+    // result (confirmed: widening or disabling it entirely, independent of
+    // the cloudMask change above, made no meaningful visual difference —
+    // the real fix is the threshold softening above). length(normalizedXY)
+    // is the pole-distance in sin(angle-from-zenith) terms, independent of
+    // the current world radius — 0 at the apex, growing toward the horizon.
     float apexFade = smoothstep(0.0, 0.08, length(normalizedXY));
     float visibility = heightFrac * cloudMask * apexFade * 0.5; // kept subtle — an overlay, not a repaint
     vec3 cloudColor = vec3(0.99, 0.99, 1.0);
