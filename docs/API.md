@@ -2297,8 +2297,9 @@ requirement already bounds it.
 If the template has a non-null `sellerId`, requires a session logged in as
 that seller (`403` otherwise). Deletes a catalog template. Rejects with `409`
 if any live `placed_instances` row still references the template (a generic
-"Referenced resource does not exist or is still in use" from D1's foreign-key
-behavior), or with a specific `409` if the template is referenced only by a
+"That didn't go through — something it depends on is missing, or something
+else still depends on it." from D1's foreign-key behavior), or with a
+specific `409` if the template is referenced only by a
 `saved_layout_instances` row (a builder's saved layout, possibly one that
 isn't visible to the caller at all — see #729) or a `version_instances` row
 (a landlet's past published version history) — both of those are immutable

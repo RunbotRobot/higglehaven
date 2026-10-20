@@ -2757,7 +2757,8 @@ promptModeGenerateBtn.addEventListener('click', async () => {
     setPromptModeStatus('');
   } catch (err) {
     console.warn('Prompt mode search failed:', err);
-    setPromptModeStatus(err.message || 'Something went wrong. Please try again.');
+    // #2440: previously a generic "Something went wrong. Please try again."
+    setPromptModeStatus(err.message || "Couldn't find similar products for that — please try again in a moment.");
   } finally {
     promptModeGenerateBtn.disabled = false;
   }
@@ -3672,7 +3673,8 @@ async function handleUploadFileStep() {
   } catch (err) {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     console.error('Custom product upload failed:', err);
-    setUploadStatus(err.message || 'Something went wrong.', true);
+    // #2440: previously a generic "Something went wrong."
+    setUploadStatus(err.message || "Couldn't load a preview of that model — please try again in a moment.", true);
   } finally {
     if (myFlowToken === uploadFlowToken) uploadSubmitBtn.disabled = false;
   }
@@ -3849,7 +3851,8 @@ async function handleUploadVideoStep() {
   } catch (err) {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     console.error('Video-to-3D generation failed:', err);
-    setUploadStatus(err.message || 'Something went wrong starting video generation.', true);
+    // #2440: previously a generic "Something went wrong starting video generation."
+    setUploadStatus(err.message || "Couldn't start turning that video into a 3D model — please try again in a moment.", true);
     uploadSubmitBtn.disabled = false;
   }
 }
@@ -3974,7 +3977,8 @@ async function handleUploadDimensionsStep() {
   } catch (err) {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     console.error('Custom product creation failed:', err);
-    setUploadStatus(err.message || 'Something went wrong.', true);
+    // #2440: previously a generic "Something went wrong."
+    setUploadStatus(err.message || "Couldn't create that product — please try again in a moment.", true);
   } finally {
     if (myFlowToken === uploadFlowToken) uploadSubmitBtn.disabled = false;
   }
