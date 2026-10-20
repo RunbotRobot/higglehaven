@@ -8485,6 +8485,20 @@ export async function latestDiditSession(db, userId) {
   `).bind(userId).first();
 }
 
+// #2485: reserveDiditSession's own race-loser `existing` row (read in a
+// separate, later query than the INSERT's own NOT EXISTS check that lost)
+// isn't automatically still the same still-in-flight session that check
+// saw -- it can be gone entirely (deleted in between), already resolved
+// (processed_at set by a concurrent webhook/poll), or still just a local
+// 'pending-<uuid>' placeholder with no real url to hand back yet. Exported
+// (same reasoning as latestDiditSession/reserveDiditSession just above --
+// DIDIT_API_KEY is deliberately never configured for a real HTTP request
+// in the test files exercising handleDiditVerificationSession) so this
+// guard's own logic can be tested directly without a live network call.
+export function diditReservationStillUsable(existing) {
+  return !!existing && existing.processed_at === null && !existing.session_id.startsWith('pending-');
+}
+
 // Starts a fresh Didit-hosted verification session for the requesting
 // builder and records it so the webhook/status-poll below have a row to
 // resolve against.
@@ -8546,6 +8560,19 @@ async function handleDiditVerificationSession(request, env, db) {
   if (!reservationId) {
     // Lost the race -- a concurrent request already reserved this user's
     // pending session; hand back that one instead of ever calling Didit.
+    // #2485: `existing` is a separate, later query than the INSERT's own
+    // NOT EXISTS check above, so by the time it runs the row it's reading
+    // may no longer be the still-in-flight one that check saw -- it can be
+    // gone entirely (deleted in between), already resolved (processed_at
+    // set by a concurrent webhook/poll), or still just this function's own
+    // local 'pending-<uuid>' placeholder with no real url yet to hand
+    // back. None of those are safe to report as "here's your in-flight
+    // session" -- a clean 409 tells the client to retry, and the `latest`
+    // check at the top of this handler resolves correctly next time
+    // regardless of which of those states it turns out to be.
+    if (!diditReservationStillUsable(existing)) {
+      throw new HttpError('A verification session is already starting -- please try again in a moment', 409);
+    }
     return json({ sessionId: existing.session_id, url: existing.url });
   }
   // #1886/#2313 (porting the same durable-logging fix from the identical
@@ -8877,6 +8904,19 @@ async function latestVideoGenerationJob(db, builderId) {
   `).bind(builderId).first();
 }
 
+// #2485: reserveVideoGenerationJob's own race-loser `existing` row (read in
+// a separate, later query than the INSERT's own NOT EXISTS check that
+// lost) isn't automatically still the same still-in-flight job that check
+// saw -- it can be gone entirely (deleted in between) or already resolved
+// (processed_at set by a concurrent completion) in the narrow window
+// between that failed INSERT and this re-read. Exported, same direct-
+// testing reasoning as reserveVideoGenerationJob just below, so this
+// guard's own logic can be exercised without forcing that exact race
+// window's own precise timing.
+export function videoGenerationReservationStillUsable(existing) {
+  return !!existing && existing.processed_at === null;
+}
+
 // Exported for direct testing, the same reasoning reserveDiditSession's
 // own callers rely on -- TRIPO_API_KEY is never configured in any test
 // file, so handleVideoGenerationJobCreate itself always 503s before ever
@@ -9162,6 +9202,20 @@ async function handleVideoGenerationJobCreate(request, env, db) {
     // that just relayed an already-in-flight job's own status.
     await db.prepare('UPDATE builders SET video_generation_credits = video_generation_credits + 1 WHERE builder_id = ?')
       .bind(sessionBuilder.builder_id).run();
+    // #2485: `existing` is a separate, later query than the INSERT's own
+    // NOT EXISTS check above, so by the time it runs the row it's reading
+    // may no longer be the still-in-flight job that check saw -- it can be
+    // gone entirely (deleted in between), or already resolved
+    // (processed_at set by a concurrent completion) while this request was
+    // still mid-flight. Handing back a resolved job's own stale status
+    // here would make pollVideoGenerationJob load an old, already-consumed
+    // result into the upload wizard for free -- a clean 409 (credit
+    // already refunded above) tells the client to retry, and the `latest`
+    // check at the top of this handler reports the real current state
+    // next time.
+    if (!videoGenerationReservationStillUsable(existing)) {
+      throw new HttpError('A video-generation job is already starting -- please try again in a moment', 409);
+    }
     return json({ jobId: existing.job_id, status: existing.status });
   }
 
