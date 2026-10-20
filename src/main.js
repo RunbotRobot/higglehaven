@@ -13030,6 +13030,7 @@ const shopDownBtn = document.getElementById('shop-down-btn');
 const shopSignHintEl = document.getElementById('shop-sign-hint');
 const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
 const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
+const shopCreditOrbOfflineNoticeEl = document.getElementById('shop-credit-orb-offline-notice');
 const shopProductPreviewModalEl = document.getElementById('shop-product-preview-modal');
 const shopProductPreviewCloseBtn = document.getElementById('shop-product-preview-close-btn');
 const shopProductPreviewCanvas = document.getElementById('shop-product-preview-canvas');
@@ -13420,6 +13421,13 @@ const CREDIT_ORB_SHIMMER_MAX = 1.8;
 // opacity-transition show/auto-hide shape (see its CSS comment in
 // index.html) rather than a hard show/hide cutoff.
 const CREDIT_ORB_TOAST_VISIBLE_MS = 3000;
+// #2447: how long an unbroken streak of genuine network failures (fetch()
+// itself rejecting, never a real HTTP response -- see isNetworkError)
+// collecting any orb has to persist before this reads as "offline" rather
+// than a single dropped frame. A real HTTP response of any status (403/
+// 404/429/500) proves the server is reachable and resets this streak --
+// only true network errors count toward it.
+const CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS = 3000;
 // The world wall: an opaque ring standing at exactly the current world
 // radius, tall enough that nothing generating out beyond it (still
 // unclaimable — see the availability circle in docs/SPEC.md) is visible
@@ -16328,6 +16336,7 @@ function updateCreditOrbs(dt) {
       // #2441: spawned before removeCreditOrb disposes the real orb.mesh
       // below -- this clones it first, so the pop has its own geometry/
       // material to animate independently of the disposal.
+      markCreditOrbCollectReachedServer();
       spawnCreditOrbPopEffect(orb);
       removeCreditOrb(orb);
       showCreditOrbToast();
@@ -16339,6 +16348,7 @@ function updateCreditOrbs(dt) {
       // and clears the in-flight guard to let the very next frame retry,
       // the same way it would if collecting had never fired at all.
       if (error.status === 403) {
+        markCreditOrbCollectReachedServer();
         orb.collecting = false;
         return;
       }
@@ -16348,6 +16358,7 @@ function updateCreditOrbs(dt) {
       // now-stale orb from the scene instead of surfacing anything to the
       // shopper or retrying.
       if (error.status === 404) {
+        markCreditOrbCollectReachedServer();
         removeCreditOrb(orb);
         return;
       }
@@ -16358,8 +16369,42 @@ function updateCreditOrbs(dt) {
       // fetches a landlet's orbs once, so a wrongly-removed orb was gone
       // from this session's view for good. Transient, same as 403: leave
       // the orb in place and let the next frame retry.
+      // #2447: a 429/500 is still a real HTTP response (error.status is
+      // set), proving the server was reachable -- only a genuine network
+      // failure (isNetworkError, fetch() itself rejecting with no response
+      // at all) counts as evidence of actually being offline.
+      if (isNetworkError(error)) {
+        markCreditOrbCollectFailedToReachServer();
+      } else {
+        markCreditOrbCollectReachedServer();
+      }
       orb.collecting = false;
     });
+  }
+}
+
+// #2447: null while no genuine network failure is currently in progress;
+// set to the timestamp of the *first* one in an unbroken streak once one
+// starts, across every orb's own collect attempts (this is a connectivity
+// signal, not a per-orb one). markCreditOrbCollectReachedServer resets it
+// the moment any attempt gets a real response, same as it clears the
+// notice -- a single dropped frame shouldn't flash anything, only a
+// sustained outage should.
+let creditOrbOfflineStreakStartedAt = null;
+
+function markCreditOrbCollectReachedServer() {
+  creditOrbOfflineStreakStartedAt = null;
+  shopCreditOrbOfflineNoticeEl.classList.remove('visible');
+}
+
+function markCreditOrbCollectFailedToReachServer() {
+  const now = performance.now();
+  if (creditOrbOfflineStreakStartedAt === null) {
+    creditOrbOfflineStreakStartedAt = now;
+    return;
+  }
+  if (now - creditOrbOfflineStreakStartedAt >= CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS) {
+    shopCreditOrbOfflineNoticeEl.classList.add('visible');
   }
 }
 
