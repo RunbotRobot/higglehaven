@@ -9486,6 +9486,71 @@ rotated world position/facing match a hand-computed expectation; a second
 case confirms a target outside the search radius is correctly ignored
 (returns `null`, not just "something").
 
+### Sit pose + transition (#2478)
+
+Sub-issue of #2475, consuming the `shopIdleInteractionTarget` #2477 above
+selects. When that idle episode's own cached target has `kind: 'sit'`,
+`updateShopAvatarIdle` (`src/main.js`) eases a second blend,
+`shopSitBlend`, from 0 toward 1 at the same `SHOP_IDLE_BLEND_PER_S` rate
+the existing stand sway already uses — a separate blend, not a reuse of
+`shopIdleBlend`, since stand sway keeps running underneath the seated
+pose too (the idle head-turn/weight-shift never stops). `shopSitBlend`
+hard-cuts back to 0 the instant real input resumes, same as every other
+idle blend in this function (`shopIdleBlend`/`shopAfkBlend`).
+
+The seated pose itself is procedural, not a dedicated animation clip —
+same "fall back gracefully for an avatar model with no clip" approach the
+issue asked for, and consistent with how "stand" sway already works on
+this primitive, knee-less rig (`createShopAvatar`'s own comment: each leg
+is one rigid hip-to-foot cylinder, no separate shin segment). Four things
+ease in together, all scaled directly by `shopSitBlend` (no separate
+per-term easing needed — the avatar doesn't move at all while idle, so
+there's no moving target to chase):
+
+- **Legs** rotate forward from the hip pivot by `SHOP_SIT_LEG_ROTATION_RAD`
+  (~79°, deliberately short of a full 90° so the silhouette doesn't read
+  as stiff) — the same hip-pivot rotation the walk cycle already drives,
+  just forward instead of swinging.
+- **Arms** rotate forward from the shoulder pivot by
+  `SHOP_SIT_ARM_ROTATION_RAD` (~50°) toward the lap, on top of (additive
+  with) the existing idle arm counter-sway.
+- **Height**: `shopSitHeightOffset` is a *visual-only* z offset — added to
+  the rendered `shopAvatar.group.position.z` right after it's copied from
+  the real `shopAvatarPosition`, never to `shopAvatarPosition` itself —
+  solved so the rig's own hip height (`SHOP_AVATAR_LEG_LENGTH_M` above the
+  group's local origin) lands exactly on the target's `worldZ` (the seat
+  surface) once `shopSitBlend` reaches 1, whatever that seat's height
+  relative to normal standing hip height.
+- **Facing**: `shopSitYawOffset` is likewise a visual-only offset, added
+  only to the rendered quaternion (alongside the existing
+  `shopIdleSwayYawOffset` idle head-turn-adjacent sway) — the shortest
+  angular delta from the avatar's real `shopAvatarFacing` to the target's
+  `worldFacingRad`, scaled by `shopSitBlend`.
+
+**Deliberately visual-only, not a real reposition:** neither offset ever
+touches `shopAvatarPosition`/`shopAvatarFacing` themselves. Those stay
+exactly where the shopper was standing when the idle episode began —
+`findShopIdleInteractionTarget`'s own 3m search radius (#2477) keeps that
+gap small enough to read as "settling into" a nearby seat without an
+actual walk-to-the-chair animation, while leaving collision, the
+curvature-aware z recompute, and camera-follow (`positionShopCamera`,
+anchored to the real `shopAvatarPosition`) completely unaffected — same
+"fall back gracefully" spirit as the clip-less pose itself, just applied
+to positioning instead of animation. A real walk-to-seat is future work,
+not this sub-issue's scope.
+
+#### Testing note
+
+`e2e/shop-idle-sit-pose.test.mjs` places a real chair with a `sitTarget`,
+teleports the avatar into range, waits out the idle delay, then polls the
+read-only `window.__testShopSitPose()` hook (mirroring `shopSitBlend` and
+both visual-only offsets, plus the live leg/arm pivot rotations) until the
+blend substantially engages, confirming the leg/arm rotations and the
+height/yaw offsets all land close to their fully-blended hand-computed
+values; a further case confirms a brief joystick deflection hard-cuts
+`shopSitBlend` back to 0 on the very next frame, matching the instant-
+ease-out discipline described above.
+
 ## Control Room API (N31)
 
 The multi-session "Control Room" coordination board (a shared task/reply
