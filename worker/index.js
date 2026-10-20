@@ -2873,7 +2873,16 @@ async function handleProductFlags(request, db, route) {
       // Reject restores purchasability if auto-hide had already kicked in
       // for this listing -- never touched if an admin escalated straight to
       // removal without auto-hide ever firing.
-      await db.prepare('UPDATE catalog_templates SET flagged_hidden_at = NULL WHERE template_id = ?').bind(templateId).run();
+      // #2467: but never when an earlier flag batch on this same listing was
+      // already `approve`d -- that hide is permanent (see the approve branch's
+      // own comment above), and nothing records *why* flagged_hidden_at is set,
+      // so an unscoped UPDATE here would silently undo a confirmed-counterfeit
+      // removal the moment any later, even weak/empty-reason, flag on the same
+      // listing gets rejected.
+      await db.prepare(`
+        UPDATE catalog_templates SET flagged_hidden_at = NULL
+        WHERE template_id = ? AND NOT EXISTS (SELECT 1 FROM product_flags WHERE template_id = ? AND status = 'approved')
+      `).bind(templateId, templateId).run();
     }
     await adminActionLogStatement(db, admin.user_id, `${resolvedStatus}_product_flags`, 'catalog_template', templateId, {
       flagsResolved: resolved.meta.changes,
