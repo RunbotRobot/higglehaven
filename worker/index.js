@@ -5056,6 +5056,12 @@ async function handlePresence(request, db, route, url) {
     `).bind(sessionBuilder.builder_id, landletId, x, y, z, heading, flying ? 1 : 0).run();
     const row = await db.prepare('SELECT * FROM avatar_presence WHERE builder_id = ?')
       .bind(sessionBuilder.builder_id).first();
+    // #2492: not found here means a concurrent self-delete (migrations/0100's
+    // own ON DELETE CASCADE on builder_id) landed in the single await gap
+    // between the upsert above and this re-SELECT -- a genuine 404, same
+    // race shape #2334/#2354/#2391/#2428/#2429 already fixed elsewhere, not
+    // an uncaught null-dereference crash.
+    if (!row) return json({ error: 'Your account was deleted concurrently — please sign in again' }, 404);
     return json({
       presence: {
         landletId: row.landlet_id,
@@ -8049,7 +8055,12 @@ async function generateConceptImageBytes(env, prompt) {
     headers: { authorization: `Bearer ${env.OPENAI_API_KEY}`, 'content-type': 'application/json' },
     body: JSON.stringify({ model: 'gpt-image-1', prompt, size: '1024x1024', n: 1 }),
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page (HTML, empty, or truncated) makes
+  // response.json() itself throw before the !response.ok check below ever
+  // runs, otherwise surfacing as an uncaught 500 instead of this function's
+  // own intended 502.
+  const data = await response.json().catch(() => null);
   // #1548: same response-shape validation fetchTax1099EfilingToken/transmitTax1099Form
   // already do for their own third-party JSON -- without it, a 200 response with an
   // unexpected shape throws an uncaught TypeError instead of a clean 502.
@@ -8116,7 +8127,11 @@ async function stripeRequest(env, method, path, params, idempotencyKey, stripeAc
     headers,
     body: params ? new URLSearchParams(flattenStripeParams(params, '')) : undefined,
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502/400.
+  const data = await response.json().catch(() => null);
   if (!response.ok) {
     throw new HttpError(data?.error?.message || 'Stripe request failed', response.status >= 500 ? 502 : 400);
   }
@@ -8435,7 +8450,11 @@ async function diditRequest(env, method, path, body) {
     headers: { 'x-api-key': env.DIDIT_API_KEY, 'content-type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502/400.
+  const data = await response.json().catch(() => null);
   if (!response.ok) {
     throw new HttpError(data?.message || 'Didit request failed', response.status >= 500 ? 502 : 400);
   }
@@ -8483,6 +8502,20 @@ export async function latestDiditSession(db, userId) {
   return db.prepare(`
     SELECT * FROM didit_verification_sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1
   `).bind(userId).first();
+}
+
+// #2485: reserveDiditSession's own race-loser `existing` row (read in a
+// separate, later query than the INSERT's own NOT EXISTS check that lost)
+// isn't automatically still the same still-in-flight session that check
+// saw -- it can be gone entirely (deleted in between), already resolved
+// (processed_at set by a concurrent webhook/poll), or still just a local
+// 'pending-<uuid>' placeholder with no real url to hand back yet. Exported
+// (same reasoning as latestDiditSession/reserveDiditSession just above --
+// DIDIT_API_KEY is deliberately never configured for a real HTTP request
+// in the test files exercising handleDiditVerificationSession) so this
+// guard's own logic can be tested directly without a live network call.
+export function diditReservationStillUsable(existing) {
+  return !!existing && existing.processed_at === null && !existing.session_id.startsWith('pending-');
 }
 
 // Starts a fresh Didit-hosted verification session for the requesting
@@ -8546,6 +8579,19 @@ async function handleDiditVerificationSession(request, env, db) {
   if (!reservationId) {
     // Lost the race -- a concurrent request already reserved this user's
     // pending session; hand back that one instead of ever calling Didit.
+    // #2485: `existing` is a separate, later query than the INSERT's own
+    // NOT EXISTS check above, so by the time it runs the row it's reading
+    // may no longer be the still-in-flight one that check saw -- it can be
+    // gone entirely (deleted in between), already resolved (processed_at
+    // set by a concurrent webhook/poll), or still just this function's own
+    // local 'pending-<uuid>' placeholder with no real url yet to hand
+    // back. None of those are safe to report as "here's your in-flight
+    // session" -- a clean 409 tells the client to retry, and the `latest`
+    // check at the top of this handler resolves correctly next time
+    // regardless of which of those states it turns out to be.
+    if (!diditReservationStillUsable(existing)) {
+      throw new HttpError('A verification session is already starting -- please try again in a moment', 409);
+    }
     return json({ sessionId: existing.session_id, url: existing.url });
   }
   // #1886/#2313 (porting the same durable-logging fix from the identical
@@ -8877,6 +8923,19 @@ async function latestVideoGenerationJob(db, builderId) {
   `).bind(builderId).first();
 }
 
+// #2485: reserveVideoGenerationJob's own race-loser `existing` row (read in
+// a separate, later query than the INSERT's own NOT EXISTS check that
+// lost) isn't automatically still the same still-in-flight job that check
+// saw -- it can be gone entirely (deleted in between) or already resolved
+// (processed_at set by a concurrent completion) in the narrow window
+// between that failed INSERT and this re-read. Exported, same direct-
+// testing reasoning as reserveVideoGenerationJob just below, so this
+// guard's own logic can be exercised without forcing that exact race
+// window's own precise timing.
+export function videoGenerationReservationStillUsable(existing) {
+  return !!existing && existing.processed_at === null;
+}
+
 // Exported for direct testing, the same reasoning reserveDiditSession's
 // own callers rely on -- TRIPO_API_KEY is never configured in any test
 // file, so handleVideoGenerationJobCreate itself always 503s before ever
@@ -8924,6 +8983,17 @@ export async function reserveVideoGenerationJob(db, builderId) {
     return { reservationId: null, existing: await latestVideoGenerationJob(db, builderId) };
   }
   return { reservationId: jobId, existing: null };
+}
+
+// #2410: handleVideoGenerationJobCreate's own dedup pre-check (below,
+// before the real-cost rate limit) must not treat a stale 'pending' row --
+// the exact row reserveVideoGenerationJob's own sweep above exists to
+// recover -- as still in flight. Without this, that pre-check intercepts
+// every subsequent request for this builder forever, since it never routes
+// through reserveVideoGenerationJob (or its sweep) at all once it does.
+function isStaleVideoGenerationReservation(row) {
+  return row.status === 'pending'
+    && new Date(row.created_at).getTime() < Date.now() - VIDEO_GENERATION_RESERVATION_TIMEOUT_MS;
 }
 
 // Downloads Tripo's own (third-party, time-limited) output URL and
@@ -9137,7 +9207,7 @@ async function handleVideoGenerationJobCreate(request, env, db) {
   // this pre-check can't see -- same residual gap Didit's own
   // reserveDiditSession has for the identical reason.)
   const latest = await latestVideoGenerationJob(db, sessionBuilder.builder_id);
-  if (latest && latest.processed_at === null) {
+  if (latest && latest.processed_at === null && !isStaleVideoGenerationReservation(latest)) {
     return json({ jobId: latest.job_id, status: latest.status });
   }
   await checkRateLimit(db, `video-generation:${sessionBuilder.builder_id}`, VIDEO_GENERATION_RATE_LIMIT_MAX);
@@ -9162,6 +9232,20 @@ async function handleVideoGenerationJobCreate(request, env, db) {
     // that just relayed an already-in-flight job's own status.
     await db.prepare('UPDATE builders SET video_generation_credits = video_generation_credits + 1 WHERE builder_id = ?')
       .bind(sessionBuilder.builder_id).run();
+    // #2485: `existing` is a separate, later query than the INSERT's own
+    // NOT EXISTS check above, so by the time it runs the row it's reading
+    // may no longer be the still-in-flight job that check saw -- it can be
+    // gone entirely (deleted in between), or already resolved
+    // (processed_at set by a concurrent completion) while this request was
+    // still mid-flight. Handing back a resolved job's own stale status
+    // here would make pollVideoGenerationJob load an old, already-consumed
+    // result into the upload wizard for free -- a clean 409 (credit
+    // already refunded above) tells the client to retry, and the `latest`
+    // check at the top of this handler reports the real current state
+    // next time.
+    if (!videoGenerationReservationStillUsable(existing)) {
+      throw new HttpError('A video-generation job is already starting -- please try again in a moment', 409);
+    }
     return json({ jobId: existing.job_id, status: existing.status });
   }
 
@@ -10655,7 +10739,11 @@ async function fetchTax1099EfilingToken(env) {
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(unsigned));
   const jws = `${unsigned}.${base64UrlEncode(new Uint8Array(signature))}`;
   const response = await fetch(TAX_1099_EFILING_TOKEN_URL, { headers: { authentication: jws } });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502.
+  const data = await response.json().catch(() => null);
   if (!response.ok || !data?.AccessToken) {
     throw new HttpError(data?.StatusMessage || '1099 e-filing authentication failed', 502);
   }
@@ -10700,7 +10788,15 @@ async function transmitTax1099Form(env, { form, payeeEmail, payeeTaxId }) {
     headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502. Orthogonal to
+  // #1475's own ambiguous-post-transmission-failure question (whether the
+  // vendor actually received this submission before failing) -- this only
+  // changes an unparseable response from a raw 500 into the same clean 502
+  // every other failure here already gets, not what a 502 then implies.
+  const data = await response.json().catch(() => null);
   if (!response.ok || !data?.SubmissionId) {
     throw new HttpError(data?.StatusMessage || '1099 e-filing transmission failed', 502);
   }

@@ -1,6 +1,6 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { latestDiditSession, reconcileDiditSession, reserveDiditSession } from './index.js';
+import { diditReservationStillUsable, latestDiditSession, reconcileDiditSession, reserveDiditSession } from './index.js';
 import { api, signupBuilder, signupSeller } from './test-helpers.js';
 
 // Own file (own D1/worker isolate — see test-helpers.js's own comment on
@@ -314,6 +314,38 @@ describe('Didit verification webhook (#589)', () => {
         'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
       ).bind('didit_stale_reservation_swept', userId).first();
       expect(sweepLog).toBeFalsy();
+    });
+  });
+
+  // #2485: reserveDiditSession's own race-loser `existing` row isn't
+  // automatically still usable as "here's your in-flight session" --
+  // handleDiditVerificationSession's own guard (diditReservationStillUsable)
+  // decides that. Tested directly, the same reasoning this file's own top
+  // comment already gives for testing reserveDiditSession/latestDiditSession
+  // directly instead of through a real HTTP request (DIDIT_API_KEY is
+  // deliberately never configured here).
+  describe('diditReservationStillUsable (#2485)', () => {
+    it('is false for a null existing row (e.g. deleted in the narrow race window)', () => {
+      expect(diditReservationStillUsable(null)).toBe(false);
+      expect(diditReservationStillUsable(undefined)).toBe(false);
+    });
+
+    it('is false for an already-resolved session (processed_at set by a concurrent webhook/poll)', () => {
+      expect(diditReservationStillUsable({ session_id: 'session-real', processed_at: '2026-01-01T00:00:00.000Z', url: 'https://verify.didit.me/session/real' })).toBe(false);
+    });
+
+    it('is false for a still-local pending-<uuid> placeholder with no real url yet', async () => {
+      const builder = await signupBuilder('didit-still-usable-placeholder');
+      const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first()).user_id;
+      const reservation = await reserveDiditSession(env.DB, userId);
+      const existing = await latestDiditSession(env.DB, userId);
+      expect(existing.session_id).toBe(reservation.reservationId);
+
+      expect(diditReservationStillUsable(existing)).toBe(false);
+    });
+
+    it('is true for a genuine, still-pending, real (non-placeholder) session', () => {
+      expect(diditReservationStillUsable({ session_id: 'session-real', processed_at: null, url: 'https://verify.didit.me/session/real' })).toBe(true);
     });
   });
 

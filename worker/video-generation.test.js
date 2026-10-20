@@ -1,6 +1,6 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { cleanupUnreferencedModels, reserveVideoGenerationJob } from './index.js';
+import { cleanupUnreferencedModels, reserveVideoGenerationJob, videoGenerationReservationStillUsable } from './index.js';
 import { api, signupBuilder } from './test-helpers.js';
 
 // Own file (own D1/worker isolate — see test-helpers.js's own comment on
@@ -395,6 +395,34 @@ describe('Video-to-3D job creation (#1619)', () => {
     }
   });
 
+  // #2410: the dedup pre-check just above (`latest.processed_at === null`)
+  // used to treat a stale 'pending' row the exact same as a genuinely
+  // in-flight one -- intercepting it forever, before reserveVideoGenerationJob
+  // (and its own #1782 stale-sweep) ever ran. Unlike the happy-path create
+  // above, which flips straight to 'processing' synchronously, this
+  // reproduces the real crash window by reserving a 'pending' row directly
+  // (bypassing the HTTP handler) and backdating it past
+  // VIDEO_GENERATION_RESERVATION_TIMEOUT_MS, the same way the
+  // reserveVideoGenerationJob-level stale-sweep test above does.
+  it('#2410: does not dedup against a stale pending row -- starts a fresh job instead', async () => {
+    const builder = await signupBuilderWithCredits('video-gen-stale-dedup');
+    const stale = await reserveVideoGenerationJob(env.DB, builder.builderId);
+    await env.DB.prepare(`
+      UPDATE video_generation_jobs SET created_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-10 minutes') WHERE job_id = ?
+    `).bind(stale.reservationId).run();
+
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    expect(created.status).toBe(201);
+    const createdBody = await created.json();
+    expect(createdBody.jobId).not.toBe(stale.reservationId);
+
+    // The stale placeholder is gone (swept by reserveVideoGenerationJob),
+    // leaving exactly the fresh job behind.
+    const rows = await env.DB.prepare('SELECT * FROM video_generation_jobs WHERE builder_id = ?').bind(builder.builderId).all();
+    expect(rows.results).toHaveLength(1);
+    expect(rows.results[0].job_id).toBe(createdBody.jobId);
+  });
+
   it('rate-limits repeated job-creation attempts from the same builder', async () => {
     const builder = await signupBuilderWithCredits('video-gen-rate-limit');
     // Each attempt must land as a distinct job (not the dedup path above),
@@ -647,6 +675,32 @@ describe('reserveVideoGenerationJob (#1619)', () => {
       'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
     ).bind('video_generation_stale_reservation_swept', builder.builderId).first();
     expect(sweepLog).toBeFalsy();
+  });
+});
+
+// #2485: reserveVideoGenerationJob's own race-loser `existing` row isn't
+// automatically still usable as "here's your in-flight job" --
+// handleVideoGenerationJobCreate's own guard (videoGenerationReservation
+// StillUsable) decides that. Tested directly, the same reasoning this
+// file's own describe blocks above already test reserveVideoGenerationJob
+// directly for narrow race/timing states a real HTTP request can't force
+// deterministically.
+describe('videoGenerationReservationStillUsable (#2485)', () => {
+  it('is false for a null existing row (e.g. deleted in the narrow race window)', () => {
+    expect(videoGenerationReservationStillUsable(null)).toBe(false);
+    expect(videoGenerationReservationStillUsable(undefined)).toBe(false);
+  });
+
+  it('is false for an already-resolved job (processed_at set by a concurrent completion)', () => {
+    expect(videoGenerationReservationStillUsable({ job_id: 'job-real', status: 'completed', processed_at: '2026-01-01T00:00:00.000Z' })).toBe(false);
+  });
+
+  it('is true for a genuine, still-pending job', async () => {
+    const builder = await signupBuilderWithCredits('video-gen-still-usable-pending');
+    const reservation = await reserveVideoGenerationJob(env.DB, builder.builderId);
+    const existing = await env.DB.prepare('SELECT * FROM video_generation_jobs WHERE job_id = ?').bind(reservation.reservationId).first();
+
+    expect(videoGenerationReservationStillUsable(existing)).toBe(true);
   });
 });
 
