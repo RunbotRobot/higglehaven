@@ -748,6 +748,131 @@ describe('Shipping', () => {
   });
 });
 
+// #2476 (sub-issue of #2475's "[Tracking] Furniture interaction-target
+// system"): docs/SPEC.md §2's "sit, lean, stand" idle state machine --
+// this covers only the data model (metadata.sitTarget/leanTarget), not the
+// targeting/pose logic itself (later sub-issues).
+describe('Sit/lean interaction targets', () => {
+  function templateBody(overrides = {}) {
+    return {
+      name: 'Sit/lean test product',
+      color: '#123456',
+      dimensions: { width: 2, depth: 1, height: 0.8 },
+      ...overrides,
+    };
+  }
+
+  it('rejects a non-object metadata.sitTarget', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'sit-lean-bad-object-template',
+        ...templateBody({ metadata: { sitTarget: 'yes' } }),
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/sitTarget must be an object/);
+  });
+
+  it('rejects an offsetXM outside the template\'s own footprint', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'sit-lean-bad-offset-template',
+        ...templateBody({
+          metadata: { sitTarget: { offsetXM: 5, offsetYM: 0, heightM: 0.4, facingRad: 0 } },
+        }),
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/sitTarget\.offsetXM must be a number within \+\/- half/);
+  });
+
+  it('rejects a heightM outside the template\'s own height range', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'sit-lean-bad-height-template',
+        ...templateBody({
+          metadata: { leanTarget: { offsetXM: 0, offsetYM: 0, heightM: 5, facingRad: 0 } },
+        }),
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/leanTarget\.heightM must be a number between 0 and/);
+  });
+
+  it('rejects a non-finite facingRad', async () => {
+    const rejected = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'sit-lean-bad-facing-template',
+        ...templateBody({
+          metadata: { sitTarget: { offsetXM: 0, offsetYM: 0, heightM: 0.4, facingRad: 'north' } },
+        }),
+      }),
+    });
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/sitTarget\.facingRad must be a finite number/);
+  });
+
+  it('accepts valid sitTarget and leanTarget values and round-trips them through GET, independently', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'sit-lean-valid-template',
+        ...templateBody({
+          metadata: {
+            sitTarget: { offsetXM: 0, offsetYM: -0.3, heightM: 0.45, facingRad: 3.14 },
+            leanTarget: { offsetXM: 0.9, offsetYM: 0, heightM: 0.8, facingRad: -1.57 },
+          },
+        }),
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.metadata.sitTarget).toEqual({ offsetXM: 0, offsetYM: -0.3, heightM: 0.45, facingRad: 3.14 });
+    expect(created.body.template.metadata.leanTarget).toEqual({ offsetXM: 0.9, offsetYM: 0, heightM: 0.8, facingRad: -1.57 });
+
+    const fetched = await api('/catalog/sit-lean-valid-template');
+    expect(fetched.body.template.metadata.sitTarget.heightM).toBe(0.45);
+    expect(fetched.body.template.metadata.leanTarget.offsetXM).toBe(0.9);
+  });
+
+  it('defaults to neither sittable nor leanable when both are absent', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({ templateId: 'sit-lean-default-template', ...templateBody() }),
+    });
+    expect(created.response.status).toBe(201);
+    expect(created.body.template.metadata.sitTarget).toBeUndefined();
+    expect(created.body.template.metadata.leanTarget).toBeUndefined();
+  });
+
+  it('lets a sitTarget be cleared by omitting it from a metadata replace, without touching leanTarget', async () => {
+    await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'sit-lean-clear-template',
+        ...templateBody({
+          metadata: {
+            sitTarget: { offsetXM: 0, offsetYM: 0, heightM: 0.4, facingRad: 0 },
+            leanTarget: { offsetXM: 0.9, offsetYM: 0, heightM: 0.8, facingRad: 0 },
+          },
+        }),
+      }),
+    });
+    const cleared = await api('/catalog/sit-lean-clear-template', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        metadata: { leanTarget: { offsetXM: 0.9, offsetYM: 0, heightM: 0.8, facingRad: 0 } },
+      }),
+    });
+    expect(cleared.response.status).toBe(200);
+    expect(cleared.body.template.metadata.sitTarget).toBeUndefined();
+    expect(cleared.body.template.metadata.leanTarget).toEqual({ offsetXM: 0.9, offsetYM: 0, heightM: 0.8, facingRad: 0 });
+  });
+});
+
 // #327 ("build the 3D Model > Flat image creation pathway") — a minimal,
 // real 1x1 transparent PNG, same idiom as glbFile's synthetic-but-valid
 // binary fixture, so these tests exercise the real base64-decode/R2-put

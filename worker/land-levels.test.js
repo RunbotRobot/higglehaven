@@ -441,6 +441,68 @@ describe('Landlet levels', () => {
     expect(saved, `${racingInstanceId} was destroyed by the level-removal sweep without ever being saved`).not.toBeNull();
   });
 
+  // #2470: the #928 fix above re-queries placed_instances fresh right
+  // before the sweep, but still scoped by minZ/maxZ computed from the
+  // pre-DELETE snapshot taken before checkRateLimit -- that snapshot only
+  // excludes the level actually being removed, so it doesn't account for a
+  // concurrent level ADD in the *other* direction landing in that same
+  // gap. Here the landlet starts with only an "up" level (1); while this
+  // request is removing it, a concurrent request (simulated the same way
+  // as the #928 test above, via the same env.DB.prepare hook on
+  // checkRateLimit's own INSERT) adds a "down" level (-1) and places an
+  // instance at z = -10 -- outside the stale pre-DELETE range ([-5, 5], since
+  // the original snapshot saw no other levels once level 1 is removed) but
+  // squarely inside the real, live range once level -1 exists ([-15, 5]).
+  // The instance is genuinely valid under the landlet's actual current
+  // levels and must survive untouched -- not swept into a saved layout, not
+  // deleted from active space.
+  it('does not sweep an instance that only became valid via a concurrent level add in the other direction', async () => {
+    const owner = await signupBuilder('levels-other-direction-race-owner');
+    await createGreenbeltLandletWithArea('levels-other-direction-race-landlet', 1000);
+    await claim('levels-other-direction-race-landlet', owner);
+    await growLandCapHeadroom(owner.builderId);
+    await api('/landlets/levels-other-direction-race-landlet/levels', owner.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+
+    const racingInstanceId = 'levels-other-direction-race-instance';
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('INSERT INTO rate_limit_events')) {
+        armed = false;
+        // Mirrors a concurrent tab's own real POST /levels {direction:
+        // 'down'} + place-an-instance sequence landing in the gap between
+        // the original pre-DELETE snapshot and this request's own DELETE.
+        originalPrepare(`
+          INSERT INTO landlet_levels (level_id, landlet_id, level_index, cap_consumed_m2) VALUES (?, ?, ?, ?)
+        `).bind('levels-other-direction-race-down-level', 'levels-other-direction-race-landlet', -1, 1).run();
+        originalPrepare(`
+          INSERT INTO placed_instances (
+            instance_id, landlet_id, template_id, x_m, y_m, z_m,
+            rotation_x_rad, rotation_y_rad, rotation_z_rad, scale
+          ) VALUES (?, ?, ?, ?, ?, ?, 0, 0, 0, 1)
+        `).bind(racingInstanceId, 'levels-other-direction-race-landlet', 'placeholder-tree', 1, 1, -LEVEL_HEIGHT_M).run();
+      }
+      return originalPrepare(sql);
+    };
+    try {
+      const removed = await api('/landlets/levels-other-direction-race-landlet/levels/1', owner.session({ method: 'DELETE' }));
+      expect(removed.response.status).toBe(200);
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+
+    const stillPlaced = await env.DB.prepare(
+      'SELECT 1 FROM placed_instances WHERE instance_id = ?',
+    ).bind(racingInstanceId).first();
+    expect(stillPlaced, `${racingInstanceId} was wrongly swept even though it's valid under the live (post-concurrent-add) levels`).not.toBeNull();
+    const saved = await env.DB.prepare(
+      'SELECT 1 FROM saved_layout_instances WHERE source_instance_id = ?',
+    ).bind(racingInstanceId).first();
+    expect(saved, `${racingInstanceId} was wrongly archived as swept even though it's valid under the live (post-concurrent-add) levels`).toBeNull();
+  });
+
   // #958: same #415 "auction transfer in the await gap" race already closed
   // for landlet versions/draft/instances -- an owning builder's add-level
   // request must not still succeed once a concurrent auction resolution has

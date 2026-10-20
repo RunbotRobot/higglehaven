@@ -5056,6 +5056,12 @@ async function handlePresence(request, db, route, url) {
     `).bind(sessionBuilder.builder_id, landletId, x, y, z, heading, flying ? 1 : 0).run();
     const row = await db.prepare('SELECT * FROM avatar_presence WHERE builder_id = ?')
       .bind(sessionBuilder.builder_id).first();
+    // #2492: not found here means a concurrent self-delete (migrations/0100's
+    // own ON DELETE CASCADE on builder_id) landed in the single await gap
+    // between the upsert above and this re-SELECT -- a genuine 404, same
+    // race shape #2334/#2354/#2391/#2428/#2429 already fixed elsewhere, not
+    // an uncaught null-dereference crash.
+    if (!row) return json({ error: 'Your account was deleted concurrently — please sign in again' }, 404);
     return json({
       presence: {
         landletId: row.landlet_id,
@@ -5196,6 +5202,13 @@ async function handleFriendships(request, db, route, url) {
     await fireNotification(db, recipientBuilderId,
       `${sessionBuilder.label} sent you a friend request.`);
     const row = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).first();
+    // #2469: a concurrent DELETE (the recipient declining the request we
+    // just notified them about, or either side's own self-delete cascade)
+    // can remove this row in the await gap since the INSERT -- a genuine
+    // 404, same race shape #2334/#2354/#2364/#2391/#2392/#2429/#2430
+    // already fixed elsewhere, not an uncaught friendshipFromRow(undefined)
+    // crash.
+    if (!row) return json({ error: 'Friendship not found' }, 404);
     const labelsById = await labelsByBuilderId(db, [recipientBuilderId]);
     const landletsById = await ownedLandletsByBuilderId(db, [recipientBuilderId]);
     return json({ friendship: friendshipFromRow(row, requesterBuilderId, labelsById, landletsById) }, 201);
@@ -5712,6 +5725,13 @@ async function handleBundles(request, db, route, url) {
       INSERT INTO bundles (bundle_id, builder_id, name, items_json, shared) VALUES (?, ?, ?, ?, ?)
     `).bind(bundleId, builderId, name, JSON.stringify(items), shared ? 1 : 0).run();
     const row = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(bundleId).first();
+    // #2469: a concurrent DELETE of this same bundle (the id is
+    // predictable from the idempotency key, so a same-owner retry/second
+    // tab can target it) or a self-delete cascade can remove this row in
+    // the await gap since the INSERT -- same race shape #2426 already
+    // fixed for this resource's own PATCH, not an uncaught
+    // bundleFromRow(undefined) crash.
+    if (!row) return json({ error: 'Bundle not found' }, 404);
     return json({ bundle: bundleFromRow(row) }, 201);
   }
 
@@ -5933,6 +5953,10 @@ async function handleStartAuction(request, db, landletId) {
     throw new HttpError('This landlet already has an active auction', 409);
   }
   const row = await db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auctionId).first();
+  // #2427: a concurrent self-delete can remove this just-created, still-
+  // zero-bid auction (builderDeletionStatements) between the INSERT above
+  // and this re-SELECT, same idiom as #2334/#2354/#2364/#2391/#2392.
+  if (!row) throw new HttpError('This landlet no longer has an active auction — it may have been removed concurrently', 409);
   return json({ auction: await auctionFromRow(db, row) }, 201);
 }
 
@@ -6158,6 +6182,15 @@ async function handleLandletLevels(request, db, route) {
     }
     await recomputeLandCap(db, landlet.owner_builder_id);
     const row = await db.prepare('SELECT * FROM landlet_levels WHERE level_id = ?').bind(levelId).first();
+    // #2469: a concurrent removal of this exact (deterministically-indexed,
+    // outermost) level from a second tab, a builder self-delete cascade, a
+    // concurrent auction resolution (resolveAuction's own
+    // DELETE FROM landlet_levels), or an admin reassign-owner can remove
+    // this row in the await gap since the INSERT (or recomputeLandCap just
+    // above) -- a genuine race, not an uncaught levelFromRow(undefined)
+    // crash. Same idiom as #2334/#2354/#2364/#2391/#2392/#2429/#2430, 409
+    // to match this branch's own "changed -- please retry" message above.
+    if (!row) throw new HttpError('This landlet\'s levels changed — please retry', 409);
     return json({ level: levelFromRow(row) }, 201);
   }
 
@@ -6227,6 +6260,25 @@ async function handleLandletLevels(request, db, route) {
     if (deleted.meta.changes === 0) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
+    // #2470: minZ/maxZ above were computed from the pre-DELETE snapshot
+    // taken before the rate-limit check and the DELETE's own awaited
+    // round-trips — fine for the rate-limit-bucket decision that snapshot
+    // feeds (outOfRange above), but a concurrent level add in the *other*
+    // direction during that gap (e.g. this request removes the outermost
+    // "up" level while another tab adds a new "down" level) would still
+    // leave minZ/maxZ reflecting the old, now-wrong extent here, after the
+    // DELETE has actually committed. The outermost-level guard folded into
+    // the DELETE's own WHERE clause above only protects the direction being
+    // removed, so it doesn't catch this. Re-deriving the range from a fresh
+    // read of the now-committed landlet_levels table — same formula, same
+    // half-level-height slack — keeps the sweep below scoped to the real,
+    // live extent instead of a window that may have shifted out from under
+    // it.
+    const remainingAfterDelete = await db.prepare('SELECT level_index FROM landlet_levels WHERE landlet_id = ?')
+      .bind(landletId).all();
+    const freshRemainingIndices = remainingAfterDelete.results.map((row) => row.level_index);
+    const freshMinZ = Math.min(0, ...freshRemainingIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M;
+    const freshMaxZ = Math.max(0, ...freshRemainingIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M;
     // #522 (owner-confirmed, 2026-09-09): any instance left sitting in the
     // z-range this level was providing is removed from active shoppable
     // space rather than silently drifting out of bounds — nothing else
@@ -6256,7 +6308,7 @@ async function handleLandletLevels(request, db, route) {
     // earlier snapshot — closes that window down to this batch's own commit
     // latency.
     const freshOutOfRange = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)')
-      .bind(landletId, minZ, maxZ).all();
+      .bind(landletId, freshMinZ, freshMaxZ).all();
     const statements = [];
     if (freshOutOfRange.results.length > 0) {
       const savedLayoutId = `saved-layout-${crypto.randomUUID()}`;
@@ -6282,7 +6334,7 @@ async function handleLandletLevels(request, db, route) {
       }
     }
     statements.push(
-      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)').bind(landletId, minZ, maxZ),
+      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)').bind(landletId, freshMinZ, freshMaxZ),
     );
     await db.batch(statements);
     await recomputeLandCap(db, landlet.owner_builder_id);
@@ -8003,7 +8055,12 @@ async function generateConceptImageBytes(env, prompt) {
     headers: { authorization: `Bearer ${env.OPENAI_API_KEY}`, 'content-type': 'application/json' },
     body: JSON.stringify({ model: 'gpt-image-1', prompt, size: '1024x1024', n: 1 }),
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page (HTML, empty, or truncated) makes
+  // response.json() itself throw before the !response.ok check below ever
+  // runs, otherwise surfacing as an uncaught 500 instead of this function's
+  // own intended 502.
+  const data = await response.json().catch(() => null);
   // #1548: same response-shape validation fetchTax1099EfilingToken/transmitTax1099Form
   // already do for their own third-party JSON -- without it, a 200 response with an
   // unexpected shape throws an uncaught TypeError instead of a clean 502.
@@ -8070,7 +8127,11 @@ async function stripeRequest(env, method, path, params, idempotencyKey, stripeAc
     headers,
     body: params ? new URLSearchParams(flattenStripeParams(params, '')) : undefined,
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502/400.
+  const data = await response.json().catch(() => null);
   if (!response.ok) {
     throw new HttpError(data?.error?.message || 'Stripe request failed', response.status >= 500 ? 502 : 400);
   }
@@ -8389,7 +8450,11 @@ async function diditRequest(env, method, path, body) {
     headers: { 'x-api-key': env.DIDIT_API_KEY, 'content-type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined,
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502/400.
+  const data = await response.json().catch(() => null);
   if (!response.ok) {
     throw new HttpError(data?.message || 'Didit request failed', response.status >= 500 ? 502 : 400);
   }
@@ -8437,6 +8502,20 @@ export async function latestDiditSession(db, userId) {
   return db.prepare(`
     SELECT * FROM didit_verification_sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1
   `).bind(userId).first();
+}
+
+// #2485: reserveDiditSession's own race-loser `existing` row (read in a
+// separate, later query than the INSERT's own NOT EXISTS check that lost)
+// isn't automatically still the same still-in-flight session that check
+// saw -- it can be gone entirely (deleted in between), already resolved
+// (processed_at set by a concurrent webhook/poll), or still just a local
+// 'pending-<uuid>' placeholder with no real url to hand back yet. Exported
+// (same reasoning as latestDiditSession/reserveDiditSession just above --
+// DIDIT_API_KEY is deliberately never configured for a real HTTP request
+// in the test files exercising handleDiditVerificationSession) so this
+// guard's own logic can be tested directly without a live network call.
+export function diditReservationStillUsable(existing) {
+  return !!existing && existing.processed_at === null && !existing.session_id.startsWith('pending-');
 }
 
 // Starts a fresh Didit-hosted verification session for the requesting
@@ -8500,6 +8579,19 @@ async function handleDiditVerificationSession(request, env, db) {
   if (!reservationId) {
     // Lost the race -- a concurrent request already reserved this user's
     // pending session; hand back that one instead of ever calling Didit.
+    // #2485: `existing` is a separate, later query than the INSERT's own
+    // NOT EXISTS check above, so by the time it runs the row it's reading
+    // may no longer be the still-in-flight one that check saw -- it can be
+    // gone entirely (deleted in between), already resolved (processed_at
+    // set by a concurrent webhook/poll), or still just this function's own
+    // local 'pending-<uuid>' placeholder with no real url yet to hand
+    // back. None of those are safe to report as "here's your in-flight
+    // session" -- a clean 409 tells the client to retry, and the `latest`
+    // check at the top of this handler resolves correctly next time
+    // regardless of which of those states it turns out to be.
+    if (!diditReservationStillUsable(existing)) {
+      throw new HttpError('A verification session is already starting -- please try again in a moment', 409);
+    }
     return json({ sessionId: existing.session_id, url: existing.url });
   }
   // #1886/#2313 (porting the same durable-logging fix from the identical
@@ -8617,17 +8709,36 @@ const DIDIT_TERMINAL_STATUSES = { Approved: true, Declined: false, Abandoned: fa
 // the webhook or a poll gets there first applies the change; the other is
 // a safe no-op, so this can't double-apply from a race or a repeat
 // webhook delivery.
+// #2484: the session claim and the trust_tier raise used to be two
+// sequential awaited .run() calls -- an interruption between them (a
+// transient D1 error, or the isolate hitting a CPU/time limit) could leave
+// processed_at already set with trust_tier never raised, and since every
+// retry's own claim above short-circuits on processed_at IS NOT NULL, that
+// stranded state had no retry path at all. Batched into one D1 transaction
+// (same shape as #2174) so the two writes can no longer split. The users
+// UPDATE's own EXISTS guard reads the session row *as this same batch just
+// left it* (D1 batch statements run sequentially within one transaction),
+// so it only fires when this call's own claim actually landed (or had
+// already landed from an earlier, fully-completed call -- a replayed
+// webhook re-applying the same value is a safe no-op either way); it's
+// only ever included in the batch when `approved` is true in the first
+// place, so a decline never reaches it.
 async function applyDiditDecision(db, sessionId, userId, approved) {
-  const result = await db.prepare(`
-    UPDATE didit_verification_sessions SET status = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE session_id = ? AND processed_at IS NULL
-  `).bind(approved ? 'approved' : 'declined', sessionId).run();
-  if (result.meta.changes === 0) return;
+  const statements = [
+    db.prepare(`
+      UPDATE didit_verification_sessions SET status = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE session_id = ? AND processed_at IS NULL
+    `).bind(approved ? 'approved' : 'declined', sessionId),
+  ];
   if (approved) {
-    await db.prepare(`
-      UPDATE users SET trust_tier = 'id_verified', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE user_id = ?
-    `).bind(userId).run();
+    statements.push(db.prepare(`
+      UPDATE users SET trust_tier = 'id_verified', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE user_id = ? AND EXISTS (
+        SELECT 1 FROM didit_verification_sessions WHERE session_id = ? AND status = 'approved' AND processed_at IS NOT NULL
+      )
+    `).bind(userId, sessionId));
   }
+  await db.batch(statements);
 }
 
 // Shared by handleDiditVerificationStatus (poll the current session) and
@@ -8831,6 +8942,19 @@ async function latestVideoGenerationJob(db, builderId) {
   `).bind(builderId).first();
 }
 
+// #2485: reserveVideoGenerationJob's own race-loser `existing` row (read in
+// a separate, later query than the INSERT's own NOT EXISTS check that
+// lost) isn't automatically still the same still-in-flight job that check
+// saw -- it can be gone entirely (deleted in between) or already resolved
+// (processed_at set by a concurrent completion) in the narrow window
+// between that failed INSERT and this re-read. Exported, same direct-
+// testing reasoning as reserveVideoGenerationJob just below, so this
+// guard's own logic can be exercised without forcing that exact race
+// window's own precise timing.
+export function videoGenerationReservationStillUsable(existing) {
+  return !!existing && existing.processed_at === null;
+}
+
 // Exported for direct testing, the same reasoning reserveDiditSession's
 // own callers rely on -- TRIPO_API_KEY is never configured in any test
 // file, so handleVideoGenerationJobCreate itself always 503s before ever
@@ -8878,6 +9002,17 @@ export async function reserveVideoGenerationJob(db, builderId) {
     return { reservationId: null, existing: await latestVideoGenerationJob(db, builderId) };
   }
   return { reservationId: jobId, existing: null };
+}
+
+// #2410: handleVideoGenerationJobCreate's own dedup pre-check (below,
+// before the real-cost rate limit) must not treat a stale 'pending' row --
+// the exact row reserveVideoGenerationJob's own sweep above exists to
+// recover -- as still in flight. Without this, that pre-check intercepts
+// every subsequent request for this builder forever, since it never routes
+// through reserveVideoGenerationJob (or its sweep) at all once it does.
+function isStaleVideoGenerationReservation(row) {
+  return row.status === 'pending'
+    && new Date(row.created_at).getTime() < Date.now() - VIDEO_GENERATION_RESERVATION_TIMEOUT_MS;
 }
 
 // Downloads Tripo's own (third-party, time-limited) output URL and
@@ -9091,7 +9226,7 @@ async function handleVideoGenerationJobCreate(request, env, db) {
   // this pre-check can't see -- same residual gap Didit's own
   // reserveDiditSession has for the identical reason.)
   const latest = await latestVideoGenerationJob(db, sessionBuilder.builder_id);
-  if (latest && latest.processed_at === null) {
+  if (latest && latest.processed_at === null && !isStaleVideoGenerationReservation(latest)) {
     return json({ jobId: latest.job_id, status: latest.status });
   }
   await checkRateLimit(db, `video-generation:${sessionBuilder.builder_id}`, VIDEO_GENERATION_RATE_LIMIT_MAX);
@@ -9116,6 +9251,20 @@ async function handleVideoGenerationJobCreate(request, env, db) {
     // that just relayed an already-in-flight job's own status.
     await db.prepare('UPDATE builders SET video_generation_credits = video_generation_credits + 1 WHERE builder_id = ?')
       .bind(sessionBuilder.builder_id).run();
+    // #2485: `existing` is a separate, later query than the INSERT's own
+    // NOT EXISTS check above, so by the time it runs the row it's reading
+    // may no longer be the still-in-flight job that check saw -- it can be
+    // gone entirely (deleted in between), or already resolved
+    // (processed_at set by a concurrent completion) while this request was
+    // still mid-flight. Handing back a resolved job's own stale status
+    // here would make pollVideoGenerationJob load an old, already-consumed
+    // result into the upload wizard for free -- a clean 409 (credit
+    // already refunded above) tells the client to retry, and the `latest`
+    // check at the top of this handler reports the real current state
+    // next time.
+    if (!videoGenerationReservationStillUsable(existing)) {
+      throw new HttpError('A video-generation job is already starting -- please try again in a moment', 409);
+    }
     return json({ jobId: existing.job_id, status: existing.status });
   }
 
@@ -9326,11 +9475,13 @@ const CREDIT_ORB_COLLECT_RATE_LIMIT_MAX = 20;
 // calls. Reuses this file's only other avatar_presence-freshness idiom
 // (PRESENCE_STALE_AFTER_MS, #1767) rather than inventing a second one, and
 // a radius generous enough to tolerate that same staleness window's worth
-// of real movement at SHOP_RUN_SPEED_M_S (2.7m/s, ~27m) on top of the
-// client's own 1.5m collect radius -- the point of this check is requiring
-// *some* fresh, correctly-landletted presence at all (what the scripted
-// exploit has none of), not pixel-perfect anti-cheat precision.
-const CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M = 30;
+// of real movement at SHOP_RUN_SPEED_M_S (#2481: 4.4704m/s/10mph as of
+// #2444, ~45m -- was 2.7m/s/~27m when this constant was first set, see
+// #2481) on top of the client's own 1.5m collect radius -- the point of
+// this check is requiring *some* fresh, correctly-landletted presence at
+// all (what the scripted exploit has none of), not pixel-perfect
+// anti-cheat precision.
+const CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M = 50;
 
 // GET /api/credit-orbs (optionally ?landletId=... to scope to one landlet,
 // per #1994's own "or scoped by landlet" note) -- the frontend's read path
@@ -10607,7 +10758,11 @@ async function fetchTax1099EfilingToken(env) {
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(unsigned));
   const jws = `${unsigned}.${base64UrlEncode(new Uint8Array(signature))}`;
   const response = await fetch(TAX_1099_EFILING_TOKEN_URL, { headers: { authentication: jws } });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502.
+  const data = await response.json().catch(() => null);
   if (!response.ok || !data?.AccessToken) {
     throw new HttpError(data?.StatusMessage || '1099 e-filing authentication failed', 502);
   }
@@ -10652,7 +10807,15 @@ async function transmitTax1099Form(env, { form, payeeEmail, payeeTaxId }) {
     headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
-  const data = await response.json();
+  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
+  // upstream gateway error page makes response.json() itself throw before
+  // the !response.ok check below ever runs, otherwise surfacing as an
+  // uncaught 500 instead of this function's own intended 502. Orthogonal to
+  // #1475's own ambiguous-post-transmission-failure question (whether the
+  // vendor actually received this submission before failing) -- this only
+  // changes an unparseable response from a raw 500 into the same clean 502
+  // every other failure here already gets, not what a 502 then implies.
+  const data = await response.json().catch(() => null);
   if (!response.ok || !data?.SubmissionId) {
     throw new HttpError(data?.StatusMessage || '1099 e-filing transmission failed', 502);
   }
@@ -11086,6 +11249,12 @@ async function handleConfirmCard(request, env, db) {
       WHERE user_id = ?
     `).bind(user.user_id).run();
     const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+    // #2430: a concurrent account deletion (self-delete from another
+    // session, or escalateExpiredSuspensions' own cascade) landing in the
+    // await gap since the UPDATE above can remove this row before this
+    // re-SELECT runs -- same race shape #2334/#2354/#2364/#2391/#2392
+    // already fixed elsewhere, not an uncaught userFromRow(undefined) crash.
+    if (!updated) return json({ error: 'Account no longer exists' }, 404);
     return json({ user: userFromRow(updated) });
   }
   // #1072: this used to trust a client-supplied paymentMethodId directly,
@@ -11134,6 +11303,10 @@ async function handleConfirmCard(request, env, db) {
     throw new HttpError('Only credit cards are accepted for this step — debit and prepaid cards can\'t be used.', 400);
   }
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  // #2430: same concurrent-account-deletion race as handleConfirmCard's own
+  // re-SELECT above -- a concurrent delete landing in the await gap since
+  // the UPDATE can remove this row before this re-SELECT runs.
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(updated) });
 }
 
@@ -11168,6 +11341,12 @@ async function handleAgeAttest(request, db) {
     `).bind(new Date().toISOString(), user.user_id).run();
   }
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  // #2430: same concurrent-account-deletion race as handleConfirmCard's own
+  // re-SELECT above (self-delete from another session, or
+  // escalateExpiredSuspensions' own cascade) -- can remove this row in the
+  // await gap since the UPDATE (or, when already attested, since the
+  // requireCurrentUser read at the top of this handler).
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(updated) });
 }
 
@@ -11740,6 +11919,13 @@ async function handleChangeEmail(request, env, db) {
   if (result.meta.changes === 0) throw new HttpError('Email is already registered', 409);
   const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, email);
   const row = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  // #2430: the UPDATE's own meta.changes check above only confirms it
+  // matched a row (and won the email-collision race) at the moment it ran
+  // -- a concurrent account deletion landing in the await gap since (the
+  // issueEmailVerification call above) can still remove the row before
+  // this re-SELECT runs, same race shape #2334/#2354/#2364/#2391/#2392
+  // already fixed elsewhere.
+  if (!row) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(row), verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
 }
 
@@ -11813,6 +11999,12 @@ async function handleLogin(request, db, url) {
 
   const sessionToken = await createSession(db, row.user_id);
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(row.user_id).first();
+  // #2430: a concurrent account deletion (another session's own self-
+  // delete, or escalateExpiredSuspensions' own cascade) landing in the
+  // await gap since the UPDATE above (or createSession just before) can
+  // remove this row before this re-SELECT runs, same race shape
+  // #2334/#2354/#2364/#2391/#2392 already fixed elsewhere.
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json(
     { user: userFromRow(updated) },
     200,
@@ -16549,7 +16741,14 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash),
   ];
-  if (builderId) {
+  // #2439: a free listing (price_cents 0, reachable since
+  // computePurchaseAmounts only rejects a null price, not a zero one)
+  // produces builderShareCents === 0 — crediting that is a no-op, but
+  // higgles_earnings_events.amount_cents has its own CHECK (amount_cents
+  // > 0) (migration 0093), so unconditionally inserting a zero-amount row
+  // turned what should be a clean $0 sale into an uncaught "CHECK
+  // constraint failed", surfacing as a generic 400 via databaseHttpError.
+  if (builderId && builderShareCents > 0) {
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(builderShareCents, builderId),
@@ -16717,7 +16916,14 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash),
   ];
-  if (builderId) {
+  // #2439: same zero-commission guard as handlePurchaseFinalize's own
+  // identical block above — a free listing (price_cents 0) makes
+  // builderShareCents 0, and crediting that is a no-op, but
+  // higgles_earnings_events.amount_cents' own CHECK (amount_cents > 0)
+  // (migration 0093) turned an unconditional insert of that zero-amount
+  // row into an uncaught "CHECK constraint failed" on an otherwise-clean
+  // $0 purchase.
+  if (builderId && builderShareCents > 0) {
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(builderShareCents, builderId),
@@ -18401,11 +18607,17 @@ async function getInstancesById(db, instanceIds) {
 // 4xx. Checked only after `HttpError` in the top-level catch, so routes
 // with a more specific pre-check (assertReferenceExists above) keep their
 // own message instead of falling through to this generic one.
+// #2440: the three generic (non-ring-specific) messages below used to name
+// the underlying SQL constraint type directly ("UNIQUE constraint failed"
+// -> "Resource already exists", etc.) -- raw backend language the frontend
+// shows verbatim via `alert(err.message || ...)`. Reworded to plain,
+// in-app phrasing with the same meaning; the ring-specific messages above
+// were already written this way and are left unchanged.
 function databaseHttpError(error) {
   const message = errorMessages(error);
 
   if (message.includes('UNIQUE constraint failed')) {
-    return new HttpError('Resource already exists', 409);
+    return new HttpError('That already exists.', 409);
   }
   if (message.includes('generated ring radial overlap')) {
     return new HttpError('Generated ring would overlap existing generated rings', 409);
@@ -18420,10 +18632,10 @@ function databaseHttpError(error) {
     return new HttpError('Generated ring candidates cannot be changed individually', 409);
   }
   if (message.includes('FOREIGN KEY constraint failed')) {
-    return new HttpError('Referenced resource does not exist or is still in use', 409);
+    return new HttpError("That didn't go through — something it depends on is missing, or something else still depends on it.", 409);
   }
   if (message.includes('CHECK constraint failed') || message.includes('NOT NULL constraint failed')) {
-    return new HttpError('Request violates a database constraint', 400);
+    return new HttpError('That request has an invalid or missing value — please check the details and try again.', 400);
   }
 
   return null;
@@ -18559,6 +18771,47 @@ function assertValidExtensible(metadata, dimensions) {
       throw new HttpError(`metadata.extensible.${axis}.minM must be less than this template's own ${dimensionKey}`, 400);
     }
   }
+}
+
+// docs/SPEC.md §2's context-aware idle state machine ("sit, lean, stand") --
+// only "stand" is built today (src/main.js's updateShopAvatarIdle); #2476
+// (sub-issue of the #2475 tracking issue) adds the data model a later
+// targeting/pose system needs: where on a marked product an avatar sits or
+// leans, and which way it faces while doing so. Coordinates are in the
+// template's own local, un-rotated model space -- the same centered-at-
+// origin space createMeshForInstance's BoxGeometry/model loading already
+// use (x/y span +/- half the template's own width/depth, z spans 0 to its
+// own height) -- so a later targeting system combines this with a placed
+// instance's own x_m/y_m/z_m/rotation_z_rad to get a world-space target,
+// the same way extensible's minM above is expressed in the template's own
+// space rather than any one instance's.
+function assertValidInteractionTarget(target, dimensions, key) {
+  if (typeof target !== 'object' || target === null || Array.isArray(target)) {
+    throw new HttpError(`metadata.${key} must be an object`, 400);
+  }
+  const { offsetXM, offsetYM, heightM, facingRad } = target;
+  if (!Number.isFinite(offsetXM) || Math.abs(offsetXM) > dimensions.width / 2) {
+    throw new HttpError(`metadata.${key}.offsetXM must be a number within +/- half this template's own width`, 400);
+  }
+  if (!Number.isFinite(offsetYM) || Math.abs(offsetYM) > dimensions.depth / 2) {
+    throw new HttpError(`metadata.${key}.offsetYM must be a number within +/- half this template's own depth`, 400);
+  }
+  if (!Number.isFinite(heightM) || heightM < 0 || heightM > dimensions.height) {
+    throw new HttpError(`metadata.${key}.heightM must be a number between 0 and this template's own height`, 400);
+  }
+  if (!Number.isFinite(facingRad)) {
+    throw new HttpError(`metadata.${key}.facingRad must be a finite number`, 400);
+  }
+}
+
+function assertValidSitTarget(metadata, dimensions) {
+  if (metadata.sitTarget === undefined) return;
+  assertValidInteractionTarget(metadata.sitTarget, dimensions, 'sitTarget');
+}
+
+function assertValidLeanTarget(metadata, dimensions) {
+  if (metadata.leanTarget === undefined) return;
+  assertValidInteractionTarget(metadata.leanTarget, dimensions, 'leanTarget');
 }
 
 // #327: decodes and size-caps the flat PNG thumbnail POST /api/catalog/
@@ -18718,6 +18971,8 @@ function validateTemplate(input, fallbackId) {
   assertValidNoReturns(template.metadata);
   assertValidDomesticOnly(template.metadata);
   assertValidExtensible(template.metadata, template.dimensions);
+  assertValidSitTarget(template.metadata, template.dimensions);
+  assertValidLeanTarget(template.metadata, template.dimensions);
   return template;
 }
 

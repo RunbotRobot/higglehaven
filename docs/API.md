@@ -2297,8 +2297,9 @@ requirement already bounds it.
 If the template has a non-null `sellerId`, requires a session logged in as
 that seller (`403` otherwise). Deletes a catalog template. Rejects with `409`
 if any live `placed_instances` row still references the template (a generic
-"Referenced resource does not exist or is still in use" from D1's foreign-key
-behavior), or with a specific `409` if the template is referenced only by a
+"That didn't go through — something it depends on is missing, or something
+else still depends on it." from D1's foreign-key behavior), or with a
+specific `409` if the template is referenced only by a
 `saved_layout_instances` row (a builder's saved layout, possibly one that
 isn't visible to the caller at all — see #729) or a `version_instances` row
 (a landlet's past published version history) — both of those are immutable
@@ -9365,6 +9366,74 @@ structurally identical to the already-e2e-covered "Edit Returns Policy"
 panel (same collapsed-panel-with-a-Save-step idiom, same
 `updateCatalogTemplate` call), so a second full browser-driven test of the
 same interaction pattern would be redundant rather than additive.
+
+### Sit/lean interaction targets (#2476)
+
+docs/SPEC.md §2 asks for a "context-aware idle state machine (sit, lean,
+stand)". Only "stand" exists today (`src/main.js`'s
+`updateShopAvatarIdle`) — tracked as the #2475 tracking issue, broken into
+sub-issues. This section covers the first piece: the data model a later
+targeting/pose system needs to know where on a marked product an avatar
+sits or leans, and which way it faces while doing so. Whether a product is
+sittable/leanable at all is a seller-set flag, same single-concern-per-key
+simplicity as `noReturns`/`domesticOnly` above — no automatic inference
+from `category`/`subcategory`, since a heuristic would misfire on edge
+cases (a "chair" product that's purely decorative scale, say) with no way
+for the seller to override it.
+
+`metadata.sitTarget`/`metadata.leanTarget` (each optional, independent —
+a product can be sittable, leanable, both, or neither) are objects with:
+
+```json
+{
+  "offsetXM": 0,
+  "offsetYM": -0.3,
+  "heightM": 0.45,
+  "facingRad": 3.14159
+}
+```
+
+All four fields are required together — there's no partial-object form.
+Coordinates are in the template's own local, un-rotated model space: the
+same centered-at-origin space `createMeshForInstance`'s geometry/model
+loading already use (`offsetXM`/`offsetYM` span +/- half the template's
+own `width`/`depth`; `heightM` spans 0 to its own `height`). A later
+targeting system combines this with a placed instance's own
+`x`/`y`/`z`/`rotationZ` to get the real world-space target, the same way
+`metadata.extensible`'s own `minM` (see "Extensible products (crop)")
+is expressed in the template's own space rather than any one instance's.
+`facingRad` is the local direction (radians) the avatar faces while
+seated/leaning, before the instance's own `rotationZ` is added.
+
+`assertValidSitTarget`/`assertValidLeanTarget` (both called from inside
+`validateTemplate`) reject a non-object value, a non-finite field, an
+`offsetXM`/`offsetYM` outside the template's own footprint, or a `heightM`
+outside its own height range, each with `400`.
+
+A seller sets either via its own row's "Edit Sit/Lean Target" panel
+(checkbox + four numeric inputs + Save, same collapsed-panel idiom as
+"Edit Extensibility" above) — `.seller-sit-lean-toggle`/
+`.seller-sit-lean-panel` in `src/main.js`. Unchecking and saving deletes
+the metadata key entirely rather than persisting a stale target, the same
+clear-to-absent convention `extensible`/`noReturns` already use.
+
+**Deferred, not built here:** the actual targeting logic (finding the
+nearest valid sit/lean target on landing from flight, or on idle) and the
+seated/leaning poses themselves are separate #2475 sub-issues — this is
+schema/metadata plus the minimal build-UI to set it, nothing more.
+
+#### Testing note
+
+`worker/catalog-content-features.test.js`'s "Sit/lean interaction targets"
+describe block covers the non-object/missing-field rejections, an
+out-of-footprint offset, an out-of-range height, a valid value
+round-tripping through `GET` for both `sitTarget` and `leanTarget`
+independently, and clearing one via a full `metadata` replace — the same
+matrix "Shipping" above covers for `domesticOnly`. No e2e coverage yet:
+same reasoning as Shipping's own panel above (structurally identical
+collapsed-panel-with-a-Save-step idiom to the already-e2e-covered
+Extensibility panel) — worth a real e2e pass once the targeting/pose
+sub-issues give this panel something visible to actually verify.
 
 ## Control Room API (N31)
 

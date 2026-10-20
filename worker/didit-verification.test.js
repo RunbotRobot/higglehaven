@@ -1,6 +1,6 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { latestDiditSession, reconcileDiditSession, reserveDiditSession } from './index.js';
+import { diditReservationStillUsable, latestDiditSession, reconcileDiditSession, reserveDiditSession } from './index.js';
 import { api, signupBuilder, signupSeller } from './test-helpers.js';
 
 // Own file (own D1/worker isolate — see test-helpers.js's own comment on
@@ -135,6 +135,70 @@ describe('Didit verification webhook (#589)', () => {
     expect(user.trust_tier).toBe('credit_card');
     const session = await env.DB.prepare('SELECT status FROM didit_verification_sessions WHERE session_id = ?').bind(sessionId).first();
     expect(session.status).toBe('declined');
+  });
+
+  // #2484: the session claim and the trust_tier raise used to be two
+  // separate sequential .run() calls -- an interruption between them could
+  // strand a user "approved" but never actually id_verified, with every
+  // later retry short-circuiting on the already-set processed_at. Fixed by
+  // batching both writes into one db.batch call (same shape #2174 already
+  // established for a different two-write path). Confirms it's issued as
+  // exactly one batched call carrying both statements, not two separate
+  // writes, same mocking idiom #2174's own regression test uses.
+  it('issues the session claim and trust_tier raise as a single batched write on approval', async () => {
+    const builder = await signupBuilder('didit-webhook-batched-approve');
+    const sessionId = await insertPendingSession(builder.email);
+
+    const originalBatch = env.DB.batch.bind(env.DB);
+    let batchCallCount = 0;
+    let lastBatchSize = 0;
+    env.DB.batch = async (statements) => {
+      batchCallCount += 1;
+      lastBatchSize = statements.length;
+      return originalBatch(statements);
+    };
+    let response;
+    try {
+      response = await postDiditWebhook({ session_id: sessionId, status: 'Approved' });
+    } finally {
+      env.DB.batch = originalBatch;
+    }
+    expect(response.status).toBe(200);
+    expect(batchCallCount).toBe(1);
+    expect(lastBatchSize).toBe(2);
+
+    const user = await env.DB.prepare('SELECT trust_tier FROM users WHERE email = ?').bind(builder.email).first();
+    expect(user.trust_tier).toBe('id_verified');
+  });
+
+  // Same shape as the approval case just above, but a decline's batch
+  // should carry only the session-claim statement -- the trust_tier
+  // statement is never even constructed, matching the original code's own
+  // `if (approved)` gate.
+  it('issues only the session claim as a single batched write on decline', async () => {
+    const builder = await signupBuilder('didit-webhook-batched-decline');
+    const sessionId = await insertPendingSession(builder.email);
+
+    const originalBatch = env.DB.batch.bind(env.DB);
+    let batchCallCount = 0;
+    let lastBatchSize = 0;
+    env.DB.batch = async (statements) => {
+      batchCallCount += 1;
+      lastBatchSize = statements.length;
+      return originalBatch(statements);
+    };
+    let response;
+    try {
+      response = await postDiditWebhook({ session_id: sessionId, status: 'Declined' });
+    } finally {
+      env.DB.batch = originalBatch;
+    }
+    expect(response.status).toBe(200);
+    expect(batchCallCount).toBe(1);
+    expect(lastBatchSize).toBe(1);
+
+    const user = await env.DB.prepare('SELECT trust_tier FROM users WHERE email = ?').bind(builder.email).first();
+    expect(user.trust_tier).toBe('credit_card');
   });
 
   // #1037: GET /api/auth/didit-verification-status forwards straight
@@ -314,6 +378,38 @@ describe('Didit verification webhook (#589)', () => {
         'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
       ).bind('didit_stale_reservation_swept', userId).first();
       expect(sweepLog).toBeFalsy();
+    });
+  });
+
+  // #2485: reserveDiditSession's own race-loser `existing` row isn't
+  // automatically still usable as "here's your in-flight session" --
+  // handleDiditVerificationSession's own guard (diditReservationStillUsable)
+  // decides that. Tested directly, the same reasoning this file's own top
+  // comment already gives for testing reserveDiditSession/latestDiditSession
+  // directly instead of through a real HTTP request (DIDIT_API_KEY is
+  // deliberately never configured here).
+  describe('diditReservationStillUsable (#2485)', () => {
+    it('is false for a null existing row (e.g. deleted in the narrow race window)', () => {
+      expect(diditReservationStillUsable(null)).toBe(false);
+      expect(diditReservationStillUsable(undefined)).toBe(false);
+    });
+
+    it('is false for an already-resolved session (processed_at set by a concurrent webhook/poll)', () => {
+      expect(diditReservationStillUsable({ session_id: 'session-real', processed_at: '2026-01-01T00:00:00.000Z', url: 'https://verify.didit.me/session/real' })).toBe(false);
+    });
+
+    it('is false for a still-local pending-<uuid> placeholder with no real url yet', async () => {
+      const builder = await signupBuilder('didit-still-usable-placeholder');
+      const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first()).user_id;
+      const reservation = await reserveDiditSession(env.DB, userId);
+      const existing = await latestDiditSession(env.DB, userId);
+      expect(existing.session_id).toBe(reservation.reservationId);
+
+      expect(diditReservationStillUsable(existing)).toBe(false);
+    });
+
+    it('is true for a genuine, still-pending, real (non-placeholder) session', () => {
+      expect(diditReservationStillUsable({ session_id: 'session-real', processed_at: null, url: 'https://verify.didit.me/session/real' })).toBe(true);
     });
   });
 
