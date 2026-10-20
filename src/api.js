@@ -1377,6 +1377,37 @@ export async function fetchProductReviews(templateId) {
   return requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews`);
 }
 
+// #2422: same "a lost response looks identical to never having reached the
+// server" protection as signPostIdempotencyKey/calendarEventIdempotencyKey
+// above -- a dropped POST response and the innocent manual retry it
+// invites would otherwise either fail the eligibility check the first
+// attempt already consumed, or silently create a second, distinct review
+// against a different eligible purchase of the same product. Scoped per
+// templateId only, same reasoning as those two: this key only ever lives
+// in one browser's own localStorage, cleared on success.
+const PRODUCT_REVIEW_IDEMPOTENCY_TTL_MS = 30 * 60 * 1000;
+
+function productReviewIdempotencyStorageKey(templateId) {
+  return `higglehaven-product-review-idempotency-${templateId}`;
+}
+
+function productReviewIdempotencyKey(templateId) {
+  const storageKey = productReviewIdempotencyStorageKey(templateId);
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (saved && typeof saved.key === 'string' && Date.now() - saved.at < PRODUCT_REVIEW_IDEMPOTENCY_TTL_MS) {
+      return saved.key;
+    }
+  } catch (e) { /* private-browsing/blocked storage, or corrupt value — mint a fresh one below */ }
+  const key = crypto.randomUUID();
+  try { localStorage.setItem(storageKey, JSON.stringify({ key, at: Date.now() })); } catch (e) { /* ignore */ }
+  return key;
+}
+
+function clearProductReviewIdempotencyKey(templateId) {
+  try { localStorage.removeItem(productReviewIdempotencyStorageKey(templateId)); } catch (e) { /* ignore */ }
+}
+
 // #1113: authorLabel is no longer accepted here -- the server derives it
 // from the session (closing #893's spoofing gap), so a caller needs a real
 // session (ensureBuilderIdentity()) before this will ever succeed.
@@ -1384,8 +1415,9 @@ export async function createProductReview(templateId, { rating, text } = {}) {
   const { review } = await requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ rating, text }),
+    body: JSON.stringify({ rating, text, idempotencyKey: productReviewIdempotencyKey(templateId) }),
   });
+  clearProductReviewIdempotencyKey(templateId);
   return review;
 }
 
