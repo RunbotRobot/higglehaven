@@ -1,13 +1,15 @@
-// #2479 (sub-issue of #2475): once #2477's targeting selects a leanTarget
-// for the current idle episode, the avatar should actually ease into a
-// lean pose against it -- its real position (shopAvatarPosition, which
-// positionShopCamera reads directly -- see updateShopAvatarIdle's own
-// comment on shopLeanStart) blending toward the target's own worldX/Y/Z,
-// its facing blending toward the target's own worldFacingRad, and its
-// whole-body pitch tilting back by SHOP_LEAN_PITCH_RAD, all scaled by the
-// same shopIdleBlend every other idle-sway term already uses. This is the
-// first test in this area to actually verify a *pose change*, not just
-// target selection (shop-idle-sit-lean-targeting.test.mjs's own scope).
+// #2479 (sub-issue of #2475): once #2477's own targeting selects a
+// kind: 'lean' target for the current idle episode, the avatar should ease
+// into a lean-against pose aligned to that target's own position/
+// orientation -- a visual-only position/yaw offset on the rendered mesh
+// plus a backward body tilt, never touching the real shopAvatarPosition/
+// shopAvatarFacing (see docs/API.md's "Lean pose + transition (#2479)" --
+// same discipline as the sit pose's own height/yaw offset, for the same
+// reason: sitting/leaning shouldn't affect movement, collision, curvature,
+// or camera-follow code). Checks the blend actually engages close to its
+// fully-blended values, then that a brief joystick deflection hard-cuts it
+// back to 0 on the very next frame (the same instant-ease-out discipline
+// every other idle blend in this file already follows).
 import { launchPage, chooseIdentity, finish } from './helpers.mjs';
 
 const LABEL = 'Idle Lean Pose Builder';
@@ -32,11 +34,12 @@ async function fetchJson(p, path, options) {
 }
 
 // Same "break the hands-off spawn orbit with a brief real joystick
-// deflection" idiom shop-idle-sit-lean-targeting.test.mjs's own header
-// comment documents -- otherwise shopSpawnRotating overwrites
-// shopAvatarPosition.x/y every frame regardless of what this test teleports
-// it to.
-async function stopSpawnOrbit(p) {
+// deflection" idiom shop-idle-sit-pose.test.mjs's own header comment
+// documents -- otherwise shopSpawnRotating overwrites shopAvatarPosition.x/y
+// every frame regardless of what this test teleports it to. Reused again
+// below (after the lean pose engages) to drive the hard-cut-on-movement
+// assertion.
+async function deflectMoveJoystick(p) {
   const moveJoystickBox = await p.locator('#shop-move-joystick').boundingBox();
   const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
   const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
@@ -48,11 +51,10 @@ async function stopSpawnOrbit(p) {
   await p.waitForTimeout(100);
 }
 
-// Sell mode first, same reasoning as shop-idle-sit-lean-targeting.test.mjs's
-// own comment: a catalog template's metadata can only be PATCHed by its
-// owning seller, so this creates its own template directly via the API
-// with leanTarget already set at creation time, in the template's own
-// local, un-rotated model space (1.0 x 1.0 x 2.0m, centered at origin).
+// Same ownership/creation shortcuts shop-idle-sit-pose.test.mjs's own
+// comments explain in full: a seller-owned template, builder fetched
+// directly (bypassing Build mode's own claim-modal), landlet at the default
+// (0,0) center.
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
 const seller = (await fetchJson(page, '/api/sellers/me')).body.seller;
 
@@ -66,10 +68,6 @@ const templateCreated = await fetchJson(page, '/api/catalog', {
     dimensions: { width: 1.0, depth: 1.0, height: 2.0 },
     sellerId: seller.sellerId,
     priceCents: 500,
-    // offsetYM = 0.3 puts the lean spot just in front of the wall's own
-    // face; facingRad = Math.PI means "face the opposite way from the
-    // wall's own local +Y," i.e. with your back to it -- the pose this
-    // sub-issue is meant to produce.
     metadata: { leanTarget: { offsetXM: 0, offsetYM: 0.3, heightM: 1.0, facingRad: Math.PI } },
   }),
 });
@@ -91,10 +89,8 @@ const landletCreated = await fetchJson(page, '/api/landlets', {
 console.log('landlet created at the default (0,0) center (status should be 201):', landletCreated.status);
 
 // No rotation on the placed instance -- keeps the expected world target a
-// direct read of the template's own local offset/facing, since the
-// rotation-combination math itself is already covered by
-// shop-idle-sit-lean-targeting.test.mjs. z = height/2 (1.0) matches the
-// ground-rest convention a real placement would apply.
+// direct read of the template's own local offset/facing, same reasoning
+// shop-idle-sit-pose.test.mjs's own comment gives for its own chair.
 const WALL_X = 10;
 const WALL_Y = 10;
 const placed = await fetchJson(page, '/api/instances/batch', {
@@ -113,105 +109,106 @@ const placed = await fetchJson(page, '/api/instances/batch', {
 });
 console.log('wall instance placed (status should be 201):', placed.status, placed.body);
 
-const expected = {
-  worldX: WALL_X,
-  worldY: WALL_Y + 0.3,
-  worldZ: 1.0, // mesh.position.z (1.0) - height/2 (1.0) + heightM (1.0)
-  worldFacingRad: Math.PI,
-};
+// Hand-computed expected target (0-rotation instance, so no offset
+// rotation to combine): worldX/Y = instance position + offsetXM/offsetYM,
+// worldZ = mesh.position.z (1.0) - height/2 (1.0) + heightM (1.0) = 1.0,
+// worldFacingRad = facingRad (PI) + mesh.rotation.z (0) = PI.
+const LEAN_TARGET_WORLD_X = WALL_X;
+const LEAN_TARGET_WORLD_Y = WALL_Y + 0.3;
+const LEAN_TARGET_WORLD_Z = 1.0;
+const LEAN_TARGET_WORLD_FACING_RAD = Math.PI;
+const SHOP_LEAN_PITCH_RAD = (12 * Math.PI) / 180;
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
-await stopSpawnOrbit(page);
-// 2m from the wall's own lean spot -- comfortably inside the 3m search
-// radius. 3-arg teleport forces shopFlightState to 'grounded' too (same
-// convention the targeting test documents).
+await deflectMoveJoystick(page);
+// 3-arg form forces shopFlightState to 'grounded' too -- 2m from the
+// wall's own lean spot, comfortably inside the 3m search radius.
+const AVATAR_X = WALL_X;
+const AVATAR_Y = WALL_Y - 2;
 await page.evaluate(([x, y]) => {
   window.__testTeleportShopAvatar(x, y, 0);
   window.__testForceShopProximityCheck();
-}, [WALL_X, WALL_Y - 2]);
+}, [AVATAR_X, AVATAR_Y]);
 await page.waitForTimeout(500); // lets the just-forced landlet instance load actually finish
 
-// Sanity check: the target itself gets found (shop-idle-sit-lean-targeting's
-// own scope), before this test moves on to the pose it actually drives.
-const directSearch = await page.evaluate(
-  ([x, y]) => window.__testFindShopIdleInteractionTarget(x, y),
-  [WALL_X, WALL_Y - 2],
-);
-console.log('direct search result (should be the lean target):', directSearch);
+// Captured once here as the real baseline for the expected position/yaw-
+// offset math below, same reasoning shop-idle-sit-pose.test.mjs's own
+// baselineFacingRad gives (shopAvatarFacing/shopAvatarPosition never change
+// on their own while idle -- no real input, so nothing moves them).
+const baselinePosition = await page.evaluate(() => window.__testShopAvatarPosition());
+const baselineFacingRad = (await page.evaluate(() => window.__shopAvatarOrientation)).facingRad;
 
-// Polls until the lean pose has eased in most of the way, same
-// real-vs-simulated-time reasoning the targeting test's own comment gives
-// for not using a fixed real-time wait -- SHOP_IDLE_DELAY_S (3s) plus
-// several more seconds for shopIdleBlend's own exponential ease (#2479's
-// pose is scaled by it) to climb past 0.9 isn't guaranteed to land within
-// any fixed real-time window under a throttled/loaded CI run.
-await page.waitForFunction(
-  () => (window.__shopAvatarOrientation?.leanBlend ?? 0) > 0.95,
-  { timeout: 25000 },
-);
+// Same real-vs-simulated-time polling reasoning shop-idle-sit-pose.test.mjs's
+// own comment documents -- waits for the idle episode to actually pick the
+// lean target up, then for shopLeanBlend (eased at SHOP_IDLE_BLEND_PER_S =
+// 0.6/s) to substantially engage rather than a fixed real-time sleep.
+await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'lean', { timeout: 15000 });
+await page.waitForFunction(() => window.__testShopLeanPose().blend > 0.9, { timeout: 20000 });
 
-const orientation = await page.evaluate(() => window.__shopAvatarOrientation);
-const position = await page.evaluate(() => window.__testShopAvatarPosition());
-console.log('orientation at high lean blend (leanBlend should be > 0.9):', orientation);
-console.log('position at high lean blend (should be close to the lean target):', position);
-
-// Recovers the quaternion's own yaw-only component by applying it to the
-// avatar's local forward axis (+Y, per createShopAvatar's own "arbitrarily
-// picking +Y as front" comment) -- the pitch term rotates around local X
-// first (innermost in the yaw*pitch composition updateShopAvatarMovement
-// builds), which only scales the resulting horizontal projection by
-// cos(pitch) without rotating it, so atan2(-x, y) on the transformed
-// vector recovers the composed yaw exactly regardless of how much pitch
-// (SHOP_LEAN_PITCH_RAD, well under 90 degrees) is blended in.
-function yawFromQuaternion([qx, qy, qz, qw]) {
-  // Standard quaternion-vector rotation formula, v' = v + 2*cross(qv, cross(qv, v) + qw*v),
-  // applied to local forward (0, 1, 0).
-  const vx = 0, vy = 1, vz = 0;
-  const cross1x = qy * vz - qz * vy;
-  const cross1y = qz * vx - qx * vz;
-  const cross1z = qx * vy - qy * vx;
-  const tx = cross1x + qw * vx;
-  const ty = cross1y + qw * vy;
-  const tz = cross1z + qw * vz;
-  const cross2x = qy * tz - qz * ty;
-  const cross2y = qz * tx - qx * tz;
-  const fx = vx + 2 * cross2x;
-  const fy = vy + 2 * cross2y;
-  return Math.atan2(-fx, fy);
-}
-
-function angleDelta(a, b) {
-  return Math.atan2(Math.sin(a - b), Math.cos(a - b));
-}
-
-const actualYaw = yawFromQuaternion(orientation.quaternion);
-const yawError = Math.abs(angleDelta(actualYaw, expected.worldFacingRad));
-console.log('recovered yaw vs expected facing (error should be small):', actualYaw, expected.worldFacingRad, yawError);
+const engagedPose = await page.evaluate(() => window.__testShopLeanPose());
+const engagedOrientation = await page.evaluate(() => window.__shopAvatarOrientation);
+console.log('lean pose once substantially engaged (blend should be > 0.9):', engagedPose, engagedOrientation);
 
 function closeTo(actual, expectedValue, tolerance) {
   return typeof actual === 'number' && Math.abs(actual - expectedValue) < tolerance;
 }
 
+// At blend ~0.9 (not a clean 1.0, since the exponential ease never fully
+// reaches it) every term should be within a generous tolerance of its
+// fully-blended value -- enough to catch a wrong sign, a missing scale
+// factor, or a swapped term, which is what this test actually cares about.
+const expectedOffsetXFull = LEAN_TARGET_WORLD_X - baselinePosition.x;
+const expectedOffsetYFull = LEAN_TARGET_WORLD_Y - baselinePosition.y;
+const expectedOffsetZFull = LEAN_TARGET_WORLD_Z - baselinePosition.z;
+const expectedYawDeltaFull = Math.atan2(
+  Math.sin(LEAN_TARGET_WORLD_FACING_RAD - baselineFacingRad),
+  Math.cos(LEAN_TARGET_WORLD_FACING_RAD - baselineFacingRad),
+);
+const poseEngaged =
+  engagedPose.blend > 0.9 &&
+  closeTo(engagedPose.positionOffset.x, expectedOffsetXFull * engagedPose.blend, 0.1) &&
+  closeTo(engagedPose.positionOffset.y, expectedOffsetYFull * engagedPose.blend, 0.1) &&
+  closeTo(engagedPose.positionOffset.z, expectedOffsetZFull * engagedPose.blend, 0.1) &&
+  closeTo(engagedPose.yawOffset, expectedYawDeltaFull * engagedPose.blend, 0.1) &&
+  // Backward tilt (positive, opposite SHOP_AVATAR_FLIGHT_PITCH_RAD's
+  // forward-dive sign) -- pitchRad eases toward SHOP_LEAN_PITCH_RAD *
+  // blend independently (SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S), so this
+  // only checks it's substantially engaged in the right direction.
+  engagedOrientation.pitchRad > SHOP_LEAN_PITCH_RAD * 0.5 &&
+  // The real, authoritative position/facing must stay completely
+  // untouched -- visual-only per #2479/#2478's shared discipline.
+  baselinePosition.x === (await page.evaluate(() => window.__testShopAvatarPosition())).x;
+console.log('lean pose terms all close to their fully-blended hand-computed values (should be true):', poseEngaged);
+
+// Instant ease-out: a brief joystick deflection counts as real input
+// (hasActiveInput), which should hard-cut shopLeanBlend (and its offsets)
+// back to exactly 0 the very next frame -- not an eased decay like the
+// ease-in above.
+await deflectMoveJoystick(page);
+const poseAfterMovement = await page.evaluate(() => window.__testShopLeanPose());
+console.log(
+  'lean pose hard-cut to 0 the instant movement resumed (should be true):',
+  poseAfterMovement.blend === 0 && poseAfterMovement.yawOffset === 0
+    && poseAfterMovement.positionOffset.x === 0 && poseAfterMovement.positionOffset.y === 0 && poseAfterMovement.positionOffset.z === 0,
+);
+
 const pass =
   templateCreated.status === 201 &&
   landletCreated.status === 201 &&
   placed.status === 201 &&
-  directSearch?.kind === 'lean' &&
-  orientation.leanBlend > 0.95 &&
-  // Backward tilt (positive, opposite SHOP_AVATAR_FLIGHT_PITCH_RAD's
-  // forward-dive sign) should be most of the way to its own full value.
-  orientation.pitchRad > 0.15 &&
-  yawError < 0.15 &&
-  closeTo(position.x, expected.worldX, 0.2) &&
-  closeTo(position.y, expected.worldY, 0.2) &&
-  closeTo(position.z, expected.worldZ, 0.2) &&
+  poseEngaged &&
+  poseAfterMovement.blend === 0 &&
+  poseAfterMovement.yawOffset === 0 &&
+  poseAfterMovement.positionOffset.x === 0 &&
+  poseAfterMovement.positionOffset.y === 0 &&
+  poseAfterMovement.positionOffset.z === 0 &&
   errors.length === 0;
 
 await finish(session.browser, {
   pass,
-  label: '#2479: a lean target eases the avatar\'s real position, facing, and body pitch into a lean-against pose',
+  label: '#2479: the lean pose eases in on a lean target and hard-cuts back to neutral on movement',
   errors,
 });
