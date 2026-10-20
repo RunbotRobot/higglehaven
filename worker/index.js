@@ -11086,6 +11086,12 @@ async function handleConfirmCard(request, env, db) {
       WHERE user_id = ?
     `).bind(user.user_id).run();
     const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+    // #2430: a concurrent account deletion (self-delete from another
+    // session, or escalateExpiredSuspensions' own cascade) landing in the
+    // await gap since the UPDATE above can remove this row before this
+    // re-SELECT runs -- same race shape #2334/#2354/#2364/#2391/#2392
+    // already fixed elsewhere, not an uncaught userFromRow(undefined) crash.
+    if (!updated) return json({ error: 'Account no longer exists' }, 404);
     return json({ user: userFromRow(updated) });
   }
   // #1072: this used to trust a client-supplied paymentMethodId directly,
@@ -11134,6 +11140,10 @@ async function handleConfirmCard(request, env, db) {
     throw new HttpError('Only credit cards are accepted for this step — debit and prepaid cards can\'t be used.', 400);
   }
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  // #2430: same concurrent-account-deletion race as handleConfirmCard's own
+  // re-SELECT above -- a concurrent delete landing in the await gap since
+  // the UPDATE can remove this row before this re-SELECT runs.
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(updated) });
 }
 
@@ -11168,6 +11178,12 @@ async function handleAgeAttest(request, db) {
     `).bind(new Date().toISOString(), user.user_id).run();
   }
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  // #2430: same concurrent-account-deletion race as handleConfirmCard's own
+  // re-SELECT above (self-delete from another session, or
+  // escalateExpiredSuspensions' own cascade) -- can remove this row in the
+  // await gap since the UPDATE (or, when already attested, since the
+  // requireCurrentUser read at the top of this handler).
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(updated) });
 }
 
@@ -11740,6 +11756,13 @@ async function handleChangeEmail(request, env, db) {
   if (result.meta.changes === 0) throw new HttpError('Email is already registered', 409);
   const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, email);
   const row = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  // #2430: the UPDATE's own meta.changes check above only confirms it
+  // matched a row (and won the email-collision race) at the moment it ran
+  // -- a concurrent account deletion landing in the await gap since (the
+  // issueEmailVerification call above) can still remove the row before
+  // this re-SELECT runs, same race shape #2334/#2354/#2364/#2391/#2392
+  // already fixed elsewhere.
+  if (!row) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(row), verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
 }
 
@@ -11813,6 +11836,12 @@ async function handleLogin(request, db, url) {
 
   const sessionToken = await createSession(db, row.user_id);
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(row.user_id).first();
+  // #2430: a concurrent account deletion (another session's own self-
+  // delete, or escalateExpiredSuspensions' own cascade) landing in the
+  // await gap since the UPDATE above (or createSession just before) can
+  // remove this row before this re-SELECT runs, same race shape
+  // #2334/#2354/#2364/#2391/#2392 already fixed elsewhere.
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json(
     { user: userFromRow(updated) },
     200,
