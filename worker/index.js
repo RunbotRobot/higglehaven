@@ -18430,11 +18430,17 @@ async function getInstancesById(db, instanceIds) {
 // 4xx. Checked only after `HttpError` in the top-level catch, so routes
 // with a more specific pre-check (assertReferenceExists above) keep their
 // own message instead of falling through to this generic one.
+// #2440: the three generic (non-ring-specific) messages below used to name
+// the underlying SQL constraint type directly ("UNIQUE constraint failed"
+// -> "Resource already exists", etc.) -- raw backend language the frontend
+// shows verbatim via `alert(err.message || ...)`. Reworded to plain,
+// in-app phrasing with the same meaning; the ring-specific messages above
+// were already written this way and are left unchanged.
 function databaseHttpError(error) {
   const message = errorMessages(error);
 
   if (message.includes('UNIQUE constraint failed')) {
-    return new HttpError('Resource already exists', 409);
+    return new HttpError('That already exists.', 409);
   }
   if (message.includes('generated ring radial overlap')) {
     return new HttpError('Generated ring would overlap existing generated rings', 409);
@@ -18449,10 +18455,10 @@ function databaseHttpError(error) {
     return new HttpError('Generated ring candidates cannot be changed individually', 409);
   }
   if (message.includes('FOREIGN KEY constraint failed')) {
-    return new HttpError('Referenced resource does not exist or is still in use', 409);
+    return new HttpError("That didn't go through — something it depends on is missing, or something else still depends on it.", 409);
   }
   if (message.includes('CHECK constraint failed') || message.includes('NOT NULL constraint failed')) {
-    return new HttpError('Request violates a database constraint', 400);
+    return new HttpError('That request has an invalid or missing value — please check the details and try again.', 400);
   }
 
   return null;
