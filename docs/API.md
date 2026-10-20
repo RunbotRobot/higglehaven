@@ -2297,8 +2297,9 @@ requirement already bounds it.
 If the template has a non-null `sellerId`, requires a session logged in as
 that seller (`403` otherwise). Deletes a catalog template. Rejects with `409`
 if any live `placed_instances` row still references the template (a generic
-"Referenced resource does not exist or is still in use" from D1's foreign-key
-behavior), or with a specific `409` if the template is referenced only by a
+"That didn't go through — something it depends on is missing, or something
+else still depends on it." from D1's foreign-key behavior), or with a
+specific `409` if the template is referenced only by a
 `saved_layout_instances` row (a builder's saved layout, possibly one that
 isn't visible to the caller at all — see #729) or a `version_instances` row
 (a landlet's past published version history) — both of those are immutable
@@ -7241,6 +7242,73 @@ nothing else in this app reacts to a flag's status. Rate-limited to 20
 calls per 15 minutes, bucketed by the acting admin's own user id (see
 "Rate limiting" above).
 
+### Counterfeit/policy flags + strike ladder (#2017/#2018)
+
+`#2017`'s own endpoints were never written up here — documented now
+alongside `#2018`'s strike-ladder consequence, which hangs directly off
+the `resolve` action below.
+
+```
+POST /api/catalog/:templateId/flags
+{ "reason": "Looks like a counterfeit of a trademarked design" }  // optional, ≤280 chars
+```
+
+Requires `requireSessionBuilder`. Inserts a `product_flags` row
+(`migrations/0131`); a second flag from the same builder on the same
+listing hits that migration's own `UNIQUE(template_id, flagger_builder_id)`
+and surfaces as a `409`. Once `PRODUCT_FLAG_AUTO_HIDE_THRESHOLD` (3)
+*distinct* flaggers are pending at once, the listing auto-hides
+(`catalog_templates.flagged_hidden_at`, blocking new purchases) and the
+seller is notified (`#2056`) — all before any admin has reviewed anything.
+Returns `{ flagId, pendingCount, autoHidden }`.
+
+```
+GET /api/product-flags
+```
+
+Admin-only. One row per listing with pending flags (not one per flag) —
+`{ templateId, templateName, sellerId, pendingCount }` — since an admin
+resolves a listing's whole pending set in one action, not flag-by-flag.
+
+```
+POST /api/catalog/:templateId/flags/resolve
+{ "action": "approve", "severe": false }  // severe optional, approve-only
+```
+
+Admin-only. `action` is `"approve"` or `"reject"`; `400` if neither.
+Resolves every still-pending flag on the listing at once (a flag is a
+report against the listing, not an individually-adjudicated claim).
+`400` if there was nothing pending to resolve. `approve` hides the listing
+permanently (not a hard delete — `assertCatalogTemplatesDeletable` still
+applies to it) and increments `sellers.strike_count`; `reject` un-hides it
+if auto-hide had already fired. Either way, writes one `admin_action_log`
+entry (`action_type: "approved_product_flags"`/`"rejected_product_flags"`).
+
+**`#2018`'s strike ladder** fires only on `approve`, reading the seller's
+own just-incremented `strike_count` fresh (so it always acts on the real
+post-increment total, not a stale pre-read): 1st confirmed violation is a
+dashboard-notification warning only; the 2nd violation (or the 1st, if
+`severe: true`) is a 7-day account suspension via `#1201`'s own suspension
+primitive; the 3rd violation, or any single `severe` one — skipping the
+ladder entirely regardless of count — is "permanent removal." `#1201`'s
+own resolution ruled out a separate admin-initiated hard-delete tool, so
+"permanent" here reuses the ordinary suspension primitive at its own
+maximum `graceDays` (365) rather than inventing a second mechanism —
+`#2033`'s own auto-escalation (once it lands) is what actually turns an
+unlifted suspension into a real deletion; this rung's only job is to start
+that clock. A seller with no linked `user_id` (a legacy/dangling row) gets
+no suspension — there's no account to act on — but the strike count itself
+still increments.
+
+If the account the ladder targets is already under an active suspension
+(e.g. a 3rd violation landing on a seller the 2nd violation already
+suspended for 7 days), this does **not** 409 the way a second plain
+`suspend-account` call against an already-suspended email would — it
+escalates the existing suspension's own `grace_period_ends_at` forward to
+the harsher rung's target, logging an `escalate_suspension` admin-action
+entry, and never pulls it earlier if the account were already on a longer
+suspension than this rung would set.
+
 ### Low-stock / days-remaining list (#1949, sub-issue of #1947)
 
 ```
@@ -8105,7 +8173,7 @@ anything below.
 
 Movement is real ground-based walking, not free flight: the move joystick
 changes `shopAvatarPosition` (the avatar's own feet position, clamped to
-the ground plane) at `SHOP_WALK_SPEED_M_S`/`SHOP_RUN_SPEED_M_S` (1.8/2.7
+the ground plane) at `SHOP_WALK_SPEED_M_S`/`SHOP_RUN_SPEED_M_S` (1.8/4.4704
 m/s, docs/SPEC.md §2's confirmed speeds) rather than moving the camera
 directly. There's no separate run input — the joystick's own deflection
 (0..1) doubles as intensity, linearly interpolating between the two
@@ -9298,6 +9366,74 @@ structurally identical to the already-e2e-covered "Edit Returns Policy"
 panel (same collapsed-panel-with-a-Save-step idiom, same
 `updateCatalogTemplate` call), so a second full browser-driven test of the
 same interaction pattern would be redundant rather than additive.
+
+### Sit/lean interaction targets (#2476)
+
+docs/SPEC.md §2 asks for a "context-aware idle state machine (sit, lean,
+stand)". Only "stand" exists today (`src/main.js`'s
+`updateShopAvatarIdle`) — tracked as the #2475 tracking issue, broken into
+sub-issues. This section covers the first piece: the data model a later
+targeting/pose system needs to know where on a marked product an avatar
+sits or leans, and which way it faces while doing so. Whether a product is
+sittable/leanable at all is a seller-set flag, same single-concern-per-key
+simplicity as `noReturns`/`domesticOnly` above — no automatic inference
+from `category`/`subcategory`, since a heuristic would misfire on edge
+cases (a "chair" product that's purely decorative scale, say) with no way
+for the seller to override it.
+
+`metadata.sitTarget`/`metadata.leanTarget` (each optional, independent —
+a product can be sittable, leanable, both, or neither) are objects with:
+
+```json
+{
+  "offsetXM": 0,
+  "offsetYM": -0.3,
+  "heightM": 0.45,
+  "facingRad": 3.14159
+}
+```
+
+All four fields are required together — there's no partial-object form.
+Coordinates are in the template's own local, un-rotated model space: the
+same centered-at-origin space `createMeshForInstance`'s geometry/model
+loading already use (`offsetXM`/`offsetYM` span +/- half the template's
+own `width`/`depth`; `heightM` spans 0 to its own `height`). A later
+targeting system combines this with a placed instance's own
+`x`/`y`/`z`/`rotationZ` to get the real world-space target, the same way
+`metadata.extensible`'s own `minM` (see "Extensible products (crop)")
+is expressed in the template's own space rather than any one instance's.
+`facingRad` is the local direction (radians) the avatar faces while
+seated/leaning, before the instance's own `rotationZ` is added.
+
+`assertValidSitTarget`/`assertValidLeanTarget` (both called from inside
+`validateTemplate`) reject a non-object value, a non-finite field, an
+`offsetXM`/`offsetYM` outside the template's own footprint, or a `heightM`
+outside its own height range, each with `400`.
+
+A seller sets either via its own row's "Edit Sit/Lean Target" panel
+(checkbox + four numeric inputs + Save, same collapsed-panel idiom as
+"Edit Extensibility" above) — `.seller-sit-lean-toggle`/
+`.seller-sit-lean-panel` in `src/main.js`. Unchecking and saving deletes
+the metadata key entirely rather than persisting a stale target, the same
+clear-to-absent convention `extensible`/`noReturns` already use.
+
+**Deferred, not built here:** the actual targeting logic (finding the
+nearest valid sit/lean target on landing from flight, or on idle) and the
+seated/leaning poses themselves are separate #2475 sub-issues — this is
+schema/metadata plus the minimal build-UI to set it, nothing more.
+
+#### Testing note
+
+`worker/catalog-content-features.test.js`'s "Sit/lean interaction targets"
+describe block covers the non-object/missing-field rejections, an
+out-of-footprint offset, an out-of-range height, a valid value
+round-tripping through `GET` for both `sitTarget` and `leanTarget`
+independently, and clearing one via a full `metadata` replace — the same
+matrix "Shipping" above covers for `domesticOnly`. No e2e coverage yet:
+same reasoning as Shipping's own panel above (structurally identical
+collapsed-panel-with-a-Save-step idiom to the already-e2e-covered
+Extensibility panel) — worth a real e2e pass once the targeting/pose
+sub-issues give this panel something visible to actually verify.
 
 ## Control Room API (N31)
 

@@ -8,7 +8,13 @@ async function requestJson(path, options) {
   const response = await fetch(`${API_BASE}${path}`, options);
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    const error = new Error(body.error || `${path} failed with HTTP ${response.status}`);
+    // #2440: previously `${path} failed with HTTP ${response.status}` --
+    // raw request-plumbing language with no theming, shown verbatim to the
+    // user whenever a response comes back !ok with no (or malformed)
+    // {error} body of its own. Only the display text changed; `error.status`
+    // below is unaffected and still carries the real HTTP status for any
+    // caller-side logic (e.g. the #2222 403-vs-404 distinction noted below).
+    const error = new Error(body.error || "Couldn't complete that — higglehaven ran into a problem on its end. Please try again in a moment.");
     // #2222: collectCreditOrb's own caller needs to tell a 403 ("not
     // actually near it yet, by the server's own record") apart from a 404
     // ("someone else already collected it") -- the former is worth
@@ -670,7 +676,8 @@ export async function uploadModelFile(file) {
   const response = await fetch(`${API_BASE}/models`, { method: 'POST', body: form });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `Model upload failed with HTTP ${response.status}`);
+    // #2440: previously `Model upload failed with HTTP ${response.status}` -- see requestJson's own #2440 comment above.
+    throw new Error(body.error || "Couldn't upload that model — higglehaven ran into a problem on its end. Please try again in a moment.");
   }
   return response.json(); // { modelUrl, sourceName, sizeBytes }
 }
@@ -684,7 +691,8 @@ export async function createVideoGenerationJob(framesForm) {
   const response = await fetch(`${API_BASE}/video-generation-jobs`, { method: 'POST', body: framesForm });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.error || `Video generation request failed with HTTP ${response.status}`);
+    // #2440: previously `Video generation request failed with HTTP ${response.status}` -- see requestJson's own #2440 comment above.
+    throw new Error(body.error || "Couldn't start turning that video into a 3D model — higglehaven ran into a problem on its end. Please try again in a moment.");
   }
   return response.json(); // { jobId, status }
 }
@@ -1377,6 +1385,37 @@ export async function fetchProductReviews(templateId) {
   return requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews`);
 }
 
+// #2422: same "a lost response looks identical to never having reached the
+// server" protection as signPostIdempotencyKey/calendarEventIdempotencyKey
+// above -- a dropped POST response and the innocent manual retry it
+// invites would otherwise either fail the eligibility check the first
+// attempt already consumed, or silently create a second, distinct review
+// against a different eligible purchase of the same product. Scoped per
+// templateId only, same reasoning as those two: this key only ever lives
+// in one browser's own localStorage, cleared on success.
+const PRODUCT_REVIEW_IDEMPOTENCY_TTL_MS = 30 * 60 * 1000;
+
+function productReviewIdempotencyStorageKey(templateId) {
+  return `higglehaven-product-review-idempotency-${templateId}`;
+}
+
+function productReviewIdempotencyKey(templateId) {
+  const storageKey = productReviewIdempotencyStorageKey(templateId);
+  try {
+    const saved = JSON.parse(localStorage.getItem(storageKey) || 'null');
+    if (saved && typeof saved.key === 'string' && Date.now() - saved.at < PRODUCT_REVIEW_IDEMPOTENCY_TTL_MS) {
+      return saved.key;
+    }
+  } catch (e) { /* private-browsing/blocked storage, or corrupt value — mint a fresh one below */ }
+  const key = crypto.randomUUID();
+  try { localStorage.setItem(storageKey, JSON.stringify({ key, at: Date.now() })); } catch (e) { /* ignore */ }
+  return key;
+}
+
+function clearProductReviewIdempotencyKey(templateId) {
+  try { localStorage.removeItem(productReviewIdempotencyStorageKey(templateId)); } catch (e) { /* ignore */ }
+}
+
 // #1113: authorLabel is no longer accepted here -- the server derives it
 // from the session (closing #893's spoofing gap), so a caller needs a real
 // session (ensureBuilderIdentity()) before this will ever succeed.
@@ -1384,8 +1423,9 @@ export async function createProductReview(templateId, { rating, text } = {}) {
   const { review } = await requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ rating, text }),
+    body: JSON.stringify({ rating, text, idempotencyKey: productReviewIdempotencyKey(templateId) }),
   });
+  clearProductReviewIdempotencyKey(templateId);
   return review;
 }
 

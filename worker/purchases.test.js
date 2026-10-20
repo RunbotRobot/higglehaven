@@ -508,6 +508,38 @@ describe('Simulated purchases', () => {
     });
   });
 
+  // #2439: priceCents 0 is distinct from the unpriced (null) case tested
+  // above — computePurchaseAmounts only rejects a null price, so a free
+  // listing reaches the write path with totalCents/builderShareCents both
+  // 0. Crediting a $0 commission is a no-op, but
+  // higgles_earnings_events.amount_cents has its own CHECK (amount_cents >
+  // 0) (migration 0093), so unconditionally inserting that zero-amount row
+  // used to turn this otherwise-clean purchase into an uncaught "CHECK
+  // constraint failed", surfacing as a generic 400 via databaseHttpError
+  // instead of the 201 a free sale should return.
+  it('completes a purchase of a free (priceCents 0) product without hitting higgles_earnings_events\' zero-amount CHECK constraint', async () => {
+    const seller = await signupBuilder('purchase-free-seller');
+    await createGreenbeltLandletWithArea('purchase-free-landlet', 1000);
+    await claim('purchase-free-landlet', seller);
+    await createTemplate('purchase-free-template', { priceCents: 0 });
+    await placeInstance('purchase-free-instance', 'purchase-free-landlet', 'purchase-free-template', seller);
+
+    const before = await builderRow(seller.builderId);
+    const purchased = await api('/instances/purchase-free-instance/purchase', seller.session({ method: 'POST' }));
+    expect(purchased.response.status).toBe(201);
+    expect(purchased.body.purchase).toMatchObject({
+      totalCents: 0, commissionCents: 0, builderShareCents: 0, platformShareCents: 0,
+    });
+
+    const after = await builderRow(seller.builderId);
+    expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents);
+
+    const { results } = await env.DB.prepare(
+      'SELECT * FROM higgles_earnings_events WHERE builder_id = ?',
+    ).bind(seller.builderId).all();
+    expect(results).toHaveLength(0);
+  });
+
   it('lists a builder\'s purchase history via GET /api/purchases', async () => {
     const seller = await signupBuilder('purchase-list-seller');
     await createGreenbeltLandletWithArea('purchase-list-landlet', 1000);

@@ -1562,10 +1562,12 @@ function meshDimensions(mesh) {
 // the instance's own object rather than swapping object identity, so every
 // other per-object hook (entry.objects, sign/calendar/review registration,
 // userData) keeps working completely unchanged — only this proxy's and the
-// real model's own children's `.visible` flags toggle (see
-// setInstanceLodState below). Box-fallback/flooring instances (object.isMesh
-// true, from createMeshForInstance's own box-fallback branches) return null
-// here: they're already a single cheap box, nothing left to simplify.
+// real model's own children's `.visible`/hit-testable state toggle (see
+// setInstanceLodState below, which also establishes the correct initial
+// raycast state right after this returns — see its own call site). Box-
+// fallback/flooring instances (object.isMesh true, from
+// createMeshForInstance's own box-fallback branches) return null here:
+// they're already a single cheap box, nothing left to simplify.
 function buildInstanceLodProxy(object) {
   if (object.isMesh) return null;
   const { width, depth, height } = meshDimensions(object);
@@ -1573,27 +1575,44 @@ function buildInstanceLodProxy(object) {
   const material = new THREE.MeshStandardMaterial({ color: object.userData.template.color });
   const proxy = new THREE.Mesh(geometry, material);
   proxy.visible = false;
-  // THREE.Raycaster's own intersectObject(s) doesn't check `.visible` —
-  // only an object's own raycast() implementation decides whether it's
-  // hit-testable. Without this, a tap/click raycast against the real
-  // model's parent object (e.g. shopReviews' own tap-to-open handler)
-  // could land on this invisible stand-in instead of (or in front of) the
-  // real geometry it's standing in for while hidden in the near band.
-  proxy.raycast = () => {};
   return proxy;
+}
+
+// #2399: THREE.Raycaster's own tree walk (see intersect() in its source)
+// never checks `.visible` — only `.layers`, and then each object's own
+// raycast() return value. A plain no-op raycast override returns
+// `undefined`, not `false`, which still lets the walk recurse into that
+// object's own children — not enough to hide a real model's top-level
+// child when it's often a Group wrapping several meshes, not a single
+// Mesh. Returning exactly `false` stops that recursion outright, so a
+// hidden object (and everything under it) never contributes a hit;
+// deleting our own override restores whatever raycast method that
+// object's own class actually defines (Mesh.prototype.raycast, or the
+// inert Object3D.prototype.raycast for a plain Group), without having to
+// know or store which one that was.
+function setLodChildHitTestable(child, hitTestable) {
+  if (hitTestable) delete child.raycast;
+  else child.raycast = () => false;
 }
 
 // #2378: true switches an instance to its simplified middle-band proxy;
 // false restores full detail. A no-op for an instance with no proxy
 // (buildInstanceLodProxy returned null for it, stored as
 // object.userData.lodProxy in loadShopLandletInstances) — a box/flooring
-// instance has nothing to switch.
+// instance has nothing to switch. Keeps hit-testability in sync with
+// visibility on both sides (#2399) — without this, the visible side of a
+// switch could tap-miss (invisible proxy/model still absorbing the hit)
+// while the hidden side keeps catching every tap meant for whichever
+// object the shopper can actually see.
 function setInstanceLodState(object, isMiddle) {
   const proxy = object.userData.lodProxy;
   if (!proxy) return;
   proxy.visible = isMiddle;
+  setLodChildHitTestable(proxy, isMiddle);
   for (const child of object.children) {
-    if (child !== proxy) child.visible = !isMiddle;
+    if (child === proxy) continue;
+    child.visible = !isMiddle;
+    setLodChildHitTestable(child, !isMiddle);
   }
 }
 
@@ -2738,7 +2757,8 @@ promptModeGenerateBtn.addEventListener('click', async () => {
     setPromptModeStatus('');
   } catch (err) {
     console.warn('Prompt mode search failed:', err);
-    setPromptModeStatus(err.message || 'Something went wrong. Please try again.');
+    // #2440: previously a generic "Something went wrong. Please try again."
+    setPromptModeStatus(err.message || "Couldn't find similar products for that — please try again in a moment.");
   } finally {
     promptModeGenerateBtn.disabled = false;
   }
@@ -3151,6 +3171,7 @@ const uploadHintBtn = document.getElementById('upload-hint-btn');
 const uploadModeVideoBtn = document.getElementById('upload-mode-video-btn');
 const uploadModeFileBtn = document.getElementById('upload-mode-file-btn');
 const uploadVideoSectionEl = document.getElementById('upload-video-section');
+const uploadVideoCreditsEl = document.getElementById('upload-video-credits');
 const uploadVideoInput = document.getElementById('upload-video-input');
 const uploadRetryVideoBtn = document.getElementById('upload-retry-video-btn');
 const uploadStatusEl = document.getElementById('upload-status');
@@ -3251,6 +3272,23 @@ function disposeUploadDimensionPreview() {
   uploadDimensionPreview = null;
 }
 
+// #2442: `builders.video_generation_credits` (migrations/0127) was never
+// surfaced anywhere in the Upload Model modal -- a seller had no way to
+// tell they were out of free generations before actually attempting one
+// and hitting VIDEO_GENERATION_NO_CREDITS_MESSAGE's 402. Best-effort: a
+// failed fetch (offline, logged out mid-flow) just leaves the line blank
+// rather than blocking entry into video mode over it.
+async function refreshUploadVideoCredits() {
+  uploadVideoCreditsEl.textContent = '';
+  try {
+    const { videoGenerationCredits } = await fetchMyBuilder();
+    uploadVideoCreditsEl.textContent =
+      `${videoGenerationCredits} free model generation${videoGenerationCredits === 1 ? '' : 's'} remaining`;
+  } catch (err) {
+    console.warn('Failed to load the video-generation credit balance:', err);
+  }
+}
+
 // Switches step 'file' between its two mutually-exclusive input methods.
 // #1602's info-tooltip popups (upload-hint, upload-video-hint) are
 // siblings of their own field row, not nested inside it, so each one is
@@ -3265,6 +3303,12 @@ function setUploadFileMode(mode) {
   uploadModeVideoBtn.hidden = mode !== 'file';
   uploadVideoSectionEl.hidden = mode !== 'video';
   uploadSubmitBtn.textContent = mode === 'video' ? 'Generate Model' : 'Add Product';
+  // #2442: refreshed every time video mode is (re-)entered, not just once
+  // per modal open -- a generation attempt since the last time this
+  // section was shown (success or the 402 no-credits rejection) changes
+  // the real balance, and uploadRetryVideoBtn can land back here more than
+  // once in the same modal session.
+  if (mode === 'video') refreshUploadVideoCredits();
 }
 uploadModeVideoBtn.addEventListener('click', () => setUploadFileMode('video'));
 uploadModeFileBtn.addEventListener('click', () => setUploadFileMode('file'));
@@ -3629,7 +3673,8 @@ async function handleUploadFileStep() {
   } catch (err) {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     console.error('Custom product upload failed:', err);
-    setUploadStatus(err.message || 'Something went wrong.', true);
+    // #2440: previously a generic "Something went wrong."
+    setUploadStatus(err.message || "Couldn't load a preview of that model — please try again in a moment.", true);
   } finally {
     if (myFlowToken === uploadFlowToken) uploadSubmitBtn.disabled = false;
   }
@@ -3806,7 +3851,8 @@ async function handleUploadVideoStep() {
   } catch (err) {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     console.error('Video-to-3D generation failed:', err);
-    setUploadStatus(err.message || 'Something went wrong starting video generation.', true);
+    // #2440: previously a generic "Something went wrong starting video generation."
+    setUploadStatus(err.message || "Couldn't start turning that video into a 3D model — please try again in a moment.", true);
     uploadSubmitBtn.disabled = false;
   }
 }
@@ -3931,7 +3977,8 @@ async function handleUploadDimensionsStep() {
   } catch (err) {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
     console.error('Custom product creation failed:', err);
-    setUploadStatus(err.message || 'Something went wrong.', true);
+    // #2440: previously a generic "Something went wrong."
+    setUploadStatus(err.message || "Couldn't create that product — please try again in a moment.", true);
   } finally {
     if (myFlowToken === uploadFlowToken) uploadSubmitBtn.disabled = false;
   }
@@ -4007,7 +4054,7 @@ function populateSellerCategoryFilterOptions(templates) {
     const key = t.category.toLowerCase();
     if (!categoriesByKey.has(key)) categoriesByKey.set(key, t.category);
   }
-  const categories = [...categoriesByKey.values()].sort();
+  const categories = [...categoriesByKey.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
   const previous = sellerCategoryFilterSelect.value;
   sellerCategoryFilterSelect.innerHTML = '';
   const allOption = document.createElement('option');
@@ -5208,6 +5255,170 @@ function renderSellerList() {
     });
 
     extensibilityPanel.appendChild(saveBtn);
+
+    // Sit/lean interaction targets (docs/SPEC.md §2, docs/API.md's
+    // "Sit/lean interaction targets (#2476)") — schema/metadata-only piece
+    // of the #2475 tracking issue; the actual targeting/pose logic is a
+    // later sub-issue. Same collapsed-panel-with-a-Save-step idiom as
+    // Extensibility above, with two independent sections (a product can
+    // be sittable, leanable, both, or neither).
+    const SIT_LEAN_TARGETS = [
+      { key: 'sitTarget', label: 'Sittable', className: 'seller-sit-target' },
+      { key: 'leanTarget', label: 'Leanable', className: 'seller-lean-target' },
+    ];
+    const existingSitLean = {};
+    for (const { key } of SIT_LEAN_TARGETS) existingSitLean[key] = template.metadata?.[key] || null;
+    const anySitLeanOn = () => SIT_LEAN_TARGETS.some(({ key }) => !!existingSitLean[key]);
+
+    const sitLeanToggle = document.createElement('button');
+    sitLeanToggle.className = 'seller-extensibility-toggle seller-sit-lean-toggle';
+    sitLeanToggle.type = 'button';
+    sitLeanToggle.textContent = `${anySitLeanOn() ? 'Sit/Lean Target (on)' : 'Sit/Lean Target'} ▾`;
+    details.appendChild(sitLeanToggle);
+
+    const sitLeanPanel = document.createElement('div');
+    sitLeanPanel.className = 'seller-sit-lean-panel';
+    sitLeanPanel.hidden = true;
+    details.appendChild(sitLeanPanel);
+
+    sitLeanToggle.addEventListener('click', () => {
+      sitLeanPanel.hidden = !sitLeanPanel.hidden;
+      sitLeanToggle.textContent = `${anySitLeanOn() ? 'Sit/Lean Target (on)' : 'Sit/Lean Target'} ${sitLeanPanel.hidden ? '▾' : '▴'}`;
+    });
+
+    const sitLeanFields = {};
+    for (const { key, label, className } of SIT_LEAN_TARGETS) {
+      const existing = existingSitLean[key];
+
+      const checkboxLabel = document.createElement('label');
+      checkboxLabel.className = `${className}-checkbox-label`;
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.checked = !!existing;
+      checkboxLabel.appendChild(checkbox);
+      checkboxLabel.appendChild(document.createTextNode(label));
+      sitLeanPanel.appendChild(checkboxLabel);
+
+      const offsetXInput = document.createElement('input');
+      offsetXInput.className = `${className}-offset-x-input`;
+      offsetXInput.type = 'number';
+      offsetXInput.step = '0.01';
+      offsetXInput.placeholder = `offset X (${unitSuffix()})`;
+      offsetXInput.disabled = !checkbox.checked;
+      if (existing) offsetXInput.value = toDisplayLength(existing.offsetXM).toFixed(2);
+
+      const offsetYInput = document.createElement('input');
+      offsetYInput.className = `${className}-offset-y-input`;
+      offsetYInput.type = 'number';
+      offsetYInput.step = '0.01';
+      offsetYInput.placeholder = `offset Y (${unitSuffix()})`;
+      offsetYInput.disabled = !checkbox.checked;
+      if (existing) offsetYInput.value = toDisplayLength(existing.offsetYM).toFixed(2);
+
+      const heightInput = document.createElement('input');
+      heightInput.className = `${className}-height-input`;
+      heightInput.type = 'number';
+      heightInput.step = '0.01';
+      heightInput.min = '0';
+      heightInput.placeholder = `height (${unitSuffix()})`;
+      heightInput.disabled = !checkbox.checked;
+      if (existing) heightInput.value = toDisplayLength(existing.heightM).toFixed(2);
+
+      const facingInput = document.createElement('input');
+      facingInput.className = `${className}-facing-input`;
+      facingInput.type = 'number';
+      facingInput.step = '0.01';
+      facingInput.placeholder = 'facing (radians)';
+      facingInput.disabled = !checkbox.checked;
+      if (existing) facingInput.value = existing.facingRad.toFixed(2);
+
+      checkbox.addEventListener('change', () => {
+        offsetXInput.disabled = !checkbox.checked;
+        offsetYInput.disabled = !checkbox.checked;
+        heightInput.disabled = !checkbox.checked;
+        facingInput.disabled = !checkbox.checked;
+      });
+
+      const row = document.createElement('div');
+      row.className = `${className}-row`;
+      row.appendChild(offsetXInput);
+      row.appendChild(offsetYInput);
+      row.appendChild(heightInput);
+      row.appendChild(facingInput);
+      sitLeanPanel.appendChild(row);
+
+      sitLeanFields[key] = { checkbox, offsetXInput, offsetYInput, heightInput, facingInput };
+    }
+
+    const sitLeanStatus = document.createElement('div');
+    sitLeanStatus.className = 'seller-sit-lean-status';
+
+    const sitLeanSaveBtn = document.createElement('button');
+    sitLeanSaveBtn.className = 'seller-sit-lean-save-btn metadata-save-btn';
+    sitLeanSaveBtn.type = 'button';
+    sitLeanSaveBtn.textContent = 'Save Sit/Lean Target';
+    metadataSaveButtons.push(sitLeanSaveBtn);
+
+    sitLeanSaveBtn.addEventListener('click', async () => {
+      if (isMetadataSaveBusy()) return;
+      sitLeanStatus.textContent = '';
+      sitLeanStatus.classList.remove('error');
+      const nextTargets = {};
+      for (const { key, label } of SIT_LEAN_TARGETS) {
+        const { checkbox, offsetXInput, offsetYInput, heightInput, facingInput } = sitLeanFields[key];
+        if (!checkbox.checked) continue;
+        const offsetXM = fromDisplayLength(Number(offsetXInput.value));
+        const offsetYM = fromDisplayLength(Number(offsetYInput.value));
+        const heightM = fromDisplayLength(Number(heightInput.value));
+        const facingRad = Number(facingInput.value);
+        if (!Number.isFinite(offsetXM) || Math.abs(offsetXM) > template.dimensions.width / 2) {
+          sitLeanStatus.textContent = `${label} offset X must be within +/- half this product's own width.`;
+          sitLeanStatus.classList.add('error');
+          return;
+        }
+        if (!Number.isFinite(offsetYM) || Math.abs(offsetYM) > template.dimensions.depth / 2) {
+          sitLeanStatus.textContent = `${label} offset Y must be within +/- half this product's own depth.`;
+          sitLeanStatus.classList.add('error');
+          return;
+        }
+        if (!Number.isFinite(heightM) || heightM < 0 || heightM > template.dimensions.height) {
+          sitLeanStatus.textContent = `${label} height must be between 0 and this product's own height.`;
+          sitLeanStatus.classList.add('error');
+          return;
+        }
+        if (!Number.isFinite(facingRad)) {
+          sitLeanStatus.textContent = `${label} facing must be a number.`;
+          sitLeanStatus.classList.add('error');
+          return;
+        }
+        nextTargets[key] = { offsetXM, offsetYM, heightM, facingRad };
+      }
+      setMetadataSaveBusy(true);
+      for (const btn of metadataSaveButtons) btn.disabled = true;
+      try {
+        // A full replace, not a merge -- same reasoning as Extensibility's
+        // own save handler above.
+        const nextMetadata = { ...template.metadata };
+        for (const { key } of SIT_LEAN_TARGETS) {
+          if (nextTargets[key]) nextMetadata[key] = nextTargets[key];
+          else delete nextMetadata[key];
+        }
+        const updated = await updateCatalogTemplate(template.templateId, { metadata: nextMetadata });
+        Object.assign(template, updated);
+        for (const { key } of SIT_LEAN_TARGETS) existingSitLean[key] = nextTargets[key] || null;
+        sitLeanStatus.textContent = 'Saved.';
+        sitLeanToggle.textContent = `${anySitLeanOn() ? 'Sit/Lean Target (on)' : 'Sit/Lean Target'} ${sitLeanPanel.hidden ? '▾' : '▴'}`;
+      } catch (err) {
+        sitLeanStatus.textContent = err.message || 'Could not save.';
+        sitLeanStatus.classList.add('error');
+      } finally {
+        setMetadataSaveBusy(false);
+        syncMetadataSaveButtonsDisabled(template.templateId); // #457, see above
+      }
+    });
+
+    sitLeanPanel.appendChild(sitLeanSaveBtn);
+    sitLeanPanel.appendChild(sitLeanStatus);
 
     // Product reviews (docs/SPEC.md §5, docs/API.md's "Product reviews") —
     // shopper-authored, tied to this product itself rather than to any one
@@ -12111,6 +12322,10 @@ async function renderMyLands() {
     renameBtn.addEventListener('click', async () => {
       const next = prompt('Rename this land', landlet.name);
       if (!next || !next.trim() || next.trim() === landlet.name) return;
+      if (next.trim().length > 100) {
+        alert('Keep it to 100 characters or fewer.');
+        return;
+      }
       myLandsStatusEl.textContent = '';
       myLandsStatusEl.classList.remove('error');
       renameBtn.disabled = true;
@@ -12531,9 +12746,19 @@ async function pollDiditVerificationStatus() {
         return;
       }
     } catch (err) {
-      // A transient failure here shouldn't give up outright — keep
-      // polling until the deadline, the same "best-effort background
-      // refresh" spirit as refreshAccountAuthUI's own trust-tier fetch.
+      // #2405: a 401 here means this browser's session ended (or never
+      // existed, e.g. the Didit mobile-handoff return landing in a
+      // different browser) -- not a transient blip, and retrying it for
+      // the full 5 minutes never resolves since no session means the
+      // builder's real status can't be fetched from here. Stop and ask
+      // for a login instead of looking stuck.
+      if (err.status === 401) {
+        setAuthStatus('Log in to check your verification status.');
+        return;
+      }
+      // Any other failure shouldn't give up outright — keep polling
+      // until the deadline, the same "best-effort background refresh"
+      // spirit as refreshAccountAuthUI's own trust-tier fetch.
       console.warn('Could not check Didit verification status:', err);
     }
     if (Date.now() >= deadline) {
@@ -12888,8 +13113,18 @@ const authInitPromise = (async () => {
     // this browser has an active session; openAuthModal only needs to
     // actually show it (a fresh page load starts with the modal closed).
     openAuthModal();
-    setAuthStatus('Checking verification status…');
-    await pollDiditVerificationStatus();
+    // #2405: Didit's hosted flow supports a "continue on your phone" QR
+    // handoff, so this return leg can land in a browser/device with no
+    // session for the account that started verification. Polling a
+    // session-gated endpoint from there just 401s on every tick for 5
+    // minutes behind a login form — tell the user to log in instead of
+    // pretending a check is actually happening.
+    if (!currentAuthUser) {
+      setAuthStatus('Log in to check your verification status.');
+    } else {
+      setAuthStatus('Checking verification status…');
+      await pollDiditVerificationStatus();
+    }
   } else if (resetToken) {
     pendingResetToken = resetToken;
     // Forced to the logged-out form view even if this browser happens to
@@ -12991,6 +13226,7 @@ const shopDownBtn = document.getElementById('shop-down-btn');
 const shopSignHintEl = document.getElementById('shop-sign-hint');
 const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
 const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
+const shopCreditOrbOfflineNoticeEl = document.getElementById('shop-credit-orb-offline-notice');
 const shopProductPreviewModalEl = document.getElementById('shop-product-preview-modal');
 const shopProductPreviewCloseBtn = document.getElementById('shop-product-preview-close-btn');
 const shopProductPreviewCanvas = document.getElementById('shop-product-preview-canvas');
@@ -13028,14 +13264,15 @@ const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, generating: 0
 function plotColorKeyForLandlet(landlet) {
   return landlet.landType === 'water' ? 'water' : landlet.status;
 }
-// docs/SPEC.md §2's confirmed ground speeds: 1.8 m/s walking, 2.7 m/s
-// (~6 mph, v16 — raised from the original 2.2 m/s for a run that actually
-// reads as one) running. There's no separate run input (a run key/button)
+// docs/SPEC.md §2's confirmed ground speeds: 1.8 m/s walking, 4.4704 m/s
+// (10 mph, v17 — raised from 2.7 m/s/~6 mph, which the owner found still
+// read as a slow walk against a measured brick wall; "feels right" over
+// "is realistic") running. There's no separate run input (a run key/button)
 // — the move joystick's own deflection doubles as intensity, so pushing it
 // all the way out runs and a gentle nudge walks, the same analog feel a
 // real joystick gamepad gives a run.
 const SHOP_WALK_SPEED_M_S = 1.8;
-const SHOP_RUN_SPEED_M_S = 2.7; // docs/SPEC.md §2 (v16): ~6 mph, a more noticeable gap from walking
+const SHOP_RUN_SPEED_M_S = 4.4704; // docs/SPEC.md §2 (v17): 10 mph
 const SHOP_LOOK_SPEED_RAD_S = 1.8;
 const SHOP_MIN_HEIGHT_M = 1.5;
 // Flight (docs/SPEC.md §2) — see updateShopFlight/bindShopFlyToggle.
@@ -13326,6 +13563,10 @@ const SHOP_PROXIMITY_INTERVAL_MS = 400;
 // this client re-renders other avatars, not how often it writes its own.
 const SHOP_PRESENCE_REPORT_INTERVAL_MS = 1500;
 const SHOP_PRESENCE_POLL_INTERVAL_MS = 1000;
+// #2436: how many consecutive polls an avatar must be missing from before
+// pollNearbyPresenceIfNeeded actually despawns it -- see that function's
+// own comment for why a single missed poll isn't enough.
+const SHOP_OTHER_AVATAR_MISSED_POLLS_BEFORE_DESPAWN = 2;
 // Below this, a report would just be re-sending the same position/heading
 // the server already has -- skip it entirely (client-side throttling,
 // #1098's own POST endpoint explicitly left to this sub-issue) rather than
@@ -13340,20 +13581,6 @@ const SHOP_PRESENCE_HEADING_THRESHOLD_RAD = 0.05;
 // fresh regardless of movement, with 3x margin under that 10s cutoff so
 // even one dropped heartbeat doesn't go stale.
 const SHOP_PRESENCE_HEARTBEAT_INTERVAL_MS = 3000;
-// #2436: pollNearbyPresenceIfNeeded's own eviction below used to drop a
-// shopOtherAvatars entry the instant one poll came back without it -- a
-// single poll's own response can land without a still-present avatar
-// (phase relationship between this avatar's 1000ms poll and the other's
-// 1500ms report cadence, or the polling avatar's own report row briefly
-// aging past PRESENCE_STALE_AFTER_MS during a throttled background-tab
-// requestAnimationFrame loop), and if that gap lands on exactly the frame
-// a landing's nearestOpenLandingSpot/landingSpotOccupiedByAvatar check
-// runs (#2044), the collision-avoidance nudge is skipped outright rather
-// than delayed. Requiring 2 consecutive missed polls before actually
-// removing the entry costs at most one extra poll interval of a stale
-// ghost avatar lingering (a cosmetic, self-correcting cost) in exchange
-// for never losing that avatar on a single transient gap.
-const SHOP_OTHER_AVATAR_MISSED_POLLS_BEFORE_REMOVE = 2;
 // Community signs (docs/SPEC.md §6, docs/API.md's "Community signs") —
 // shopper-authored posts fade in as the camera approaches a sign and back
 // out past it, rather than a hard show/hide cutoff, the same
@@ -13382,6 +13609,18 @@ const SIGN_MAX_VISIBLE_POSTS = 5;
 // avatar height is the intended collection gesture, not a bug.
 const CREDIT_ORB_COLLECT_RADIUS_M = 1.5;
 const CREDIT_ORB_FLOAT_HEIGHT_M = 1.2;
+// #2443: how far above local ground (shopFlightAltitudeM, not world z --
+// a landlet's own group sits at a fixed world z of exactly 0 regardless of
+// distance from the origin, per #1871's "addLandletToScene" group.position
+// call, while shopAvatarPosition.z is deliberately sunk by
+// curvatureDropM(distance from origin) as a pure rendering trick; comparing
+// world z values would conflate that offset with real altitude) the avatar
+// can be and still have this count as a ground walk-in rather than flying
+// over it. Reuses CREDIT_ORB_COLLECT_RADIUS_M's own scale as a reasonable
+// near-ground margin (covers the walk cycle's own small vertical bob and any
+// ground-incline slack) -- tight enough that a real flight altitude no
+// longer collects, per the owner's own report.
+const CREDIT_ORB_COLLECT_ALTITUDE_TOLERANCE_M = CREDIT_ORB_COLLECT_RADIUS_M;
 const CREDIT_ORB_RADIUS_M = 0.25;
 const CREDIT_ORB_ROTATION_SPEED_RAD_S = 1.4;
 // Shimmer: emissiveIntensity oscillates between these two bounds rather
@@ -13395,6 +13634,13 @@ const CREDIT_ORB_SHIMMER_MAX = 1.8;
 // opacity-transition show/auto-hide shape (see its CSS comment in
 // index.html) rather than a hard show/hide cutoff.
 const CREDIT_ORB_TOAST_VISIBLE_MS = 3000;
+// #2447: how long an unbroken streak of genuine network failures (fetch()
+// itself rejecting, never a real HTTP response -- see isNetworkError)
+// collecting any orb has to persist before this reads as "offline" rather
+// than a single dropped frame. A real HTTP response of any status (403/
+// 404/429/500) proves the server is reachable and resets this streak --
+// only true network errors count toward it.
+const CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS = 3000;
 // The world wall: an opaque ring standing at exactly the current world
 // radius, tall enough that nothing generating out beyond it (still
 // unclaimable — see the availability circle in docs/SPEC.md) is visible
@@ -13660,26 +13906,41 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     vec2 swirled = mat2(c, -s, s, c) * normalizedXY;
     vec2 samplePos = swirled * 2.5 + vec2(uTime * 0.05, heightFrac * 3.0 - uTime * 0.015);
     float clouds = fbm(samplePos);
-    // A narrow smoothstep range here reads as a near-binary edge — cloud or
-    // not, with barely any blend in between — which combined with how pale
-    // both colors already are shows up as a hard visible line at the
-    // boundary rather than a soft wisp. Widening it spreads the transition
-    // across much more of the noise field's own range.
-    float cloudMask = smoothstep(0.25, 0.95, clouds);
-    // #1190: the fbm() octave fade above suppresses each octave once its
-    // own period aliases (confirmed via direct visual debugging this
-    // *is* firing, aggressively, for the higher octaves near the apex) —
-    // but the lowest surviving octave can still alias on its own right at
-    // the literal pole, where even a single noise-space cycle collapses
-    // into a handful of screen pixels. Fading the whole cloud overlay out
-    // by proximity to true zenith (not a further per-octave tweak, which
-    // #1190's own investigation already tried and found didn't track the
-    // actual aliasing) sidesteps that degenerate case entirely: right at
-    // the pole, the overlay converges to 0 and only vColor's own smooth,
-    // noise-free gradient remains — nothing left there to alias.
-    // length(normalizedXY) is the pole-distance in sin(angle-from-zenith)
-    // terms, independent of the current world radius (see normalizedXY's
-    // own comment) — 0 at the apex, growing toward the horizon.
+    // #1190/#1585/#1799/owner-report-2026-10-20: three prior fixes in this
+    // area (apex-streak footprint-fade tuning, shear-band envelope capping,
+    // footprint-threshold widening/narrowing) all targeted *aliasing* —
+    // undersampled high-frequency noise. Direct visual debugging this time
+    // (rendering fbm()'s raw, unprocessed output with visibility forced to
+    // 0/1 at a time) found something different: even the *smooth*,
+    // correctly-resolved, non-aliased base octave shows a soft radial
+    // "spoke" pattern converging on the pole. This isn't noise undersampling
+    // at all — it's an unavoidable consequence of rotating the flattened
+    // (x,y) world position (normalizedXY below) around the pole: every
+    // azimuth's sample position approaches the *same* noise-space point as
+    // world-space radius shrinks toward the pole (a sphere's pole is a
+    // single point — any 2D flattening must collapse every azimuth there),
+    // so a smooth noise gradient near that point reads as straight
+    // "contour" lines radiating outward once you're close enough. No amount
+    // of per-octave aliasing suppression touches this, because it's present
+    // in the lowest octave too, which that mechanism never fades.
+    // What actually fixes the *visible* symptom: the previous narrow
+    // smoothstep(0.25, 0.95, clouds) turned this smooth radial gradient
+    // into a near-binary cloud/no-cloud mask, and it's that hard threshold
+    // — not the underlying gradient — that reads as sharp "spokes"/"bands"
+    // rather than a soft, barely-noticeable undulation. Widening the
+    // threshold dramatically (confirmed via a full yaw sweep at a fixed
+    // steep pitch, not just one camera angle) keeps the same underlying
+    // field but blends it so softly that the radial structure stops being
+    // perceptible, without touching the swirl/shear-band fix (#1204) or the
+    // per-octave aliasing fade (#1633) at all.
+    float cloudMask = smoothstep(-0.3, 1.3, clouds);
+    // Kept from before (#1204/#1585) as a modest extra safety margin right
+    // at the literal pole specifically — on its own this barely moves the
+    // result (confirmed: widening or disabling it entirely, independent of
+    // the cloudMask change above, made no meaningful visual difference —
+    // the real fix is the threshold softening above). length(normalizedXY)
+    // is the pole-distance in sin(angle-from-zenith) terms, independent of
+    // the current world radius — 0 at the apex, growing toward the horizon.
     float apexFade = smoothstep(0.0, 0.08, length(normalizedXY));
     float visibility = heightFrac * cloudMask * apexFade * 0.5; // kept subtle — an overlay, not a repaint
     vec3 cloudColor = vec3(0.99, 0.99, 1.0);
@@ -14525,6 +14786,16 @@ window.__testTeleportShopAvatar = (x, y, z) => {
 // unless a test calls it" convention as every other window.__test* hook
 // here.
 window.__testShopAvatarPosition = () => ({ x: shopAvatarPosition.x, y: shopAvatarPosition.y, z: shopAvatarPosition.z });
+// #2423: read-only counterpart for shopFlightState itself -- a test waiting
+// for a real landing/takeoff to finish can't just wait out
+// SHOP_FLIGHT_*_DURATION_S in real time and assume that's enough: dt each
+// frame is clamped to 0.1s (updateShopMovement's own "clamp against
+// tab-switch-sized gaps" comment), so under a CPU-starved CI run where
+// requestAnimationFrame ticks arrive sparsely, *simulated* flight time can
+// fall arbitrarily far behind real time -- a fixed real-time wait sized for
+// the simulated duration is never actually guaranteed to be enough. Polling
+// this instead of guessing a bigger timeout is the robust fix.
+window.__testShopFlightState = () => shopFlightState;
 // #1479: forces an immediate, synchronous load/unload decision rather than
 // waiting on the next real requestAnimationFrame tick to notice a teleport
 // on its own. window.__testTeleportShopAvatar's own comment above explains
@@ -14554,6 +14825,41 @@ window.__testShopInstanceLodBand = (instanceId) => {
     const proxy = object.userData.lodProxy;
     if (!proxy) return 'none';
     return proxy.visible ? 'middle' : 'near';
+  }
+  return null;
+};
+// #2399: read-only test hook exercising the *real* raycast pipeline (the
+// same THREE.Raycaster/shopReviews.map(r => r.mesh) pair the tap-to-inspect
+// click handler below uses) against a ray aimed straight down through the
+// exact center of the proxy's own world-space bounding box -- computed via
+// THREE.Box3 rather than assumed local coordinates, so it works regardless
+// of whether the proxy or the real model is currently visible. Reports
+// which representation actually absorbed the hit ('proxy', 'real', or
+// 'none' for no hit at all), independent of findTappedShopProduct's own
+// walk-up-to-the-shared-parent resolution (which would mask this -- both
+// representations share the same top-level `object`, so tapping either one
+// still resolves to the same product; this hook is what actually shows
+// setInstanceLodState's own hit-testable toggle working, or not). Always
+// inert unless a test calls it, same convention as the other window.__test*
+// hooks here.
+window.__testShopInstanceLodHitSource = (instanceId) => {
+  for (const entry of shopLandlets.values()) {
+    const object = entry.objects.find((o) => o.userData.instanceId === instanceId);
+    if (!object) continue;
+    const proxy = object.userData.lodProxy;
+    if (!proxy) return null;
+    const box = new THREE.Box3().setFromObject(proxy);
+    const center = box.getCenter(new THREE.Vector3());
+    const origin = new THREE.Vector3(center.x, center.y, box.max.z + 10);
+    const downRaycaster = new THREE.Raycaster(origin, new THREE.Vector3(0, 0, -1));
+    const hits = downRaycaster.intersectObjects(shopReviews.map((r) => r.mesh), true);
+    if (hits.length === 0) return 'none';
+    let current = hits[0].object;
+    while (current) {
+      if (current === proxy) return 'proxy';
+      current = current.parent;
+    }
+    return 'real';
   }
   return null;
 };
@@ -14913,11 +15219,15 @@ function setShopFlyBtnFlying(flying) {
   shopFlyBtnIcon.style.transform = `scale(${SHOP_FLY_BTN_ICON_ZOOM})`;
 }
 
-// Toggling mid-transition (takingOff/landing) is ignored rather than
-// queued or reversed — let the current one finish, then the next press
-// starts cleanly from a real grounded/flying state. Landing captures its
-// own starting altitude (shopFlightLandingStartAltitudeM) so its descent
-// ramps from wherever the player actually was, not always the same height.
+// Toggling mid-takeoff is ignored — let it finish, then the next press
+// starts cleanly from a real flying state (resuming mid-ascent isn't
+// needed: taking off is already what a tap during it would ask for).
+// Landing captures its own starting altitude (shopFlightLandingStartAltitudeM)
+// so its descent ramps from wherever the player actually was, not always
+// the same height. #2446: toggling mid-landing resumes flight immediately
+// from the current altitude instead of being ignored like takeoff — a
+// player who tapped fly by mistake, or wants back up before fully
+// grounding, shouldn't have to wait out the whole descent first.
 function toggleShopFlight() {
   // #1175/#1176: a deliberate tap of the fly button is navigation input
   // same as any joystick deflection — stop the hands-off spawn orbit
@@ -14941,6 +15251,14 @@ function toggleShopFlight() {
     // while actually 'flying' — see updateShopFlight), so the ascend/
     // descend controls hide the instant it starts, not once it finishes.
     setShopFlyBtnFlying(false);
+  } else if (shopFlightState === 'landing') {
+    // #2446: shopFlightAltitudeM is already the live, current altitude —
+    // updateShopFlight's own 'landing' branch has been writing it every
+    // frame since the descent started — so resuming 'flying' here needs no
+    // ramp/elapsed-time reset of its own, unlike takeoff: the 'flying'
+    // branch above never reads shopFlightTransitionElapsedS at all.
+    shopFlightState = 'flying';
+    setShopFlyBtnFlying(true);
   }
 }
 
@@ -15613,6 +15931,7 @@ function updateShopMovement(now) {
   updateCalendarFade();
   updateReviewFade();
   updateCreditOrbs(dt);
+  updateCreditOrbPopEffects(dt);
   if (now - lastScheduledEventCheck >= SCHEDULED_EVENT_CHECK_INTERVAL_MS) {
     lastScheduledEventCheck = now;
     checkScheduledCalendarEvents();
@@ -15987,14 +16306,21 @@ async function pollNearbyPresenceIfNeeded(now) {
     entry.toZ = avatar.z;
     entry.toHeading = avatar.heading ?? entry.fromHeading;
     entry.receivedAt = now;
-    entry.missedPolls = 0;
+    entry.missedPolls = 0; // #2436: seen again -- clear any pending despawn countdown
   }
+  // #2436: a single poll missing an avatar that's genuinely still nearby
+  // (report/poll cadence phase gap, or the avatar's own report briefly
+  // going stale) used to despawn it outright -- including on the exact
+  // frame updateShopFlight's landing branch reads shopOtherAvatars to run
+  // the #2044 collision-avoidance nudge, silently skipping it. Requiring
+  // SHOP_OTHER_AVATAR_MISSED_POLLS_BEFORE_DESPAWN consecutive misses before
+  // actually removing the avatar costs at most a couple of poll intervals
+  // of a stale ghost avatar lingering -- far cheaper than a missed landing
+  // nudge, which never gets a second chance once that frame has passed.
   for (const [builderId, entry] of shopOtherAvatars) {
     if (seenBuilderIds.has(builderId)) continue;
-    // #2436: don't remove on the first miss -- see this constant's own
-    // comment above.
-    entry.missedPolls = (entry.missedPolls || 0) + 1;
-    if (entry.missedPolls < SHOP_OTHER_AVATAR_MISSED_POLLS_BEFORE_REMOVE) continue;
+    entry.missedPolls = (entry.missedPolls ?? 0) + 1;
+    if (entry.missedPolls < SHOP_OTHER_AVATAR_MISSED_POLLS_BEFORE_DESPAWN) continue;
     scene.remove(entry.group);
     disposeObject3D(entry.group);
     shopOtherAvatars.delete(builderId);
@@ -16180,6 +16506,41 @@ function createCreditOrbMesh() {
   return mesh;
 }
 
+// #2441: a brief scale-up-then-fade pop, played on a detached clone of the
+// just-collected orb's own mesh rather than the real orb -- same "own
+// geometry/material, disposed once its short lifespan ends" shape as
+// spawnConfettiBurst/updateConfettiBursts below, just for a single growing,
+// fading sphere instead of a particle burst. Spawned on a clone (never
+// orb.mesh itself, which removeCreditOrb disposes immediately after) so
+// this purely cosmetic effect never has to finish before collection logic/
+// collision moves on.
+const CREDIT_ORB_POP_LIFESPAN_S = 0.4;
+const CREDIT_ORB_POP_END_SCALE = 2.5;
+const creditOrbPopEffects = [];
+
+function spawnCreditOrbPopEffect(orb) {
+  const mesh = new THREE.Mesh(orb.mesh.geometry.clone(), orb.mesh.material.clone());
+  mesh.material.transparent = true;
+  mesh.position.copy(orb.mesh.position);
+  orb.group.add(mesh);
+  creditOrbPopEffects.push({ mesh, group: orb.group, elapsed: 0 });
+}
+
+function updateCreditOrbPopEffects(dt) {
+  for (const effect of [...creditOrbPopEffects]) {
+    effect.elapsed += dt;
+    const t = THREE.MathUtils.clamp(effect.elapsed / CREDIT_ORB_POP_LIFESPAN_S, 0, 1);
+    effect.mesh.scale.setScalar(1 + (CREDIT_ORB_POP_END_SCALE - 1) * t);
+    effect.mesh.material.opacity = 1 - t;
+    if (effect.elapsed >= CREDIT_ORB_POP_LIFESPAN_S) {
+      effect.group.remove(effect.mesh);
+      effect.mesh.geometry.dispose();
+      effect.mesh.material.dispose();
+      creditOrbPopEffects.splice(creditOrbPopEffects.indexOf(effect), 1);
+    }
+  }
+}
+
 let creditOrbShimmerElapsedS = 0;
 const scratchCreditOrbWorldPos = new THREE.Vector3();
 
@@ -16203,15 +16564,26 @@ function updateCreditOrbs(dt) {
     // behind the avatar, well outside CREDIT_ORB_COLLECT_RADIUS_M on its
     // own, so camera.position would never read as "standing on it" at this
     // tight a radius the way it still works for signs/calendars' much wider
-    // SIGN_INTERACT_RADIUS_M (8m). Horizontal-only (x/y), ignoring z, since
-    // CREDIT_ORB_FLOAT_HEIGHT_M's own float-above-ground offset shouldn't
-    // count against "walked into it."
+    // SIGN_INTERACT_RADIUS_M (8m).
     const world = orb.mesh.getWorldPosition(scratchCreditOrbWorldPos);
     const dx = world.x - shopAvatarPosition.x;
     const dy = world.y - shopAvatarPosition.y;
     if (Math.hypot(dx, dy) > CREDIT_ORB_COLLECT_RADIUS_M) continue;
+    // #2443: horizontal proximity alone also fired for flying directly over
+    // an orb at any altitude, since height above ground was never checked.
+    // shopFlightAltitudeM (not world z -- see CREDIT_ORB_COLLECT_ALTITUDE_
+    // TOLERANCE_M's own comment on why) is the curvature-independent "how
+    // high above local ground" signal already tracked for flight, so this
+    // excludes real flight altitude without touching an ordinary ground
+    // walk-in.
+    if (Math.abs(shopFlightAltitudeM) > CREDIT_ORB_COLLECT_ALTITUDE_TOLERANCE_M) continue;
     orb.collecting = true;
     collectCreditOrb(orb.orbId).then(() => {
+      // #2441: spawned before removeCreditOrb disposes the real orb.mesh
+      // below -- this clones it first, so the pop has its own geometry/
+      // material to animate independently of the disposal.
+      markCreditOrbCollectReachedServer();
+      spawnCreditOrbPopEffect(orb);
       removeCreditOrb(orb);
       showCreditOrbToast();
     }).catch((error) => {
@@ -16222,6 +16594,7 @@ function updateCreditOrbs(dt) {
       // and clears the in-flight guard to let the very next frame retry,
       // the same way it would if collecting had never fired at all.
       if (error.status === 403) {
+        markCreditOrbCollectReachedServer();
         orb.collecting = false;
         return;
       }
@@ -16231,6 +16604,7 @@ function updateCreditOrbs(dt) {
       // now-stale orb from the scene instead of surfacing anything to the
       // shopper or retrying.
       if (error.status === 404) {
+        markCreditOrbCollectReachedServer();
         removeCreditOrb(orb);
         return;
       }
@@ -16241,8 +16615,42 @@ function updateCreditOrbs(dt) {
       // fetches a landlet's orbs once, so a wrongly-removed orb was gone
       // from this session's view for good. Transient, same as 403: leave
       // the orb in place and let the next frame retry.
+      // #2447: a 429/500 is still a real HTTP response (error.status is
+      // set), proving the server was reachable -- only a genuine network
+      // failure (isNetworkError, fetch() itself rejecting with no response
+      // at all) counts as evidence of actually being offline.
+      if (isNetworkError(error)) {
+        markCreditOrbCollectFailedToReachServer();
+      } else {
+        markCreditOrbCollectReachedServer();
+      }
       orb.collecting = false;
     });
+  }
+}
+
+// #2447: null while no genuine network failure is currently in progress;
+// set to the timestamp of the *first* one in an unbroken streak once one
+// starts, across every orb's own collect attempts (this is a connectivity
+// signal, not a per-orb one). markCreditOrbCollectReachedServer resets it
+// the moment any attempt gets a real response, same as it clears the
+// notice -- a single dropped frame shouldn't flash anything, only a
+// sustained outage should.
+let creditOrbOfflineStreakStartedAt = null;
+
+function markCreditOrbCollectReachedServer() {
+  creditOrbOfflineStreakStartedAt = null;
+  shopCreditOrbOfflineNoticeEl.classList.remove('visible');
+}
+
+function markCreditOrbCollectFailedToReachServer() {
+  const now = performance.now();
+  if (creditOrbOfflineStreakStartedAt === null) {
+    creditOrbOfflineStreakStartedAt = now;
+    return;
+  }
+  if (now - creditOrbOfflineStreakStartedAt >= CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS) {
+    shopCreditOrbOfflineNoticeEl.classList.add('visible');
   }
 }
 
@@ -16259,6 +16667,11 @@ function removeCreditOrb(orb) {
 // -- lets a test confirm an orb survives a transient collect failure
 // (429/500/network) instead of being wrongly removed from the scene.
 window.__testActiveCreditOrbIds = () => shopCreditOrbs.map((orb) => orb.orbId);
+// #2441: same e2e-only convention as window.__testActiveCreditOrbIds just
+// above -- lets a test confirm a pop effect actually spawned on collection
+// (and, after waiting out CREDIT_ORB_POP_LIFESPAN_S, that it cleaned itself
+// up again) without depending on fragile pixel-level visual assertions.
+window.__testActiveCreditOrbPopEffectCount = () => creditOrbPopEffects.length;
 
 function showCreditOrbToast() {
   shopCreditOrbToastEl.classList.add('visible');

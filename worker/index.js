@@ -2450,6 +2450,18 @@ const PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX = 20;
 // new author-only edit branch below.
 const PRODUCT_REVIEW_EDIT_RATE_LIMIT_MAX = 20;
 
+// #2422: same "a dropped POST response and the innocent manual retry it
+// invites" protection signPostIdempotencyKey/calendarEventIdempotencyKey
+// already give their own structurally identical POSTs. Scoped by
+// templateId+builderId rather than a purchase_id, since purchase_id isn't
+// known until after the eligibility lookup the retry would otherwise fail
+// against (a successful first attempt already consumed the purchase it
+// reviewed).
+function productReviewIdempotencyKey(templateId, builderId, rawKey) {
+  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
+  return `review:${templateId}:${builderId}:${rawKey}`;
+}
+
 async function handleProductReviews(request, db, route) {
   const templateId = route[1];
 
@@ -2492,6 +2504,33 @@ async function handleProductReviews(request, db, route) {
     await checkRateLimit(db, `product-review-create:${sessionBuilder.builder_id}`, PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const authorLabel = sessionBuilder.label;
+    const rating = Number(input.rating);
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
+      throw new HttpError('rating must be an integer from 1 to 5', 400);
+    }
+    const text = input.text === undefined || input.text === null || input.text === ''
+      ? null
+      : stringValue(input.text, 'text');
+    if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    // #2422: a retry that reuses the same (validated) client-supplied key
+    // finds its own already-landed row here and returns it instead of
+    // hitting the eligibility check below -- which a successful first
+    // attempt already consumed the one purchase it reviewed against, so a
+    // naive retry would otherwise either 400 ("no eligible purchase") or,
+    // if the shopper has a second unreviewed purchase of this same
+    // product, silently create a second, distinct review that was never
+    // the retry's intent. Checked before the eligibility lookup for
+    // exactly that reason. Same content-match-before-reuse guard
+    // signPostIdempotencyKey/#1778 already established for its own sibling.
+    const idempotencyKey = productReviewIdempotencyKey(templateId, sessionBuilder.builder_id, input.idempotencyKey);
+    let existingReview = null;
+    if (idempotencyKey) {
+      existingReview = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?')
+        .bind(idempotencyKey, templateId).first();
+      if (existingReview && existingReview.rating === rating && existingReview.text === text) {
+        return json({ review: reviewFromRow(existingReview) });
+      }
+    }
     // The caller's own oldest unreviewed, unrefunded purchase of this
     // template — a real foreign key, not a label match. This SELECT alone
     // isn't the actual guard against double-reviewing (see the INSERT's own
@@ -2506,14 +2545,6 @@ async function handleProductReviews(request, db, route) {
     if (!purchase) {
       throw new HttpError('Only a shopper who has purchased this product, and not yet reviewed that purchase, can review it', 400);
     }
-    const rating = Number(input.rating);
-    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-      throw new HttpError('rating must be an integer from 1 to 5', 400);
-    }
-    const text = input.text === undefined || input.text === null || input.text === ''
-      ? null
-      : stringValue(input.text, 'text');
-    if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
     // One review per purchase (migrations/0100, replacing migrations/0059's
     // per-label guard) — the SELECT above is a point-in-time read, not a
     // consumption check, so without this the same purchase could otherwise
@@ -2531,7 +2562,7 @@ async function handleProductReviews(request, db, route) {
     // WHERE clause, closes that race the same way the double-review guard
     // already does. `changes === 0` means one of the two guards blocked
     // the insert; re-reading disambiguates which for a clearer error.
-    const reviewId = `review-${crypto.randomUUID()}`;
+    const reviewId = (idempotencyKey && !existingReview) ? idempotencyKey : `review-${crypto.randomUUID()}`;
     // #1975: records who actually wrote this review (sessionBuilder.user_id),
     // the same sign_posts.user_id pattern (#1830/migrations/0125) — lets the
     // PATCH/DELETE branches below check real ownership instead of having no
@@ -2577,6 +2608,11 @@ async function handleProductReviews(request, db, route) {
       }
     }
     const row = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ?').bind(reviewId).first();
+    // #2429: same re-SELECT race #2364 fixed for this resource's PATCH
+    // sibling, never applied to this POST/create branch -- a concurrent
+    // admin delete landing in the awaited gap since the INSERT above can
+    // remove the row before this re-SELECT runs.
+    if (!row) return json({ error: 'Review not found' }, 404);
     return json({ review: reviewFromRow(row) }, 201);
   }
 
@@ -2783,6 +2819,11 @@ async function handleProductFlags(request, db, route) {
     if (action !== 'approve' && action !== 'reject') {
       throw new HttpError("action must be 'approve' or 'reject'", 400);
     }
+    // #2018: lets an admin skip straight to the strike ladder's permanent-
+    // removal rung for a single severe violation (confirmed counterfeit,
+    // fraud, minor-safety), regardless of the seller's prior strike count --
+    // only meaningful on approve, silently ignored otherwise.
+    const severe = input.severe === true;
     const template = await db.prepare('SELECT template_id, seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     if (!template) return json({ error: 'Catalog template not found' }, 404);
     // Resolves every still-pending flag on this listing at once -- a flag is
@@ -2821,6 +2862,12 @@ async function handleProductFlags(request, db, route) {
           await fireNotification(db, owner.builder_id,
             'A product listing of yours was removed after an admin-confirmed counterfeit/policy-violation flag. A strike was added to your account.');
         }
+        // #2018: the strike ladder itself -- reads the just-incremented
+        // count fresh, so it always acts on the real post-increment total.
+        await applyStrikeLadderConsequence(db, {
+          sellerId: template.seller_id, ownerBuilderId: owner?.builder_id ?? null,
+          adminUserId: admin.user_id, severe, templateId,
+        });
       }
     } else {
       // Reject restores purchasability if auto-hide had already kicked in
@@ -2835,6 +2882,83 @@ async function handleProductFlags(request, db, route) {
   }
 
   return json({ error: 'Not found' }, 404);
+}
+
+// #2018 (sub-issue of #1212, owner-settled shape on #1212's own comment
+// thread, 2026-10-13): warning (1st violation) -> temporary suspension
+// (2nd violation, or 1st *severe* one) -> permanent removal (3rd
+// violation, or any single severe one, skipping the ladder entirely).
+// "Permanent" reuses #1201's own suspension tool at its maximum graceDays
+// (365) rather than a separate hard-delete mechanism -- #1201's own
+// resolution ruled out admin-initiated hard deletion outright, and #2033's
+// own auto-escalation (once it lands) is what actually turns an unlifted
+// suspension into a real deletion; this rung's job is only to start that
+// clock and make sure a later, lesser violation never pulls it backward.
+const STRIKE_LADDER_TEMPORARY_GRACE_DAYS = 7;
+const STRIKE_LADDER_PERMANENT_GRACE_DAYS = 365;
+
+async function applyStrikeLadderConsequence(db, { sellerId, ownerBuilderId, adminUserId, severe, templateId }) {
+  const seller = await db.prepare('SELECT user_id, strike_count FROM sellers WHERE seller_id = ?').bind(sellerId).first();
+  // No linked account to act on -- same "dangling seller" tolerance this
+  // file already extends elsewhere (e.g. handleSellerFeedbackDelete).
+  if (!seller || !seller.user_id) return;
+  if (!severe && seller.strike_count <= 1) {
+    if (ownerBuilderId) {
+      await fireNotification(db, ownerBuilderId,
+        'Warning: a counterfeit/policy-violation flag against one of your listings was confirmed by an admin. A repeat violation will result in a temporary account suspension.');
+    }
+    return;
+  }
+  const permanent = severe || seller.strike_count >= 3;
+  const graceDays = permanent ? STRIKE_LADDER_PERMANENT_GRACE_DAYS : STRIKE_LADDER_TEMPORARY_GRACE_DAYS;
+  const reason = permanent
+    ? `Strike ladder: permanent removal (${severe ? 'severe violation' : `strike ${seller.strike_count}`}) -- template ${templateId}`
+    : `Strike ladder: temporary suspension (strike ${seller.strike_count}) -- template ${templateId}`;
+  await applySuspensionLadderRung(db, { userId: seller.user_id, adminUserId, reason, graceDays });
+  if (ownerBuilderId) {
+    await fireNotification(db, ownerBuilderId, permanent
+      ? 'Your account has been suspended indefinitely after a confirmed counterfeit/policy violation. This suspension will not be lifted.'
+      : `Your account has been temporarily suspended for ${STRIKE_LADDER_TEMPORARY_GRACE_DAYS} days after a confirmed counterfeit/policy violation.`);
+  }
+}
+
+// Distinct from handleSuspendAccount's own plain insert-only path (which
+// must keep 409ing on an already-active suspension, per that endpoint's
+// existing contract) -- the strike ladder is the one caller that can
+// legitimately land on an account its own earlier rung already suspended
+// (e.g. the 2nd-violation 7-day suspension, followed later by a 3rd/severe
+// violation), and escalating the existing row forward -- never shortening
+// it -- is the correct behavior there, not a 409 or a second, conflicting
+// active row.
+async function applySuspensionLadderRung(db, { userId, adminUserId, reason, graceDays }) {
+  const gracePeriodEndsAt = new Date(Date.now() + graceDays * 24 * 60 * 60 * 1000).toISOString();
+  const suspensionId = `suspension-${crypto.randomUUID()}`;
+  const inserted = await db.prepare(`
+    INSERT INTO account_suspensions (suspension_id, user_id, admin_user_id, reason, grace_period_ends_at)
+    SELECT ?, ?, ?, ?, ?
+    WHERE NOT EXISTS (
+      SELECT 1 FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+    )
+  `).bind(suspensionId, userId, adminUserId, reason, gracePeriodEndsAt, userId).run();
+  if (inserted.meta.changes === 1) {
+    await adminActionLogStatement(db, adminUserId, 'suspend_account', 'user', userId, {
+      suspensionId, reason, gracePeriodEndsAt,
+    }).run();
+    return;
+  }
+  const active = await db.prepare(`
+    SELECT * FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+  `).bind(userId).first();
+  if (!active || active.grace_period_ends_at >= gracePeriodEndsAt) return;
+  const updated = await db.prepare(`
+    UPDATE account_suspensions SET grace_period_ends_at = ?
+    WHERE suspension_id = ? AND grace_period_ends_at < ?
+  `).bind(gracePeriodEndsAt, active.suspension_id, gracePeriodEndsAt).run();
+  if (updated.meta.changes === 1) {
+    await adminActionLogStatement(db, adminUserId, 'escalate_suspension', 'user', userId, {
+      suspensionId: active.suspension_id, reason, newGracePeriodEndsAt: gracePeriodEndsAt,
+    }).run();
+  }
 }
 
 async function handleProductFlagsList(request, db, url) {
@@ -3911,6 +4035,12 @@ function builderFromRow(row) {
     // -- a communication preference has no reason to leak through a
     // cross-account lookup either.
     notifySoldOutEmail: !!row.notify_sold_out_email,
+    // #2442: own-account-only, same reasoning as higglesBalanceCents above
+    // -- this balance (migrations/0127) was never surfaced anywhere in the
+    // response shape at all, so the Upload Model modal had nothing to read
+    // to show a builder how many free video-to-3D generations they have
+    // left before they actually attempt one.
+    videoGenerationCredits: row.video_generation_credits,
   };
 }
 
@@ -5066,6 +5196,13 @@ async function handleFriendships(request, db, route, url) {
     await fireNotification(db, recipientBuilderId,
       `${sessionBuilder.label} sent you a friend request.`);
     const row = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).first();
+    // #2469: a concurrent DELETE (the recipient declining the request we
+    // just notified them about, or either side's own self-delete cascade)
+    // can remove this row in the await gap since the INSERT -- a genuine
+    // 404, same race shape #2334/#2354/#2364/#2391/#2392/#2429/#2430
+    // already fixed elsewhere, not an uncaught friendshipFromRow(undefined)
+    // crash.
+    if (!row) return json({ error: 'Friendship not found' }, 404);
     const labelsById = await labelsByBuilderId(db, [recipientBuilderId]);
     const landletsById = await ownedLandletsByBuilderId(db, [recipientBuilderId]);
     return json({ friendship: friendshipFromRow(row, requesterBuilderId, labelsById, landletsById) }, 201);
@@ -5349,10 +5486,19 @@ async function handleDirectMessages(request, db, route, url) {
       WHERE b.builder_id = ?
     `).bind(recipientBuilderId).first();
     if (!recipient) throw new HttpError(`recipientBuilderId "${recipientBuilderId}" does not exist`, 400);
-    if (recipient.trust_tier !== 'id_verified') {
-      throw new HttpError('The recipient must be ID-verified to receive direct messages', 403, { idVerificationRequired: true });
-    }
+    // #2415: friendship must be checked before the recipient's trust_tier --
+    // trust_tier is never exposed through any public lookup (publicBuilderFromRow,
+    // #807), but checking it first let any id_verified builder probe an
+    // arbitrary stranger's verification status via the two 403s' distinct
+    // messages, with no friendship or consent from the target.
     await assertAcceptedFriendship(db, senderBuilderId, recipientBuilderId);
+    if (recipient.trust_tier !== 'id_verified') {
+      // #2414: no idVerificationRequired flag here -- unlike assertIdVerified's
+      // check of the caller's OWN tier above, there's nothing the caller's
+      // account can do about someone else's verification (docs/API.md's
+      // "Direct messages" section).
+      throw new HttpError('The recipient must be ID-verified to receive direct messages', 403);
+    }
     // #1719: a retry (network blip after this exact write already landed)
     // finds it here instead of delivering the same text twice — mirrors
     // writePurchaseRow's own idempotency check, keyed off message_id
@@ -5573,6 +5719,13 @@ async function handleBundles(request, db, route, url) {
       INSERT INTO bundles (bundle_id, builder_id, name, items_json, shared) VALUES (?, ?, ?, ?, ?)
     `).bind(bundleId, builderId, name, JSON.stringify(items), shared ? 1 : 0).run();
     const row = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(bundleId).first();
+    // #2469: a concurrent DELETE of this same bundle (the id is
+    // predictable from the idempotency key, so a same-owner retry/second
+    // tab can target it) or a self-delete cascade can remove this row in
+    // the await gap since the INSERT -- same race shape #2426 already
+    // fixed for this resource's own PATCH, not an uncaught
+    // bundleFromRow(undefined) crash.
+    if (!row) return json({ error: 'Bundle not found' }, 404);
     return json({ bundle: bundleFromRow(row) }, 201);
   }
 
@@ -5607,7 +5760,13 @@ async function handleBundles(request, db, route, url) {
       UPDATE bundles SET name = COALESCE(?, name), shared = COALESCE(?, shared), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE bundle_id = ?
     `).bind(name, shared, route[1]).run();
     if (result.meta.changes === 0) return json({ error: 'Bundle not found' }, 404);
+    // #2426: result.meta.changes === 0 only proves the UPDATE matched a row
+    // at the moment it ran -- a concurrent DELETE landing in the single
+    // await gap between that UPDATE committing and this re-SELECT removes
+    // the row anyway, so bundleFromRow(undefined) would otherwise throw a
+    // raw 500 instead of a clean 404. Same idiom as #2334/#2354/#2364.
     const updated = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(route[1]).first();
+    if (!updated) return json({ error: 'Bundle not found' }, 404);
     return json({ bundle: bundleFromRow(updated) });
   }
 
@@ -5788,6 +5947,10 @@ async function handleStartAuction(request, db, landletId) {
     throw new HttpError('This landlet already has an active auction', 409);
   }
   const row = await db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auctionId).first();
+  // #2427: a concurrent self-delete can remove this just-created, still-
+  // zero-bid auction (builderDeletionStatements) between the INSERT above
+  // and this re-SELECT, same idiom as #2334/#2354/#2364/#2391/#2392.
+  if (!row) throw new HttpError('This landlet no longer has an active auction — it may have been removed concurrently', 409);
   return json({ auction: await auctionFromRow(db, row) }, 201);
 }
 
@@ -6013,6 +6176,15 @@ async function handleLandletLevels(request, db, route) {
     }
     await recomputeLandCap(db, landlet.owner_builder_id);
     const row = await db.prepare('SELECT * FROM landlet_levels WHERE level_id = ?').bind(levelId).first();
+    // #2469: a concurrent removal of this exact (deterministically-indexed,
+    // outermost) level from a second tab, a builder self-delete cascade, a
+    // concurrent auction resolution (resolveAuction's own
+    // DELETE FROM landlet_levels), or an admin reassign-owner can remove
+    // this row in the await gap since the INSERT (or recomputeLandCap just
+    // above) -- a genuine race, not an uncaught levelFromRow(undefined)
+    // crash. Same idiom as #2334/#2354/#2364/#2391/#2392/#2429/#2430, 409
+    // to match this branch's own "changed -- please retry" message above.
+    if (!row) throw new HttpError('This landlet\'s levels changed — please retry', 409);
     return json({ level: levelFromRow(row) }, 201);
   }
 
@@ -6082,6 +6254,25 @@ async function handleLandletLevels(request, db, route) {
     if (deleted.meta.changes === 0) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
+    // #2470: minZ/maxZ above were computed from the pre-DELETE snapshot
+    // taken before the rate-limit check and the DELETE's own awaited
+    // round-trips — fine for the rate-limit-bucket decision that snapshot
+    // feeds (outOfRange above), but a concurrent level add in the *other*
+    // direction during that gap (e.g. this request removes the outermost
+    // "up" level while another tab adds a new "down" level) would still
+    // leave minZ/maxZ reflecting the old, now-wrong extent here, after the
+    // DELETE has actually committed. The outermost-level guard folded into
+    // the DELETE's own WHERE clause above only protects the direction being
+    // removed, so it doesn't catch this. Re-deriving the range from a fresh
+    // read of the now-committed landlet_levels table — same formula, same
+    // half-level-height slack — keeps the sweep below scoped to the real,
+    // live extent instead of a window that may have shifted out from under
+    // it.
+    const remainingAfterDelete = await db.prepare('SELECT level_index FROM landlet_levels WHERE landlet_id = ?')
+      .bind(landletId).all();
+    const freshRemainingIndices = remainingAfterDelete.results.map((row) => row.level_index);
+    const freshMinZ = Math.min(0, ...freshRemainingIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M;
+    const freshMaxZ = Math.max(0, ...freshRemainingIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M;
     // #522 (owner-confirmed, 2026-09-09): any instance left sitting in the
     // z-range this level was providing is removed from active shoppable
     // space rather than silently drifting out of bounds — nothing else
@@ -6111,7 +6302,7 @@ async function handleLandletLevels(request, db, route) {
     // earlier snapshot — closes that window down to this batch's own commit
     // latency.
     const freshOutOfRange = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)')
-      .bind(landletId, minZ, maxZ).all();
+      .bind(landletId, freshMinZ, freshMaxZ).all();
     const statements = [];
     if (freshOutOfRange.results.length > 0) {
       const savedLayoutId = `saved-layout-${crypto.randomUUID()}`;
@@ -6137,7 +6328,7 @@ async function handleLandletLevels(request, db, route) {
       }
     }
     statements.push(
-      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)').bind(landletId, minZ, maxZ),
+      db.prepare('DELETE FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)').bind(landletId, freshMinZ, freshMaxZ),
     );
     await db.batch(statements);
     await recomputeLandCap(db, landlet.owner_builder_id);
@@ -6441,12 +6632,25 @@ async function handleAuctionBids(request, db, route) {
     // at INSERT time and folds it into the same atomic statement as the
     // existing highest-bid guard, so this bid only actually lands if the
     // builder is still under cap the instant it's written.
+    // #2412: the two guards below (highest-bid, land-cap) were the only
+    // ones folded into this atomic write -- nothing re-checked that the
+    // auction itself was still active at INSERT time, so a concurrent
+    // resolution (resolveDueAuctions' sweep, another caller's /resolve,
+    // or just another GET triggering resolveAuctionIfDue) landing in the
+    // gap between the up-front check above and this INSERT could let a
+    // bid attach to an auction that has already ended. Folding the same
+    // live EXISTS check resolveAuction's own atomic status-flip guard
+    // uses closes that window the same way every other auction-racing
+    // write in this file already does.
     const inserted = await db.prepare(`
       INSERT INTO auction_bids (bid_id, auction_id, bidder_builder_id, amount_cents)
       SELECT ?, ?, ?, ?
-      WHERE NOT EXISTS (
-        SELECT 1 FROM auction_bids WHERE auction_id = ? AND amount_cents >= ?
+      WHERE EXISTS (
+        SELECT 1 FROM auctions WHERE auction_id = ? AND status = 'active'
       )
+        AND NOT EXISTS (
+          SELECT 1 FROM auction_bids WHERE auction_id = ? AND amount_cents >= ?
+        )
         AND (
           SELECT b.land_cap_m2 FROM builders b WHERE b.builder_id = ?
         ) + ? >= (
@@ -6464,10 +6668,14 @@ async function handleAuctionBids(request, db, route) {
             ), 0)
         )
     `).bind(
-      bidId, auctionId, builderId, amountCents, auctionId, amountCents,
+      bidId, auctionId, builderId, amountCents, auctionId, auctionId, amountCents,
       builderId, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2, auctionedLandlet.area_m2, builderId, builderId,
     ).run();
     if (inserted.meta.changes === 0) {
+      const currentAuction = await db.prepare('SELECT status FROM auctions WHERE auction_id = ?').bind(auctionId).first();
+      if (currentAuction.status !== 'active') {
+        throw new HttpError('This auction has already ended', 409);
+      }
       const currentHighest = await db.prepare(`
         SELECT amount_cents FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 1
       `).bind(auctionId).first();
@@ -7963,19 +8171,27 @@ async function handleStripeWebhook(request, env, db) {
   if (!env.STRIPE_WEBHOOK_SECRET) throw new HttpError('Stripe webhook is not configured on this server yet.', 503);
   const rawBody = await request.text();
   const signatureHeader = request.headers.get('stripe-signature') || '';
-  const signatureParts = Object.fromEntries(
-    signatureHeader.split(',').map((part) => part.split('=').map((piece) => piece.trim())),
-  );
-  if (!signatureParts.t || !signatureParts.v1) throw new HttpError('Invalid webhook signature', 401);
+  const signatureEntries = signatureHeader.split(',').map((part) => part.split('=').map((piece) => piece.trim()));
+  const timestamp = signatureEntries.find(([entryKey]) => entryKey === 't')?.[1];
+  // #2418: during a secret rotation Stripe keeps the old secret active for
+  // up to 24h and signs each event with BOTH secrets, sending every
+  // resulting v1 signature in the same header (Stripe's own "Verify
+  // manually" docs) -- collapsing to a single v1 value (this used to go
+  // through Object.fromEntries, which keeps only the last of any repeated
+  // key) silently discarded whichever signature wasn't the header's last
+  // v1 entry, rejecting a real event whenever that happened to be the one
+  // actually matching this server's current secret.
+  const v1Signatures = signatureEntries.filter(([entryKey]) => entryKey === 'v1').map(([, value]) => value);
+  if (!timestamp || v1Signatures.length === 0) throw new HttpError('Invalid webhook signature', 401);
   const key = await crypto.subtle.importKey(
     'raw', new TextEncoder().encode(env.STRIPE_WEBHOOK_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
   );
-  const signedPayload = `${signatureParts.t}.${rawBody}`;
+  const signedPayload = `${timestamp}.${rawBody}`;
   const expectedSignature = bytesToHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signedPayload))));
-  if (!timingSafeEqual(signatureParts.v1, expectedSignature)) {
+  if (!v1Signatures.some((signature) => timingSafeEqual(signature, expectedSignature))) {
     throw new HttpError('Invalid webhook signature', 401);
   }
-  if (Math.abs(Date.now() / 1000 - Number(signatureParts.t)) > STRIPE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS) {
+  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > STRIPE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS) {
     throw new HttpError('Invalid webhook signature', 401);
   }
   let event;
@@ -9167,11 +9383,13 @@ const CREDIT_ORB_COLLECT_RATE_LIMIT_MAX = 20;
 // calls. Reuses this file's only other avatar_presence-freshness idiom
 // (PRESENCE_STALE_AFTER_MS, #1767) rather than inventing a second one, and
 // a radius generous enough to tolerate that same staleness window's worth
-// of real movement at SHOP_RUN_SPEED_M_S (2.7m/s, ~27m) on top of the
-// client's own 1.5m collect radius -- the point of this check is requiring
-// *some* fresh, correctly-landletted presence at all (what the scripted
-// exploit has none of), not pixel-perfect anti-cheat precision.
-const CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M = 30;
+// of real movement at SHOP_RUN_SPEED_M_S (#2481: 4.4704m/s/10mph as of
+// #2444, ~45m -- was 2.7m/s/~27m when this constant was first set, see
+// #2481) on top of the client's own 1.5m collect radius -- the point of
+// this check is requiring *some* fresh, correctly-landletted presence at
+// all (what the scripted exploit has none of), not pixel-perfect
+// anti-cheat precision.
+const CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M = 50;
 
 // GET /api/credit-orbs (optionally ?landletId=... to scope to one landlet,
 // per #1994's own "or scoped by landlet" note) -- the frontend's read path
@@ -10927,6 +11145,12 @@ async function handleConfirmCard(request, env, db) {
       WHERE user_id = ?
     `).bind(user.user_id).run();
     const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+    // #2430: a concurrent account deletion (self-delete from another
+    // session, or escalateExpiredSuspensions' own cascade) landing in the
+    // await gap since the UPDATE above can remove this row before this
+    // re-SELECT runs -- same race shape #2334/#2354/#2364/#2391/#2392
+    // already fixed elsewhere, not an uncaught userFromRow(undefined) crash.
+    if (!updated) return json({ error: 'Account no longer exists' }, 404);
     return json({ user: userFromRow(updated) });
   }
   // #1072: this used to trust a client-supplied paymentMethodId directly,
@@ -10975,6 +11199,10 @@ async function handleConfirmCard(request, env, db) {
     throw new HttpError('Only credit cards are accepted for this step — debit and prepaid cards can\'t be used.', 400);
   }
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  // #2430: same concurrent-account-deletion race as handleConfirmCard's own
+  // re-SELECT above -- a concurrent delete landing in the await gap since
+  // the UPDATE can remove this row before this re-SELECT runs.
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(updated) });
 }
 
@@ -11009,6 +11237,12 @@ async function handleAgeAttest(request, db) {
     `).bind(new Date().toISOString(), user.user_id).run();
   }
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  // #2430: same concurrent-account-deletion race as handleConfirmCard's own
+  // re-SELECT above (self-delete from another session, or
+  // escalateExpiredSuspensions' own cascade) -- can remove this row in the
+  // await gap since the UPDATE (or, when already attested, since the
+  // requireCurrentUser read at the top of this handler).
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(updated) });
 }
 
@@ -11581,6 +11815,13 @@ async function handleChangeEmail(request, env, db) {
   if (result.meta.changes === 0) throw new HttpError('Email is already registered', 409);
   const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, email);
   const row = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+  // #2430: the UPDATE's own meta.changes check above only confirms it
+  // matched a row (and won the email-collision race) at the moment it ran
+  // -- a concurrent account deletion landing in the await gap since (the
+  // issueEmailVerification call above) can still remove the row before
+  // this re-SELECT runs, same race shape #2334/#2354/#2364/#2391/#2392
+  // already fixed elsewhere.
+  if (!row) return json({ error: 'Account no longer exists' }, 404);
   return json({ user: userFromRow(row), verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
 }
 
@@ -11654,6 +11895,12 @@ async function handleLogin(request, db, url) {
 
   const sessionToken = await createSession(db, row.user_id);
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(row.user_id).first();
+  // #2430: a concurrent account deletion (another session's own self-
+  // delete, or escalateExpiredSuspensions' own cascade) landing in the
+  // await gap since the UPDATE above (or createSession just before) can
+  // remove this row before this re-SELECT runs, same race shape
+  // #2334/#2354/#2364/#2391/#2392 already fixed elsewhere.
+  if (!updated) return json({ error: 'Account no longer exists' }, 404);
   return json(
     { user: userFromRow(updated) },
     200,
@@ -15126,6 +15373,12 @@ async function handleInstanceBackups(request, db, route) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
     const row = await db.prepare('SELECT * FROM placed_instance_backups WHERE backup_id = ?').bind(backupId).first();
+    // #2428: not found here means a concurrent DELETE of the hosting
+    // instance (migrations/0137's own ON DELETE CASCADE on instance_id)
+    // landed in the single await gap between the guarded INSERT above and
+    // this re-SELECT -- a genuine 404, same race shape #2334/#2392 already
+    // fixed elsewhere, not an uncaught backupFromRow(undefined) crash.
+    if (!row) return json({ error: 'Placed instance backup not found' }, 404);
     return json({ backup: backupFromRow(row) }, 201);
   }
 
@@ -15369,6 +15622,12 @@ async function handleSignPosts(request, db, route) {
       throw new HttpError('This placed instance is not marked as a community sign', 400);
     }
     const row = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ?').bind(postId).first();
+    // #2429: same re-SELECT race #2354 fixed for this resource's PATCH
+    // sibling, never applied to this POST/create branch -- a concurrent
+    // admin delete, or a concurrent PATCH unflagging is_community_sign (see
+    // #1327's own comment above), can remove the row before this re-SELECT
+    // runs.
+    if (!row) return json({ error: 'Post not found' }, 404);
     return json({ post: signPostFromRow(row) }, 201);
   }
 
@@ -15623,6 +15882,11 @@ async function handleCalendarEvents(request, db, route) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
     const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
+    // #2429: same re-SELECT race #2354 fixed for this resource's PATCH
+    // sibling, never applied to this POST/create branch -- a concurrent
+    // admin delete, or a concurrent PATCH unflagging is_community_calendar,
+    // can remove the row before this re-SELECT runs.
+    if (!row) return json({ error: 'Event not found' }, 404);
     return json({ event: calendarEventFromRow(row) }, 201);
   }
 
@@ -16373,7 +16637,14 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash),
   ];
-  if (builderId) {
+  // #2439: a free listing (price_cents 0, reachable since
+  // computePurchaseAmounts only rejects a null price, not a zero one)
+  // produces builderShareCents === 0 — crediting that is a no-op, but
+  // higgles_earnings_events.amount_cents has its own CHECK (amount_cents
+  // > 0) (migration 0093), so unconditionally inserting a zero-amount row
+  // turned what should be a clean $0 sale into an uncaught "CHECK
+  // constraint failed", surfacing as a generic 400 via databaseHttpError.
+  if (builderId && builderShareCents > 0) {
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(builderShareCents, builderId),
@@ -16541,7 +16812,14 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash),
   ];
-  if (builderId) {
+  // #2439: same zero-commission guard as handlePurchaseFinalize's own
+  // identical block above — a free listing (price_cents 0) makes
+  // builderShareCents 0, and crediting that is a no-op, but
+  // higgles_earnings_events.amount_cents' own CHECK (amount_cents > 0)
+  // (migration 0093) turned an unconditional insert of that zero-amount
+  // row into an uncaught "CHECK constraint failed" on an otherwise-clean
+  // $0 purchase.
+  if (builderId && builderShareCents > 0) {
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(builderShareCents, builderId),
@@ -17185,6 +17463,10 @@ async function handleSellerFeedbackCreate(request, env, purchaseId) {
       `"${authorLabel}" left ${rating}-star feedback on a purchase from you.`);
   }
   const row = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.feedback_id = ?`).bind(feedbackId).first();
+  // #2429: same re-SELECT race #2364 fixed for this resource's PATCH
+  // sibling, never applied to this POST/create branch -- a concurrent
+  // admin delete can remove the row before this re-SELECT runs.
+  if (!row) return json({ error: 'Feedback not found' }, 404);
   return json({ feedback: sellerFeedbackFromRow(row) }, 201);
 }
 
@@ -18221,11 +18503,17 @@ async function getInstancesById(db, instanceIds) {
 // 4xx. Checked only after `HttpError` in the top-level catch, so routes
 // with a more specific pre-check (assertReferenceExists above) keep their
 // own message instead of falling through to this generic one.
+// #2440: the three generic (non-ring-specific) messages below used to name
+// the underlying SQL constraint type directly ("UNIQUE constraint failed"
+// -> "Resource already exists", etc.) -- raw backend language the frontend
+// shows verbatim via `alert(err.message || ...)`. Reworded to plain,
+// in-app phrasing with the same meaning; the ring-specific messages above
+// were already written this way and are left unchanged.
 function databaseHttpError(error) {
   const message = errorMessages(error);
 
   if (message.includes('UNIQUE constraint failed')) {
-    return new HttpError('Resource already exists', 409);
+    return new HttpError('That already exists.', 409);
   }
   if (message.includes('generated ring radial overlap')) {
     return new HttpError('Generated ring would overlap existing generated rings', 409);
@@ -18240,10 +18528,10 @@ function databaseHttpError(error) {
     return new HttpError('Generated ring candidates cannot be changed individually', 409);
   }
   if (message.includes('FOREIGN KEY constraint failed')) {
-    return new HttpError('Referenced resource does not exist or is still in use', 409);
+    return new HttpError("That didn't go through — something it depends on is missing, or something else still depends on it.", 409);
   }
   if (message.includes('CHECK constraint failed') || message.includes('NOT NULL constraint failed')) {
-    return new HttpError('Request violates a database constraint', 400);
+    return new HttpError('That request has an invalid or missing value — please check the details and try again.', 400);
   }
 
   return null;
@@ -18379,6 +18667,47 @@ function assertValidExtensible(metadata, dimensions) {
       throw new HttpError(`metadata.extensible.${axis}.minM must be less than this template's own ${dimensionKey}`, 400);
     }
   }
+}
+
+// docs/SPEC.md §2's context-aware idle state machine ("sit, lean, stand") --
+// only "stand" is built today (src/main.js's updateShopAvatarIdle); #2476
+// (sub-issue of the #2475 tracking issue) adds the data model a later
+// targeting/pose system needs: where on a marked product an avatar sits or
+// leans, and which way it faces while doing so. Coordinates are in the
+// template's own local, un-rotated model space -- the same centered-at-
+// origin space createMeshForInstance's BoxGeometry/model loading already
+// use (x/y span +/- half the template's own width/depth, z spans 0 to its
+// own height) -- so a later targeting system combines this with a placed
+// instance's own x_m/y_m/z_m/rotation_z_rad to get a world-space target,
+// the same way extensible's minM above is expressed in the template's own
+// space rather than any one instance's.
+function assertValidInteractionTarget(target, dimensions, key) {
+  if (typeof target !== 'object' || target === null || Array.isArray(target)) {
+    throw new HttpError(`metadata.${key} must be an object`, 400);
+  }
+  const { offsetXM, offsetYM, heightM, facingRad } = target;
+  if (!Number.isFinite(offsetXM) || Math.abs(offsetXM) > dimensions.width / 2) {
+    throw new HttpError(`metadata.${key}.offsetXM must be a number within +/- half this template's own width`, 400);
+  }
+  if (!Number.isFinite(offsetYM) || Math.abs(offsetYM) > dimensions.depth / 2) {
+    throw new HttpError(`metadata.${key}.offsetYM must be a number within +/- half this template's own depth`, 400);
+  }
+  if (!Number.isFinite(heightM) || heightM < 0 || heightM > dimensions.height) {
+    throw new HttpError(`metadata.${key}.heightM must be a number between 0 and this template's own height`, 400);
+  }
+  if (!Number.isFinite(facingRad)) {
+    throw new HttpError(`metadata.${key}.facingRad must be a finite number`, 400);
+  }
+}
+
+function assertValidSitTarget(metadata, dimensions) {
+  if (metadata.sitTarget === undefined) return;
+  assertValidInteractionTarget(metadata.sitTarget, dimensions, 'sitTarget');
+}
+
+function assertValidLeanTarget(metadata, dimensions) {
+  if (metadata.leanTarget === undefined) return;
+  assertValidInteractionTarget(metadata.leanTarget, dimensions, 'leanTarget');
 }
 
 // #327: decodes and size-caps the flat PNG thumbnail POST /api/catalog/
@@ -18538,6 +18867,8 @@ function validateTemplate(input, fallbackId) {
   assertValidNoReturns(template.metadata);
   assertValidDomesticOnly(template.metadata);
   assertValidExtensible(template.metadata, template.dimensions);
+  assertValidSitTarget(template.metadata, template.dimensions);
+  assertValidLeanTarget(template.metadata, template.dimensions);
   return template;
 }
 

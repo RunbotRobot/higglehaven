@@ -532,6 +532,32 @@
       #shop-credit-orb-toast.visible {
         opacity: 1;
       }
+      /* #2447: unlike #shop-credit-orb-toast just above (a one-shot,
+         auto-hiding confirmation), this stays up for as long as collection
+         keeps failing without a real server response -- "offline", not a
+         momentary blip -- and clears the moment a request succeeds again,
+         so it's shown/hidden directly rather than on an auto-hide timer.
+         Stacked one slot above the toast per that comment's own stacking
+         idiom, so a success toast firing right as connectivity returns
+         doesn't collide with this notice fading out. */
+      #shop-credit-orb-offline-notice {
+        position: fixed;
+        z-index: 16;
+        bottom: 330px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgb(var(--pill-rgb) / 0.9);
+        padding: 8px 16px;
+        border-radius: 8px;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.4s;
+      }
+      #shop-credit-orb-offline-notice.visible {
+        opacity: 1;
+      }
       /* Same treatment as #shop-sign-hint just above (see its own comment),
          stacked one slot higher so both can show at once near an
          overlapping sign+calendar without colliding. */
@@ -1752,6 +1778,12 @@
         touch-action: none;
       }
       #upload-animations-detected {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      /* #2442: the free-generations-remaining line above the video picker
+         -- same small/muted treatment as #upload-animations-detected. */
+      #upload-video-credits {
         font-size: 12px;
         color: rgb(var(--ink-rgb) / 0.65);
       }
@@ -4170,6 +4202,7 @@
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <div id="shop-credit-orb-toast" role="status" aria-live="polite">You collected a free model-generation credit!</div>
+    <div id="shop-credit-orb-offline-notice" role="status" aria-live="polite">Can't collect orbs right now — you appear to be offline.</div>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <!-- #506/N45 history (see this button's own CSS comment below for the
@@ -4373,6 +4406,7 @@
             &#128249; Or generate a model from a video instead
           </button>
           <div id="upload-video-section" hidden>
+            <div id="upload-video-credits"></div>
             <div class="field-with-tooltip">
               <label id="upload-video-label">
                 Short video of the object
