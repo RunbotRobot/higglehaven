@@ -212,6 +212,64 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     expect(allowedPurchase.response.status).toBe(201);
   });
 
+  // #2467: reject's own UPDATE used to clear flagged_hidden_at unconditionally
+  // -- including when an *earlier* flag batch on the same listing had already
+  // been approved (a permanent hide, per the approve branch's own comment).
+  // A second, unrelated flag reaching the queue and getting rejected would
+  // silently un-hide a confirmed-counterfeit listing with no record it had
+  // ever been incorrectly restored.
+  it('reject on a fresh flag does not undo an earlier approve\'s permanent hide', async () => {
+    const seller = await signupSeller('flag-reapprove-seller');
+    const builder = await signupBuilder('flag-reapprove-owner');
+    await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ landletId: 'flag-reapprove-landlet', name: 'Flag reapprove landlet', areaM2: 1000, status: 'greenbelt' }),
+    }));
+    await api('/landlets/flag-reapprove-landlet/claim', builder.session({ method: 'POST' }));
+    await createTemplate('flag-reapprove-template', seller);
+    await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId: 'flag-reapprove-instance', landletId: 'flag-reapprove-landlet', templateId: 'flag-reapprove-template', x: 0, y: 0 }),
+    }));
+
+    const firstFlaggers = await Promise.all([1, 2].map((n) => signupBuilder(`flag-reapprove-flagger-${n}`)));
+    for (const flagger of firstFlaggers) {
+      await api('/catalog/flag-reapprove-template/flags', flagger.session({ method: 'POST', body: JSON.stringify({}) }));
+    }
+    const approved = await api('/catalog/flag-reapprove-template/flags/resolve', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ action: 'approve' }),
+    }));
+    expect(approved.response.status).toBe(200);
+    expect(approved.body.resolvedStatus).toBe('approved');
+
+    const hiddenAfterApprove = await api('/instances/flag-reapprove-instance/purchase', builder.session({ method: 'POST' }));
+    expect(hiddenAfterApprove.response.status).toBe(400);
+
+    // A new, unrelated flag reaches the queue after the listing is already
+    // permanently hidden -- the POST branch has no already-hidden guard, so
+    // this succeeds and puts the listing back in the pending-review queue.
+    const laterFlagger = await signupBuilder('flag-reapprove-later-flagger');
+    const laterFlag = await api('/catalog/flag-reapprove-template/flags', laterFlagger.session({
+      method: 'POST', body: JSON.stringify({ reason: 'unrelated, weak report' }),
+    }));
+    expect(laterFlag.response.status).toBe(201);
+
+    const rejected = await api('/catalog/flag-reapprove-template/flags/resolve', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ action: 'reject' }),
+    }));
+    expect(rejected.response.status).toBe(200);
+    expect(rejected.body.resolvedStatus).toBe('rejected');
+    expect(rejected.body.flagsResolved).toBe(1); // only the later, still-pending flag -- the approved pair is untouched
+
+    const fetched = await api('/catalog/flag-reapprove-template');
+    expect(fetched.body.template.flaggedHiddenAt).toBeTruthy();
+
+    const stillBlockedPurchase = await api('/instances/flag-reapprove-instance/purchase', builder.session({ method: 'POST' }));
+    expect(stillBlockedPurchase.response.status).toBe(400);
+  });
+
   it('lists pending-flag listings for an admin, grouped per template, 403s a non-admin', async () => {
     await createTemplate('flag-list-template');
     const flagger = await signupBuilder('flag-list-flagger');
