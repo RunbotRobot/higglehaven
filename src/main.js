@@ -14912,6 +14912,14 @@ let shopIdleHeadCurrentRad = 0;
 let shopIdleHeadTargetRad = 0;
 let shopIdleHeadTimerS = 0;
 let shopIdleHeadIntervalS = THREE.MathUtils.randFloat(SHOP_IDLE_HEAD_TURN_INTERVAL_MIN_S, SHOP_IDLE_HEAD_TURN_INTERVAL_MAX_S);
+// #2477 (sub-issue of #2475): the sit/lean target selected once per idle
+// episode, the instant idle sway begins -- null until then, and reset to
+// null the moment real movement resumes (re-armed for the next idle
+// episode). Consumed by the (not yet built) sit/lean pose sub-issues;
+// today's existing stand sway below runs unconditionally regardless of
+// this value, matching #2477's own "fall back to stand sway unchanged"
+// scope -- this sub-issue is selection only, not the pose itself.
+let shopIdleInteractionTarget = null;
 
 // Flight state (docs/SPEC.md §2) — see updateShopFlight/toggleShopFlight.
 // 'grounded' | 'takingOff' | 'flying' | 'landing'. Toggling mid-transition
@@ -15024,9 +15032,18 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     shopIdleElapsedS = 0;
     shopIdleBlend = 0;
     shopAfkBlend = 0;
+    shopIdleInteractionTarget = null; // re-arm (#2477) for the next idle episode
   } else {
+    // #2477: fires exactly once per idle episode, the instant elapsed time
+    // first crosses SHOP_IDLE_DELAY_S -- not every frame afterward, since
+    // shopIdleElapsedS keeps growing past that threshold for as long as
+    // the avatar stays idle.
+    const wasIdle = shopIdleElapsedS >= SHOP_IDLE_DELAY_S;
     shopIdleElapsedS += dt;
     const idleTarget = shopIdleElapsedS >= SHOP_IDLE_DELAY_S ? 1 : 0;
+    if (!wasIdle && idleTarget === 1) {
+      shopIdleInteractionTarget = findShopIdleInteractionTarget(shopAvatarPosition.x, shopAvatarPosition.y);
+    }
     shopIdleBlend += (idleTarget - shopIdleBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
     const afkTarget = shopIdleElapsedS >= SHOP_AFK_DELAY_S ? 1 : 0;
     shopAfkBlend += (afkTarget - shopAfkBlend) * Math.min(1, SHOP_AFK_BLEND_PER_S * dt);
@@ -15636,6 +15653,71 @@ function shopLandingObstructionTopZ(x, y) {
   }
   return topZ;
 }
+
+// #2477 (sub-issue of #2475): nearest valid sit/lean target (docs/API.md's
+// "Sit/lean interaction targets (#2476)") within range of (x, y), for
+// updateShopAvatarIdle below to select once an idle episode begins. Scope
+// is selection only -- the sit/lean poses that would actually consume this
+// are separate, later sub-issues; returning a target here doesn't change
+// any currently-visible avatar behavior yet.
+//
+// offsetXM/offsetYM/facingRad are stored in the template's own local,
+// un-rotated model space (docs/API.md's own wording) -- the same centered-
+// at-origin space shopPositionBlocked/shopLandingObstructionTopZ above
+// already read mesh.position/meshDimensions in, so the offset has to be
+// rotated by the placed instance's own mesh.rotation.z before adding it to
+// the instance's world position, and heightM (0..height, ground-up in that
+// same local space) only ever needs mesh.position.z - height/2 (itemZMin,
+// same term shopLandingObstructionTopZ's own itemZMax uses the + half of)
+// added to it, not any rotation.
+//
+// Prefers sit over lean when both are in range (sitting reads as a
+// stronger "resting" signal than leaning), then nearest within whichever
+// kind — simple nearest-wins, no pathfinding, matching #2044's own
+// "keep it simple" precedent for the sibling landing-spot search above.
+const SHOP_IDLE_INTERACTION_SEARCH_RADIUS_M = 3;
+function findShopIdleInteractionTarget(x, y) {
+  let best = null;
+  for (const entry of shopLandlets.values()) {
+    if (!entry.loaded) continue;
+    for (const mesh of entry.objects) {
+      const metadata = mesh.userData.template?.metadata;
+      if (!metadata) continue;
+      for (const [metadataKey, kind] of [['sitTarget', 'sit'], ['leanTarget', 'lean']]) {
+        const target = metadata[metadataKey];
+        if (!target) continue;
+        const cos = Math.cos(mesh.rotation.z);
+        const sin = Math.sin(mesh.rotation.z);
+        const worldX = entry.group.position.x + mesh.position.x + (target.offsetXM * cos - target.offsetYM * sin);
+        const worldY = entry.group.position.y + mesh.position.y + (target.offsetXM * sin + target.offsetYM * cos);
+        const distance = Math.hypot(worldX - x, worldY - y);
+        if (distance > SHOP_IDLE_INTERACTION_SEARCH_RADIUS_M) continue;
+        if (best && (best.kind === 'sit' && kind === 'lean')) continue; // sit already found elsewhere — lean never outranks it
+        if (best && best.kind === kind && best.distance <= distance) continue; // already have a closer one of this same kind
+        const { height } = meshDimensions(mesh);
+        best = {
+          kind,
+          instanceId: mesh.userData.instanceId,
+          worldX,
+          worldY,
+          worldZ: mesh.position.z - height / 2 + target.heightM,
+          worldFacingRad: mesh.rotation.z + target.facingRad,
+          distance,
+        };
+      }
+    }
+  }
+  return best;
+}
+// #2477: e2e-only hook, same convention as window.__testNearestOpenLandingSpot
+// above -- lets a test drive the real search function directly against
+// whatever placed items/metadata a test has actually set up, without
+// needing to wait out a real idle episode.
+window.__testFindShopIdleInteractionTarget = (x, y) => findShopIdleInteractionTarget(x, y);
+// Read-only: the target actually cached for the avatar's *current* idle
+// episode (null if not idle, or idle with nothing in range) -- see
+// shopIdleInteractionTarget's own declaration above.
+window.__testShopIdleInteractionTarget = () => shopIdleInteractionTarget;
 
 // #2044: the spec line SHOP_FLIGHT_TAKEOFF_DURATION_S's own comment above
 // flags as deferred ("occupied landing spots offset to nearest open
