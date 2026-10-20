@@ -1924,6 +1924,14 @@
     return '$' + (cents / 100).toFixed(2);
   }
 
+  // #2402: endsAt is a raw ISO-8601 instant (worker/index.js's
+  // activeAuctionConflict) -- format it the same way #2352's
+  // handleSuspendAccount fix formats its own *EndsAt field, rather than
+  // interpolating the raw instant.
+  function formatEndsAt(isoString) {
+    return new Date(isoString).toLocaleString();
+  }
+
   // #1822: landlet override panel -- look up a landlet by id, then
   // force-complete a stuck `generating` landlet or reassign a `claimed`
   // one's owner by hand. The judgment calls this needed (land cap is a
@@ -2059,7 +2067,7 @@
           const a = error.activeAuction;
           auctionDetailsEl.textContent = 'Active auction ' + a.auctionId + ': starting bid '
             + formatCents(a.startingBidCents) + ', high bid ' + (a.highBidCents == null ? 'none yet' : formatCents(a.highBidCents))
-            + ', ' + a.bidderCount + ' bidder(s), ends ' + a.endsAt + '.';
+            + ', ' + a.bidderCount + ' bidder(s), ends ' + formatEndsAt(a.endsAt) + '.';
           auctionConflictWrap.hidden = false;
           return;
         }

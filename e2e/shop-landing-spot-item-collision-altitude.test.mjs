@@ -165,7 +165,15 @@ const othersSeenByA = await pageA.evaluate(() => window.__shopOtherAvatars);
 console.log('B as seen by A right before landing (should be a real {x, y, ...} at bx/by):', othersSeenByA);
 
 await pageA.click('#shop-fly-btn'); // starts landing from A's current (bx, by)
-await pageA.waitForTimeout(2500); // past SHOP_FLIGHT_LANDING_DURATION_S (2s) -- now 'grounded'
+// #2423: a fixed real-time wait here (the convention this test originally
+// copied from e2e/shop-landing-spot-avatar-collision.test.mjs) assumes
+// SHOP_FLIGHT_LANDING_DURATION_S (2s) of *simulated* flight time reliably
+// elapses within a couple seconds of *real* time -- not guaranteed under a
+// CPU-starved CI run, since each frame's dt is clamped to 0.1s
+// (updateShopMovement's own comment) and a slow/sparse RAF loop can leave
+// simulated time lagging well behind real time. Poll the real flight state
+// instead of guessing a bigger number.
+await pageA.waitForFunction(() => window.__testShopFlightState() === 'grounded', { timeout: 15000 });
 
 const finalPosition = await pageA.evaluate(() => window.__testShopAvatarPosition());
 

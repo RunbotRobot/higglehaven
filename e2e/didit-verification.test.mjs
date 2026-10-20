@@ -8,6 +8,8 @@ import {
   launchPage, finish, waitForText, openAccountMenu, clearVerifyModalIfShown,
 } from './helpers.mjs';
 
+const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
+
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Didit Suite' });
 const email = `didit-suite-${Date.now()}@example.com`;
 
@@ -61,12 +63,40 @@ console.log('status after clicking Verify with Government ID (should mention "no
 // connectivity-indicator.test.mjs's own comment documents filtering out.
 const unexpectedErrors = errors.filter((e) => !e.includes('Failed to load resource'));
 
+// #2405: the ?diditReturn=1 return leg assumed the browser landing on it
+// still carries the session that started verification -- not guaranteed,
+// since Didit's hosted flow supports a "continue on your phone" handoff.
+// A fresh, cookie-free context (not the signed-in `page` above) stands in
+// for that case: no session, landing directly on the return URL.
+const returnContext = await browser.newContext({ viewport: { width: 420, height: 860 } });
+const returnPage = await returnContext.newPage();
+const returnErrors = [];
+returnPage.on('pageerror', (err) => returnErrors.push(err.message));
+returnPage.on('console', (msg) => { if (msg.type() === 'error') returnErrors.push(msg.text()); });
+let diditStatusRequestedWithoutSession = false;
+returnPage.on('request', (req) => {
+  if (req.url().includes('/api/auth/didit-verification-status')) diditStatusRequestedWithoutSession = true;
+});
+await returnPage.goto(`${BASE_URL}/?diditReturn=1`, { waitUntil: 'networkidle' });
+await returnPage.waitForSelector('#auth-modal.visible', { timeout: 8000 });
+const loggedOutFormVisible = await returnPage.locator('#auth-logged-out').isVisible();
+console.log('login form shown for a session-less ?diditReturn=1 landing (should be true):', loggedOutFormVisible);
+const returnStatusText = await returnPage.textContent('#auth-status');
+console.log('auth-status text for a session-less return (should ask the user to log in, not say "Checking..."):', returnStatusText.trim());
+console.log('a poll of the session-gated status endpoint was skipped entirely (should be true):', !diditStatusRequestedWithoutSession);
+await returnContext.close();
+
 const pass = trustTierBeforeVerify.includes('Credit-card verified') &&
   verifyBtnVisible &&
   statusAfterClick.includes('not configured') &&
-  unexpectedErrors.length === 0;
+  loggedOutFormVisible &&
+  returnStatusText.includes('Log in') &&
+  !returnStatusText.includes('Checking verification status') &&
+  !diditStatusRequestedWithoutSession &&
+  unexpectedErrors.length === 0 &&
+  returnErrors.length === 0;
 await finish(browser, {
   pass,
-  label: 'Didit government-ID verification (#589): account panel shows trust-tier status + Verify button, which surfaces the unconfigured-Didit error correctly',
-  errors,
+  label: 'Didit government-ID verification (#589): account panel shows trust-tier status + Verify button, which surfaces the unconfigured-Didit error correctly; a session-less ?diditReturn=1 landing prompts login instead of polling forever (#2405)',
+  errors: [...errors, ...returnErrors],
 });

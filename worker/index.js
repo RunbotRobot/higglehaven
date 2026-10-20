@@ -5349,10 +5349,19 @@ async function handleDirectMessages(request, db, route, url) {
       WHERE b.builder_id = ?
     `).bind(recipientBuilderId).first();
     if (!recipient) throw new HttpError(`recipientBuilderId "${recipientBuilderId}" does not exist`, 400);
-    if (recipient.trust_tier !== 'id_verified') {
-      throw new HttpError('The recipient must be ID-verified to receive direct messages', 403, { idVerificationRequired: true });
-    }
+    // #2415: friendship must be checked before the recipient's trust_tier --
+    // trust_tier is never exposed through any public lookup (publicBuilderFromRow,
+    // #807), but checking it first let any id_verified builder probe an
+    // arbitrary stranger's verification status via the two 403s' distinct
+    // messages, with no friendship or consent from the target.
     await assertAcceptedFriendship(db, senderBuilderId, recipientBuilderId);
+    if (recipient.trust_tier !== 'id_verified') {
+      // #2414: no idVerificationRequired flag here -- unlike assertIdVerified's
+      // check of the caller's OWN tier above, there's nothing the caller's
+      // account can do about someone else's verification (docs/API.md's
+      // "Direct messages" section).
+      throw new HttpError('The recipient must be ID-verified to receive direct messages', 403);
+    }
     // #1719: a retry (network blip after this exact write already landed)
     // finds it here instead of delivering the same text twice — mirrors
     // writePurchaseRow's own idempotency check, keyed off message_id
@@ -7980,19 +7989,27 @@ async function handleStripeWebhook(request, env, db) {
   if (!env.STRIPE_WEBHOOK_SECRET) throw new HttpError('Stripe webhook is not configured on this server yet.', 503);
   const rawBody = await request.text();
   const signatureHeader = request.headers.get('stripe-signature') || '';
-  const signatureParts = Object.fromEntries(
-    signatureHeader.split(',').map((part) => part.split('=').map((piece) => piece.trim())),
-  );
-  if (!signatureParts.t || !signatureParts.v1) throw new HttpError('Invalid webhook signature', 401);
+  const signatureEntries = signatureHeader.split(',').map((part) => part.split('=').map((piece) => piece.trim()));
+  const timestamp = signatureEntries.find(([entryKey]) => entryKey === 't')?.[1];
+  // #2418: during a secret rotation Stripe keeps the old secret active for
+  // up to 24h and signs each event with BOTH secrets, sending every
+  // resulting v1 signature in the same header (Stripe's own "Verify
+  // manually" docs) -- collapsing to a single v1 value (this used to go
+  // through Object.fromEntries, which keeps only the last of any repeated
+  // key) silently discarded whichever signature wasn't the header's last
+  // v1 entry, rejecting a real event whenever that happened to be the one
+  // actually matching this server's current secret.
+  const v1Signatures = signatureEntries.filter(([entryKey]) => entryKey === 'v1').map(([, value]) => value);
+  if (!timestamp || v1Signatures.length === 0) throw new HttpError('Invalid webhook signature', 401);
   const key = await crypto.subtle.importKey(
     'raw', new TextEncoder().encode(env.STRIPE_WEBHOOK_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
   );
-  const signedPayload = `${signatureParts.t}.${rawBody}`;
+  const signedPayload = `${timestamp}.${rawBody}`;
   const expectedSignature = bytesToHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signedPayload))));
-  if (!timingSafeEqual(signatureParts.v1, expectedSignature)) {
+  if (!v1Signatures.some((signature) => timingSafeEqual(signature, expectedSignature))) {
     throw new HttpError('Invalid webhook signature', 401);
   }
-  if (Math.abs(Date.now() / 1000 - Number(signatureParts.t)) > STRIPE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS) {
+  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > STRIPE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS) {
     throw new HttpError('Invalid webhook signature', 401);
   }
   let event;
