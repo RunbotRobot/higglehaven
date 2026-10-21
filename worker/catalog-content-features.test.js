@@ -6,7 +6,7 @@ import {
   cosineSimilarity, writePurchaseRow, escapeHtml,
 } from './index.js';
 import {
-  api, signupBuilder, signupSeller, signupAdmin, glbFile,
+  api, signupBuilder, signupSeller, signupAdmin, grantAdminTo, glbFile,
 } from './test-helpers.js';
 
 let adminSession;
@@ -1454,7 +1454,7 @@ describe('Finite stock tracking (#1948)', () => {
   });
 
   it('never touches stock_quantity for the default (unlimited) template', async () => {
-    const builder = await signupBuilder('stock-unlimited-builder');
+    const builder = await signupAdmin('stock-unlimited-builder'); // #653: simulated path is admin-only
     await createLandletAndClaim('stock-unlimited-landlet', builder);
     await createTemplateWithStock('stock-unlimited-template');
     await placeInstance('stock-unlimited-instance', 'stock-unlimited-landlet', 'stock-unlimited-template', builder);
@@ -1468,7 +1468,7 @@ describe('Finite stock tracking (#1948)', () => {
   });
 
   it('decrements remaining stock by the purchased quantity without exhausting it', async () => {
-    const builder = await signupBuilder('stock-decrement-builder');
+    const builder = await signupAdmin('stock-decrement-builder'); // #653: simulated path is admin-only
     await createLandletAndClaim('stock-decrement-landlet', builder);
     await createTemplateWithStock('stock-decrement-template', { stockQuantity: 5 });
     await placeInstance('stock-decrement-instance', 'stock-decrement-landlet', 'stock-decrement-template', builder);
@@ -1503,7 +1503,7 @@ describe('Finite stock tracking (#1948)', () => {
   // the last unit: a request for more than what remains must be rejected
   // without partially decrementing.
   it('atomically rejects an over-quantity purchase without touching remaining stock', async () => {
-    const builder = await signupBuilder('stock-overbuy-builder');
+    const builder = await signupAdmin('stock-overbuy-builder'); // #653: simulated path is admin-only (atomic guard runs past the gate)
     await createLandletAndClaim('stock-overbuy-landlet', builder);
     await createTemplateWithStock('stock-overbuy-template', { stockQuantity: 2 });
     await placeInstance('stock-overbuy-instance', 'stock-overbuy-landlet', 'stock-overbuy-template', builder);
@@ -1521,6 +1521,7 @@ describe('Finite stock tracking (#1948)', () => {
 
   it('on hitting exactly zero, removes every placed instance of the template and notifies each landlet owner', async () => {
     const ownerA = await signupBuilder('stock-soldout-owner-a');
+    await grantAdminTo(ownerA); // #653: simulated path is admin-only
     const ownerB = await signupBuilder('stock-soldout-owner-b');
     await createLandletAndClaim('stock-soldout-landlet-a', ownerA);
     await createLandletAndClaim('stock-soldout-landlet-b', ownerB);
@@ -1546,7 +1547,7 @@ describe('Finite stock tracking (#1948)', () => {
   });
 
   it('allows purchasing again after restocking a sold-out template via PATCH', async () => {
-    const builder = await signupBuilder('stock-restock-builder');
+    const builder = await signupAdmin('stock-restock-builder'); // #653: simulated path is admin-only
     await createLandletAndClaim('stock-restock-landlet', builder);
     await createTemplateWithStock('stock-restock-template', { stockQuantity: 1 });
     await placeInstance('stock-restock-instance-1', 'stock-restock-landlet', 'stock-restock-template', builder);
@@ -1618,6 +1619,7 @@ describe('Finite stock tracking (#1948)', () => {
   describe('Sold-out markers (#2068)', () => {
     it('creates one marker per removed instance, capturing its own landlet/position/template snapshot', async () => {
       const ownerA = await signupBuilder('marker-soldout-owner-a');
+      await grantAdminTo(ownerA); // #653: simulated path is admin-only
       const ownerB = await signupBuilder('marker-soldout-owner-b');
       await createLandletAndClaim('marker-soldout-landlet-a', ownerA);
       await createLandletAndClaim('marker-soldout-landlet-b', ownerB);
@@ -1649,7 +1651,7 @@ describe('Finite stock tracking (#1948)', () => {
     });
 
     it('scopes the list to the given landlet only, requires its own owner\'s session, and 404s a nonexistent landlet', async () => {
-      const owner = await signupBuilder('marker-list-owner');
+      const owner = await signupAdmin('marker-list-owner'); // #653: simulated path is admin-only
       const stranger = await signupBuilder('marker-list-stranger');
       await createLandletAndClaim('marker-list-landlet', owner);
       await createTemplateWithStock('marker-list-template', { stockQuantity: 1 });
@@ -1671,7 +1673,7 @@ describe('Finite stock tracking (#1948)', () => {
     });
 
     it('dismisses a marker so it no longer appears in the list, 404ing a repeat dismiss or a marker from a different landlet', async () => {
-      const owner = await signupBuilder('marker-dismiss-owner');
+      const owner = await signupAdmin('marker-dismiss-owner'); // #653: simulated path is admin-only
       const stranger = await signupBuilder('marker-dismiss-stranger');
       await createLandletAndClaim('marker-dismiss-landlet', owner);
       // POST .../claim enforces a hard one-claimed-landlet-per-builder
@@ -1720,7 +1722,7 @@ describe('Finite stock tracking (#1948)', () => {
     });
 
     it('rate-limits repeated dismiss attempts from the same builder', async () => {
-      const owner = await signupBuilder('marker-dismiss-rate-limit-owner');
+      const owner = await signupAdmin('marker-dismiss-rate-limit-owner'); // #653: simulated path is admin-only
       await createLandletAndClaim('marker-dismiss-rate-limit-landlet', owner);
       await createTemplateWithStock('marker-dismiss-rate-limit-template', { stockQuantity: 20 });
       for (let i = 0; i < 20; i++) {
@@ -1753,7 +1755,7 @@ describe('Finite stock tracking (#1948)', () => {
     // race tests, hijacking env.DB.prepare to transfer ownership away
     // right as checkRateLimit's own INSERT INTO rate_limit_events runs.
     it('rejects a dismiss on a landlet that was transferred to a new owner mid-request', async () => {
-      const owner = await signupBuilder('marker-dismiss-race-owner');
+      const owner = await signupAdmin('marker-dismiss-race-owner'); // #653: simulated path is admin-only
       const newOwner = await signupBuilder('marker-dismiss-race-new-owner');
       await createLandletAndClaim('marker-dismiss-race-landlet', owner);
       await createTemplateWithStock('marker-dismiss-race-template', { stockQuantity: 1 });
@@ -1788,7 +1790,7 @@ describe('Finite stock tracking (#1948)', () => {
     });
 
     it('does not remove or resurrect markers when the sold-out template is later restocked', async () => {
-      const owner = await signupBuilder('marker-restock-owner');
+      const owner = await signupAdmin('marker-restock-owner'); // #653: simulated path is admin-only
       await createLandletAndClaim('marker-restock-landlet', owner);
       await createTemplateWithStock('marker-restock-template', { stockQuantity: 1 });
       await placeInstance('marker-restock-instance', 'marker-restock-landlet', 'marker-restock-template', owner);
@@ -1897,7 +1899,7 @@ describe('Sold-out notifications: dashboard + opt-in email (#2067)', () => {
   });
 
   it('sold-out sweep still fires the dashboard notification for an opted-in builder (email itself is unverifiable without RESEND_API_KEY)', async () => {
-    const owner = await signupBuilder('notify-soldout-owner');
+    const owner = await signupAdmin('notify-soldout-owner'); // #653: simulated path is admin-only
     await api('/builders/me/notification-preferences', owner.session({
       method: 'PUT',
       body: JSON.stringify({ notifySoldOutEmail: true }),
@@ -2005,7 +2007,7 @@ describe('Low-stock / days-remaining list (#1949)', () => {
   });
 
   it('reports "unpredictable" for a one-of-a-kind item regardless of its own sales history', async () => {
-    const builder = await signupBuilder('low-stock-unpredictable-builder');
+    const builder = await signupAdmin('low-stock-unpredictable-builder'); // #653: simulated path is admin-only
     await createLandletAndClaim('low-stock-unpredictable-landlet', builder);
     // Starts at 5 so a purchase can bring it down to exactly 1 (the
     // one-of-a-kind threshold) while the instance stays placed (only
@@ -2025,7 +2027,7 @@ describe('Low-stock / days-remaining list (#1949)', () => {
   });
 
   it('computes a dynamic days-remaining estimate from the template\'s own sales history', async () => {
-    const builder = await signupBuilder('low-stock-velocity-builder');
+    const builder = await signupAdmin('low-stock-velocity-builder'); // #653: simulated path is admin-only
     await createLandletAndClaim('low-stock-velocity-landlet', builder);
     await createTemplateWithStock('low-stock-velocity-template', { stockQuantity: 30 });
     await placeInstance('low-stock-velocity-instance', 'low-stock-velocity-landlet', 'low-stock-velocity-template', builder);
@@ -2053,7 +2055,7 @@ describe('Low-stock / days-remaining list (#1949)', () => {
 
   it('computes velocity across every builder selling the same template, not just the session builder\'s own sales', async () => {
     const hostA = await signupBuilder('low-stock-shared-pool-host-a');
-    const hostB = await signupBuilder('low-stock-shared-pool-host-b');
+    const hostB = await signupAdmin('low-stock-shared-pool-host-b'); // #653: simulated path is admin-only
     await createLandletAndClaim('low-stock-shared-pool-landlet-a', hostA);
     await createLandletAndClaim('low-stock-shared-pool-landlet-b', hostB);
     await createTemplateWithStock('low-stock-shared-pool-template', { stockQuantity: 20 });
@@ -2079,7 +2081,7 @@ describe('Low-stock / days-remaining list (#1949)', () => {
   });
 
   it('falls back to same-category velocity when the template has no sales history of its own', async () => {
-    const seedBuilder = await signupBuilder('low-stock-category-seed-builder');
+    const seedBuilder = await signupAdmin('low-stock-category-seed-builder'); // #653: simulated path is admin-only
     await createLandletAndClaim('low-stock-category-seed-landlet', seedBuilder);
     await createTemplateWithStock('low-stock-category-seed-template', { stockQuantity: 50, category: 'low-stock-test-category' });
     await placeInstance('low-stock-category-seed-instance', 'low-stock-category-seed-landlet', 'low-stock-category-seed-template', seedBuilder);

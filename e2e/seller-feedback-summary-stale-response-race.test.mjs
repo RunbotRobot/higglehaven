@@ -11,7 +11,7 @@
 // this bug class.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -63,6 +63,13 @@ await fetchJson('/api/instances', {
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ instanceId, landletId: landlets[0].landletId, templateId: template.templateId, x: 0, y: 0 }),
 });
+
+// #653: the simulated path is now admin-only (this seller hasn't
+// completed Stripe Connect onboarding) — grant it to this same
+// browser-session account now, before either purchase below, so neither
+// one (especially the second, mid-race) picks up an extra grant-admin
+// round trip that could itself perturb the timing this test depends on.
+await grantAdmin(emailForLabel(LABEL));
 
 // First purchase/feedback: a single 5-star rating, submitted before the
 // race begins -- this is the content the stale (first) fetch will see.

@@ -693,7 +693,7 @@ describe('Placed instance backup-chain CRUD (#2050)', () => {
 
 describe('sweepSoldOutTemplateInstances consults the backup chain (#2050)', () => {
   it('activates backup #1 on sell-out, then backup #2 on a second sell-out, removing each consumed entry', async () => {
-    const builder = await signupBuilder('sweep-chain-builder');
+    const builder = await signupAdmin('sweep-chain-builder');
     await createLandletAndClaim('sweep-chain-landlet', builder);
     await createTemplate('sweep-chain-active', { stockQuantity: 1 });
     await createTemplate('sweep-chain-backup-1', { stockQuantity: 1 });
@@ -735,7 +735,7 @@ describe('sweepSoldOutTemplateInstances consults the backup chain (#2050)', () =
   });
 
   it('skips past a chain entry whose own template is already out of stock, and compacts the surviving tail\'s positions', async () => {
-    const builder = await signupBuilder('sweep-skip-builder');
+    const builder = await signupAdmin('sweep-skip-builder');
     await createLandletAndClaim('sweep-skip-landlet', builder);
     await createTemplate('sweep-skip-active', { stockQuantity: 1 });
     await createTemplate('sweep-skip-backup-exhausted', { stockQuantity: 0 });
@@ -781,7 +781,7 @@ describe('sweepSoldOutTemplateInstances consults the backup chain (#2050)', () =
   });
 
   it('falls back to delete+notify exactly as before when the chain is empty', async () => {
-    const builder = await signupBuilder('sweep-empty-chain-builder');
+    const builder = await signupAdmin('sweep-empty-chain-builder');
     await createLandletAndClaim('sweep-empty-chain-landlet', builder);
     await createTemplate('sweep-empty-chain-active', { stockQuantity: 1 });
     await placeInstance('sweep-empty-chain-instance', 'sweep-empty-chain-landlet', 'sweep-empty-chain-active', builder);
@@ -801,7 +801,7 @@ describe('sweepSoldOutTemplateInstances consults the backup chain (#2050)', () =
   });
 
   it('falls back to delete+notify when every chain entry is exhausted', async () => {
-    const builder = await signupBuilder('sweep-all-exhausted-builder');
+    const builder = await signupAdmin('sweep-all-exhausted-builder');
     await createLandletAndClaim('sweep-all-exhausted-landlet', builder);
     await createTemplate('sweep-all-exhausted-active', { stockQuantity: 1 });
     await createTemplate('sweep-all-exhausted-backup', { stockQuantity: 0 });
@@ -862,7 +862,7 @@ describe('sweepSoldOutTemplateInstances chunks its IN(...) queries past 100 entr
     // The 150th affected instance -- placed and purchased for real, since
     // this is the one that actually triggers the sweep (dropping the
     // template's stock_quantity to 0).
-    const buyer = await signupBuilder('sweep-chunk-buyer');
+    const buyer = await signupAdmin('sweep-chunk-buyer');
     await createLandletAndClaim('sweep-chunk-buyer-landlet', buyer);
     await placeInstance('sweep-chunk-buyer-instance', 'sweep-chunk-buyer-landlet', 'sweep-chunk-template', buyer);
 
