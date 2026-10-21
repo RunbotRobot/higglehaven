@@ -5,25 +5,27 @@
 // as #2501/#2519/#2454.
 import { json, HttpError, clientIp } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
-import { readJson, stringValue } from './validation.js';
+import {
+  readJson, stringValue, queryLimit, decodeCursor, encodeCursor, assertReferencesExist,
+} from './validation.js';
 import { currentUser } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
 // #2535 (see its own module's comment for the general shape): these
 // haven't been extracted from worker/index.js yet -- requireSessionBuilder/
 // requireVerifiedSession/requireOwnedLandlet(s) are genuinely cross-cutting
 // auth/ownership helpers used from dozens of unrelated handlers, and
-// assertReferenceExists/assertReferencesExist/the instance-validation
-// helpers below live alongside handleInstancePurchase's own use of them,
-// not just this module's. Importing them back from the main file (rather
-// than duplicating or prematurely relocating them) is an intentional, safe
+// assertReferenceExists/the instance-validation helpers below live
+// alongside handleInstancePurchase's own use of them, not just this
+// module's. Importing them back from the main file (rather than
+// duplicating or prematurely relocating them) is an intentional, safe
 // circular import -- every one of these is only ever called at request
 // time, long after both modules have finished their own top-level
 // evaluation, so the cycle never actually binds an undefined value.
 import {
   requireSessionBuilder, requireVerifiedSession, requireOwnedLandlet, requireOwnedLandlets,
-  assertReferenceExists, assertReferencesExist, assertCropWithinTemplateBounds, assertInstanceZWithinLevels,
+  assertReferenceExists, assertCropWithinTemplateBounds, assertInstanceZWithinLevels,
   assertInstanceXYWithinLandlet, assertInstanceScaleWithinBounds, cropsEqual, instanceParams, instanceFromRow,
-  getInstancesById, validateInstance, decodeCursor, encodeCursor, queryLimit, recordContentEditHistory,
+  getInstancesById, validateInstance, recordContentEditHistory,
   isoDateString, handleInstancePurchase,
 } from '../index.js';
 

@@ -80,12 +80,30 @@ await taxField.locator('.stripe-onboarding-form label', { hasText: 'Country of c
 await foreignTaxIdLabel.locator('input').fill('FTIN-000');
 
 const submitBtn = page.getByRole('button', { name: /tax paperwork/i });
-await submitBtn.click();
+// #2573: a flat margin on the post-submit status text (previously
+// `waitForFunction` with #2145's own 60000ms fix) still wasn't enough
+// under CI load, the same repeat-offender shape #2400/#2499/#2544/#2547
+// already converted elsewhere in this suite. The only round trip between
+// the click and the status note's own re-render is the POST itself --
+// the click handler (renderTaxPaperworkField, src/main.js) sets
+// formStatus.textContent synchronously in its catch block once the
+// awaited submitTaxIdForm() rejects, no further async work after that.
+// Waiting directly on that response covers whatever CI-load contention
+// delayed it with one long margin, then a short margin for the now-
+// genuinely-synchronous DOM update that follows.
+const [submitResponse] = await Promise.all([
+  page.waitForResponse(
+    (response) => response.request().method() === 'POST' && response.url().includes('/api/tax/id-form'),
+    { timeout: 60000 },
+  ),
+  submitBtn.click(),
+]);
+console.log('tax/id-form submit responded (should be 503, "not configured"):', submitResponse.status());
 
 await page.waitForFunction(
   () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('not configured on this server yet')),
   null,
-  { timeout: 60000 },
+  { timeout: 5000 },
 );
 const formStatusText = await taxField.locator('.settings-empty-note').last().textContent();
 console.log('Form status after submitting (should surface the real "not configured" 503):', formStatusText);

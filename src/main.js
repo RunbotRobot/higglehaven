@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { cropGeometryFromEnd } from './meshCrop.js';
+import { getModalFocusable, openModalA11y, closeModalA11y } from './ui/modal.js';
 import { CATALOG as FALLBACK_CATALOG, DEFAULT_INSTANCES } from './catalog.js';
 import { loadInstances, saveInstances } from './layoutStorage.js';
 import {
@@ -177,6 +178,16 @@ import {
   currentMode, setCurrentMode,
   LANDLET_AREA_M2, LANDLET_SIDE_M, LANDLET_HEIGHT_M,
 } from './world/state.js';
+// #2552: scene/camera/renderer/canvas and the shared animate()/
+// updateCompassNeedle/onResize loop now live in src/world/scene.js (see
+// that module's own comments) — registerModeFrameUpdate/registerFacing
+// Override are each mode's own hook into that now-shared loop (see
+// enterShopMode/enterSellMode/enterLayoutPreviewMode/bootstrap's own
+// calls to them, and buildModeFrameUpdate's own comment below).
+import {
+  scene, camera, renderer, canvas,
+  registerModeFrameUpdate, registerFacingOverride,
+} from './world/scene.js';
 
 // #2564: the mandatory first-claim flow (runClaimFlow, its own flyover-map
 // scene, and the plot pick/confirm handlers) now lives in src/claim/flow.js
@@ -221,10 +232,12 @@ const PREVIEW_SAVED_LAYOUT_ID_KEY = 'higglehaven.previewSavedLayoutId';
 const BUILD_TARGET_LANDLET_ID_KEY = 'higglehaven.buildTargetLandletId';
 
 // Declared here (rather than alongside the rest of Shop mode, much further
-// down) because animate() below reads it on every frame starting from its
-// very first, synchronous call at module load — a `let` declared after
-// that point would be in its temporal dead zone the first time animate()
-// runs, throwing before the app ever renders a frame.
+// down) because several Shop-specific pointer/keyboard event handlers
+// declared well before the rest of Shop mode's own state gate on it — a
+// `let` declared after those would be in its temporal dead zone the first
+// time one of them ran. (#2552: animate() itself moved to world/scene.js
+// and no longer reads this directly — see registerModeFrameUpdate's own
+// comment — but plenty else in this file still does.)
 let shopActive = false;
 
 // Vertical construction (issue #167/#168/#169): the current lándlet's own
@@ -264,38 +277,10 @@ function levelLabel(levelIndex) {
   return levelIndex > 0 ? `Level +${levelIndex}` : `Level ${levelIndex}`;
 }
 
-const canvas = document.getElementById('app');
-
 // Shown in Settings' General tab (renderGeneralSettingsSection) rather than
 // an always-on-screen HUD overlay — decluttering the main view, now that
 // it's the only way to read/copy exactly which commit is deployed.
 const BUILD_INFO_TEXT = `build ${__BUILD_COMMIT__} · ${__BUILD_TIME__}`;
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87ceeb); // flat placeholder sky color
-
-const camera = new THREE.PerspectiveCamera(
-  60,
-  window.innerWidth / window.innerHeight,
-  0.1,
-  1000,
-);
-// Three.js defaults to Y-up, which reads as backwards for a project whose
-// ground plane is naturally X/Y (latitude/longitude-shaped) with height as
-// the odd one out — Z-up matches that better. OrbitControls (and
-// Object3D.lookAt, used just below) both key off `camera.up` rather than
-// hard-coding Y, so this is enough to retarget the whole "vertical axis"
-// convention with no library patching. It has to happen before
-// `new OrbitControls(...)` — OrbitControls reads `object.up` once, at
-// construction, to build its internal up-axis-correction quaternion.
-camera.up.set(0, 0, 1);
-// Positioned up and back so the whole plot is in frame.
-camera.position.set(LANDLET_SIDE_M * 0.6, LANDLET_SIDE_M * 0.6, LANDLET_SIDE_M * 0.5);
-camera.lookAt(0, 0, 0);
-
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
 
 // Dev-only orbit camera so the scene is inspectable on a phone (pinch/drag)
 // before any real avatar movement exists. Not part of the in-world control scheme.
@@ -3048,77 +3033,8 @@ catalogPickerCloseBtn.addEventListener('click', closeCatalogPicker);
 // This only works with the real backend reachable — creating a new
 // persistent catalog entry has nowhere to live in offline/fallback mode,
 // since catalog.js is a static file, not a runtime data store.
-// #1316: shared modal keyboard accessibility. role="dialog"/aria-modal are
-// set on each modal element in index.html; this covers what markup alone
-// can't — moving focus into a dialog when it opens, restoring it to
-// whatever opened the dialog once it closes, trapping Tab/Shift+Tab inside
-// the dialog while it's open, and closing the currently-open dialog on
-// Escape. Only one modal is ever open at a time in this app, so a single
-// tracked "active" modal (rather than a stack) matches how
-// openModalA11y/closeModalA11y are called below.
-let activeModalEl = null;
-let activeModalCloseFn = null;
-let modalReturnFocusEl = null;
-
-function getModalFocusable(modalEl) {
-  return Array.from(modalEl.querySelectorAll(
-    'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
-  )).filter((el) => el.offsetParent !== null);
-}
-
-// Exported: src/claim/flow.js (#2564) needs both of these — same temporary
-// circular-import note as START_MODE_KEY's own comment above. #2550 (the
-// ui/modal.js leaf) is this pair's real destination; nothing here should
-// still be exported from main.js once that lands.
-export function openModalA11y(modalEl, closeFn) {
-  activeModalEl = modalEl;
-  activeModalCloseFn = closeFn || null;
-  modalReturnFocusEl = document.activeElement;
-  const target = getModalFocusable(modalEl)[0] || modalEl;
-  target.focus({ preventScroll: true });
-}
-
-export function closeModalA11y(modalEl) {
-  if (activeModalEl !== modalEl) return;
-  activeModalEl = null;
-  activeModalCloseFn = null;
-  const returnTo = modalReturnFocusEl;
-  modalReturnFocusEl = null;
-  if (returnTo && document.body.contains(returnTo) && returnTo.offsetParent !== null) {
-    returnTo.focus({ preventScroll: true });
-  } else if (accountMenuToggle.offsetParent !== null) {
-    // The settings/notifications/friends/my-lands triggers all live inside
-    // the collapsible account-menu panel (see openAccountMenu's own
-    // comment in e2e/helpers.mjs), which auto-collapses — hiding the very
-    // button that opened the modal — the moment that button is clicked.
-    // Falling back to the toggle that controls the panel is a more useful
-    // landing spot than leaving focus wherever the browser defaults it
-    // (document.body) once the original trigger is no longer focusable.
-    accountMenuToggle.focus({ preventScroll: true });
-  }
-}
-
-document.addEventListener('keydown', (event) => {
-  if (!activeModalEl) return;
-  if (event.key === 'Escape') {
-    event.preventDefault();
-    activeModalCloseFn?.();
-    return;
-  }
-  if (event.key === 'Tab') {
-    const focusable = getModalFocusable(activeModalEl);
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
-});
+// Generic modal a11y stack (focus move-in/restore, Tab trap, Escape-to-close)
+// lives in src/ui/modal.js — see that file's own #1316 comment.
 
 const uploadModalEl = document.getElementById('upload-modal');
 const uploadModalTitleEl = document.getElementById('upload-modal-title');
@@ -9304,7 +9220,6 @@ const selectionFillGeometry = new THREE.BoxGeometry(1, 1, 1);
 const scratchBox = new THREE.Box3();
 const scratchBoxSize = new THREE.Vector3();
 const scratchBoxCenter = new THREE.Vector3();
-const compassNeedleEl = document.getElementById('compass-needle');
 
 function addSelectionOutline(mesh) {
   if (selectionOutlines.has(mesh)) return;
@@ -10719,13 +10634,6 @@ function endSwipe(event) {
 window.addEventListener('pointerup', endSwipe);
 window.addEventListener('pointercancel', endSwipe);
 
-function onResize() {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-}
-window.addEventListener('resize', onResize);
-
 // OrbitControls' native "zoom" (wheel / pinch) is a *dolly*: it changes the
 // distance between the camera and a fixed orbit target. That's "zoom to a
 // point" — and it has a real failure mode, which is what made zoom feel
@@ -11086,51 +10994,19 @@ function applyEdgePanWhileDraggingProduct() {
   }
 }
 
-// #1169: on-screen compass (Shop and Build modes; hidden in Sell via
-// SELL_HIDDEN_BUILDER_UI_IDS). Shop mode already tracks a dedicated
-// avatar-facing angle (shopAvatarFacing, declared further down with the
-// rest of the Shop-mode state — safe to reference here since this only
-// ever runs once shopActive is true, well after full module evaluation);
-// Build mode has no avatar at all, just the free OrbitControls camera, so
-// its "facing" is read directly off the camera's own current look
-// direction instead. The two are deliberately not the same value
-// (shopAvatarFacing eases toward movement direction rather than tracking
-// the camera instantly), but each is the right analog for its own mode.
-//
-// "North" is a convention this codebase never previously defined for its
-// world coordinates — inferred here from the one existing precedent:
-// loadLandletMap's claim-flyover camera starts south of center looking
-// toward +Y, which only reads sensibly if +Y is already "up"/North on
-// that map. +X is then East, the only orientation consistent with
-// standard map/compass reading once a Z-up world has a chosen North.
-// Facing angle 0 means +Y (North); the in-world yaw convention turns a
-// positive angle toward -X (see applyShopCameraOrientation's own
-// comment), so the clockwise bearing an ordinary compass face uses is the
-// negation of that facing angle.
-const compassScratchDir = new THREE.Vector3();
-function currentFacingRad() {
-  if (shopActive) return shopAvatarFacing;
-  camera.getWorldDirection(compassScratchDir);
-  return Math.atan2(-compassScratchDir.x, compassScratchDir.y);
-}
-
-function updateCompassNeedle() {
-  const bearingDeg = THREE.MathUtils.radToDeg(-currentFacingRad());
-  compassNeedleEl.style.transform = `rotate(${bearingDeg}deg)`;
-}
-
-function animate(now) {
-  requestAnimationFrame(animate);
-  if (shopActive) {
-    updateShopMovement(now);
-    updateShopSky(now);
-  } else {
-    updateTargetTween(now);
-    applyEdgePanWhileDraggingProduct();
-    controls.update();
-    updateCameraDebug(now);
-  }
-  updateCompassNeedle();
+// #2552: Build mode (and layout-preview, which shares this same camera/
+// selection-adjacent machinery) registers this once on entry via
+// registerModeFrameUpdate (world/scene.js) — see that module's own
+// comment for why a single registered callback replaced animate()'s old
+// `if (shopActive) {...} else {...}` branch. Shop mode registers its own
+// movement+sky callback instead (see enterShopMode); Sell mode has no
+// per-frame work of its own (paginated, static between page turns) and
+// registers null (see enterSellMode).
+function buildModeFrameUpdate(now) {
+  updateTargetTween(now);
+  applyEdgePanWhileDraggingProduct();
+  controls.update();
+  updateCameraDebug(now);
   // A selected item's outline must track it live while the translate/rotate
   // gizmo drags it — BoxHelper doesn't auto-update, so it's recomputed here
   // every frame rather than only on selection change. The fill mesh reuses
@@ -11160,9 +11036,7 @@ function animate(now) {
     fill.scale.copy(scratchBoxSize).multiplyScalar(SELECTION_FILL_PADDING);
     fill.position.copy(scratchBoxCenter);
   }
-  renderer.render(scene, camera);
 }
-animate(0);
 
 // Which landlet this session builds on: a builder's own claimed landlet if
 // they already have one, otherwise a modal letting them claim a fresh one
@@ -14992,6 +14866,20 @@ let shopSitBlend = 0;
 // moving target to smooth out.
 let shopSitYawOffset = 0;
 let shopSitHeightOffset = 0;
+// #2480 (sub-issue of #2475): randomized once per sit episode, the instant
+// a 'sit' target is selected (same moment shopIdleInteractionTarget itself
+// gets set) -- shopSitBlend stays suppressed at 0 until this many seconds
+// of that same episode have elapsed, so the avatar doesn't always commit
+// to sitting at the exact same instant idle sway begins; sometimes it
+// lingers standing a bit first. Timing-side counterpart to the random
+// target selection in findShopIdleInteractionTarget above. Lean (#2479,
+// just below) doesn't yet have the same settle-delay pattern applied to
+// its own blend -- a small follow-up, not redone here, per #2480's own
+// "across repeated idle cycles" scope covering both poses equally.
+const SHOP_SIT_SETTLE_DELAY_MIN_S = 0;
+const SHOP_SIT_SETTLE_DELAY_MAX_S = 2;
+let shopSitSettleDelayS = 0;
+let shopSitSettleElapsedS = 0; // seconds of real idle time with a 'sit' target selected, this episode
 // #2479 (sub-issue of #2475): same shape as #2478's own shopSitBlend/
 // shopSitYawOffset/shopSitHeightOffset just above, for a 'lean' target
 // instead of 'sit' -- a dedicated ease (not a reuse of shopIdleBlend) so
@@ -15120,6 +15008,7 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     shopSitBlend = 0; // #2478: instant ease-out, same as shopIdleBlend/shopAfkBlend just above
     shopSitYawOffset = 0;
     shopSitHeightOffset = 0;
+    shopSitSettleElapsedS = 0; // #2480: re-armed for the next sit episode's own randomized delay
     shopLeanBlend = 0; // #2479: same instant ease-out, mirroring sit's own just above
     shopLeanYawOffset = 0;
     shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
@@ -15133,16 +15022,25 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     const idleTarget = shopIdleElapsedS >= SHOP_IDLE_DELAY_S ? 1 : 0;
     if (!wasIdle && idleTarget === 1) {
       shopIdleInteractionTarget = findShopIdleInteractionTarget(shopAvatarPosition.x, shopAvatarPosition.y);
+      // #2480: re-randomized every time a fresh episode selects a new sit
+      // target (including re-selecting the same chair next time around) —
+      // see this constant's own declaration for why.
+      shopSitSettleDelayS = THREE.MathUtils.randFloat(SHOP_SIT_SETTLE_DELAY_MIN_S, SHOP_SIT_SETTLE_DELAY_MAX_S);
+      shopSitSettleElapsedS = 0;
     }
     shopIdleBlend += (idleTarget - shopIdleBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
     const afkTarget = shopIdleElapsedS >= SHOP_AFK_DELAY_S ? 1 : 0;
     shopAfkBlend += (afkTarget - shopAfkBlend) * Math.min(1, SHOP_AFK_BLEND_PER_S * dt);
 
-    // #2478: eases in only when this idle episode's own selected target
-    // (above) is a sit one — stays at 0, same as always, for a lean target
-    // or no target at all (ordinary stand sway keeps running regardless,
-    // same "fall back to stand sway unchanged" scope #2477 already cut).
-    const sitTarget = shopIdleInteractionTarget?.kind === 'sit' ? 1 : 0;
+    // #2478/#2480: eases in only once this idle episode's own selected
+    // target (above) is a sit one *and* its own randomized settle delay
+    // has elapsed — stays at 0, same as always, for a lean target, no
+    // target, or a sit target still within its settle delay (ordinary
+    // stand sway keeps running regardless, same "fall back to stand sway
+    // unchanged" scope #2477 already cut).
+    if (shopIdleInteractionTarget?.kind === 'sit') shopSitSettleElapsedS += dt;
+    const sitTarget =
+      shopIdleInteractionTarget?.kind === 'sit' && shopSitSettleElapsedS >= shopSitSettleDelayS ? 1 : 0;
     shopSitBlend += (sitTarget - shopSitBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
     if (shopIdleInteractionTarget?.kind === 'sit') {
       // Hip height (local z = SHOP_AVATAR_LEG_LENGTH_M above the group's
@@ -15830,12 +15728,20 @@ function shopLandingObstructionTopZ(x, y) {
 // added to it, not any rotation.
 //
 // Prefers sit over lean when both are in range (sitting reads as a
-// stronger "resting" signal than leaning), then nearest within whichever
-// kind — simple nearest-wins, no pathfinding, matching #2044's own
-// "keep it simple" precedent for the sibling landing-spot search above.
+// stronger "resting" signal than leaning); within whichever kind,
+// #2480 (sub-issue of #2475) picks uniformly at random among every
+// in-range candidate of that kind, rather than deterministic nearest-
+// wins -- so standing idle in the same spot near several chairs doesn't
+// always settle into the exact same one, matching docs/SPEC.md §2's own
+// "with randomization" line (the same spirit as the existing stand-sway's
+// randomized sway period/head-turn interval just below, applied here to
+// *which* target gets picked instead of an ongoing motion parameter).
+// Still no pathfinding, matching #2044's own "keep it simple" precedent
+// for the sibling landing-spot search above.
 const SHOP_IDLE_INTERACTION_SEARCH_RADIUS_M = 3;
 function findShopIdleInteractionTarget(x, y) {
-  let best = null;
+  const sitCandidates = [];
+  const leanCandidates = [];
   for (const entry of shopLandlets.values()) {
     if (!entry.loaded) continue;
     for (const mesh of entry.objects) {
@@ -15850,10 +15756,8 @@ function findShopIdleInteractionTarget(x, y) {
         const worldY = entry.group.position.y + mesh.position.y + (target.offsetXM * sin + target.offsetYM * cos);
         const distance = Math.hypot(worldX - x, worldY - y);
         if (distance > SHOP_IDLE_INTERACTION_SEARCH_RADIUS_M) continue;
-        if (best && (best.kind === 'sit' && kind === 'lean')) continue; // sit already found elsewhere — lean never outranks it
-        if (best && best.kind === kind && best.distance <= distance) continue; // already have a closer one of this same kind
         const { height } = meshDimensions(mesh);
-        best = {
+        (kind === 'sit' ? sitCandidates : leanCandidates).push({
           kind,
           instanceId: mesh.userData.instanceId,
           worldX,
@@ -15861,11 +15765,13 @@ function findShopIdleInteractionTarget(x, y) {
           worldZ: mesh.position.z - height / 2 + target.heightM,
           worldFacingRad: mesh.rotation.z + target.facingRad,
           distance,
-        };
+        });
       }
     }
   }
-  return best;
+  const candidates = sitCandidates.length > 0 ? sitCandidates : leanCandidates;
+  if (candidates.length === 0) return null;
+  return candidates[Math.floor(Math.random() * candidates.length)];
 }
 // #2477: e2e-only hook, same convention as window.__testNearestOpenLandingSpot
 // above -- lets a test drive the real search function directly against
@@ -15888,6 +15794,12 @@ window.__testShopSitPose = () => ({
   heightOffset: shopSitHeightOffset,
   legRotationRad: shopAvatar.legPivotL.rotation.x,
   armRotationRad: shopAvatar.armPivotL.rotation.x,
+  // #2480: this episode's own randomized settle delay/elapsed (see their
+  // declarations above) -- lets a test confirm the delay itself varies
+  // across repeated episodes, and that shopSitBlend really does stay 0
+  // until shopSitSettleElapsedS catches up to it.
+  settleDelayS: shopSitSettleDelayS,
+  settleElapsedS: shopSitSettleElapsedS,
 });
 // #2479: same convention as window.__testShopSitPose just above, for the
 // lean pose's own visual-only state.
@@ -18569,6 +18481,8 @@ async function enterShopMode() {
   shopSitBlend = 0;
   shopSitYawOffset = 0;
   shopSitHeightOffset = 0;
+  shopSitSettleDelayS = 0;
+  shopSitSettleElapsedS = 0;
   shopLeanBlend = 0;
   shopLeanYawOffset = 0;
   shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
@@ -18645,6 +18559,15 @@ async function enterShopMode() {
   shopStatusEl.textContent = '';
   shopStatusEl.classList.remove('visible');
   shopActive = true;
+  // #2552: Shop's own per-frame work (movement + sky) and its own avatar-
+  // facing value for the compass (eases toward movement direction rather
+  // than tracking the camera instantly, unlike every other mode's default
+  // camera-derived bearing — see world/scene.js's own comment).
+  registerModeFrameUpdate((now) => {
+    updateShopMovement(now);
+    updateShopSky(now);
+  });
+  registerFacingOverride(() => shopAvatarFacing);
 }
 
 // #540: Sell mode's own "faux lándlet" — the seller's own products,
@@ -19055,6 +18978,12 @@ async function enterLayoutPreviewMode() {
   translateControls.detach();
   rotateControls.detach();
   controls.enabled = false;
+  // #2552: shares Build's own tween/edge-pan/controls/debug/selection-
+  // highlight per-frame work (selection/highlight are both empty here —
+  // clearSelection() above and this mode's own no-highlighting design —
+  // so those two loops are harmless no-ops, same as they already are
+  // whenever Build itself has nothing selected).
+  registerModeFrameUpdate(buildModeFrameUpdate);
 
   setBuilderId(await ensureBuilderIdentity());
   if (!builderId) {
@@ -19150,6 +19079,11 @@ async function enterLayoutPreviewMode() {
 // hide the builder chrome that doesn't apply, clear out whatever the
 // placeholder/real landlet scene had, load this seller's own content.
 async function enterSellMode() {
+  // #2552: Sell has no per-frame work of its own (paginated, static
+  // between page turns) — see world/scene.js's own comment on why this is
+  // an explicit null rather than just leaving whatever the previous page
+  // load registered.
+  registerModeFrameUpdate(null);
   for (const id of SELL_HIDDEN_BUILDER_UI_IDS) {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
@@ -19541,6 +19475,9 @@ async function bootstrap() {
     showShopAccessGate();
     return;
   }
+  // #2552: Build's own tween/edge-pan/controls/debug/selection-highlight
+  // per-frame work — see buildModeFrameUpdate's own comment.
+  registerModeFrameUpdate(buildModeFrameUpdate);
   refreshNotificationsBadge();
   refreshFriendsBadge();
   refreshDmBadge();
