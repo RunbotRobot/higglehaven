@@ -13,9 +13,12 @@ import { json, HttpError, JSON_HEADERS, clientIp } from './lib/http.js';
 import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './lib/rate-limit.js';
 import { adminActionLogStatement } from './lib/admin-log.js';
 import { timingSafeEqual, bytesToHex, hexToBytes } from './lib/crypto.js';
-import { readJson, stringValue, labelValue, databaseHttpError, errorMessages } from './lib/validation.js';
+import {
+  readJson, stringValue, labelValue, databaseHttpError, errorMessages,
+  finiteNumber, queryLimit, decodeCursor, encodeCursor, assertReferencesExist,
+} from './lib/validation.js';
 import { notificationStatement, fireNotification, fireNotifications } from './lib/notifications.js';
-import { SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser, requireAdmin } from './lib/auth.js';
+import { SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser, requireAdmin, assertOwner } from './lib/auth.js';
 // #2535: the builder-profile domain (see that module's own comment for
 // why handleBuilders itself -- the /api/builders dispatcher these are
 // called from -- stays here rather than moving too, and for why this
@@ -4074,14 +4077,6 @@ async function requireVerifiedSession(request, db) {
   const user = await requireCurrentUser(request, db);
   assertVerified(user);
   return user;
-}
-
-// Thrown wherever an existing row's own owner column doesn't match the
-// session's resolved builder/seller id — the shared shape for every
-// "is this actually yours" check from here on, so each call site reads as
-// one line instead of re-deriving the same if/throw every time.
-function assertOwner(actualOwnerId, sessionOwnerId, message) {
-  if (actualOwnerId !== sessionOwnerId) throw new HttpError(message, 403);
 }
 
 // A row's own seller_id column can be non-null yet dangling — pointing at
@@ -17721,21 +17716,6 @@ async function selectModelUrlReferencesChunked(db, urls) {
   return rows;
 }
 
-export async function assertReferencesExist(db, table, column, values, field) {
-  const uniqueValues = [...new Set(values)];
-  const found = new Set();
-  for (let i = 0; i < uniqueValues.length; i += D1_MAX_BOUND_PARAMETERS) {
-    const chunk = uniqueValues.slice(i, i + D1_MAX_BOUND_PARAMETERS);
-    const placeholders = chunk.map(() => '?').join(', ');
-    const { results } = await db.prepare(
-      `SELECT ${column} AS value FROM ${table} WHERE ${column} IN (${placeholders})`,
-    ).bind(...chunk).all();
-    for (const row of results) found.add(row.value);
-  }
-  const missing = uniqueValues.find((value) => !found.has(value));
-  if (missing !== undefined) throw new HttpError(`${field} "${missing}" does not exist`, 400);
-}
-
 // #729: saved_layout_instances (migrations/0080) and version_instances
 // (migrations/0007) both keep an immutable historical snapshot of a
 // template's placement, and both intentionally use ON DELETE RESTRICT (a
@@ -18850,12 +18830,6 @@ function positiveNumber(value, field) {
   return number;
 }
 
-function finiteNumber(value, field) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) throw new HttpError(`${field} must be a finite number`, 400);
-  return number;
-}
-
 function optionalInteger(value, field) {
   if (value === undefined || value === null) return null;
   const number = Number(value);
@@ -18908,14 +18882,6 @@ function optionalSkeletonSignature(value) {
   return value;
 }
 
-function queryLimit(value, defaultValue) {
-  if (value === null) return defaultValue;
-  if (!/^\d+$/.test(value)) throw new HttpError('limit must be an integer between 1 and 100', 400);
-  const limit = Number(value);
-  if (limit < 1 || limit > 100) throw new HttpError('limit must be an integer between 1 and 100', 400);
-  return limit;
-}
-
 function queryNonnegativeInteger(value, field) {
   if (value === null) return null;
   const text = stringValue(value, field);
@@ -18935,30 +18901,6 @@ function queryPositiveNumber(value, field) {
     throw new HttpError(`${field} must be a positive number`, 400);
   }
   return number;
-}
-
-function encodeCursor(createdAt, id) {
-  const bytes = new TextEncoder().encode(JSON.stringify([createdAt, id]));
-  return btoa(String.fromCharCode(...bytes));
-}
-
-function decodeCursor(value) {
-  if (value === null) return null;
-  try {
-    const bytes = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
-    const decoded = JSON.parse(new TextDecoder().decode(bytes));
-    // #1470: same empty-string guard decodeCatalogCursor/decodeCatalogPriceCursor
-    // already have below -- without it, a cursor encoding ["",""] (never
-    // produced by encodeCursor itself) silently matches every row on a
-    // descending-sort endpoint's `created_at < '' OR (... id < '')` check,
-    // returning an empty page instead of the 400 a malformed cursor should get.
-    if (!Array.isArray(decoded) || decoded.length !== 2 ||
-        typeof decoded[0] !== 'string' || decoded[0] === '' ||
-        typeof decoded[1] !== 'string' || decoded[1] === '') throw new Error();
-    return { createdAt: decoded[0], id: decoded[1] };
-  } catch {
-    throw new HttpError('cursor is invalid', 400);
-  }
 }
 
 function encodeVersionCursor(versionNumber) {

@@ -1897,7 +1897,13 @@
         showErr(cleanupErr, error.message);
       } finally {
         dryRunBtn.disabled = false;
-        if (lastDryRunMaxDeletes !== maxDeletes) realRunBtn.disabled = true;
+        // #2525: this must be an unconditional re-sync, not a one-way
+        // "disable only" guard -- a thrown real-run request (network blip,
+        // a 409, a transient 5xx) left lastDryRunMaxDeletes/maxDeletes
+        // still equal (nothing cleared the arm), so the old `if` left
+        // realRunBtn stuck disabled forever even though its arming state
+        // was still genuinely valid.
+        realRunBtn.disabled = (lastDryRunMaxDeletes !== maxDeletes);
       }
     }
     dryRunBtn.addEventListener('click', () => runCleanup(true));

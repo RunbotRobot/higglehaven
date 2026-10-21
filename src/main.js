@@ -177,6 +177,23 @@ import {
   currentMode, setCurrentMode,
   LANDLET_AREA_M2, LANDLET_SIDE_M, LANDLET_HEIGHT_M,
 } from './world/state.js';
+// #2552: scene/camera/renderer/canvas and the shared animate()/
+// updateCompassNeedle/onResize loop now live in src/world/scene.js (see
+// that module's own comments) — registerModeFrameUpdate/registerFacing
+// Override are each mode's own hook into that now-shared loop (see
+// enterShopMode/enterSellMode/enterLayoutPreviewMode/bootstrap's own
+// calls to them, and buildModeFrameUpdate's own comment below).
+import {
+  scene, camera, renderer, canvas,
+  registerModeFrameUpdate, registerFacingOverride,
+} from './world/scene.js';
+
+// #2564: the mandatory first-claim flow (runClaimFlow, its own flyover-map
+// scene, and the plot pick/confirm handlers) now lives in src/claim/flow.js
+// — see that module's own comment for its dependency notes, including why
+// it in turn imports a few things back from this module (a temporary
+// circular import pending #2550's ui/modal.js extraction).
+import { runClaimFlow } from './claim/flow.js';
 
 let activeBundleTab = 'mine';
 
@@ -194,7 +211,13 @@ let activeBundleTab = 'mine';
 // localStorage) carries the *next* mode across that reload — it's gone
 // once bootstrap() reads it, and a plain fresh tab with nothing set always
 // lands on Shop, the product's chosen default landing view.
-const START_MODE_KEY = 'higglehaven.startMode';
+// Exported: src/claim/flow.js (#2564) needs it for claimBackBtn's own
+// reload-to-shop fallback — a temporary circular import (this module also
+// imports runClaimFlow from there) until #2550 gives this constant a real
+// home outside main.js the way #2551 already did for the state it also
+// needed; harmless here since every use on both sides is inside a function
+// body, never read at module-evaluation time.
+export const START_MODE_KEY = 'higglehaven.startMode';
 // #635's own preview is reached via a reload the same way Shop/Build/Sell
 // switch (see START_MODE_KEY's own comment above) — this carries which
 // saved layout to load across that reload, since START_MODE_KEY itself
@@ -208,10 +231,12 @@ const PREVIEW_SAVED_LAYOUT_ID_KEY = 'higglehaven.previewSavedLayoutId';
 const BUILD_TARGET_LANDLET_ID_KEY = 'higglehaven.buildTargetLandletId';
 
 // Declared here (rather than alongside the rest of Shop mode, much further
-// down) because animate() below reads it on every frame starting from its
-// very first, synchronous call at module load — a `let` declared after
-// that point would be in its temporal dead zone the first time animate()
-// runs, throwing before the app ever renders a frame.
+// down) because several Shop-specific pointer/keyboard event handlers
+// declared well before the rest of Shop mode's own state gate on it — a
+// `let` declared after those would be in its temporal dead zone the first
+// time one of them ran. (#2552: animate() itself moved to world/scene.js
+// and no longer reads this directly — see registerModeFrameUpdate's own
+// comment — but plenty else in this file still does.)
 let shopActive = false;
 
 // Vertical construction (issue #167/#168/#169): the current lándlet's own
@@ -251,38 +276,10 @@ function levelLabel(levelIndex) {
   return levelIndex > 0 ? `Level +${levelIndex}` : `Level ${levelIndex}`;
 }
 
-const canvas = document.getElementById('app');
-
 // Shown in Settings' General tab (renderGeneralSettingsSection) rather than
 // an always-on-screen HUD overlay — decluttering the main view, now that
 // it's the only way to read/copy exactly which commit is deployed.
 const BUILD_INFO_TEXT = `build ${__BUILD_COMMIT__} · ${__BUILD_TIME__}`;
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87ceeb); // flat placeholder sky color
-
-const camera = new THREE.PerspectiveCamera(
-  60,
-  window.innerWidth / window.innerHeight,
-  0.1,
-  1000,
-);
-// Three.js defaults to Y-up, which reads as backwards for a project whose
-// ground plane is naturally X/Y (latitude/longitude-shaped) with height as
-// the odd one out — Z-up matches that better. OrbitControls (and
-// Object3D.lookAt, used just below) both key off `camera.up` rather than
-// hard-coding Y, so this is enough to retarget the whole "vertical axis"
-// convention with no library patching. It has to happen before
-// `new OrbitControls(...)` — OrbitControls reads `object.up` once, at
-// construction, to build its internal up-axis-correction quaternion.
-camera.up.set(0, 0, 1);
-// Positioned up and back so the whole plot is in frame.
-camera.position.set(LANDLET_SIDE_M * 0.6, LANDLET_SIDE_M * 0.6, LANDLET_SIDE_M * 0.5);
-camera.lookAt(0, 0, 0);
-
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
 
 // Dev-only orbit camera so the scene is inspectable on a phone (pinch/drag)
 // before any real avatar movement exists. Not part of the in-world control scheme.
@@ -3053,7 +3050,11 @@ function getModalFocusable(modalEl) {
   )).filter((el) => el.offsetParent !== null);
 }
 
-function openModalA11y(modalEl, closeFn) {
+// Exported: src/claim/flow.js (#2564) needs both of these — same temporary
+// circular-import note as START_MODE_KEY's own comment above. #2550 (the
+// ui/modal.js leaf) is this pair's real destination; nothing here should
+// still be exported from main.js once that lands.
+export function openModalA11y(modalEl, closeFn) {
   activeModalEl = modalEl;
   activeModalCloseFn = closeFn || null;
   modalReturnFocusEl = document.activeElement;
@@ -3061,7 +3062,7 @@ function openModalA11y(modalEl, closeFn) {
   target.focus({ preventScroll: true });
 }
 
-function closeModalA11y(modalEl) {
+export function closeModalA11y(modalEl) {
   if (activeModalEl !== modalEl) return;
   activeModalEl = null;
   activeModalCloseFn = null;
@@ -9287,7 +9288,6 @@ const selectionFillGeometry = new THREE.BoxGeometry(1, 1, 1);
 const scratchBox = new THREE.Box3();
 const scratchBoxSize = new THREE.Vector3();
 const scratchBoxCenter = new THREE.Vector3();
-const compassNeedleEl = document.getElementById('compass-needle');
 
 function addSelectionOutline(mesh) {
   if (selectionOutlines.has(mesh)) return;
@@ -10702,13 +10702,6 @@ function endSwipe(event) {
 window.addEventListener('pointerup', endSwipe);
 window.addEventListener('pointercancel', endSwipe);
 
-function onResize() {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-}
-window.addEventListener('resize', onResize);
-
 // OrbitControls' native "zoom" (wheel / pinch) is a *dolly*: it changes the
 // distance between the camera and a fixed orbit target. That's "zoom to a
 // point" — and it has a real failure mode, which is what made zoom feel
@@ -11069,51 +11062,19 @@ function applyEdgePanWhileDraggingProduct() {
   }
 }
 
-// #1169: on-screen compass (Shop and Build modes; hidden in Sell via
-// SELL_HIDDEN_BUILDER_UI_IDS). Shop mode already tracks a dedicated
-// avatar-facing angle (shopAvatarFacing, declared further down with the
-// rest of the Shop-mode state — safe to reference here since this only
-// ever runs once shopActive is true, well after full module evaluation);
-// Build mode has no avatar at all, just the free OrbitControls camera, so
-// its "facing" is read directly off the camera's own current look
-// direction instead. The two are deliberately not the same value
-// (shopAvatarFacing eases toward movement direction rather than tracking
-// the camera instantly), but each is the right analog for its own mode.
-//
-// "North" is a convention this codebase never previously defined for its
-// world coordinates — inferred here from the one existing precedent:
-// loadLandletMap's claim-flyover camera starts south of center looking
-// toward +Y, which only reads sensibly if +Y is already "up"/North on
-// that map. +X is then East, the only orientation consistent with
-// standard map/compass reading once a Z-up world has a chosen North.
-// Facing angle 0 means +Y (North); the in-world yaw convention turns a
-// positive angle toward -X (see applyShopCameraOrientation's own
-// comment), so the clockwise bearing an ordinary compass face uses is the
-// negation of that facing angle.
-const compassScratchDir = new THREE.Vector3();
-function currentFacingRad() {
-  if (shopActive) return shopAvatarFacing;
-  camera.getWorldDirection(compassScratchDir);
-  return Math.atan2(-compassScratchDir.x, compassScratchDir.y);
-}
-
-function updateCompassNeedle() {
-  const bearingDeg = THREE.MathUtils.radToDeg(-currentFacingRad());
-  compassNeedleEl.style.transform = `rotate(${bearingDeg}deg)`;
-}
-
-function animate(now) {
-  requestAnimationFrame(animate);
-  if (shopActive) {
-    updateShopMovement(now);
-    updateShopSky(now);
-  } else {
-    updateTargetTween(now);
-    applyEdgePanWhileDraggingProduct();
-    controls.update();
-    updateCameraDebug(now);
-  }
-  updateCompassNeedle();
+// #2552: Build mode (and layout-preview, which shares this same camera/
+// selection-adjacent machinery) registers this once on entry via
+// registerModeFrameUpdate (world/scene.js) — see that module's own
+// comment for why a single registered callback replaced animate()'s old
+// `if (shopActive) {...} else {...}` branch. Shop mode registers its own
+// movement+sky callback instead (see enterShopMode); Sell mode has no
+// per-frame work of its own (paginated, static between page turns) and
+// registers null (see enterSellMode).
+function buildModeFrameUpdate(now) {
+  updateTargetTween(now);
+  applyEdgePanWhileDraggingProduct();
+  controls.update();
+  updateCameraDebug(now);
   // A selected item's outline must track it live while the translate/rotate
   // gizmo drags it — BoxHelper doesn't auto-update, so it's recomputed here
   // every frame rather than only on selection change. The fill mesh reuses
@@ -11143,9 +11104,7 @@ function animate(now) {
     fill.scale.copy(scratchBoxSize).multiplyScalar(SELECTION_FILL_PADDING);
     fill.position.copy(scratchBoxCenter);
   }
-  renderer.render(scene, camera);
 }
-animate(0);
 
 // Which landlet this session builds on: a builder's own claimed landlet if
 // they already have one, otherwise a modal letting them claim a fresh one
@@ -13253,7 +13212,7 @@ const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, generating: 0
 // greenbelt. Every per-plot color/affordance lookup goes through this
 // instead of reading `.status` directly, so a water landlet always resolves
 // to each palette's own 'water' entry regardless of its underlying status.
-function plotColorKeyForLandlet(landlet) {
+export function plotColorKeyForLandlet(landlet) {
   return landlet.landType === 'water' ? 'water' : landlet.status;
 }
 // docs/SPEC.md §2's confirmed ground speeds: 1.8 m/s walking, 4.4704 m/s
@@ -14975,6 +14934,20 @@ let shopSitBlend = 0;
 // moving target to smooth out.
 let shopSitYawOffset = 0;
 let shopSitHeightOffset = 0;
+// #2480 (sub-issue of #2475): randomized once per sit episode, the instant
+// a 'sit' target is selected (same moment shopIdleInteractionTarget itself
+// gets set) -- shopSitBlend stays suppressed at 0 until this many seconds
+// of that same episode have elapsed, so the avatar doesn't always commit
+// to sitting at the exact same instant idle sway begins; sometimes it
+// lingers standing a bit first. Timing-side counterpart to the random
+// target selection in findShopIdleInteractionTarget above. Lean (#2479,
+// just below) doesn't yet have the same settle-delay pattern applied to
+// its own blend -- a small follow-up, not redone here, per #2480's own
+// "across repeated idle cycles" scope covering both poses equally.
+const SHOP_SIT_SETTLE_DELAY_MIN_S = 0;
+const SHOP_SIT_SETTLE_DELAY_MAX_S = 2;
+let shopSitSettleDelayS = 0;
+let shopSitSettleElapsedS = 0; // seconds of real idle time with a 'sit' target selected, this episode
 // #2479 (sub-issue of #2475): same shape as #2478's own shopSitBlend/
 // shopSitYawOffset/shopSitHeightOffset just above, for a 'lean' target
 // instead of 'sit' -- a dedicated ease (not a reuse of shopIdleBlend) so
@@ -15103,6 +15076,7 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     shopSitBlend = 0; // #2478: instant ease-out, same as shopIdleBlend/shopAfkBlend just above
     shopSitYawOffset = 0;
     shopSitHeightOffset = 0;
+    shopSitSettleElapsedS = 0; // #2480: re-armed for the next sit episode's own randomized delay
     shopLeanBlend = 0; // #2479: same instant ease-out, mirroring sit's own just above
     shopLeanYawOffset = 0;
     shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
@@ -15116,16 +15090,25 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     const idleTarget = shopIdleElapsedS >= SHOP_IDLE_DELAY_S ? 1 : 0;
     if (!wasIdle && idleTarget === 1) {
       shopIdleInteractionTarget = findShopIdleInteractionTarget(shopAvatarPosition.x, shopAvatarPosition.y);
+      // #2480: re-randomized every time a fresh episode selects a new sit
+      // target (including re-selecting the same chair next time around) —
+      // see this constant's own declaration for why.
+      shopSitSettleDelayS = THREE.MathUtils.randFloat(SHOP_SIT_SETTLE_DELAY_MIN_S, SHOP_SIT_SETTLE_DELAY_MAX_S);
+      shopSitSettleElapsedS = 0;
     }
     shopIdleBlend += (idleTarget - shopIdleBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
     const afkTarget = shopIdleElapsedS >= SHOP_AFK_DELAY_S ? 1 : 0;
     shopAfkBlend += (afkTarget - shopAfkBlend) * Math.min(1, SHOP_AFK_BLEND_PER_S * dt);
 
-    // #2478: eases in only when this idle episode's own selected target
-    // (above) is a sit one — stays at 0, same as always, for a lean target
-    // or no target at all (ordinary stand sway keeps running regardless,
-    // same "fall back to stand sway unchanged" scope #2477 already cut).
-    const sitTarget = shopIdleInteractionTarget?.kind === 'sit' ? 1 : 0;
+    // #2478/#2480: eases in only once this idle episode's own selected
+    // target (above) is a sit one *and* its own randomized settle delay
+    // has elapsed — stays at 0, same as always, for a lean target, no
+    // target, or a sit target still within its settle delay (ordinary
+    // stand sway keeps running regardless, same "fall back to stand sway
+    // unchanged" scope #2477 already cut).
+    if (shopIdleInteractionTarget?.kind === 'sit') shopSitSettleElapsedS += dt;
+    const sitTarget =
+      shopIdleInteractionTarget?.kind === 'sit' && shopSitSettleElapsedS >= shopSitSettleDelayS ? 1 : 0;
     shopSitBlend += (sitTarget - shopSitBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
     if (shopIdleInteractionTarget?.kind === 'sit') {
       // Hip height (local z = SHOP_AVATAR_LEG_LENGTH_M above the group's
@@ -15813,12 +15796,20 @@ function shopLandingObstructionTopZ(x, y) {
 // added to it, not any rotation.
 //
 // Prefers sit over lean when both are in range (sitting reads as a
-// stronger "resting" signal than leaning), then nearest within whichever
-// kind — simple nearest-wins, no pathfinding, matching #2044's own
-// "keep it simple" precedent for the sibling landing-spot search above.
+// stronger "resting" signal than leaning); within whichever kind,
+// #2480 (sub-issue of #2475) picks uniformly at random among every
+// in-range candidate of that kind, rather than deterministic nearest-
+// wins -- so standing idle in the same spot near several chairs doesn't
+// always settle into the exact same one, matching docs/SPEC.md §2's own
+// "with randomization" line (the same spirit as the existing stand-sway's
+// randomized sway period/head-turn interval just below, applied here to
+// *which* target gets picked instead of an ongoing motion parameter).
+// Still no pathfinding, matching #2044's own "keep it simple" precedent
+// for the sibling landing-spot search above.
 const SHOP_IDLE_INTERACTION_SEARCH_RADIUS_M = 3;
 function findShopIdleInteractionTarget(x, y) {
-  let best = null;
+  const sitCandidates = [];
+  const leanCandidates = [];
   for (const entry of shopLandlets.values()) {
     if (!entry.loaded) continue;
     for (const mesh of entry.objects) {
@@ -15833,10 +15824,8 @@ function findShopIdleInteractionTarget(x, y) {
         const worldY = entry.group.position.y + mesh.position.y + (target.offsetXM * sin + target.offsetYM * cos);
         const distance = Math.hypot(worldX - x, worldY - y);
         if (distance > SHOP_IDLE_INTERACTION_SEARCH_RADIUS_M) continue;
-        if (best && (best.kind === 'sit' && kind === 'lean')) continue; // sit already found elsewhere — lean never outranks it
-        if (best && best.kind === kind && best.distance <= distance) continue; // already have a closer one of this same kind
         const { height } = meshDimensions(mesh);
-        best = {
+        (kind === 'sit' ? sitCandidates : leanCandidates).push({
           kind,
           instanceId: mesh.userData.instanceId,
           worldX,
@@ -15844,11 +15833,13 @@ function findShopIdleInteractionTarget(x, y) {
           worldZ: mesh.position.z - height / 2 + target.heightM,
           worldFacingRad: mesh.rotation.z + target.facingRad,
           distance,
-        };
+        });
       }
     }
   }
-  return best;
+  const candidates = sitCandidates.length > 0 ? sitCandidates : leanCandidates;
+  if (candidates.length === 0) return null;
+  return candidates[Math.floor(Math.random() * candidates.length)];
 }
 // #2477: e2e-only hook, same convention as window.__testNearestOpenLandingSpot
 // above -- lets a test drive the real search function directly against
@@ -15871,6 +15862,12 @@ window.__testShopSitPose = () => ({
   heightOffset: shopSitHeightOffset,
   legRotationRad: shopAvatar.legPivotL.rotation.x,
   armRotationRad: shopAvatar.armPivotL.rotation.x,
+  // #2480: this episode's own randomized settle delay/elapsed (see their
+  // declarations above) -- lets a test confirm the delay itself varies
+  // across repeated episodes, and that shopSitBlend really does stay 0
+  // until shopSitSettleElapsedS catches up to it.
+  settleDelayS: shopSitSettleDelayS,
+  settleElapsedS: shopSitSettleElapsedS,
 });
 // #2479: same convention as window.__testShopSitPose just above, for the
 // lean pose's own visual-only state.
@@ -18552,6 +18549,8 @@ async function enterShopMode() {
   shopSitBlend = 0;
   shopSitYawOffset = 0;
   shopSitHeightOffset = 0;
+  shopSitSettleDelayS = 0;
+  shopSitSettleElapsedS = 0;
   shopLeanBlend = 0;
   shopLeanYawOffset = 0;
   shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
@@ -18628,6 +18627,15 @@ async function enterShopMode() {
   shopStatusEl.textContent = '';
   shopStatusEl.classList.remove('visible');
   shopActive = true;
+  // #2552: Shop's own per-frame work (movement + sky) and its own avatar-
+  // facing value for the compass (eases toward movement direction rather
+  // than tracking the camera instantly, unlike every other mode's default
+  // camera-derived bearing — see world/scene.js's own comment).
+  registerModeFrameUpdate((now) => {
+    updateShopMovement(now);
+    updateShopSky(now);
+  });
+  registerFacingOverride(() => shopAvatarFacing);
 }
 
 // #540: Sell mode's own "faux lándlet" — the seller's own products,
@@ -19038,6 +19046,12 @@ async function enterLayoutPreviewMode() {
   translateControls.detach();
   rotateControls.detach();
   controls.enabled = false;
+  // #2552: shares Build's own tween/edge-pan/controls/debug/selection-
+  // highlight per-frame work (selection/highlight are both empty here —
+  // clearSelection() above and this mode's own no-highlighting design —
+  // so those two loops are harmless no-ops, same as they already are
+  // whenever Build itself has nothing selected).
+  registerModeFrameUpdate(buildModeFrameUpdate);
 
   setBuilderId(await ensureBuilderIdentity());
   if (!builderId) {
@@ -19133,6 +19147,11 @@ async function enterLayoutPreviewMode() {
 // hide the builder chrome that doesn't apply, clear out whatever the
 // placeholder/real landlet scene had, load this seller's own content.
 async function enterSellMode() {
+  // #2552: Sell has no per-frame work of its own (paginated, static
+  // between page turns) — see world/scene.js's own comment on why this is
+  // an explicit null rather than just leaving whatever the previous page
+  // load registered.
+  registerModeFrameUpdate(null);
   for (const id of SELL_HIDDEN_BUILDER_UI_IDS) {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
@@ -19271,87 +19290,6 @@ for (const btn of modeNavButtons) {
   });
 }
 
-const claimModalEl = document.getElementById('claim-modal');
-const claimMapCanvas = document.getElementById('claim-map-canvas');
-const claimStatusEl = document.getElementById('claim-status');
-const claimRefreshBtn = document.getElementById('claim-refresh-btn');
-const claimBackBtn = document.getElementById('claim-back-btn');
-const claimSelectionNameEl = document.getElementById('claim-selection-name');
-const claimConfirmBtn = document.getElementById('claim-confirm-btn');
-
-function runClaimFlow() {
-  return new Promise((resolve) => {
-    claimModalEl.classList.add('visible');
-    // No closeFn: this flow has no cancel action (claimBackBtn reloads the
-    // page rather than dismissing the modal in place — see its own comment
-    // below), so Escape intentionally does nothing here rather than
-    // silently abandoning a mandatory first-claim flow.
-    openModalA11y(claimModalEl, null);
-    loadLandletMap(resolve);
-    claimRefreshBtn.onclick = () => loadLandletMap(resolve);
-    // A reload rather than trying to unwind this modal in place — the
-    // same clean-slate escape hatch #mode-nav's own Shop/Build switching
-    // uses, and for the same reason: there's nothing built yet here to
-    // preserve, so starting bootstrap() over from scratch is simpler than
-    // reasoning about every way this could be left dangling (the builder
-    // this flow is claiming for getting deleted out from under it, say).
-    // Targets 'shop', not 'build': a builder with nothing claimed yet who
-    // backs out of this flow has nothing left to build on, same as
-    // declining to log in (see bootstrap()'s own fallback) — targeting
-    // 'build' here used to land back in resolveLandletId(), which finds
-    // the same still-unclaimed builder and immediately reopens this exact
-    // modal, an inescapable loop that also blocked reaching the account
-    // menu (it sits under this modal's z-index) to log out at all.
-    claimBackBtn.onclick = () => {
-      sessionStorage.setItem(START_MODE_KEY, 'shop');
-      location.reload();
-    };
-  });
-}
-
-// A self-contained Three.js scene/camera/renderer/controls for the claim
-// modal, entirely separate from the main builder scene (which hasn't loaded
-// any content yet at this point anyway) so it can be freely created and
-// torn down each time the modal opens without touching builder state.
-let claimFlyover = null;
-
-// loadLandletMap awaits a fetch before building its scene; if Refresh is
-// clicked again before that fetch resolves, disposeClaimFlyover() at the
-// new call's start is a no-op (claimFlyover is still null either way), so
-// without this guard both calls would go on to build a full scene, attach
-// their own canvas click/resize listeners, and race to overwrite the
-// shared claimFlyover — leaking one call's listeners/RAF loop forever.
-// Each call captures the token's value *before* it starts awaiting, then
-// checks it's still the latest afterward; a superseded call bails out
-// quietly instead of building anything.
-let claimMapLoadToken = 0;
-
-function disposeClaimFlyover() {
-  if (!claimFlyover) return;
-  cancelAnimationFrame(claimFlyover.animationHandle);
-  window.removeEventListener('resize', claimFlyover.onResize);
-  // #1131: this used to be the one listener loadLandletMap attaches that
-  // never got removed here — every completed load (not just a raced-out
-  // in-flight one, which claimMapLoadToken already guards against) left
-  // its own 'click' listener on claimMapCanvas permanently, each closing
-  // over this exact scene/plotMeshes/etc. Every ordinary Refresh click or
-  // failed-claim retry (claimSelectedLandlet's own catch calls
-  // loadLandletMap again) leaked one more, forever. Removed the same way
-  // onResize already is just above.
-  claimMapCanvas.removeEventListener('click', claimFlyover.onCanvasClick);
-  claimFlyover.controls.dispose();
-  claimFlyover.renderer.dispose();
-  for (const mesh of claimFlyover.plotMeshes) {
-    mesh.geometry.dispose();
-    mesh.material.dispose();
-  }
-  for (const outline of claimFlyover.plotOutlines) outline.geometry.dispose();
-  claimFlyover.plotOutlineMaterial.dispose();
-  claimFlyover.selectionOutline?.geometry.dispose();
-  claimFlyover.selectionOutlineMaterial.dispose();
-  claimFlyover = null;
-}
-
 function pointInPolygonXY(x, y, polygon) {
   let inside = false;
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
@@ -19431,7 +19369,7 @@ function computeGaplessWorldRadius(landlets, worldRadiusM) {
 // generated one, or a plain square sized to its area as a fallback for
 // legacy/placeholder landlets (e.g. starter-landlet) that predate real
 // procedural generation and were never given one.
-function shapeForLandlet(landlet) {
+export function shapeForLandlet(landlet) {
   const shape = new THREE.Shape();
   if (landlet.polygon && landlet.polygon.length >= 3) {
     shape.moveTo(landlet.polygon[0].x, landlet.polygon[0].y);
@@ -19475,321 +19413,6 @@ function applyGroundCurvature(geometry, worldCenterX, worldCenterY) {
   }
   position.needsUpdate = true;
   geometry.computeVertexNormals();
-}
-
-// Matches SHOP_PLOT_COLORS' own claimed color (see its comment) so the
-// claim-map flyover and the real 3D world it's picking a plot in agree.
-const CLAIM_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, water: 0x4a9bd1 };
-
-// docs/SPEC.md §1's Earth-curvature ground (issue #135, worker/
-// earthCurvature.js) applied to this flyover — the one place in this app
-// that currently renders many landlets across a real fraction of the
-// world's own radius at once. A single landlet's own ~31.6m ground plane
-// (Build/Shop mode's flat ground meshes, deliberately left untouched)
-// sags by a fraction of a millimeter at Earth's real radius — genuinely
-// imperceptible, the same "correct architecture, imperceptible at this
-// scale" tradeoff docs/SPEC.md §3 already makes for the buildable-volume
-// cone (see clampToLandlet/footprintScaleAtHeight above). This flyover's
-// own radius (the world's current growth radius) is the only distance
-// this app deals with that's large enough for that sag to eventually
-// matter, so it's the one ground mesh actually worth curving today.
-//
-// Builds a triangulated disc — ringCount concentric rings (plus a center
-// point) of angularSegments vertices each — with every vertex run through
-// curvedPosition, rather than THREE.CircleGeometry's flat single-ring fan
-// (which has no interior vertices to displace at all). Reused for both
-// the ground fill (a full disc from r=0) and the world-boundary ring
-// (innerRadius > 0, an annulus with no center fan) via buildCurvedRingBand
-// below.
-function buildCurvedDiscGeometry(radius, ringCount, angularSegments) {
-  const positions = [];
-  const center = curvedPosition({ x: 0, y: 0, z: 0 });
-  positions.push(center.x, center.y, center.z);
-  const ringStart = [];
-  for (let ring = 1; ring <= ringCount; ring++) {
-    ringStart[ring] = positions.length / 3;
-    const r = (radius * ring) / ringCount;
-    for (let a = 0; a < angularSegments; a++) {
-      const theta = (a / angularSegments) * Math.PI * 2;
-      const point = curvedPosition({ x: r * Math.cos(theta), y: r * Math.sin(theta), z: 0 });
-      positions.push(point.x, point.y, point.z);
-    }
-  }
-  const indices = [];
-  for (let a = 0; a < angularSegments; a++) {
-    const next = (a + 1) % angularSegments;
-    indices.push(0, ringStart[1] + a, ringStart[1] + next);
-  }
-  for (let ring = 1; ring < ringCount; ring++) {
-    const inner = ringStart[ring];
-    const outer = ringStart[ring + 1];
-    for (let a = 0; a < angularSegments; a++) {
-      const next = (a + 1) % angularSegments;
-      indices.push(inner + a, outer + a, outer + next);
-      indices.push(inner + a, outer + next, inner + next);
-    }
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setIndex(indices);
-  return geometry;
-}
-
-// A thin curved annulus between innerRadius and outerRadius — the same
-// per-vertex curvedPosition treatment as buildCurvedDiscGeometry, just two
-// rings with no center fan (this map's world-boundary line never reaches
-// r=0). ringCount lets a wide band (unused here, innerRadius/outerRadius
-// are close together for this map's own thin boundary line) still curve
-// smoothly instead of interpolating flat between just two curved rings.
-function buildCurvedRingBand(innerRadius, outerRadius, ringCount, angularSegments) {
-  const positions = [];
-  const ringStart = [];
-  for (let ring = 0; ring <= ringCount; ring++) {
-    ringStart[ring] = positions.length / 3;
-    const r = innerRadius + ((outerRadius - innerRadius) * ring) / ringCount;
-    for (let a = 0; a < angularSegments; a++) {
-      const theta = (a / angularSegments) * Math.PI * 2;
-      const point = curvedPosition({ x: r * Math.cos(theta), y: r * Math.sin(theta), z: 0 });
-      positions.push(point.x, point.y, point.z);
-    }
-  }
-  const indices = [];
-  for (let ring = 0; ring < ringCount; ring++) {
-    const inner = ringStart[ring];
-    const outer = ringStart[ring + 1];
-    for (let a = 0; a < angularSegments; a++) {
-      const next = (a + 1) % angularSegments;
-      indices.push(inner + a, outer + a, outer + next);
-      indices.push(inner + a, outer + next, inner + next);
-    }
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setIndex(indices);
-  return geometry;
-}
-
-// A navigable overhead flyover: an orbit-controlled camera looking down at
-// a curved rendering (see buildCurvedDiscGeometry above) of the whole world
-// circle and every landlet in it, each shape/position/color drawn straight
-// from real world data (no separate 2D projection math — a landlet's plot
-// sits at its own center_x_m/center_y_m, run through curvedPosition, on
-// the same ground the builder scene itself uses). Tapping a plot previews
-// it below regardless of status; only an available (greenbelt) one enables
-// the Claim button.
-async function loadLandletMap(resolve) {
-  const myLoadToken = ++claimMapLoadToken;
-  claimStatusEl.textContent = 'Loading the world…';
-  claimStatusEl.classList.remove('error');
-  claimSelectionNameEl.textContent = 'No plot selected';
-  claimConfirmBtn.disabled = true;
-  claimConfirmBtn.onclick = null;
-  disposeClaimFlyover();
-
-  let world;
-  let landlets;
-  try {
-    // Landlets still generating (not yet enclosed by the world's expansion
-    // radius) are queued backend state, not something to show a builder —
-    // only fetch the two statuses that are meaningful to see/select here.
-    // #885: fetchLandlets only ever returns one page — GET /api/landlets
-    // orders oldest-first, so a plain limit:100 here would permanently cap
-    // this map at the oldest 100 greenbelt/claimed landlets ever generated,
-    // silently hiding every plot from the ongoing world-expansion pipeline
-    // (same bug class #186/#190 already fixed for other /landlets callers).
-    // fetchAllLandlets follows nextCursor to get the real full set.
-    const [fetchedWorld, greenbeltLandlets, claimedLandlets] = await Promise.all([
-      fetchWorld(),
-      fetchAllLandlets({ status: 'greenbelt' }),
-      fetchAllLandlets({ status: 'claimed' }),
-    ]);
-    world = fetchedWorld;
-    landlets = [...greenbeltLandlets, ...claimedLandlets];
-  } catch (err) {
-    if (myLoadToken !== claimMapLoadToken) return; // superseded — a newer load owns the UI now
-    claimStatusEl.textContent = err.message || 'Could not load the world.';
-    claimStatusEl.classList.add('error');
-    return;
-  }
-  if (myLoadToken !== claimMapLoadToken) return; // superseded while fetching — abandon quietly, nothing built yet
-
-  const radiusM = world.radiusM;
-  const scene = new THREE.Scene();
-  // Bright pale sky + soft green ground — this map used to be a near-black
-  // "radar" backdrop, which read as ominous rather than the lighthearted,
-  // bright feel the rest of the world now goes for (see the day-night
-  // removal and index.html's own brand-color comment).
-  scene.background = new THREE.Color(0x87ceeb);
-  scene.add(new THREE.AmbientLight(0xffffff, 0.9));
-  const sun = new THREE.DirectionalLight(0xffffff, 0.7);
-  sun.position.set(radiusM, -radiusM, radiusM * 2);
-  scene.add(sun);
-
-  const ground = new THREE.Mesh(
-    buildCurvedDiscGeometry(radiusM * 1.4, 16, 64),
-    new THREE.MeshBasicMaterial({ color: 0xa8d98a }),
-  );
-  scene.add(ground);
-
-  const boundary = new THREE.Mesh(
-    buildCurvedRingBand(radiusM * 0.99, radiusM * 1.01, 2, 128),
-    new THREE.MeshBasicMaterial({ color: 0x16240a, transparent: true, opacity: 0.4, side: THREE.DoubleSide }),
-  );
-  boundary.position.z = 0.02;
-  scene.add(boundary);
-
-  // Plots of the same status share a fill color, so without a per-plot
-  // border two adjacent greenbelt lands would visually merge into one —
-  // this is a placeholder selection UI (a real flyover will eventually
-  // replace it), so making individual land boundaries readable at a glance
-  // matters more here than it would in a polished final view.
-  const plotOutlineMaterial = new THREE.LineBasicMaterial({ color: 0x0d1a08, transparent: true, opacity: 0.7 });
-  const plotMeshes = [];
-  const plotOutlines = [];
-  let anyAvailable = false;
-  for (const landlet of landlets) {
-    if (landlet.status === 'greenbelt' && landlet.landType !== 'water') anyAvailable = true;
-    const shape = shapeForLandlet(landlet);
-    const geometry = new THREE.ShapeGeometry(shape);
-    const material = new THREE.MeshBasicMaterial({ color: CLAIM_PLOT_COLORS[plotColorKeyForLandlet(landlet)] ?? 0xffffff });
-    const mesh = new THREE.Mesh(geometry, material);
-    // The plot's own polygon (shape, above) stays flat — only its
-    // placement moves to the real curved position. Tilting the polygon
-    // itself to lie tangent to the curve would be more "correct," but at
-    // one landlet's own ~31.6m span the tilt is imperceptible (the same
-    // reasoning this map's own ground curve comment gives), so it's left
-    // flat rather than adding a tangent-plane rotation with no visible
-    // payoff yet.
-    const curvedCenter = curvedPosition({ x: landlet.center.x, y: landlet.center.y, z: 0 });
-    mesh.position.set(curvedCenter.x, curvedCenter.y, curvedCenter.z + 0.05);
-    mesh.userData.landlet = landlet;
-    scene.add(mesh);
-    plotMeshes.push(mesh);
-
-    const outlineGeometry = new THREE.BufferGeometry().setFromPoints(
-      shape.getPoints().map((p) => new THREE.Vector3(p.x, p.y, 0)),
-    );
-    const outline = new THREE.LineLoop(outlineGeometry, plotOutlineMaterial);
-    outline.position.set(curvedCenter.x, curvedCenter.y, curvedCenter.z + 0.06);
-    scene.add(outline);
-    plotOutlines.push(outline);
-  }
-
-  // A dedicated outline per selection, built from the same polygon as the
-  // plot itself (not a bounding box, which reads as a plain rectangle for
-  // every non-square shape) — swapped out on each click the same way
-  // applyLandletShape() swaps the main builder scene's ground geometry. A
-  // bold yellow ring (the brand's secondary pale-yellow hue, saturated up
-  // for a "this one's selected" highlight) rather than white, which would
-  // barely register against this map's now-bright ground colors.
-  const selectionOutlineMaterial = new THREE.LineBasicMaterial({ color: 0xf5c518 });
-  let selectionOutline = null;
-  let selectedMesh = null;
-
-  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, radiusM * 20);
-  camera.up.set(0, 0, 1); // Z-up, matching the builder scene's own convention
-  camera.position.set(0, -radiusM * 1.8, radiusM * 1.6);
-  camera.lookAt(0, 0, 0);
-
-  const renderer = new THREE.WebGLRenderer({ canvas: claimMapCanvas, antialias: true });
-  const controls = new OrbitControls(camera, claimMapCanvas);
-  controls.target.set(0, 0, 0);
-  controls.minDistance = radiusM * 0.15;
-  controls.maxDistance = radiusM * 6;
-  controls.maxPolarAngle = Math.PI * 0.49; // stop just shy of edge-on/underground
-  controls.update();
-
-  function onResize() {
-    const rect = claimMapCanvas.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
-    renderer.setSize(rect.width, rect.height, false);
-    camera.aspect = rect.width / rect.height;
-    camera.updateProjectionMatrix();
-  }
-  onResize();
-  window.addEventListener('resize', onResize);
-
-  const raycaster = new THREE.Raycaster();
-  const pointerNdcClaim = new THREE.Vector2();
-  // Named (rather than an inline arrow passed straight to addEventListener)
-  // so disposeClaimFlyover above can remove this exact function later —
-  // see its own comment on why that matters (#1131).
-  function onCanvasClick(event) {
-    const rect = claimMapCanvas.getBoundingClientRect();
-    pointerNdcClaim.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    pointerNdcClaim.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-    raycaster.setFromCamera(pointerNdcClaim, camera);
-    const hits = raycaster.intersectObjects(plotMeshes);
-    if (hits.length === 0) return;
-    const mesh = hits[0].object;
-    const landlet = mesh.userData.landlet;
-
-    if (selectedMesh) {
-      selectedMesh.material.color.setHex(CLAIM_PLOT_COLORS[plotColorKeyForLandlet(selectedMesh.userData.landlet)] ?? 0xffffff);
-    }
-    selectedMesh = mesh;
-    // Lighten toward white rather than using a fixed highlight color, so
-    // the highlighted plot still visibly carries its own status color
-    // (available vs. claimed vs. water) instead of every selection looking
-    // the same.
-    mesh.material.color.setHex(CLAIM_PLOT_COLORS[plotColorKeyForLandlet(landlet)] ?? 0xffffff).lerp(new THREE.Color(0xffffff), 0.45);
-
-    if (selectionOutline) {
-      scene.remove(selectionOutline);
-      selectionOutline.geometry.dispose();
-    }
-    const outlinePoints = shapeForLandlet(landlet).getPoints().map((p) => new THREE.Vector3(p.x, p.y, 0));
-    selectionOutline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(outlinePoints), selectionOutlineMaterial);
-    const curvedSelectionCenter = curvedPosition({ x: landlet.center.x, y: landlet.center.y, z: 0 });
-    selectionOutline.position.set(curvedSelectionCenter.x, curvedSelectionCenter.y, curvedSelectionCenter.z + 0.07);
-    selectionOutline.renderOrder = 2;
-    scene.add(selectionOutline);
-    claimFlyover.selectionOutline = selectionOutline;
-
-    const statusLabel = landlet.landType === 'water' ? 'Water' : landlet.status === 'greenbelt' ? 'Available' : 'Claimed';
-    claimSelectionNameEl.textContent = `${landlet.name} (${formatArea(landlet.areaM2)}) — ${statusLabel}`;
-    claimConfirmBtn.disabled = landlet.status !== 'greenbelt' || landlet.landType === 'water';
-    claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);
-  }
-  claimMapCanvas.addEventListener('click', onCanvasClick);
-
-  function animate() {
-    claimFlyover.animationHandle = requestAnimationFrame(animate);
-    controls.update();
-    renderer.render(scene, camera);
-  }
-  claimFlyover = {
-    scene, camera, renderer, controls, plotMeshes, plotOutlines, plotOutlineMaterial, onResize, onCanvasClick, animationHandle: 0,
-    selectionOutline: null, selectionOutlineMaterial,
-  };
-  animate();
-
-  // The world now grows itself on a schedule (see worker/index.js's
-  // scheduled() export) rather than needing a player to trigger it by
-  // hand — this can only actually show right after a fresh deployment, in
-  // the brief window before the first automatic growth cycle runs.
-  claimStatusEl.textContent = anyAvailable
-    ? ''
-    : 'No lándlets are ready to claim yet — check back again shortly.';
-}
-
-async function claimSelectedLandlet(landlet, resolve) {
-  claimConfirmBtn.disabled = true;
-  claimStatusEl.textContent = `Claiming ${landlet.name}…`;
-  claimStatusEl.classList.remove('error');
-  try {
-    const claimed = await claimLandlet(landlet.landletId);
-    disposeClaimFlyover();
-    claimModalEl.classList.remove('visible');
-    closeModalA11y(claimModalEl);
-    resolve(claimed.landletId);
-  } catch (err) {
-    // Someone else likely claimed it in the meantime (409) — refresh the
-    // map since its status is now stale.
-    claimStatusEl.textContent = err.message || 'Claim failed — it may have just been taken.';
-    claimStatusEl.classList.add('error');
-    loadLandletMap(resolve);
-  }
 }
 
 // #1170 (owner request, 2026-10-01): a grayed-out, non-interactive outline
@@ -19920,6 +19543,9 @@ async function bootstrap() {
     showShopAccessGate();
     return;
   }
+  // #2552: Build's own tween/edge-pan/controls/debug/selection-highlight
+  // per-frame work — see buildModeFrameUpdate's own comment.
+  registerModeFrameUpdate(buildModeFrameUpdate);
   refreshNotificationsBadge();
   refreshFriendsBadge();
   refreshDmBadge();
