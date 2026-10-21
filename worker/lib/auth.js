@@ -21,6 +21,7 @@
 // (see that issue for the full writeup) rather than forced through here.
 import { HttpError } from './http.js';
 import { bytesToHex } from './crypto.js';
+import { stringValue } from './validation.js';
 
 export const SESSION_COOKIE_NAME = 'hh_session';
 
@@ -93,4 +94,29 @@ export async function requireAdmin(request, db) {
 // (see worker/index.js's own comment on why, above requireSessionBuilder).
 export function assertOwner(actualOwnerId, sessionOwnerId, message) {
   if (actualOwnerId !== sessionOwnerId) throw new HttpError(message, 403);
+}
+
+// #2529: pure/zero-further-dependency, used well beyond admin code (login,
+// signup, password reset, ...) -- unlike requireSessionBuilder, neither of
+// these drags in anything not already in this file. Extracted verbatim,
+// zero behavior change.
+export function normalizeEmail(value) {
+  return stringValue(value, 'email').toLowerCase();
+}
+
+export function userFromRow(row) {
+  return {
+    userId: row.user_id,
+    email: row.email,
+    username: row.username,
+    emailVerified: row.email_verified_at !== null,
+    isAdmin: Boolean(row.is_admin),
+    ageAttested: row.age_attested_at !== null,
+    trustTier: row.trust_tier,
+    cardFunding: row.card_funding,
+    taxFormType: row.tax_form_type,
+    taxFormCompletedAt: row.tax_form_completed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
