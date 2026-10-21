@@ -14940,10 +14940,9 @@ let shopSitHeightOffset = 0;
 // of that same episode have elapsed, so the avatar doesn't always commit
 // to sitting at the exact same instant idle sway begins; sometimes it
 // lingers standing a bit first. Timing-side counterpart to the random
-// target selection in findShopIdleInteractionTarget above. Lean (#2479,
-// just below) doesn't yet have the same settle-delay pattern applied to
-// its own blend -- a small follow-up, not redone here, per #2480's own
-// "across repeated idle cycles" scope covering both poses equally.
+// target selection in findShopIdleInteractionTarget above. Lean (just
+// below) gets the identical pattern applied to its own blend, per #2480's
+// own "across repeated idle cycles" scope covering both poses equally.
 const SHOP_SIT_SETTLE_DELAY_MIN_S = 0;
 const SHOP_SIT_SETTLE_DELAY_MAX_S = 2;
 let shopSitSettleDelayS = 0;
@@ -14960,6 +14959,12 @@ let shopSitSettleElapsedS = 0; // seconds of real idle time with a 'sit' target 
 let shopLeanBlend = 0;
 let shopLeanYawOffset = 0;
 let shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
+// #2480: lean's own settle-delay counterpart to shopSitSettleDelayS/
+// shopSitSettleElapsedS above -- identical pattern, separate state, since
+// a sit episode and a lean episode are never the same episode (sit always
+// outranks lean within one idle episode per findShopIdleInteractionTarget).
+let shopLeanSettleDelayS = 0;
+let shopLeanSettleElapsedS = 0; // seconds of real idle time with a 'lean' target selected, this episode
 
 // Flight state (docs/SPEC.md §2) — see updateShopFlight/toggleShopFlight.
 // 'grounded' | 'takingOff' | 'flying' | 'landing'. Toggling mid-transition
@@ -15080,6 +15085,7 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     shopLeanBlend = 0; // #2479: same instant ease-out, mirroring sit's own just above
     shopLeanYawOffset = 0;
     shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
+    shopLeanSettleElapsedS = 0; // #2480: re-armed for the next lean episode's own randomized delay
   } else {
     // #2477: fires exactly once per idle episode, the instant elapsed time
     // first crosses SHOP_IDLE_DELAY_S -- not every frame afterward, since
@@ -15091,10 +15097,17 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     if (!wasIdle && idleTarget === 1) {
       shopIdleInteractionTarget = findShopIdleInteractionTarget(shopAvatarPosition.x, shopAvatarPosition.y);
       // #2480: re-randomized every time a fresh episode selects a new sit
-      // target (including re-selecting the same chair next time around) —
-      // see this constant's own declaration for why.
+      // or lean target (including re-selecting the same one next time
+      // around) — see shopSitSettleDelayS's own declaration for why. Both
+      // get randomized here regardless of which kind was actually
+      // selected (the unused one's delay just sits idle until its own
+      // kind is picked in some future episode) — simpler than branching
+      // on kind here, and harmless since each only ever gates its own
+      // blend below.
       shopSitSettleDelayS = THREE.MathUtils.randFloat(SHOP_SIT_SETTLE_DELAY_MIN_S, SHOP_SIT_SETTLE_DELAY_MAX_S);
       shopSitSettleElapsedS = 0;
+      shopLeanSettleDelayS = THREE.MathUtils.randFloat(SHOP_SIT_SETTLE_DELAY_MIN_S, SHOP_SIT_SETTLE_DELAY_MAX_S);
+      shopLeanSettleElapsedS = 0;
     }
     shopIdleBlend += (idleTarget - shopIdleBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
     const afkTarget = shopIdleElapsedS >= SHOP_AFK_DELAY_S ? 1 : 0;
@@ -15135,16 +15148,20 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
       shopSitYawOffset = 0;
     }
 
-    // #2479: same shape as #2478's sit block just above, for a 'lean'
-    // target -- eases in only when this idle episode's own selected target
-    // is a lean one (sit always outranks lean within the same episode per
-    // findShopIdleInteractionTarget, so these two blends are never both
-    // nonzero at once). Visual-only offset recomputed fresh each frame as a
-    // pure function of shopLeanBlend and the current target, same reasoning
-    // shopSitYawOffset/shopSitHeightOffset's own declaration gives -- never
-    // touches shopAvatarPosition/shopAvatarFacing, so leaning never affects
-    // movement, collision, curvature, or camera-follow code either.
-    const leanTarget = shopIdleInteractionTarget?.kind === 'lean' ? 1 : 0;
+    // #2479/#2480: same shape as #2478's sit block just above, for a
+    // 'lean' target -- eases in only once this idle episode's own
+    // selected target is a lean one *and* its own randomized settle
+    // delay has elapsed (sit always outranks lean within the same
+    // episode per findShopIdleInteractionTarget, so these two blends are
+    // never both nonzero at once). Visual-only offset recomputed fresh
+    // each frame as a pure function of shopLeanBlend and the current
+    // target, same reasoning shopSitYawOffset/shopSitHeightOffset's own
+    // declaration gives -- never touches shopAvatarPosition/
+    // shopAvatarFacing, so leaning never affects movement, collision,
+    // curvature, or camera-follow code either.
+    if (shopIdleInteractionTarget?.kind === 'lean') shopLeanSettleElapsedS += dt;
+    const leanTarget =
+      shopIdleInteractionTarget?.kind === 'lean' && shopLeanSettleElapsedS >= shopLeanSettleDelayS ? 1 : 0;
     shopLeanBlend += (leanTarget - shopLeanBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
     if (shopIdleInteractionTarget?.kind === 'lean') {
       shopLeanPositionOffset = {
@@ -15875,6 +15892,9 @@ window.__testShopLeanPose = () => ({
   blend: shopLeanBlend,
   yawOffset: shopLeanYawOffset,
   positionOffset: { ...shopLeanPositionOffset },
+  // #2480: same settle-delay fields window.__testShopSitPose exposes above.
+  settleDelayS: shopLeanSettleDelayS,
+  settleElapsedS: shopLeanSettleElapsedS,
 });
 
 // #2044: the spec line SHOP_FLIGHT_TAKEOFF_DURATION_S's own comment above
@@ -18554,6 +18574,8 @@ async function enterShopMode() {
   shopLeanBlend = 0;
   shopLeanYawOffset = 0;
   shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
+  shopLeanSettleDelayS = 0;
+  shopLeanSettleElapsedS = 0;
   // #1175 (docs/SPEC.md §1/§2): every spawn — not just a first-ever visit —
   // starts already flying, above a random world location, facing the
   // world center, and slowly orbiting it clockwise until the shopper gives
