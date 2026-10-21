@@ -7034,7 +7034,11 @@ async function renderAuctionSection() {
     if (myToken !== landletRenderToken) return;
     if (activeForMine.length > 0) {
       const row = document.createElement('div');
-      row.className = 'auction-row';
+      // #2607: also carries auction-row-mine -- the sibling Active Auctions
+      // list (buildAuctionRow, below) renders plain .auction-row elements
+      // for every site-wide active auction, so .auction-row alone no longer
+      // uniquely identifies this picker's own "your auction is live" row.
+      row.className = 'auction-row auction-row-mine';
       const info = document.createElement('div');
       info.className = 'auction-row-info';
       info.textContent = `Your auction is live — ${formatAuctionSummary(activeForMine[0])}`;
