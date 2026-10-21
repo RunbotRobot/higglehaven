@@ -75,6 +75,37 @@ export async function ensureAdminSession() {
   return adminCookiePromise;
 }
 
+// The exact email chooseIdentity derives from a label for its own signup
+// call below — exported so a test that needs to act on that same account
+// from outside the page (grantAdmin below, or a raw adminApi/fetchJson
+// call keyed by email) never risks drifting from chooseIdentity's own
+// derivation by keeping a second copy of this regex.
+export function emailForLabel(label) {
+  return `${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}@e2e.test`;
+}
+
+// #653: grants admin to an already-signed-up account by email, via the
+// real POST /api/auth/grant-admin endpoint — for a test whose own in-world
+// browser-session account (not ensureAdminSession's separate throwaway
+// one) needs to be an admin, e.g. to keep exercising the now-admin-only
+// simulated-purchase path (handleInstancePurchase's own #653 comment)
+// without losing whatever in-world state (a claimed landlet, an uploaded
+// product) that session already built up under its own cookie jar.
+// is_admin takes effect on this account's very next request — currentUser
+// (worker/lib/auth.js) re-joins the live users row every time, nothing
+// about it is cached in the session token itself.
+export async function grantAdmin(email) {
+  const adminCookie = await ensureAdminSession();
+  const granted = await adminApi('/auth/grant-admin', adminCookie, {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+  if (granted.response.status !== 200) {
+    throw new Error(`grantAdmin: grant-admin failed (${granted.response.status}) for ${email}`);
+  }
+  return granted.body;
+}
+
 const GROW_WORLD_MAX_STEPS = 20;
 
 // The real growth mechanism is now automatic (worker/index.js's scheduled()
@@ -327,7 +358,7 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   if (!isNew) {
     throw new Error(`chooseIdentity: isNew:false but no session is active — expected to already be logged in as "${label}"`);
   }
-  const email = `${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}@e2e.test`;
+  const email = emailForLabel(label);
   await page.click('.auth-tab-btn[data-auth-view="signup"]');
   await page.fill('#auth-signup-username', label);
   await page.fill('#auth-signup-email', email);

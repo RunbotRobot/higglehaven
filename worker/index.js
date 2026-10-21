@@ -1,9 +1,4 @@
-import {
-  landletMaxWorldRadius, landletMinWorldRadius, landletWorldPolygon, pointInPolygon, pointToSegmentDistance,
-  polygonsOverlap, sameAreaRadius,
-} from './geometry.js';
-import { generateLandletRing, powerLawPlots } from './landGenerator.js';
-import { generateOrganicMosaic } from './organicLandGenerator.js';
+import { landletMaxWorldRadius } from './geometry.js';
 import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from './earthCurvature.js';
 import migrationsManifest from './migrations-manifest.json';
 // #2501/#2528: cross-cutting helpers used from nearly every route handler
@@ -18,7 +13,14 @@ import {
   finiteNumber, queryLimit, decodeCursor, encodeCursor, assertReferencesExist,
 } from './lib/validation.js';
 import { notificationStatement, fireNotification, fireNotifications } from './lib/notifications.js';
-import { SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser, requireAdmin, assertOwner } from './lib/auth.js';
+import {
+  SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser, requireAdmin, assertOwner,
+  assertVerified, requireSessionBuilder, requireVerifiedSession,
+} from './lib/auth.js';
+// #2539: world-object handlers (placed instances, backups, sign posts,
+// calendar events) -- see that module's own comment for why this creates
+// an intentional, safe circular import with this file.
+import { handleInstances, signPostFromRow, calendarEventFromRow } from './lib/world-objects.js';
 // #2535: the builder-profile domain (see that module's own comment for
 // why handleBuilders itself -- the /api/builders dispatcher these are
 // called from -- stays here rather than moving too, and for why this
@@ -28,6 +30,15 @@ import {
   handleMyNotificationPreferences, handleMyOwnedAnimations, handleBuilderLowStock, handleMyAnimation,
   builderFromRow, publicBuilderFromRow, requireBuilder,
 } from './lib/builder-profile.js';
+// #2534: the land-candidates/world-generation domain -- see that module's
+// own comment for why handleLandlets/worldFromRow stay here and import
+// candidateRowFromLandlet/computeGreenbeltRatio back from it.
+import {
+  handleLandCandidates, handleLandCandidateRings, handleWorld, autoGrowWorldIfNeeded,
+  candidateRowFromLandlet, computeGreenbeltRatio,
+} from './lib/world-generation.js';
+// #2613 (leaf of #2540): sold-out markers & self-dealing flag review.
+import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-admin.js';
 // #2541: Stripe webhook/card-setup, Didit verification, video generation,
 // and credit-orb route handlers, extracted into worker/lib/ -- see each
 // module's own comment for what deliberately stayed here instead (and why).
@@ -38,6 +49,13 @@ import {
   expireStaleVideoGenerationJobs,
 } from './lib/video-generation.js';
 import { handleCreditOrbs, spawnCreditOrbIfDue } from './lib/credit-orbs.js';
+// #2532: product/seller reputation route handlers (reviews, counterfeit/
+// policy flags, seller feedback), extracted into worker/lib/reputation.js --
+// see that module's own comment for what deliberately stayed here instead.
+import {
+  handleProductReviews, handleProductFlags, handleProductFlagsList,
+  handleSellerFeedbackCreate, handleSellerFeedbackEdit, handleSellerFeedbackDelete, handleSellerFeedbackList,
+} from './lib/reputation.js';
 // #2542: the signup/login/logout/delete-account/change-password/me/
 // verify-email/request-password-reset/reset-password/resend-verification/
 // change-email/age-attest route handlers, extracted into
@@ -2457,595 +2475,10 @@ async function handleCatalog(request, db, route, url, models, env) {
   return json({ error: 'Not found' }, 404);
 }
 
-// Reviews on a catalog template (docs/SPEC.md §5's "Review incentives,"
-// docs/API.md's "Product reviews," migrations/0048) — nested under
-// /catalog/:templateId/reviews rather than a top-level /product-reviews
-// collection, same "never exists independent of its parent" reasoning as
-// sign posts/calendar events. Attached to the *template* (the product
-// itself), not to any one placed instance of it — see migrations/0048's own
-// comment for why 0047's original instance-level design was wrong. No
-// opt-in flag: every catalog template is already product-like by
-// definition, so every one is reviewable. DELETE (moderation) is gated to
-// the template's own seller, same "if (existing.seller_id)" pattern the
-// catalog template's own PATCH/DELETE handler above already uses — an
-// unowned/orphaned template's reviews get the same per-IP throttle
-// (below) the catalog template's own DELETE already needed for the exact
-// same reason (#520): with no owning seller to gate the request behind a
-// session, an unthrottled anonymous caller could otherwise wipe every
-// review on that template in an unbounded flood.
-const PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX = 20;
-
-// #804: review creation itself had no rate limit at all — the one outlier
-// among comparable free-text-identity writes in this file (sign posts,
-// calendar events, purchases, builder/seller creation, and even this
-// endpoint's own DELETE branch below all have one). Originally keyed by
-// clientIp since authorLabel was free text matched only against
-// purchases.buyer_label (also free text); #1113 now requires a session, so
-// this is keyed by builder_id like this file's other session-gated mutation
-// rate limits (e.g. FRIENDSHIP_MUTATE_RATE_LIMIT_MAX).
-const PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX = 20;
-
-// #1975: same missing-rate-limit gap this file's other owner-gated CRUD
-// mutations already closed (SIGN_POST_EDIT_RATE_LIMIT_MAX, #1830), for the
-// new author-only edit branch below.
-const PRODUCT_REVIEW_EDIT_RATE_LIMIT_MAX = 20;
-
-// #2422: same "a dropped POST response and the innocent manual retry it
-// invites" protection signPostIdempotencyKey/calendarEventIdempotencyKey
-// already give their own structurally identical POSTs. Scoped by
-// templateId+builderId rather than a purchase_id, since purchase_id isn't
-// known until after the eligibility lookup the retry would otherwise fail
-// against (a successful first attempt already consumed the purchase it
-// reviewed).
-function productReviewIdempotencyKey(templateId, builderId, rawKey) {
-  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
-  return `review:${templateId}:${builderId}:${rawKey}`;
-}
-
-async function handleProductReviews(request, db, route) {
-  const templateId = route[1];
-
-  if (request.method === 'GET' && route.length === 3) {
-    const template = await db.prepare('SELECT template_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
-    if (!template) return json({ error: 'Catalog template not found' }, 404);
-    // #416: this was ORDER BY created_at with no DESC — ascending, so once a
-    // product passed 200 reviews, the LIMIT window was always the *oldest*
-    // 200, permanently hiding every review submitted after that point (the
-    // same #356 already fixed for sign_posts/calendar_events). DESC picks
-    // the right window (always the newest 200); .reverse() restores the
-    // response's own ascending (oldest-of-the-window-first) order.
-    const { results } = await db.prepare(`
-      SELECT * FROM product_reviews WHERE template_id = ? ORDER BY created_at DESC LIMIT 200
-    `).bind(templateId).all();
-    const reviews = results.reverse().map(reviewFromRow);
-    // averageRating/count are the product's real, all-time summary, not
-    // derived from the LIMIT-200 page above (docs/API.md documents them as
-    // authoritative — "no caller needs to re-derive it from the list
-    // itself" — so past 200 reviews they'd otherwise silently become "the
-    // 200 oldest reviews' average" instead of the whole product's).
-    const summary = await db.prepare(`
-      SELECT AVG(rating) AS average_rating, COUNT(*) AS count FROM product_reviews WHERE template_id = ?
-    `).bind(templateId).first();
-    const averageRating = summary.count === 0 ? null : summary.average_rating;
-    return json({ reviews, averageRating, count: summary.count });
-  }
-
-  if (request.method === 'POST' && route.length === 3) {
-    const template = await db.prepare('SELECT template_id, name, seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
-    if (!template) return json({ error: 'Catalog template not found' }, 404);
-    // #1113 (closing #893's spoofing gap): now requires a session —
-    // authorLabel is no longer client-supplied, and eligibility is a real
-    // purchase_id lookup (purchases.buyer_builder_id, migrations/0099)
-    // instead of a caller-supplied, non-unique, mutable label matched
-    // against purchases.buyer_label. Every real purchase already requires
-    // a verified session (N44), so this is a strict tightening, not a new
-    // restriction on anyone who could legitimately review something.
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `product-review-create:${sessionBuilder.builder_id}`, PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    const authorLabel = sessionBuilder.label;
-    const rating = Number(input.rating);
-    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-      throw new HttpError('rating must be an integer from 1 to 5', 400);
-    }
-    const text = input.text === undefined || input.text === null || input.text === ''
-      ? null
-      : stringValue(input.text, 'text');
-    if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-    // #2422: a retry that reuses the same (validated) client-supplied key
-    // finds its own already-landed row here and returns it instead of
-    // hitting the eligibility check below -- which a successful first
-    // attempt already consumed the one purchase it reviewed against, so a
-    // naive retry would otherwise either 400 ("no eligible purchase") or,
-    // if the shopper has a second unreviewed purchase of this same
-    // product, silently create a second, distinct review that was never
-    // the retry's intent. Checked before the eligibility lookup for
-    // exactly that reason. Same content-match-before-reuse guard
-    // signPostIdempotencyKey/#1778 already established for its own sibling.
-    const idempotencyKey = productReviewIdempotencyKey(templateId, sessionBuilder.builder_id, input.idempotencyKey);
-    let existingReview = null;
-    if (idempotencyKey) {
-      existingReview = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?')
-        .bind(idempotencyKey, templateId).first();
-      if (existingReview && existingReview.rating === rating && existingReview.text === text) {
-        return json({ review: reviewFromRow(existingReview) });
-      }
-    }
-    // The caller's own oldest unreviewed, unrefunded purchase of this
-    // template — a real foreign key, not a label match. This SELECT alone
-    // isn't the actual guard against double-reviewing (see the INSERT's own
-    // WHERE NOT EXISTS below for that); it's just what turns "no eligible
-    // purchase at all" into a clean 400 instead of a confusing 409.
-    const purchase = await db.prepare(`
-      SELECT purchase_id FROM purchases
-      WHERE template_id = ? AND buyer_builder_id = ? AND refunded_at IS NULL
-        AND NOT EXISTS (SELECT 1 FROM product_reviews WHERE purchase_id = purchases.purchase_id)
-      ORDER BY created_at ASC LIMIT 1
-    `).bind(templateId, sessionBuilder.builder_id).first();
-    if (!purchase) {
-      throw new HttpError('Only a shopper who has purchased this product, and not yet reviewed that purchase, can review it', 400);
-    }
-    // One review per purchase (migrations/0100, replacing migrations/0059's
-    // per-label guard) — the SELECT above is a point-in-time read, not a
-    // consumption check, so without this the same purchase could otherwise
-    // back an unbounded number of reviews. A separate SELECT-then-INSERT
-    // here would be a check-then-act race (two concurrent submits against
-    // the same purchase_id could both pass the SELECT before either INSERT
-    // commits) — folding the existence check into the INSERT's own WHERE
-    // clause instead makes the whole check-and-insert one atomic statement,
-    // same idiom checkRateLimit uses for its own check-then-act race.
-    // #1385: the eligibility SELECT above already required refunded_at IS
-    // NULL, but that's the same stale-read problem — a refund landing
-    // between that SELECT and this INSERT would otherwise leave nothing
-    // blocking the insert, since the only atomic guard was "not already
-    // reviewed." Re-checking refunded_at IS NULL here too, in the same
-    // WHERE clause, closes that race the same way the double-review guard
-    // already does. `changes === 0` means one of the two guards blocked
-    // the insert; re-reading disambiguates which for a clearer error.
-    const reviewId = (idempotencyKey && !existingReview) ? idempotencyKey : `review-${crypto.randomUUID()}`;
-    // #1975: records who actually wrote this review (sessionBuilder.user_id),
-    // the same sign_posts.user_id pattern (#1830/migrations/0125) — lets the
-    // PATCH/DELETE branches below check real ownership instead of having no
-    // identity to check at all.
-    const result = await db.prepare(`
-      INSERT INTO product_reviews (review_id, template_id, author_label, rating, text, purchase_id, user_id)
-      SELECT ?, ?, ?, ?, ?, ?, ?
-      WHERE NOT EXISTS (
-        SELECT 1 FROM product_reviews WHERE purchase_id = ?
-      )
-      AND EXISTS (
-        SELECT 1 FROM purchases WHERE purchase_id = ? AND refunded_at IS NULL
-      )
-    `).bind(
-      reviewId, templateId, authorLabel, rating, text, purchase.purchase_id, sessionBuilder.user_id,
-      purchase.purchase_id, purchase.purchase_id,
-    ).run();
-    if (result.meta.changes === 0) {
-      const stillEligible = await db.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?')
-        .bind(purchase.purchase_id).first();
-      if (stillEligible?.refunded_at) {
-        throw new HttpError('This purchase has been refunded and can no longer be reviewed', 409);
-      }
-      throw new HttpError('This purchase has already been reviewed', 409);
-    }
-    // #1043: every other real "something happened that the other party
-    // should passively learn about" event in this file fires a
-    // notification (a new bid, an auction selling, a sale, a friend
-    // request — see notifyOfNewBid/the friendship POST branch above) — a
-    // new review had no notification path at all. Best-effort, fired
-    // after the write it's about, same convention as those. A seller-less
-    // or dangling seller_id (same guard the DELETE branch below uses)
-    // simply has nobody to notify.
-    if (template.seller_id && await sellerExists(db, template.seller_id)) {
-      const owner = await db.prepare(`
-        SELECT b.builder_id AS builder_id FROM sellers s
-        JOIN builders b ON b.user_id = s.user_id
-        WHERE s.seller_id = ?
-      `).bind(template.seller_id).first();
-      if (owner) {
-        await fireNotification(db, owner.builder_id,
-          `"${authorLabel}" left a ${rating}-star review on "${template.name}".`);
-      }
-    }
-    const row = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ?').bind(reviewId).first();
-    // #2429: same re-SELECT race #2364 fixed for this resource's PATCH
-    // sibling, never applied to this POST/create branch -- a concurrent
-    // admin delete landing in the awaited gap since the INSERT above can
-    // remove the row before this re-SELECT runs.
-    if (!row) return json({ error: 'Review not found' }, 404);
-    return json({ review: reviewFromRow(row) }, 201);
-  }
-
-  if (request.method === 'PATCH' && route.length === 4) {
-    const reviewId = route[3];
-    const existing = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?').bind(reviewId, templateId).first();
-    if (!existing) return json({ error: 'Review not found' }, 404);
-    // #1975: editing is author-only -- there's no moderation equivalent for
-    // PATCH the way DELETE has one (a seller moderating an unwanted review
-    // removes it; rewriting someone else's review under their own name
-    // isn't the same kind of action), same reasoning sign_posts' own PATCH
-    // (#1830) already settled. A pre-#1975 review with no user_id at all
-    // (user_id IS NULL) can never match here, same as DELETE's own
-    // author-path below -- there's nobody on record to own it.
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    if (existing.user_id === null || existing.user_id !== sessionBuilder.user_id) {
-      throw new HttpError('Not your review', 403);
-    }
-    await checkRateLimit(db, `product-review-edit:${sessionBuilder.user_id}`, PRODUCT_REVIEW_EDIT_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    let rating = existing.rating;
-    if (input.rating !== undefined) {
-      rating = Number(input.rating);
-      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-        throw new HttpError('rating must be an integer from 1 to 5', 400);
-      }
-    }
-    // Only an explicitly-present `text` key changes it -- an omitted key
-    // keeps the review's existing text, the same "distinguish omitted from
-    // explicitly cleared" shape bundles' own PATCH (COALESCE-based) handles,
-    // just computed in JS here since text's own null-clearing rule (empty
-    // string also means "no text", matching POST's own rule above) doesn't
-    // map onto COALESCE's "null parameter means keep the old value" directly.
-    let text = existing.text;
-    if ('text' in input) {
-      text = (input.text === null || input.text === '') ? null : stringValue(input.text, 'text');
-    }
-    if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-    // Same "point-in-time read, real awaited gaps after it" race this file's
-    // other author-direct mutations guard against (sign_posts' own PATCH).
-    const updated = await db.prepare('UPDATE product_reviews SET rating = ?, text = ? WHERE review_id = ? AND user_id = ?')
-      .bind(rating, text, reviewId, sessionBuilder.user_id).run();
-    if (updated.meta.changes === 0) {
-      throw new HttpError('Review changed concurrently — refetch and retry', 409);
-    }
-    // #1975/#2122: snapshot the pre-edit row for disputes -- logged only
-    // after the update is confirmed to have actually happened (a concurrent
-    // delete could otherwise win the race first and leave a false edit
-    // snapshot for an edit that never took effect), same "logged only after
-    // confirmed" idiom the delete_review_override admin branch below uses.
-    await recordContentEditHistory(db, 'product_reviews', reviewId, 'edit', existing, sessionBuilder.user_id);
-    const row = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ?').bind(reviewId).first();
-    // #2364: the UPDATE's own meta.changes check above only confirms it
-    // matched a row at the moment it ran -- a concurrent admin DELETE (the
-    // sibling branch below) landing in the awaited gap since (readJson/
-    // checkRateLimit/recordContentEditHistory) can remove the row before
-    // this re-SELECT runs. Same guard #2354 added for sign_posts/
-    // calendar_events' identical shape.
-    if (!row) return json({ error: 'Review not found' }, 404);
-    return json({ review: reviewFromRow(row) });
-  }
-
-  if (request.method === 'DELETE' && route.length === 4) {
-    const reviewId = route[3];
-    const existing = await db.prepare('SELECT * FROM product_reviews WHERE review_id = ? AND template_id = ?').bind(reviewId, templateId).first();
-    if (!existing) return json({ error: 'Review not found' }, 404);
-    const template = await db.prepare('SELECT seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
-    // #1712: an admin can remove any review outright (harassment, doxxing,
-    // other policy violations) regardless of whether the template's own
-    // seller is reachable or ever acts on it -- checked first, via the
-    // non-throwing currentUser lookup, since an admin isn't necessarily
-    // that seller and shouldn't be forced through the ownership check below.
-    const requester = await currentUser(request, db);
-    const admin = requester && requester.is_admin ? requester : null;
-    // #1975: the review's own author can remove it directly, alongside the
-    // existing admin/seller moderation paths below -- same "either should be
-    // able to remove it" shape sign_posts' own DELETE (#1830) already
-    // settled. Checked after the admin branch (an admin override always
-    // wins) but before seller moderation, since an author removing their
-    // own review is not moderation and shouldn't need a reachable seller at
-    // all. A pre-#1975 review with no user_id (user_id IS NULL) can never
-    // match here, so it falls through to the existing paths exactly as it
-    // always has.
-    if (!admin && requester && existing.user_id !== null && existing.user_id === requester.user_id) {
-      await checkRateLimit(db, `product-review-delete:${requester.user_id}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
-      const deletedByAuthor = await db.prepare('DELETE FROM product_reviews WHERE review_id = ? AND user_id = ?')
-        .bind(reviewId, requester.user_id).run();
-      if (deletedByAuthor.meta.changes === 0) {
-        throw new HttpError('Review changed concurrently — refetch and retry', 409);
-      }
-      // #1975/#2122: logged only after the delete is confirmed to have
-      // actually happened, same reasoning as the PATCH branch above.
-      await recordContentEditHistory(db, 'product_reviews', reviewId, 'delete', existing, requester.user_id);
-      return json({ deleted: true });
-    }
-    if (admin) {
-      await checkRateLimit(db, `product-review-delete:${admin.user_id}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
-    } else if (template?.seller_id && await sellerExists(db, template.seller_id)) {
-      const sessionSeller = await requireSessionSeller(request, db);
-      assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your catalog template');
-      // #990: unlike the anonymous/orphaned-template branch below (#564),
-      // this authenticated-owner branch never had a rate limit at all --
-      // same gap class already closed for other authenticated mutation
-      // actions in this file (FRIENDSHIP_MUTATE_RATE_LIMIT_MAX #899,
-      // CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX #944).
-      await checkRateLimit(db, `product-review-delete:${sessionSeller.seller_id}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
-    } else {
-      await checkRateLimit(db, `product-review-delete:${clientIp(request)}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
-    }
-    const result = await db.prepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
-    // `admin` is only set on the admin-override branch above; an ordinary
-    // seller-initiated (or anonymous orphaned-template) delete logs nothing
-    // here, same convention as handlePurchaseRefund's/handleMarkShipped's
-    // own admin-override logging. Logged only after the delete is confirmed
-    // to have actually happened -- the existence check above and this DELETE
-    // aren't atomic, so a concurrent delete (another admin, or the owning
-    // seller's own moderation path) can win the race first; a log row for a
-    // deletion that didn't happen would misattribute it to this admin, same
-    // "logged only after confirmed" idiom delete_land_candidate already uses.
-    if (admin && result.meta.changes === 1) {
-      await adminActionLogStatement(db, admin.user_id, 'delete_review_override', 'product_review', reviewId).run();
-    }
-    return json({ deleted: true });
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-// #2017 (sub-issue of #1212, owner-settled shape 2026-10-13): a shopper-
-// facing counterfeit-flag endpoint plus the admin resolve action on the
-// same listing. Zero-cost/consequence-free for the flagger by design (the
-// owner's own words: "don't punish good-faith reports") -- no rate limit
-// beyond the ordinary anti-spam one below, and no visible penalty to the
-// flagger's own account regardless of outcome.
-const PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX = 20;
-// Auto-hide threshold: once this many *distinct* flaggers (migrations/0131's
-// own UNIQUE constraint is what makes this actually distinct) are pending
-// against one template, new purchases of it block automatically pending
-// admin review -- see handleInstancePurchase's own flagged_hidden_at guard.
-const PRODUCT_FLAG_AUTO_HIDE_THRESHOLD = 3;
-
-async function handleProductFlags(request, db, route) {
-  const templateId = route[1];
-
-  if (request.method === 'POST' && route.length === 3) {
-    const template = await db.prepare('SELECT template_id, flagged_hidden_at, seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
-    if (!template) return json({ error: 'Catalog template not found' }, 404);
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `product-flag-create:${sessionBuilder.builder_id}`, PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    const reason = input.reason === undefined || input.reason === null || input.reason === ''
-      ? null
-      : stringValue(input.reason, 'reason');
-    if (reason && reason.length > 280) throw new HttpError('reason must be 280 characters or fewer', 400);
-    // migrations/0131's own UNIQUE(template_id, flagger_builder_id) is the
-    // real guard against the same builder inflating their own listing's
-    // distinct-flagger count -- a second flag from the same builder on the
-    // same template hits that constraint and surfaces as a clean 409 via
-    // this file's own top-level databaseHttpError fallback, same as every
-    // other unhandled UNIQUE violation in this file.
-    const flagId = `product-flag-${crypto.randomUUID()}`;
-    await db.prepare(`
-      INSERT INTO product_flags (flag_id, template_id, flagger_builder_id, reason)
-      VALUES (?, ?, ?, ?)
-    `).bind(flagId, templateId, sessionBuilder.builder_id, reason).run();
-    // Re-checked after the insert (not a cached count from before it) so a
-    // concurrent flag from a different builder landing in between is never
-    // silently lost from the threshold decision.
-    const { pendingCount } = await db.prepare(`
-      SELECT COUNT(*) AS pendingCount FROM product_flags WHERE template_id = ? AND status = 'pending'
-    `).bind(templateId).first();
-    let autoHidden = false;
-    if (!template.flagged_hidden_at && pendingCount >= PRODUCT_FLAG_AUTO_HIDE_THRESHOLD) {
-      const hideResult = await db.prepare(`
-        UPDATE catalog_templates SET flagged_hidden_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE template_id = ? AND flagged_hidden_at IS NULL
-      `).bind(templateId).run();
-      autoHidden = hideResult.meta.changes === 1;
-      // #2056: auto-hide blocks every future purchase of this listing
-      // immediately, well before any admin reviews the flags -- the same
-      // practical effect on the seller as the admin-confirmed `approve`
-      // branch below, which already notifies. Best-effort, same seller-
-      // resolved-via-shared-user_id join that branch already uses.
-      if (autoHidden && template.seller_id) {
-        const owner = await db.prepare(`
-          SELECT b.builder_id AS builder_id FROM sellers s
-          JOIN builders b ON b.user_id = s.user_id
-          WHERE s.seller_id = ?
-        `).bind(template.seller_id).first();
-        if (owner) {
-          await fireNotification(db, owner.builder_id,
-            'A listing of yours was automatically hidden pending review after multiple counterfeit/policy flags. New purchases are blocked until an admin resolves it.');
-        }
-      }
-    }
-    return json({ flagId, pendingCount, autoHidden }, 201);
-  }
-
-  if (request.method === 'POST' && route.length === 4 && route[3] === 'resolve') {
-    const admin = await requireAdmin(request, db);
-    await checkRateLimit(db, `product-flag-resolve:${admin.user_id}`, PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    const action = stringValue(input.action, 'action');
-    if (action !== 'approve' && action !== 'reject') {
-      throw new HttpError("action must be 'approve' or 'reject'", 400);
-    }
-    // #2018: lets an admin skip straight to the strike ladder's permanent-
-    // removal rung for a single severe violation (confirmed counterfeit,
-    // fraud, minor-safety), regardless of the seller's prior strike count --
-    // only meaningful on approve, silently ignored otherwise.
-    const severe = input.severe === true;
-    const template = await db.prepare('SELECT template_id, seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
-    if (!template) return json({ error: 'Catalog template not found' }, 404);
-    // Resolves every still-pending flag on this listing at once -- a flag is
-    // a report against the *listing*, not an individually-adjudicated claim,
-    // matching the owner's own "approve = remove listing" framing (one
-    // decision per listing, not one per flag).
-    const resolvedStatus = action === 'approve' ? 'approved' : 'rejected';
-    const resolved = await db.prepare(`
-      UPDATE product_flags SET status = ?, resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), resolved_by_admin_user_id = ?
-      WHERE template_id = ? AND status = 'pending'
-    `).bind(resolvedStatus, admin.user_id, templateId).run();
-    if (resolved.meta.changes === 0) {
-      throw new HttpError('No pending flags on this listing to resolve', 400);
-    }
-    if (action === 'approve') {
-      // Stays hidden permanently (this UPDATE is a no-op if auto-hide
-      // already set it) -- approving confirms the listing should no longer
-      // be purchasable, it does not hard-delete catalog_templates itself
-      // (that would trip assertCatalogTemplatesDeletable for any template
-      // still saved into someone's layout library, a real, if rare, edge
-      // case not worth forcing through here).
-      await db.prepare(`
-        UPDATE catalog_templates SET flagged_hidden_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE template_id = ? AND flagged_hidden_at IS NULL
-      `).bind(templateId).run();
-      if (template.seller_id) {
-        await db.prepare('UPDATE sellers SET strike_count = strike_count + 1 WHERE seller_id = ?').bind(template.seller_id).run();
-        // Best-effort notification, same seller-resolved-via-shared-user_id
-        // join handleSellerFeedbackCreate's own notification already uses.
-        const owner = await db.prepare(`
-          SELECT b.builder_id AS builder_id FROM sellers s
-          JOIN builders b ON b.user_id = s.user_id
-          WHERE s.seller_id = ?
-        `).bind(template.seller_id).first();
-        if (owner) {
-          await fireNotification(db, owner.builder_id,
-            'A product listing of yours was removed after an admin-confirmed counterfeit/policy-violation flag. A strike was added to your account.');
-        }
-        // #2018: the strike ladder itself -- reads the just-incremented
-        // count fresh, so it always acts on the real post-increment total.
-        await applyStrikeLadderConsequence(db, {
-          sellerId: template.seller_id, ownerBuilderId: owner?.builder_id ?? null,
-          adminUserId: admin.user_id, severe, templateId,
-        });
-      }
-    } else {
-      // Reject restores purchasability if auto-hide had already kicked in
-      // for this listing -- never touched if an admin escalated straight to
-      // removal without auto-hide ever firing.
-      // #2467: but never when an earlier flag batch on this same listing was
-      // already `approve`d -- that hide is permanent (see the approve branch's
-      // own comment above), and nothing records *why* flagged_hidden_at is set,
-      // so an unscoped UPDATE here would silently undo a confirmed-counterfeit
-      // removal the moment any later, even weak/empty-reason, flag on the same
-      // listing gets rejected.
-      await db.prepare(`
-        UPDATE catalog_templates SET flagged_hidden_at = NULL
-        WHERE template_id = ? AND NOT EXISTS (SELECT 1 FROM product_flags WHERE template_id = ? AND status = 'approved')
-      `).bind(templateId, templateId).run();
-    }
-    await adminActionLogStatement(db, admin.user_id, `${resolvedStatus}_product_flags`, 'catalog_template', templateId, {
-      flagsResolved: resolved.meta.changes,
-    }).run();
-    return json({ resolvedStatus, flagsResolved: resolved.meta.changes });
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-// #2018 (sub-issue of #1212, owner-settled shape on #1212's own comment
-// thread, 2026-10-13): warning (1st violation) -> temporary suspension
-// (2nd violation, or 1st *severe* one) -> permanent removal (3rd
-// violation, or any single severe one, skipping the ladder entirely).
-// "Permanent" reuses #1201's own suspension tool at its maximum graceDays
-// (365) rather than a separate hard-delete mechanism -- #1201's own
-// resolution ruled out admin-initiated hard deletion outright, and #2033's
-// own auto-escalation (once it lands) is what actually turns an unlifted
-// suspension into a real deletion; this rung's job is only to start that
-// clock and make sure a later, lesser violation never pulls it backward.
-const STRIKE_LADDER_TEMPORARY_GRACE_DAYS = 7;
-const STRIKE_LADDER_PERMANENT_GRACE_DAYS = 365;
-
-async function applyStrikeLadderConsequence(db, { sellerId, ownerBuilderId, adminUserId, severe, templateId }) {
-  const seller = await db.prepare('SELECT user_id, strike_count FROM sellers WHERE seller_id = ?').bind(sellerId).first();
-  // No linked account to act on -- same "dangling seller" tolerance this
-  // file already extends elsewhere (e.g. handleSellerFeedbackDelete).
-  if (!seller || !seller.user_id) return;
-  if (!severe && seller.strike_count <= 1) {
-    if (ownerBuilderId) {
-      await fireNotification(db, ownerBuilderId,
-        'Warning: a counterfeit/policy-violation flag against one of your listings was confirmed by an admin. A repeat violation will result in a temporary account suspension.');
-    }
-    return;
-  }
-  const permanent = severe || seller.strike_count >= 3;
-  const graceDays = permanent ? STRIKE_LADDER_PERMANENT_GRACE_DAYS : STRIKE_LADDER_TEMPORARY_GRACE_DAYS;
-  const reason = permanent
-    ? `Strike ladder: permanent removal (${severe ? 'severe violation' : `strike ${seller.strike_count}`}) -- template ${templateId}`
-    : `Strike ladder: temporary suspension (strike ${seller.strike_count}) -- template ${templateId}`;
-  await applySuspensionLadderRung(db, { userId: seller.user_id, adminUserId, reason, graceDays });
-  if (ownerBuilderId) {
-    await fireNotification(db, ownerBuilderId, permanent
-      ? 'Your account has been suspended indefinitely after a confirmed counterfeit/policy violation. This suspension will not be lifted.'
-      : `Your account has been temporarily suspended for ${STRIKE_LADDER_TEMPORARY_GRACE_DAYS} days after a confirmed counterfeit/policy violation.`);
-  }
-}
-
-// Distinct from handleSuspendAccount's own plain insert-only path (which
-// must keep 409ing on an already-active suspension, per that endpoint's
-// existing contract) -- the strike ladder is the one caller that can
-// legitimately land on an account its own earlier rung already suspended
-// (e.g. the 2nd-violation 7-day suspension, followed later by a 3rd/severe
-// violation), and escalating the existing row forward -- never shortening
-// it -- is the correct behavior there, not a 409 or a second, conflicting
-// active row.
-async function applySuspensionLadderRung(db, { userId, adminUserId, reason, graceDays }) {
-  const gracePeriodEndsAt = new Date(Date.now() + graceDays * 24 * 60 * 60 * 1000).toISOString();
-  const suspensionId = `suspension-${crypto.randomUUID()}`;
-  const inserted = await db.prepare(`
-    INSERT INTO account_suspensions (suspension_id, user_id, admin_user_id, reason, grace_period_ends_at)
-    SELECT ?, ?, ?, ?, ?
-    WHERE NOT EXISTS (
-      SELECT 1 FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
-    )
-  `).bind(suspensionId, userId, adminUserId, reason, gracePeriodEndsAt, userId).run();
-  if (inserted.meta.changes === 1) {
-    await adminActionLogStatement(db, adminUserId, 'suspend_account', 'user', userId, {
-      suspensionId, reason, gracePeriodEndsAt,
-    }).run();
-    return;
-  }
-  const active = await db.prepare(`
-    SELECT * FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
-  `).bind(userId).first();
-  if (!active || active.grace_period_ends_at >= gracePeriodEndsAt) return;
-  const updated = await db.prepare(`
-    UPDATE account_suspensions SET grace_period_ends_at = ?
-    WHERE suspension_id = ? AND grace_period_ends_at < ?
-  `).bind(gracePeriodEndsAt, active.suspension_id, gracePeriodEndsAt).run();
-  if (updated.meta.changes === 1) {
-    await adminActionLogStatement(db, adminUserId, 'escalate_suspension', 'user', userId, {
-      suspensionId: active.suspension_id, reason, newGracePeriodEndsAt: gracePeriodEndsAt,
-    }).run();
-  }
-}
-
-async function handleProductFlagsList(request, db, url) {
-  await requireAdmin(request, db);
-  // One row per *listing* with pending flags, not one per flag -- an admin
-  // resolves a listing's whole pending set in one action (see
-  // handleProductFlags' own POST .../resolve above), so the queue should
-  // read the same way, with the per-flag detail (reasons, flagger history)
-  // available via a follow-up fetch if ever needed rather than cluttering
-  // this summary view.
-  const { results } = await db.prepare(`
-    SELECT
-      pf.template_id AS templateId,
-      ct.name AS templateName,
-      ct.seller_id AS sellerId,
-      COUNT(*) AS pendingCount,
-      MIN(pf.created_at) AS firstFlaggedAt,
-      MAX(pf.created_at) AS lastFlaggedAt
-    FROM product_flags pf
-    JOIN catalog_templates ct ON ct.template_id = pf.template_id
-    WHERE pf.status = 'pending'
-    GROUP BY pf.template_id
-    ORDER BY lastFlaggedAt DESC
-    LIMIT 200
-  `).all();
-  // #2110: same totalCount-alongside-the-cap pattern as handleSignPosts/
-  // handleCalendarEvents/handlePurchases -- without it, an admin reviewing
-  // this trust-and-safety queue has no way to tell "200 of 200" from "200
-  // of 1400", silently dropping older pending listings off the end once
-  // the cap is reached. Counts distinct flagged templates, matching what
-  // the capped query above is itself grouped and capped by.
-  const total = await db.prepare(`
-    SELECT COUNT(DISTINCT template_id) AS count FROM product_flags WHERE status = 'pending'
-  `).first();
-  return json({ listings: results, totalCount: total.count });
-}
-
-function reviewFromRow(row) {
+// Exported for worker/lib/reputation.js (#2532) -- its own moved
+// handleProductReviews needs this same row formatter (also still used
+// directly here by handleExportData's own GDPR export).
+export function reviewFromRow(row) {
   return {
     reviewId: row.review_id,
     templateId: row.template_id,
@@ -3386,7 +2819,7 @@ export async function requireLandlet(db, landletId) {
 // Instances (below) have no builderId field of their own to spoof or check —
 // their only identity is which landlet they sit on — so every mutation there
 // resolves ownership through this instead of assertOwner directly.
-async function requireOwnedLandlet(db, landletId, builderId) {
+export async function requireOwnedLandlet(db, landletId, builderId) {
   const landlet = await requireLandlet(db, landletId);
   assertOwner(landlet.owner_builder_id, builderId, 'Not your landlet');
   return landlet;
@@ -3405,7 +2838,7 @@ async function requireOwnedLandlet(db, landletId, builderId) {
 // well past D1's 100-bound-parameter cap, despite the batch's own 100-item
 // cap never being exceeded. Chunked the same way getInstancesById was
 // fixed for the identical bug class in #2216.
-async function requireOwnedLandlets(db, landletIds, builderId) {
+export async function requireOwnedLandlets(db, landletIds, builderId) {
   const uniqueIds = [...new Set(landletIds)];
   const byId = new Map();
   for (let i = 0; i < uniqueIds.length; i += D1_MAX_BOUND_PARAMETERS) {
@@ -4080,57 +3513,6 @@ async function handleBuilders(request, env, db, route, url) {
   return json({ error: 'Not found' }, 404);
 }
 
-// docs/SPEC.md §6 / #556: age attestation plus credit-card (or eventual
-// government-ID, #589) verification gates every builder/seller-owned
-// action from here on, not just newly created accounts. Owner decision
-// (Control Room, 2026-09-09): "force everyone through the new gates, no
-// grandfathering in" — deliberately applied to every session, including
-// ones that signed up before this existed. Scoped to requireSessionBuilder/
-// requireSessionSeller below (the ones that actually gate world/shop-
-// selling activity), not requireCurrentUser itself, so an unverified
-// session can still reach its own account state (GET /api/builders|
-// sellers/me) and the age-attest/card-setup-intent/confirm-card endpoints
-// needed to clear this gate in the first place.
-function assertVerified(user) {
-  if (user.age_attested_at === null || user.trust_tier === 'none') {
-    throw new HttpError(
-      'Age attestation and credit-card (or government-ID) verification are required to continue.',
-      403,
-      { verificationRequired: true },
-    );
-  }
-}
-
-// The authorization workhorse for every builder-owned mutation below:
-// resolves *your own* builder profile from the session (never a
-// client-supplied builderId — that field is exactly what let anyone act
-// as anyone else before this pass, see the audit that prompted it) so a
-// handler can compare it against whatever it's about to modify.
-// Exported for worker/lib/video-generation.js and worker/lib/credit-orbs.js
-// (#2541) -- their own route handlers need this same auth-chain gate, but
-// it can't move with them (see worker/lib/auth.js's own comment on why,
-// and #2543 for the issue that'll finally extract it). A function export
-// is safe for workerd's main-entry-module constraint (#1978, see
-// worker/lib/builder-profile.js's own comment) unlike a plain const.
-export async function requireSessionBuilder(request, db) {
-  const user = await requireCurrentUser(request, db);
-  assertVerified(user);
-  // last_active_at is kept fresh inside getOrCreateBuilderForUser itself
-  // now, not here — see that function's own comment.
-  return getOrCreateBuilderForUser(db, user);
-}
-
-// N44 (owner, 2026-09-12): shopping/purchasing now requires the same
-// age-attestation + credit-card-or-ID gate as Build/Sell ("restrict minors
-// from using any part of the application"), but a purchase doesn't need a
-// builder or seller profile the way requireSessionBuilder/requireSessionSeller
-// provision — just a real, verified account. Used by handleInstancePurchase.
-async function requireVerifiedSession(request, db) {
-  const user = await requireCurrentUser(request, db);
-  assertVerified(user);
-  return user;
-}
-
 // A row's own seller_id column can be non-null yet dangling — pointing at
 // a seller that DELETE /api/sellers/:sellerId already removed (see that
 // handler's own comment: intentionally left as-is, "the same way a
@@ -4144,7 +3526,9 @@ async function requireVerifiedSession(request, db) {
 // do `if (row.seller_id && await sellerExists(db, row.seller_id))`
 // instead, so a dangling id falls through to whatever that call site
 // already does for a genuinely null one.
-async function sellerExists(db, sellerId) {
+// Exported for worker/lib/reputation.js (#2532) -- its own moved review/
+// flag/feedback handlers need this same dangling-seller_id check.
+export async function sellerExists(db, sellerId) {
   const row = await db.prepare('SELECT 1 FROM sellers WHERE seller_id = ?').bind(sellerId).first();
   return !!row;
 }
@@ -6361,8 +5745,12 @@ async function handleMySeller(request, db) {
   return json({ seller: sellerFromRow(row) });
 }
 
-// Same reasoning as requireSessionBuilder above, for seller-owned mutations.
-async function requireSessionSeller(request, db) {
+// Same reasoning as requireSessionBuilder (worker/lib/auth.js), for
+// seller-owned mutations -- stays here since getOrCreateSellerForUser is
+// seller-domain logic, not yet extracted to its own #2502 leaf. Exported
+// for worker/lib/reputation.js (#2532) -- handleProductReviews' own
+// seller-moderation DELETE branch needs this same auth-chain gate.
+export async function requireSessionSeller(request, db) {
   const user = await requireCurrentUser(request, db);
   assertVerified(user);
   return getOrCreateSellerForUser(db, user);
@@ -6371,9 +5759,10 @@ async function requireSessionSeller(request, db) {
 // Real accounts (migrations/0053_users_auth.sql) — the first genuinely
 // unforgeable identity in this app. Everything below is scoped to this
 // one concern: prove an email is real, prove a password is correct, and
-// hand back a session cookie. requireSessionBuilder/requireSessionSeller
-// above (and every ownership check built on them throughout this file)
-// are what actually put that unforgeable identity to work.
+// hand back a session cookie. requireSessionBuilder (worker/lib/auth.js)/
+// requireSessionSeller above (and every ownership check built on them
+// throughout this file) are what actually put that unforgeable identity
+// to work.
 
 const PBKDF2_ITERATIONS = 100000; // see the migration's own comment on why this is tunable per-hash, not global
 // #2542: SESSION_TTL_MS/EMAIL_VERIFICATION_TTL_MS/PASSWORD_RESET_TTL_MS/
@@ -7184,19 +6573,19 @@ async function handleBuilderStripeAccount(request, env, db) {
 // pretending to apportion which "layer" of a lifetime balance corresponds
 // to this year's earnings specifically.
 //
-// Pending #NNN (owner-flagged, 2026-09-10): higgles_balance_cents is one
-// fungible pool with no provenance tracking back to real money — the
-// simulated/free purchase path (handleInstancePurchase's dev-mode
-// fallback, no real payment ever collected) credits builder commission
-// exactly like a real Stripe sale does, so redeeming it for real cash is a
-// zero-capital, zero-auth mint of real money. Same root cause #629 already
-// found on the auction side, but reachable here with no capital and no
-// exploit skill at all. Pausing real-cash redemption again — same
-// stopgap-first-ask-later precedent as #629/#630 — until provenance
-// tracking (or some other bound) closes this; independent of any auction-
-// side flag, since that root cause was already fixed for auctions.
-const REDEMPTION_PAUSED_PENDING_PROVENANCE = true;
-
+// #653 (fixed): higgles_balance_cents is one fungible pool with no
+// provenance tracking back to real money, so the simulated/free purchase
+// path (handleInstancePurchase's dev-mode fallback) crediting builder
+// commission exactly like a real Stripe sale used to let an
+// unauthenticated real shopper mint real-redeemable commission with zero
+// capital — same root cause #629 already found on the auction side, but
+// reachable here with no capital and no exploit skill at all. Paused via
+// REDEMPTION_PAUSED_PENDING_PROVENANCE (same stopgap-first-ask-later
+// precedent as #629/#630) until the owner's actual fix shipped: that
+// simulated path is now admin-only (see handleInstancePurchase's own
+// #653 comment), so a real shopper can no longer reach it at all, closing
+// this off by construction rather than by a provenance-tracked ledger.
+//
 // #869: finds this builder's own last still-incomplete redemption
 // (claimed, but not yet confirmed by a payout) and resumes it instead of
 // claiming a fresh one — the actual fix for the duplicate-payout race
@@ -7205,9 +6594,9 @@ const REDEMPTION_PAUSED_PENDING_PROVENANCE = true;
 // own key). Exported so this — the part of the fix that doesn't require a
 // real Stripe call — can be unit-tested directly; POST /api/builders/me/
 // redeem itself always 503s before reaching this in the test suite
-// (REDEMPTION_PAUSED_PENDING_PROVENANCE, and Stripe is never configured
-// either), the same limitation claimPurchasesForPayout's own tests above
-// already accept for the seller side.
+// (Stripe is never configured there), the same limitation
+// claimPurchasesForPayout's own tests above already accept for the
+// seller side.
 export async function claimOrResumeBuilderRedemption(db, builderId, amountCents) {
   const pending = await db.prepare(`
     SELECT * FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL
@@ -7276,9 +6665,10 @@ async function handleBuilderRedeem(request, env, db) {
   if (request.method === 'POST') {
     // #1050: same "real outbound Stripe API call on the shared key" gap
     // #839/#948 already closed for the stripe-account handlers — this POST
-    // branch's Stripe transfers/payouts calls further down (currently
-    // unreachable while REDEMPTION_PAUSED_PENDING_PROVENANCE holds, but not
-    // forever) need the identical guard, same placement precedent as #948.
+    // branch's Stripe transfers/payouts calls further down (unreachable in
+    // this test suite since Stripe is never configured there, but not in a
+    // real deployment) need the identical guard, same placement precedent
+    // as #948.
     await checkRateLimit(db, `builder-redeem:${sessionBuilder.builder_id}`, STRIPE_RATE_LIMIT_MAX);
     if (availableCents <= 0) {
       throw new HttpError('Nothing is available to redeem yet.', 400);
@@ -7299,18 +6689,6 @@ async function handleBuilderRedeem(request, env, db) {
     const hasTaxPaperworkOnFile = !!user.tax_form_completed_at;
     if (!hasTaxPaperworkOnFile && grossIncome.totalCents > TAX_REPORTING_THRESHOLD_CENTS) {
       throw taxThresholdPayoutBlockedError();
-    }
-
-    // Paused pending the provenance-tracking design question above — same
-    // slot the #629 pause (REDEMPTION_PAUSED_PENDING_629, since lifted)
-    // occupied: after every other validation, so a malformed/oversized/
-    // threshold-blocked request still gets its own real status code, and
-    // only a redemption that would otherwise actually succeed hits this.
-    if (REDEMPTION_PAUSED_PENDING_PROVENANCE) {
-      throw new HttpError(
-        'Redeeming higgles for real cash is temporarily paused while we close a fraud gap — nothing about your balance is lost, this only affects new redemptions. Check back soon.',
-        503,
-      );
     }
 
     if (!stripeConfigured(env)) {
@@ -7678,8 +7056,7 @@ async function handleSellerPayouts(request, env, db) {
     // exist elsewhere in this codebase: an auction win *does* atomically
     // debit the winning bidder's own balance (#629, see resolveAuction),
     // and #349's higgle-to-cash redemption *is* built (#625,
-    // handleBuilderRedeem) — currently paused via
-    // REDEMPTION_PAUSED_PENDING_PROVENANCE (#653/#836) rather than unbuilt.
+    // handleBuilderRedeem) and, as of #653, no longer paused.
     // #615's own scoping left extending this tax gate to cover either of
     // those as an explicit open question, not yet resolved. Computed
     // before the Stripe-configuration/onboarding checks below so a caller
@@ -10367,1060 +9744,6 @@ async function handleLandletDraft(request, db, landletId) {
   return json({ error: 'Not found' }, 404);
 }
 
-// Owner (issue-570, 2026-09-09 -- picked option (a), "apply unconditionally
-// like generate-mosaic"): the manual/bulk-import creation endpoints below
-// (single POST and POST .../batch) used to skip the spatial overlap check
-// generate-mosaic and generate-ring already enforce procedurally, so an
-// admin-supplied candidate could silently overlap already-claimed,
-// already-rendered land. Shared here so generate-mosaic and both of these
-// endpoints all enforce the exact same check instead of duplicating it.
-//
-// Takes full rows (not pre-extracted polygons): a row with no explicit
-// polygon (the plain manual-candidate shape — just center+areaM2) isn't a
-// degenerate zero-area shape to skip. Everywhere else that reads such a row
-// (landletMinWorldRadius/landletMaxWorldRadius above) treats it as a circle
-// of radius sameAreaRadius(areaM2) around its center, so this represents
-// both shapes rather than letting polygonsOverlap silently see an empty
-// polygon and report no conflict.
-function landletFootprint(row) {
-  const polygon = landletWorldPolygon(row);
-  if (polygon.length >= 3) return { polygon };
-  return { circle: { x: row.center_x_m, y: row.center_y_m, radius: sameAreaRadius(row.area_m2) } };
-}
-
-function footprintsOverlap(a, b) {
-  if (a.polygon && b.polygon) return polygonsOverlap(a.polygon, b.polygon);
-  if (a.circle && b.circle) {
-    return Math.hypot(a.circle.x - b.circle.x, a.circle.y - b.circle.y) < a.circle.radius + b.circle.radius;
-  }
-  const [circle, polygon] = a.circle ? [a.circle, b.polygon] : [b.circle, a.polygon];
-  if (pointInPolygon(circle, polygon)) return true;
-  return polygon.some((point, index) =>
-    pointToSegmentDistance(circle, point, polygon[(index + 1) % polygon.length]) < circle.radius);
-}
-
-async function assertLandCandidatesDontOverlapExisting(db, newRows, message) {
-  const [existingLandlets, existingCandidates] = await Promise.all([
-    db.prepare("SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlets WHERE landlet_id <> 'starter-landlet'").all(),
-    db.prepare('SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlet_candidates').all(),
-  ]);
-  // Only a landlet with a real polygon represents genuinely-positioned land
-  // here -- landletWorldPolygon's own comment already treats a polygon-less
-  // row as "the plain-square fallback landlets predating procedural
-  // generation," not real geometry to defend. POST /landlets' own comment
-  // ("existing test/dev-tooling usage relies on it") confirms this is a
-  // real, ongoing shape: an unowned/self-owned landlet can be created there
-  // with no polygon and no spatial check at all, purely as scaffolding for
-  // whatever the test actually cares about (an instance, a version, ...),
-  // often left at the coordinate default (0,0). Falling back to a circle
-  // footprint for those too (as the new incoming candidates below still do)
-  // would make every one of them permanently block any future land-
-  // candidate generation near the origin -- not the invariant this check is
-  // meant to enforce. landlet_candidates rows keep full circle-fallback
-  // treatment regardless: those exist specifically to reserve real future
-  // land, polygon or not.
-  const existingFootprints = [
-    ...existingLandlets.results.filter((row) => landletWorldPolygon(row).length >= 3),
-    ...existingCandidates.results,
-  ].map(landletFootprint);
-  const newFootprints = newRows.map(landletFootprint);
-  const conflict = newFootprints.some((footprint) => existingFootprints.some((other) => footprintsOverlap(footprint, other)));
-  if (conflict) throw new HttpError(message, 409);
-}
-
-// Only for the manual/batch endpoints below, not generate-mosaic/-ring:
-// those generators' own output is already structurally self-consistent (by
-// construction, adjacent cells only ever share an edge, never overlap), so
-// checking their cells against each other here would risk a false-positive
-// conflict from the same float-noise-at-a-shared-edge case polygonsOverlap's
-// own TOUCH_EPSILON_M exists to absorb -- one degenerate reading of that
-// noise for a many-cell batch is more exposure than a manually-submitted
-// batch (never guaranteed internally non-overlapping in the first place)
-// needs to accept just to get the same protection.
-async function assertLandCandidatesDontOverlapEachOther(newRows, message) {
-  const newFootprints = newRows.map(landletFootprint);
-  const conflict = newFootprints.some((footprint, index) =>
-    newFootprints.some((other, otherIndex) => otherIndex !== index && footprintsOverlap(footprint, other)));
-  if (conflict) throw new HttpError(message, 409);
-}
-
-// #2013 (sub-issue of #2012): whether a point falls near one of the real
-// pre-1916 water cells scripts/ingest-geo-data.mjs ingested into
-// geo_water_cells (migrations/0128). "Near" means within that cell's own
-// sampling spacing — cells that close together are effectively the same
-// continuous water region the ingestion script sampled, not an isolated
-// point. A full-table scan is fine at this dataset's size (at most a few
-// hundred rows for any radius this world will need for a long while); add
-// an index later only if that changes.
-export async function isNearWaterCell(db, x, y) {
-  const row = await db.prepare(`
-    SELECT 1 FROM geo_water_cells
-    WHERE (x_m - ?) * (x_m - ?) + (y_m - ?) * (y_m - ?) <= spacing_m * spacing_m
-    LIMIT 1
-  `).bind(x, x, y, y).first();
-  return !!row;
-}
-
-// #2370 (sub-issue of #2368): the real biome classification at a point,
-// from geo_biome_cells (migrations/0149), or null when no sampled cell is
-// close enough to have an opinion -- #2369's own biome column is nullable
-// for exactly this "genuinely unclassified" case, not defaulted to a
-// band. Unlike isNearWaterCell's plain boolean (water only ever needs
-// "is there a cell here or not"), biome needs to know *which* band, so
-// this returns the nearest matching cell's own value -- ORDER BY the same
-// squared-distance expression the WHERE clause already computes, rather
-// than a second computed column, since D1/SQLite has no CTE-free way to
-// reuse it without repeating the expression.
-export async function biomeAt(db, x, y) {
-  const row = await db.prepare(`
-    SELECT biome FROM geo_biome_cells
-    WHERE (x_m - ?) * (x_m - ?) + (y_m - ?) * (y_m - ?) <= spacing_m * spacing_m
-    ORDER BY (x_m - ?) * (x_m - ?) + (y_m - ?) * (y_m - ?) ASC
-    LIMIT 1
-  `).bind(x, x, y, y, x, x, y, y).first();
-  return row ? row.biome : null;
-}
-
-// #2014 (sub-issue of #2012): the one real consumer of isNearWaterCell.
-// Every freshly-generated plot/cell from either generator defaults to
-// 'buildable' today (generateOrganicMosaic never sets landType at all;
-// generateLandletRing's own plots never request 'water' either, since
-// powerLawPlots -- the only real caller feeding it -- doesn't set one).
-// This upgrades a candidate to 'water' when its center falls near a real
-// ingested water cell, and otherwise leaves it exactly as the generator
-// produced it -- including an already-'water' candidate (the admin-only
-// manual generate-ring caller can still request one explicitly via
-// `plots`; this only ever upgrades toward 'water', never downgrades back
-// to 'buildable'). Forward-only by construction: it mutates candidates
-// fresh out of a generator, before they ever become a stored
-// landlets/landlet_candidates row, and never touches an existing one.
-async function applyRealWaterClassification(db, candidates) {
-  await Promise.all(candidates.map(async (candidate) => {
-    if (candidate.landType === 'water') return;
-    if (await isNearWaterCell(db, candidate.center.x, candidate.center.y)) {
-      candidate.landType = 'water';
-    }
-  }));
-}
-
-// #2371 (sub-issue of #2368): mirrors applyRealWaterClassification's exact
-// shape just above, for biome. Unlike water (an upgrade-only binary toward
-// 'water', never downgrading back to 'buildable'), biome has no ordering
-// to preserve -- the `if (candidate.biome) return` guard below plays the
-// same "don't clobber an already-set value" role water's own `landType
-// === 'water'` early-return does, just without a direction attached to
-// it. Every plot/cell outside current data coverage is left exactly at
-// today's default (undefined, normalized to null by candidateRowFromLandlet),
-// matching water's own "no data = default" precedent.
-async function applyRealBiomeClassification(db, candidates) {
-  await Promise.all(candidates.map(async (candidate) => {
-    if (candidate.biome) return;
-    const biome = await biomeAt(db, candidate.center.x, candidate.center.y);
-    if (biome) candidate.biome = biome;
-  }));
-}
-
-// Split out from the generate-mosaic handler below so #1085's automatic
-// path (generateAutoMosaicIfFreshWorld) can reuse the exact same
-// generation/validation/overlap-guard logic without an admin session —
-// same split generateLandletRingCandidates already uses for generate-ring,
-// including the optional adminUserId (action log entry only written when
-// a real admin is the one calling it).
-async function generateLandletMosaicCandidates(db, { prefix, count }, adminUserId) {
-  const mosaicCells = generateOrganicMosaic({ prefix, count });
-  await applyRealWaterClassification(db, mosaicCells);
-  await applyRealBiomeClassification(db, mosaicCells);
-  const generated = mosaicCells.map((candidate) =>
-    validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
-
-  // The mosaic template always covers the world origin as part of its
-  // 16-cell disc (organicLandGenerator.js only rotates it, never
-  // translates it) — the same point 'starter-landlet' sits on. Rather than
-  // inserting a competing candidate there, the cell containing the origin
-  // becomes starter-landlet's own shape directly, so there's exactly one
-  // polygon at the center instead of two independently-placed ones.
-  const centralIndex = generated.findIndex((candidate) => pointInPolygon(
-    { x: 0, y: 0 },
-    candidate.polygon.map((point) => ({ x: point.x + candidate.center.x, y: point.y + candidate.center.y })),
-  ));
-  if (centralIndex === -1) throw new HttpError('Generated mosaic does not cover the world origin', 500);
-  const central = generated[centralIndex];
-  const landlets = generated.filter((_candidate, index) => index !== centralIndex);
-
-  const rows = landlets.map(candidateRowFromLandlet);
-  const centralRow = candidateRowFromLandlet(central);
-  const duplicate = await db.prepare(`
-    SELECT landlet_id FROM landlet_candidates
-    WHERE landlet_id >= ? AND landlet_id <= ? LIMIT 1
-  `).bind(`${prefix}-001`, `${prefix}-999`).first();
-  if (duplicate) throw new HttpError('Land candidate already exists', 409);
-
-  // Safety net beyond the origin cell handled above: two mosaic calls (or
-  // a mosaic call landing near existing ring-generated land) would
-  // otherwise silently overlap, since this generator has no radial
-  // structure for a band-based check like generate-ring's to work with.
-  await assertLandCandidatesDontOverlapExisting(db, [...rows, centralRow], 'Generated mosaic would overlap existing land');
-
-  // Every other cell in the mosaic reaches greenbelt/claimable the normal
-  // way: materialize as 'generating' (candidateMaterializationStatements,
-  // above), then a later generation-complete/world-expand call promotes
-  // it once it's enclosed. starter-landlet already exists as a landlet
-  // row rather than a fresh candidate, so it skips that pipeline
-  // entirely — this mirrors the same "enclosed -> greenbelt, claimable
-  // now" transition directly, rather than leaving it stuck at whatever
-  // status it already had (historically 'claimed' with no owner, from
-  // the seed row in 0001_initial.sql — permanently unclaimable and
-  // invisible to the builder-delete release logic, which matches by
-  // owner_builder_id). Guarded on owner_builder_id IS NULL so a
-  // genuinely-claimed center plot is never clobbered.
-  //
-  // #1055: the enclosure decision itself is a live SQL subquery against
-  // world_settings (not a JS comparison against a pre-batch settings
-  // read, which could go stale against a concurrent expandWorldOnce) --
-  // same fix shape as the two generation-complete endpoints. The radius
-  // being compared still has to come from JS, though: centralRow's
-  // polygon/center are being freshly set in this very statement, so
-  // there's no already-stored max_world_radius_m column value that
-  // reflects it yet.
-  const centralMaxWorldRadius = landletMaxWorldRadius(centralRow);
-  await db.batch([
-    db.prepare(`
-      UPDATE landlets
-      SET center_x_m = ?, center_y_m = ?, polygon_json = ?, metadata_json = ?,
-          generated_at = COALESCE(generated_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-          status = CASE WHEN owner_builder_id IS NULL AND ? <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN 'greenbelt' ELSE status END,
-          claimable_at = CASE
-            WHEN owner_builder_id IS NULL AND ? <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-            ELSE claimable_at
-          END,
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE landlet_id = 'starter-landlet'
-    `).bind(
-      central.center.x, central.center.y, centralRow.polygon_json, centralRow.metadata_json,
-      centralMaxWorldRadius, centralMaxWorldRadius,
-    ),
-    ...rows.map((row) => candidateInsertStatement(db, row)),
-    ...candidateMaterializationSweepStatements(db, rows.map((row) => row.landlet_id)),
-    ...(adminUserId ? [adminActionLogStatement(db, adminUserId, 'generate_mosaic', 'landlet_candidate_prefix', prefix, { count: rows.length + 1 })] : []),
-  ]);
-  const stored = await db.prepare(`
-    SELECT * FROM landlet_candidates WHERE landlet_id >= ? AND landlet_id <= ? ORDER BY landlet_id
-  `).bind(`${prefix}-001`, `${prefix}-999`).all();
-  const materializedLandletIds = stored.results
-    .filter((row) => row.materialized_at)
-    .map((row) => row.landlet_id);
-  return {
-    candidates: stored.results.map(candidateFromRow),
-    materializedLandletIds,
-    starterLandletId: 'starter-landlet',
-  };
-}
-
-async function handleLandCandidates(request, db, route, url) {
-  if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-mosaic') {
-    const admin = await requireAdmin(request, db);
-    const input = await readJson(request);
-    const prefix = stringValue(input.prefix, 'prefix');
-    if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(prefix)) {
-      throw new HttpError('prefix must contain only lowercase letters, numbers, and hyphens', 400);
-    }
-    const count = positiveInteger(input.count, 'count');
-    if (count !== 16) throw new HttpError('count must be 16', 400);
-    const result = await generateLandletMosaicCandidates(db, { prefix, count }, admin.user_id);
-    return json(result, 201);
-  }
-
-  if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-ring') {
-    const admin = await requireAdmin(request, db);
-    const input = await readJson(request);
-    const prefix = stringValue(input.prefix, 'prefix');
-    if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(prefix)) {
-      throw new HttpError('prefix must contain only lowercase letters, numbers, and hyphens', 400);
-    }
-    const count = positiveInteger(input.count, 'count');
-    if (count < 3 || count > 100) throw new HttpError('count must be between 3 and 100', 400);
-    const settings = await getWorldSettings(db);
-    let innerRadiusM = input.innerRadiusM === undefined
-      ? settings.radius_m
-      : finiteNumber(input.innerRadiusM, 'innerRadiusM');
-    let startAngleRad = input.startAngleRad === undefined ? 0 : finiteNumber(input.startAngleRad, 'startAngleRad');
-    if (input.distribution !== undefined && input.distribution !== 'power-law') {
-      throw new HttpError('distribution must be power-law', 400);
-    }
-    let distribution = input.distribution || null;
-    let plots;
-    let adjacentToRingId = null;
-    if (input.adjacentToRingId !== undefined) {
-      if (input.innerRadiusM !== undefined || input.startAngleRad !== undefined) {
-        throw new HttpError('innerRadiusM and startAngleRad are derived when adjacentToRingId is used', 400);
-      }
-      adjacentToRingId = stringValue(input.adjacentToRingId, 'adjacentToRingId');
-      const adjacentRing = await db.prepare('SELECT * FROM landlet_candidate_rings WHERE ring_id = ?')
-        .bind(adjacentToRingId).first();
-      if (!adjacentRing) throw new HttpError('Adjacent land candidate ring not found', 404);
-      if (count !== adjacentRing.candidate_count) {
-        throw new HttpError('count must match the adjacent ring candidate count', 400);
-      }
-      if (input.distribution !== undefined && input.distribution !== adjacentRing.distribution) {
-        throw new HttpError('distribution must match the adjacent ring', 400);
-      }
-      const adjacentCandidates = await db.prepare(`
-        SELECT * FROM landlet_candidates WHERE ring_id = ? ORDER BY landlet_id
-      `).bind(adjacentToRingId).all();
-      if (adjacentCandidates.results.length !== count) {
-        throw new HttpError('Adjacent ring candidate membership is incomplete', 409);
-      }
-      innerRadiusM = adjacentRing.outer_radius_m;
-      startAngleRad = adjacentRing.start_angle_rad;
-      distribution = adjacentRing.distribution;
-      plots = adjacentCandidates.results.map((row) => ({
-        areaM2: row.area_m2,
-        landClass: row.landlet_class,
-        landType: row.landlet_type,
-        metadata: distribution ? { sizeDistribution: 'power-law-v1' } : {},
-      }));
-    } else if (distribution === 'power-law') {
-      plots = powerLawPlots(count, prefix);
-    }
-    const result = await generateLandletRingCandidates(db, {
-      prefix, count, innerRadiusM, startAngleRad, distribution, plots, adjacentToRingId,
-    }, admin.user_id);
-    return json(result, 201);
-  }
-
-  if (request.method === 'GET' && route.length === 1) {
-    await requireAdmin(request, db);
-    const state = url.searchParams.get('state');
-    if (state !== null && state !== 'pending' && state !== 'materialized') {
-      throw new HttpError('state must be pending or materialized', 400);
-    }
-    const limit = queryLimit(url.searchParams.get('limit'), 100);
-    const cursor = decodeCursor(url.searchParams.get('cursor'));
-    const conditions = [];
-    const bindings = [];
-    const ringIdParam = url.searchParams.get('ringId');
-    if (ringIdParam !== null) {
-      conditions.push('ring_id = ?');
-      bindings.push(stringValue(ringIdParam, 'ringId'));
-    }
-    if (state) conditions.push(`materialized_at IS ${state === 'pending' ? '' : 'NOT '}NULL`);
-    if (cursor) {
-      conditions.push('(created_at > ? OR (created_at = ? AND landlet_id > ?))');
-      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
-    }
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const { results } = await db.prepare(`
-      SELECT * FROM landlet_candidates ${where}
-      ORDER BY created_at, landlet_id LIMIT ?
-    `).bind(...bindings, limit + 1).all();
-    const hasMore = results.length > limit;
-    const page = results.slice(0, limit);
-    const last = page.at(-1);
-    return json({
-      candidates: page.map(candidateFromRow),
-      nextCursor: hasMore ? encodeCursor(last.created_at, last.landlet_id) : null,
-    });
-  }
-
-  if (request.method === 'GET' && route.length === 2) {
-    await requireAdmin(request, db);
-    const row = await db.prepare('SELECT * FROM landlet_candidates WHERE landlet_id = ?').bind(route[1]).first();
-    return row ? json({ candidate: candidateFromRow(row) }) : json({ error: 'Land candidate not found' }, 404);
-  }
-
-  if (request.method === 'DELETE' && route.length === 2) {
-    const admin = await requireAdmin(request, db);
-    const existing = await db.prepare(`
-      SELECT materialized_at, ring_id FROM landlet_candidates WHERE landlet_id = ?
-    `).bind(route[1]).first();
-    if (!existing) throw new HttpError('Land candidate not found', 404);
-    if (existing.ring_id) throw new HttpError('Generated ring candidates cannot be deleted individually', 409);
-    if (existing.materialized_at) throw new HttpError('Materialized land candidates cannot be deleted', 409);
-    const result = await db.prepare('DELETE FROM landlet_candidates WHERE landlet_id = ? AND materialized_at IS NULL')
-      .bind(route[1]).run();
-    if (result.meta.changes === 0) throw new HttpError('Land candidate started generation during deletion', 409);
-    // Logged only after the delete is confirmed to have actually happened
-    // (not batched with it) — this statement's own race guard above means
-    // the delete can still lose a race and throw, and a log row for an
-    // action that didn't happen would misattribute it to this admin.
-    await adminActionLogStatement(db, admin.user_id, 'delete_land_candidate', 'landlet_candidate', route[1]).run();
-    return json({ deleted: true });
-  }
-
-  if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
-    const admin = await requireAdmin(request, db);
-    const existing = await db.prepare(`
-      SELECT * FROM landlet_candidates WHERE landlet_id = ?
-    `).bind(route[1]).first();
-    if (!existing) throw new HttpError('Land candidate not found', 404);
-    if (existing.materialized_at) throw new HttpError('Materialized land candidates cannot be updated', 409);
-    if (existing.ring_id) throw new HttpError('Generated ring candidates cannot be updated individually', 409);
-
-    const input = await readJson(request);
-    const candidate = candidateFromRow(existing);
-    const landlet = validateLandlet({
-      ...candidate,
-      ...input,
-      landletId: route[1],
-      status: 'generating',
-      ownerBuilderId: null,
-    }, route[1]);
-    const row = candidateRowFromLandlet(landlet);
-    row.ring_id = existing.ring_id;
-    const update = db.prepare(`
-      UPDATE landlet_candidates
-      SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, landlet_class = ?, landlet_type = ?, biome = ?,
-          polygon_json = ?, metadata_json = ?, min_world_radius_m = ?, max_world_radius_m = ?
-      WHERE landlet_id = ? AND materialized_at IS NULL
-    `).bind(
-      landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.landClass, landlet.landType,
-      landlet.biome ?? null, JSON.stringify(landlet.polygon), JSON.stringify(landlet.metadata),
-      landletMinWorldRadius(row), landletMaxWorldRadius(row), route[1],
-    );
-    const results = await db.batch([
-      update,
-      ...candidateMaterializationSweepStatements(db, [route[1]]),
-    ]);
-    if (results[0].meta.changes === 0) throw new HttpError('Land candidate started generation during update', 409);
-    await adminActionLogStatement(db, admin.user_id, 'update_land_candidate', 'landlet_candidate', route[1]).run();
-    const updated = await db.prepare(`
-      SELECT * FROM landlet_candidates WHERE landlet_id = ?
-    `).bind(route[1]).first();
-    // #2391: the UPDATE above is guarded, but this re-SELECT isn't -- a
-    // concurrent DELETE (allowed here since materialized_at/ring_id were
-    // both still NULL a moment ago) can remove the row in the await gap
-    // between the update batch and this read.
-    if (!updated) throw new HttpError('Land candidate not found', 409);
-    const materialized = updated.materialized_at ? await requireLandlet(db, route[1]) : null;
-    return json({
-      candidate: candidateFromRow(updated),
-      landlet: materialized ? landletFromRow(materialized) : null,
-    });
-  }
-
-  if (request.method === 'POST' && route.length === 2 && route[1] === 'batch') {
-    const admin = await requireAdmin(request, db);
-    const input = await readJson(request);
-    if (!Array.isArray(input.candidates)) throw new HttpError('candidates must be an array', 400);
-    if (input.candidates.length === 0) throw new HttpError('candidates must contain at least one item', 400);
-    if (input.candidates.length > 100) throw new HttpError('candidates must contain at most 100 items', 400);
-
-    const landlets = input.candidates.map((candidate) =>
-      validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, crypto.randomUUID()));
-    const ids = new Set();
-    for (const landlet of landlets) {
-      if (ids.has(landlet.landletId)) throw new HttpError('landletId values must be unique', 400);
-      ids.add(landlet.landletId);
-    }
-
-    const rows = landlets.map(candidateRowFromLandlet);
-    await assertLandCandidatesDontOverlapExisting(db, rows, 'One or more candidates would overlap existing land');
-    await assertLandCandidatesDontOverlapEachOther(rows, 'One or more candidates would overlap each other');
-    await db.batch([
-      ...rows.map((row) => candidateInsertStatement(db, row)),
-      ...candidateMaterializationSweepStatements(db, rows.map((row) => row.landlet_id)),
-      adminActionLogStatement(db, admin.user_id, 'create_land_candidates_batch', 'landlet_candidate_batch', null, { landletIds: [...ids] }),
-    ]);
-    const placeholders = landlets.map(() => '?').join(', ');
-    const storedCandidates = await db.prepare(`
-      SELECT * FROM landlet_candidates WHERE landlet_id IN (${placeholders}) ORDER BY created_at
-    `).bind(...ids).all();
-    const materializedLandlets = await db.prepare(`
-      SELECT * FROM landlets WHERE landlet_id IN (${placeholders}) ORDER BY created_at
-    `).bind(...ids).all();
-    return json({
-      candidates: storedCandidates.results.map(candidateFromRow),
-      landlets: materializedLandlets.results.map(landletFromRow),
-    }, 201);
-  }
-
-  if (request.method === 'POST' && route.length === 1) {
-    const admin = await requireAdmin(request, db);
-    const input = await readJson(request);
-    const landlet = validateLandlet({ ...input, status: 'generating', ownerBuilderId: null }, crypto.randomUUID());
-    const row = candidateRowFromLandlet(landlet);
-    await assertLandCandidatesDontOverlapExisting(db, [row], 'Candidate would overlap existing land');
-    await db.batch([
-      candidateInsertStatement(db, row),
-      ...candidateMaterializationSweepStatements(db, [row.landlet_id]),
-      adminActionLogStatement(db, admin.user_id, 'create_land_candidate', 'landlet_candidate', landlet.landletId),
-    ]);
-
-    const candidate = await db.prepare('SELECT * FROM landlet_candidates WHERE landlet_id = ?').bind(landlet.landletId).first();
-    const materialized = candidate.materialized_at ? await requireLandlet(db, landlet.landletId) : null;
-    return json({ candidate: candidateFromRow(candidate), landlet: materialized ? landletFromRow(materialized) : null }, 201);
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-async function handleLandCandidateRings(request, db, route, url) {
-  if (request.method === 'GET' && route.length === 1) {
-    await requireAdmin(request, db);
-    const limit = queryLimit(url.searchParams.get('limit'), 100);
-    const cursor = decodeCursor(url.searchParams.get('cursor'));
-    const conditions = [];
-    const bindings = [];
-    const adjacentToRingIdParam = url.searchParams.get('adjacentToRingId');
-    if (adjacentToRingIdParam !== null) {
-      conditions.push('adjacent_to_ring_id = ?');
-      bindings.push(stringValue(adjacentToRingIdParam, 'adjacentToRingId'));
-    }
-    if (cursor) {
-      conditions.push('(created_at > ? OR (created_at = ? AND ring_id > ?))');
-      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
-    }
-    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-    const { results } = await db.prepare(`
-      SELECT * FROM landlet_candidate_rings ${where}
-      ORDER BY created_at, ring_id LIMIT ?
-    `).bind(...bindings, limit + 1).all();
-    const hasMore = results.length > limit;
-    const page = results.slice(0, limit);
-    const last = page.at(-1);
-    return json({
-      rings: page.map(landCandidateRingFromRow),
-      nextCursor: hasMore ? encodeCursor(last.created_at, last.ring_id) : null,
-    });
-  }
-
-  if (request.method === 'GET' && route.length === 2) {
-    await requireAdmin(request, db);
-    const row = await getLandCandidateRingWithLifecycle(db, route[1]);
-    return row
-      ? json({ ring: landCandidateRingFromRow(row) })
-      : json({ error: 'Land candidate ring not found' }, 404);
-  }
-
-  if (request.method === 'POST' && route.length === 3 && route[2] === 'generation-complete') {
-    const admin = await requireAdmin(request, db);
-    const { changed, ...result } = await completeRingGenerationInternal(db, route[1]);
-    // #829: unlike its landlet-level sibling (see that handler's own
-    // adminActionLogStatement call), this endpoint never logged who
-    // completed a ring's generation — missed by #817's own sweep.
-    // #2037: logging unconditionally missed the same race #1666 already
-    // fixed for the landlet-level sibling above — completeRingGeneration-
-    // Internal's own UPDATE can legitimately affect 0 rows (every member
-    // already enclosed by an earlier call, admin or automatic), and this
-    // handler still logged a completion that didn't happen on this call.
-    if (changed) {
-      await adminActionLogStatement(db, admin.user_id, 'ring_generation_complete', 'landlet_candidate_ring', route[1]).run();
-    }
-    return json(result);
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-// Split out of the generation-complete HTTP handler above for the same
-// reason generateLandletRingCandidates was — autoGrowWorldIfNeeded (below)
-// needs to complete a ring it just generated itself, with no HTTP request
-// to gate.
-async function completeRingGenerationInternal(db, ringId) {
-  const ringRow = await db.prepare(`
-    SELECT * FROM landlet_candidate_rings WHERE ring_id = ?
-  `).bind(ringId).first();
-  if (!ringRow) throw new HttpError('Land candidate ring not found', 404);
-
-  const membership = await db.prepare(`
-    SELECT COUNT(*) AS candidate_count,
-      SUM(CASE WHEN materialized_at IS NOT NULL THEN 1 ELSE 0 END) AS materialized_count
-    FROM landlet_candidates WHERE ring_id = ?
-  `).bind(ringId).first();
-  if (membership.candidate_count !== ringRow.candidate_count
-    || membership.materialized_count !== ringRow.candidate_count) {
-    throw new HttpError('All ring candidates must be materialized before generation can complete', 409);
-  }
-
-  // #1055: same live-subquery fix as the single-landlet generation-complete
-  // endpoint above -- a JS-read settings.radius_m here could go stale
-  // against a concurrent expandWorldOnce.
-  // #2037: added "AND generated_at IS NULL", matching the landlet-level
-  // sibling's own WHERE guard -- without it, a member that's already
-  // completed but not yet enclosed (still 'generating', COALESCE-preserved
-  // generated_at) keeps matching this UPDATE on every retry, since
-  // status = 'generating' alone stays true until enclosure. The SET clause
-  // was already a no-op for such a row either way; this only fixes what
-  // `changed` below actually measures.
-  const result = await db.prepare(`
-    UPDATE landlets
-    SET generated_at = COALESCE(generated_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-        status = CASE WHEN max_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN 'greenbelt' ELSE status END,
-        claimable_at = CASE
-          WHEN max_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world') THEN COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-          ELSE claimable_at
-        END,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE landlet_id IN (SELECT landlet_id FROM landlet_candidates WHERE ring_id = ?)
-      AND status = 'generating' AND generated_at IS NULL
-  `).bind(ringId).run();
-  const completed = await db.prepare(`
-    SELECT landlets.* FROM landlets
-    JOIN landlet_candidates USING (landlet_id)
-    WHERE landlet_candidates.ring_id = ? ORDER BY landlets.created_at, landlets.landlet_id
-  `).bind(ringId).all();
-  const updatedRing = await getLandCandidateRingWithLifecycle(db, ringId);
-  return {
-    ring: landCandidateRingFromRow(updatedRing),
-    landlets: completed.results.map(landletFromRow),
-    // #2037: lets the HTTP handler log only when this call itself actually
-    // enclosed something, not just that the ring is (now, or already)
-    // fully complete -- same "logged only after confirmed" idiom as the
-    // landlet-level sibling handler above.
-    changed: result.meta.changes > 0,
-  };
-}
-
-async function getLandCandidateRingWithLifecycle(db, ringId) {
-  return db.prepare(`
-    SELECT ring.*,
-      (SELECT child.ring_id FROM landlet_candidate_rings AS child
-       WHERE child.adjacent_to_ring_id = ring.ring_id) AS adjacent_child_ring_id,
-      COUNT(candidate.landlet_id) AS stored_candidate_count,
-      SUM(CASE WHEN candidate.landlet_id IS NOT NULL AND candidate.materialized_at IS NULL THEN 1 ELSE 0 END) AS pending_candidate_count,
-      SUM(CASE WHEN candidate.materialized_at IS NOT NULL THEN 1 ELSE 0 END) AS materialized_candidate_count,
-      SUM(CASE WHEN landlet.generated_at IS NOT NULL THEN 1 ELSE 0 END) AS completed_landlet_count,
-      SUM(CASE WHEN landlet.status = 'greenbelt' THEN 1 ELSE 0 END) AS greenbelt_landlet_count
-    FROM landlet_candidate_rings AS ring
-    LEFT JOIN landlet_candidates AS candidate ON candidate.ring_id = ring.ring_id
-    LEFT JOIN landlets AS landlet ON landlet.landlet_id = candidate.landlet_id
-    WHERE ring.ring_id = ? GROUP BY ring.ring_id
-  `).bind(ringId).first();
-}
-
-function candidateRowFromLandlet(landlet) {
-  return {
-    landlet_id: landlet.landletId,
-    name: landlet.name,
-    area_m2: landlet.areaM2,
-    center_x_m: landlet.center.x,
-    center_y_m: landlet.center.y,
-    landlet_class: landlet.landClass,
-    landlet_type: landlet.landType,
-    biome: landlet.biome ?? null,
-    polygon_json: JSON.stringify(landlet.polygon),
-    metadata_json: JSON.stringify(landlet.metadata),
-  };
-}
-
-function candidateInsertStatement(db, row) {
-  return db.prepare(`
-    INSERT INTO landlet_candidates
-      (landlet_id, name, area_m2, center_x_m, center_y_m, landlet_class, landlet_type, biome, polygon_json,
-       metadata_json, min_world_radius_m, max_world_radius_m, ring_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.landlet_class, row.landlet_type,
-    row.biome ?? null, row.polygon_json, row.metadata_json, landletMinWorldRadius(row), landletMaxWorldRadius(row),
-    row.ring_id || null,
-  );
-}
-
-// #849: the call sites below used to decide "does this candidate qualify
-// for immediate materialization" in JS, from a `settings.radius_m` read
-// taken before ever entering the db.batch() transaction that inserts the
-// candidate. If a concurrent expandWorldOnce (an admin action, or the
-// 10-minute auto-growth cron) committed a radius increase in the window
-// between that read and this batch's own commit, a candidate whose
-// min_world_radius_m qualified under the *current* radius but not the
-// stale snapshot landed as materialized_at IS NULL with no guaranteed
-// catch-up — it would sit un-materialized until some *future* expansion
-// happened to re-sweep it (expandWorldOnce's own pending-candidate query
-// is unconditional over the whole table, so it does eventually catch up,
-// but only on the next expansion, which may be long delayed or may never
-// come if growth stops).
-//
-// This closes that window the same way expandWorldOnce closes its own
-// (see its comment above): the materialize-or-not decision is made by SQL
-// reading world_settings live, inside the very same db.batch() transaction
-// as the candidate insert/update it's paired with, instead of by a JS
-// filter computed beforehand. Scoped to the specific landlet_ids the
-// caller just wrote (rather than sweeping every pending candidate
-// globally) so behavior for those rows is decided exactly once, atomically,
-// at the moment they're written — callers determine what actually
-// materialized via a post-batch SELECT of just these ids, not from a
-// pre-batch JS list.
-function candidateMaterializationSweepStatements(db, landletIds) {
-  if (landletIds.length === 0) return [];
-  const placeholders = landletIds.map(() => '?').join(', ');
-  return [
-    db.prepare(`
-      INSERT INTO landlets
-        (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, landlet_class,
-         landlet_type, biome, polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
-      SELECT landlet_id, name, area_m2, center_x_m, center_y_m, 'generating', NULL, landlet_class,
-             landlet_type, biome, polygon_json, NULL, NULL, metadata_json, max_world_radius_m
-      FROM landlet_candidates
-      WHERE landlet_id IN (${placeholders})
-        AND materialized_at IS NULL
-        AND min_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world')
-    `).bind(...landletIds),
-    db.prepare(`
-      UPDATE landlet_candidates SET materialized_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE landlet_id IN (${placeholders})
-        AND materialized_at IS NULL
-        AND min_world_radius_m <= (SELECT radius_m FROM world_settings WHERE world_id = 'default-world')
-    `).bind(...landletIds),
-  ];
-}
-
-// The actual generation + persistence half of POST /land-candidates/
-// generate-ring, split out so autoGrowWorldIfNeeded (below) can generate a
-// ring itself without going through an HTTP request — the caller is
-// expected to have already resolved/validated prefix/count/innerRadiusM/
-// startAngleRad/distribution/plots/adjacentToRingId (the HTTP handler does
-// this for a real request; autoGrowWorldIfNeeded's own caller constructs
-// them directly, always with adjacentToRingId null).
-// adminUserId is optional and present only when called from the admin HTTP
-// handler above — omitted by autoGrowWorldIfNeeded's own call below, so an
-// auto-generated ring never gets misattributed to whichever admin happens
-// to be logged in (there isn't one; it's the trusted server itself).
-async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, startAngleRad, distribution, plots, adjacentToRingId }, adminUserId) {
-  const settings = await getWorldSettings(db);
-  if (innerRadiusM < settings.radius_m) {
-    throw new HttpError('innerRadiusM cannot be inside the current world radius', 400);
-  }
-  const generated = generateLandletRing({ prefix, count, innerRadiusM, startAngleRad, plots });
-  const radialConflict = await db.prepare(`
-    SELECT landlet_id FROM landlet_candidates
-    WHERE min_world_radius_m < ? - 0.0000001
-      AND (max_world_radius_m IS NULL OR max_world_radius_m > ? + 0.0000001)
-    LIMIT 1
-  `).bind(generated.outerRadiusM, innerRadiusM).first();
-  if (radialConflict) {
-    throw new HttpError('Generated ring would overlap existing land candidates', 409);
-  }
-  await applyRealWaterClassification(db, generated.landlets);
-  await applyRealBiomeClassification(db, generated.landlets);
-  const landlets = generated.landlets.map((candidate) =>
-    validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
-  const rows = landlets.map((landlet) => ({ ...candidateRowFromLandlet(landlet), ring_id: prefix }));
-  await db.batch([
-    db.prepare(`
-      INSERT INTO landlet_candidate_rings
-        (ring_id, inner_radius_m, outer_radius_m, candidate_count, distribution, start_angle_rad,
-         boundary_signature, adjacent_to_ring_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      prefix, innerRadiusM, generated.outerRadiusM, count, distribution, startAngleRad,
-      generated.boundarySignature, adjacentToRingId,
-    ),
-    ...rows.map((row) => candidateInsertStatement(db, row)),
-    ...candidateMaterializationSweepStatements(db, rows.map((row) => row.landlet_id)),
-    ...(adminUserId ? [adminActionLogStatement(db, adminUserId, 'generate_ring', 'landlet_candidate_ring', prefix, { count })] : []),
-  ]);
-  const storedCandidates = await db.prepare(`
-    SELECT * FROM landlet_candidates WHERE ring_id = ? ORDER BY created_at, landlet_id
-  `).bind(prefix).all();
-  const materializedLandletIds = storedCandidates.results
-    .filter((row) => row.materialized_at)
-    .map((row) => row.landlet_id);
-  return {
-    candidates: storedCandidates.results.map(candidateFromRow),
-    materializedLandletIds,
-    readyForGenerationCompletion: materializedLandletIds.length === rows.length,
-    innerRadiusM,
-    outerRadiusM: generated.outerRadiusM,
-  };
-}
-
-const WORLD_SETTINGS_CONCURRENT_RETRY_LIMIT = 5;
-
-async function handleWorld(request, db, route) {
-  if (request.method === 'GET' && route.length === 1) {
-    const settings = await getWorldSettings(db);
-    const counts = await getLandletCounts(db);
-    return json({ world: worldFromRow(settings, counts) });
-  }
-
-  if (request.method === 'POST' && route.length === 2 && route[1] === 'expand') {
-    const admin = await requireAdmin(request, db);
-    const settings = await getWorldSettings(db);
-    const countsBefore = await getLandletCounts(db);
-    const greenbeltRatio = computeGreenbeltRatio(countsBefore);
-    if (greenbeltRatio >= settings.greenbelt_min_ratio) {
-      throw new HttpError('Greenbelt reserve is at or above the expansion threshold', 409);
-    }
-    const result = await expandWorldOnce(db, admin.user_id);
-    return json(result);
-  }
-
-  if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 1) {
-    const admin = await requireAdmin(request, db);
-    const input = await readJson(request);
-    // #881: same TOCTOU shape #837 fixed in expandWorldOnce — the UPDATE
-    // below used to have no WHERE guard tying it back to the `existing` row
-    // this handler actually read, so two concurrent PUT/PATCH calls (or one
-    // racing an expandWorldOnce radius bump) could each overwrite whatever
-    // the other just wrote, silently discarding an update while
-    // admin_action_log recorded both as if each succeeded cleanly. Claim the
-    // write via a conditional UPDATE first, same idiom expandWorldOnce uses.
-    let existing;
-    let world;
-    for (let attempt = 0; ; attempt++) {
-      existing = await getWorldSettings(db);
-      world = validateWorld({ ...worldFromRow(existing), ...input });
-      // #523: nothing here re-validates already-materialized/greenbelt land
-      // against a smaller radius, and expandWorldOnce (the only other writer
-      // of radius_m) only ever grows it — so a shrink here was the one path
-      // that could leave existing landlets sitting outside the world's own
-      // stated bounds. Owner direction (reply yyjnvw3ueii8zn0k5cs3): block
-      // shrinking outright; if the radius is ever wrong by accident, that's
-      // a one-time manual/engineered fix, not something this endpoint should
-      // allow as routine input.
-      if (world.radiusM < existing.radius_m) {
-        throw new HttpError('World radius cannot be decreased', 400);
-      }
-      const claimed = await db.prepare(`
-        UPDATE world_settings
-        SET radius_m = ?, expansion_increment_m = ?, greenbelt_min_ratio = ?, coordinate_rotation_deg = ?,
-            day_cycle_hours = ?, metadata_json = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE world_id = 'default-world' AND radius_m = ? AND expansion_increment_m = ?
-          AND greenbelt_min_ratio = ? AND coordinate_rotation_deg = ? AND day_cycle_hours = ?
-          AND metadata_json = ?
-      `).bind(
-        world.radiusM, world.expansionIncrementM, world.greenbeltMinRatio, world.coordinateRotationDeg, world.dayCycleHours, JSON.stringify(world.metadata),
-        existing.radius_m, existing.expansion_increment_m, existing.greenbelt_min_ratio, existing.coordinate_rotation_deg, existing.day_cycle_hours, existing.metadata_json,
-      ).run();
-      if (claimed.meta.changes > 0) break;
-      if (attempt >= WORLD_SETTINGS_CONCURRENT_RETRY_LIMIT) {
-        throw new HttpError('World settings are being updated concurrently — please retry', 409);
-      }
-    }
-    await adminActionLogStatement(db, admin.user_id, 'update_world_settings', 'world', 'default-world').run();
-    const updated = await getWorldSettings(db);
-    // #976: pass counts through like GET does above -- worldFromRow leaves
-    // landletCounts undefined when called with one argument, unlike GET's
-    // always-populated response for the identical resource.
-    const updatedCounts = await getLandletCounts(db);
-    return json({ world: worldFromRow(updated, updatedCounts) });
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-async function getWorldSettings(db) {
-  const row = await db.prepare("SELECT * FROM world_settings WHERE world_id = 'default-world'").first();
-  if (!row) throw new HttpError('World settings are not initialized', 500);
-  return row;
-}
-
-async function getLandletCounts(db) {
-  return db.prepare(`
-    SELECT
-      COUNT(*) AS total,
-      SUM(CASE WHEN status = 'greenbelt' AND landlet_type != 'water' THEN 1 ELSE 0 END) AS greenbelt,
-      SUM(CASE WHEN status = 'claimed' THEN 1 ELSE 0 END) AS claimed,
-      SUM(CASE WHEN status = 'generating' THEN 1 ELSE 0 END) AS generating,
-      SUM(CASE WHEN landlet_type = 'water' THEN 1 ELSE 0 END) AS water
-    FROM landlets
-  `).first();
-}
-
-// #755: a water landlet can never become greenbelt or be claimed (see the
-// CASE exclusion above, and POST .../claim's own landlet_type != 'water'
-// check), so it needs to come out of this ratio's denominator too, not
-// just stay out of its numerator -- otherwise every water tile the map
-// ever grows to enclose permanently drags the ratio down without ever
-// being able to satisfy it, since it can never count toward greenbelt.
-// Shared by worldNeedsGrowth, POST /world/expand's gate, and worldFromRow's
-// reported greenbeltRatio so all three keep meaning the same thing:
-// "greenbelt as a fraction of claimable land."
-function computeGreenbeltRatio(counts) {
-  const claimable = (counts?.total || 0) - (counts?.water || 0);
-  return claimable === 0 ? 0 : (counts?.greenbelt || 0) / claimable;
-}
-
-// The actual radius-bump + promotion half of POST /world/expand, split out
-// so autoGrowWorldIfNeeded (below) can expand the world itself without
-// going through an HTTP request or its ratio-gate 409 — the caller decides
-// whether expanding is warranted (the HTTP handler checks once up front;
-// the auto-grow loop below checks on every iteration). adminUserId is
-// optional and present only when called from the admin HTTP handler —
-// autoGrowWorldIfNeeded's own calls below omit it, so an automatic
-// expansion never gets logged as if some admin triggered it.
-// #837: previousRadiusM/newRadiusM used to be computed from a plain read
-// here, with the actual radius_m write further down a bare SET with no
-// guard tying it back to that read — two genuinely concurrent calls (an
-// admin double-click, a retried request, or an HTTP call racing an
-// internal auto-growth one) could both read the same previousRadiusM and
-// both write the same newRadiusM, silently dropping one whole increment
-// of growth while logging two separate admin_action_log entries both
-// claiming the same transition. Claiming the radius bump via a
-// WHERE-guarded conditional UPDATE first (same idiom this file already
-// uses for auctions — see resolveAuction/handleStartAuction) closes that
-// race: only the caller whose read is still current gets to proceed, and
-// a loser retries against fresh state rather than corrupting the log or
-// the enclosed/materialized landlet sets it computes from a stale radius.
-const EXPAND_WORLD_CONCURRENT_RETRY_LIMIT = 5;
-
-async function expandWorldOnce(db, adminUserId) {
-  let previousRadiusM;
-  let newRadiusM;
-  let settings;
-  for (let attempt = 0; ; attempt++) {
-    settings = await getWorldSettings(db);
-    previousRadiusM = settings.radius_m;
-    newRadiusM = previousRadiusM + settings.expansion_increment_m;
-    const claimed = await db.prepare(`
-      UPDATE world_settings
-      SET radius_m = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE world_id = 'default-world' AND radius_m = ?
-    `).bind(newRadiusM, previousRadiusM).run();
-    if (claimed.meta.changes > 0) break;
-    if (attempt >= EXPAND_WORLD_CONCURRENT_RETRY_LIMIT) {
-      throw new HttpError('World expansion is being updated concurrently — please retry', 409);
-    }
-  }
-  const { results } = await db.prepare(`
-    SELECT * FROM landlets
-    WHERE status = 'generating' AND generated_at IS NOT NULL
-      AND (max_world_radius_m IS NULL OR max_world_radius_m <= ?)
-  `).bind(newRadiusM).all();
-  const enclosed = results.filter((row) => landletMaxWorldRadius(row) <= newRadiusM);
-  const pending = await db.prepare(`
-    SELECT * FROM landlet_candidates
-    WHERE materialized_at IS NULL AND min_world_radius_m <= ?
-  `).bind(newRadiusM).all();
-  const overlapping = pending.results.filter((row) => landletMinWorldRadius(row) <= newRadiusM);
-  const followUpStatements = [
-    ...enclosed.map((row) => db.prepare(`
-      UPDATE landlets
-      SET status = 'greenbelt', claimable_at = COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
-          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE landlet_id = ? AND status = 'generating'
-    `).bind(row.landlet_id)),
-    ...candidateMaterializationStatements(db, overlapping),
-    ...(adminUserId
-      ? [adminActionLogStatement(db, adminUserId, 'expand_world', 'world', 'default-world', { previousRadiusM, newRadiusM })]
-      : []),
-  ];
-  if (followUpStatements.length > 0) await db.batch(followUpStatements);
-  const touchedRingIds = [...new Set(overlapping.map((row) => row.ring_id).filter(Boolean))];
-  let readyRingIds = [];
-  if (touchedRingIds.length > 0) {
-    const placeholders = touchedRingIds.map(() => '?').join(', ');
-    const ready = await db.prepare(`
-      SELECT candidate.ring_id FROM landlet_candidates AS candidate
-      JOIN landlet_candidate_rings AS ring ON ring.ring_id = candidate.ring_id
-      WHERE candidate.ring_id IN (${placeholders})
-      GROUP BY candidate.ring_id, ring.candidate_count
-      HAVING COUNT(*) = ring.candidate_count
-        AND SUM(CASE WHEN candidate.materialized_at IS NOT NULL THEN 1 ELSE 0 END) = ring.candidate_count
-      ORDER BY candidate.ring_id
-    `).bind(...touchedRingIds).all();
-    readyRingIds = ready.results.map((row) => row.ring_id);
-  }
-
-  const updated = await getWorldSettings(db);
-  const countsAfter = await getLandletCounts(db);
-  return {
-    world: worldFromRow(updated, countsAfter),
-    expansion: {
-      previousRadiusM,
-      newRadiusM,
-      incrementM: settings.expansion_increment_m,
-      promotedLandletIds: enclosed.map((row) => row.landlet_id),
-      startedGeneratingLandletIds: overlapping.map((row) => row.landlet_id),
-      readyRingIds,
-    },
-  };
-}
-
-// Automatic world growth — see the default export's scheduled() near the
-// top of this file and wrangler.jsonc's triggers.crons. Before this
-// existed, "grow the world" was a player-triggered action (the claim
-// modal's own "Grow the world" button, now retired — see git history):
-// any logged-in builder's browser would expand the world and/or generate a
-// fresh ring whenever nothing was claimable. That was always a dev-mode
-// stand-in ("a real deployment would want this driven by an actual
-// world-building process rather than a builder's own browser session," per
-// that button's own removed comment) — this *is* that real process,
-// running on a schedule instead of a click, checking exactly the same
-// condition `POST /world/expand` already gates on: the greenbelt ratio
-// dropping below `world_settings.greenbelt_min_ratio`. The manual
-// /world/expand, /land-candidates/generate-ring, /generate-mosaic, and
-// generation-complete endpoints all still exist, admin-gated, for
-// troubleshooting — this function is a second caller of the same
-// generation/expansion primitives (expandWorldOnce, generateLandletRing-
-// Candidates, completeRingGenerationInternal), not a replacement for them.
-const WORLD_GROWTH_MAX_STEPS = 20;
-// Matches the old player-triggered generateRingAtBoundary's own ring size
-// — no reason for the automatic version to generate a differently-shaped
-// world than the one already tuned by hand.
-const AUTO_RING_CANDIDATE_COUNT = 12;
-
-async function worldNeedsGrowth(db) {
-  const settings = await getWorldSettings(db);
-  const counts = await getLandletCounts(db);
-  return computeGreenbeltRatio(counts) < settings.greenbelt_min_ratio;
-}
-
-async function autoGrowWorldIfNeeded(db) {
-  if (!(await worldNeedsGrowth(db))) return { grew: false };
-
-  // Phase 1: expand to enclose anything already generating and due — the
-  // cheapest way to surface more greenbelt, since it needs no new content,
-  // mirroring the old expandToEncloseGenerating.
-  for (let i = 0; i < WORLD_GROWTH_MAX_STEPS; i++) {
-    if (!(await worldNeedsGrowth(db))) break;
-    // Matches expandWorldOnce's own enclosure criteria exactly — a
-    // 'generating' landlet with no generated_at yet isn't eligible to be
-    // enclosed no matter how far the radius grows, so it shouldn't keep
-    // this loop spinning either.
-    const enclosable = await db.prepare(
-      `SELECT 1 FROM landlets WHERE status = 'generating' AND generated_at IS NOT NULL LIMIT 1`,
-    ).first();
-    if (!enclosable) break;
-    await expandWorldOnce(db);
-  }
-
-  // Phase 2: Phase 1's loop above already broke out once nothing enclosable
-  // was left, so if the ratio is still below threshold here, more land
-  // actually needs generating — mirroring the old generateRingAtBoundary.
-  // #942: this used to re-check for literally zero greenbelt landlets
-  // instead of trusting worldNeedsGrowth's own ratio-based verdict, so this
-  // phase silently never fired once at least one greenbelt landlet existed
-  // anywhere -- true almost all the time, since the threshold is a
-  // percentage, not "run out completely". That defeated the entire feature
-  // in its realistic steady state.
-  //
-  // #1085: owner's decision, 2026-10-01 -- prefer the organic mosaic
-  // generator over the legacy ring generator first, falling back to the
-  // ring generator only once mosaic is unavailable (it's a deliberately
-  // one-time operation; see generateAutoMosaicIfFreshWorld's own comment).
-  if (await worldNeedsGrowth(db)) {
-    const mosaicGenerated = await generateAutoMosaicIfFreshWorld(db);
-    if (!mosaicGenerated) {
-      await generateRingAtWorldBoundary(db);
-    }
-  }
-
-  return { grew: true };
-}
-
-// #1085: generate-mosaic's own disc always covers the same origin-centered
-// area (organicLandGenerator.js only rotates the template, never
-// translates it), so it is inherently a one-time operation across the
-// world's whole lifetime -- once it has succeeded once (here, or via a
-// prior manual admin call with any prefix), every later attempt hits its
-// own duplicate/overlap guards and throws. That makes "is the world still
-// fresh enough for mosaic" self-limiting to detect: just attempt it and
-// let those guards decide, rather than adding new world_settings state to
-// track "has an organic seed been attempted here" independently. A rare,
-// genuinely-unexpected failure (not one of this function's own guards)
-// still propagates, instead of silently masking a real bug as "mosaic
-// unavailable, fall back to ring."
-async function generateAutoMosaicIfFreshWorld(db) {
-  try {
-    await generateLandletMosaicCandidates(db, { prefix: 'auto-mosaic', count: 16 });
-    return true;
-  } catch (err) {
-    if (err instanceof HttpError) return false;
-    throw err;
-  }
-}
-
 // docs/SPEC.md §5's "greenbelt via inactivity" land-reclamation mechanic
 // (#325) — land held by a genuinely abandoned builder cycles back toward
 // greenbelt via the same $0-reserve-auction path #199 already established
@@ -11558,92 +9881,6 @@ export async function warnInactiveLandletOwners(db) {
   }
 }
 
-async function generateRingAtWorldBoundary(db) {
-  let settings = await getWorldSettings(db);
-  let innerRadiusM = settings.radius_m;
-  let ring = null;
-  for (let attempt = 0; attempt < WORLD_GROWTH_MAX_STEPS && !ring; attempt++) {
-    // Radius-derived, not random/sequential — naturally unique per call
-    // (radius only ever grows) the same way the old frontend flow's own
-    // `dev-ring-${Math.round(innerRadiusM)}` prefix was.
-    const prefix = `auto-ring-${Math.round(innerRadiusM)}`;
-
-    // #1314: a previous, interrupted run (e.g. the Worker was recycled
-    // mid-cycle) may have already committed this exact reservation --
-    // generateLandletRingCandidates' own db.batch is atomic, so the ring
-    // row and its candidates are either both there or neither is, but the
-    // completion/enclosure steps below never got to run. Checked *before*
-    // attempting generation, not caught as an error afterward: a fresh
-    // attempt at this same radius would generate candidates with the exact
-    // same footprint as the ones already stored, so generateLandletRingCandidates'
-    // own radial-overlap precheck would always report a conflict against
-    // itself first (an HttpError, not the raw D1 UNIQUE-constraint error
-    // the old reactive check here used to key off) -- silently bumping past
-    // its own prior reservation and abandoning it in 'generating' limbo
-    // forever, rather than ever finishing it.
-    const existing = await db.prepare(
-      'SELECT outer_radius_m FROM landlet_candidate_rings WHERE ring_id = ?',
-    ).bind(prefix).first();
-    if (existing) {
-      ring = { ringId: prefix, outerRadiusM: existing.outer_radius_m };
-      break;
-    }
-
-    try {
-      const result = await generateLandletRingCandidates(db, {
-        prefix, count: AUTO_RING_CANDIDATE_COUNT, innerRadiusM, startAngleRad: 0, distribution: null,
-        adjacentToRingId: null,
-      });
-      ring = { ringId: prefix, outerRadiusM: result.outerRadiusM };
-    } catch (err) {
-      if (!(err instanceof HttpError)) throw err;
-      if (err.message === 'Generated ring would overlap existing land candidates') {
-        innerRadiusM += settings.expansion_increment_m;
-      } else {
-        throw err;
-      }
-    }
-  }
-  if (!ring) return; // no clear room found this pass — the next scheduled run tries again
-
-  try {
-    await completeRingGenerationInternal(db, ring.ringId);
-  } catch {
-    // Not every member has materialized yet — expand toward its outer
-    // edge and retry once, same fallback the old frontend flow used.
-    for (let i = 0; i < WORLD_GROWTH_MAX_STEPS; i++) {
-      settings = await getWorldSettings(db);
-      if (settings.radius_m >= ring.outerRadiusM) break;
-      await expandWorldOnce(db);
-    }
-    await completeRingGenerationInternal(db, ring.ringId);
-  }
-
-  for (let i = 0; i < WORLD_GROWTH_MAX_STEPS; i++) {
-    settings = await getWorldSettings(db);
-    if (settings.radius_m >= ring.outerRadiusM) break;
-    await expandWorldOnce(db);
-  }
-}
-
-function candidateMaterializationStatements(db, candidates) {
-  return candidates.flatMap((row) => [
-    db.prepare(`
-      INSERT INTO landlets
-        (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, landlet_class,
-         landlet_type, biome, polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
-      VALUES (?, ?, ?, ?, ?, 'generating', NULL, ?, ?, ?, ?, NULL, NULL, ?, ?)
-    `).bind(
-      row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.landlet_class,
-      row.landlet_type, row.biome, row.polygon_json, row.metadata_json, landletMaxWorldRadius(row),
-    ),
-    db.prepare(`
-      UPDATE landlet_candidates SET materialized_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE landlet_id = ? AND materialized_at IS NULL
-    `).bind(row.landlet_id),
-  ]);
-}
-
 async function explainClaimConflict(db, landletId, builderId) {
   const landlet = await db.prepare('SELECT status, owner_builder_id, landlet_type, landlet_class FROM landlets WHERE landlet_id = ?').bind(landletId).first();
   if (!landlet) throw new HttpError('Landlet not found', 404);
@@ -11670,1203 +9907,8 @@ async function explainClaimConflict(db, landletId, builderId) {
   throw new HttpError('Landlet could not be claimed', 409);
 }
 
-// #827: unlike almost every other authenticated write in this file
-// (landlet-version, bundle-create, saved-layout-create, friend-request,
-// calendar-event, landlet-self-claim-create, ...), none of the placed_instances
-// mutations below ever called checkRateLimit — a compromised/scripted builder
-// session could flood single or batch creates/updates/deletes with zero
-// throttling. This bucket needs a much higher ceiling than those endpoints'
-// (10-30 per RATE_LIMIT_WINDOW_MS): unlike a one-off friend request or bundle,
-// src/main.js's syncUpdate fires on every discrete drag/rotate/resize/rename
-// commit during ordinary active building, easily dozens of times in a few
-// minutes — a low threshold copied from those endpoints would throttle a
-// legitimately active builder mid-session, the same trap PR #381 hit (and
-// was superseded by #382 for) when it tried a naive per-IP limit on catalog
-// creation. One shared bucket per builder across every write shape (single
-// or batch — a batch of up to 100 instances counts as one hit, same as
-// every other batch endpoint in this file) still bounds a genuine flood
-// while leaving generous headroom for real interactive editing.
-const INSTANCE_WRITE_RATE_LIMIT_MAX = 500;
 
-async function handleInstances(request, env, route, url) {
-  const db = env.DB;
-  if (request.method === 'DELETE' && route.length === 2 && route[1] === 'batch') {
-    const input = await readJson(request);
-    if (!Array.isArray(input.instanceIds)) throw new HttpError('instanceIds must be an array', 400);
-    if (input.instanceIds.length === 0) throw new HttpError('instanceIds must contain at least one item', 400);
-    if (input.instanceIds.length > 100) throw new HttpError('instanceIds must contain at most 100 items', 400);
-    const instanceIds = input.instanceIds.map((id) => stringValue(id, 'instanceIds item'));
-    if (new Set(instanceIds).size !== instanceIds.length) throw new HttpError('instanceIds must be unique', 400);
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
-    const placeholders = instanceIds.map(() => '?').join(', ');
-    const { results } = await db.prepare(`
-      SELECT instance_id, landlet_id FROM placed_instances WHERE instance_id IN (${placeholders})
-    `).bind(...instanceIds).all();
-    if (results.length !== instanceIds.length) {
-      throw new HttpError('Every instanceId must reference an existing placed instance', 404);
-    }
-    await requireOwnedLandlets(db, results.map((row) => row.landlet_id), sessionBuilder.builder_id);
-    const landletIdByInstanceId = new Map(results.map((row) => [row.instance_id, row.landlet_id]));
-    // #929: same fold-the-ownership-re-check-into-the-write idiom as the
-    // single DELETE above and the POST/PUT batch below — requireOwnedLandlets
-    // is a point-in-time check, so without this a landlet transfer landing
-    // in the await gap since `results` was fetched would let this DELETE
-    // still remove rows the caller no longer owns.
-    const batchResults = await db.batch(instanceIds.map((instanceId) => db.prepare(`
-      DELETE FROM placed_instances
-      WHERE instance_id = ?
-        AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
-    `).bind(instanceId, landletIdByInstanceId.get(instanceId), sessionBuilder.builder_id)));
-    // #1773: sibling of #1772's own fix — a batch can span multiple
-    // landlets (requireOwnedLandlets above explicitly supports that), and
-    // db.batch() has no atomic rollback on a WHERE-guard mismatch (same D1
-    // semantics the single-instance PATCH handler below's own #1022
-    // comment documents): a guard failing for one instance's landlet
-    // doesn't undo another instance's own delete in the same batch.
-    // Throwing a blanket 409 here used to claim the whole request failed
-    // even when some of these deletes were already durable -- real rows on
-    // a still-owned landlet, genuinely gone from the DB, while the client
-    // (believing nothing happened) never prunes them locally. Only when
-    // literally nothing was deleted is it safe to report a clean,
-    // fully-retryable failure; otherwise report exactly which instanceIds
-    // were rejected so the caller can reconcile instead of being lied to.
-    const rejectedInstanceIds = instanceIds.filter((_, i) => batchResults[i].meta.changes === 0);
-    if (rejectedInstanceIds.length === instanceIds.length) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
-    }
-    const rejectedSet = new Set(rejectedInstanceIds);
-    const deletedInstanceIds = instanceIds.filter((instanceId) => !rejectedSet.has(instanceId));
-    return json({ deletedInstanceIds, rejectedInstanceIds });
-  }
-
-  if ((request.method === 'POST' || request.method === 'PUT') && route.length === 2 && route[1] === 'batch') {
-    const input = await readJson(request);
-    if (!Array.isArray(input.instances)) throw new HttpError('instances must be an array', 400);
-    if (input.instances.length === 0) throw new HttpError('instances must contain at least one item', 400);
-    if (input.instances.length > 100) throw new HttpError('instances must contain at most 100 items', 400);
-    const instances = input.instances.map((item) => validateInstance(item, crypto.randomUUID()));
-    const instanceIds = instances.map((instance) => instance.instanceId);
-    if (new Set(instanceIds).size !== instanceIds.length) {
-      throw new HttpError('instanceId values must be unique', 400);
-    }
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
-    await assertReferencesExist(db, 'catalog_templates', 'template_id', instances.map((instance) => instance.templateId), 'templateId');
-    await assertReferencesExist(db, 'landlets', 'landlet_id', instances.map((instance) => instance.landletId), 'landletId');
-    const existingInstances = await getInstancesById(db, instanceIds);
-    // Found via backlog audit: this batch endpoint re-validated crop/z
-    // unconditionally for every instance, even ones already stored
-    // unchanged — exactly the bug #338 already fixed for the single-
-    // instance PUT/PATCH handler below (see its own comment). PUT
-    // /instances/batch is what a multi-item group move or an undo/redo
-    // snapshot restore uses (src/api.js's upsertInstancesRemote), and both
-    // resend every affected instance's full current state, untouched ones
-    // included — so a template shrunk (or a landlet level removed) after
-    // an instance's crop/z was already validated would brick that
-    // instance on its next unrelated group move, the same bricking #338
-    // fixed for a single-instance edit. An instance with no existing row
-    // (a genuinely new one, or POST's case where none can exist yet)
-    // always gets validated, same as before.
-    const instancesNeedingCropCheck = instances.filter((instance) => {
-      const existing = existingInstances.get(instance.instanceId);
-      return !existing || instance.templateId !== existing.templateId || !cropsEqual(instance.crop, existing.crop);
-    });
-    await assertCropWithinTemplateBounds(db, instancesNeedingCropCheck);
-    const instancesNeedingZCheck = instances.filter((instance) => {
-      const existing = existingInstances.get(instance.instanceId);
-      return !existing || instance.z !== existing.z || instance.landletId !== existing.landletId;
-    });
-    await assertInstanceZWithinLevels(db, instancesNeedingZCheck);
-    // Same "only re-check what actually changed" reasoning as crop/z above.
-    // #1048: scale's own domain bound is checked before the footprint-aware
-    // XY check below (see that call site's own comment for why).
-    const instancesNeedingScaleCheck = instances.filter((instance) => {
-      const existing = existingInstances.get(instance.instanceId);
-      return !existing || instance.scale !== existing.scale;
-    });
-    assertInstanceScaleWithinBounds(instancesNeedingScaleCheck);
-    // Same "only re-check what actually changed" reasoning as crop/z above
-    // — an untouched x/y resent unchanged on an unrelated group move
-    // shouldn't get re-validated against a bound that may have tightened
-    // since (footprintScaleAtHeight shrinks with z, so a level added above
-    // an instance after it was placed could otherwise brick it here).
-    // Also re-checks on a crop/templateId/scale change — the XY check is
-    // now footprint-aware, so those affect the bound too, not just x/y/z/
-    // landletId.
-    const instancesNeedingXYCheck = instances.filter((instance) => {
-      const existing = existingInstances.get(instance.instanceId);
-      return !existing || instance.x !== existing.x || instance.y !== existing.y || instance.z !== existing.z
-        || instance.landletId !== existing.landletId || instance.scale !== existing.scale
-        || instance.templateId !== existing.templateId || !cropsEqual(instance.crop, existing.crop);
-    });
-    await assertInstanceXYWithinLandlet(db, instancesNeedingXYCheck);
-    const landletIdsToCheck = new Set(instances.map((instance) => instance.landletId));
-    for (const existing of existingInstances.values()) landletIdsToCheck.add(existing.landletId);
-    await requireOwnedLandlets(db, landletIdsToCheck, sessionBuilder.builder_id);
-    const conflictClause = request.method === 'PUT' ? `
-      ON CONFLICT(instance_id) DO UPDATE SET
-        landlet_id = excluded.landlet_id, template_id = excluded.template_id,
-        x_m = excluded.x_m, y_m = excluded.y_m, z_m = excluded.z_m,
-        rotation_x_rad = excluded.rotation_x_rad, rotation_y_rad = excluded.rotation_y_rad,
-        rotation_z_rad = excluded.rotation_z_rad, label = excluded.label, crop_json = excluded.crop_json,
-        scale = excluded.scale, is_community_sign = excluded.is_community_sign,
-        is_community_calendar = excluded.is_community_calendar,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    ` : '';
-    // #456: same reasoning as the single-create endpoint above — fold the
-    // ownership re-check into each write instead of trusting the
-    // point-in-time requireOwnedLandlets check above alone.
-    const batchResults = await db.batch(instances.map((instance) => db.prepare(`
-      INSERT INTO placed_instances
-        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-      WHERE EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
-      ${conflictClause}
-    `).bind(...instanceParams(instance), instance.landletId, sessionBuilder.builder_id)));
-    // #1772: a batch can span multiple landlets (requireOwnedLandlets above
-    // explicitly supports that), and db.batch() has no atomic rollback on a
-    // WHERE-guard mismatch (same D1 semantics the single-instance PATCH
-    // handler below's own #1022 comment documents) -- a guard failing for
-    // one instance's landlet doesn't undo another instance's own write in
-    // the same batch. Throwing a blanket 409 here used to claim the whole
-    // request failed even when some of these writes were already durable.
-    // Only when literally nothing landed is it safe to report a clean,
-    // fully-retryable failure; otherwise report exactly which instanceIds
-    // were rejected so the caller can reconcile instead of being lied to.
-    const rejectedInstanceIds = instances
-      .filter((_, i) => batchResults[i].meta.changes === 0)
-      .map((instance) => instance.instanceId);
-    if (rejectedInstanceIds.length === instances.length) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
-    }
-    const rejectedSet = new Set(rejectedInstanceIds);
-    const succeededInstanceIds = instanceIds.filter((instanceId) => !rejectedSet.has(instanceId));
-    // #1675: the single-instance PATCH handler below has its own #1022
-    // cleanup for exactly this transition -- this sibling batch endpoint
-    // (what a multi-item group move or an undo/redo snapshot restore uses)
-    // never had it, so unflagging a community sign/calendar through here
-    // left its sign_posts/calendar_events rows sitting around
-    // invisible-but-persistent, same resurrection risk #1022 fixed for the
-    // single-instance path. existingInstances (built above, before the
-    // write) already has each instance's prior flag value to diff against.
-    // Skips any instance in rejectedSet -- its write above never actually
-    // landed, so its stored flag value didn't change and this cleanup must
-    // not run for it either.
-    for (const instance of instances) {
-      if (rejectedSet.has(instance.instanceId)) continue;
-      const existing = existingInstances.get(instance.instanceId);
-      if (existing?.isCommunitySign && !instance.isCommunitySign) {
-        await db.prepare('DELETE FROM sign_posts WHERE instance_id = ?').bind(instance.instanceId).run();
-      }
-      if (existing?.isCommunityCalendar && !instance.isCommunityCalendar) {
-        await db.prepare('DELETE FROM calendar_events WHERE instance_id = ?').bind(instance.instanceId).run();
-      }
-    }
-    const stored = await getInstancesById(db, succeededInstanceIds);
-    return json({
-      instances: succeededInstanceIds.map((instanceId) => stored.get(instanceId)),
-      rejectedInstanceIds,
-    }, request.method === 'POST' ? 201 : 200);
-  }
-
-  if (request.method === 'GET' && route.length === 1) {
-    const landletIdParam = url.searchParams.get('landletId');
-    const landletId = landletIdParam === null ? 'starter-landlet' : stringValue(landletIdParam, 'landletId');
-    const templateIdParam = url.searchParams.get('templateId');
-    const templateId = templateIdParam === null ? null : stringValue(templateIdParam, 'templateId');
-    const limit = queryLimit(url.searchParams.get('limit'), 100);
-    const cursor = decodeCursor(url.searchParams.get('cursor'));
-    const conditions = ['landlet_id = ?'];
-    const bindings = [landletId];
-    if (templateId) {
-      conditions.push('template_id = ?');
-      bindings.push(templateId);
-    }
-    if (cursor) {
-      conditions.push('(created_at > ? OR (created_at = ? AND instance_id > ?))');
-      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
-    }
-    bindings.push(limit + 1);
-    const { results } = await db.prepare(`
-      SELECT * FROM placed_instances
-      WHERE ${conditions.join(' AND ')}
-      ORDER BY created_at, instance_id LIMIT ?
-    `).bind(...bindings).all();
-    const hasMore = results.length > limit;
-    const page = results.slice(0, limit);
-    const last = page.at(-1);
-    return json({
-      instances: page.map(instanceFromRow),
-      nextCursor: hasMore ? encodeCursor(last.created_at, last.instance_id) : null,
-    });
-  }
-
-  if (request.method === 'GET' && route.length === 2) {
-    const row = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(route[1]).first();
-    return row ? json({ instance: instanceFromRow(row) }) : json({ error: 'Instance not found' }, 404);
-  }
-
-  if (request.method === 'POST' && route.length === 1) {
-    const input = await readJson(request);
-    const instance = validateInstance(input, crypto.randomUUID());
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
-    await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
-    await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
-    await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
-    await assertCropWithinTemplateBounds(db, [instance]);
-    await assertInstanceZWithinLevels(db, [instance]);
-    // #1048: scale's own domain bound before the footprint-aware XY check.
-    assertInstanceScaleWithinBounds([instance]);
-    await assertInstanceXYWithinLandlet(db, [instance]);
-    // #456: requireOwnedLandlet above is a point-in-time check — an auction
-    // resolving (transferring ownership, wiping placed_instances) in the
-    // await gap between it and this write would otherwise let this request
-    // still plant an instance on a landlet that's no longer the caller's.
-    // Same "fold the ownership re-check into the write itself" idiom #415
-    // already used for handleLandletVersions/handleLandletDraft.
-    const created = await db.prepare(`
-      INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
-      WHERE EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
-    `).bind(...instanceParams(instance), instance.landletId, sessionBuilder.builder_id).run();
-    if (created.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
-    }
-    const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(instance.instanceId).first();
-    // #2392: not found here means a concurrent auction transfer (which
-    // wipes every placed_instances row on the landlet, see
-    // buildAuctionWinnerSettlementStatements) landed in the single await
-    // gap between the guarded INSERT above and this re-SELECT -- a genuine
-    // 404, same race shape #2334 already fixed for notifications, not an
-    // uncaught instanceFromRow(undefined) crash.
-    if (!stored) return json({ error: 'Instance not found' }, 404);
-    return json({ instance: instanceFromRow(stored) }, 201);
-  }
-
-  if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
-    const existing = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(route[1]).first();
-    if (!existing) return json({ error: 'Instance not found' }, 404);
-    const input = await readJson(request);
-    const instance = validateInstance({ ...instanceFromRow(existing), ...input, instanceId: route[1] }, route[1]);
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
-    await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
-    await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
-    await requireOwnedLandlet(db, existing.landlet_id, sessionBuilder.builder_id);
-    if (instance.landletId !== existing.landlet_id) {
-      await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
-    }
-    // Found via backlog audit (#338): re-validating crop unconditionally
-    // here, even when neither crop nor templateId actually changed, meant a
-    // template shrunk (or its extensible.minM raised) after an instance's
-    // crop was already set could brick that instance — any later PATCH for
-    // something wholly unrelated (moving it, renaming its label) would
-    // re-check the *carried-over* stale crop against the template's
-    // *current* bounds and 400, even though the caller never meant to
-    // touch crop. A first attempt at this fix checked only whether `crop`/
-    // `templateId` were *present* in the request body — but src/main.js's
-    // syncUpdate always resends the mesh's full current state (crop
-    // included) on every edit via instanceFromMesh, so that check was
-    // always true for real frontend traffic and never actually skipped
-    // anything. Comparing actual values against the stored row (via
-    // cropsEqual) is what correctly distinguishes "this request resent the
-    // same crop unchanged" from "this request is asserting a new crop/
-    // template pairing that didn't already exist" — only the latter needs
-    // re-validating.
-    const cropOrTemplateChanged = instance.templateId !== existing.template_id
-      || !cropsEqual(instance.crop, JSON.parse(existing.crop_json || '{}'));
-    if (cropOrTemplateChanged) {
-      await assertCropWithinTemplateBounds(db, [instance]);
-    }
-    // Same "only re-check what actually changed" reasoning as crop above:
-    // an unrelated PATCH (renaming a label, say) always resends the
-    // instance's full current state, so re-validating an untouched z
-    // against the landlet's *current* levels would risk bricking existing
-    // instances if a level was ever removed out from under them.
-    if (instance.z !== existing.z_m || instance.landletId !== existing.landlet_id) {
-      await assertInstanceZWithinLevels(db, [instance]);
-    }
-    // Same "only re-check what actually changed" reasoning as crop/z above.
-    // #1048: scale's own domain bound is checked before the footprint-aware
-    // XY check below (see that call site's own comment for why).
-    if (instance.scale !== existing.scale) {
-      assertInstanceScaleWithinBounds([instance]);
-    }
-    // Also re-checks on a crop/templateId/scale change — the XY check is
-    // now footprint-aware, so those affect the bound too, not just x/y/z/
-    // landletId.
-    if (instance.x !== existing.x_m || instance.y !== existing.y_m
-      || instance.z !== existing.z_m || instance.landletId !== existing.landlet_id
-      || instance.scale !== existing.scale || cropOrTemplateChanged) {
-      await assertInstanceXYWithinLandlet(db, [instance]);
-    }
-    // #456: fold the ownership re-check into the write itself — same
-    // reasoning as the create endpoints above. Without this, a landlet
-    // transfer (which deletes every placed_instances row on it — see
-    // resolveAuction) landing in the await gap since existing was fetched
-    // means this UPDATE's plain "WHERE instance_id = ?" would silently
-    // affect zero rows, and (before this fix) that went unchecked: the
-    // response still fed the stale `existing` id into a fresh SELECT that
-    // now returns nothing, feeding a null row into instanceFromRow.
-    // Re-checking ownership explicitly (rather than relying on the row
-    // simply being gone) also closes the same gap for any other write that
-    // might one day mutate a landlet's ownership without deleting its
-    // instances.
-    const updated = await db.prepare(`
-      UPDATE placed_instances
-      SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, crop_json = ?, scale = ?, is_community_sign = ?, is_community_calendar = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE instance_id = ?
-        AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
-    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0, instance.isCommunityCalendar ? 1 : 0, route[1], instance.landletId, sessionBuilder.builder_id).run();
-    if (updated.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
-    }
-    // #1022: unflagging (true -> false) used to only ever touch this row's
-    // own is_community_sign/is_community_calendar columns -- the sign's
-    // sign_posts/calendar's calendar_events rows were never cleared, so
-    // they sat around invisible-but-persistent and silently reappeared if
-    // the same instance was ever re-flagged later. Only the ON DELETE
-    // CASCADE (migrations/0041/0042) fires on actually deleting the
-    // instance; unflagging needs its own explicit cleanup here. Run as
-    // separate follow-up writes gated on the UPDATE above having actually
-    // landed (not batched with it), same idiom as #1006's notification
-    // fix -- db.batch() has no atomic rollback on a WHERE-guard mismatch,
-    // so batching an unconditional delete alongside a write that might
-    // still no-op on the ownership race above would delete real content
-    // even when the PATCH itself ends up rejected with a 409.
-    if (existing.is_community_sign && !instance.isCommunitySign) {
-      await db.prepare('DELETE FROM sign_posts WHERE instance_id = ?').bind(route[1]).run();
-    }
-    if (existing.is_community_calendar && !instance.isCommunityCalendar) {
-      await db.prepare('DELETE FROM calendar_events WHERE instance_id = ?').bind(route[1]).run();
-    }
-    const stored = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(route[1]).first();
-    // #2392: not found here means a concurrent auction transfer (which
-    // wipes every placed_instances row on the landlet, see
-    // buildAuctionWinnerSettlementStatements) landed in the await gap
-    // between the guarded UPDATE above and this re-SELECT -- a genuine
-    // 404, same race shape #2334 already fixed for notifications, not an
-    // uncaught instanceFromRow(undefined) crash.
-    if (!stored) return json({ error: 'Instance not found' }, 404);
-    return json({ instance: instanceFromRow(stored) });
-  }
-
-  if (request.method === 'DELETE' && route.length === 2) {
-    const existing = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(route[1]).first();
-    if (!existing) return json({ error: 'Instance not found' }, 404);
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
-    await requireOwnedLandlet(db, existing.landlet_id, sessionBuilder.builder_id);
-    // #929: requireOwnedLandlet above is a point-in-time check, unlike the
-    // POST/PUT/PATCH siblings above, which fold their own ownership
-    // re-check into the write itself. Without this, a landlet transfer
-    // landing in the await gap since existing was fetched would let this
-    // DELETE still remove a row the caller no longer owns, and unlike
-    // POST/PATCH, nothing here checked meta.changes to catch that.
-    const deleted = await db.prepare(`
-      DELETE FROM placed_instances
-      WHERE instance_id = ?
-        AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
-    `).bind(route[1], existing.landlet_id, sessionBuilder.builder_id).run();
-    if (deleted.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
-    }
-    return json({ deleted: true });
-  }
-
-  if (route.length >= 3 && route[2] === 'posts') {
-    return handleSignPosts(request, db, route);
-  }
-
-  if (route.length >= 3 && route[2] === 'events') {
-    return handleCalendarEvents(request, db, route);
-  }
-
-  if (route.length >= 3 && route[2] === 'backups') {
-    return handleInstanceBackups(request, db, route);
-  }
-
-  if (request.method === 'POST' && route.length === 3 && route[2] === 'purchase') {
-    return handleInstancePurchase(request, env, route[1]);
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-// #2050 (sub-issue of #1952): a placed instance's own configured backup/
-// replacement chain -- nested under /instances/:id/backups for the same
-// "never exists independent of its instance" reasoning handleSignPosts/
-// handleCalendarEvents already use. Every op here is gated to the
-// instance's own hosting landlet's owner (builder-facing configuration,
-// not shopper-facing content) -- there's no moderation/admin path the way
-// sign posts have, since nobody but the owner has any business touching
-// their own backup chain.
-const INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX = 200;
-// #2171: every other ordered/bulk-array endpoint in this file caps its
-// length explicitly (e.g. PUT /landlets/:id/instances at 250, POST
-// /land-candidates/batch at 100) -- this chain had no such cap. 20 matches
-// the scale of a "backup chain" feature (a handful of fallback templates
-// per instance, not a bulk list).
-const INSTANCE_BACKUP_CHAIN_MAX = 20;
-
-function backupFromRow(row) {
-  return {
-    backupId: row.backup_id,
-    instanceId: row.instance_id,
-    position: row.position,
-    templateId: row.template_id,
-    createdAt: row.created_at,
-  };
-}
-
-async function handleInstanceBackups(request, db, route) {
-  const instanceId = route[1];
-  const instance = await db.prepare('SELECT instance_id, landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
-  if (!instance) return json({ error: 'Instance not found' }, 404);
-  const sessionBuilder = await requireSessionBuilder(request, db);
-  await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
-
-  if (request.method === 'GET' && route.length === 3) {
-    const { results } = await db.prepare(
-      'SELECT * FROM placed_instance_backups WHERE instance_id = ? ORDER BY position',
-    ).bind(instanceId).all();
-    return json({ backups: results.map(backupFromRow) });
-  }
-
-  if (request.method === 'POST' && route.length === 3) {
-    await checkRateLimit(db, `instance-backup-write:${sessionBuilder.builder_id}`, INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    const templateId = stringValue(input.templateId, 'templateId');
-    await assertReferenceExists(db, 'catalog_templates', 'template_id', templateId, 'templateId');
-    // An early, best-effort cap check -- not itself race-free (two
-    // concurrent appends can both read a count one below the max and both
-    // pass), but that only risks the chain briefly exceeding
-    // INSTANCE_BACKUP_CHAIN_MAX by a small amount under a genuine race, not
-    // the position-collision/gap bug #2183 is about. Position itself is no
-    // longer derived from this read -- see the INSERT's own subquery below.
-    const tail = await db.prepare(
-      'SELECT COUNT(*) AS count FROM placed_instance_backups WHERE instance_id = ?',
-    ).bind(instanceId).first();
-    if (tail.count >= INSTANCE_BACKUP_CHAIN_MAX) {
-      throw new HttpError(`A backup chain can contain at most ${INSTANCE_BACKUP_CHAIN_MAX} entries`, 400);
-    }
-    const backupId = `backup-${crypto.randomUUID()}`;
-    // #929/#960 idiom (see handleInstances' own POST above): requireOwnedLandlet
-    // above is a point-in-time check, and the awaits since then (readJson,
-    // assertReferenceExists, the cap check above) are real gaps a landlet
-    // transfer could land in -- fold the ownership re-check into the write
-    // itself.
-    //
-    // #2183: position used to come from a COUNT(*) read in a statement
-    // separate from this INSERT -- two concurrent appends could both read
-    // the same count and both insert at the identical position, since
-    // nothing else enforces uniqueness on (instance_id, position). Appends
-    // to the end of the chain -- the new entry's position is the chain's own
-    // current length, not a client-supplied index -- so folding that same
-    // COUNT(*) into a live subquery inside this INSERT instead closes the
-    // race the same way spawnCreditOrbIfDue's own comment describes: D1/
-    // SQLite serializes writes, so a second concurrent append's own
-    // subquery only ever runs after the first append's INSERT has already
-    // committed, and sees the incremented count. (The cap check above still
-    // uses its own separate, slightly-stale read -- see that comment.)
-    const created = await db.prepare(`
-      INSERT INTO placed_instance_backups (backup_id, instance_id, position, template_id)
-      SELECT ?, ?, (SELECT COUNT(*) FROM placed_instance_backups WHERE instance_id = ?), ?
-      WHERE EXISTS (
-        SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
-        WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
-      )
-    `).bind(backupId, instanceId, instanceId, templateId, instanceId, sessionBuilder.builder_id).run();
-    if (created.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
-    }
-    const row = await db.prepare('SELECT * FROM placed_instance_backups WHERE backup_id = ?').bind(backupId).first();
-    // #2428: not found here means a concurrent DELETE of the hosting
-    // instance (migrations/0137's own ON DELETE CASCADE on instance_id)
-    // landed in the single await gap between the guarded INSERT above and
-    // this re-SELECT -- a genuine 404, same race shape #2334/#2392 already
-    // fixed elsewhere, not an uncaught backupFromRow(undefined) crash.
-    if (!row) return json({ error: 'Placed instance backup not found' }, 404);
-    return json({ backup: backupFromRow(row) }, 201);
-  }
-
-  if (request.method === 'PUT' && route.length === 3) {
-    const input = await readJson(request);
-    if (!Array.isArray(input.order) || input.order.some((id) => typeof id !== 'string')) {
-      throw new HttpError('order must be an array of backupIds', 400);
-    }
-    const { results: existingRows } = await db.prepare(
-      'SELECT backup_id FROM placed_instance_backups WHERE instance_id = ?',
-    ).bind(instanceId).all();
-    const existingIds = new Set(existingRows.map((row) => row.backup_id));
-    // Requires the full current set, not a partial reorder -- a partial
-    // list would leave the omitted rows' own positions ambiguous (keep
-    // their old slot? shift to the end?), so the caller always resends
-    // every id it already has, same as src/main.js's own full-state resync
-    // idiom elsewhere in this file (e.g. handleInstances' PATCH).
-    if (input.order.length !== existingIds.size || new Set(input.order).size !== existingIds.size
-      || !input.order.every((id) => existingIds.has(id))) {
-      throw new HttpError("order must contain exactly this instance's current backup ids, each once", 400);
-    }
-    await checkRateLimit(db, `instance-backup-write:${sessionBuilder.builder_id}`, INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX);
-    // #2091: same #929/#960 idiom as this handler's own POST above --
-    // requireOwnedLandlet at the top is a point-in-time check, and readJson/
-    // the existingIds SELECT/checkRateLimit above are real awaited gaps a
-    // landlet transfer could land in. Fold the ownership re-check into each
-    // UPDATE itself rather than trusting the earlier check.
-    const updateResults = await db.batch(input.order.map((backupId, position) => db.prepare(`
-      UPDATE placed_instance_backups SET position = ?
-      WHERE backup_id = ? AND instance_id = ? AND EXISTS (
-        SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
-        WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
-      )
-    `).bind(position, backupId, instanceId, instanceId, sessionBuilder.builder_id)));
-    if (updateResults.some((result) => result.meta.changes === 0)) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
-    }
-    const { results } = await db.prepare(
-      'SELECT * FROM placed_instance_backups WHERE instance_id = ? ORDER BY position',
-    ).bind(instanceId).all();
-    return json({ backups: results.map(backupFromRow) });
-  }
-
-  if (request.method === 'DELETE' && route.length === 4) {
-    const backupId = route[3];
-    const existing = await db.prepare(
-      'SELECT position FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ?',
-    ).bind(backupId, instanceId).first();
-    if (!existing) return json({ error: 'Backup not found' }, 404);
-    await checkRateLimit(db, `instance-backup-write:${sessionBuilder.builder_id}`, INSTANCE_BACKUP_WRITE_RATE_LIMIT_MAX);
-    // #2091: same #929/#960 idiom as this handler's own POST above / the
-    // identical handleSignPosts moderation-DELETE guard -- fold the
-    // ownership re-check into the DELETE itself rather than trusting the
-    // top-of-handler requireOwnedLandlet, which is only a point-in-time
-    // check against the awaits (readJson/SELECT/checkRateLimit) since then.
-    //
-    // #2174/PR #2179 (landed independently, mid-investigation of this
-    // issue) already wrapped this DELETE and a position-shift UPDATE in
-    // one db.batch for crash-safety between the two statements -- but kept
-    // the shift's threshold bound from this same early `existing.position`
-    // read, just now atomically with the DELETE. That closes the single-
-    // request crash window #2174 was about, but not the cross-request race
-    // #2183 is about: two different concurrent deletes' *batches* still
-    // just serialize as two separate transactions, each trusting its own
-    // now-possibly-stale threshold. Confirmed by hand-tracing and then
-    // empirically (see this file's own test): when the batch for the
-    // lower position threshold commits first, the other batch's stale,
-    // already-bound higher threshold stops matching rows the first batch
-    // already pulled below it, leaving a gap.
-    //
-    // Folding a live subquery (re-deriving the target row's current
-    // position by backup_id) into the shift instead makes it correct
-    // regardless of commit ordering -- not the possibly-stale
-    // `existing.position` this still only uses for the early 404. The
-    // shift is placed first in the batch so its own subquery re-derives
-    // the row's position immediately before the delete that follows it in
-    // the same transaction removes it, and carries the same ownership
-    // guard as the delete so an invalid/transferred-landlet request can't
-    // partially shift without actually deleting anything -- the delete
-    // failing (0 changes, whether from a lost ownership race or the row
-    // already being gone) also makes the shift's own subquery return
-    // nothing to compare against, so it naturally matches 0 rows too,
-    // without needing #2179's separate NOT-EXISTS-the-row guard.
-    const [, deleted] = await db.batch([
-      db.prepare(`
-        UPDATE placed_instance_backups SET position = position - 1
-        WHERE instance_id = ? AND position > (
-          SELECT position FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ?
-        ) AND EXISTS (
-          SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
-          WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
-        )
-      `).bind(instanceId, backupId, instanceId, instanceId, sessionBuilder.builder_id),
-      db.prepare(`
-        DELETE FROM placed_instance_backups WHERE backup_id = ? AND instance_id = ? AND EXISTS (
-          SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
-          WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
-        )
-      `).bind(backupId, instanceId, instanceId, sessionBuilder.builder_id),
-    ]);
-    if (deleted.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
-    }
-    return json({ deleted: true });
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-// Posts on a "community sign" instance (docs/SPEC.md §6, migrations/0041) —
-// nested under /instances/:id/posts rather than a top-level /sign-posts
-// collection since a post never exists independent of the sign it's on,
-// the same reasoning /landlets/:id/versions already follows.
-//
-// #1830 (owner correction, 2026-10-13): POST used to be open to any
-// shopper with a free-text authorLabel and "no account to check against
-// anyway" — true before #678/N44, stale since: Shop mode's own entry gate
-// (ensureShopperIdentity, src/main.js) has required a real logged-in,
-// verified account for a while now, this handler was just never updated
-// once that changed underneath it. authorLabel is now always derived
-// server-side from the posting user's own username, and sign_posts.user_id
-// (migrations/0125) records who actually posted — which both the DELETE
-// branch (moderation OR the post's own author now) and the new PATCH
-// branch (the post's own author only) check against.
-// Found via backlog audit (#337): unlike every other public, repeatable
-// mutation in this file (signup, password-reset, model-upload, purchase),
-// posting to a community sign requires no session and had no
-// checkRateLimit call at all — an anonymous caller could post an
-// unlimited number of times per second, unboundedly growing sign_posts.
-// Now that posting requires a session, bucketed by the user's own id
-// rather than clientIp, matching CALENDAR_EVENT_RATE_LIMIT_MAX's own
-// reasoning for an action gated on a real account instead of anonymous
-// requests.
-const SIGN_POST_RATE_LIMIT_MAX = 20;
-// #944: the DELETE branch below is an authenticated, owner-gated,
-// repeatable mutation with no rate limit at all -- unlike its own POST
-// sibling above (SIGN_POST_RATE_LIMIT_MAX) and this file's other owner-
-// gated CRUD DELETEs (friendship-mutate, bundle-mutate).
-const SIGN_POST_DELETE_RATE_LIMIT_MAX = 20;
-// #1830: same missing-rate-limit gap as SIGN_POST_DELETE_RATE_LIMIT_MAX,
-// for the new author-only edit branch below.
-const SIGN_POST_EDIT_RATE_LIMIT_MAX = 20;
-
-// #1718: same "a lost response looks, from here, identical to the request
-// never having reached us at all" protection as calendarEventIdempotencyKey
-// above (#1716) / the purchase flow's own purchaseIdempotencyKey (#473) — a
-// dropped POST response and the innocent manual retry it invites would
-// otherwise create a second, fully duplicate sign_posts row with the same
-// authorLabel/text. Namespaced with instanceId only, not a builder id like
-// those two siblings — #1830 made posting require a session, but the
-// client's own cached key (src/api.js's signPostIdempotencyKey) was never
-// namespaced per-poster to begin with, and the POST branch's own
-// content-match check below already covers a key reused across two
-// different sessions the same way it covers one reused for a genuinely
-// different note. A missing or malformed key degrades to no idempotency
-// protection for this one request rather than failing the post outright.
-function signPostIdempotencyKey(instanceId, rawKey) {
-  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
-  return `post:${instanceId}:${rawKey}`;
-}
-
-async function handleSignPosts(request, db, route) {
-  const instanceId = route[1];
-
-  if (request.method === 'GET' && route.length === 3) {
-    const instance = await db.prepare('SELECT instance_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
-    if (!instance) return json({ error: 'Instance not found' }, 404);
-    const { results } = await db.prepare(`
-      SELECT * FROM sign_posts WHERE instance_id = ? ORDER BY created_at DESC LIMIT 200
-    `).bind(instanceId).all();
-    // #356: this was ORDER BY created_at with no DESC — ascending, so once
-    // a sign passed 200 posts, the LIMIT window was always the *oldest*
-    // 200, permanently hiding every post made after that point (the newest
-    // ones always fell outside it). Selecting DESC picks the right window
-    // (always the newest 200) but .reverse() restores the response's own
-    // ascending order (oldest of that window first) — rebuildSignSprites'
-    // `sign.posts.slice(-SIGN_MAX_VISIBLE_POSTS)` (src/main.js) depends on
-    // that ordering to grab the *most recent* posts for in-world display,
-    // so only the SQL window changes, not the array's own order. A real
-    // COUNT (same pattern handlePurchases already uses) lets a client tell
-    // the list is truncated at all, which the old shape never exposed.
-    const total = await db.prepare('SELECT COUNT(*) AS count FROM sign_posts WHERE instance_id = ?').bind(instanceId).first();
-    return json({ posts: results.reverse().map(signPostFromRow), totalCount: total.count });
-  }
-
-  if (request.method === 'POST' && route.length === 3) {
-    const instance = await db.prepare('SELECT instance_id, is_community_sign FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
-    if (!instance) return json({ error: 'Instance not found' }, 404);
-    if (!instance.is_community_sign) {
-      throw new HttpError('This placed instance is not marked as a community sign', 400);
-    }
-    // #1830: see this function's own top-of-section comment -- Shop mode's
-    // entry gate already requires exactly this (requireVerifiedSession, not
-    // just requireCurrentUser), so posting here can never happen without
-    // having already cleared it. Checked after the instance/flag checks
-    // above, same ordering as handleCalendarEvents' own structurally
-    // identical POST branch, so a request against the wrong kind of
-    // instance still gets that specific 400 rather than an unrelated 401.
-    const user = await requireVerifiedSession(request, db);
-    await checkRateLimit(db, `sign-post:${user.user_id}`, SIGN_POST_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    // #1830: no longer client-supplied -- always the posting user's own
-    // username, so nobody can post under a name that isn't theirs.
-    const authorLabel = user.username;
-    const text = stringValue(input.text, 'text');
-    if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-    // #1718: a retry that reuses the same (validated) client-supplied key
-    // finds its own already-landed row here and returns it instead of
-    // inserting a second, fully duplicate post.
-    // #1778: that dedup is only a legitimate hit when the found row's own
-    // content actually matches this request -- the key is cached
-    // client-side per instanceId (src/api.js's signPostIdempotencyKey), not
-    // per attempt, so a stale key reused for a genuinely different second
-    // note (the author typed something new into the same prompt() flow
-    // within the cache's TTL) must not silently return the FIRST post as if
-    // it were this one. On a mismatch, mint a real id instead, same as the
-    // "missing/malformed key" fallback below already does.
-    const idempotencyKey = signPostIdempotencyKey(instanceId, input.idempotencyKey);
-    let existing = null;
-    if (idempotencyKey) {
-      existing = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ? AND instance_id = ?').bind(idempotencyKey, instanceId).first();
-      if (existing && existing.author_label === authorLabel && existing.text === text) {
-        return json({ post: signPostFromRow(existing) });
-      }
-    }
-    const postId = (idempotencyKey && !existing) ? idempotencyKey : `post-${crypto.randomUUID()}`;
-    // #1327: the is_community_sign check above is a point-in-time read, and
-    // readJson is a real awaited gap after it -- without re-checking here,
-    // a concurrent PATCH unflagging this instance (whose own #1022 cleanup
-    // deletes every existing sign_posts row for it, specifically so a post
-    // can never resurface on re-flagging) could still let this INSERT land
-    // afterward, resurrecting exactly what that cleanup exists to prevent.
-    // Same #929/#960 idiom as this handler's own DELETE sibling below.
-    const inserted = await db.prepare(`
-      INSERT INTO sign_posts (post_id, instance_id, author_label, text, user_id)
-      SELECT ?, ?, ?, ?, ? WHERE EXISTS (
-        SELECT 1 FROM placed_instances WHERE instance_id = ? AND is_community_sign = 1
-      )
-    `).bind(postId, instanceId, authorLabel, text, user.user_id, instanceId).run();
-    if (inserted.meta.changes === 0) {
-      throw new HttpError('This placed instance is not marked as a community sign', 400);
-    }
-    const row = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ?').bind(postId).first();
-    // #2429: same re-SELECT race #2354 fixed for this resource's PATCH
-    // sibling, never applied to this POST/create branch -- a concurrent
-    // admin delete, or a concurrent PATCH unflagging is_community_sign (see
-    // #1327's own comment above), can remove the row before this re-SELECT
-    // runs.
-    if (!row) return json({ error: 'Post not found' }, 404);
-    return json({ post: signPostFromRow(row) }, 201);
-  }
-
-  if (request.method === 'PATCH' && route.length === 4) {
-    const postId = route[3];
-    const existing = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ? AND instance_id = ?').bind(postId, instanceId).first();
-    if (!existing) return json({ error: 'Post not found' }, 404);
-    // #1830: editing is author-only -- there's no moderation equivalent for
-    // PATCH the way DELETE has one (a builder moderating unwanted content
-    // removes it; rewriting someone else's words under their own name isn't
-    // the same kind of action). A pre-#1830 post with no user_id at all
-    // (user_id IS NULL) can never match here, same as DELETE's own
-    // author-path below -- there's nobody on record to own it.
-    const user = await requireVerifiedSession(request, db);
-    if (existing.user_id === null || existing.user_id !== user.user_id) {
-      throw new HttpError('Not your post', 403);
-    }
-    await checkRateLimit(db, `sign-post-edit:${user.user_id}`, SIGN_POST_EDIT_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    const text = stringValue(input.text, 'text');
-    if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-    // Same #929/#960 idiom as this handler's own DELETE/POST siblings --
-    // the existence/ownership check above is a point-in-time read, and
-    // checkRateLimit/readJson are real awaited gaps after it.
-    const updated = await db.prepare('UPDATE sign_posts SET text = ? WHERE post_id = ? AND user_id = ?')
-      .bind(text, postId, user.user_id).run();
-    if (updated.meta.changes === 0) {
-      throw new HttpError('Post changed concurrently — refetch and retry', 409);
-    }
-    const row = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ?').bind(postId).first();
-    // #2354: meta.changes above only confirms the UPDATE matched a row at
-    // the moment it ran -- a concurrent admin-override DELETE (below) can
-    // still land in the real awaited gap between that UPDATE committing
-    // and this re-SELECT running, same shape #2334 already fixed for
-    // notifications' own PATCH.
-    if (!row) return json({ error: 'Post not found' }, 404);
-    return json({ post: signPostFromRow(row) });
-  }
-
-  if (request.method === 'DELETE' && route.length === 4) {
-    const postId = route[3];
-    const existing = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ? AND instance_id = ?').bind(postId, instanceId).first();
-    if (!existing) return json({ error: 'Post not found' }, 404);
-    const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
-    if (!instance) return json({ error: 'Instance not found' }, 404);
-    // #781: an admin can remove any sign post outright (harassment, doxxing,
-    // other policy violations) regardless of whether the hosting landlet's
-    // own owner ever acts on it -- same "checked first, via the non-throwing
-    // currentUser lookup" shape as #1712's product-review admin override,
-    // since an admin isn't necessarily the post's author or the landlet owner.
-    const requester = await currentUser(request, db);
-    const admin = requester && requester.is_admin ? requester : null;
-    if (admin) {
-      await checkRateLimit(db, `sign-post-delete:${admin.user_id}`, SIGN_POST_DELETE_RATE_LIMIT_MAX);
-      const deletedByAdmin = await db.prepare('DELETE FROM sign_posts WHERE post_id = ?').bind(postId).run();
-      if (deletedByAdmin.meta.changes === 0) {
-        throw new HttpError('Post changed concurrently — refetch and retry', 409);
-      }
-      await adminActionLogStatement(db, admin.user_id, 'delete_sign_post_override', 'sign_post', postId).run();
-      return json({ deleted: true });
-    }
-    // #1830: requireSessionBuilder (not requireVerifiedSession) so this one
-    // call resolves both the real user_id a post's own author needs below,
-    // and the builder_id the moderation fallback below that already needs
-    // -- every account is automatically a builder (getOrCreateBuilderForUser),
-    // so this never fails for a session that already passed the login the
-    // GET-side /instances fetch itself already required to reach this page.
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    // The post's own author can remove it directly now that a post records
-    // who made it, alongside the existing moderation path below -- either
-    // should be able to remove a post: the author directly, or the sign's
-    // own hosting landlet's builder for moderation. A pre-#1830 post with
-    // no user_id at all (user_id IS NULL) can never match here, so it falls
-    // through to the moderation path exactly as it always has.
-    if (existing.user_id !== null && existing.user_id === sessionBuilder.user_id) {
-      await checkRateLimit(db, `sign-post-delete:${sessionBuilder.user_id}`, SIGN_POST_DELETE_RATE_LIMIT_MAX);
-      const deletedByAuthor = await db.prepare('DELETE FROM sign_posts WHERE post_id = ? AND user_id = ?')
-        .bind(postId, sessionBuilder.user_id).run();
-      if (deletedByAuthor.meta.changes === 0) {
-        throw new HttpError('Post changed concurrently — refetch and retry', 409);
-      }
-      return json({ deleted: true });
-    }
-    // Moderation: gated to the sign's own hosting landlet's owner, same as
-    // always.
-    await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
-    await checkRateLimit(db, `sign-post-delete:${sessionBuilder.builder_id}`, SIGN_POST_DELETE_RATE_LIMIT_MAX);
-    // #960: requireOwnedLandlet above is a point-in-time check, and
-    // checkRateLimit is a real awaited write in between -- without this,
-    // an auction resolving (transferring ownership) in that gap would let
-    // this DELETE still moderate content on a landlet the caller no longer
-    // owns, with no trace. Same #929 idiom as handleInstances' own single
-    // DELETE.
-    const deleted = await db.prepare(`
-      DELETE FROM sign_posts WHERE post_id = ?
-        AND EXISTS (
-          SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
-          WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
-        )
-    `).bind(postId, instanceId, sessionBuilder.builder_id).run();
-    if (deleted.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
-    }
-    return json({ deleted: true });
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-function signPostFromRow(row) {
-  return {
-    postId: row.post_id,
-    instanceId: row.instance_id,
-    authorLabel: row.author_label,
-    text: row.text,
-    userId: row.user_id,
-    createdAt: row.created_at,
-  };
-}
-
-// Events on a "community calendar" instance (docs/SPEC.md §6,
-// migrations/0042) — nested under /instances/:id/events for the same
-// "never exists independent of its instance" reasoning handleSignPosts
-// above uses, and the same moderation-gated-to-the-hosting-landlet's-owner
-// DELETE — but POST is deliberately NOT structurally identical to
-// handleSignPosts: docs/SPEC.md §6 explicitly calls calendar events
-// "builder-authored," unlike sign posts' "shopper-authored" free-text
-// authorLabel. Only the hosting landlet's own owner may post one, and
-// authorLabel comes from their real builder profile, not client input —
-// otherwise anyone could post a "confetti-cannon" trigger (or any other
-// event) on someone else's shop under that builder's own name.
-// Found via backlog audit: unlike every other repeatable write in this
-// file — including the structurally near-identical sign-post POST above
-// (SIGN_POST_RATE_LIMIT_MAX, itself found via #337 for this exact class
-// of gap) and friend requests (FRIEND_REQUEST_RATE_LIMIT_MAX) — posting a
-// calendar event had no checkRateLimit call at all, letting an
-// authenticated landlet owner insert unlimited calendar_events rows in a
-// tight loop. Bucketed by builder id, not IP, since this is an
-// authenticated action gating a real account's own request volume (same
-// reasoning FRIEND_REQUEST_RATE_LIMIT_MAX's own comment gives).
-const CALENDAR_EVENT_RATE_LIMIT_MAX = 20;
-// #944: same missing-rate-limit gap as SIGN_POST_DELETE_RATE_LIMIT_MAX,
-// found in this handler's own DELETE branch.
-const CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX = 20;
-// #1023: the /trigger branch below is intentionally unauthenticated (any
-// client racing to fire a due event, not just its landlet's owner) and
-// idempotent, but every call still does at least one SELECT, and a winning
-// call an UPDATE plus a re-SELECT -- real D1 load with no cap, the one
-// remaining public repeatable mutation in this file with no checkRateLimit
-// call at all. Bucketed by IP like SIGN_POST_RATE_LIMIT_MAX, since this
-// route is unauthenticated like sign posts, not owner-gated like the POST
-// above.
-const EVENT_TRIGGER_RATE_LIMIT_MAX = 20;
-// #1975: same missing-rate-limit gap as CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX,
-// for the new author-only edit branch below.
-const CALENDAR_EVENT_EDIT_RATE_LIMIT_MAX = 20;
-
-// #1716: same "a lost response looks, from here, identical to the request
-// never having reached us at all" protection as the purchase flow's own
-// purchaseIdempotencyKey above (#473) — a dropped POST response and the
-// innocent manual retry it invites would otherwise create a second, fully
-// duplicate calendar_events row that independently re-fires
-// handleCalendarEventTrigger's own one-shot effect (that function is only
-// idempotent per event_id, not per logical event). Namespaced with both
-// instanceId and the calling builder id, same as purchaseIdempotencyKey's
-// own #974 fix, so a key can never collide across two different calendars
-// or (after an ownership transfer) two different owners. A missing or
-// malformed key degrades to no idempotency protection for this one request
-// rather than failing the create outright.
-function calendarEventIdempotencyKey(instanceId, builderId, rawKey) {
-  if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
-  return `event:${instanceId}:${builderId}:${rawKey}`;
-}
-
-async function handleCalendarEvents(request, db, route) {
-  const instanceId = route[1];
-
-  if (request.method === 'GET' && route.length === 3) {
-    const instance = await db.prepare('SELECT instance_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
-    if (!instance) return json({ error: 'Instance not found' }, 404);
-    const { results } = await db.prepare(`
-      SELECT * FROM calendar_events WHERE instance_id = ? ORDER BY created_at DESC LIMIT 200
-    `).bind(instanceId).all();
-    // #356: same ascending-window/no-count gap as handleSignPosts above,
-    // fixed the same way — DESC for the right LIMIT window, .reverse() to
-    // keep the response ascending (calendar.events.slice(-SIGN_MAX_VISIBLE_POSTS)
-    // in src/main.js depends on that order too).
-    const total = await db.prepare('SELECT COUNT(*) AS count FROM calendar_events WHERE instance_id = ?').bind(instanceId).first();
-    return json({ events: results.reverse().map(calendarEventFromRow), totalCount: total.count });
-  }
-
-  if (request.method === 'POST' && route.length === 3) {
-    const instance = await db.prepare('SELECT instance_id, is_community_calendar, landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
-    if (!instance) return json({ error: 'Instance not found' }, 404);
-    if (!instance.is_community_calendar) {
-      throw new HttpError('This placed instance is not marked as a community calendar', 400);
-    }
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
-    await checkRateLimit(db, `calendar-event:${sessionBuilder.builder_id}`, CALENDAR_EVENT_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    const text = stringValue(input.text, 'text');
-    if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-    // scheduledAt is optional — most events are just a plain announcement
-    // (docs/SPEC.md §6's "event postings"), with a real one-shot trigger
-    // moment (the spec's own "confetti-cannon" example) an explicit extra
-    // step, not the default.
-    const scheduledAt = input.scheduledAt === undefined || input.scheduledAt === null
-      ? null
-      : isoDateString(input.scheduledAt, 'scheduledAt');
-    // #1716: a retry that reuses the same (validated) client-supplied key
-    // finds its own already-landed row here and returns it instead of
-    // inserting a second, fully duplicate event.
-    // #1751: that dedup is only a legitimate hit when the found row's own
-    // content actually matches this request -- the key is cached client-side
-    // per instanceId (src/api.js's calendarEventIdempotencyKey), not per
-    // attempt, so a stale key reused for a genuinely different second event
-    // (the author typed something new into the same prompt() flow within
-    // the cache's TTL) must not silently return the FIRST event as if it
-    // were this one. On a mismatch, mint a real id instead, same as the
-    // "missing/malformed key" fallback below already does.
-    const idempotencyKey = calendarEventIdempotencyKey(instanceId, sessionBuilder.builder_id, input.idempotencyKey);
-    let existing = null;
-    if (idempotencyKey) {
-      existing = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(idempotencyKey).first();
-      if (existing && existing.text === text && existing.scheduled_at === scheduledAt) {
-        return json({ event: calendarEventFromRow(existing) });
-      }
-    }
-    const eventId = (idempotencyKey && !existing) ? idempotencyKey : `event-${crypto.randomUUID()}`;
-    // #1327: both the is_community_calendar check and requireOwnedLandlet
-    // above are point-in-time reads, with real awaited gaps (readJson,
-    // checkRateLimit) after them -- without re-checking both here, a
-    // concurrent PATCH unflagging this instance (whose own #1022 cleanup
-    // deletes every existing calendar_events row for it, specifically so an
-    // event can never resurface on re-flagging) or a landlet ownership
-    // change (auction resolution, admin reassignment) could still let this
-    // INSERT land afterward. Same #929/#960 idiom as this handler's own
-    // DELETE sibling below.
-    const inserted = await db.prepare(`
-      INSERT INTO calendar_events (event_id, instance_id, author_label, text, scheduled_at, user_id)
-      SELECT ?, ?, ?, ?, ?, ? WHERE EXISTS (
-        SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
-        WHERE pi.instance_id = ? AND pi.is_community_calendar = 1 AND l.owner_builder_id IS ?
-      )
-    `).bind(eventId, instanceId, sessionBuilder.label, text, scheduledAt, sessionBuilder.user_id, instanceId, sessionBuilder.builder_id).run();
-    if (inserted.meta.changes === 0) {
-      const current = await db.prepare('SELECT is_community_calendar FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
-      if (!current?.is_community_calendar) {
-        throw new HttpError('This placed instance is not marked as a community calendar', 400);
-      }
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
-    }
-    const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
-    // #2429: same re-SELECT race #2354 fixed for this resource's PATCH
-    // sibling, never applied to this POST/create branch -- a concurrent
-    // admin delete, or a concurrent PATCH unflagging is_community_calendar,
-    // can remove the row before this re-SELECT runs.
-    if (!row) return json({ error: 'Event not found' }, 404);
-    return json({ event: calendarEventFromRow(row) }, 201);
-  }
-
-  if (request.method === 'PATCH' && route.length === 4) {
-    const eventId = route[3];
-    const existing = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ? AND instance_id = ?').bind(eventId, instanceId).first();
-    if (!existing) return json({ error: 'Event not found' }, 404);
-    // #1975: editing is author-only -- same reasoning as sign posts' own
-    // PATCH (#1830): there's no moderation equivalent for rewriting
-    // someone else's words under their own name. In the ordinary case the
-    // event's author already IS the hosting landlet's current owner (POST
-    // requires it), but this uses the event's own recorded user_id rather
-    // than re-checking landlet ownership, so the original author keeps
-    // editing rights even after the landlet changes hands (auction, admin
-    // reassignment) -- the same guarantee sign posts/product reviews give.
-    // A pre-#1975 event with no user_id at all (user_id IS NULL) can never
-    // match here, same as DELETE's own author-path below.
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    if (existing.user_id === null || existing.user_id !== sessionBuilder.user_id) {
-      throw new HttpError('Not your event', 403);
-    }
-    await checkRateLimit(db, `calendar-event-edit:${sessionBuilder.user_id}`, CALENDAR_EVENT_EDIT_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    let text = existing.text;
-    if (input.text !== undefined) {
-      text = stringValue(input.text, 'text');
-      if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-    }
-    let scheduledAt = existing.scheduled_at;
-    if ('scheduledAt' in input) {
-      scheduledAt = input.scheduledAt === undefined || input.scheduledAt === null
-        ? null
-        : isoDateString(input.scheduledAt, 'scheduledAt');
-    }
-    // A changed scheduledAt re-arms the one-shot trigger (#270) -- this is
-    // logically a different scheduled moment, the same "genuinely
-    // different event" distinction #1751's own idempotency-key content
-    // match already draws, so it shouldn't stay permanently inert just
-    // because some earlier scheduledAt on this same row already fired.
-    const triggeredAt = scheduledAt === existing.scheduled_at ? existing.triggered_at : null;
-    const updated = await db.prepare('UPDATE calendar_events SET text = ?, scheduled_at = ?, triggered_at = ? WHERE event_id = ? AND user_id = ?')
-      .bind(text, scheduledAt, triggeredAt, eventId, sessionBuilder.user_id).run();
-    if (updated.meta.changes === 0) {
-      throw new HttpError('Event changed concurrently — refetch and retry', 409);
-    }
-    // #2122: logged only after the update is confirmed to have actually
-    // happened, same "logged only after confirmed" idiom the
-    // delete_calendar_event_override admin branch below uses.
-    await recordContentEditHistory(db, 'calendar_events', eventId, 'edit', existing, sessionBuilder.user_id);
-    const row = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
-    // #2354: same concurrent-admin-override-DELETE race #2334 already
-    // fixed for notifications' own PATCH -- the meta.changes check above
-    // only confirms the UPDATE itself matched, not that the row still
-    // exists by the time this re-SELECT runs.
-    if (!row) return json({ error: 'Event not found' }, 404);
-    return json({ event: calendarEventFromRow(row) });
-  }
-
-  if (request.method === 'DELETE' && route.length === 4) {
-    const eventId = route[3];
-    const existing = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ? AND instance_id = ?').bind(eventId, instanceId).first();
-    if (!existing) return json({ error: 'Event not found' }, 404);
-    // #781: an admin can remove any calendar event outright, same reasoning
-    // and shape as the sign-posts admin override above.
-    const requester = await currentUser(request, db);
-    const admin = requester && requester.is_admin ? requester : null;
-    if (admin) {
-      await checkRateLimit(db, `calendar-event-delete:${admin.user_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
-      const deletedByAdmin = await db.prepare('DELETE FROM calendar_events WHERE event_id = ?').bind(eventId).run();
-      if (deletedByAdmin.meta.changes === 0) {
-        throw new HttpError('Event changed concurrently — refetch and retry', 409);
-      }
-      await adminActionLogStatement(db, admin.user_id, 'delete_calendar_event_override', 'calendar_event', eventId).run();
-      return json({ deleted: true });
-    }
-    // Same moderation gate as sign posts above — the calendar's own hosting
-    // landlet's owner, not the event's free-text author.
-    const instance = await db.prepare('SELECT landlet_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
-    if (!instance) return json({ error: 'Instance not found' }, 404);
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    // #1975: the event's own author can remove it directly, independent of
-    // current landlet ownership -- same reasoning as the new PATCH branch
-    // above. A pre-#1975 event with no user_id at all (user_id IS NULL)
-    // can never match here, so it falls through to the moderation path
-    // exactly as it always has.
-    if (existing.user_id !== null && existing.user_id === sessionBuilder.user_id) {
-      await checkRateLimit(db, `calendar-event-delete:${sessionBuilder.user_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
-      const deletedByAuthor = await db.prepare('DELETE FROM calendar_events WHERE event_id = ? AND user_id = ?')
-        .bind(eventId, sessionBuilder.user_id).run();
-      if (deletedByAuthor.meta.changes === 0) {
-        throw new HttpError('Event changed concurrently — refetch and retry', 409);
-      }
-      // #2122: logged only after the delete is confirmed to have actually
-      // happened, same reasoning as the PATCH branch above.
-      await recordContentEditHistory(db, 'calendar_events', eventId, 'delete', existing, sessionBuilder.user_id);
-      return json({ deleted: true });
-    }
-    await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
-    await checkRateLimit(db, `calendar-event-delete:${sessionBuilder.builder_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
-    // #960: same #929 idiom as the sign-posts DELETE above -- see its own
-    // comment.
-    const deleted = await db.prepare(`
-      DELETE FROM calendar_events WHERE event_id = ?
-        AND EXISTS (
-          SELECT 1 FROM placed_instances pi JOIN landlets l ON l.landlet_id = pi.landlet_id
-          WHERE pi.instance_id = ? AND l.owner_builder_id IS ?
-        )
-    `).bind(eventId, instanceId, sessionBuilder.builder_id).run();
-    if (deleted.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
-    }
-    return json({ deleted: true });
-  }
-
-  // The one-shot creative-tool trigger itself (docs/API.md's "Community
-  // calendar" — "scheduled confetti-cannon trigger"). Route:
-  // /instances/:instanceId/events/:eventId/trigger, i.e. route =
-  // ['instances', instanceId, 'events', eventId, 'trigger'] — route[3] is
-  // the eventId here, one level deeper than DELETE's own route[3] above
-  // (which IS the eventId for a 4-element route; this is a 5-element one).
-  // Idempotent, like the auction resolve endpoint: calling it before
-  // scheduledAt, on an event with no scheduledAt at all, or on one
-  // already triggered is never an error, just a no-op — `triggered` in
-  // the response tells the caller whether *this* call was the one that
-  // actually fired it, since only that caller should play the effect
-  // locally.
-  if (request.method === 'POST' && route.length === 5 && route[4] === 'trigger') {
-    return handleCalendarEventTrigger(request, db, instanceId, route[3]);
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-async function handleCalendarEventTrigger(request, db, instanceId, eventId) {
-  await checkRateLimit(db, `event-trigger:${clientIp(request)}`, EVENT_TRIGGER_RATE_LIMIT_MAX);
-  const event = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ? AND instance_id = ?').bind(eventId, instanceId).first();
-  if (!event) return json({ error: 'Event not found' }, 404);
-  if (!event.scheduled_at || event.triggered_at || event.scheduled_at > new Date().toISOString()) {
-    return json({ event: calendarEventFromRow(event), triggered: false });
-  }
-  // #270: the WHERE ... triggered_at IS NULL guard is what makes this safe
-  // against a race (two callers both passing the earlier check at once) —
-  // but only whichever UPDATE actually lands first changes any rows. A
-  // losing caller's own UPDATE affects zero rows, yet a later re-SELECT
-  // would still see the winner's non-null triggered_at and wrongly report
-  // triggered: true too. Reading the result of this exact UPDATE (rather
-  // than re-querying) is what actually distinguishes the one winner from
-  // every loser.
-  const result = await db.prepare(`
-    UPDATE calendar_events SET triggered_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE event_id = ? AND triggered_at IS NULL
-  `).bind(eventId).run();
-  const updated = await db.prepare('SELECT * FROM calendar_events WHERE event_id = ?').bind(eventId).first();
-  return json({ event: calendarEventFromRow(updated), triggered: result.meta.changes === 1 });
-}
-
-function calendarEventFromRow(row) {
-  return {
-    eventId: row.event_id,
-    instanceId: row.instance_id,
-    authorLabel: row.author_label,
-    text: row.text,
-    scheduledAt: row.scheduled_at,
-    triggeredAt: row.triggered_at,
-    createdAt: row.created_at,
-    userId: row.user_id,
-  };
-}
-
-function isoDateString(value, field) {
+export function isoDateString(value, field) {
   const text = stringValue(value, field);
   if (Number.isNaN(new Date(text).getTime())) {
     throw new HttpError(`${field} must be a valid date/time string`, 400);
@@ -12939,7 +9981,7 @@ const PURCHASE_FINALIZE_RATE_LIMIT_MAX = 20;
 // against either, so it's keyed by client IP rather than a builder/seller id.
 const CONFIRM_DELIVERY_RATE_LIMIT_MAX = 20;
 
-async function handleInstancePurchase(request, env, instanceId) {
+export async function handleInstancePurchase(request, env, instanceId) {
   const db = env.DB;
   // N44 (owner, 2026-09-12): shopping/purchasing — real-money or simulated —
   // now requires the same age-attestation + credit-card-or-ID gate Build/Sell
@@ -13009,20 +10051,31 @@ async function handleInstancePurchase(request, env, instanceId) {
 
   // #453: a product whose seller has fully completed Stripe Connect
   // onboarding (#452) checks out with real money instead of this
-  // endpoint's original dev-mode simulation (migrations/0051) — every
-  // other seller (none connected yet, or still mid-onboarding) keeps
-  // today's exact behavior unchanged, so existing demo/test flows never
-  // need a connected Stripe account to keep working. The stripeConfigured
-  // check here is deliberately a silent fallback to the simulation, not a
-  // 503 — a deployment that never sets STRIPE_SECRET_KEY at all (local
-  // dev, this test suite, or simply a fresh install before the platform
-  // owner adds it) should still have a working storefront, exactly as
-  // before this feature existed.
+  // endpoint's original dev-mode simulation (migrations/0051). The
+  // stripeConfigured check here is deliberately a silent fallback to the
+  // simulation, not a 503 — a deployment that never sets
+  // STRIPE_SECRET_KEY at all (local dev, this test suite, or simply a
+  // fresh install before the platform owner adds it) should still have a
+  // working storefront, exactly as before this feature existed.
   const seller = template.seller_id
     ? await db.prepare('SELECT stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?').bind(template.seller_id).first()
     : null;
   if (seller?.stripe_account_id && seller.stripe_onboarding_status === 'complete' && stripeConfigured(env)) {
     return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label);
+  }
+  // #653 (owner, 2026-09-11): "real-world shoppers should not be able to
+  // purchase from dev sellers" — any seller who hasn't (yet) fully
+  // completed Stripe Connect onboarding is, for this purpose, a dev
+  // seller, and the simulated/free path below is the dev/test pathway
+  // the owner wants kept available in parallel with real-money checkout
+  // ("the whole point of simulating is to test the real-world code"),
+  // not opened up to real shoppers. Closing this off to non-admins is
+  // what lets REDEMPTION_PAUSED_PENDING_PROVENANCE's stopgap (below) lift
+  // for good: the zero-capital higgles-mint that pause existed for
+  // required an unauthenticated real shopper reaching this exact path,
+  // which is no longer possible.
+  if (!user.is_admin) {
+    throw new HttpError('This product is not yet available for purchase — its seller has not finished setting up real payments.', 403);
   }
   // #1231: e2e/*.test.mjs only ever talks HTTP to a running dev server (no
   // direct D1 access the way worker/commerce.test.js's own mark-shipped/
@@ -13696,60 +10749,6 @@ async function flagSelfDealingIfMatched(db, purchaseId, buyerBuilderId, sellerId
   `).bind(`self-dealing-flag-${crypto.randomUUID()}`, purchaseId, JSON.stringify(['email'])).run();
 }
 
-const SELF_DEALING_FLAG_REVIEW_RATE_LIMIT_MAX = 20;
-
-// #2019: the admin-facing review queue over self_dealing_flags -- a flag
-// here is a soft signal, not an accusation, so there is no "approve"
-// action with its own consequence the way #2017's product-flags resolve
-// has (remove listing + strike seller). An admin reviewing one is just
-// acknowledging it (optionally with a note for their own record); nothing
-// else in this app reacts to a flag's status.
-async function handleSelfDealingFlags(request, db, route) {
-  if (request.method === 'GET' && route.length === 1) {
-    await requireAdmin(request, db);
-    const { results } = await db.prepare(`
-      SELECT sdf.flag_id AS flagId, sdf.purchase_id AS purchaseId, sdf.matched_signals AS matchedSignals, sdf.created_at AS createdAt,
-             p.template_id AS templateId, p.buyer_builder_id AS buyerBuilderId, p.builder_id AS builderId, p.total_cents AS totalCents
-      FROM self_dealing_flags sdf
-      JOIN purchases p ON p.purchase_id = sdf.purchase_id
-      WHERE sdf.status = 'pending'
-      ORDER BY sdf.created_at DESC
-      LIMIT 200
-    `).all();
-    // #2110: same totalCount-alongside-the-cap pattern as handleSignPosts/
-    // handleCalendarEvents/handlePurchases -- without it, an admin
-    // reviewing this trust-and-safety queue has no way to tell "200 of
-    // 200" from "200 of 1400", silently dropping older pending flags off
-    // the end once the cap is reached.
-    const total = await db.prepare(`SELECT COUNT(*) AS count FROM self_dealing_flags WHERE status = 'pending'`).first();
-    return json({
-      flags: results.map((row) => ({ ...row, matchedSignals: JSON.parse(row.matchedSignals) })),
-      totalCount: total.count,
-    });
-  }
-
-  if (request.method === 'POST' && route.length === 3 && route[2] === 'review') {
-    const admin = await requireAdmin(request, db);
-    await checkRateLimit(db, `self-dealing-flag-review:${admin.user_id}`, SELF_DEALING_FLAG_REVIEW_RATE_LIMIT_MAX);
-    const flagId = route[1];
-    const input = await readJson(request);
-    const notes = input.notes === undefined || input.notes === null || input.notes === ''
-      ? null
-      : stringValue(input.notes, 'notes');
-    if (notes && notes.length > 280) throw new HttpError('notes must be 280 characters or fewer', 400);
-    const result = await db.prepare(`
-      UPDATE self_dealing_flags SET status = 'reviewed', reviewed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-        reviewed_by_admin_user_id = ?, review_notes = ?
-      WHERE flag_id = ? AND status = 'pending'
-    `).bind(admin.user_id, notes, flagId).run();
-    if (result.meta.changes === 0) throw new HttpError('Flag not found or already reviewed', 404);
-    await adminActionLogStatement(db, admin.user_id, 'reviewed_self_dealing_flag', 'self_dealing_flag', flagId, { notes }).run();
-    return json({ reviewed: true });
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
 // #1948, reworked by #2050: every placed_instance of a template that just
 // hit zero stock used to lose its listing instantly, no exceptions -- the
 // same hard-delete-no-archive treatment an owning builder's own
@@ -13895,68 +10894,6 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
       });
     }
   }
-}
-
-function soldOutMarkerFromRow(row) {
-  return {
-    markerId: row.marker_id,
-    landletId: row.landlet_id,
-    x: row.x_m,
-    y: row.y_m,
-    z: row.z_m,
-    templateId: row.template_id,
-    templateName: row.template_name,
-    soldOutAt: row.sold_out_at,
-  };
-}
-
-// #2068: dismissing is a one-way action (clearing a marker permanently,
-// same "builder has acknowledged this, stop showing it" shape other
-// dismiss-style actions in this app use), not a delete-then-recreate --
-// shares a rate-limit bucket shape with every other per-account mutation
-// limit in this file.
-const SOLD_OUT_MARKER_DISMISS_RATE_LIMIT_MAX = 20;
-
-async function handleSoldOutMarkers(request, db, route) {
-  const landletId = route[1];
-
-  if (request.method === 'GET' && route.length === 3) {
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    await requireOwnedLandlet(db, landletId, sessionBuilder.builder_id);
-    const { results } = await db.prepare(
-      'SELECT * FROM sold_out_markers WHERE landlet_id = ? AND dismissed_at IS NULL ORDER BY sold_out_at ASC',
-    ).bind(landletId).all();
-    return json({ markers: results.map(soldOutMarkerFromRow) });
-  }
-
-  if (request.method === 'POST' && route.length === 5 && route[4] === 'dismiss') {
-    const markerId = route[3];
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    await requireOwnedLandlet(db, landletId, sessionBuilder.builder_id);
-    await checkRateLimit(db, `sold-out-marker-dismiss:${sessionBuilder.builder_id}`, SOLD_OUT_MARKER_DISMISS_RATE_LIMIT_MAX);
-    // #2098: same #929/#960/#2091 idiom used throughout this file --
-    // requireOwnedLandlet above is a point-in-time check, and
-    // checkRateLimit is a real awaited gap since then. Fold the ownership
-    // re-check into the UPDATE itself (landlet_id is a direct FK here, so
-    // no placed_instances join is needed, unlike the backup-chain case).
-    const result = await db.prepare(`
-      UPDATE sold_out_markers SET dismissed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE marker_id = ? AND landlet_id = ? AND dismissed_at IS NULL AND EXISTS (
-        SELECT 1 FROM landlets l WHERE l.landlet_id = ? AND l.owner_builder_id IS ?
-      )
-    `).bind(markerId, landletId, landletId, sessionBuilder.builder_id).run();
-    if (result.meta.changes === 0) {
-      const stillOwned = await db.prepare('SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?')
-        .bind(landletId, sessionBuilder.builder_id).first();
-      if (!stillOwned) {
-        throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
-      }
-      throw new HttpError('Marker not found or already dismissed', 404);
-    }
-    return json({ dismissed: true });
-  }
-
-  return json({ error: 'Not found' }, 404);
 }
 
 async function handlePurchases(request, env, route, url) {
@@ -14155,40 +11092,10 @@ async function handleMarkShipped(request, env, purchaseId) {
   return json({ purchase: purchaseFromRow(updated) });
 }
 
-// Issue #1096 (owner decision via Control Room, 2026-10-01): distinct from
-// product_reviews (migrations/0047/0048) — a review rates the *product*,
-// shared across every seller who lists it; this rates one specific
-// seller's own service (listing accuracy, timeliness, communication) for
-// one specific purchase from them. Mirrors handleProductReviews' own
-// purchase-gating and rate-limit shape (see that function's own comments
-// for the full reasoning) — the differences are purely that this is keyed
-// to one exact purchase_id rather than a template_id/buyer_builder_id
-// pair, since the owner's own ask was "one to one with a purchase." #1123:
-// this had drifted to mirror handleProductReviews' *pre*-#893-fix shape
-// (a client-supplied authorLabel matched against free-text buyer_label) —
-// now updated to the same session-derived, buyer_builder_id-based
-// eligibility check #1113/#1116 already brought to product reviews.
-const SELLER_FEEDBACK_CREATE_RATE_LIMIT_MAX = 20;
-
-// #1975 (owner decision via #1738, 2026-10-13): the feedback's own author
-// (the purchase's buyer) gets the same self-edit/delete #1975 already gave
-// sign posts/product reviews/calendar events. Unlike those three,
-// seller_feedback gets no new user_id column for it — the buyer's identity
-// is already permanently on record via purchases.buyer_builder_id
-// (migrations/0099), the same real, session-verified, never-reassigned
-// identity handleSellerFeedbackCreate's own eligibility check already
-// uses, so authorization and this row shape's own userId field both
-// resolve it with a join instead. A purchase whose buyer later self-
-// deletes their account nulls buyer_builder_id (ON DELETE SET NULL) —
-// same as every other precedent's "legacy/no author on record" case, such
-// a row can never be claimed by anyone as their own.
-const SELLER_FEEDBACK_SELECT_WITH_BUYER = `
-  SELECT f.*, bld.user_id AS buyer_user_id FROM seller_feedback f
-  JOIN purchases p ON p.purchase_id = f.purchase_id
-  LEFT JOIN builders bld ON bld.builder_id = p.buyer_builder_id
-`;
-
-function sellerFeedbackFromRow(row) {
+// Exported for worker/lib/reputation.js (#2532) -- its own moved seller-
+// feedback handlers need this same row formatter (also still used
+// directly here by handleExportData's own GDPR export).
+export function sellerFeedbackFromRow(row) {
   return {
     feedbackId: row.feedback_id,
     purchaseId: row.purchase_id,
@@ -14199,223 +11106,6 @@ function sellerFeedbackFromRow(row) {
     createdAt: row.created_at,
     userId: row.buyer_user_id ?? null,
   };
-}
-
-async function handleSellerFeedbackCreate(request, env, purchaseId) {
-  const db = env.DB;
-  const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
-  if (!purchase) throw new HttpError('Purchase not found', 404);
-  if (!purchase.seller_id) {
-    throw new HttpError('This purchase has no seller to leave feedback for', 400);
-  }
-  // #1123 (closing the same spoofing gap #893 already fixed for product
-  // reviews): requires a session — authorLabel is no longer client-supplied,
-  // and eligibility is a real buyer_builder_id match (migrations/0099)
-  // instead of a caller-supplied, non-unique, mutable label matched against
-  // purchases.buyer_label.
-  const sessionBuilder = await requireSessionBuilder(request, db);
-  await checkRateLimit(db, `seller-feedback-create:${sessionBuilder.builder_id}`, SELLER_FEEDBACK_CREATE_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const authorLabel = sessionBuilder.label;
-  // Same #357 refunded-purchase exclusion handleProductReviews uses — a
-  // shopper made whole by a refund has no standing to also rate that same
-  // transaction's service.
-  if (purchase.buyer_builder_id !== sessionBuilder.builder_id || purchase.refunded_at) {
-    throw new HttpError('Only the buyer of this purchase can leave feedback', 400);
-  }
-  const rating = Number(input.rating);
-  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-    throw new HttpError('rating must be an integer from 1 to 5', 400);
-  }
-  const text = input.text === undefined || input.text === null || input.text === ''
-    ? null
-    : stringValue(input.text, 'text');
-  if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-  // One feedback per purchase (migrations/0097's own UNIQUE constraint on
-  // purchase_id is the DB-level backstop) — folding the existence check
-  // into the INSERT's own WHERE clause, same atomic check-and-insert idiom
-  // handleProductReviews' own comment explains, avoids a check-then-act
-  // race between two concurrent submits for the same purchase ever
-  // reaching the UNIQUE constraint as a raw, unhandled error.
-  // #1385: the eager refunded_at check above has the same stale-read
-  // problem handleProductReviews' own INSERT guard just closed — a refund
-  // landing between that check and this INSERT would otherwise leave
-  // nothing blocking it, since the only atomic guard was "not already
-  // left." Re-checking refunded_at IS NULL here too closes that race.
-  const feedbackId = `seller-feedback-${crypto.randomUUID()}`;
-  const result = await db.prepare(`
-    INSERT INTO seller_feedback (feedback_id, purchase_id, seller_id, author_label, rating, text)
-    SELECT ?, ?, ?, ?, ?, ?
-    WHERE NOT EXISTS (SELECT 1 FROM seller_feedback WHERE purchase_id = ?)
-    AND EXISTS (SELECT 1 FROM purchases WHERE purchase_id = ? AND refunded_at IS NULL)
-  `).bind(feedbackId, purchaseId, purchase.seller_id, authorLabel, rating, text, purchaseId, purchaseId).run();
-  if (result.meta.changes === 0) {
-    const stillEligible = await db.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?')
-      .bind(purchaseId).first();
-    if (stillEligible?.refunded_at) {
-      throw new HttpError('This purchase has been refunded and can no longer have feedback left for it', 409);
-    }
-    throw new HttpError('Feedback has already been left for this purchase', 409);
-  }
-  // Best-effort notification, same convention as handleProductReviews'
-  // own POST — seller resolved to their own builder profile via the
-  // shared user_id both tables carry; a dangling seller_id has nobody to
-  // notify and is silently skipped (sellerExists already confirmed above
-  // isn't needed here since a dangling seller_id just means the join
-  // below returns nothing).
-  const owner = await db.prepare(`
-    SELECT b.builder_id AS builder_id FROM sellers s
-    JOIN builders b ON b.user_id = s.user_id
-    WHERE s.seller_id = ?
-  `).bind(purchase.seller_id).first();
-  if (owner) {
-    await fireNotification(db, owner.builder_id,
-      `"${authorLabel}" left ${rating}-star feedback on a purchase from you.`);
-  }
-  const row = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.feedback_id = ?`).bind(feedbackId).first();
-  // #2429: same re-SELECT race #2364 fixed for this resource's PATCH
-  // sibling, never applied to this POST/create branch -- a concurrent
-  // admin delete can remove the row before this re-SELECT runs.
-  if (!row) return json({ error: 'Feedback not found' }, 404);
-  return json({ feedback: sellerFeedbackFromRow(row) }, 201);
-}
-
-// #1975/#1738: author-only edit for the feedback's own author (the
-// purchase's buyer) — mirrors product_reviews'/calendar_events' own PATCH
-// shape exactly (see SELLER_FEEDBACK_SELECT_WITH_BUYER's own comment above
-// for why this is gated via a join instead of a native user_id column).
-// No moderation equivalent for PATCH, same reasoning as those two:
-// rewriting someone else's feedback under their own name isn't a kind of
-// moderation action that exists anywhere else in this file.
-const SELLER_FEEDBACK_EDIT_RATE_LIMIT_MAX = 20;
-
-async function handleSellerFeedbackEdit(request, env, purchaseId) {
-  const db = env.DB;
-  const existing = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
-  if (!existing) return json({ error: 'Feedback not found' }, 404);
-  const sessionBuilder = await requireSessionBuilder(request, db);
-  if (existing.buyer_user_id === null || existing.buyer_user_id !== sessionBuilder.user_id) {
-    throw new HttpError('Not your feedback', 403);
-  }
-  await checkRateLimit(db, `seller-feedback-edit:${sessionBuilder.user_id}`, SELLER_FEEDBACK_EDIT_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  let rating = existing.rating;
-  if (input.rating !== undefined) {
-    rating = Number(input.rating);
-    if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-      throw new HttpError('rating must be an integer from 1 to 5', 400);
-    }
-  }
-  // Same omitted-vs-explicitly-cleared distinction product_reviews' own
-  // PATCH already makes — an absent `text` key keeps the existing value, an
-  // explicit null/empty string clears it.
-  let text = existing.text;
-  if ('text' in input) {
-    text = (input.text === null || input.text === '') ? null : stringValue(input.text, 'text');
-  }
-  if (text && text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
-  // Same "point-in-time read, real awaited gaps after it" race this file's
-  // other author-direct mutations guard against — re-verified atomically via
-  // the same join authorization used above, not just the eager read.
-  const updated = await db.prepare(`
-    UPDATE seller_feedback SET rating = ?, text = ? WHERE purchase_id = ? AND EXISTS (
-      SELECT 1 FROM purchases p JOIN builders bld ON bld.builder_id = p.buyer_builder_id
-      WHERE p.purchase_id = seller_feedback.purchase_id AND bld.user_id = ?
-    )
-  `).bind(rating, text, purchaseId, sessionBuilder.user_id).run();
-  if (updated.meta.changes === 0) {
-    throw new HttpError('Feedback changed concurrently — refetch and retry', 409);
-  }
-  // #1975/#2122: snapshot the pre-edit row for disputes -- logged only
-  // after the update is confirmed to have actually happened, same "logged
-  // only after confirmed" idiom the admin-DELETE branch below uses.
-  await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'edit', existing, sessionBuilder.user_id);
-  const row = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
-  // #2364: same concurrent-admin-delete race #2354 fixed for sign_posts/
-  // calendar_events -- the UPDATE's own meta.changes check above only
-  // confirms it matched a row at the moment it ran, not that it still
-  // exists by the time this re-SELECT runs.
-  if (!row) return json({ error: 'Feedback not found' }, 404);
-  return json({ feedback: sellerFeedbackFromRow(row) });
-}
-
-// #1738 (owner confirmed, 2026-10-13): seller_feedback rates a person's own
-// conduct on a transaction, not a product -- unlike product_reviews' own
-// DELETE branch, which lets the reviewed template's seller self-delete,
-// self-delete here would let a seller scrub legitimate negative feedback
-// about their own conduct. Admin-only removal remains the sole moderation
-// route for the rated seller's side — there is deliberately no third,
-// seller-moderation branch the way product_reviews has one, since #1738's
-// own resolution confirmed the rated seller never gets to remove feedback
-// about themselves, ever. #1975 (same thread): the feedback's own author
-// (the buyer who actually wrote it) is a different person from the rated
-// seller and gets the ordinary author-direct removal every other
-// self-authored content type in this file already has — ON DELETE SET
-// NULL on purchases.buyer_builder_id means a buyer who later self-deletes
-// their account can never come back and claim it (same "legacy/no author
-// on record" case SELLER_FEEDBACK_SELECT_WITH_BUYER's own comment
-// describes), so it falls through to admin-only exactly as it always has.
-// Keyed by purchaseId (not a separate feedbackId) since migrations/0097's
-// own UNIQUE constraint on purchase_id already makes it a 1-to-1 resource,
-// the same shape POST .../feedback above already uses.
-const SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX = 20;
-
-async function handleSellerFeedbackDelete(request, env, purchaseId) {
-  const db = env.DB;
-  const existing = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
-  if (!existing) return json({ error: 'Feedback not found' }, 404);
-  const requester = await currentUser(request, db);
-  const admin = requester && requester.is_admin ? requester : null;
-  if (!admin && requester && existing.buyer_user_id !== null && existing.buyer_user_id === requester.user_id) {
-    await checkRateLimit(db, `seller-feedback-delete:${requester.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
-    const deletedByAuthor = await db.prepare(`
-      DELETE FROM seller_feedback WHERE purchase_id = ? AND EXISTS (
-        SELECT 1 FROM purchases p JOIN builders bld ON bld.builder_id = p.buyer_builder_id
-        WHERE p.purchase_id = seller_feedback.purchase_id AND bld.user_id = ?
-      )
-    `).bind(purchaseId, requester.user_id).run();
-    if (deletedByAuthor.meta.changes === 0) {
-      throw new HttpError('Feedback changed concurrently — refetch and retry', 409);
-    }
-    // #1975/#2122: logged only after the delete is confirmed to have
-    // actually happened, same reasoning as the PATCH branch above.
-    await recordContentEditHistory(db, 'seller_feedback', existing.feedback_id, 'delete', existing, requester.user_id);
-    return json({ deleted: true });
-  }
-  const resolvedAdmin = admin || await requireAdmin(request, db);
-  await checkRateLimit(db, `seller-feedback-delete:${resolvedAdmin.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
-  const result = await db.prepare('DELETE FROM seller_feedback WHERE purchase_id = ?').bind(purchaseId).run();
-  // #2003: the existence check above and this DELETE aren't atomic, so a
-  // concurrent delete (another admin retrying, say) can win the race
-  // first -- logged only after confirmed to have actually happened, same
-  // "logged only after confirmed" idiom delete_review_override/
-  // delete_land_candidate already use, so a deletion that didn't happen
-  // is never misattributed to this admin.
-  if (result.meta.changes === 1) {
-    await adminActionLogStatement(db, resolvedAdmin.user_id, 'delete_seller_feedback', 'seller_feedback', existing.feedback_id).run();
-  }
-  return json({ deleted: true });
-}
-
-async function handleSellerFeedbackList(db, sellerId) {
-  // Public, same reasoning as GET .../reviews being unauthenticated — a
-  // rating is meant to be seen, not just by the seller themself. The only
-  // UI surfacing it today is the Seller modal (necessarily the seller's
-  // own, since opening someone else's isn't possible), which is what makes
-  // it read as "seller-facing" in practice without the API itself needing
-  // to restrict who can ask.
-  const { results } = await db.prepare(`
-    ${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.seller_id = ? ORDER BY f.created_at DESC LIMIT 200
-  `).bind(sellerId).all();
-  const feedback = results.reverse().map(sellerFeedbackFromRow);
-  // averageRating/count are the seller's real, all-time summary, not
-  // derived from the LIMIT-200 page above — same reasoning as
-  // handleProductReviews' own averageRating comment.
-  const summary = await db.prepare(`
-    SELECT AVG(rating) AS average_rating, COUNT(*) AS count FROM seller_feedback WHERE seller_id = ?
-  `).bind(sellerId).first();
-  const averageRating = summary.count === 0 ? null : summary.average_rating;
-  return json({ feedback, averageRating, count: summary.count });
 }
 
 async function handlePurchaseConfirmDelivery(request, env) {
@@ -14954,7 +11644,10 @@ export async function assertReferenceExists(db, table, column, value, field) {
 // (migrations/0129) — "in case of disputes," per the owner's own framing,
 // not an audit log of the action alone. Shared across every content type
 // this applies to, rather than a bespoke history table per type.
-async function recordContentEditHistory(db, sourceTable, sourceId, action, row, actorUserId) {
+// Exported for worker/lib/reputation.js (#2532) -- its own moved review/
+// feedback PATCH/DELETE branches need this same history snapshot (also
+// still used directly here by calendar_events' own PATCH/DELETE).
+export async function recordContentEditHistory(db, sourceTable, sourceId, action, row, actorUserId) {
   await db.prepare(`
     INSERT INTO user_content_edit_history (history_id, source_table, source_id, action, snapshot_json, actor_user_id)
     VALUES (?, ?, ?, ?, ?, ?)
@@ -15130,7 +11823,7 @@ const EXTENSIBLE_DIMENSION_KEY_BY_AXIS = { x: 'width', y: 'depth', z: 'height' }
 // request actually changed the crop" apart from "this request just resent
 // the instance's existing crop unchanged" (which src/main.js's syncUpdate
 // always does, since it round-trips the mesh's full state on every edit).
-function cropsEqual(a, b) {
+export function cropsEqual(a, b) {
   const axes = new Set([...Object.keys(a), ...Object.keys(b)]);
   for (const axis of axes) {
     if (a[axis] !== b[axis]) return false;
@@ -15144,7 +11837,7 @@ function cropsEqual(a, b) {
 // dimension for that axis] range. Runs after the FK checks that already
 // guarantee templateId exists, so a missing template here would only
 // happen for an instance with no crop at all (skipped) or a genuine race.
-async function assertCropWithinTemplateBounds(db, instances) {
+export async function assertCropWithinTemplateBounds(db, instances) {
   const withCrop = instances.filter((instance) => Object.keys(instance.crop).length > 0);
   if (withCrop.length === 0) return;
   const templateIds = [...new Set(withCrop.map((instance) => instance.templateId))];
@@ -15181,7 +11874,7 @@ async function assertCropWithinTemplateBounds(db, instances) {
 // rows at all (the common case — most landlets never go vertical) still
 // has an implicit ground level at index 0, matching the Math.min/max(0, ...)
 // pattern handleLandletLevels itself uses to find the current extent.
-async function assertInstanceZWithinLevels(db, instances) {
+export async function assertInstanceZWithinLevels(db, instances) {
   const landletIds = [...new Set(instances.map((instance) => instance.landletId))];
   if (landletIds.length === 0) return;
   const placeholders = landletIds.map(() => '?').join(', ');
@@ -15233,7 +11926,7 @@ async function assertInstanceZWithinLevels(db, instances) {
 // can't be found (deleted after being referenced) is treated the same as
 // before this fix — a center-point-only check — rather than blocking the
 // write on a lookup that predates this validation.
-async function assertInstanceXYWithinLandlet(db, instances) {
+export async function assertInstanceXYWithinLandlet(db, instances) {
   if (instances.length === 0) return;
   const templateIds = [...new Set(instances.map((instance) => instance.templateId))];
   const placeholders = templateIds.map(() => '?').join(', ');
@@ -15274,7 +11967,7 @@ async function assertInstanceXYWithinLandlet(db, instances) {
 // Chunked here, at the source, rather than capped per-caller -- same
 // reasoning selectRowsByIdsChunked's own comment gives for fixing every
 // caller at once instead of bounding each one individually.
-async function getInstancesById(db, instanceIds) {
+export async function getInstancesById(db, instanceIds) {
   const rows = [];
   for (let i = 0; i < instanceIds.length; i += D1_MAX_BOUND_PARAMETERS) {
     const chunk = instanceIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
@@ -15624,7 +12317,7 @@ function validateTemplate(input, fallbackId) {
   return template;
 }
 
-function validateLandlet(input, fallbackId) {
+export function validateLandlet(input, fallbackId) {
   const center = input.center || {};
   const landlet = {
     landletId: stringValue(input.landletId || fallbackId, 'landletId'),
@@ -15649,7 +12342,7 @@ function validateLandlet(input, fallbackId) {
   return landlet;
 }
 
-function validateWorld(input) {
+export function validateWorld(input) {
   const world = {
     worldId: 'default-world',
     radiusM: finiteNumber(input.radiusM, 'radiusM'),
@@ -15664,7 +12357,7 @@ function validateWorld(input) {
   return world;
 }
 
-function validateInstance(input, fallbackId) {
+export function validateInstance(input, fallbackId) {
   return {
     instanceId: stringValue(input.instanceId || input.id || fallbackId, 'instanceId'),
     landletId: stringValue(input.landletId || 'starter-landlet', 'landletId'),
@@ -15716,7 +12409,7 @@ function validateScale(value) {
 // bricking a pre-existing out-of-range row.
 const MIN_INSTANCE_SCALE = 0.001;
 const MAX_INSTANCE_SCALE = 1000;
-function assertInstanceScaleWithinBounds(instances) {
+export function assertInstanceScaleWithinBounds(instances) {
   for (const instance of instances) {
     if (instance.scale < MIN_INSTANCE_SCALE || instance.scale > MAX_INSTANCE_SCALE) {
       throw new HttpError(`scale must be between ${MIN_INSTANCE_SCALE} and ${MAX_INSTANCE_SCALE}`, 400);
@@ -15769,7 +12462,7 @@ function templateContentMatches(existingRow, template) {
     && existingRow.stock_quantity === template.stockQuantity;
 }
 
-function instanceParams(instance) {
+export function instanceParams(instance) {
   return [instance.instanceId, instance.landletId, instance.templateId, instance.x, instance.y,
     instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label,
     JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0,
@@ -15819,7 +12512,7 @@ export function templateFromRow(row) {
   };
 }
 
-function instanceFromRow(row) {
+export function instanceFromRow(row) {
   return {
     instanceId: row.instance_id,
     id: row.instance_id,
@@ -15866,7 +12559,7 @@ export function landletFromRow(row) {
   };
 }
 
-function candidateFromRow(row) {
+export function candidateFromRow(row) {
   return {
     landletId: row.landlet_id,
     name: row.name,
@@ -15883,7 +12576,7 @@ function candidateFromRow(row) {
   };
 }
 
-function landCandidateRingFromRow(row) {
+export function landCandidateRingFromRow(row) {
   const ring = {
     ringId: row.ring_id,
     innerRadiusM: row.inner_radius_m,
@@ -15957,7 +12650,7 @@ function versionInstanceFromRow(row) {
   };
 }
 
-function worldFromRow(row, counts) {
+export function worldFromRow(row, counts) {
   const totalLandlets = counts?.total || 0;
   const greenbeltLandlets = counts?.greenbelt || 0;
   return {
@@ -16034,7 +12727,7 @@ function ratioNumber(value, field) {
   return number;
 }
 
-function positiveInteger(value, field) {
+export function positiveInteger(value, field) {
   const number = Number(value);
   if (!Number.isInteger(number) || number <= 0) throw new HttpError(`${field} must be a positive integer`, 400);
   return number;

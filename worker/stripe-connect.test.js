@@ -692,35 +692,29 @@ describe('Higgles redemption (#625)', () => {
     expect(status.body.availableCents).toBe(2_000_001);
   });
 
-  // Owner (Control Room, 2026-09-10, on #651): higgles_balance_cents has no
+  // Owner (Control Room, 2026-09-10, on #651): higgles_balance_cents had no
   // provenance back to real money — the free/simulated purchase path
-  // credits builder commission exactly like a real Stripe sale does, so
-  // redeeming it is a zero-capital, zero-auth mint of real cash. Same
+  // credited builder commission exactly like a real Stripe sale, so
+  // redeeming it was a zero-capital, zero-auth mint of real cash. Same
   // stopgap-first shape as the (since-lifted) #629 auction pause:
-  // REDEMPTION_PAUSED_PENDING_PROVENANCE now occupies the same slot —
-  // after every other validation, ahead of the stripeConfigured check —
-  // which is the actual reason the test just below still sees 503 too.
-  it('pauses redemption pending the provenance-tracking fix, ahead of the Stripe-configured check, leaving the balance untouched', async () => {
-    const builder = await signupBuilder('redeem-paused-provenance');
+  // REDEMPTION_PAUSED_PENDING_PROVENANCE occupied the same slot — after
+  // every other validation, ahead of the stripeConfigured check — until
+  // #653's actual fix shipped: that simulated path is now admin-only (see
+  // handleInstancePurchase's own #653 comment), closing the exploit by
+  // construction, so the pause itself is gone. A connected builder now
+  // falls straight through to the next real check instead, same as an
+  // unconnected one already did — this test suite never configures
+  // STRIPE_SECRET_KEY, so that's still a 503, just "not configured"
+  // rather than "paused".
+  it('falls through to the Stripe-not-configured check now that redemption is no longer paused (#653)', async () => {
+    const builder = await signupBuilder('redeem-unpaused-unconfigured');
     await connectBuilder(builder);
     await creditHiggles(builder, 5000);
     const got = await api('/builders/me/redeem', builder.session({
       method: 'POST', body: JSON.stringify({}),
     }));
     expect(got.response.status).toBe(503);
-    expect(got.body.error).toMatch(/paused/i);
-
-    const status = await api('/builders/me/redeem', builder.session());
-    expect(status.body.availableCents).toBe(5000);
-  });
-
-  it('returns the same pause 503 even once Stripe would otherwise be configured (message differs from the plain unconfigured case)', async () => {
-    const builder = await signupBuilder('redeem-unconfigured');
-    await creditHiggles(builder, 5000);
-    const got = await api('/builders/me/redeem', builder.session({
-      method: 'POST', body: JSON.stringify({}),
-    }));
-    expect(got.response.status).toBe(503);
+    expect(got.body.error).toMatch(/not configured/i);
 
     const status = await api('/builders/me/redeem', builder.session());
     expect(status.body.availableCents).toBe(5000);
@@ -728,9 +722,10 @@ describe('Higgles redemption (#625)', () => {
 
   // #1050: same "real outbound Stripe API call on the shared key" gap
   // #839/#948 already fixed for the stripe-account handlers -- this
-  // endpoint's own Stripe transfers/payouts calls (unreachable today while
-  // REDEMPTION_PAUSED_PENDING_PROVENANCE holds, but not forever) need the
-  // identical guard. Same coverage shape as those handlers' own tests.
+  // endpoint's own Stripe transfers/payouts calls (unreachable in this
+  // suite since Stripe is never configured here, but not in a real
+  // deployment) need the identical guard. Same coverage shape as those
+  // handlers' own tests.
   it('rate-limits repeated redemption attempts from the same builder', async () => {
     const builder = await signupBuilder('redeem-rate-limit');
     await creditHiggles(builder, 5000);
@@ -747,11 +742,11 @@ describe('Higgles redemption (#625)', () => {
   });
 
   // #869: POST /builders/me/redeem itself always 503s in this suite
-  // (REDEMPTION_PAUSED_PENDING_PROVENANCE, on top of Stripe never being
-  // configured), so the actual fix -- resuming an in-flight redemption
-  // instead of always minting a fresh one with a fresh (and therefore
-  // useless) idempotency key -- is tested directly against the exported
-  // claim/resume primitive, the same "no real Stripe call needed" shape
+  // (Stripe is never configured here), so the actual fix -- resuming an
+  // in-flight redemption instead of always minting a fresh one with a
+  // fresh (and therefore useless) idempotency key -- is tested directly
+  // against the exported claim/resume primitive, the same "no real
+  // Stripe call needed" shape
   // commerce.test.js's own claimPurchasesForPayout tests already use.
   it('claimOrResumeBuilderRedemption claims a fresh redemption and debits the balance when nothing is pending', async () => {
     const builder = await signupBuilder('redeem-claim-fresh');

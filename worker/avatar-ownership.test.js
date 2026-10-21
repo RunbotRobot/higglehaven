@@ -9,7 +9,7 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { writePurchaseRow } from './index.js';
-import { api, signupAdmin, signupBuilder } from './test-helpers.js';
+import { api, signupAdmin, signupBuilder, grantAdminTo } from './test-helpers.js';
 
 let adminSession;
 
@@ -56,7 +56,12 @@ async function placeInstance(instanceId, landletId, templateId, builder) {
 // Purchasing is now gated on a real, verified session (N44) regardless of
 // who's buying — the seller's own session here is just the simplest way
 // to get one, same shortcut worker/commerce.test.js's own #683 test uses.
+// #653: every one of this file's own templates sells through a seller who
+// never completes Stripe Connect onboarding, so this always hits the now
+// admin-only simulated path — promote the buyer in place here rather than
+// at each call site.
 async function purchase(instanceId, buyer) {
+  await grantAdminTo(buyer);
   return api(`/instances/${instanceId}/purchase`, buyer.session({ method: 'POST' }));
 }
 
