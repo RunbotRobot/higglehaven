@@ -6,7 +6,7 @@
 // scope, not this file's.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { spawnCreditOrbIfDue } from './index.js';
+import { spawnCreditOrbIfDue } from './lib/credit-orbs.js';
 import { api, signupAdmin, signupBuilder } from './test-helpers.js';
 
 beforeAll(async () => {
