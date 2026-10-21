@@ -181,7 +181,7 @@ describe('Account deletion (#1146)', () => {
     // Same #732 shape as DELETE /api/sellers/:id's own test.
     it('blocks the whole account deletion when the seller has an unpaid real-money purchase, leaving everything untouched', async () => {
       const seller = await signupSeller('delete-account-unpaid-payout-seller');
-      const builder = await signupBuilder('delete-account-unpaid-payout-builder');
+      const builder = await signupAdmin('delete-account-unpaid-payout-builder');
       await createGreenbeltLandlet('delete-account-unpaid-payout-landlet');
       await api('/landlets/delete-account-unpaid-payout-landlet/claim', builder.session({ method: 'POST' }));
       const created = await api('/catalog', seller.session({
