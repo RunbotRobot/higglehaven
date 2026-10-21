@@ -3,8 +3,9 @@ import {
 } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
-  refundIdempotencyKey, resolveFinalizeBuilderId, claimPurchasesForPayout,
+  refundIdempotencyKey, claimPurchasesForPayout,
 } from './index.js';
+import { resolveFinalizeBuilderId } from './lib/purchase-creation.js';
 import {
   api, signupBuilder, signupSeller, signupAdmin,
 } from './test-helpers.js';

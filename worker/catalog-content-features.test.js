@@ -3,8 +3,9 @@ import {
 } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
-  cosineSimilarity, writePurchaseRow, escapeHtml,
+  cosineSimilarity, escapeHtml,
 } from './index.js';
+import { writePurchaseRow } from './lib/purchase-creation.js';
 import {
   api, signupBuilder, signupSeller, signupAdmin, grantAdminTo, glbFile,
 } from './test-helpers.js';

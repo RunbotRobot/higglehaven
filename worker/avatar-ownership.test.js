@@ -8,7 +8,7 @@
 // scope, not this file's.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { writePurchaseRow } from './index.js';
+import { writePurchaseRow } from './lib/purchase-creation.js';
 import { api, signupAdmin, signupBuilder, grantAdminTo } from './test-helpers.js';
 
 let adminSession;
