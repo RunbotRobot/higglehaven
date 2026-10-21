@@ -5,25 +5,28 @@
 // ladder (#1212/#2018), and per-purchase seller feedback (#1096/#1738).
 // Extracted verbatim, zero behavior change.
 //
-// Deliberately NOT included here: requireSessionBuilder/requireSessionSeller/
-// sellerExists/recordContentEditHistory/reviewFromRow/sellerFeedbackFromRow --
-// each is genuinely shared beyond this file (requireSessionBuilder/
-// requireSessionSeller/sellerExists across dozens of other handlers;
-// recordContentEditHistory also by calendar_events' own PATCH/DELETE;
-// reviewFromRow/sellerFeedbackFromRow also by handleExportData's own GDPR
-// export), so they stay in worker/index.js and are imported back below, the
-// same one-directional-except-for-genuinely-shared-state shape
+// Deliberately NOT included here: requireSessionSeller/sellerExists/
+// recordContentEditHistory/reviewFromRow/sellerFeedbackFromRow -- each is
+// genuinely shared beyond this file (requireSessionSeller/sellerExists
+// across dozens of other handlers; recordContentEditHistory also by
+// calendar_events' own PATCH/DELETE; reviewFromRow/sellerFeedbackFromRow
+// also by handleExportData's own GDPR export), so they stay in
+// worker/index.js and are imported back below, the same
+// one-directional-except-for-genuinely-shared-state shape
 // worker/lib/builder-profile.js's own comment documents for its own
 // templateFromRow/recomputeLandCap imports (#2535), and worker/lib/
 // credit-orbs.js's own comment documents for requireSessionBuilder (#2541).
+// requireSessionBuilder itself now lives in ./auth.js (moved there after
+// this module was first written -- see that module's own comment) and is
+// imported directly from there instead, not re-imported back from index.js.
 import { json, HttpError, clientIp } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue } from './validation.js';
 import { fireNotification } from './notifications.js';
-import { currentUser, requireAdmin, assertOwner } from './auth.js';
+import { currentUser, requireAdmin, assertOwner, requireSessionBuilder } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
 import {
-  requireSessionBuilder, requireSessionSeller, sellerExists, recordContentEditHistory,
+  requireSessionSeller, sellerExists, recordContentEditHistory,
   reviewFromRow, sellerFeedbackFromRow,
 } from '../index.js';
 
