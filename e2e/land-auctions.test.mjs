@@ -65,12 +65,16 @@ await startForm.waitFor({ timeout: 5000 });
 await startForm.locator('input').nth(0).fill('10'); // starting bid $10
 await startForm.locator('input').nth(1).fill('1'); // duration 1 hour
 await sellerPage.click('.auction-start-btn');
+// #2607: .auction-row alone is ambiguous -- the sibling Active Auctions
+// list (listField) also renders plain .auction-row elements for every
+// site-wide active auction. .auction-row-mine is the picker's own
+// "your auction is live" row's own, distinct class.
 await sellerPage.waitForFunction(
-  () => document.querySelector('.settings-field .auction-row')?.textContent.includes('Your auction is live'),
+  () => document.querySelector('.auction-row-mine')?.textContent.includes('Your auction is live'),
   null,
   { timeout: 30000 },
 );
-const sellerOwnAuctionText = await sellerPage.locator('.auction-row').first().textContent();
+const sellerOwnAuctionText = await sellerPage.locator('.auction-row-mine').first().textContent();
 console.log('seller\'s own auction row (should mention "Your auction is live" and "$10.00"):', sellerOwnAuctionText);
 
 // Reopening Start doesn't offer a second form — the landlet already has
@@ -219,12 +223,14 @@ await openAccountMenu(sellerPage);
 await sellerPage.click('#settings-btn');
 await sellerPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await sellerPage.click('.settings-tab-btn[data-section="build"]');
+// #2607: .auction-row-mine, not the ambiguous .auction-row (see the
+// earlier occurrence of this same comment above).
 await sellerPage.waitForFunction(
-  () => document.querySelector('.settings-field .auction-row')?.textContent.includes('$15.00'),
+  () => document.querySelector('.auction-row-mine')?.textContent.includes('$15.00'),
   null,
   { timeout: 30000 },
 );
-const sellerSeesBidText = await sellerPage.locator('.auction-row').first().textContent();
+const sellerSeesBidText = await sellerPage.locator('.auction-row-mine').first().textContent();
 console.log('seller\'s own view after the bid (should mention $15.00):', sellerSeesBidText);
 
 // The bid also fired a real builder-facing notification (see
@@ -271,7 +277,9 @@ await sellerPage.waitForSelector('.landlet-picker select', { timeout: 10000 });
 const pickerOptionCount = await sellerPage.locator('.landlet-picker select option').count();
 console.log('landlet picker option count now that the seller owns 2 claimed landlets (should be 2):', pickerOptionCount);
 
-const defaultPickerText = await sellerPage.locator('.auction-row').first().textContent().catch(() => '');
+// #2607: .auction-row-mine, not the ambiguous .auction-row (see the
+// earlier occurrences of this same comment above).
+const defaultPickerText = await sellerPage.locator('.auction-row-mine').first().textContent().catch(() => '');
 console.log('default picker selection still shows the live auction on the Build-mode landlet (should mention "Your auction is live"):', defaultPickerText);
 
 await sellerPage.selectOption('.landlet-picker select', SECOND_LANDLET_ID);
