@@ -46,10 +46,17 @@ await page.click('#upload-mode-video-btn');
 const videoSectionVisibleAfterToggle = await page.evaluate(() => !document.getElementById('upload-video-section').hidden);
 const fileRowHiddenAfterToggle = await page.evaluate(() => document.getElementById('upload-file-field-row').hidden);
 const submitLabelInVideoMode = await page.textContent('#upload-submit-btn');
-// #2442: a fresh builder starts with 0 video_generation_credits
-// (migrations/0127's own default) -- refreshUploadVideoCredits runs as
-// part of entering video mode, so this should already be populated right
-// after the toggle, with no extra wait.
+// #2442/#2521: a fresh builder starts with 0 video_generation_credits
+// (migrations/0127's own default) -- refreshUploadVideoCredits runs as part
+// of entering video mode, but it does a real fetchMyBuilder() network
+// round-trip before populating this line, and setUploadFileMode fires it
+// without awaiting it. Reading textContent synchronously right after the
+// click raced that fetch under CI load and intermittently saw '' instead of
+// the populated line (#2521) -- wait for it to actually populate first.
+await page.waitForFunction(
+  () => document.getElementById('upload-video-credits').textContent.trim().length > 0,
+  { timeout: 5000 },
+);
 const videoCreditsTextAfterToggle = (await page.textContent('#upload-video-credits')).trim();
 console.log('video section visible after toggling (should be true):', videoSectionVisibleAfterToggle);
 console.log('manual file row hidden after toggling (should be true):', fileRowHiddenAfterToggle);

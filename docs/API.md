@@ -9555,12 +9555,52 @@ values; a further case confirms a brief joystick deflection hard-cuts
 `shopSitBlend` back to 0 on the very next frame, matching the instant-
 ease-out discipline described above.
 
+### Lean pose + transition (#2479)
+
+Sub-issue of #2475, same shape as the sit pose just above for a `kind:
+'lean'` target instead — a dedicated `shopLeanBlend` (eased the same way,
+hard-cut on real input, never both nonzero alongside `shopSitBlend` since
+a `sitTarget` always outranks a `leanTarget` within the same idle episode
+per #2477) gates three visual-only terms, scaled directly by
+`shopLeanBlend`:
+
+- **Position**: `shopLeanPositionOffset` (`{x, y, z}`) — unlike sit's
+  height-only offset, leaning against a surface needs horizontal
+  displacement too, so all three axes are added to the rendered
+  `shopAvatar.group.position` right after it's copied from the real
+  `shopAvatarPosition`, solved so the rendered position lands exactly on
+  the target's `worldX`/`worldY`/`worldZ` once `shopLeanBlend` reaches 1.
+- **Facing**: `shopLeanYawOffset`, the same shortest-angular-delta-to-
+  `worldFacingRad` idiom `shopSitYawOffset` already uses, added to the
+  rendered quaternion alongside it (and alongside `shopIdleSwayYawOffset`).
+- **Body pitch**: the whole rig tilts back by `SHOP_LEAN_PITCH_RAD` (12°)
+  around the same local-X axis `SHOP_AVATAR_FLIGHT_PITCH_RAD` already uses
+  for the opposite (forward-dive) flight tilt — reusing that same eased
+  `shopAvatarPitch` state variable, so leaning is mutually exclusive with
+  flight tilt (airborne always wins) and eases back to level the same way
+  landing already does.
+
+**Deliberately visual-only, not a real reposition** — exactly the same
+reasoning and the same tradeoff (collision/curvature/camera-follow stay
+keyed off the real, unmoved `shopAvatarPosition`/`shopAvatarFacing`;
+`findShopIdleInteractionTarget`'s 3m search radius keeps the visual gap
+small) the sit pose section above gives in full; it isn't repeated here.
+
+#### Testing note
+
+`e2e/shop-idle-lean-pose.test.mjs` mirrors `shop-idle-sit-pose.test.mjs`
+exactly, for a leanable wall and `window.__testShopLeanPose()` (mirroring
+`shopLeanBlend` and the position/yaw offsets) in place of the sit pose's
+own hook, plus checking `shopAvatarPitch` via `window.__shopAvatarOrientation`
+for the backward tilt.
+
 ### Randomized sit/lean selection and timing (#2480)
 
 Sub-issue of #2475, depending on at least one of the sit/lean pose sub-
-issues landing first (sit, #2478, has; lean, #2479, hadn't as of this
-writing — see the note below on scope). docs/SPEC.md §2 asks for the idle
-state machine to work "with randomization," matching how the existing
+issues landing first (sit, #2478, had, at the time this sub-issue was
+picked up; lean, #2479, landed separately around the same time — see the
+note below on scope). docs/SPEC.md §2 asks for the idle state machine to
+work "with randomization," matching how the existing
 stand sway already randomizes its sway period and head-turn interval
 (`SHOP_IDLE_SWAY_PERIOD_MIN_S`/`MAX_S`, `SHOP_IDLE_HEAD_TURN_INTERVAL_MIN_S`/
 `MAX_S`). Two independent randomizations, both in `src/main.js`:
@@ -9588,15 +9628,15 @@ stand sway already randomizes its sway period and head-turn interval
   re-randomize fresh on every new episode, including re-selecting the same
   target next time around.
 
-**Scope note:** lean (#2479) hadn't landed on this branch yet when this
-sub-issue was picked up, which #2480's own issue text allows for ("depends
-on at least one of the sit or lean pose sub-issues landing first"). The
-settle-delay timing randomization above is implemented for sit only;
-whoever lands lean should apply the same pattern (a randomized settle
-delay gating its own blend) to keep both poses' timing equally varied, per
-this issue's "across repeated idle cycles" line covering both. The target-
-selection randomization is kind-agnostic and already covers lean the
-moment it exists, with no further change needed there.
+**Scope note:** lean (#2479) landed separately around the same time as this
+sub-issue was picked up, so the settle-delay timing randomization above is
+implemented for sit only — lean's own `shopLeanBlend` doesn't yet have an
+equivalent randomized settle delay gating it. Whoever picks that up next
+should apply the same pattern (a randomized settle delay gating its own
+blend) to keep both poses' timing equally varied, per this issue's "across
+repeated idle cycles" line covering both. The target-selection
+randomization above is kind-agnostic and already covers lean as-is, with
+no further change needed there.
 
 #### Testing note
 
