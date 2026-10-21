@@ -28,16 +28,34 @@ await claimLandlet(sellerPage);
 await openAccountMenu(sellerPage);
 await sellerPage.click('#settings-btn');
 await sellerPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
-await sellerPage.click('.settings-tab-btn[data-section="build"]');
-await sellerPage.waitForTimeout(500);
-
-// #2437: this panel's render involves two sequential awaited round-trips
-// (fetchAllLandlets then fetchAuctions, both via the local wrangler dev
-// worker) before the form appears -- under CI load that can outrun a tight
-// margin. 30000ms matches the comparable wait just below (the auction-row
-// "live" state, also behind its own round-trip).
+// #2437 -> #2547: this panel's render (renderAuctionSection, src/main.js)
+// involves two sequential awaited round-trips (fetchAllLandlets then
+// fetchAuctions, both via the local wrangler dev worker) before
+// .auction-start-form appears -- a flat margin on the form's own
+// visibility was bumped once already (10000ms -> 30000ms by #2437) and
+// still wasn't enough under current CI load (#2547), the same
+// repeat-offender shape #2400/#2499/#2544 already converted elsewhere in
+// this suite. Waiting directly on the GET /auctions response that
+// immediately precedes the form's (synchronous) DOM append covers both
+// round-trips' real latency with one long, contention-tolerant margin --
+// whatever fetchAllLandlets itself took, this wait simply hasn't resolved
+// yet. `landletId=` in the query distinguishes this fetchAuctions call
+// (renderForLandlet, scoped to one landlet) from the sibling
+// fetchAllAuctions call renderAuctionList fires concurrently for the
+// Active Auctions list below (world-wide, no landletId).
+const [auctionsForLandletResponse] = await Promise.all([
+  sellerPage.waitForResponse(
+    (response) => response.request().method() === 'GET' &&
+      response.url().includes('/auctions') && response.url().includes('landletId='),
+    { timeout: 60000 },
+  ),
+  sellerPage.click('.settings-tab-btn[data-section="build"]'),
+]);
+if (!auctionsForLandletResponse.ok()) {
+  throw new Error(`land-auctions: auctions-for-landlet fetch failed (${auctionsForLandletResponse.status()})`);
+}
 const startForm = sellerPage.locator('.auction-start-form');
-await startForm.waitFor({ timeout: 30000 });
+await startForm.waitFor({ timeout: 5000 });
 await startForm.locator('input').nth(0).fill('10'); // starting bid $10
 await startForm.locator('input').nth(1).fill('1'); // duration 1 hour
 await sellerPage.click('.auction-start-btn');
