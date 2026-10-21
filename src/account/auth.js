@@ -3,11 +3,11 @@
 // extracted wholesale from src/main.js. Two notes on cross-module coupling
 // the design pass didn't fully anticipate:
 // - ensureBuilderIdentity/ensureSellerIdentity/ensureShopperIdentity
-//   (account/identity.js's own future scope, #2555 — still in src/main.js
-//   for now) call requireLogin/requireVerification below, hence those two
-//   exports; resetLocalSessionState below needs to reset their own
-//   builderIdentityFlowPromise/sellerIdentityFlowPromise guards in turn,
-//   hence the resetIdentityFlowPromises() import from src/main.js.
+//   (account/identity.js, #2555) call requireLogin/requireVerification
+//   below, hence those two exports; resetLocalSessionState below needs to
+//   reset their own builderIdentityFlowPromise/sellerIdentityFlowPromise
+//   guards in turn, hence the resetIdentityFlowPromises() import from
+//   account/identity.js.
 // - hasVerifiedSession (Shop-mode presence-reporting guard, still in
 //   src/main.js) reads both currentAuthUser (exported below) and its own
 //   accountSessionEnding flag, which the delete-account flow below needs
@@ -21,9 +21,8 @@ import {
 } from '../api.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { currentMode, setBuilderId, setSellerId } from '../world/state.js';
-import {
-  loadStripeJs, START_MODE_KEY, resetIdentityFlowPromises, setAccountSessionEnding,
-} from '../main.js';
+import { loadStripeJs, START_MODE_KEY, setAccountSessionEnding } from '../main.js';
+import { resetIdentityFlowPromises } from './identity.js';
 
 export async function requireLogin(view = 'signup', hint) {
   if (currentAuthUser) return currentAuthUser;
