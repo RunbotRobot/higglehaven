@@ -4,22 +4,15 @@
 // $5/day budget") -- the spawn-sweep, read, and collect route handler/
 // helpers. Extracted verbatim, zero behavior change.
 //
-// Deliberately NOT included here: requireSessionBuilder/requireAdmin --
-// requireAdmin is already extracted (worker/lib/auth.js); requireSessionBuilder
-// is the builder-profile domain's own auth-chain internal (#2535), not yet
-// extracted itself (blocked on #2543, see worker/lib/auth.js's own comment
-// on why) -- so it stays in worker/index.js and is imported back below,
-// the same shape worker/lib/builder-profile.js's own comment documents for
-// its own templateFromRow/recomputeLandCap imports (#2535). LANDLET_SIDE_M/
-// PRESENCE_STALE_AFTER_MS are likewise genuinely shared beyond this file
-// (every per-landlet placement calculation; every presence-staleness
-// check), not credit-orb-specific.
+// requireSessionBuilder/requireAdmin both now live in worker/lib/auth.js
+// (#2543/#2528). LANDLET_SIDE_M/PRESENCE_STALE_AFTER_MS below are
+// duplicated from worker/index.js, not imported -- see that duplication's
+// own comment for why.
 import { json, HttpError } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
-import { requireAdmin } from './auth.js';
+import { requireAdmin, requireSessionBuilder } from './auth.js';
 import { readJson, stringValue, finiteNumber } from './validation.js';
 import { adminActionLogStatement } from './admin-log.js';
-import { requireSessionBuilder } from '../index.js';
 
 // #1978: workerd requires every named export of the main Worker entry
 // module (worker/index.js) to be a function/class binding, not a plain

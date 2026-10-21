@@ -7,7 +7,7 @@
 // window.__testLowStockHighlightedInstanceIds for #1950's sibling panel),
 // not DOM/pixel inspection, plus a real click through the Settings > Build
 // panel's toggle and per-marker Dismiss button.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, emailForLabel, grantAdmin } from './helpers.mjs';
 
 const LABEL = 'Sold Out Marker Tester';
 const INSTANCE_ID = 'sold-out-marker-instance';
@@ -45,6 +45,12 @@ await fetchJson('/api/instances', {
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ instanceId: INSTANCE_ID, landletId: landlet.landletId, templateId: 'sold-out-marker-template', x: 2, y: 3 }),
 });
+// #653: the simulated path is now admin-only (this template has no
+// seller_id at all here, so it's never Stripe-connected either) — grant
+// it to this same browser-session account rather than switching to a
+// separate one, so this purchase still lands against the landlet this
+// test already built up under this session's own cookie.
+await grantAdmin(emailForLabel(LABEL));
 const purchased = await fetchJson(`/api/instances/${INSTANCE_ID}/purchase`, { method: 'POST' });
 console.log('purchase that sells out the template (should be 201):', purchased.status);
 

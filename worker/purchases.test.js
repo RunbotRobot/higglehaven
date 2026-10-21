@@ -69,7 +69,7 @@ describe('Simulated purchases', () => {
   // introduces for sellable custom avatars) should place and purchase
   // exactly like any other product, with zero special-casing needed.
   it('places and purchases an avatar-category template with no special-casing (#683)', async () => {
-    const seller = await signupBuilder('avatar-category-seller');
+    const seller = await signupAdmin('avatar-category-seller');
     await createGreenbeltLandletWithArea('avatar-category-landlet', 1000);
     await claim('avatar-category-landlet', seller);
 
@@ -114,7 +114,7 @@ describe('Simulated purchases', () => {
   // real-money path. This confirms the simulated path (the default for a
   // product whose seller hasn't connected Stripe) now handles it too.
   it('does not double-credit the builder when the same idempotencyKey is retried', async () => {
-    const seller = await signupBuilder('purchase-idempotency-seller');
+    const seller = await signupAdmin('purchase-idempotency-seller');
     await createGreenbeltLandletWithArea('purchase-idempotency-landlet', 1000);
     await claim('purchase-idempotency-landlet', seller);
     await createTemplate('purchase-idempotency-template', { priceCents: 750 });
@@ -164,8 +164,8 @@ describe('Simulated purchases', () => {
       'purchase-idempotency-cross-buyer-template', seller,
     );
 
-    const buyerA = await signupBuilder('purchase-idempotency-cross-buyer-a');
-    const buyerB = await signupBuilder('purchase-idempotency-cross-buyer-b');
+    const buyerA = await signupAdmin('purchase-idempotency-cross-buyer-a');
+    const buyerB = await signupAdmin('purchase-idempotency-cross-buyer-b');
     const sharedKey = 'shared-stale-key';
 
     const purchasedByA = await api('/instances/purchase-idempotency-cross-buyer-instance/purchase', buyerA.session({
@@ -200,7 +200,7 @@ describe('Simulated purchases', () => {
   // That must be treated as a genuinely new purchase, not silently
   // collapsed onto the stale row.
   it('treats a same-key resubmit with a different quantity as a genuinely new purchase', async () => {
-    const seller = await signupBuilder('purchase-idempotency-mismatch-seller');
+    const seller = await signupAdmin('purchase-idempotency-mismatch-seller');
     await createGreenbeltLandletWithArea('purchase-idempotency-mismatch-landlet', 1000);
     await claim('purchase-idempotency-mismatch-landlet', seller);
     await createTemplate('purchase-idempotency-mismatch-template', { priceCents: 750 });
@@ -270,7 +270,7 @@ describe('Simulated purchases', () => {
   });
 
   it('reads quantity and buyerLabel from the request body, defaulting to 1 and the session builder\'s own label', async () => {
-    const seller = await signupBuilder('purchase-body-seller');
+    const seller = await signupAdmin('purchase-body-seller');
     await createGreenbeltLandletWithArea('purchase-body-landlet', 1000);
     await claim('purchase-body-landlet', seller);
     await createTemplate('purchase-body-template', { priceCents: 1000 });
@@ -318,7 +318,7 @@ describe('Simulated purchases', () => {
   // so asserting both separately matters).
   it('stores the session builder as buyerBuilderId on a simulated purchase', async () => {
     const seller = await signupBuilder('purchase-buyer-id-seller');
-    const buyer = await signupBuilder('purchase-buyer-id-buyer');
+    const buyer = await signupAdmin('purchase-buyer-id-buyer');
     await createGreenbeltLandletWithArea('purchase-buyer-id-landlet', 1000);
     await claim('purchase-buyer-id-landlet', seller);
     await createTemplate('purchase-buyer-id-template', { priceCents: 1000 });
@@ -344,7 +344,7 @@ describe('Simulated purchases', () => {
   // then confirms the same buyer can review it under their own session,
   // with no explicit purchaseId/authorLabel needed from the client either.
   it('lets a real buyer review the product after a purchase made with no explicit buyerLabel (#761/#1113)', async () => {
-    const buyer = await signupBuilder('review-eligibility-buyer');
+    const buyer = await signupAdmin('review-eligibility-buyer');
     await createGreenbeltLandletWithArea('review-eligibility-landlet', 1000);
     await claim('review-eligibility-landlet', buyer);
     await createTemplate('review-eligibility-template', { priceCents: 500 });
@@ -369,7 +369,7 @@ describe('Simulated purchases', () => {
     // "Simulated purchases"), so quantity is one of two guards (alongside
     // the rate limit below) against one request minting an arbitrary
     // higgles credit.
-    const seller = await signupBuilder('purchase-quantity-cap-seller');
+    const seller = await signupAdmin('purchase-quantity-cap-seller');
     await createGreenbeltLandletWithArea('purchase-quantity-cap-landlet', 1000);
     await claim('purchase-quantity-cap-landlet', seller);
     await createTemplate('purchase-quantity-cap-template', { priceCents: 1000 });
@@ -391,7 +391,7 @@ describe('Simulated purchases', () => {
   });
 
   it('rejects a total price that exceeds MAX_MONEY_CENTS even when quantity and priceCents each pass their own cap (#521)', async () => {
-    const seller = await signupBuilder('purchase-total-cap-seller');
+    const seller = await signupAdmin('purchase-total-cap-seller');
     await createGreenbeltLandletWithArea('purchase-total-cap-landlet', 1000);
     await claim('purchase-total-cap-landlet', seller);
     // 100_000_000 is MAX_MONEY_CENTS itself — individually valid for priceCents.
@@ -423,7 +423,7 @@ describe('Simulated purchases', () => {
     // keeps this test's bucket from colliding with every other purchase
     // test in this file, which otherwise all share the same "unknown" IP
     // bucket (mirrors the model-upload rate-limit test's own approach).
-    const seller = await signupBuilder('purchase-rate-limit-seller');
+    const seller = await signupAdmin('purchase-rate-limit-seller');
     await createGreenbeltLandletWithArea('purchase-rate-limit-landlet', 1000);
     await claim('purchase-rate-limit-landlet', seller);
     await createTemplate('purchase-rate-limit-template', { priceCents: 1000 });
@@ -450,7 +450,7 @@ describe('Simulated purchases', () => {
     // a burst blow past the limit. Firing every request at once (rather
     // than the sequential loop above, which an unfixed version would also
     // have passed) is what actually exercises that race.
-    const seller = await signupBuilder('purchase-rate-limit-burst-seller');
+    const seller = await signupAdmin('purchase-rate-limit-burst-seller');
     await createGreenbeltLandletWithArea('purchase-rate-limit-burst-landlet', 1000);
     await claim('purchase-rate-limit-burst-landlet', seller);
     await createTemplate('purchase-rate-limit-burst-template', { priceCents: 1000 });
@@ -467,7 +467,7 @@ describe('Simulated purchases', () => {
   }, 45000);
 
   it('computes the 2% commission with a 50/50 split, crediting the builder\'s balance and earnings ledger', async () => {
-    const seller = await signupBuilder('purchase-commission-seller');
+    const seller = await signupAdmin('purchase-commission-seller');
     await createGreenbeltLandletWithArea('purchase-commission-landlet', 1000);
     await claim('purchase-commission-landlet', seller);
     await createTemplate('purchase-commission-template', { priceCents: 10000 }); // $100
@@ -492,7 +492,7 @@ describe('Simulated purchases', () => {
   });
 
   it('applies the 0.5% floor on a low-commission product, without ever pushing the platform share negative', async () => {
-    const seller = await signupBuilder('purchase-floor-seller');
+    const seller = await signupAdmin('purchase-floor-seller');
     await createGreenbeltLandletWithArea('purchase-floor-landlet', 1000);
     await claim('purchase-floor-landlet', seller);
     await createTemplate('purchase-floor-template', { priceCents: 100000 }); // $1000
@@ -518,7 +518,7 @@ describe('Simulated purchases', () => {
   // constraint failed", surfacing as a generic 400 via databaseHttpError
   // instead of the 201 a free sale should return.
   it('completes a purchase of a free (priceCents 0) product without hitting higgles_earnings_events\' zero-amount CHECK constraint', async () => {
-    const seller = await signupBuilder('purchase-free-seller');
+    const seller = await signupAdmin('purchase-free-seller');
     await createGreenbeltLandletWithArea('purchase-free-landlet', 1000);
     await claim('purchase-free-landlet', seller);
     await createTemplate('purchase-free-template', { priceCents: 0 });
@@ -541,7 +541,7 @@ describe('Simulated purchases', () => {
   });
 
   it('lists a builder\'s purchase history via GET /api/purchases', async () => {
-    const seller = await signupBuilder('purchase-list-seller');
+    const seller = await signupAdmin('purchase-list-seller');
     await createGreenbeltLandletWithArea('purchase-list-landlet', 1000);
     await claim('purchase-list-landlet', seller);
     await createTemplate('purchase-list-template', { priceCents: 500 });
@@ -619,7 +619,7 @@ describe('Simulated purchases', () => {
   });
 
   it('refunds a purchase, clawing back exactly the builder\'s commission share (not the full total)', async () => {
-    const seller = await signupBuilder('purchase-refund-seller');
+    const seller = await signupAdmin('purchase-refund-seller');
     await createGreenbeltLandletWithArea('purchase-refund-landlet', 1000);
     await claim('purchase-refund-landlet', seller);
     await createTemplate('purchase-refund-template', { priceCents: 10000 }); // $100
@@ -666,7 +666,7 @@ describe('Simulated purchases', () => {
   });
 
   it('keeps a purchase record (with a nulled builderId) after the hosting builder deletes their account, and still allows a refund', async () => {
-    const seller = await signupBuilder('purchase-builder-deleted-seller');
+    const seller = await signupAdmin('purchase-builder-deleted-seller');
     await createGreenbeltLandletWithArea('purchase-builder-deleted-landlet', 1000);
     await claim('purchase-builder-deleted-landlet', seller);
     await createTemplate('purchase-builder-deleted-template', { priceCents: 4000 });
@@ -724,7 +724,7 @@ describe('Simulated purchases', () => {
   });
 
   it('rejects refunding a purchase with no seller without an admin session', async () => {
-    const seller = await signupBuilder('purchase-refund-no-seller-auth-seller');
+    const seller = await signupAdmin('purchase-refund-no-seller-auth-seller');
     await createGreenbeltLandletWithArea('purchase-refund-no-seller-auth-landlet', 1000);
     await claim('purchase-refund-no-seller-auth-landlet', seller);
     await createTemplate('purchase-refund-no-seller-auth-template', { priceCents: 5000 });
@@ -750,7 +750,7 @@ describe('Simulated purchases', () => {
   it('lets the product\'s own seller refund a purchase, and rejects a different seller', async () => {
     const owningSeller = await signupSeller('purchase-refund-owner-seller');
     const otherSeller = await signupSeller('purchase-refund-other-seller');
-    const builder = await signupBuilder('purchase-refund-owner-builder');
+    const builder = await signupAdmin('purchase-refund-owner-builder');
     await createGreenbeltLandletWithArea('purchase-refund-owner-landlet', 1000);
     await claim('purchase-refund-owner-landlet', builder);
     const created = await api('/catalog', owningSeller.session({
@@ -795,7 +795,7 @@ describe('Simulated purchases', () => {
   // match it — the purchase became permanently un-refundable.
   it('falls back to admin refunding a purchase once the product\'s seller has since deleted their account', async () => {
     const seller = await signupSeller('purchase-refund-deleted-seller');
-    const builder = await signupBuilder('purchase-refund-deleted-seller-builder');
+    const builder = await signupAdmin('purchase-refund-deleted-seller-builder');
     await createGreenbeltLandletWithArea('purchase-refund-deleted-seller-landlet', 1000);
     await claim('purchase-refund-deleted-seller-landlet', builder);
     const created = await api('/catalog', seller.session({
@@ -830,7 +830,7 @@ describe('Simulated purchases', () => {
   it('lets the product\'s own seller list its sales via GET /purchases?templateId=, and rejects a different seller', async () => {
     const owningSeller = await signupSeller('purchase-list-owner-seller');
     const otherSeller = await signupSeller('purchase-list-other-seller');
-    const builder = await signupBuilder('purchase-list-owner-builder');
+    const builder = await signupAdmin('purchase-list-owner-builder');
     await createGreenbeltLandletWithArea('purchase-list-owner-landlet', 1000);
     await claim('purchase-list-owner-landlet', builder);
     const created = await api('/catalog', owningSeller.session({
@@ -868,7 +868,7 @@ describe('Simulated purchases', () => {
   // product's sales-history view.
   it('falls back to admin listing a product\'s sales once its seller has since deleted their account', async () => {
     const seller = await signupSeller('purchase-list-deleted-seller');
-    const builder = await signupBuilder('purchase-list-deleted-seller-builder');
+    const builder = await signupAdmin('purchase-list-deleted-seller-builder');
     await createGreenbeltLandletWithArea('purchase-list-deleted-seller-landlet', 1000);
     await claim('purchase-list-deleted-seller-landlet', builder);
     const created = await api('/catalog', seller.session({
@@ -908,7 +908,7 @@ describe('Simulated purchases', () => {
   // floor-guard here (see git history) that this test reverts: the
   // clawback is unconditional again and genuinely allowed to go negative.
   it('lets the clawback push a builder\'s higgles balance negative — there is no floor on a refund', async () => {
-    const seller = await signupBuilder('purchase-refund-negative-seller');
+    const seller = await signupAdmin('purchase-refund-negative-seller');
     await createGreenbeltLandletWithArea('purchase-refund-negative-landlet', 1000);
     await claim('purchase-refund-negative-landlet', seller);
     await createTemplate('purchase-refund-negative-template', { priceCents: 10000 });
@@ -925,7 +925,7 @@ describe('Simulated purchases', () => {
   });
 
   it('respects a seller\'s no-returns policy, rejecting the refund', async () => {
-    const seller = await signupBuilder('purchase-no-returns-seller');
+    const seller = await signupAdmin('purchase-no-returns-seller');
     await createGreenbeltLandletWithArea('purchase-no-returns-landlet', 1000);
     await claim('purchase-no-returns-landlet', seller);
     await createTemplate('purchase-no-returns-template', { priceCents: 500, metadata: { noReturns: true } });
@@ -960,7 +960,7 @@ describe('Simulated purchases', () => {
   describe('Real-money checkout (#453)', () => {
     it('still uses the simulated purchase path when Stripe is not configured, even for a fully connected seller', async () => {
       const seller = await signupSeller('checkout-fallback-seller');
-      const builder = await signupBuilder('checkout-fallback-builder');
+      const builder = await signupAdmin('checkout-fallback-builder');
       await createGreenbeltLandletWithArea('checkout-fallback-landlet', 1000);
       await claim('checkout-fallback-landlet', builder);
       const created = await api('/catalog', seller.session({
@@ -1007,7 +1007,7 @@ describe('Simulated purchases', () => {
     });
 
     it('is idempotent for an already-finalized paymentIntentId, entirely without needing Stripe configured', async () => {
-      const seller = await signupBuilder('checkout-idempotent-seller');
+      const seller = await signupAdmin('checkout-idempotent-seller');
       await createGreenbeltLandletWithArea('checkout-idempotent-landlet', 1000);
       await claim('checkout-idempotent-landlet', seller);
       await createTemplate('checkout-idempotent-template', { priceCents: 2000 });
@@ -1103,7 +1103,7 @@ describe('Simulated purchases', () => {
   // share must stay untouched until it does.
   describe('Real-money refunds (#348)', () => {
     it('leaves the purchase unrefunded and the builder\'s balance untouched when Stripe is not configured', async () => {
-      const seller = await signupBuilder('real-refund-seller');
+      const seller = await signupAdmin('real-refund-seller');
       await createGreenbeltLandletWithArea('real-refund-landlet', 1000);
       await claim('real-refund-landlet', seller);
       await createTemplate('real-refund-template', { priceCents: 8000 });
@@ -1178,7 +1178,7 @@ describe('Simulated purchases', () => {
   describe('Seller deletion (#732)', () => {
     it('rejects deleting a seller with an unpaid real-money purchase, and allows it again once paid out', async () => {
       const seller = await signupSeller('unpaid-payout-delete-seller');
-      const builder = await signupBuilder('unpaid-payout-delete-builder');
+      const builder = await signupAdmin('unpaid-payout-delete-builder');
       await createGreenbeltLandletWithArea('unpaid-payout-delete-landlet', 1000);
       await claim('unpaid-payout-delete-landlet', builder);
       const created = await api('/catalog', seller.session({
@@ -1234,7 +1234,7 @@ describe('Simulated purchases', () => {
     // payout endpoint.
     it('rejects deleting a seller whose purchase is claimed for payout but not yet Stripe-confirmed', async () => {
       const seller = await signupSeller('inflight-payout-delete-seller');
-      const builder = await signupBuilder('inflight-payout-delete-builder');
+      const builder = await signupAdmin('inflight-payout-delete-builder');
       await createGreenbeltLandletWithArea('inflight-payout-delete-landlet', 1000);
       await claim('inflight-payout-delete-landlet', builder);
       const created = await api('/catalog', seller.session({
@@ -1276,7 +1276,7 @@ describe('Simulated purchases', () => {
 
     it('still allows deleting a seller whose only purchase is a simulated (no payment_intent_id) sale', async () => {
       const seller = await signupSeller('sim-sale-deletable-seller');
-      const builder = await signupBuilder('sim-sale-deletable-builder');
+      const builder = await signupAdmin('sim-sale-deletable-builder');
       await createGreenbeltLandletWithArea('sim-sale-deletable-landlet', 1000);
       await claim('sim-sale-deletable-landlet', builder);
       const created = await api('/catalog', seller.session({

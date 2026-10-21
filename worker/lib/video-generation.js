@@ -4,24 +4,18 @@
 // handlers plus every helper exclusively used by them. Extracted
 // verbatim, zero behavior change.
 //
-// Deliberately NOT included here: requireSessionBuilder -- it's the
-// builder-profile domain's own auth-chain internal (#2535), genuinely
-// shared across dozens of handlers well beyond this file, not yet
-// extracted itself (blocked on #2543, see worker/lib/auth.js's own
-// comment on why) -- so it stays in worker/index.js and is imported back
-// below, the same shape worker/lib/builder-profile.js's own comment
-// documents for its own templateFromRow/recomputeLandCap imports (#2535).
-// Likewise MAX_MODEL_BYTES/formatBytes/validateGlb/getStorageUsage/
+// requireSessionBuilder now lives in worker/lib/auth.js (#2543/#2528).
+// MAX_MODEL_BYTES/formatBytes/validateGlb/getStorageUsage/
 // reserveStorageBudget/hasValidImageSignature are the shared model-upload
 // infrastructure handleModelUpload (worker/index.js) also depends on, not
-// video-generation-specific.
+// video-generation-specific -- still imported back from there below.
 import { json, HttpError } from './http.js';
 import { timingSafeEqual, bytesToHex } from './crypto.js';
 import { checkRateLimit } from './rate-limit.js';
-import { assertOwner } from './auth.js';
+import { assertOwner, requireSessionBuilder } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
 import {
-  requireSessionBuilder, formatBytes, validateGlb, getStorageUsage, reserveStorageBudget, hasValidImageSignature,
+  formatBytes, validateGlb, getStorageUsage, reserveStorageBudget, hasValidImageSignature,
 } from '../index.js';
 
 // #1978: workerd requires every named export of the main Worker entry

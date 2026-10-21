@@ -163,7 +163,13 @@ console.log('direct search result (should match the rotated expected target):', 
 // reasoning as the altitude test's own real-vs-simulated-time comment:
 // SHOP_IDLE_DELAY_S (3s) of simulated time isn't guaranteed to elapse
 // within exactly 3s of real time under a throttled/loaded CI run.
-await page.waitForFunction(() => window.__testShopIdleInteractionTarget() !== null, { timeout: 15000 });
+// #2598: waitForFunction's signature is (pageFunction, arg, options) --
+// this 2-arg call put { timeout: 15000 } in the arg slot instead, so the
+// real applied timeout was always Playwright's own default (30000ms),
+// not 15000ms -- and even the intended 15000ms wasn't enough margin
+// under current CI load. The explicit `null` arg reaches the options
+// slot, and the timeout is widened for real headroom.
+await page.waitForFunction(() => window.__testShopIdleInteractionTarget() !== null, null, { timeout: 60000 });
 const idleEpisodeTarget = await page.evaluate(() => window.__testShopIdleInteractionTarget());
 console.log('target cached for this idle episode (should match the rotated expected target):', idleEpisodeTarget);
 

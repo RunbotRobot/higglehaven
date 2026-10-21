@@ -6,7 +6,7 @@
 // (#2014) the two real generators that now consult it.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { isNearWaterCell } from './index.js';
+import { isNearWaterCell } from './lib/world-generation.js';
 import { generateLandletRing } from './landGenerator.js';
 import { generateOrganicMosaic } from './organicLandGenerator.js';
 import { pointInPolygon } from './geometry.js';

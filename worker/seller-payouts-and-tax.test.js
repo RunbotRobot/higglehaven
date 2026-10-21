@@ -6,7 +6,7 @@ import {
   claimPurchasesForPayout, sellerPayoutIdempotencyKey, claimOrResumeSellerPayout, selectPurchasesForPayout,
 } from './index.js';
 import {
-  api, signupBuilder, signupSeller, signupAdmin,
+  api, grantAdminTo, signupBuilder, signupSeller, signupAdmin,
 } from './test-helpers.js';
 
 let adminSession;
@@ -90,6 +90,10 @@ describe('Seller payouts (#454)', () => {
   // this is what /instances/:id/purchase actually does), then directly
   // set the columns a real #453 finalize would have written.
   async function makeRealMoneyPurchase(builder, seller, { isDigitalGood = false, deliveryConfirmToken } = {}) {
+    // #653: the simulated path below is now admin-only — every caller of
+    // this helper passes a plain signupBuilder account as the buyer, so
+    // promote it in place here once rather than touching every call site.
+    await grantAdminTo(builder);
     const suffix = crypto.randomUUID().slice(0, 8);
     const landletId = `payout-landlet-${suffix}`;
     const templateId = `payout-template-${suffix}`;
@@ -367,7 +371,7 @@ describe('Seller payouts (#454)', () => {
     // A separate builder claims this one: `builder` above already holds
     // its own claimed landlet from makeRealMoneyPurchase, and a builder
     // can only ever hold one claimed landlet at a time.
-    const secondBuilder = await signupBuilder('payout-mark-shipped-reject-builder-2');
+    const secondBuilder = await signupAdmin('payout-mark-shipped-reject-builder-2');
     await createGreenbeltLandletWithArea('payout-simulated-landlet', 1000);
     await claim('payout-simulated-landlet', secondBuilder);
     const simTemplate = await api('/catalog', seller.session({
@@ -605,7 +609,7 @@ describe('Seller payouts (#454)', () => {
   // winning refund completes fully via the higgles-only clawback path
   // instead of hitting this suite's deliberately-unconfigured Stripe.
   it('a refund racing a concurrent payout claim never lets both land on the same purchase', async () => {
-    const seller = await signupBuilder('refund-payout-race-seller');
+    const seller = await signupAdmin('refund-payout-race-seller');
     await createGreenbeltLandletWithArea('refund-payout-race-landlet', 1000);
     await claim('refund-payout-race-landlet', seller);
     await createTemplate('refund-payout-race-template', { priceCents: 10000 });
@@ -654,7 +658,7 @@ describe('Seller payouts (#454)', () => {
   // row and claimed (and would have paid out) a purchase already
   // refunded out from under it.
   it('never claims a purchase using a caller-held row that went stale (refunded) after being read', async () => {
-    const seller = await signupBuilder('refund-payout-stale-seller');
+    const seller = await signupAdmin('refund-payout-stale-seller');
     await createGreenbeltLandletWithArea('refund-payout-stale-landlet', 1000);
     await claim('refund-payout-stale-landlet', seller);
     await createTemplate('refund-payout-stale-template', { priceCents: 10000 });
@@ -819,7 +823,7 @@ describe('Seller payouts (#454)', () => {
     });
 
     it('counts higgles commission income earned as a builder', async () => {
-      const builder = await signupBuilder('tax-summary-builder');
+      const builder = await signupAdmin('tax-summary-builder');
       const seller = await signupSeller('tax-summary-builder-seller');
       const landletId = 'tax-summary-builder-landlet';
       const templateId = 'tax-summary-builder-template';
