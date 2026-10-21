@@ -9,7 +9,7 @@
 // separate file), since this sweep never calls out to Tripo at all.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { expireStaleVideoGenerationJobs } from './index.js';
+import { expireStaleVideoGenerationJobs } from './lib/video-generation.js';
 import { signupBuilder } from './test-helpers.js';
 
 beforeAll(async () => {

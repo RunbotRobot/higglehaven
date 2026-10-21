@@ -1,6 +1,7 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { cleanupUnreferencedModels, reserveVideoGenerationJob, videoGenerationReservationStillUsable } from './index.js';
+import { cleanupUnreferencedModels } from './index.js';
+import { reserveVideoGenerationJob, videoGenerationReservationStillUsable } from './lib/video-generation.js';
 import { api, signupBuilder } from './test-helpers.js';
 
 // Own file (own D1/worker isolate — see test-helpers.js's own comment on
