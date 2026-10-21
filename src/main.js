@@ -161,44 +161,24 @@ import {
   relativeCurvatureDropM,
 } from '../worker/earthCurvature.js';
 
-// The API (worker/index.js + D1) is authoritative when reachable; the
-// catalog.js constants above are only used if fetching it fails. This is
-// reassigned once, in bootstrap() below, before anything reads it — every
-// other reference to the catalog goes through this variable rather than
-// FALLBACK_CATALOG directly.
-let activeCatalog = FALLBACK_CATALOG;
+// #2551: activeCatalog/myBundles/communityBundles/builderId/currentLandletId/
+// sellerId/currentMode and the LANDLET_* consts now live in
+// src/world/state.js (see that module's own comments for why each one is
+// shaped the way it is) — every other extracted module under #2504 needs to
+// read at least one of them. Writes go through the paired setter functions
+// (an ES import binding is read-only from this side).
+import {
+  activeCatalog, setActiveCatalog,
+  myBundles, setMyBundles,
+  communityBundles, setCommunityBundles,
+  builderId, setBuilderId,
+  currentLandletId, setCurrentLandletId,
+  sellerId, setSellerId,
+  currentMode, setCurrentMode,
+  LANDLET_AREA_M2, LANDLET_SIDE_M, LANDLET_HEIGHT_M,
+} from './world/state.js';
 
-// Saved groups a builder can stamp down again together (see migrations/
-// 0039_bundles.sql) — fetched once builderId is settled in bootstrap() and
-// refreshed after any save/delete. Empty (rather than falling back to
-// something local) when the backend's unreachable — a bundle only makes
-// sense as something durable across sessions/landlets, so there's no
-// offline equivalent worth keeping, unlike activeCatalog's FALLBACK_CATALOG.
-let myBundles = [];
-// Every builder's opted-in shared bundles (see migrations/0040_bundle_sharing.sql)
-// — a separate list from myBundles, not a filtered view of it, fetched
-// alongside it in bootstrap() so the picker's section can show/hide
-// correctly based on either tab having something before a builder ever
-// switches to the Community tab.
-let communityBundles = [];
 let activeBundleTab = 'mine';
-
-// Resolved from the logged-in account's own builder profile (see
-// ensureBuilderIdentity, docs/API.md's "Authentication") once, in
-// bootstrap(), before anything reads it; every instance created afterward
-// is tagged with it so builders only ever see and edit their own
-// landlet's placed products. currentLandletId is settled alongside it.
-let builderId = null;
-let currentLandletId = 'starter-landlet';
-
-// A seller identity is a genuinely separate roster from builders (see
-// worker/index.js's /api/sellers and docs/API.md's "Sellers" section) —
-// catalog_templates.seller_id is tagged with this, not builderId, so
-// "my products" means "products this seller identity uploaded," not
-// "products this builder identity uploaded." Settled lazily, only once
-// Sell mode is actually reached (see ensureSellerIdentity below), unlike
-// builderId which bootstrap() always resolves up front.
-let sellerId = null;
 
 // Shop, Build, and Sell are the three peer top-level views (#mode-nav in
 // index.html) — genuine currentMode values now (#540 gave Sell the real
@@ -226,7 +206,6 @@ const PREVIEW_SAVED_LAYOUT_ID_KEY = 'higglehaven.previewSavedLayoutId';
 // resolveLandletId's own comment) owned landlets this way, since bootstrap()
 // is the only place Build mode ever loads a landlet from.
 const BUILD_TARGET_LANDLET_ID_KEY = 'higglehaven.buildTargetLandletId';
-let currentMode = 'shop';
 
 // Declared here (rather than alongside the rest of Shop mode, much further
 // down) because animate() below reads it on every frame starting from its
@@ -234,22 +213,6 @@ let currentMode = 'shop';
 // that point would be in its temporal dead zone the first time animate()
 // runs, throwing before the app ever renders a frame.
 let shopActive = false;
-
-// Naming convention (see docs/SPEC.md): plain "a" internally — "landlet", not "lándlet".
-// A standard landlet is exactly 1000 m^2. Square footprint for this first pass:
-// side length = sqrt(area), giving an edge just over 31.6 meters.
-const LANDLET_AREA_M2 = 1000;
-const LANDLET_SIDE_M = Math.sqrt(LANDLET_AREA_M2);
-// Buildable volume: one level (10m, per spec §3) straight up from whichever
-// level's own floor is currently in view. No longer the flat-plane/plain-
-// cuboid placeholder this comment used to describe — the ground itself is
-// curved (curveGroundGeometry, issues #133/#135) and clampToLandlet (below)
-// already widens/narrows the X/Y footprint per height via
-// footprintScaleAtHeight, matching the spec's actual cone-shaped volume
-// (issue #136). LANDLET_HEIGHT_M just fixes each level's own Z-slab height;
-// see clampToLandlet's own comment for how the cross-section at that height
-// gets corrected.
-const LANDLET_HEIGHT_M = 10;
 
 // Vertical construction (issue #167/#168/#169): the current lándlet's own
 // ground-level area (needed to preview a level's cap cost client-side
@@ -2866,8 +2829,8 @@ function renderBundlePicker() {
           // divergence risk, keeps both tabs' copies in sync.
           const [freshMine, freshShared] = await Promise.all([fetchBundles(), fetchSharedBundles()]);
           if (myLoadToken !== bundlePickerLoadToken) return; // superseded while loading — a newer rename/share-toggle owns the picker now
-          myBundles = freshMine;
-          communityBundles = freshShared;
+          setMyBundles(freshMine);
+          setCommunityBundles(freshShared);
           renderBundlePicker();
         } catch (err) {
           alert(err.message || 'Could not rename this bundle.');
@@ -2901,8 +2864,8 @@ function renderBundlePicker() {
           // tab's membership.
           const [freshMine, freshShared] = await Promise.all([fetchBundles(), fetchSharedBundles()]);
           if (myLoadToken !== bundlePickerLoadToken) return; // superseded while loading — a newer rename/share-toggle owns the picker now
-          myBundles = freshMine;
-          communityBundles = freshShared;
+          setMyBundles(freshMine);
+          setCommunityBundles(freshShared);
           renderBundlePicker();
         } catch (err) {
           alert(err.message || 'Could not update this bundle\'s sharing.');
@@ -2928,8 +2891,8 @@ function renderBundlePicker() {
         try {
           await deleteBundle(bundle.bundleId);
           if (myLoadToken !== bundlePickerLoadToken) return; // superseded while loading — a newer rename/share-toggle owns the picker now
-          myBundles = myBundles.filter((b) => b.bundleId !== bundle.bundleId);
-          communityBundles = communityBundles.filter((b) => b.bundleId !== bundle.bundleId);
+          setMyBundles(myBundles.filter((b) => b.bundleId !== bundle.bundleId));
+          setCommunityBundles(communityBundles.filter((b) => b.bundleId !== bundle.bundleId));
           renderBundlePicker();
         } catch (err) {
           alert(err.message || 'Could not delete this bundle.');
@@ -5071,7 +5034,7 @@ function renderSellerList() {
       deleteBtn.disabled = true;
       try {
         await deleteCatalogTemplate(template.templateId);
-        activeCatalog = activeCatalog.filter((t) => t.templateId !== template.templateId);
+        setActiveCatalog(activeCatalog.filter((t) => t.templateId !== template.templateId));
         buildCatalogPickerButtons();
         refreshSellerShowcase();
         // #1342: same fix as Duplicate's own handler above -- renderActiveSellerView()
@@ -6627,7 +6590,7 @@ async function renderLandCapField() {
   // session, silently establish it the same way (requireLogin's own
   // `if (currentAuthUser) return currentAuthUser` means this never pops a
   // login prompt) instead of just leaving this whole field missing.
-  if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
+  if (!builderId && currentAuthUser) setBuilderId(await ensureBuilderIdentity());
   // #905: a tab switch (or modal reopen) during that await already tore
   // down and rebuilt settingsSectionEl for a different tab — appending
   // below would land this field there instead of silently vanishing with
@@ -6817,7 +6780,7 @@ async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, d
 // avoid touching that already-working, real-money-adjacent flow.
 async function renderRedeemHigglesField() {
   const myToken = settingsRenderToken;
-  if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
+  if (!builderId && currentAuthUser) setBuilderId(await ensureBuilderIdentity());
   // #905: see renderLandCapField's own comment — a tab switch/modal reopen
   // during that await already tore down settingsSectionEl for a different
   // tab, so this real-money redemption form must not land there.
@@ -7035,7 +6998,7 @@ function renderBuilderIdentityField() {
     // next full renderSettingsSection() redraw this same Reset Profile
     // triggers would otherwise still query the old, just-released landlet
     // and get a real 403 back.
-    onDeleted: () => { builderId = null; currentLandletId = null; },
+    onDeleted: () => { setBuilderId(null); setCurrentLandletId(null); },
     // #741: keep Shop mode's own "Built by X" attribution (populated once
     // in enterShopMode) from showing a stale pre-rename label for the rest
     // of this session.
@@ -7056,7 +7019,7 @@ function renderSellerIdentityField() {
     // this warning doesn't need to (and can't) disclose an amount at risk
     // the way renderBuilderIdentityField's higgles-balance warning does.
     deleteWarning: 'Reset your seller profile? This cannot be undone. Your login stays active either way; use Delete Account under Account above to delete that too.',
-    onDeleted: () => { sellerId = null; },
+    onDeleted: () => { setSellerId(null); },
   });
 }
 
@@ -7716,7 +7679,7 @@ async function renderAuctionSection() {
   // Establish it silently (no login prompt, since requireLogin short-
   // circuits on an existing currentAuthUser) rather than showing a
   // "choose an identity" dead end to someone who already has one.
-  if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
+  if (!builderId && currentAuthUser) setBuilderId(await ensureBuilderIdentity());
   // #905: see renderLandCapField's own comment — a tab switch/modal reopen
   // during that await already tore down settingsSectionEl for a different
   // tab, so this section (with a live "Start Auction" button) must not
@@ -8153,7 +8116,7 @@ async function renderAuctionSection() {
 // keystroke.
 async function renderLowStockSection() {
   const myToken = settingsRenderToken;
-  if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
+  if (!builderId && currentAuthUser) setBuilderId(await ensureBuilderIdentity());
   if (myToken !== settingsRenderToken) return;
   if (!builderId) {
     const note = document.createElement('div');
@@ -11400,7 +11363,7 @@ async function ensureBuilderIdentity() {
       user = await requireVerification(user);
       if (!user) return null;
       const builder = await fetchMyBuilder();
-      builderId = builder.builderId;
+      setBuilderId(builder.builderId);
       return builderId;
     })();
   }
@@ -11419,7 +11382,7 @@ async function ensureSellerIdentity() {
       user = await requireVerification(user);
       if (!user) return null;
       const seller = await fetchMySeller();
-      sellerId = seller.sellerId;
+      setSellerId(seller.sellerId);
       return sellerId;
     })();
   }
@@ -12808,8 +12771,8 @@ authVerifyIdBtn.addEventListener('click', async () => {
 // Products" listing).
 function resetLocalSessionState() {
   currentAuthUser = null;
-  builderId = null;
-  sellerId = null;
+  setBuilderId(null);
+  setSellerId(null);
   builderIdentityFlowPromise = null;
   sellerIdentityFlowPromise = null;
 }
@@ -18245,9 +18208,9 @@ async function enterShopMode() {
   soldOutMarkers = [];
 
   try {
-    activeCatalog = await fetchCatalog();
+    setActiveCatalog(await fetchCatalog());
   } catch {
-    activeCatalog = FALLBACK_CATALOG;
+    setActiveCatalog(FALLBACK_CATALOG);
   }
 
   // #681: which custom avatar (if any) this account has equipped — never
@@ -18990,11 +18953,11 @@ async function enterLayoutPreviewMode() {
   rotateControls.detach();
   controls.enabled = false;
 
-  builderId = await ensureBuilderIdentity();
+  setBuilderId(await ensureBuilderIdentity());
   if (!builderId) {
     // N44: lands on showShopAccessGate's shared end state, not a full
     // enterShopMode() call — see that function's own comment for why.
-    currentMode = 'shop';
+    setCurrentMode('shop');
     updateModeNavUI();
     showShopAccessGate();
     return;
@@ -19012,7 +18975,9 @@ async function enterLayoutPreviewMode() {
 
   let layout;
   try {
-    [activeCatalog, layout] = await Promise.all([fetchCatalog(), fetchSavedLayout(savedLayoutId)]);
+    const [catalog, loadedLayout] = await Promise.all([fetchCatalog(), fetchSavedLayout(savedLayoutId)]);
+    setActiveCatalog(catalog);
+    layout = loadedLayout;
   } catch (err) {
     layoutPreviewNameEl.textContent = err.message || 'Could not load this saved layout.';
     return;
@@ -19114,7 +19079,7 @@ async function enterSellMode() {
     // fallback just below). Nothing left to show here. N44: lands on
     // showShopAccessGate's shared end state, not a full enterShopMode()
     // call — see that function's own comment for why.
-    currentMode = 'shop';
+    setCurrentMode('shop');
     updateModeNavUI();
     showShopAccessGate();
     return;
@@ -19130,15 +19095,15 @@ async function enterSellMode() {
   // profile the same way visiting Build mode for the first time would —
   // the natural cost of this app's "every account can hold both roles"
   // model, not a new one Sell mode introduces on its own.
-  builderId = await ensureBuilderIdentity();
+  setBuilderId(await ensureBuilderIdentity());
   refreshNotificationsBadge();
   refreshFriendsBadge();
   refreshDmBadge();
 
   try {
-    activeCatalog = await fetchCatalog();
+    setActiveCatalog(await fetchCatalog());
   } catch {
-    activeCatalog = FALLBACK_CATALOG;
+    setActiveCatalog(FALLBACK_CATALOG);
   }
   sellerShowcasePages = computeSellerShowcasePages(myProducts());
 
@@ -19816,7 +19781,7 @@ async function bootstrap() {
     ? requestedStartMode : 'shop';
 
   if (startMode === 'shop') {
-    currentMode = 'shop';
+    setCurrentMode('shop');
     updateModeNavUI();
     await enterShopMode();
     return;
@@ -19832,7 +19797,7 @@ async function bootstrap() {
   await authInitPromise;
 
   if (startMode === 'sell') {
-    currentMode = 'sell';
+    setCurrentMode('sell');
     updateModeNavUI();
     await enterSellMode();
     return;
@@ -19843,20 +19808,20 @@ async function bootstrap() {
   // so updateModeNavUI() below is a harmless no-op (no nav button's
   // data-mode ever equals 'layoutPreview').
   if (startMode === 'layoutPreview') {
-    currentMode = 'layoutPreview';
+    setCurrentMode('layoutPreview');
     updateModeNavUI();
     await enterLayoutPreviewMode();
     return;
   }
 
-  currentMode = 'build';
+  setCurrentMode('build');
   updateModeNavUI();
   // #1831: fetchCatalog needs no builderId (unlike resolveLandletId just
   // below, which filters by it) -- firing it alongside ensureBuilderIdentity
   // rather than after overlaps that round trip with this one instead of
   // paying for both in serial.
   const catalogPromise = fetchCatalog();
-  builderId = await ensureBuilderIdentity();
+  setBuilderId(await ensureBuilderIdentity());
   if (!builderId) {
     // Declined to log in (closed #auth-modal without signing in/up) —
     // Build/Sell both require a real account now (docs/API.md's
@@ -19864,7 +19829,7 @@ async function bootstrap() {
     // on showShopAccessGate's shared end state, not a full enterShopMode()
     // call — see that function's own comment for why.
     catalogPromise.catch(() => {}); // abandoning it here -- avoid an unhandled-rejection warning if it fails
-    currentMode = 'shop';
+    setCurrentMode('shop');
     updateModeNavUI();
     showShopAccessGate();
     return;
@@ -19874,15 +19839,15 @@ async function bootstrap() {
   refreshDmBadge();
   let instances;
   try {
-    currentLandletId = await resolveLandletId();
+    setCurrentLandletId(await resolveLandletId());
     const [catalog, remoteInstances, landletRecord, levels] = await Promise.all([
       catalogPromise, fetchInstances(currentLandletId), fetchLandlet(currentLandletId),
       fetchLandletLevels(currentLandletId),
     ]);
-    activeCatalog = catalog;
+    setActiveCatalog(catalog);
     instances = remoteInstances;
-    myBundles = [];
-    communityBundles = [];
+    setMyBundles([]);
+    setCommunityBundles([]);
     applyLandletShape(landletRecord);
     currentLandletAreaM2 = landletRecord.areaM2;
     currentLandletLevels = levels;
@@ -19908,17 +19873,17 @@ async function bootstrap() {
     Promise.all([fetchBundles(), fetchSharedBundles()])
       .then(([bundles, shared]) => {
         if (bundlesLoadToken !== bundlePickerLoadToken) return; // superseded while loading -- a newer bundle-picker action owns the picker now
-        myBundles = bundles;
-        communityBundles = shared;
+        setMyBundles(bundles);
+        setCommunityBundles(shared);
         renderBundlePicker();
       })
       .catch((err) => console.warn('Could not load bundles:', err));
   } catch (err) {
     console.warn('Backend unreachable, falling back to local/placeholder data:', err);
-    activeCatalog = FALLBACK_CATALOG;
-    myBundles = [];
-    communityBundles = [];
-    currentLandletId = 'starter-landlet';
+    setActiveCatalog(FALLBACK_CATALOG);
+    setMyBundles([]);
+    setCommunityBundles([]);
+    setCurrentLandletId('starter-landlet');
     currentLandletAreaM2 = LANDLET_AREA_M2;
     currentLandletLevels = [];
     currentLevelIndex = 0;
