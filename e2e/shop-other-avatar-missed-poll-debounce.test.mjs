@@ -120,7 +120,24 @@ console.log('B as seen by A after exactly ONE missed poll (should still be prese
 while (missesServed < 2) {
   await pageA.waitForTimeout(50);
 }
-await pageA.waitForTimeout(400);
+// #2567: a fixed 400ms margin here was too tight under CI load for
+// pollNearbyPresenceIfNeeded to actually finish processing the second miss
+// (the route handler fulfilling, the fetch resolving, the despawn loop
+// running) before the snapshot below was taken -- polling for the real
+// end state instead, same page.waitForFunction idiom
+// e2e/upload-video-generation-entry-point.test.mjs uses for its own
+// analogous race (#2521/#2524). Swallowing a timeout here rather than
+// letting it throw: if the despawn genuinely never happens (a real product
+// regression, not a timing issue), afterTwoMisses below still shows B
+// present and the pass check below fails with that diagnostic, instead of
+// an unhandled Playwright exception.
+await pageA
+  .waitForFunction(
+    (builderId) => !(window.__shopOtherAvatars ?? []).some((a) => a.builderId === builderId),
+    builderB.builderId,
+    { timeout: 10000 },
+  )
+  .catch(() => {});
 const afterTwoMisses = await pageA.evaluate(() => window.__shopOtherAvatars);
 const bEntryAfterTwoMisses = afterTwoMisses?.find((a) => a.builderId === builderB.builderId);
 console.log('B as seen by A after TWO CONSECUTIVE missed polls (should now be despawned):', bEntryAfterTwoMisses);
