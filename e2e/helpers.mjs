@@ -464,13 +464,32 @@ export async function clearVerifyModalIfShown(page) {
 // facing button click), tries a handful of candidate points until one
 // reads "Available," and confirms.
 export async function claimLandlet(page) {
-  await page.waitForSelector('#claim-modal.visible', { timeout: 10000 });
-  await page.waitForTimeout(2000);
+  // #2582: '#claim-modal.visible' appearing is gated behind
+  // resolveLandletId's own fetchLandlets() round trip (src/main.js) --
+  // that request starts before this helper ever runs and isn't anything a
+  // click here triggers, same already-in-flight-or-already-resolved shape
+  // #2544 hit for the verify modal. Playwright's selector wait already
+  // polls for the real end state here (no click()-actionability trap like
+  // #2544's), so the fix is simply widening the margin to match comparable
+  // modal-open waits elsewhere in this file (e.g. the account-menu-modal
+  // wait at 60000ms) instead of re-escalating a tighter one yet again.
+  await page.waitForSelector('#claim-modal.visible', { timeout: 60000 });
+  // loadLandletMap's own real cost (fetchWorld + two fetchAllLandlets calls,
+  // then building the flyover scene -- src/claim/flow.js) was hidden behind
+  // a flat 2000ms sleep here. #claim-status starts as the synchronous
+  // 'Loading the world…' placeholder loadLandletMap itself sets before any
+  // of that work begins, and only changes once it actually finishes -- poll
+  // for that transition directly instead of guessing how long it takes.
+  const claimMapLoaded = () => page.waitForFunction(
+    () => document.getElementById('claim-status').textContent !== 'Loading the world…',
+    { timeout: 60000 },
+  );
+  await claimMapLoaded();
   const status = await page.textContent('#claim-status');
   if (status?.includes('check back again shortly')) {
     await growWorldAsAdmin();
     await page.click('#claim-refresh-btn');
-    await page.waitForTimeout(2000);
+    await claimMapLoaded();
   }
   const canvasBox = await page.locator('#claim-map-canvas').boundingBox();
   const candidatePoints = [[0.5, 0.5], [0.4, 0.4], [0.4, 0.3], [0.5, 0.3], [0.2, 0.4], [0.1, 0.4]];
@@ -480,14 +499,30 @@ export async function claimLandlet(page) {
     const selection = await page.textContent('#claim-selection-name');
     if (selection && selection.includes('Available')) break;
   }
-  await page.click('#claim-confirm-btn');
+  // #2582: unlike the modal-open wait above, this click is what fires the
+  // real request (claimConfirmBtn's own onclick -> claimSelectedLandlet ->
+  // POST /landlets/:id/claim), so pairing page.waitForResponse with the
+  // click itself is safe here -- same #2400/chooseIdentity pattern, no race
+  // on an already-in-flight request.
+  const [claimResponse] = await Promise.all([
+    page.waitForResponse(
+      (response) => response.request().method() === 'POST' && /\/api\/landlets\/[^/]+\/claim$/.test(new URL(response.url()).pathname),
+      { timeout: 60000 },
+    ),
+    page.click('#claim-confirm-btn'),
+  ]);
+  if (!claimResponse.ok()) {
+    throw new Error(`claimLandlet: POST .../claim failed with HTTP ${claimResponse.status()}`);
+  }
   // #1368: #account-menu-toggle is unconditionally present/visible in
   // #topbar-left from the moment the page loads -- #claim-modal only dims
   // it visually with a higher z-index overlay, which Playwright's default
   // "visible" check doesn't account for. Waiting for it here never actually
   // verified the claim succeeded. #claim-modal:not(.visible) (same pattern
   // as #auth-modal/#verify-modal above) is the real "did the modal close"
-  // signal.
+  // signal -- short margin is enough now that the response above already
+  // absorbed the real network cost, leaving only the synchronous
+  // disposeClaimFlyover()/class-removal that follows it.
   await page.waitForSelector('#claim-modal:not(.visible)', { state: 'attached', timeout: 10000 });
 }
 
