@@ -177,6 +177,16 @@ import {
   currentMode, setCurrentMode,
   LANDLET_AREA_M2, LANDLET_SIDE_M, LANDLET_HEIGHT_M,
 } from './world/state.js';
+// #2552: scene/camera/renderer/canvas and the shared animate()/
+// updateCompassNeedle/onResize loop now live in src/world/scene.js (see
+// that module's own comments) — registerModeFrameUpdate/registerFacing
+// Override are each mode's own hook into that now-shared loop (see
+// enterShopMode/enterSellMode/enterLayoutPreviewMode/bootstrap's own
+// calls to them, and buildModeFrameUpdate's own comment below).
+import {
+  scene, camera, renderer, canvas,
+  registerModeFrameUpdate, registerFacingOverride,
+} from './world/scene.js';
 
 // #2564: the mandatory first-claim flow (runClaimFlow, its own flyover-map
 // scene, and the plot pick/confirm handlers) now lives in src/claim/flow.js
@@ -221,10 +231,12 @@ const PREVIEW_SAVED_LAYOUT_ID_KEY = 'higglehaven.previewSavedLayoutId';
 const BUILD_TARGET_LANDLET_ID_KEY = 'higglehaven.buildTargetLandletId';
 
 // Declared here (rather than alongside the rest of Shop mode, much further
-// down) because animate() below reads it on every frame starting from its
-// very first, synchronous call at module load — a `let` declared after
-// that point would be in its temporal dead zone the first time animate()
-// runs, throwing before the app ever renders a frame.
+// down) because several Shop-specific pointer/keyboard event handlers
+// declared well before the rest of Shop mode's own state gate on it — a
+// `let` declared after those would be in its temporal dead zone the first
+// time one of them ran. (#2552: animate() itself moved to world/scene.js
+// and no longer reads this directly — see registerModeFrameUpdate's own
+// comment — but plenty else in this file still does.)
 let shopActive = false;
 
 // Vertical construction (issue #167/#168/#169): the current lándlet's own
@@ -264,38 +276,10 @@ function levelLabel(levelIndex) {
   return levelIndex > 0 ? `Level +${levelIndex}` : `Level ${levelIndex}`;
 }
 
-const canvas = document.getElementById('app');
-
 // Shown in Settings' General tab (renderGeneralSettingsSection) rather than
 // an always-on-screen HUD overlay — decluttering the main view, now that
 // it's the only way to read/copy exactly which commit is deployed.
 const BUILD_INFO_TEXT = `build ${__BUILD_COMMIT__} · ${__BUILD_TIME__}`;
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87ceeb); // flat placeholder sky color
-
-const camera = new THREE.PerspectiveCamera(
-  60,
-  window.innerWidth / window.innerHeight,
-  0.1,
-  1000,
-);
-// Three.js defaults to Y-up, which reads as backwards for a project whose
-// ground plane is naturally X/Y (latitude/longitude-shaped) with height as
-// the odd one out — Z-up matches that better. OrbitControls (and
-// Object3D.lookAt, used just below) both key off `camera.up` rather than
-// hard-coding Y, so this is enough to retarget the whole "vertical axis"
-// convention with no library patching. It has to happen before
-// `new OrbitControls(...)` — OrbitControls reads `object.up` once, at
-// construction, to build its internal up-axis-correction quaternion.
-camera.up.set(0, 0, 1);
-// Positioned up and back so the whole plot is in frame.
-camera.position.set(LANDLET_SIDE_M * 0.6, LANDLET_SIDE_M * 0.6, LANDLET_SIDE_M * 0.5);
-camera.lookAt(0, 0, 0);
-
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
 
 // Dev-only orbit camera so the scene is inspectable on a phone (pinch/drag)
 // before any real avatar movement exists. Not part of the in-world control scheme.
@@ -9304,7 +9288,6 @@ const selectionFillGeometry = new THREE.BoxGeometry(1, 1, 1);
 const scratchBox = new THREE.Box3();
 const scratchBoxSize = new THREE.Vector3();
 const scratchBoxCenter = new THREE.Vector3();
-const compassNeedleEl = document.getElementById('compass-needle');
 
 function addSelectionOutline(mesh) {
   if (selectionOutlines.has(mesh)) return;
@@ -10719,13 +10702,6 @@ function endSwipe(event) {
 window.addEventListener('pointerup', endSwipe);
 window.addEventListener('pointercancel', endSwipe);
 
-function onResize() {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-}
-window.addEventListener('resize', onResize);
-
 // OrbitControls' native "zoom" (wheel / pinch) is a *dolly*: it changes the
 // distance between the camera and a fixed orbit target. That's "zoom to a
 // point" — and it has a real failure mode, which is what made zoom feel
@@ -11086,51 +11062,19 @@ function applyEdgePanWhileDraggingProduct() {
   }
 }
 
-// #1169: on-screen compass (Shop and Build modes; hidden in Sell via
-// SELL_HIDDEN_BUILDER_UI_IDS). Shop mode already tracks a dedicated
-// avatar-facing angle (shopAvatarFacing, declared further down with the
-// rest of the Shop-mode state — safe to reference here since this only
-// ever runs once shopActive is true, well after full module evaluation);
-// Build mode has no avatar at all, just the free OrbitControls camera, so
-// its "facing" is read directly off the camera's own current look
-// direction instead. The two are deliberately not the same value
-// (shopAvatarFacing eases toward movement direction rather than tracking
-// the camera instantly), but each is the right analog for its own mode.
-//
-// "North" is a convention this codebase never previously defined for its
-// world coordinates — inferred here from the one existing precedent:
-// loadLandletMap's claim-flyover camera starts south of center looking
-// toward +Y, which only reads sensibly if +Y is already "up"/North on
-// that map. +X is then East, the only orientation consistent with
-// standard map/compass reading once a Z-up world has a chosen North.
-// Facing angle 0 means +Y (North); the in-world yaw convention turns a
-// positive angle toward -X (see applyShopCameraOrientation's own
-// comment), so the clockwise bearing an ordinary compass face uses is the
-// negation of that facing angle.
-const compassScratchDir = new THREE.Vector3();
-function currentFacingRad() {
-  if (shopActive) return shopAvatarFacing;
-  camera.getWorldDirection(compassScratchDir);
-  return Math.atan2(-compassScratchDir.x, compassScratchDir.y);
-}
-
-function updateCompassNeedle() {
-  const bearingDeg = THREE.MathUtils.radToDeg(-currentFacingRad());
-  compassNeedleEl.style.transform = `rotate(${bearingDeg}deg)`;
-}
-
-function animate(now) {
-  requestAnimationFrame(animate);
-  if (shopActive) {
-    updateShopMovement(now);
-    updateShopSky(now);
-  } else {
-    updateTargetTween(now);
-    applyEdgePanWhileDraggingProduct();
-    controls.update();
-    updateCameraDebug(now);
-  }
-  updateCompassNeedle();
+// #2552: Build mode (and layout-preview, which shares this same camera/
+// selection-adjacent machinery) registers this once on entry via
+// registerModeFrameUpdate (world/scene.js) — see that module's own
+// comment for why a single registered callback replaced animate()'s old
+// `if (shopActive) {...} else {...}` branch. Shop mode registers its own
+// movement+sky callback instead (see enterShopMode); Sell mode has no
+// per-frame work of its own (paginated, static between page turns) and
+// registers null (see enterSellMode).
+function buildModeFrameUpdate(now) {
+  updateTargetTween(now);
+  applyEdgePanWhileDraggingProduct();
+  controls.update();
+  updateCameraDebug(now);
   // A selected item's outline must track it live while the translate/rotate
   // gizmo drags it — BoxHelper doesn't auto-update, so it's recomputed here
   // every frame rather than only on selection change. The fill mesh reuses
@@ -11160,9 +11104,7 @@ function animate(now) {
     fill.scale.copy(scratchBoxSize).multiplyScalar(SELECTION_FILL_PADDING);
     fill.position.copy(scratchBoxCenter);
   }
-  renderer.render(scene, camera);
 }
-animate(0);
 
 // Which landlet this session builds on: a builder's own claimed landlet if
 // they already have one, otherwise a modal letting them claim a fresh one
@@ -18645,6 +18587,15 @@ async function enterShopMode() {
   shopStatusEl.textContent = '';
   shopStatusEl.classList.remove('visible');
   shopActive = true;
+  // #2552: Shop's own per-frame work (movement + sky) and its own avatar-
+  // facing value for the compass (eases toward movement direction rather
+  // than tracking the camera instantly, unlike every other mode's default
+  // camera-derived bearing — see world/scene.js's own comment).
+  registerModeFrameUpdate((now) => {
+    updateShopMovement(now);
+    updateShopSky(now);
+  });
+  registerFacingOverride(() => shopAvatarFacing);
 }
 
 // #540: Sell mode's own "faux lándlet" — the seller's own products,
@@ -19055,6 +19006,12 @@ async function enterLayoutPreviewMode() {
   translateControls.detach();
   rotateControls.detach();
   controls.enabled = false;
+  // #2552: shares Build's own tween/edge-pan/controls/debug/selection-
+  // highlight per-frame work (selection/highlight are both empty here —
+  // clearSelection() above and this mode's own no-highlighting design —
+  // so those two loops are harmless no-ops, same as they already are
+  // whenever Build itself has nothing selected).
+  registerModeFrameUpdate(buildModeFrameUpdate);
 
   setBuilderId(await ensureBuilderIdentity());
   if (!builderId) {
@@ -19150,6 +19107,11 @@ async function enterLayoutPreviewMode() {
 // hide the builder chrome that doesn't apply, clear out whatever the
 // placeholder/real landlet scene had, load this seller's own content.
 async function enterSellMode() {
+  // #2552: Sell has no per-frame work of its own (paginated, static
+  // between page turns) — see world/scene.js's own comment on why this is
+  // an explicit null rather than just leaving whatever the previous page
+  // load registered.
+  registerModeFrameUpdate(null);
   for (const id of SELL_HIDDEN_BUILDER_UI_IDS) {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
@@ -19541,6 +19503,9 @@ async function bootstrap() {
     showShopAccessGate();
     return;
   }
+  // #2552: Build's own tween/edge-pan/controls/debug/selection-highlight
+  // per-frame work — see buildModeFrameUpdate's own comment.
+  registerModeFrameUpdate(buildModeFrameUpdate);
   refreshNotificationsBadge();
   refreshFriendsBadge();
   refreshDmBadge();
