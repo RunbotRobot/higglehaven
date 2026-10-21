@@ -7,15 +7,18 @@
 // already uses elsewhere), the account-status note reflects Stripe not
 // being configured on this dev server (no STRIPE_SECRET_KEY in .dev.vars,
 // same as every other Stripe-touching suite in this repo — see docs/
-// API.md's own testing-limitation note), and clicking Redeem surfaces
-// #653's real, current pause message.
+// API.md's own testing-limitation note), and clicking Redeem surfaces that
+// same "not configured" 503 (#653: redemption is no longer paused — see
+// handleBuilderRedeem's own #653 comment and worker/stripe-connect.test.js's
+// "falls through to the Stripe-not-configured check" test — so this is now
+// the first real check the click can actually hit).
 //
 // Not covered here (same limitation this repo's other Stripe-adjacent
 // tests already document): actually submitting the onboarding form and a
 // real transfers/payouts round trip, since neither is reachable without a
-// real STRIPE_SECRET_KEY. #653's pause 503 fires before the "Stripe not
-// configured" 503 in handleBuilderRedeem's own validation order, so the
-// Redeem button's behavior is fully deterministic and testable regardless.
+// real STRIPE_SECRET_KEY. The Redeem button's behavior is fully
+// deterministic and testable regardless, since this suite never configures
+// STRIPE_SECRET_KEY.
 import { launchPage, chooseIdentity, claimLandlet, grantHigglesAsAdmin, openAccountMenu, finish } from './helpers.mjs';
 
 const LABEL = 'Higgles Cashout Suite Tester';
@@ -79,23 +82,24 @@ console.log('Redeem button visible (should be true, since the granted balance is
 const redeemFormField = page.locator('.settings-field').filter({ has: redeemBtn });
 await redeemBtn.click();
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('temporarily paused')),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('not configured on this server yet')),
   null,
   { timeout: 60000 },
 );
 const afterClickText = await redeemFormField.locator('.settings-empty-note').last().textContent();
-console.log('Status after clicking Redeem (should surface #653\'s real pause message):', afterClickText);
+console.log('Status after clicking Redeem (should surface the real "Stripe not configured" 503):', afterClickText);
 
-// The Redeem click above deliberately triggers a real 503 (#653's pause) —
-// Chromium logs any non-2xx fetch response as "Failed to load resource"
-// independent of whether the app handled it gracefully, the same reason
-// e2e/didit-verification.test.mjs and e2e/saved-layout-paste.test.mjs
-// already filter this out of their own errors.length === 0 check.
+// The Redeem click above deliberately triggers a real 503 (Stripe isn't
+// configured on this dev server) — Chromium logs any non-2xx fetch
+// response as "Failed to load resource" independent of whether the app
+// handled it gracefully, the same reason e2e/didit-verification.test.mjs
+// and e2e/saved-layout-paste.test.mjs already filter this out of their own
+// errors.length === 0 check.
 const unexpectedErrors = errors.filter((e) => !e.includes('Failed to load resource'));
 
 const pass = statusText.includes(`$${(GRANT_CENTS / 100).toFixed(2)}`) &&
   statusText.includes("Stripe payouts aren't set up on this server yet") &&
   redeemBtnVisible &&
-  afterClickText.includes('temporarily paused while we close a fraud gap') &&
+  afterClickText.includes('Stripe payouts are not configured on this server yet') &&
   unexpectedErrors.length === 0;
-await finish(browser, { pass, label: 'Settings > Build "Redeem Higgles" field shows real balance and surfaces #653\'s pause (#723)', errors });
+await finish(browser, { pass, label: 'Settings > Build "Redeem Higgles" field shows real balance and surfaces the real Stripe-not-configured 503 (#723, #653)', errors });
