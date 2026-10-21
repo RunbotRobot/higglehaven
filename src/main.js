@@ -161,44 +161,41 @@ import {
   relativeCurvatureDropM,
 } from '../worker/earthCurvature.js';
 
-// The API (worker/index.js + D1) is authoritative when reachable; the
-// catalog.js constants above are only used if fetching it fails. This is
-// reassigned once, in bootstrap() below, before anything reads it — every
-// other reference to the catalog goes through this variable rather than
-// FALLBACK_CATALOG directly.
-let activeCatalog = FALLBACK_CATALOG;
+// #2551: activeCatalog/myBundles/communityBundles/builderId/currentLandletId/
+// sellerId/currentMode and the LANDLET_* consts now live in
+// src/world/state.js (see that module's own comments for why each one is
+// shaped the way it is) — every other extracted module under #2504 needs to
+// read at least one of them. Writes go through the paired setter functions
+// (an ES import binding is read-only from this side).
+import {
+  activeCatalog, setActiveCatalog,
+  myBundles, setMyBundles,
+  communityBundles, setCommunityBundles,
+  builderId, setBuilderId,
+  currentLandletId, setCurrentLandletId,
+  sellerId, setSellerId,
+  currentMode, setCurrentMode,
+  LANDLET_AREA_M2, LANDLET_SIDE_M, LANDLET_HEIGHT_M,
+} from './world/state.js';
+// #2552: scene/camera/renderer/canvas and the shared animate()/
+// updateCompassNeedle/onResize loop now live in src/world/scene.js (see
+// that module's own comments) — registerModeFrameUpdate/registerFacing
+// Override are each mode's own hook into that now-shared loop (see
+// enterShopMode/enterSellMode/enterLayoutPreviewMode/bootstrap's own
+// calls to them, and buildModeFrameUpdate's own comment below).
+import {
+  scene, camera, renderer, canvas,
+  registerModeFrameUpdate, registerFacingOverride,
+} from './world/scene.js';
 
-// Saved groups a builder can stamp down again together (see migrations/
-// 0039_bundles.sql) — fetched once builderId is settled in bootstrap() and
-// refreshed after any save/delete. Empty (rather than falling back to
-// something local) when the backend's unreachable — a bundle only makes
-// sense as something durable across sessions/landlets, so there's no
-// offline equivalent worth keeping, unlike activeCatalog's FALLBACK_CATALOG.
-let myBundles = [];
-// Every builder's opted-in shared bundles (see migrations/0040_bundle_sharing.sql)
-// — a separate list from myBundles, not a filtered view of it, fetched
-// alongside it in bootstrap() so the picker's section can show/hide
-// correctly based on either tab having something before a builder ever
-// switches to the Community tab.
-let communityBundles = [];
+// #2564: the mandatory first-claim flow (runClaimFlow, its own flyover-map
+// scene, and the plot pick/confirm handlers) now lives in src/claim/flow.js
+// — see that module's own comment for its dependency notes, including why
+// it in turn imports a few things back from this module (a temporary
+// circular import pending #2550's ui/modal.js extraction).
+import { runClaimFlow } from './claim/flow.js';
+
 let activeBundleTab = 'mine';
-
-// Resolved from the logged-in account's own builder profile (see
-// ensureBuilderIdentity, docs/API.md's "Authentication") once, in
-// bootstrap(), before anything reads it; every instance created afterward
-// is tagged with it so builders only ever see and edit their own
-// landlet's placed products. currentLandletId is settled alongside it.
-let builderId = null;
-let currentLandletId = 'starter-landlet';
-
-// A seller identity is a genuinely separate roster from builders (see
-// worker/index.js's /api/sellers and docs/API.md's "Sellers" section) —
-// catalog_templates.seller_id is tagged with this, not builderId, so
-// "my products" means "products this seller identity uploaded," not
-// "products this builder identity uploaded." Settled lazily, only once
-// Sell mode is actually reached (see ensureSellerIdentity below), unlike
-// builderId which bootstrap() always resolves up front.
-let sellerId = null;
 
 // Shop, Build, and Sell are the three peer top-level views (#mode-nav in
 // index.html) — genuine currentMode values now (#540 gave Sell the real
@@ -214,7 +211,13 @@ let sellerId = null;
 // localStorage) carries the *next* mode across that reload — it's gone
 // once bootstrap() reads it, and a plain fresh tab with nothing set always
 // lands on Shop, the product's chosen default landing view.
-const START_MODE_KEY = 'higglehaven.startMode';
+// Exported: src/claim/flow.js (#2564) needs it for claimBackBtn's own
+// reload-to-shop fallback — a temporary circular import (this module also
+// imports runClaimFlow from there) until #2550 gives this constant a real
+// home outside main.js the way #2551 already did for the state it also
+// needed; harmless here since every use on both sides is inside a function
+// body, never read at module-evaluation time.
+export const START_MODE_KEY = 'higglehaven.startMode';
 // #635's own preview is reached via a reload the same way Shop/Build/Sell
 // switch (see START_MODE_KEY's own comment above) — this carries which
 // saved layout to load across that reload, since START_MODE_KEY itself
@@ -226,30 +229,15 @@ const PREVIEW_SAVED_LAYOUT_ID_KEY = 'higglehaven.previewSavedLayoutId';
 // resolveLandletId's own comment) owned landlets this way, since bootstrap()
 // is the only place Build mode ever loads a landlet from.
 const BUILD_TARGET_LANDLET_ID_KEY = 'higglehaven.buildTargetLandletId';
-let currentMode = 'shop';
 
 // Declared here (rather than alongside the rest of Shop mode, much further
-// down) because animate() below reads it on every frame starting from its
-// very first, synchronous call at module load — a `let` declared after
-// that point would be in its temporal dead zone the first time animate()
-// runs, throwing before the app ever renders a frame.
+// down) because several Shop-specific pointer/keyboard event handlers
+// declared well before the rest of Shop mode's own state gate on it — a
+// `let` declared after those would be in its temporal dead zone the first
+// time one of them ran. (#2552: animate() itself moved to world/scene.js
+// and no longer reads this directly — see registerModeFrameUpdate's own
+// comment — but plenty else in this file still does.)
 let shopActive = false;
-
-// Naming convention (see docs/SPEC.md): plain "a" internally — "landlet", not "lándlet".
-// A standard landlet is exactly 1000 m^2. Square footprint for this first pass:
-// side length = sqrt(area), giving an edge just over 31.6 meters.
-const LANDLET_AREA_M2 = 1000;
-const LANDLET_SIDE_M = Math.sqrt(LANDLET_AREA_M2);
-// Buildable volume: one level (10m, per spec §3) straight up from whichever
-// level's own floor is currently in view. No longer the flat-plane/plain-
-// cuboid placeholder this comment used to describe — the ground itself is
-// curved (curveGroundGeometry, issues #133/#135) and clampToLandlet (below)
-// already widens/narrows the X/Y footprint per height via
-// footprintScaleAtHeight, matching the spec's actual cone-shaped volume
-// (issue #136). LANDLET_HEIGHT_M just fixes each level's own Z-slab height;
-// see clampToLandlet's own comment for how the cross-section at that height
-// gets corrected.
-const LANDLET_HEIGHT_M = 10;
 
 // Vertical construction (issue #167/#168/#169): the current lándlet's own
 // ground-level area (needed to preview a level's cap cost client-side
@@ -288,38 +276,10 @@ function levelLabel(levelIndex) {
   return levelIndex > 0 ? `Level +${levelIndex}` : `Level ${levelIndex}`;
 }
 
-const canvas = document.getElementById('app');
-
 // Shown in Settings' General tab (renderGeneralSettingsSection) rather than
 // an always-on-screen HUD overlay — decluttering the main view, now that
 // it's the only way to read/copy exactly which commit is deployed.
 const BUILD_INFO_TEXT = `build ${__BUILD_COMMIT__} · ${__BUILD_TIME__}`;
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87ceeb); // flat placeholder sky color
-
-const camera = new THREE.PerspectiveCamera(
-  60,
-  window.innerWidth / window.innerHeight,
-  0.1,
-  1000,
-);
-// Three.js defaults to Y-up, which reads as backwards for a project whose
-// ground plane is naturally X/Y (latitude/longitude-shaped) with height as
-// the odd one out — Z-up matches that better. OrbitControls (and
-// Object3D.lookAt, used just below) both key off `camera.up` rather than
-// hard-coding Y, so this is enough to retarget the whole "vertical axis"
-// convention with no library patching. It has to happen before
-// `new OrbitControls(...)` — OrbitControls reads `object.up` once, at
-// construction, to build its internal up-axis-correction quaternion.
-camera.up.set(0, 0, 1);
-// Positioned up and back so the whole plot is in frame.
-camera.position.set(LANDLET_SIDE_M * 0.6, LANDLET_SIDE_M * 0.6, LANDLET_SIDE_M * 0.5);
-camera.lookAt(0, 0, 0);
-
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
 
 // Dev-only orbit camera so the scene is inspectable on a phone (pinch/drag)
 // before any real avatar movement exists. Not part of the in-world control scheme.
@@ -1395,9 +1355,22 @@ function findTemplate(templateId) {
 const gltfLoader = new GLTFLoader();
 const modelGltfCache = new Map(); // modelUrl -> Promise<GLTF>
 
+// #2438: a failed load used to cache the REJECTED promise just as
+// permanently as a successful one — a single transient failure (a dropped
+// request, an R2 read racing right behind the upload that created this
+// exact file) poisoned this URL for the rest of the tab's session, since
+// every later caller (a second placed instance of the same template, a
+// later view of the same product) got handed the same already-rejected
+// promise instead of a fresh attempt. Deleting the cache entry the moment
+// it rejects — before the rejection ever reaches this call's own caller —
+// means only the failing attempt itself sees that rejection; the next call
+// for the same url finds the cache empty again and genuinely retries.
 function loadModelGltf(url) {
   if (!modelGltfCache.has(url)) {
-    modelGltfCache.set(url, gltfLoader.loadAsync(url));
+    modelGltfCache.set(url, gltfLoader.loadAsync(url).catch((err) => {
+      modelGltfCache.delete(url);
+      throw err;
+    }));
   }
   return modelGltfCache.get(url);
 }
@@ -2866,8 +2839,8 @@ function renderBundlePicker() {
           // divergence risk, keeps both tabs' copies in sync.
           const [freshMine, freshShared] = await Promise.all([fetchBundles(), fetchSharedBundles()]);
           if (myLoadToken !== bundlePickerLoadToken) return; // superseded while loading — a newer rename/share-toggle owns the picker now
-          myBundles = freshMine;
-          communityBundles = freshShared;
+          setMyBundles(freshMine);
+          setCommunityBundles(freshShared);
           renderBundlePicker();
         } catch (err) {
           alert(err.message || 'Could not rename this bundle.');
@@ -2901,8 +2874,8 @@ function renderBundlePicker() {
           // tab's membership.
           const [freshMine, freshShared] = await Promise.all([fetchBundles(), fetchSharedBundles()]);
           if (myLoadToken !== bundlePickerLoadToken) return; // superseded while loading — a newer rename/share-toggle owns the picker now
-          myBundles = freshMine;
-          communityBundles = freshShared;
+          setMyBundles(freshMine);
+          setCommunityBundles(freshShared);
           renderBundlePicker();
         } catch (err) {
           alert(err.message || 'Could not update this bundle\'s sharing.');
@@ -2928,8 +2901,8 @@ function renderBundlePicker() {
         try {
           await deleteBundle(bundle.bundleId);
           if (myLoadToken !== bundlePickerLoadToken) return; // superseded while loading — a newer rename/share-toggle owns the picker now
-          myBundles = myBundles.filter((b) => b.bundleId !== bundle.bundleId);
-          communityBundles = communityBundles.filter((b) => b.bundleId !== bundle.bundleId);
+          setMyBundles(myBundles.filter((b) => b.bundleId !== bundle.bundleId));
+          setCommunityBundles(communityBundles.filter((b) => b.bundleId !== bundle.bundleId));
           renderBundlePicker();
         } catch (err) {
           alert(err.message || 'Could not delete this bundle.');
@@ -3077,7 +3050,11 @@ function getModalFocusable(modalEl) {
   )).filter((el) => el.offsetParent !== null);
 }
 
-function openModalA11y(modalEl, closeFn) {
+// Exported: src/claim/flow.js (#2564) needs both of these — same temporary
+// circular-import note as START_MODE_KEY's own comment above. #2550 (the
+// ui/modal.js leaf) is this pair's real destination; nothing here should
+// still be exported from main.js once that lands.
+export function openModalA11y(modalEl, closeFn) {
   activeModalEl = modalEl;
   activeModalCloseFn = closeFn || null;
   modalReturnFocusEl = document.activeElement;
@@ -3085,7 +3062,7 @@ function openModalA11y(modalEl, closeFn) {
   target.focus({ preventScroll: true });
 }
 
-function closeModalA11y(modalEl) {
+export function closeModalA11y(modalEl) {
   if (activeModalEl !== modalEl) return;
   activeModalEl = null;
   activeModalCloseFn = null;
@@ -3361,6 +3338,13 @@ function closeUploadModal() {
   uploadModalEl.classList.remove('visible');
   resetUploadModalToFileStep();
   closeModalA11y(uploadModalEl);
+  // #2515: this modal only ever opens stacked on top of the still-visible
+  // Seller modal (openUploadModal never hides it) -- closeModalA11y above
+  // only clears activeModalEl, so without re-arming here the Seller modal
+  // is left on screen but untrapped, same bug class #1679 fixed for the
+  // Friends-map/DM pair.
+  sellerModalEl.classList.add('visible');
+  openModalA11y(sellerModalEl, closeSellerModal);
 }
 
 uploadModelBtn.addEventListener('click', openUploadModal);
@@ -5064,7 +5048,7 @@ function renderSellerList() {
       deleteBtn.disabled = true;
       try {
         await deleteCatalogTemplate(template.templateId);
-        activeCatalog = activeCatalog.filter((t) => t.templateId !== template.templateId);
+        setActiveCatalog(activeCatalog.filter((t) => t.templateId !== template.templateId));
         buildCatalogPickerButtons();
         refreshSellerShowcase();
         // #1342: same fix as Duplicate's own handler above -- renderActiveSellerView()
@@ -5883,18 +5867,27 @@ updateSellerViewToggleUI();
 // seller has at least one piece of feedback, same "nothing to show yet"
 // convention #productInfoEl's own comment documents, rather than a
 // permanent "No feedback yet" placeholder taking up space.
+// #2514: singleton summary element, so one shared counter (not a per-row
+// one like renderReviews' own reviewLoadToken) is the right shape here —
+// guards against a double-clicked Sell/Manage button's two openSellerModal()
+// calls racing each other and letting the first (now-stale) fetch overwrite
+// what the second, newer one already rendered.
+let sellerFeedbackLoadToken = 0;
 async function renderSellerFeedbackSummary(id) {
+  const myLoadToken = ++sellerFeedbackLoadToken;
   let feedback;
   let averageRating;
   let count;
   try {
     ({ feedback, averageRating, count } = await fetchSellerFeedback(id));
   } catch (err) {
+    if (myLoadToken !== sellerFeedbackLoadToken) return; // superseded while fetching
     console.warn('Could not load seller feedback summary:', err);
     sellerFeedbackSummaryEl.hidden = true;
     sellerFeedbackListEl.innerHTML = '';
     return;
   }
+  if (myLoadToken !== sellerFeedbackLoadToken) return; // superseded — a newer call owns the summary now
   sellerFeedbackSummaryEl.hidden = feedback.length === 0;
   sellerFeedbackListEl.innerHTML = '';
   if (feedback.length === 0) return;
@@ -6611,7 +6604,7 @@ async function renderLandCapField() {
   // session, silently establish it the same way (requireLogin's own
   // `if (currentAuthUser) return currentAuthUser` means this never pops a
   // login prompt) instead of just leaving this whole field missing.
-  if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
+  if (!builderId && currentAuthUser) setBuilderId(await ensureBuilderIdentity());
   // #905: a tab switch (or modal reopen) during that await already tore
   // down and rebuilt settingsSectionEl for a different tab — appending
   // below would land this field there instead of silently vanishing with
@@ -6801,7 +6794,7 @@ async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, d
 // avoid touching that already-working, real-money-adjacent flow.
 async function renderRedeemHigglesField() {
   const myToken = settingsRenderToken;
-  if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
+  if (!builderId && currentAuthUser) setBuilderId(await ensureBuilderIdentity());
   // #905: see renderLandCapField's own comment — a tab switch/modal reopen
   // during that await already tore down settingsSectionEl for a different
   // tab, so this real-money redemption form must not land there.
@@ -7019,7 +7012,7 @@ function renderBuilderIdentityField() {
     // next full renderSettingsSection() redraw this same Reset Profile
     // triggers would otherwise still query the old, just-released landlet
     // and get a real 403 back.
-    onDeleted: () => { builderId = null; currentLandletId = null; },
+    onDeleted: () => { setBuilderId(null); setCurrentLandletId(null); },
     // #741: keep Shop mode's own "Built by X" attribution (populated once
     // in enterShopMode) from showing a stale pre-rename label for the rest
     // of this session.
@@ -7040,7 +7033,7 @@ function renderSellerIdentityField() {
     // this warning doesn't need to (and can't) disclose an amount at risk
     // the way renderBuilderIdentityField's higgles-balance warning does.
     deleteWarning: 'Reset your seller profile? This cannot be undone. Your login stays active either way; use Delete Account under Account above to delete that too.',
-    onDeleted: () => { sellerId = null; },
+    onDeleted: () => { setSellerId(null); },
   });
 }
 
@@ -7700,7 +7693,7 @@ async function renderAuctionSection() {
   // Establish it silently (no login prompt, since requireLogin short-
   // circuits on an existing currentAuthUser) rather than showing a
   // "choose an identity" dead end to someone who already has one.
-  if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
+  if (!builderId && currentAuthUser) setBuilderId(await ensureBuilderIdentity());
   // #905: see renderLandCapField's own comment — a tab switch/modal reopen
   // during that await already tore down settingsSectionEl for a different
   // tab, so this section (with a live "Start Auction" button) must not
@@ -8137,7 +8130,7 @@ async function renderAuctionSection() {
 // keystroke.
 async function renderLowStockSection() {
   const myToken = settingsRenderToken;
-  if (!builderId && currentAuthUser) builderId = await ensureBuilderIdentity();
+  if (!builderId && currentAuthUser) setBuilderId(await ensureBuilderIdentity());
   if (myToken !== settingsRenderToken) return;
   if (!builderId) {
     const note = document.createElement('div');
@@ -9295,7 +9288,6 @@ const selectionFillGeometry = new THREE.BoxGeometry(1, 1, 1);
 const scratchBox = new THREE.Box3();
 const scratchBoxSize = new THREE.Vector3();
 const scratchBoxCenter = new THREE.Vector3();
-const compassNeedleEl = document.getElementById('compass-needle');
 
 function addSelectionOutline(mesh) {
   if (selectionOutlines.has(mesh)) return;
@@ -10710,13 +10702,6 @@ function endSwipe(event) {
 window.addEventListener('pointerup', endSwipe);
 window.addEventListener('pointercancel', endSwipe);
 
-function onResize() {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-}
-window.addEventListener('resize', onResize);
-
 // OrbitControls' native "zoom" (wheel / pinch) is a *dolly*: it changes the
 // distance between the camera and a fixed orbit target. That's "zoom to a
 // point" — and it has a real failure mode, which is what made zoom feel
@@ -11077,51 +11062,19 @@ function applyEdgePanWhileDraggingProduct() {
   }
 }
 
-// #1169: on-screen compass (Shop and Build modes; hidden in Sell via
-// SELL_HIDDEN_BUILDER_UI_IDS). Shop mode already tracks a dedicated
-// avatar-facing angle (shopAvatarFacing, declared further down with the
-// rest of the Shop-mode state — safe to reference here since this only
-// ever runs once shopActive is true, well after full module evaluation);
-// Build mode has no avatar at all, just the free OrbitControls camera, so
-// its "facing" is read directly off the camera's own current look
-// direction instead. The two are deliberately not the same value
-// (shopAvatarFacing eases toward movement direction rather than tracking
-// the camera instantly), but each is the right analog for its own mode.
-//
-// "North" is a convention this codebase never previously defined for its
-// world coordinates — inferred here from the one existing precedent:
-// loadLandletMap's claim-flyover camera starts south of center looking
-// toward +Y, which only reads sensibly if +Y is already "up"/North on
-// that map. +X is then East, the only orientation consistent with
-// standard map/compass reading once a Z-up world has a chosen North.
-// Facing angle 0 means +Y (North); the in-world yaw convention turns a
-// positive angle toward -X (see applyShopCameraOrientation's own
-// comment), so the clockwise bearing an ordinary compass face uses is the
-// negation of that facing angle.
-const compassScratchDir = new THREE.Vector3();
-function currentFacingRad() {
-  if (shopActive) return shopAvatarFacing;
-  camera.getWorldDirection(compassScratchDir);
-  return Math.atan2(-compassScratchDir.x, compassScratchDir.y);
-}
-
-function updateCompassNeedle() {
-  const bearingDeg = THREE.MathUtils.radToDeg(-currentFacingRad());
-  compassNeedleEl.style.transform = `rotate(${bearingDeg}deg)`;
-}
-
-function animate(now) {
-  requestAnimationFrame(animate);
-  if (shopActive) {
-    updateShopMovement(now);
-    updateShopSky(now);
-  } else {
-    updateTargetTween(now);
-    applyEdgePanWhileDraggingProduct();
-    controls.update();
-    updateCameraDebug(now);
-  }
-  updateCompassNeedle();
+// #2552: Build mode (and layout-preview, which shares this same camera/
+// selection-adjacent machinery) registers this once on entry via
+// registerModeFrameUpdate (world/scene.js) — see that module's own
+// comment for why a single registered callback replaced animate()'s old
+// `if (shopActive) {...} else {...}` branch. Shop mode registers its own
+// movement+sky callback instead (see enterShopMode); Sell mode has no
+// per-frame work of its own (paginated, static between page turns) and
+// registers null (see enterSellMode).
+function buildModeFrameUpdate(now) {
+  updateTargetTween(now);
+  applyEdgePanWhileDraggingProduct();
+  controls.update();
+  updateCameraDebug(now);
   // A selected item's outline must track it live while the translate/rotate
   // gizmo drags it — BoxHelper doesn't auto-update, so it's recomputed here
   // every frame rather than only on selection change. The fill mesh reuses
@@ -11151,9 +11104,7 @@ function animate(now) {
     fill.scale.copy(scratchBoxSize).multiplyScalar(SELECTION_FILL_PADDING);
     fill.position.copy(scratchBoxCenter);
   }
-  renderer.render(scene, camera);
 }
-animate(0);
 
 // Which landlet this session builds on: a builder's own claimed landlet if
 // they already have one, otherwise a modal letting them claim a fresh one
@@ -11384,7 +11335,7 @@ async function ensureBuilderIdentity() {
       user = await requireVerification(user);
       if (!user) return null;
       const builder = await fetchMyBuilder();
-      builderId = builder.builderId;
+      setBuilderId(builder.builderId);
       return builderId;
     })();
   }
@@ -11403,7 +11354,7 @@ async function ensureSellerIdentity() {
       user = await requireVerification(user);
       if (!user) return null;
       const seller = await fetchMySeller();
-      sellerId = seller.sellerId;
+      setSellerId(seller.sellerId);
       return sellerId;
     })();
   }
@@ -12792,8 +12743,8 @@ authVerifyIdBtn.addEventListener('click', async () => {
 // Products" listing).
 function resetLocalSessionState() {
   currentAuthUser = null;
-  builderId = null;
-  sellerId = null;
+  setBuilderId(null);
+  setSellerId(null);
   builderIdentityFlowPromise = null;
   sellerIdentityFlowPromise = null;
 }
@@ -13261,7 +13212,7 @@ const SHOP_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, generating: 0
 // greenbelt. Every per-plot color/affordance lookup goes through this
 // instead of reading `.status` directly, so a water landlet always resolves
 // to each palette's own 'water' entry regardless of its underlying status.
-function plotColorKeyForLandlet(landlet) {
+export function plotColorKeyForLandlet(landlet) {
   return landlet.landType === 'water' ? 'water' : landlet.status;
 }
 // docs/SPEC.md §2's confirmed ground speeds: 1.8 m/s walking, 4.4704 m/s
@@ -13507,7 +13458,26 @@ const SHOP_IDLE_ARM_SWAY_AMPLITUDE_RAD = 0.05;
 const SHOP_IDLE_HEAD_TURN_MAX_RAD = 0.4; // a natural glance range, not a full look-behind
 const SHOP_IDLE_HEAD_TURN_INTERVAL_MIN_S = 2.5;
 const SHOP_IDLE_HEAD_TURN_INTERVAL_MAX_S = 5;
+// #2478 (sub-issue of #2475): the seated pose. No knee joint on this
+// primitive rig (createShopAvatar's own comment -- each leg is one rigid
+// hip-to-foot cylinder), so "sitting" is approximated as the whole leg
+// swinging forward from the hip toward horizontal, same single-joint
+// simplification the walk cycle already uses -- not a full right angle, so
+// the silhouette doesn't read as the legs sticking straight out stiff.
+const SHOP_SIT_LEG_ROTATION_RAD = (Math.PI / 2) * 0.88;
+// Forearms resting toward the lap rather than hanging straight down —
+// gentler than the legs' own rotation since there's no elbow to bend
+// either and a full 90 degrees would plant the hands on the floor instead.
+const SHOP_SIT_ARM_ROTATION_RAD = (Math.PI / 2) * 0.55;
 const SHOP_IDLE_HEAD_TURN_EASE_PER_S = 1.5;
+// #2479 (sub-issue of #2475): lean pose -- how far the whole body tilts
+// back against a leanTarget's surface at full idle blend. Same local-X
+// axis/eased-toward-a-target idiom as SHOP_AVATAR_FLIGHT_PITCH_RAD just
+// above, opposite sign (that one tilts forward into a dive; this tilts
+// backward into a wall behind the avatar, matching a leanTarget's own
+// facingRad -- "the direction the avatar faces while leaning," i.e. away
+// from whatever it's leaning against).
+const SHOP_LEAN_PITCH_RAD = (12 * Math.PI) / 180;
 const SHOP_JOYSTICK_MAX_PX = 46;
 const SHOP_JOYSTICK_DEADZONE_PX = 6;
 // This near/far load-unload distance (plus the middle-LOD band just below,
@@ -14957,6 +14927,39 @@ let shopIdleHeadIntervalS = THREE.MathUtils.randFloat(SHOP_IDLE_HEAD_TURN_INTERV
 // this value, matching #2477's own "fall back to stand sway unchanged"
 // scope -- this sub-issue is selection only, not the pose itself.
 let shopIdleInteractionTarget = null;
+// #2478 (sub-issue of #2475): how much of the seated pose is currently
+// showing -- 0 whenever the selected interaction target (just above) isn't
+// a 'sit' one (ordinary stand sway runs instead), eased toward 1 at the
+// same SHOP_IDLE_BLEND_PER_S rate the stand sway above already uses, and
+// hard-cut back to 0 the instant real input resumes — same ease-in-on-
+// stillness/instant-ease-out-on-movement discipline as shopIdleBlend
+// itself (a separate blend, not a reuse of shopIdleBlend, since idle sway
+// still runs underneath a seated pose too — see updateShopAvatarIdle).
+let shopSitBlend = 0;
+// Visual-only offsets layered on top of the avatar's own authoritative
+// shopAvatarFacing/shopAvatarPosition at the point they're actually
+// rendered (same additive convention shopIdleSwayYawOffset above already
+// uses for yaw) -- so sitting never touches movement, collision,
+// curvature, or camera-follow code, all of which key off the real
+// shopAvatarFacing/shopAvatarPosition directly. Both are pure functions of
+// shopSitBlend and the current idle target recomputed fresh each frame
+// (see updateShopAvatarIdle), not independently-eased state of their own —
+// the avatar doesn't move at all while idle, so there's nothing chasing a
+// moving target to smooth out.
+let shopSitYawOffset = 0;
+let shopSitHeightOffset = 0;
+// #2479 (sub-issue of #2475): same shape as #2478's own shopSitBlend/
+// shopSitYawOffset/shopSitHeightOffset just above, for a 'lean' target
+// instead of 'sit' -- a dedicated ease (not a reuse of shopIdleBlend) so
+// ordinary idle sway keeps running underneath a lean too, and the same
+// visual-only-offset discipline (never touches shopAvatarPosition/
+// shopAvatarFacing/camera-follow/collision) for the same reason sit's own
+// declaration gives. Unlike sit's height-only offset, leaning against a
+// surface needs horizontal displacement too, so this carries a full x/y/z
+// offset rather than just height.
+let shopLeanBlend = 0;
+let shopLeanYawOffset = 0;
+let shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
 
 // Flight state (docs/SPEC.md §2) — see updateShopFlight/toggleShopFlight.
 // 'grounded' | 'takingOff' | 'flying' | 'landing'. Toggling mid-transition
@@ -15070,6 +15073,12 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     shopIdleBlend = 0;
     shopAfkBlend = 0;
     shopIdleInteractionTarget = null; // re-arm (#2477) for the next idle episode
+    shopSitBlend = 0; // #2478: instant ease-out, same as shopIdleBlend/shopAfkBlend just above
+    shopSitYawOffset = 0;
+    shopSitHeightOffset = 0;
+    shopLeanBlend = 0; // #2479: same instant ease-out, mirroring sit's own just above
+    shopLeanYawOffset = 0;
+    shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
   } else {
     // #2477: fires exactly once per idle episode, the instant elapsed time
     // first crosses SHOP_IDLE_DELAY_S -- not every frame afterward, since
@@ -15084,6 +15093,64 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     shopIdleBlend += (idleTarget - shopIdleBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
     const afkTarget = shopIdleElapsedS >= SHOP_AFK_DELAY_S ? 1 : 0;
     shopAfkBlend += (afkTarget - shopAfkBlend) * Math.min(1, SHOP_AFK_BLEND_PER_S * dt);
+
+    // #2478: eases in only when this idle episode's own selected target
+    // (above) is a sit one — stays at 0, same as always, for a lean target
+    // or no target at all (ordinary stand sway keeps running regardless,
+    // same "fall back to stand sway unchanged" scope #2477 already cut).
+    const sitTarget = shopIdleInteractionTarget?.kind === 'sit' ? 1 : 0;
+    shopSitBlend += (sitTarget - shopSitBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
+    if (shopIdleInteractionTarget?.kind === 'sit') {
+      // Hip height (local z = SHOP_AVATAR_LEG_LENGTH_M above the group's
+      // own origin, same convention createShopAvatar's own comment
+      // documents) needs to land exactly on the target's own worldZ (the
+      // seat surface, already the right height for *hips*, not feet — see
+      // findShopIdleInteractionTarget's own heightM comment) once fully
+      // blended in; solving that backwards for the group-position offset
+      // this adds on top of the real (unmoved) shopAvatarPosition.z gives
+      // this term, same shape regardless of whether the seat sits above or
+      // below standing hip height.
+      shopSitHeightOffset =
+        (shopIdleInteractionTarget.worldZ - SHOP_AVATAR_LEG_LENGTH_M - shopAvatarPosition.z) * shopSitBlend;
+      // Shortest-angle delta so turning to face a target behind the
+      // avatar doesn't spin the long way around — same atan2-of-sin/cos
+      // idiom the real facing turn above (shopAvatarFacing) already uses.
+      const yawDelta = Math.atan2(
+        Math.sin(shopIdleInteractionTarget.worldFacingRad - shopAvatarFacing),
+        Math.cos(shopIdleInteractionTarget.worldFacingRad - shopAvatarFacing),
+      );
+      shopSitYawOffset = yawDelta * shopSitBlend;
+    } else {
+      shopSitHeightOffset = 0;
+      shopSitYawOffset = 0;
+    }
+
+    // #2479: same shape as #2478's sit block just above, for a 'lean'
+    // target -- eases in only when this idle episode's own selected target
+    // is a lean one (sit always outranks lean within the same episode per
+    // findShopIdleInteractionTarget, so these two blends are never both
+    // nonzero at once). Visual-only offset recomputed fresh each frame as a
+    // pure function of shopLeanBlend and the current target, same reasoning
+    // shopSitYawOffset/shopSitHeightOffset's own declaration gives -- never
+    // touches shopAvatarPosition/shopAvatarFacing, so leaning never affects
+    // movement, collision, curvature, or camera-follow code either.
+    const leanTarget = shopIdleInteractionTarget?.kind === 'lean' ? 1 : 0;
+    shopLeanBlend += (leanTarget - shopLeanBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
+    if (shopIdleInteractionTarget?.kind === 'lean') {
+      shopLeanPositionOffset = {
+        x: (shopIdleInteractionTarget.worldX - shopAvatarPosition.x) * shopLeanBlend,
+        y: (shopIdleInteractionTarget.worldY - shopAvatarPosition.y) * shopLeanBlend,
+        z: (shopIdleInteractionTarget.worldZ - shopAvatarPosition.z) * shopLeanBlend,
+      };
+      const leanYawDelta = Math.atan2(
+        Math.sin(shopIdleInteractionTarget.worldFacingRad - shopAvatarFacing),
+        Math.cos(shopIdleInteractionTarget.worldFacingRad - shopAvatarFacing),
+      );
+      shopLeanYawOffset = leanYawDelta * shopLeanBlend;
+    } else {
+      shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
+      shopLeanYawOffset = 0;
+    }
   }
   shopAvatar.afkSprite.material.opacity = shopAfkBlend;
 
@@ -15106,6 +15173,16 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
   shopAvatar.armPivotL.rotation.x += armIdleSway;
   shopAvatar.armPivotR.rotation.x -= armIdleSway;
   shopAvatar.headPivot.rotation.z = shopIdleHeadCurrentRad;
+
+  // #2478: layered on top of the counter-swing arm sway and the (always
+  // ~0 while idle) walk-cycle leg rotation just above/in updateShopAvatarPose
+  // — both pivots turn the same direction (unlike the arms' own idle
+  // counter-sway) since a seated silhouette has both legs/arms forward
+  // together, not alternating.
+  shopAvatar.legPivotL.rotation.x += SHOP_SIT_LEG_ROTATION_RAD * shopSitBlend;
+  shopAvatar.legPivotR.rotation.x += SHOP_SIT_LEG_ROTATION_RAD * shopSitBlend;
+  shopAvatar.armPivotL.rotation.x += SHOP_SIT_ARM_ROTATION_RAD * shopSitBlend;
+  shopAvatar.armPivotR.rotation.x += SHOP_SIT_ARM_ROTATION_RAD * shopSitBlend;
 }
 
 // Shared by walking's own floor clamp and the camera-follow height — keeps
@@ -15755,6 +15832,26 @@ window.__testFindShopIdleInteractionTarget = (x, y) => findShopIdleInteractionTa
 // episode (null if not idle, or idle with nothing in range) -- see
 // shopIdleInteractionTarget's own declaration above.
 window.__testShopIdleInteractionTarget = () => shopIdleInteractionTarget;
+// #2478: same "expose computed state purely for verification" convention
+// as window.__shopAvatarOrientation/__testShopIdleInteractionTarget above
+// -- lets an e2e test confirm the seated pose actually engages (the blend
+// itself, the visual-only yaw/height offsets, and the leg/arm pivots
+// actually bending into the seated silhouette) without needing pixel
+// inspection.
+window.__testShopSitPose = () => ({
+  blend: shopSitBlend,
+  yawOffset: shopSitYawOffset,
+  heightOffset: shopSitHeightOffset,
+  legRotationRad: shopAvatar.legPivotL.rotation.x,
+  armRotationRad: shopAvatar.armPivotL.rotation.x,
+});
+// #2479: same convention as window.__testShopSitPose just above, for the
+// lean pose's own visual-only state.
+window.__testShopLeanPose = () => ({
+  blend: shopLeanBlend,
+  yawOffset: shopLeanYawOffset,
+  positionOffset: { ...shopLeanPositionOffset },
+});
 
 // #2044: the spec line SHOP_FLIGHT_TAKEOFF_DURATION_S's own comment above
 // flags as deferred ("occupied landing spots offset to nearest open
@@ -16010,9 +16107,14 @@ function updateShopMovement(now) {
   // independent `.rotation.x`/`.rotation.z` Euler fields (the old code
   // here) can't express this and always tilted the same way regardless of
   // facing direction.
-  const targetAvatarPitch = airborne ? SHOP_AVATAR_FLIGHT_PITCH_RAD : 0;
+  // #2479: leanBlend is shopIdleBlend's own ease-in/hard-cut-out, gated to
+  // only the frames a lean target is actually active for this idle episode
+  // (shopLeanBlend, same shape as shopSitBlend -- 0 whenever
+  // shopIdleInteractionTarget is null or 'sit'), so this term is a harmless
+  // no-op outside an actual lean.
+  const targetAvatarPitch = airborne ? SHOP_AVATAR_FLIGHT_PITCH_RAD : SHOP_LEAN_PITCH_RAD * shopLeanBlend;
   shopAvatarPitch += (targetAvatarPitch - shopAvatarPitch) * Math.min(1, SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S * dt);
-  scratchAvatarYawQuat.setFromAxisAngle(SHOP_AVATAR_YAW_AXIS, shopAvatarFacing + shopIdleSwayYawOffset);
+  scratchAvatarYawQuat.setFromAxisAngle(SHOP_AVATAR_YAW_AXIS, shopAvatarFacing + shopIdleSwayYawOffset + shopSitYawOffset + shopLeanYawOffset);
   scratchAvatarPitchQuat.setFromAxisAngle(SHOP_AVATAR_PITCH_AXIS, shopAvatarPitch);
   shopAvatar.group.quaternion.copy(scratchAvatarYawQuat).multiply(scratchAvatarPitchQuat);
   // #1168: same reasoning as window.__shopAvatarMetrics above — this file's
@@ -16021,8 +16123,10 @@ function updateShopMovement(now) {
   // plain, frame-updated snapshot (not the live THREE.Quaternion itself,
   // which Playwright's page.evaluate can't structured-clone) is enough for
   // a test to confirm the tilt direction actually tracks shopAvatarFacing
-  // rather than staying fixed.
-  window.__shopAvatarOrientation = { facingRad: shopAvatarFacing, pitchRad: shopAvatarPitch, quaternion: shopAvatar.group.quaternion.toArray() };
+  // rather than staying fixed. leanBlend (#2479) lets a test confirm the
+  // lean pose is actually easing in/out rather than just checking the
+  // position/facing ended up in the right place.
+  window.__shopAvatarOrientation = { facingRad: shopAvatarFacing, pitchRad: shopAvatarPitch, quaternion: shopAvatar.group.quaternion.toArray(), leanBlend: shopLeanBlend };
   // #1588: same reasoning as window.__shopAvatarOrientation above — shopYaw
   // (the free-look camera's own heading) has no other way for a test to
   // read it, and the camera-lock-to-facing setting needs to confirm it
@@ -16032,6 +16136,16 @@ function updateShopMovement(now) {
   // the AFK sprite's own opacity is otherwise only checkable by eye.
   window.__shopAfkOpacity = shopAvatar.afkSprite.material.opacity;
   shopAvatar.group.position.copy(shopAvatarPosition);
+  // #2478: visual-only (see shopSitHeightOffset's own declaration for why
+  // this never touches the real shopAvatarPosition.z that positionShopCamera
+  // and collision/curvature code key off just below/above).
+  shopAvatar.group.position.z += shopSitHeightOffset;
+  // #2479: same visual-only discipline as #2478's height offset just
+  // above, extended to all three axes (see shopLeanPositionOffset's own
+  // declaration for why).
+  shopAvatar.group.position.x += shopLeanPositionOffset.x;
+  shopAvatar.group.position.y += shopLeanPositionOffset.y;
+  shopAvatar.group.position.z += shopLeanPositionOffset.z;
   positionShopCamera();
 
   if (now - shopLastProximityCheck >= SHOP_PROXIMITY_INTERVAL_MS) {
@@ -17770,6 +17884,11 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
 function closeRefundPolicyModal() {
   refundPolicyModalEl.classList.remove('visible');
   closeModalA11y(refundPolicyModalEl);
+  // #2515: same gap as closeUploadModal's own #2515 fix -- this modal only
+  // ever opens stacked on top of the still-visible Shop Product Preview
+  // modal, so re-arm its trap rather than leaving it on screen untrapped.
+  shopProductPreviewModalEl.classList.add('visible');
+  openModalA11y(shopProductPreviewModalEl, closeShopProductPreviewModal);
 }
 function handleShopReturnPolicyClick() {
   refundPolicyModalEl.classList.add('visible');
@@ -18145,9 +18264,9 @@ async function enterShopMode() {
   soldOutMarkers = [];
 
   try {
-    activeCatalog = await fetchCatalog();
+    setActiveCatalog(await fetchCatalog());
   } catch {
-    activeCatalog = FALLBACK_CATALOG;
+    setActiveCatalog(FALLBACK_CATALOG);
   }
 
   // #681: which custom avatar (if any) this account has equipped — never
@@ -18402,6 +18521,13 @@ async function enterShopMode() {
   shopIdleHeadCurrentRad = 0;
   shopIdleHeadTargetRad = 0;
   shopIdleHeadTimerS = 0;
+  shopIdleInteractionTarget = null;
+  shopSitBlend = 0;
+  shopSitYawOffset = 0;
+  shopSitHeightOffset = 0;
+  shopLeanBlend = 0;
+  shopLeanYawOffset = 0;
+  shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
   // #1175 (docs/SPEC.md §1/§2): every spawn — not just a first-ever visit —
   // starts already flying, above a random world location, facing the
   // world center, and slowly orbiting it clockwise until the shopper gives
@@ -18475,6 +18601,15 @@ async function enterShopMode() {
   shopStatusEl.textContent = '';
   shopStatusEl.classList.remove('visible');
   shopActive = true;
+  // #2552: Shop's own per-frame work (movement + sky) and its own avatar-
+  // facing value for the compass (eases toward movement direction rather
+  // than tracking the camera instantly, unlike every other mode's default
+  // camera-derived bearing — see world/scene.js's own comment).
+  registerModeFrameUpdate((now) => {
+    updateShopMovement(now);
+    updateShopSky(now);
+  });
+  registerFacingOverride(() => shopAvatarFacing);
 }
 
 // #540: Sell mode's own "faux lándlet" — the seller's own products,
@@ -18885,12 +19020,18 @@ async function enterLayoutPreviewMode() {
   translateControls.detach();
   rotateControls.detach();
   controls.enabled = false;
+  // #2552: shares Build's own tween/edge-pan/controls/debug/selection-
+  // highlight per-frame work (selection/highlight are both empty here —
+  // clearSelection() above and this mode's own no-highlighting design —
+  // so those two loops are harmless no-ops, same as they already are
+  // whenever Build itself has nothing selected).
+  registerModeFrameUpdate(buildModeFrameUpdate);
 
-  builderId = await ensureBuilderIdentity();
+  setBuilderId(await ensureBuilderIdentity());
   if (!builderId) {
     // N44: lands on showShopAccessGate's shared end state, not a full
     // enterShopMode() call — see that function's own comment for why.
-    currentMode = 'shop';
+    setCurrentMode('shop');
     updateModeNavUI();
     showShopAccessGate();
     return;
@@ -18908,7 +19049,9 @@ async function enterLayoutPreviewMode() {
 
   let layout;
   try {
-    [activeCatalog, layout] = await Promise.all([fetchCatalog(), fetchSavedLayout(savedLayoutId)]);
+    const [catalog, loadedLayout] = await Promise.all([fetchCatalog(), fetchSavedLayout(savedLayoutId)]);
+    setActiveCatalog(catalog);
+    layout = loadedLayout;
   } catch (err) {
     layoutPreviewNameEl.textContent = err.message || 'Could not load this saved layout.';
     return;
@@ -18978,6 +19121,11 @@ async function enterLayoutPreviewMode() {
 // hide the builder chrome that doesn't apply, clear out whatever the
 // placeholder/real landlet scene had, load this seller's own content.
 async function enterSellMode() {
+  // #2552: Sell has no per-frame work of its own (paginated, static
+  // between page turns) — see world/scene.js's own comment on why this is
+  // an explicit null rather than just leaving whatever the previous page
+  // load registered.
+  registerModeFrameUpdate(null);
   for (const id of SELL_HIDDEN_BUILDER_UI_IDS) {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
@@ -19010,7 +19158,7 @@ async function enterSellMode() {
     // fallback just below). Nothing left to show here. N44: lands on
     // showShopAccessGate's shared end state, not a full enterShopMode()
     // call — see that function's own comment for why.
-    currentMode = 'shop';
+    setCurrentMode('shop');
     updateModeNavUI();
     showShopAccessGate();
     return;
@@ -19026,15 +19174,15 @@ async function enterSellMode() {
   // profile the same way visiting Build mode for the first time would —
   // the natural cost of this app's "every account can hold both roles"
   // model, not a new one Sell mode introduces on its own.
-  builderId = await ensureBuilderIdentity();
+  setBuilderId(await ensureBuilderIdentity());
   refreshNotificationsBadge();
   refreshFriendsBadge();
   refreshDmBadge();
 
   try {
-    activeCatalog = await fetchCatalog();
+    setActiveCatalog(await fetchCatalog());
   } catch {
-    activeCatalog = FALLBACK_CATALOG;
+    setActiveCatalog(FALLBACK_CATALOG);
   }
   sellerShowcasePages = computeSellerShowcasePages(myProducts());
 
@@ -19116,87 +19264,6 @@ for (const btn of modeNavButtons) {
   });
 }
 
-const claimModalEl = document.getElementById('claim-modal');
-const claimMapCanvas = document.getElementById('claim-map-canvas');
-const claimStatusEl = document.getElementById('claim-status');
-const claimRefreshBtn = document.getElementById('claim-refresh-btn');
-const claimBackBtn = document.getElementById('claim-back-btn');
-const claimSelectionNameEl = document.getElementById('claim-selection-name');
-const claimConfirmBtn = document.getElementById('claim-confirm-btn');
-
-function runClaimFlow() {
-  return new Promise((resolve) => {
-    claimModalEl.classList.add('visible');
-    // No closeFn: this flow has no cancel action (claimBackBtn reloads the
-    // page rather than dismissing the modal in place — see its own comment
-    // below), so Escape intentionally does nothing here rather than
-    // silently abandoning a mandatory first-claim flow.
-    openModalA11y(claimModalEl, null);
-    loadLandletMap(resolve);
-    claimRefreshBtn.onclick = () => loadLandletMap(resolve);
-    // A reload rather than trying to unwind this modal in place — the
-    // same clean-slate escape hatch #mode-nav's own Shop/Build switching
-    // uses, and for the same reason: there's nothing built yet here to
-    // preserve, so starting bootstrap() over from scratch is simpler than
-    // reasoning about every way this could be left dangling (the builder
-    // this flow is claiming for getting deleted out from under it, say).
-    // Targets 'shop', not 'build': a builder with nothing claimed yet who
-    // backs out of this flow has nothing left to build on, same as
-    // declining to log in (see bootstrap()'s own fallback) — targeting
-    // 'build' here used to land back in resolveLandletId(), which finds
-    // the same still-unclaimed builder and immediately reopens this exact
-    // modal, an inescapable loop that also blocked reaching the account
-    // menu (it sits under this modal's z-index) to log out at all.
-    claimBackBtn.onclick = () => {
-      sessionStorage.setItem(START_MODE_KEY, 'shop');
-      location.reload();
-    };
-  });
-}
-
-// A self-contained Three.js scene/camera/renderer/controls for the claim
-// modal, entirely separate from the main builder scene (which hasn't loaded
-// any content yet at this point anyway) so it can be freely created and
-// torn down each time the modal opens without touching builder state.
-let claimFlyover = null;
-
-// loadLandletMap awaits a fetch before building its scene; if Refresh is
-// clicked again before that fetch resolves, disposeClaimFlyover() at the
-// new call's start is a no-op (claimFlyover is still null either way), so
-// without this guard both calls would go on to build a full scene, attach
-// their own canvas click/resize listeners, and race to overwrite the
-// shared claimFlyover — leaking one call's listeners/RAF loop forever.
-// Each call captures the token's value *before* it starts awaiting, then
-// checks it's still the latest afterward; a superseded call bails out
-// quietly instead of building anything.
-let claimMapLoadToken = 0;
-
-function disposeClaimFlyover() {
-  if (!claimFlyover) return;
-  cancelAnimationFrame(claimFlyover.animationHandle);
-  window.removeEventListener('resize', claimFlyover.onResize);
-  // #1131: this used to be the one listener loadLandletMap attaches that
-  // never got removed here — every completed load (not just a raced-out
-  // in-flight one, which claimMapLoadToken already guards against) left
-  // its own 'click' listener on claimMapCanvas permanently, each closing
-  // over this exact scene/plotMeshes/etc. Every ordinary Refresh click or
-  // failed-claim retry (claimSelectedLandlet's own catch calls
-  // loadLandletMap again) leaked one more, forever. Removed the same way
-  // onResize already is just above.
-  claimMapCanvas.removeEventListener('click', claimFlyover.onCanvasClick);
-  claimFlyover.controls.dispose();
-  claimFlyover.renderer.dispose();
-  for (const mesh of claimFlyover.plotMeshes) {
-    mesh.geometry.dispose();
-    mesh.material.dispose();
-  }
-  for (const outline of claimFlyover.plotOutlines) outline.geometry.dispose();
-  claimFlyover.plotOutlineMaterial.dispose();
-  claimFlyover.selectionOutline?.geometry.dispose();
-  claimFlyover.selectionOutlineMaterial.dispose();
-  claimFlyover = null;
-}
-
 function pointInPolygonXY(x, y, polygon) {
   let inside = false;
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
@@ -19276,7 +19343,7 @@ function computeGaplessWorldRadius(landlets, worldRadiusM) {
 // generated one, or a plain square sized to its area as a fallback for
 // legacy/placeholder landlets (e.g. starter-landlet) that predate real
 // procedural generation and were never given one.
-function shapeForLandlet(landlet) {
+export function shapeForLandlet(landlet) {
   const shape = new THREE.Shape();
   if (landlet.polygon && landlet.polygon.length >= 3) {
     shape.moveTo(landlet.polygon[0].x, landlet.polygon[0].y);
@@ -19320,321 +19387,6 @@ function applyGroundCurvature(geometry, worldCenterX, worldCenterY) {
   }
   position.needsUpdate = true;
   geometry.computeVertexNormals();
-}
-
-// Matches SHOP_PLOT_COLORS' own claimed color (see its comment) so the
-// claim-map flyover and the real 3D world it's picking a plot in agree.
-const CLAIM_PLOT_COLORS = { greenbelt: 0x6ca42e, claimed: 0xc2a878, water: 0x4a9bd1 };
-
-// docs/SPEC.md §1's Earth-curvature ground (issue #135, worker/
-// earthCurvature.js) applied to this flyover — the one place in this app
-// that currently renders many landlets across a real fraction of the
-// world's own radius at once. A single landlet's own ~31.6m ground plane
-// (Build/Shop mode's flat ground meshes, deliberately left untouched)
-// sags by a fraction of a millimeter at Earth's real radius — genuinely
-// imperceptible, the same "correct architecture, imperceptible at this
-// scale" tradeoff docs/SPEC.md §3 already makes for the buildable-volume
-// cone (see clampToLandlet/footprintScaleAtHeight above). This flyover's
-// own radius (the world's current growth radius) is the only distance
-// this app deals with that's large enough for that sag to eventually
-// matter, so it's the one ground mesh actually worth curving today.
-//
-// Builds a triangulated disc — ringCount concentric rings (plus a center
-// point) of angularSegments vertices each — with every vertex run through
-// curvedPosition, rather than THREE.CircleGeometry's flat single-ring fan
-// (which has no interior vertices to displace at all). Reused for both
-// the ground fill (a full disc from r=0) and the world-boundary ring
-// (innerRadius > 0, an annulus with no center fan) via buildCurvedRingBand
-// below.
-function buildCurvedDiscGeometry(radius, ringCount, angularSegments) {
-  const positions = [];
-  const center = curvedPosition({ x: 0, y: 0, z: 0 });
-  positions.push(center.x, center.y, center.z);
-  const ringStart = [];
-  for (let ring = 1; ring <= ringCount; ring++) {
-    ringStart[ring] = positions.length / 3;
-    const r = (radius * ring) / ringCount;
-    for (let a = 0; a < angularSegments; a++) {
-      const theta = (a / angularSegments) * Math.PI * 2;
-      const point = curvedPosition({ x: r * Math.cos(theta), y: r * Math.sin(theta), z: 0 });
-      positions.push(point.x, point.y, point.z);
-    }
-  }
-  const indices = [];
-  for (let a = 0; a < angularSegments; a++) {
-    const next = (a + 1) % angularSegments;
-    indices.push(0, ringStart[1] + a, ringStart[1] + next);
-  }
-  for (let ring = 1; ring < ringCount; ring++) {
-    const inner = ringStart[ring];
-    const outer = ringStart[ring + 1];
-    for (let a = 0; a < angularSegments; a++) {
-      const next = (a + 1) % angularSegments;
-      indices.push(inner + a, outer + a, outer + next);
-      indices.push(inner + a, outer + next, inner + next);
-    }
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setIndex(indices);
-  return geometry;
-}
-
-// A thin curved annulus between innerRadius and outerRadius — the same
-// per-vertex curvedPosition treatment as buildCurvedDiscGeometry, just two
-// rings with no center fan (this map's world-boundary line never reaches
-// r=0). ringCount lets a wide band (unused here, innerRadius/outerRadius
-// are close together for this map's own thin boundary line) still curve
-// smoothly instead of interpolating flat between just two curved rings.
-function buildCurvedRingBand(innerRadius, outerRadius, ringCount, angularSegments) {
-  const positions = [];
-  const ringStart = [];
-  for (let ring = 0; ring <= ringCount; ring++) {
-    ringStart[ring] = positions.length / 3;
-    const r = innerRadius + ((outerRadius - innerRadius) * ring) / ringCount;
-    for (let a = 0; a < angularSegments; a++) {
-      const theta = (a / angularSegments) * Math.PI * 2;
-      const point = curvedPosition({ x: r * Math.cos(theta), y: r * Math.sin(theta), z: 0 });
-      positions.push(point.x, point.y, point.z);
-    }
-  }
-  const indices = [];
-  for (let ring = 0; ring < ringCount; ring++) {
-    const inner = ringStart[ring];
-    const outer = ringStart[ring + 1];
-    for (let a = 0; a < angularSegments; a++) {
-      const next = (a + 1) % angularSegments;
-      indices.push(inner + a, outer + a, outer + next);
-      indices.push(inner + a, outer + next, inner + next);
-    }
-  }
-  const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
-  geometry.setIndex(indices);
-  return geometry;
-}
-
-// A navigable overhead flyover: an orbit-controlled camera looking down at
-// a curved rendering (see buildCurvedDiscGeometry above) of the whole world
-// circle and every landlet in it, each shape/position/color drawn straight
-// from real world data (no separate 2D projection math — a landlet's plot
-// sits at its own center_x_m/center_y_m, run through curvedPosition, on
-// the same ground the builder scene itself uses). Tapping a plot previews
-// it below regardless of status; only an available (greenbelt) one enables
-// the Claim button.
-async function loadLandletMap(resolve) {
-  const myLoadToken = ++claimMapLoadToken;
-  claimStatusEl.textContent = 'Loading the world…';
-  claimStatusEl.classList.remove('error');
-  claimSelectionNameEl.textContent = 'No plot selected';
-  claimConfirmBtn.disabled = true;
-  claimConfirmBtn.onclick = null;
-  disposeClaimFlyover();
-
-  let world;
-  let landlets;
-  try {
-    // Landlets still generating (not yet enclosed by the world's expansion
-    // radius) are queued backend state, not something to show a builder —
-    // only fetch the two statuses that are meaningful to see/select here.
-    // #885: fetchLandlets only ever returns one page — GET /api/landlets
-    // orders oldest-first, so a plain limit:100 here would permanently cap
-    // this map at the oldest 100 greenbelt/claimed landlets ever generated,
-    // silently hiding every plot from the ongoing world-expansion pipeline
-    // (same bug class #186/#190 already fixed for other /landlets callers).
-    // fetchAllLandlets follows nextCursor to get the real full set.
-    const [fetchedWorld, greenbeltLandlets, claimedLandlets] = await Promise.all([
-      fetchWorld(),
-      fetchAllLandlets({ status: 'greenbelt' }),
-      fetchAllLandlets({ status: 'claimed' }),
-    ]);
-    world = fetchedWorld;
-    landlets = [...greenbeltLandlets, ...claimedLandlets];
-  } catch (err) {
-    if (myLoadToken !== claimMapLoadToken) return; // superseded — a newer load owns the UI now
-    claimStatusEl.textContent = err.message || 'Could not load the world.';
-    claimStatusEl.classList.add('error');
-    return;
-  }
-  if (myLoadToken !== claimMapLoadToken) return; // superseded while fetching — abandon quietly, nothing built yet
-
-  const radiusM = world.radiusM;
-  const scene = new THREE.Scene();
-  // Bright pale sky + soft green ground — this map used to be a near-black
-  // "radar" backdrop, which read as ominous rather than the lighthearted,
-  // bright feel the rest of the world now goes for (see the day-night
-  // removal and index.html's own brand-color comment).
-  scene.background = new THREE.Color(0x87ceeb);
-  scene.add(new THREE.AmbientLight(0xffffff, 0.9));
-  const sun = new THREE.DirectionalLight(0xffffff, 0.7);
-  sun.position.set(radiusM, -radiusM, radiusM * 2);
-  scene.add(sun);
-
-  const ground = new THREE.Mesh(
-    buildCurvedDiscGeometry(radiusM * 1.4, 16, 64),
-    new THREE.MeshBasicMaterial({ color: 0xa8d98a }),
-  );
-  scene.add(ground);
-
-  const boundary = new THREE.Mesh(
-    buildCurvedRingBand(radiusM * 0.99, radiusM * 1.01, 2, 128),
-    new THREE.MeshBasicMaterial({ color: 0x16240a, transparent: true, opacity: 0.4, side: THREE.DoubleSide }),
-  );
-  boundary.position.z = 0.02;
-  scene.add(boundary);
-
-  // Plots of the same status share a fill color, so without a per-plot
-  // border two adjacent greenbelt lands would visually merge into one —
-  // this is a placeholder selection UI (a real flyover will eventually
-  // replace it), so making individual land boundaries readable at a glance
-  // matters more here than it would in a polished final view.
-  const plotOutlineMaterial = new THREE.LineBasicMaterial({ color: 0x0d1a08, transparent: true, opacity: 0.7 });
-  const plotMeshes = [];
-  const plotOutlines = [];
-  let anyAvailable = false;
-  for (const landlet of landlets) {
-    if (landlet.status === 'greenbelt' && landlet.landType !== 'water') anyAvailable = true;
-    const shape = shapeForLandlet(landlet);
-    const geometry = new THREE.ShapeGeometry(shape);
-    const material = new THREE.MeshBasicMaterial({ color: CLAIM_PLOT_COLORS[plotColorKeyForLandlet(landlet)] ?? 0xffffff });
-    const mesh = new THREE.Mesh(geometry, material);
-    // The plot's own polygon (shape, above) stays flat — only its
-    // placement moves to the real curved position. Tilting the polygon
-    // itself to lie tangent to the curve would be more "correct," but at
-    // one landlet's own ~31.6m span the tilt is imperceptible (the same
-    // reasoning this map's own ground curve comment gives), so it's left
-    // flat rather than adding a tangent-plane rotation with no visible
-    // payoff yet.
-    const curvedCenter = curvedPosition({ x: landlet.center.x, y: landlet.center.y, z: 0 });
-    mesh.position.set(curvedCenter.x, curvedCenter.y, curvedCenter.z + 0.05);
-    mesh.userData.landlet = landlet;
-    scene.add(mesh);
-    plotMeshes.push(mesh);
-
-    const outlineGeometry = new THREE.BufferGeometry().setFromPoints(
-      shape.getPoints().map((p) => new THREE.Vector3(p.x, p.y, 0)),
-    );
-    const outline = new THREE.LineLoop(outlineGeometry, plotOutlineMaterial);
-    outline.position.set(curvedCenter.x, curvedCenter.y, curvedCenter.z + 0.06);
-    scene.add(outline);
-    plotOutlines.push(outline);
-  }
-
-  // A dedicated outline per selection, built from the same polygon as the
-  // plot itself (not a bounding box, which reads as a plain rectangle for
-  // every non-square shape) — swapped out on each click the same way
-  // applyLandletShape() swaps the main builder scene's ground geometry. A
-  // bold yellow ring (the brand's secondary pale-yellow hue, saturated up
-  // for a "this one's selected" highlight) rather than white, which would
-  // barely register against this map's now-bright ground colors.
-  const selectionOutlineMaterial = new THREE.LineBasicMaterial({ color: 0xf5c518 });
-  let selectionOutline = null;
-  let selectedMesh = null;
-
-  const camera = new THREE.PerspectiveCamera(50, 1, 0.1, radiusM * 20);
-  camera.up.set(0, 0, 1); // Z-up, matching the builder scene's own convention
-  camera.position.set(0, -radiusM * 1.8, radiusM * 1.6);
-  camera.lookAt(0, 0, 0);
-
-  const renderer = new THREE.WebGLRenderer({ canvas: claimMapCanvas, antialias: true });
-  const controls = new OrbitControls(camera, claimMapCanvas);
-  controls.target.set(0, 0, 0);
-  controls.minDistance = radiusM * 0.15;
-  controls.maxDistance = radiusM * 6;
-  controls.maxPolarAngle = Math.PI * 0.49; // stop just shy of edge-on/underground
-  controls.update();
-
-  function onResize() {
-    const rect = claimMapCanvas.getBoundingClientRect();
-    if (rect.width === 0 || rect.height === 0) return;
-    renderer.setSize(rect.width, rect.height, false);
-    camera.aspect = rect.width / rect.height;
-    camera.updateProjectionMatrix();
-  }
-  onResize();
-  window.addEventListener('resize', onResize);
-
-  const raycaster = new THREE.Raycaster();
-  const pointerNdcClaim = new THREE.Vector2();
-  // Named (rather than an inline arrow passed straight to addEventListener)
-  // so disposeClaimFlyover above can remove this exact function later —
-  // see its own comment on why that matters (#1131).
-  function onCanvasClick(event) {
-    const rect = claimMapCanvas.getBoundingClientRect();
-    pointerNdcClaim.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
-    pointerNdcClaim.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
-    raycaster.setFromCamera(pointerNdcClaim, camera);
-    const hits = raycaster.intersectObjects(plotMeshes);
-    if (hits.length === 0) return;
-    const mesh = hits[0].object;
-    const landlet = mesh.userData.landlet;
-
-    if (selectedMesh) {
-      selectedMesh.material.color.setHex(CLAIM_PLOT_COLORS[plotColorKeyForLandlet(selectedMesh.userData.landlet)] ?? 0xffffff);
-    }
-    selectedMesh = mesh;
-    // Lighten toward white rather than using a fixed highlight color, so
-    // the highlighted plot still visibly carries its own status color
-    // (available vs. claimed vs. water) instead of every selection looking
-    // the same.
-    mesh.material.color.setHex(CLAIM_PLOT_COLORS[plotColorKeyForLandlet(landlet)] ?? 0xffffff).lerp(new THREE.Color(0xffffff), 0.45);
-
-    if (selectionOutline) {
-      scene.remove(selectionOutline);
-      selectionOutline.geometry.dispose();
-    }
-    const outlinePoints = shapeForLandlet(landlet).getPoints().map((p) => new THREE.Vector3(p.x, p.y, 0));
-    selectionOutline = new THREE.LineLoop(new THREE.BufferGeometry().setFromPoints(outlinePoints), selectionOutlineMaterial);
-    const curvedSelectionCenter = curvedPosition({ x: landlet.center.x, y: landlet.center.y, z: 0 });
-    selectionOutline.position.set(curvedSelectionCenter.x, curvedSelectionCenter.y, curvedSelectionCenter.z + 0.07);
-    selectionOutline.renderOrder = 2;
-    scene.add(selectionOutline);
-    claimFlyover.selectionOutline = selectionOutline;
-
-    const statusLabel = landlet.landType === 'water' ? 'Water' : landlet.status === 'greenbelt' ? 'Available' : 'Claimed';
-    claimSelectionNameEl.textContent = `${landlet.name} (${formatArea(landlet.areaM2)}) — ${statusLabel}`;
-    claimConfirmBtn.disabled = landlet.status !== 'greenbelt' || landlet.landType === 'water';
-    claimConfirmBtn.onclick = () => claimSelectedLandlet(landlet, resolve);
-  }
-  claimMapCanvas.addEventListener('click', onCanvasClick);
-
-  function animate() {
-    claimFlyover.animationHandle = requestAnimationFrame(animate);
-    controls.update();
-    renderer.render(scene, camera);
-  }
-  claimFlyover = {
-    scene, camera, renderer, controls, plotMeshes, plotOutlines, plotOutlineMaterial, onResize, onCanvasClick, animationHandle: 0,
-    selectionOutline: null, selectionOutlineMaterial,
-  };
-  animate();
-
-  // The world now grows itself on a schedule (see worker/index.js's
-  // scheduled() export) rather than needing a player to trigger it by
-  // hand — this can only actually show right after a fresh deployment, in
-  // the brief window before the first automatic growth cycle runs.
-  claimStatusEl.textContent = anyAvailable
-    ? ''
-    : 'No lándlets are ready to claim yet — check back again shortly.';
-}
-
-async function claimSelectedLandlet(landlet, resolve) {
-  claimConfirmBtn.disabled = true;
-  claimStatusEl.textContent = `Claiming ${landlet.name}…`;
-  claimStatusEl.classList.remove('error');
-  try {
-    const claimed = await claimLandlet(landlet.landletId);
-    disposeClaimFlyover();
-    claimModalEl.classList.remove('visible');
-    closeModalA11y(claimModalEl);
-    resolve(claimed.landletId);
-  } catch (err) {
-    // Someone else likely claimed it in the meantime (409) — refresh the
-    // map since its status is now stale.
-    claimStatusEl.textContent = err.message || 'Claim failed — it may have just been taken.';
-    claimStatusEl.classList.add('error');
-    loadLandletMap(resolve);
-  }
 }
 
 // #1170 (owner request, 2026-10-01): a grayed-out, non-interactive outline
@@ -19712,7 +19464,7 @@ async function bootstrap() {
     ? requestedStartMode : 'shop';
 
   if (startMode === 'shop') {
-    currentMode = 'shop';
+    setCurrentMode('shop');
     updateModeNavUI();
     await enterShopMode();
     return;
@@ -19728,7 +19480,7 @@ async function bootstrap() {
   await authInitPromise;
 
   if (startMode === 'sell') {
-    currentMode = 'sell';
+    setCurrentMode('sell');
     updateModeNavUI();
     await enterSellMode();
     return;
@@ -19739,20 +19491,20 @@ async function bootstrap() {
   // so updateModeNavUI() below is a harmless no-op (no nav button's
   // data-mode ever equals 'layoutPreview').
   if (startMode === 'layoutPreview') {
-    currentMode = 'layoutPreview';
+    setCurrentMode('layoutPreview');
     updateModeNavUI();
     await enterLayoutPreviewMode();
     return;
   }
 
-  currentMode = 'build';
+  setCurrentMode('build');
   updateModeNavUI();
   // #1831: fetchCatalog needs no builderId (unlike resolveLandletId just
   // below, which filters by it) -- firing it alongside ensureBuilderIdentity
   // rather than after overlaps that round trip with this one instead of
   // paying for both in serial.
   const catalogPromise = fetchCatalog();
-  builderId = await ensureBuilderIdentity();
+  setBuilderId(await ensureBuilderIdentity());
   if (!builderId) {
     // Declined to log in (closed #auth-modal without signing in/up) —
     // Build/Sell both require a real account now (docs/API.md's
@@ -19760,25 +19512,28 @@ async function bootstrap() {
     // on showShopAccessGate's shared end state, not a full enterShopMode()
     // call — see that function's own comment for why.
     catalogPromise.catch(() => {}); // abandoning it here -- avoid an unhandled-rejection warning if it fails
-    currentMode = 'shop';
+    setCurrentMode('shop');
     updateModeNavUI();
     showShopAccessGate();
     return;
   }
+  // #2552: Build's own tween/edge-pan/controls/debug/selection-highlight
+  // per-frame work — see buildModeFrameUpdate's own comment.
+  registerModeFrameUpdate(buildModeFrameUpdate);
   refreshNotificationsBadge();
   refreshFriendsBadge();
   refreshDmBadge();
   let instances;
   try {
-    currentLandletId = await resolveLandletId();
+    setCurrentLandletId(await resolveLandletId());
     const [catalog, remoteInstances, landletRecord, levels] = await Promise.all([
       catalogPromise, fetchInstances(currentLandletId), fetchLandlet(currentLandletId),
       fetchLandletLevels(currentLandletId),
     ]);
-    activeCatalog = catalog;
+    setActiveCatalog(catalog);
     instances = remoteInstances;
-    myBundles = [];
-    communityBundles = [];
+    setMyBundles([]);
+    setCommunityBundles([]);
     applyLandletShape(landletRecord);
     currentLandletAreaM2 = landletRecord.areaM2;
     currentLandletLevels = levels;
@@ -19804,17 +19559,17 @@ async function bootstrap() {
     Promise.all([fetchBundles(), fetchSharedBundles()])
       .then(([bundles, shared]) => {
         if (bundlesLoadToken !== bundlePickerLoadToken) return; // superseded while loading -- a newer bundle-picker action owns the picker now
-        myBundles = bundles;
-        communityBundles = shared;
+        setMyBundles(bundles);
+        setCommunityBundles(shared);
         renderBundlePicker();
       })
       .catch((err) => console.warn('Could not load bundles:', err));
   } catch (err) {
     console.warn('Backend unreachable, falling back to local/placeholder data:', err);
-    activeCatalog = FALLBACK_CATALOG;
-    myBundles = [];
-    communityBundles = [];
-    currentLandletId = 'starter-landlet';
+    setActiveCatalog(FALLBACK_CATALOG);
+    setMyBundles([]);
+    setCommunityBundles([]);
+    setCurrentLandletId('starter-landlet');
     currentLandletAreaM2 = LANDLET_AREA_M2;
     currentLandletLevels = [];
     currentLevelIndex = 0;

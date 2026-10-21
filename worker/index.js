@@ -6,13 +6,19 @@ import { generateLandletRing, powerLawPlots } from './landGenerator.js';
 import { generateOrganicMosaic } from './organicLandGenerator.js';
 import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from './earthCurvature.js';
 import migrationsManifest from './migrations-manifest.json';
-
-const JSON_HEADERS = {
-  'content-type': 'application/json; charset=utf-8',
-  'access-control-allow-origin': '*',
-  'access-control-allow-methods': 'GET,POST,PATCH,PUT,DELETE,OPTIONS',
-  'access-control-allow-headers': 'content-type',
-};
+// #2501/#2528: cross-cutting helpers used from nearly every route handler
+// below, extracted into worker/lib/ -- see each module's own comment for
+// the call-site counts that justified pulling it out of this file.
+import { json, HttpError, JSON_HEADERS, clientIp } from './lib/http.js';
+import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './lib/rate-limit.js';
+import { adminActionLogStatement } from './lib/admin-log.js';
+import { timingSafeEqual, bytesToHex, hexToBytes } from './lib/crypto.js';
+import {
+  readJson, stringValue, labelValue, databaseHttpError, errorMessages,
+  finiteNumber, queryLimit, decodeCursor, encodeCursor, assertReferencesExist,
+} from './lib/validation.js';
+import { notificationStatement, fireNotification, fireNotifications } from './lib/notifications.js';
+import { SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser, requireAdmin, assertOwner } from './lib/auth.js';
 
 // #1360: generic hardening every response from this Worker should carry,
 // regardless of path — applied in one place (fetch's own wrapper below)
@@ -176,28 +182,6 @@ async function computeAccessToken(passphrase) {
   );
   const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode('higglehaven-access-granted'));
   return [...new Uint8Array(signature)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-// Not a security-critical timing defense here (this gates a handful of
-// friends, not a real adversary) — just cheap enough to use everywhere a
-// secret gets compared instead of reaching for `===` in some spots and not
-// others.
-function timingSafeEqual(a, b) {
-  if (a.length !== b.length) return false;
-  let mismatch = 0;
-  for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return mismatch === 0;
-}
-
-function parseCookies(header) {
-  const cookies = {};
-  if (!header) return cookies;
-  for (const part of header.split(';')) {
-    const eq = part.indexOf('=');
-    if (eq === -1) continue;
-    cookies[part.slice(0, eq).trim()] = part.slice(eq + 1).trim();
-  }
-  return cookies;
 }
 
 // Embedded as a base64 data URI (not a separate <img src="/wordmark.png">
@@ -4532,14 +4516,6 @@ async function requireVerifiedSession(request, db) {
   return user;
 }
 
-// Thrown wherever an existing row's own owner column doesn't match the
-// session's resolved builder/seller id — the shared shape for every
-// "is this actually yours" check from here on, so each call site reads as
-// one line instead of re-deriving the same if/throw every time.
-function assertOwner(actualOwnerId, sessionOwnerId, message) {
-  if (actualOwnerId !== sessionOwnerId) throw new HttpError(message, 403);
-}
-
 // A row's own seller_id column can be non-null yet dangling — pointing at
 // a seller that DELETE /api/sellers/:sellerId already removed (see that
 // handler's own comment: intentionally left as-is, "the same way a
@@ -4907,8 +4883,14 @@ async function handleNotifications(request, db, route, url) {
     await checkRateLimit(db, `notification-mutate:${sessionBuilder.builder_id}`, NOTIFICATION_MUTATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (input.read === true) {
+      // #2509: guarded on read_at IS NULL, matching every sibling mark-read
+      // write (mark-all-read just below, direct-message mark-read, the
+      // sold-out-marker dismiss) -- without it, a second PATCH (e.g. a fast
+      // double-tap/Enter-plus-click before the first request's response
+      // clears the click handler) re-stamps read_at to a later time than
+      // when the user actually first read it.
       await db.prepare(`
-        UPDATE notifications SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE notification_id = ?
+        UPDATE notifications SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE notification_id = ? AND read_at IS NULL
       `).bind(route[1]).run();
     }
     const updated = await db.prepare('SELECT * FROM notifications WHERE notification_id = ?').bind(route[1]).first();
@@ -7338,71 +7320,6 @@ async function notifyOfNewBid(db, auction, amountCents, bidderBuilderId, previou
   await fireNotifications(db, notifications);
 }
 
-function notificationStatement(db, builderId, message, templateId = null) {
-  return db.prepare(
-    'INSERT INTO notifications (notification_id, builder_id, message, template_id) VALUES (?, ?, ?, ?)',
-  ).bind(`notification-${crypto.randomUUID()}`, builderId, message, templateId);
-}
-
-// #1122: notifications.builder_id is NOT NULL REFERENCES builders ON DELETE
-// CASCADE, so a target builder who self-deletes in the narrow window
-// between a call site reading its id and this INSERT actually running turns
-// an explicitly best-effort notification into a real, hard FK failure —
-// either surfacing a misleading error for a mutation that already committed
-// (when run standalone), or rolling back an otherwise-valid batch entirely,
-// including the mutation it was only meant to report on (when previously
-// batched atomically alongside it). Every call site now fires its
-// notification(s) through fireNotification/fireNotifications below, outside
-// of any batch shared with a real mutation, so this specific, expected race
-// can never affect anything but the notification itself.
-function isForeignKeyConstraintError(err) {
-  // errorMessages (below) walks the error's own .cause chain — same
-  // unwrapping databaseHttpError already relies on to recognize a D1
-  // constraint failure, since the raw message isn't always on the
-  // outermost error object.
-  return errorMessages(err).includes('FOREIGN KEY constraint failed');
-}
-
-// Exported so #1122's own regression test can exercise the swallow-vs-
-// rethrow decision directly, the same way refundIdempotencyKey and
-// auctionSettlementEventId above are exported for their own tests.
-export async function fireNotification(db, builderId, message, templateId = null) {
-  try {
-    await notificationStatement(db, builderId, message, templateId).run();
-  } catch (err) {
-    if (!isForeignKeyConstraintError(err)) throw err;
-  }
-}
-
-// Same as fireNotification, for more than one recipient at once — each
-// still run and caught independently, so one recipient's self-delete race
-// never affects another's notification.
-async function fireNotifications(db, notifications) {
-  for (const { builderId, message, templateId } of notifications) {
-    await fireNotification(db, builderId, message, templateId);
-  }
-}
-
-// #814: accountability record for an admin-gated mutation — who did what,
-// not just whether it was allowed. Returns a statement (same shape as
-// notificationStatement above) so call sites can batch it atomically
-// alongside their own mutation rather than risk the mutation succeeding
-// with no log row if a separate .run() failed. detail is any small
-// JSON-serializable context worth keeping (e.g. the affected email/amount);
-// optional since not every action needs it.
-function adminActionLogStatement(db, adminUserId, actionType, targetType, targetId, detail) {
-  return db.prepare(
-    'INSERT INTO admin_action_log (log_id, admin_user_id, action_type, target_type, target_id, detail_json) VALUES (?, ?, ?, ?, ?, ?)',
-  ).bind(
-    `admin-action-${crypto.randomUUID()}`,
-    adminUserId,
-    actionType,
-    targetType ?? null,
-    targetId ?? null,
-    detail !== undefined ? JSON.stringify(detail) : null,
-  );
-}
-
 // #996: admin_action_log (#814) was write-only from its own first
 // landing (#813's own body called an admin-facing browse UI an
 // intentional, separate follow-up) -- this is that follow-up. Same
@@ -7585,64 +7502,12 @@ async function requireSessionSeller(request, db) {
 // above (and every ownership check built on them throughout this file)
 // are what actually put that unforgeable identity to work.
 
-const SESSION_COOKIE_NAME = 'hh_session';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const PBKDF2_ITERATIONS = 100000; // see the migration's own comment on why this is tunable per-hash, not global
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour — shorter than email verification since a leaked reset link is higher-stakes
 const FAILED_LOGIN_LOCK_THRESHOLD = 5;
 const FAILED_LOGIN_LOCK_DURATION_MS = 15 * 60 * 1000;
-
-// Fixed-window rate limiting (migrations/0057) for the auth endpoints that
-// are both unauthenticated and repeatable and (once RESEND_API_KEY is
-// configured) can trigger a real outbound email to an arbitrary address:
-// signup and password-reset-request. Login already has its own real
-// per-account lockout (failed_login_attempts/locked_until above).
-// resend-verification (#363) is session-gated rather than IP+email
-// bucketed like the two above — it doesn't have an arbitrary-address
-// enumeration angle to guard against, but still needs a cap keyed by the
-// caller's own user id, or one logged-in user could loop it indefinitely.
-//
-// Bucketed by client IP + the specific email being targeted, not IP alone
-// — this limits hammering one target from one source without any new
-// Cloudflare bindings, and (deliberately) means the existing test suite's
-// per-case unique emails never collide with each other in the same D1.
-// Deliberately scoped: this stops targeted retry/harassment of one email
-// address, not an IP spraying signups across many distinct addresses —
-// that broader case is already substantially covered today by the
-// private-preview access-gate passphrase (see checkAccessGate) blocking
-// these endpoints from anyone who doesn't already have it, and would need
-// something like Cloudflare Turnstile/Bot Management if the gate ever
-// comes off, not just a bigger version of this.
-const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
-
-function clientIp(request) {
-  return request.headers.get('cf-connecting-ip') || 'unknown';
-}
-
-async function checkRateLimit(db, bucketKey, maxAttempts) {
-  const now = Date.now();
-  // A separate SELECT-then-INSERT here would be a check-then-act race:
-  // concurrent requests sharing a bucket (e.g. a burst from one IP) could
-  // all read the same under-the-limit count before any of their inserts
-  // committed, letting a burst blow well past maxAttempts. Folding the
-  // count check into the INSERT's own WHERE clause makes the whole
-  // check-and-increment one atomic statement instead — nothing can
-  // interleave inside it. `changes` is 0 exactly when the subquery's count
-  // was already at or over the limit, i.e. the guard blocked the insert.
-  // Old rows outside the window are filtered here rather than actively
-  // deleted per call now — actual cleanup is pruneExpiredAuthState's job
-  // (run from the same cron as world growth), so a rate-limit check no
-  // longer needs its own separate write just to stay tidy.
-  const result = await db.prepare(`
-    INSERT INTO rate_limit_events (bucket_key, created_at)
-    SELECT ?1, ?2
-    WHERE (SELECT COUNT(*) FROM rate_limit_events WHERE bucket_key = ?1 AND created_at >= ?3) < ?4
-  `).bind(bucketKey, now, now - RATE_LIMIT_WINDOW_MS, maxAttempts).run();
-  if (result.meta.changes === 0) {
-    throw new HttpError('Too many attempts. Please wait a while and try again.', 429);
-  }
-}
 
 // checkRateLimit only ever prunes the one bucket it's currently checking —
 // a bucket that's hit once and never revisited (e.g. signup/reset attempts
@@ -7761,16 +7626,6 @@ export async function pruneOldDatabaseBackups(bucket) {
   if (toDelete.length > 0) await bucket.delete(toDelete);
 }
 
-function bytesToHex(bytes) {
-  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function hexToBytes(hex) {
-  const bytes = new Uint8Array(hex.length / 2);
-  for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-  return bytes;
-}
-
 // A random, high-entropy (256-bit) opaque value — used both for session
 // tokens (the raw value a browser's cookie carries) and for email-
 // verification/password-reset tokens (the raw value a link's query string
@@ -7779,11 +7634,6 @@ function hexToBytes(hex) {
 // migrations/0053_users_auth.sql for why.
 function generateToken() {
   return bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
-}
-
-async function sha256Hex(text) {
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return bytesToHex(new Uint8Array(digest));
 }
 
 // Self-describing `pbkdf2$<iterations>$<saltHex>$<hashHex>` format (see
@@ -7956,51 +7806,6 @@ function clearSessionCookieHeader(url) {
 // override) so links built here are actually reachable while testing.
 function appBaseUrl(env) {
   return env.APP_BASE_URL || 'https://higglehaven.com';
-}
-
-async function currentUser(request, db) {
-  const cookies = parseCookies(request.headers.get('cookie'));
-  const token = cookies[SESSION_COOKIE_NAME];
-  if (!token) return null;
-  const tokenHash = await sha256Hex(token);
-  const row = await db.prepare(`
-    SELECT users.* FROM sessions
-    JOIN users ON users.user_id = sessions.user_id
-    WHERE sessions.token_hash = ? AND sessions.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-  `).bind(tokenHash).first();
-  return row || null;
-}
-
-async function requireCurrentUser(request, db) {
-  const user = await currentUser(request, db);
-  if (!user) throw new HttpError('Not authenticated', 401);
-  // #2030 (sub-issue of #1201): the single join point every authenticated
-  // request goes through -- enforcing the check here, rather than in
-  // currentUser() itself, is what lets this throw a distinct, client-
-  // actionable error instead of the generic 401 a plain null would produce
-  // (a suspended user's session is still valid; it's their standing that's
-  // revoked, not their login). #2029's own admin endpoints read a TARGET
-  // account's suspension state via a direct SELECT on account_suspensions,
-  // never through currentUser/requireCurrentUser, so they're unaffected by
-  // this -- only the CALLING admin's own session goes through this check,
-  // the same as any other authenticated action.
-  const activeSuspension = await db.prepare(`
-    SELECT 1 FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
-  `).bind(user.user_id).first();
-  if (activeSuspension) throw new HttpError('Your account is suspended', 403, { suspended: true });
-  return user;
-}
-
-// Gates world-generation tooling (see migrations/0055_admin_role.sql) —
-// manual /api/world settings edits and the land-candidate/ring endpoints
-// below. Deliberately NOT applied to the endpoints that actually grow the
-// world day to day (see the scheduled() export near the bottom of this
-// file) — those run automatically, unauthenticated, as the trusted server
-// itself, not through any HTTP request a session could gate.
-async function requireAdmin(request, db) {
-  const user = await requireCurrentUser(request, db);
-  if (!user.is_admin) throw new HttpError('Admin access required', 403);
-  return user;
 }
 
 // #2212: no server-side HTML-escaping helper existed anywhere in this file
@@ -12321,22 +12126,19 @@ const EXPORT_DATA_RATE_LIMIT_MAX = 10;
 
 // #1986 (sub-issue of #1983): the `social` section of handleExportData
 // below. Most of these tables genuinely key off builder_id/user_id, but
-// two don't, and this returns the best available approximation rather
-// than silently omitting them:
-// - calendar_events has no author column at all (unlike sign_posts, which
-//   got a real user_id in #1830/migrations/0125) -- only a free-text
-//   author_label stamped from the poster's label at post time (#289). A
-//   label match against this account's CURRENT label is the best signal
-//   available; it misses events posted under a since-changed label and
-//   could, in principle, catch another account that happens to share
-//   today's label with a past poster. Flagged here rather than guessed
-//   past silently -- a real author_id column is the actual fix, tracked
-//   separately from this export feature.
+// one doesn't, and this returns the best available approximation rather
+// than silently omitting it:
 // - landlet_versions/version_instances have no author column either --
 //   only landlet_id. "Authored by this builder" is approximated as
 //   "versions of landlets this builder currently owns," since landlet
 //   ownership itself can change hands (auction, admin reassignment) and
 //   nothing records who actually created a given version.
+// calendar_events used to be in this same "no real author column" bucket
+// (a free-text author_label match against this account's CURRENT label,
+// per #289) -- migrations/0135_calendar_events_user_id.sql (#1975) closed
+// that gap with a real user_id FK, same shape as sign_posts (#1830/
+// migrations/0125). See the calendarEvents query below for the real
+// filter now in use.
 async function exportSocialSection(db, builderId, userId) {
   const friendships = await db.prepare(`
     SELECT * FROM friendships WHERE requester_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
@@ -18259,17 +18061,6 @@ function routePath(pathname) {
   }
 }
 
-async function readJson(request) {
-  if (!request.headers.get('content-type')?.includes('application/json')) {
-    throw new HttpError('Expected application/json request body', 415);
-  }
-  try {
-    return await request.json();
-  } catch {
-    throw new HttpError('Request body is not valid JSON', 400);
-  }
-}
-
 // placed_instances/catalog_templates FK columns otherwise surface a
 // nonexistent reference as a raw SQLite constraint failure — caught by
 // databaseHttpError below as a generic 409, instead of a clean, specific
@@ -18360,21 +18151,6 @@ async function selectModelUrlReferencesChunked(db, urls) {
     rows.push(...results);
   }
   return rows;
-}
-
-export async function assertReferencesExist(db, table, column, values, field) {
-  const uniqueValues = [...new Set(values)];
-  const found = new Set();
-  for (let i = 0; i < uniqueValues.length; i += D1_MAX_BOUND_PARAMETERS) {
-    const chunk = uniqueValues.slice(i, i + D1_MAX_BOUND_PARAMETERS);
-    const placeholders = chunk.map(() => '?').join(', ');
-    const { results } = await db.prepare(
-      `SELECT ${column} AS value FROM ${table} WHERE ${column} IN (${placeholders})`,
-    ).bind(...chunk).all();
-    for (const row of results) found.add(row.value);
-  }
-  const missing = uniqueValues.find((value) => !found.has(value));
-  if (missing !== undefined) throw new HttpError(`${field} "${missing}" does not exist`, 400);
 }
 
 // #729: saved_layout_instances (migrations/0080) and version_instances
@@ -18647,44 +18423,6 @@ async function getInstancesById(db, instanceIds) {
 // shows verbatim via `alert(err.message || ...)`. Reworded to plain,
 // in-app phrasing with the same meaning; the ring-specific messages above
 // were already written this way and are left unchanged.
-function databaseHttpError(error) {
-  const message = errorMessages(error);
-
-  if (message.includes('UNIQUE constraint failed')) {
-    return new HttpError('That already exists.', 409);
-  }
-  if (message.includes('generated ring radial overlap')) {
-    return new HttpError('Generated ring would overlap existing generated rings', 409);
-  }
-  if (message.includes('generated ring boundary mismatch')) {
-    return new HttpError('Adjacent generated rings must use matching boundary seams', 409);
-  }
-  if (message.includes('generated ring adjacency parent mismatch')) {
-    return new HttpError('Adjacent ring does not match its parent reservation', 409);
-  }
-  if (message.includes('generated ring candidates are immutable')) {
-    return new HttpError('Generated ring candidates cannot be changed individually', 409);
-  }
-  if (message.includes('FOREIGN KEY constraint failed')) {
-    return new HttpError("That didn't go through — something it depends on is missing, or something else still depends on it.", 409);
-  }
-  if (message.includes('CHECK constraint failed') || message.includes('NOT NULL constraint failed')) {
-    return new HttpError('That request has an invalid or missing value — please check the details and try again.', 400);
-  }
-
-  return null;
-}
-
-function errorMessages(error) {
-  const messages = [];
-  let current = error;
-  while (current && !messages.includes(current.message)) {
-    if (typeof current.message === 'string') messages.push(current.message);
-    current = current.cause;
-  }
-  return messages.join(' ');
-}
-
 // Baseline prohibited-content policy (docs/SPEC.md §4: "Prohibited
 // categories (baseline, eBay/Etsy-referenced): weapons capable of serious
 // harm, controlled substances/paraphernalia, adult content,
@@ -19457,29 +19195,6 @@ function integerValue(value, field) {
   return number;
 }
 
-function stringValue(value, field) {
-  if (typeof value !== 'string' || value.trim() === '') throw new HttpError(`${field} is required`, 400);
-  return value.trim();
-}
-
-// Found via backlog audit (#337): sign-post authorLabel, review
-// authorLabel, and purchase buyerLabel are all free-text "who's this
-// from" display labels validated with plain stringValue — unlike every
-// other user-facing free-text field in this file (a post's own text
-// capped at 280, catalog search's q at 100, password at 200), none of
-// them had an upper bound. The frontend's own shopperLabel() prompt
-// (src/main.js) has no maxlength either, so nothing stops an arbitrarily
-// long value even through the normal UI, let alone a direct API call.
-const MAX_LABEL_LENGTH = 100;
-
-function labelValue(value, field) {
-  const label = stringValue(value, field);
-  if (label.length > MAX_LABEL_LENGTH) {
-    throw new HttpError(`${field} must be ${MAX_LABEL_LENGTH} characters or fewer`, 400);
-  }
-  return label;
-}
-
 // #1584: task_id is a client-supplied value with no character restriction
 // (labelValue alone only checks length), and it's interpolated unescaped
 // into several HTML attributes on the Control Room admin board -- every real
@@ -19552,12 +19267,6 @@ function positiveNumber(value, field) {
   return number;
 }
 
-function finiteNumber(value, field) {
-  const number = Number(value);
-  if (!Number.isFinite(number)) throw new HttpError(`${field} must be a finite number`, 400);
-  return number;
-}
-
 function optionalInteger(value, field) {
   if (value === undefined || value === null) return null;
   const number = Number(value);
@@ -19610,14 +19319,6 @@ function optionalSkeletonSignature(value) {
   return value;
 }
 
-function queryLimit(value, defaultValue) {
-  if (value === null) return defaultValue;
-  if (!/^\d+$/.test(value)) throw new HttpError('limit must be an integer between 1 and 100', 400);
-  const limit = Number(value);
-  if (limit < 1 || limit > 100) throw new HttpError('limit must be an integer between 1 and 100', 400);
-  return limit;
-}
-
 function queryNonnegativeInteger(value, field) {
   if (value === null) return null;
   const text = stringValue(value, field);
@@ -19637,30 +19338,6 @@ function queryPositiveNumber(value, field) {
     throw new HttpError(`${field} must be a positive number`, 400);
   }
   return number;
-}
-
-function encodeCursor(createdAt, id) {
-  const bytes = new TextEncoder().encode(JSON.stringify([createdAt, id]));
-  return btoa(String.fromCharCode(...bytes));
-}
-
-function decodeCursor(value) {
-  if (value === null) return null;
-  try {
-    const bytes = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
-    const decoded = JSON.parse(new TextDecoder().decode(bytes));
-    // #1470: same empty-string guard decodeCatalogCursor/decodeCatalogPriceCursor
-    // already have below -- without it, a cursor encoding ["",""] (never
-    // produced by encodeCursor itself) silently matches every row on a
-    // descending-sort endpoint's `created_at < '' OR (... id < '')` check,
-    // returning an empty page instead of the 400 a malformed cursor should get.
-    if (!Array.isArray(decoded) || decoded.length !== 2 ||
-        typeof decoded[0] !== 'string' || decoded[0] === '' ||
-        typeof decoded[1] !== 'string' || decoded[1] === '') throw new Error();
-    return { createdAt: decoded[0], id: decoded[1] };
-  } catch {
-    throw new HttpError('cursor is invalid', 400);
-  }
 }
 
 function encodeVersionCursor(versionNumber) {
@@ -19715,18 +19392,5 @@ function decodeCatalogPriceCursor(value) {
     return { priceCents: decoded[0], templateId: decoded[1] };
   } catch {
     throw new HttpError('cursor is invalid', 400);
-  }
-}
-
-function json(payload, status = 200, extraHeaders) {
-  const headers = extraHeaders ? { ...JSON_HEADERS, ...extraHeaders } : JSON_HEADERS;
-  return new Response(JSON.stringify(payload, null, 2), { status, headers });
-}
-
-class HttpError extends Error {
-  constructor(message, status, extra) {
-    super(message);
-    this.status = status;
-    this.extra = extra;
   }
 }

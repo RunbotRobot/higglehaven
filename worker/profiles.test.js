@@ -1479,6 +1479,32 @@ describe('Notifications', () => {
     expect(missing.response.status).toBe(404);
   });
 
+  // #2509: a second PATCH {read: true} on an already-read notification used
+  // to re-stamp read_at to a later time -- unlike every sibling mark-read
+  // write (mark-all-read just below, direct-message mark-read, the
+  // sold-out-marker dismiss), this UPDATE had no `read_at IS NULL` guard.
+  // Realistic trigger: a fast double-tap/Enter-plus-click sends two
+  // concurrent PATCHes before the first one's response clears the
+  // frontend's own click listener (src/main.js's markReadOnClick).
+  it('leaves readAt unchanged on a second PATCH {read: true} for an already-read notification', async () => {
+    const { owner } = await seedNotifications('mark-twice');
+    const before = await api('/notifications', owner.session());
+    const target = before.body.notifications[0];
+
+    const first = await api(`/notifications/${target.notificationId}`, owner.session({
+      method: 'PATCH', body: JSON.stringify({ read: true }),
+    }));
+    expect(first.response.status).toBe(200);
+    const firstReadAt = first.body.notification.readAt;
+    expect(firstReadAt).not.toBeNull();
+
+    const second = await api(`/notifications/${target.notificationId}`, owner.session({
+      method: 'PATCH', body: JSON.stringify({ read: true }),
+    }));
+    expect(second.response.status).toBe(200);
+    expect(second.body.notification.readAt).toBe(firstReadAt);
+  });
+
   // #2334: notifications.builder_id is ON DELETE CASCADE -- a self-delete
   // (DELETE /builders/:id) cascade-deletes every notification for that
   // builder. Firing it concurrently with a PATCH on one of those exact

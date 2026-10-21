@@ -12,9 +12,13 @@
 // a unit test using the workers-pool ASSETS binding can't do this, since
 // that pool never runs `vite build` the way this suite's own run-all.mjs
 // does (see that file's own comment on why).
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 import { ensureAdminSession, finish } from './helpers.mjs';
 
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || null;
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 
@@ -523,14 +527,6 @@ await imageTaskCard.locator('.msg-text', { hasText: 'A reply with its own attach
 const replyImgSrc = await imageTaskCard.locator('.msg .msg-img').getAttribute('src');
 console.log('reply thread entry shows an image for its own imageUrl (actual):', replyImgSrc);
 
-// Neither imageUrl above points at a real R2 object (no upload flow was run
-// to create one) -- rendering a real <img src> for it is exactly the thing
-// under test, and Chromium logs a "Failed to load resource: 404" console
-// error for that fetch as a result. That's an expected side effect of this
-// fixture, not a product bug, so it's dropped here rather than tripping
-// this suite's catch-all zero-console-errors bar below.
-errors.splice(0, errors.length, ...errors.filter((e) => !e.includes('Failed to load resource')));
-
 // #1858: a slow tab-switch request (e.g. Queued) that resolves *after* a
 // faster, more recently clicked tab (Done) used to overwrite tasks/
 // totalTasks with the stale response anyway, then re-filter those wrong
@@ -628,6 +624,87 @@ const secondRepliesRaceReplyStillVisible = await card.locator('.msg-text', { has
 console.log('both replies still visible after the delayed, stale GET resolves (should both be true):', firstRepliesRaceReplyStillVisible, secondRepliesRaceReplyStillVisible);
 await page.unroute('**/api/control-room/tasks/*/replies');
 
+// #2526 regression: a task written via the AGENTS.md-documented direct-D1
+// fallback (bypassing the HTTP API's own controlRoomTaskIdValue regex,
+// worker/index.js's controlRoomTaskIdValue check) can have an id
+// containing a CSS-selector metacharacter like a double-quote. Before the
+// fix, each of this page's three hand-built
+// `querySelector('[data-attr="' + id + '"]')` calls (setListHTML's own
+// focus-restore, the jump-to-task handler, and the reply-send handler)
+// threw an uncaught SyntaxError the moment that id was used to build a
+// selector. Seeded with `wrangler d1 execute --local`, the same
+// outside-the-Worker direct-D1 technique as the #1928 purchases-panel-race
+// seed above, since the real API would reject this id outright.
+const quoteTaskId = `e2e-2526-quo"te-${Date.now()}`;
+const quoteTaskNumber = (Math.floor(Date.now() / 1000) % 100000) + 90;
+const quoteTaskTitle = `E2E quote-id regression target ${quoteTaskNumber}`;
+execFileSync('npx', [
+  'wrangler', 'd1', 'execute', 'higglehaven-db', '--local', '--command',
+  `INSERT INTO control_room_tasks (task_id, kind, number, title, status) VALUES ('${quoteTaskId}', 'feedback', ${quoteTaskNumber}, '${quoteTaskTitle}', 'queued')`,
+], { cwd: REPO_ROOT, stdio: 'pipe' });
+console.log('seeded a control_room_tasks row with a selector-metacharacter id via the direct-D1 fallback (task_id contains a double-quote)');
+
+// A second task, blocked on the quote-id task's own number, so its own
+// "Blocked on #n" pill's jump-to-task click exercises the jump handler's
+// querySelector (site 2) against the quote-id task.
+const quoteBlockedTitle = `E2E quote-id blocked task ${quoteTaskNumber}`;
+await page.evaluate(async ({ title, waitingOn }) => {
+  await fetch('/api/control-room/tasks', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ from: 'e2e-owner', kind: 'feedback', title, waitingOn }),
+  });
+}, { title: quoteBlockedTitle, waitingOn: String(quoteTaskNumber) });
+
+await page.reload({ waitUntil: 'networkidle' });
+
+const quoteTaskCard = page.locator('.card', { has: page.locator('.title', { hasText: quoteTaskTitle }) });
+await quoteTaskCard.waitFor({ timeout: 10000 });
+
+// Site 3 (reply-send handler): expand, type a reply, send it -- pre-fix,
+// `querySelector('[data-reply-text="' + taskId + '"]')` throws the moment
+// the quote in taskId breaks the hand-built selector.
+await quoteTaskCard.locator('.card-head').click();
+await quoteTaskCard.locator('textarea[data-reply-text]').fill('A reply on the quote-id task itself.');
+await quoteTaskCard.locator('button[data-action="reply"]').click();
+await quoteTaskCard.locator('.msg-text', { hasText: 'A reply on the quote-id task itself.' }).waitFor({ timeout: 20000 });
+const quoteTaskReplySucceeded = await quoteTaskCard.locator('.msg-text', { hasText: 'A reply on the quote-id task itself.' }).isVisible();
+console.log('reply on the quote-id task sends without throwing (should be true):', quoteTaskReplySucceeded);
+
+// Site 1 (setListHTML's focus-restore): focus this same task's reply
+// "From" input, then force another setListHTML rebuild via an unrelated
+// card's toggle -- pre-fix, the focus-restore querySelector (which keys
+// off this exact focused element's own dataset value) throws the same way
+// once it re-runs against the quote-id task's id.
+const quoteFromInput = quoteTaskCard.locator('input[data-reply-from]');
+await quoteFromInput.fill('quote-id-focus-probe');
+await card.locator('.card-head').click(); // unrelated card (seeded earlier in this file); its toggle alone forces a render()/setListHTML rebuild
+const quoteFromInputSurvivedRerender = await quoteFromInput.inputValue();
+console.log('reply "From" input on the quote-id task survives an unrelated render without throwing (actual):', quoteFromInputSurvivedRerender);
+
+// Site 2 (jump-to handler): click the blocked task's "Blocked on #n" pill
+// -- pre-fix, `querySelector('[data-task-id="' + target.id + '"]')` throws
+// once target.id (the quote-id task's own id) hits the same gap.
+const quoteBlockedCard = page.locator('.card', { has: page.locator('.title', { hasText: quoteBlockedTitle }) });
+await quoteBlockedCard.waitFor({ timeout: 10000 });
+const quoteBlockedPill = quoteBlockedCard.locator('.pill-blocked-on');
+await quoteBlockedPill.click();
+await page.waitForTimeout(500);
+const quoteTaskCardOpenAfterJump = await quoteTaskCard.evaluate((el) => el.classList.contains('open'));
+console.log('jumping to the quote-id task from its blocked pill opens it without throwing (should be true):', quoteTaskCardOpenAfterJump);
+
+// Neither imageUrl seeded earlier in this file points at a real R2 object
+// (no upload flow was run to create one) -- rendering a real <img src> for
+// it is exactly the thing under test there, and Chromium logs a "Failed to
+// load resource: 404" console error for that fetch every time the thumbnail
+// re-renders, including on every ~15s poll tick between here and the
+// imageUrl section above. That's an expected side effect of that fixture,
+// not a product bug, so every occurrence is dropped here (filtered at the
+// very end, not right after that section, so it still catches whatever
+// poll ticks or renders fire during everything below it too) rather than
+// tripping this suite's catch-all zero-console-errors bar below.
+errors.splice(0, errors.length, ...errors.filter((e) => !e.includes('Failed to load resource')));
+
 const pass = anonStatus === 401 && anonSeesSignIn &&
   heading.includes('higglehaven Control Room') &&
   adminsListText.includes('@') &&
@@ -663,5 +740,8 @@ const pass = anonStatus === 401 && anonSeesSignIn &&
   secondRepliesRaceReplyStillVisible &&
   raceGrantedAdminVisibleBeforeStaleResponse &&
   raceGrantedAdminStillVisibleAfterStaleResponse &&
+  quoteTaskReplySucceeded &&
+  quoteFromInputSurvivedRerender === 'quote-id-focus-probe' &&
+  quoteTaskCardOpenAfterJump &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Control Room admin page (#N31 option 3): same-origin board at /admin/control-room, loadAdmins() survives a stale overlapping reload (#1929)', errors });

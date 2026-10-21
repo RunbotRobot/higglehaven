@@ -70,13 +70,30 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.click('.settings-tab-btn[data-section="build"]');
 await page.waitForTimeout(500);
-await page.click('.version-action-btn:has-text("Publish")');
-// #2200's own 30000ms margin (restoring the pre-#2144 de-facto default)
-// was exceeded again under heavier fleet-wide CI load -- same recurring
-// margin-exhaustion shape as #1388/#1896/#2048/#2360/#2420 elsewhere in
-// this suite. Doubling to 60000ms, matching #2420's own escalation size
-// for an equivalent CI-load timeout on a different call site.
-await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 2, null, { timeout: 60000 });
+// #2200 -> #2499: this used to be a flat `waitForFunction` margin on the
+// rendered `.version-row` count, repeatedly bumped (most recently to
+// 60000ms by df35352) as fleet-wide CI load outpaced each guess -- the same
+// recurring shape #1388/#1896/#2048/#2360/#2420 already hit elsewhere in
+// this suite. The real chain behind that DOM update (publishBtn's own
+// click handler, src/main.js): two sequential writes (`saveLandletVersion`
+// POST, `activateLandletVersion` POST), then an unawaited
+// `renderVersionHistory()` that fires a GET to this same
+// `/landlets/:id/versions` path (this time without a body) to rebuild the
+// row list. Waiting on that GET response directly -- the actual async
+// operation the row count depends on -- lets this one wait carry the long,
+// contention-sensitive margin, while the DOM update that follows it (a
+// handful of synchronous appendVersionRow calls) only needs a short one.
+const [versionsResponse] = await Promise.all([
+  page.waitForResponse(
+    (response) => response.url().includes(`/landlets/${myLandlet.landletId}/versions`) && response.request().method() === 'GET',
+    { timeout: 60000 },
+  ),
+  page.click('.version-action-btn:has-text("Publish")'),
+]);
+if (!versionsResponse.ok()) {
+  throw new Error(`publish-and-version-history: version-history refetch failed (${versionsResponse.status()})`);
+}
+await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 2, null, { timeout: 5000 });
 const rowCountAfterSecondPublish = await page.locator('.version-row').count();
 console.log('version rows after second publish (should be 2):', rowCountAfterSecondPublish);
 
