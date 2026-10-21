@@ -15,10 +15,21 @@ import { adminActionLogStatement } from './lib/admin-log.js';
 import { timingSafeEqual, bytesToHex, hexToBytes } from './lib/crypto.js';
 import {
   readJson, stringValue, labelValue, databaseHttpError, errorMessages,
-  finiteNumber, queryLimit, decodeCursor, encodeCursor, assertReferencesExist,
+  finiteNumber, queryLimit, decodeCursor, encodeCursor, assertReferencesExist, positiveInteger,
 } from './lib/validation.js';
 import { notificationStatement, fireNotification, fireNotifications } from './lib/notifications.js';
 import { SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser, requireAdmin, assertOwner } from './lib/auth.js';
+// #2530: the shared R2 storage-budget machinery (genuinely cross-domain --
+// see worker/lib/storage.js's own comment) plus the models/uploaded-assets
+// domain handlers themselves, extracted into worker/lib/.
+import {
+  MAX_MODEL_BYTES, MAX_TOTAL_STORAGE_BYTES, MODEL_UPLOAD_RESERVATION_TIMEOUT_MS,
+  formatBytes, getStorageUsage, reserveStorageBudget, validateGlb,
+} from './lib/storage.js';
+import {
+  handleUploadedAsset, handleModelUpload, handleModelListing, handleModelStorage, handleModelCleanup,
+  scheduledModelCleanup, cleanupUnreferencedModels,
+} from './lib/models.js';
 
 // #1360: generic hardening every response from this Worker should carry,
 // regardless of path — applied in one place (fetch's own wrapper below)
@@ -50,17 +61,6 @@ function withSecurityHeaders(response) {
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
-// Real-time web/mobile products should be tiny — see catalog.js's own
-// comments and the size guidance given when this endpoint was built.
-// 20MB is a generous ceiling above that guidance (most uploads should land
-// well under 2MB), not a target: it exists to reject an accidentally-huge
-// raw photogrammetry export before it ever reaches R2, not to encourage
-// files anywhere near it.
-const MAX_MODEL_BYTES = 20 * 1024 * 1024;
-const GLB_MAGIC = 0x46546c67; // ascii "glTF", little-endian uint32
-const GLB_VERSION = 2;
-const GLB_JSON_CHUNK = 0x4e4f534a;
-
 // #327: a client-rendered flat thumbnail (renderCatalogThumbnailNow in
 // src/main.js, a fixed 128x128 canvas) — nowhere near this cap in
 // practice, but bounded independently of MAX_MODEL_BYTES since this is a
@@ -88,73 +88,6 @@ const JPEG_SIGNATURE = [0xff, 0xd8, 0xff];
 const WEBP_RIFF_SIGNATURE = [0x52, 0x49, 0x46, 0x46];
 const WEBP_FORMAT_SIGNATURE = [0x57, 0x45, 0x42, 0x50];
 
-// R2's free tier is 10GB of storage per month. This is our OWN
-// application-level backstop well under that — checked live against R2's
-// actual current contents on every upload — so a new upload gets rejected
-// before it would ever push real usage into paid territory, independent
-// of whatever Cloudflare's own billing dashboard does or doesn't warn
-// about. Only counts what's actually in R2 — the built-in catalog's models
-// ship as static assets, not R2 objects, so they never count against this.
-// The two writers that do live in this bucket and count against it:
-// builder-uploaded custom models (handleModelUpload) and generated concept
-// images (concept-image, #602) — both go through reserveStorageBudget.
-const MAX_TOTAL_STORAGE_BYTES = 8 * 1024 * 1024 * 1024;
-
-// Generous bound on how long a model_upload_reservations row can outlive
-// its own request before being treated as abandoned (the request crashed
-// or the Worker was killed mid-upload, before its own cleanup ran) — see
-// migrations/0065_model_upload_reservations.sql. Comfortably above how
-// long even a slow connection needs to finish uploading MAX_MODEL_BYTES.
-const MODEL_UPLOAD_RESERVATION_TIMEOUT_MS = 5 * 60 * 1000;
-
-async function getStorageUsage(bucket) {
-  let usedBytes = 0;
-  let objectCount = 0;
-  let cursor;
-  do {
-    const listing = await bucket.list({ cursor, limit: 1000 });
-    for (const object of listing.objects) usedBytes += object.size;
-    objectCount += listing.objects.length;
-    cursor = listing.truncated ? listing.cursor : undefined;
-  } while (cursor);
-  return { usedBytes, objectCount };
-}
-
-// The atomic reservation dance MAX_TOTAL_STORAGE_BYTES enforcement needs
-// (see model_upload_reservations' own migration comment), shared between
-// handleModelUpload and concept-image generation (#602) — both write into
-// the same MODELS bucket and can each add a meaningfully large object, so
-// both need to close the same concurrent-upload race against the same cap.
-// Concept-image can't reserve before its own R2 write the way a multipart
-// upload does (its size isn't known until the image is actually generated),
-// so it calls this right before the put instead of before the request body
-// is even read — same atomicity where it matters (nothing else can land
-// between this reservation and its own put), just later in that one
-// request's own timeline. Returns a reservation id the caller must delete
-// (in a finally) once its own R2 write lands or fails.
-async function reserveStorageBudget(db, usage, sizeBytes, sizeLabel) {
-  const reservationId = `reservation-${crypto.randomUUID()}`;
-  const now = Date.now();
-  await db.prepare(`
-    DELETE FROM model_upload_reservations WHERE created_at < ?
-  `).bind(now - MODEL_UPLOAD_RESERVATION_TIMEOUT_MS).run();
-  const reserved = await db.prepare(`
-    INSERT INTO model_upload_reservations (reservation_id, size_bytes, created_at)
-    SELECT ?, ?, ?
-    WHERE ? + (SELECT COALESCE(SUM(size_bytes), 0) FROM model_upload_reservations) + ? <= ?
-  `).bind(reservationId, sizeBytes, now, usage.usedBytes, sizeBytes, MAX_TOTAL_STORAGE_BYTES).run();
-  if (reserved.meta.changes === 0) {
-    const reservedBytes = await db.prepare(`
-      SELECT COALESCE(SUM(size_bytes), 0) AS total FROM model_upload_reservations
-    `).first();
-    const remainingBudget = MAX_TOTAL_STORAGE_BYTES - usage.usedBytes - reservedBytes.total;
-    throw new HttpError(
-      `${sizeLabel} is ${formatBytes(sizeBytes)}, but only ${formatBytes(Math.max(remainingBudget, 0))} of storage headroom is left (${formatBytes(MAX_TOTAL_STORAGE_BYTES)} total cap)`,
-      507,
-    );
-  }
-  return reservationId;
-}
 
 // Private-preview gate: when ACCESS_PASSPHRASE is configured (a Worker
 // secret, never committed), every request — pages, the API, uploaded
@@ -535,95 +468,6 @@ export async function checkMigrationDrift(env) {
       }
     }
   }
-}
-
-async function handleUploadedAsset(request, env) {
-  if (!env.MODELS) return json({ error: 'R2 binding MODELS is not configured' }, 500);
-  if (request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'DELETE') {
-    return new Response(null, { status: 405, headers: { allow: 'GET, HEAD, DELETE' } });
-  }
-
-  let key;
-  try {
-    key = decodeURIComponent(new URL(request.url).pathname.replace(/^\/uploads\//, ''));
-  } catch {
-    throw new HttpError('Invalid upload path encoding', 400);
-  }
-  if (!key) throw new HttpError('Uploaded model key is required', 400);
-
-  if (request.method === 'DELETE') {
-    if (!env.DB) throw new HttpError('D1 binding DB is not configured', 500);
-    // Same admin-only bar as /api/models/cleanup below (and every other
-    // maintenance-tooling endpoint gated by requireAdmin) — deleting an R2
-    // object outright, unlike every other mutating endpoint in this file,
-    // has no owning builder/seller to check against, so "logged in" alone
-    // isn't a meaningful bar here.
-    const admin = await requireAdmin(request, env.DB);
-    const modelUrl = `/uploads/${key}`;
-    const existing = await env.MODELS.head(key);
-    if (!existing) return json({ error: 'Not found' }, 404);
-    // #376: re-checked as the very last thing before the actual R2 delete
-    // (not at the top of this handler) to keep this as close as this
-    // codebase's D1-vs-R2 split allows to the atomic check-then-act idiom
-    // used everywhere else here (auction bids, reviews, friendships) — a
-    // template referencing this model created between an earlier check and
-    // now would otherwise still lose its file out from under it.
-    // #774: model_url and image_url are both content-addressed keys into
-    // this same bucket (the latter written by POST .../thumbnail) — an
-    // object referenced only as a thumbnail must block deletion here too.
-    // #1644/#1655/#1696: video_generation_jobs.model_url and
-    // control_room_tasks/control_room_replies.image_url are three more
-    // writers into this same bucket/scheme (same five sources
-    // cleanupUnreferencedModels already checks) — without these, this raw
-    // admin delete would succeed on an object still in use by a pending
-    // video-to-3D job or a Control Room screenshot, destroying it out from
-    // under that reference even though the automated sweep would have
-    // correctly protected it.
-    const referenced = await env.DB.prepare(`
-      SELECT 1 FROM catalog_templates WHERE model_url = ? OR image_url = ?
-      UNION ALL
-      SELECT 1 FROM video_generation_jobs WHERE model_url = ?
-      UNION ALL
-      SELECT 1 FROM control_room_tasks WHERE image_url = ?
-      UNION ALL
-      SELECT 1 FROM control_room_replies WHERE image_url = ?
-      LIMIT 1
-    `).bind(modelUrl, modelUrl, modelUrl, modelUrl, modelUrl).first();
-    if (referenced) throw new HttpError('Uploaded model is still referenced', 409);
-    await env.MODELS.delete(key);
-    // #829: same missed-audit-trail gap as /api/models/cleanup above — this
-    // single-object delete never recorded which admin ran it.
-    await adminActionLogStatement(env.DB, admin.user_id, 'delete_uploaded_asset', 'model_upload', modelUrl).run();
-    return json({ deleted: true });
-  }
-
-  const conditionalRequest = request.method === 'HEAD' || request.headers.has('if-none-match');
-  let object = conditionalRequest ? await env.MODELS.head(key) : await env.MODELS.get(key);
-  if (!object) return json({ error: 'Not found' }, 404);
-  const headers = new Headers();
-  object.writeHttpMetadata(headers);
-  headers.set('etag', object.httpEtag);
-  headers.set('access-control-allow-origin', '*');
-  // #823: defense-in-depth for the whole /uploads/* surface — stops a
-  // browser from MIME-sniffing stored bytes into something other than the
-  // Content-Type this server itself set at write time.
-  headers.set('x-content-type-options', 'nosniff');
-  // Uploaded files are content-addressed (SHA-256 key, never overwritten in
-  // place — see handleModelUpload) and never change once
-  // stored, so a long-lived cache is always safe.
-  headers.set('cache-control', 'public, max-age=31536000, immutable');
-  if (request.headers.get('if-none-match') === object.httpEtag) {
-    return new Response(null, { status: 304, headers });
-  }
-  if (request.method === 'HEAD') return new Response(null, { headers });
-
-  // A metadata lookup was enough to answer a matching conditional request.
-  // Fetch the body only when a stale conditional GET actually needs it.
-  if (!('body' in object)) {
-    object = await env.MODELS.get(key);
-    if (!object) return json({ error: 'Not found' }, 404);
-  }
-  return new Response(object.body, { headers });
 }
 
 async function handleApi(request, env, url, ctx) {
@@ -1253,374 +1097,6 @@ async function handleControlRoomReplyCreate(request, env, db, taskId) {
   return json({ reply: controlRoomReplyFromRow(row) }, 201);
 }
 
-// Accepts a model file as a direct multipart/form-data upload (a "file"
-// field). This only ever returns a modelUrl; creating the actual
-// catalog_templates row referencing it is a separate POST /api/catalog
-// call (unchanged), keeping "get bytes into storage" and "register a
-// product" as two independent steps.
-//
-// A URL-import mode (the Worker fetching a link server-side) used to live
-// here too, dropped for now: in practice it was hard to get a plain,
-// directly-fetchable file link out of consumer cloud/share tools, and that
-// path can't benefit from the client-side model optimization pipeline
-// (src/modelOptimizer.js) since the browser never sees the bytes. It was
-// also an open server-side-request-forgery surface — this endpoint has no
-// auth, so anyone could have asked the Worker to fetch arbitrary URLs on
-// its behalf.
-async function handleModelUpload(request, env) {
-  if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
-
-  // Unauthenticated on purpose (see the removed-URL-import comment above),
-  // but unlike POST /api/builders/sellers this isn't just a spoof-nothing
-  // row insert — each call can burn up to MAX_MODEL_BYTES of the shared
-  // MAX_TOTAL_STORAGE_BYTES cap, so an anonymous caller looping this
-  // endpoint could otherwise exhaust R2 storage for everyone. Same
-  // per-IP-throttle mitigation as signup/password-reset (checkRateLimit).
-  await checkRateLimit(env.DB, `model-upload:${clientIp(request)}`, 20);
-
-  const contentType = request.headers.get('content-type') || '';
-  if (!contentType.includes('multipart/form-data')) {
-    throw new HttpError('Expected multipart/form-data', 415);
-  }
-
-  const form = await request.formData().catch(() => {
-    throw new HttpError('Request body is not valid multipart/form-data', 400);
-  });
-  const file = form.get('file');
-  if (!file || typeof file.arrayBuffer !== 'function') {
-    throw new HttpError('Expected a "file" field in the form data', 400);
-  }
-  if (file.size > MAX_MODEL_BYTES) {
-    throw new HttpError(`File is ${formatBytes(file.size)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`, 413);
-  }
-  const bytes = await file.arrayBuffer();
-  validateGlb(bytes);
-
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
-  const hash = [...digest].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-  const key = `models/${hash}.glb`;
-  const existing = await env.MODELS.head(key);
-  if (existing) {
-    return json({
-      modelUrl: `/uploads/${key}`,
-      sourceName: file.name || 'model.glb',
-      sizeBytes: existing.size,
-      deduplicated: true,
-    });
-  }
-
-  const usage = await getStorageUsage(env.MODELS);
-
-  // R2 has no primitive for "put only if some byte budget elsewhere still
-  // allows it," so the actual cap enforcement has to happen in D1 instead —
-  // see reserveStorageBudget's own comment for the atomic-reservation idiom
-  // this shares with concept-image generation (#602), the other writer into
-  // this same bucket. `usage.usedBytes` is a snapshot (R2 can't be read
-  // inside the same atomic statement), but any other upload racing this one
-  // reads its own snapshot at essentially the same real R2 state, so the SUM
-  // of not-yet-landed reservations — computed atomically alongside this
-  // insert — is what actually closes the race between concurrent requests
-  // (#264).
-  const reservationId = await reserveStorageBudget(env.DB, usage, file.size, 'File');
-
-  try {
-    await env.MODELS.put(key, bytes, { httpMetadata: { contentType: 'model/gltf-binary' } });
-  } finally {
-    // The reservation's job is done either way: on success it's now
-    // reflected in R2 itself (the next getStorageUsage will see it); on
-    // failure the budget it held should be freed back up immediately
-    // rather than waiting out MODEL_UPLOAD_RESERVATION_TIMEOUT_MS.
-    await env.DB.prepare('DELETE FROM model_upload_reservations WHERE reservation_id = ?').bind(reservationId).run();
-  }
-  return json({
-    modelUrl: `/uploads/${key}`,
-    sourceName: file.name || 'model.glb',
-    sizeBytes: bytes.byteLength,
-    deduplicated: false,
-  }, 201);
-}
-
-// Admin-only, same "cleanup tooling" bar as POST /api/models/cleanup and
-// DELETE /uploads/:key — this lists every R2 upload (including
-// unregistered, in-progress ones no other builder should be able to
-// enumerate) with its size, etag, and which catalog templates reference
-// it. Not a builder/seller-facing endpoint at all.
-async function handleModelListing(request, env, url) {
-  await requireAdmin(request, env.DB);
-  if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
-  const limit = queryLimit(url.searchParams.get('limit'), 100);
-  const cursorParam = url.searchParams.get('cursor');
-  const cursor = cursorParam === null ? undefined : stringValue(cursorParam, 'cursor');
-  const listing = await env.MODELS.list({ limit, cursor });
-  const modelUrls = listing.objects.map((object) => `/uploads/${object.key}`);
-  const templateRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
-  const videoJobRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
-  const controlRoomRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
-  if (modelUrls.length > 0) {
-    // #774: image_url (thumbnails) shares this same bucket/URL scheme as
-    // model_url — checking model_url alone marked every live thumbnail
-    // "unreferenced". #1644/#1655/#1696: video_generation_jobs.model_url
-    // and control_room_tasks/control_room_replies.image_url are three more
-    // writers into this same bucket/scheme (same reasoning as
-    // cleanupUnreferencedModels' own two UNION queries, which already check
-    // all five) — a model/image real-but-not-yet-template-referenced in one
-    // of these used to read back here as `deletable: true` with an empty
-    // reference list, a false "safe to delete" signal for this admin view.
-    //
-    // #2204: selectModelUrlReferencesChunked (see its own comment) chunks
-    // this same query rather than binding the full modelUrls array once
-    // per UNION branch in a single call -- this list can be up to 100
-    // long (this handler's own `limit` above), which blew D1's 100-bound-
-    // parameter cap once multiplied by 5 branches.
-    const referenced = await selectModelUrlReferencesChunked(env.DB, modelUrls);
-    for (const row of referenced) {
-      if (row.source === 'template') templateRefs.get(row.url).push(row.id);
-      else if (row.source === 'videoJob') videoJobRefs.get(row.url).push(row.id);
-      else controlRoomRefs.get(row.url).push(row.id);
-    }
-  }
-  return json({
-    models: listing.objects.map((object) => {
-      const modelUrl = `/uploads/${object.key}`;
-      const referencedByTemplateIds = templateRefs.get(modelUrl);
-      const referencedByVideoJobIds = videoJobRefs.get(modelUrl);
-      const referencedByControlRoomIds = controlRoomRefs.get(modelUrl);
-      return {
-        modelUrl,
-        sizeBytes: object.size,
-        etag: object.httpEtag,
-        uploadedAt: object.uploaded?.toISOString() || null,
-        referencedByTemplateIds,
-        referencedByVideoJobIds,
-        referencedByControlRoomIds,
-        deletable: referencedByTemplateIds.length === 0 && referencedByVideoJobIds.length === 0
-          && referencedByControlRoomIds.length === 0,
-      };
-    }),
-    nextCursor: listing.truncated ? listing.cursor : null,
-  });
-}
-
-// Admin-only, same reasoning as handleModelListing above — live storage
-// utilization against the shared cap is operational data, not something a
-// shopper/builder/seller session has any business reading.
-async function handleModelStorage(request, env) {
-  await requireAdmin(request, env.DB);
-  if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
-  const usage = await getStorageUsage(env.MODELS);
-  return json({
-    ...usage,
-    capBytes: MAX_TOTAL_STORAGE_BYTES,
-    availableBytes: Math.max(0, MAX_TOTAL_STORAGE_BYTES - usage.usedBytes),
-    utilizationRatio: usage.usedBytes / MAX_TOTAL_STORAGE_BYTES,
-  });
-}
-
-async function handleModelCleanup(request, env) {
-  if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
-  // Admin-only: this bulk-deletes any unreferenced upload in the shared R2
-  // bucket, including another builder's in-progress upload that just
-  // hasn't been registered via POST /api/catalog yet (the two are
-  // deliberately independent steps — see handleModelUpload's own comment).
-  // Same bar as the world/land-candidate tooling above. (handleApi already
-  // guarantees env.DB is configured before routing here, unlike
-  // handleUploadedAsset below, which sits outside handleApi entirely.)
-  const admin = await requireAdmin(request, env.DB);
-  const input = await readJson(request);
-  const maxDeletes = positiveInteger(input.maxDeletes ?? 100, 'maxDeletes');
-  if (maxDeletes > 100) throw new HttpError('maxDeletes must be at most 100', 400);
-  if (input.dryRun !== undefined && typeof input.dryRun !== 'boolean') {
-    throw new HttpError('dryRun must be a boolean', 400);
-  }
-  const dryRun = input.dryRun || false;
-  const result = await cleanupUnreferencedModels(env, { maxDeletes, dryRun });
-  // #1202: targetCount/reclaimedBytes alone can't say which objects a given
-  // run actually (or would) remove -- targetModelUrls is already computed by
-  // cleanupUnreferencedModels (and already returned in this endpoint's own
-  // HTTP response below), so carry it into the logged detail too, the same
-  // "who did what" bar #829 already held delete_uploaded_asset to.
-  await adminActionLogStatement(env.DB, admin.user_id, 'model_cleanup', 'model_upload_batch', null, {
-    maxDeletes, dryRun, targetCount: result.targetCount, reclaimedBytes: result.reclaimedBytes,
-    targetModelUrls: result.targetModelUrls,
-  }).run();
-  return json({ ...result, dryRun });
-}
-
-// #848: scheduled()'s own periodic sweep — see its call site below.
-// Every writer into the MODELS bucket (model uploads, catalog thumbnails,
-// concept-image generation, #602) shares one MAX_TOTAL_STORAGE_BYTES cap,
-// but concept-image's own generated PNGs are *never* meant to be
-// referenced by a catalog_templates row (they're pure scratch input to
-// similarity-search, see concept-image's own comment) — every generation
-// is therefore a guaranteed-permanent, guaranteed-unreferenced object
-// with no automatic path to reclaim it, previously only cleaned up if an
-// admin happened to run POST /api/models/cleanup by hand. Left
-// unattended, ordinary encouraged usage (iterating on a concept-image
-// prompt) eventually exhausts the shared cap and 507s every writer,
-// model uploads and catalog thumbnails included, until an admin notices.
-// adminUserId is null here (a real admin_user_id FK wouldn't exist for a
-// cron-triggered action) — admin_action_log.admin_user_id already allows
-// NULL for exactly this "no longer identifiable/no admin acted" shape
-// (migrations/0087's own ON DELETE SET NULL reasoning).
-export async function scheduledModelCleanup(env) {
-  if (!env.MODELS) return;
-  // #890: an unattended sweep — unlike the admin-triggered POST endpoint
-  // below, which stays immediate/no-grace-period on purpose — must not
-  // delete an upload that's still legitimately mid-registration (the
-  // upload-then-register wizard has no deadline of its own). Reuses
-  // MODEL_UPLOAD_RESERVATION_TIMEOUT_MS: the same "comfortably above how
-  // long even a slow connection needs" reasoning already applied to the
-  // storage-budget-reservation side of this identical upload flow.
-  const result = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false, minAgeMs: MODEL_UPLOAD_RESERVATION_TIMEOUT_MS });
-  if (result.targetCount > 0) {
-    // #1202: same "record which objects, not just how many" fix as
-    // handleModelCleanup's own call site above -- matters even more here
-    // since this unattended sweep's admin_action_log row is the only record
-    // this run ever produces at all (no HTTP response for anyone to see).
-    await adminActionLogStatement(env.DB, null, 'model_cleanup', 'model_upload_batch', null, {
-      maxDeletes: 100, dryRun: false, targetCount: result.targetCount, reclaimedBytes: result.reclaimedBytes,
-      targetModelUrls: result.targetModelUrls,
-      trigger: 'scheduled',
-    }).run();
-  }
-}
-
-// Exported so #890's regression test can exercise minAgeMs directly with a
-// tiny threshold — proving an object that genuinely clears the age bar
-// still gets cleaned isn't practically testable through the real cron
-// path, which hardcodes the full 5-minute MODEL_UPLOAD_RESERVATION_TIMEOUT_MS.
-export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAgeMs = 0 }) {
-  const targets = [];
-  let cursor;
-  let completeScan = false;
-  const now = Date.now();
-  do {
-    const listing = await env.MODELS.list({ cursor, limit: 100 });
-    const modelUrls = listing.objects.map((object) => `/uploads/${object.key}`);
-    const referencedUrls = new Set();
-    if (modelUrls.length > 0) {
-      // #774: image_url (thumbnails) shares this same bucket/URL scheme as
-      // model_url — checking model_url alone would target live thumbnails
-      // for deletion as "unreferenced". #1644: video_generation_jobs.
-      // model_url (migrations/0119) is a second, independent writer into
-      // this same bucket/scheme — a completed video-to-3D job's model has
-      // no catalog_templates row yet (that's only created once a human
-      // finishes the upload wizard, #1620), so without this it reads as
-      // unreferenced and gets swept within minutes of generation. #1655:
-      // control_room_tasks/control_room_replies.image_url (migrations/0082)
-      // are a fourth writer into this same bucket/scheme — imageUrlValue
-      // explicitly accepts a /uploads/<key> path for these columns, so a
-      // Control Room screenshot uploaded that way looked unreferenced too.
-      //
-      // #2204: selectModelUrlReferencesChunked (see its own comment) chunks
-      // this same 5-way check rather than binding the full modelUrls array
-      // once per branch in a single call -- a 100-object R2 page blew D1's
-      // 100-bound-parameter cap once multiplied by 5 branches.
-      const referenced = await selectModelUrlReferencesChunked(env.DB, modelUrls);
-      for (const row of referenced) referencedUrls.add(row.url);
-    }
-    let examinedWholePage = true;
-    for (let i = 0; i < listing.objects.length; i++) {
-      const object = listing.objects[i];
-      // #890: an object younger than minAgeMs is skipped, not just
-      // "examined and found referenced" — it may still be mid-registration
-      // (see this function's own callers for why the cron path passes a
-      // nonzero minAgeMs and the admin-triggered one doesn't).
-      const oldEnough = !object.uploaded || now - object.uploaded.getTime() >= minAgeMs;
-      if (oldEnough && !referencedUrls.has(`/uploads/${object.key}`)) targets.push(object);
-      if (targets.length === maxDeletes && i < listing.objects.length - 1) {
-        examinedWholePage = false;
-        break;
-      }
-    }
-    // completeScan means "every object in the bucket was actually examined,"
-    // not just "R2 has no further pages" — listing.truncated alone doesn't
-    // capture the loop above stopping mid-page once maxDeletes is hit, which
-    // would otherwise report the scan as complete despite skipping whatever
-    // was left unexamined on this same (final, listing.truncated === false)
-    // page (#417).
-    completeScan = !listing.truncated && examinedWholePage;
-    cursor = listing.truncated ? listing.cursor : undefined;
-  } while (!completeScan && targets.length < maxDeletes);
-
-  // #376: each target's "unreferenced" check above ran against whatever
-  // page it was scanned on, potentially many awaits before this point (the
-  // scan can span several 100-object pages) — a catalog template could
-  // have started referencing one of them in the meantime. Re-verify against
-  // the final target set immediately before the actual delete, as close to
-  // the R2 call as this D1-vs-R2 split allows, and only delete/report
-  // whatever is still genuinely unreferenced.
-  let toDelete = targets;
-  if (targets.length > 0) {
-    // #774/#1644/#1655: same reference-check gap as the scan above —
-    // re-checked here too since this query is independent of it.
-    //
-    // #2204: chunked via selectModelUrlReferencesChunked for the same
-    // reason as the scan above — targetUrls can be up to maxDeletes long,
-    // which blew D1's 100-bound-parameter cap once multiplied by 5
-    // branches in a single unchunked query.
-    const targetUrls = targets.map((object) => `/uploads/${object.key}`);
-    const stillReferenced = await selectModelUrlReferencesChunked(env.DB, targetUrls);
-    const rescuedUrls = new Set(stillReferenced.map((row) => row.url));
-    toDelete = targets.filter((object) => !rescuedUrls.has(`/uploads/${object.key}`));
-  }
-  if (!dryRun && toDelete.length > 0) await env.MODELS.delete(toDelete.map((object) => object.key));
-  const reclaimedBytes = toDelete.reduce((sum, object) => sum + object.size, 0);
-  return {
-    targetModelUrls: toDelete.map((object) => `/uploads/${object.key}`),
-    targetCount: toDelete.length,
-    reclaimedBytes,
-    completeScan,
-  };
-}
-
-function validateGlb(bytes) {
-  const view = new DataView(bytes);
-  if (bytes.byteLength < 20 || view.getUint32(0, true) !== GLB_MAGIC) {
-    throw new HttpError('File is not a valid .glb (binary glTF) model', 400);
-  }
-  if (view.getUint32(4, true) !== GLB_VERSION) {
-    throw new HttpError('Only glTF 2.0 .glb models are supported', 400);
-  }
-  if (view.getUint32(8, true) !== bytes.byteLength) {
-    throw new HttpError('GLB header length does not match the uploaded file', 400);
-  }
-
-  let offset = 12;
-  let chunkIndex = 0;
-  while (offset < bytes.byteLength) {
-    if (offset + 8 > bytes.byteLength) throw new HttpError('GLB contains a truncated chunk header', 400);
-    const chunkLength = view.getUint32(offset, true);
-    const chunkType = view.getUint32(offset + 4, true);
-    const chunkEnd = offset + 8 + chunkLength;
-    if (chunkLength % 4 !== 0 || chunkEnd > bytes.byteLength) {
-      throw new HttpError('GLB contains an invalid chunk length', 400);
-    }
-    if (chunkIndex === 0) {
-      if (chunkType !== GLB_JSON_CHUNK) throw new HttpError('GLB must begin with a JSON chunk', 400);
-      let json;
-      try {
-        json = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(new Uint8Array(bytes, offset + 8, chunkLength)).trimEnd());
-      } catch {
-        throw new HttpError('GLB contains invalid JSON metadata', 400);
-      }
-      // Found via backlog audit: syntactically valid JSON (even `{}`) used
-      // to pass this check outright, storing an unusable "model" that only
-      // fails later wherever it's actually loaded (client preview, catalog
-      // thumbnailing, in-world rendering). asset.version is the one
-      // top-level field the glTF 2.0 spec itself requires of every valid
-      // asset (§3.9.2) — checking for it closes the gap with the same kind
-      // of format-conformance check this function already does for the
-      // magic number/version/chunk type, not a new app-specific rule.
-      if (typeof json?.asset?.version !== 'string') {
-        throw new HttpError('GLB is missing the required asset.version field', 400);
-      }
-    }
-    offset = chunkEnd;
-    chunkIndex += 1;
-  }
-}
-
 // #1713: video-generation frame uploads (handleVideoGenerationJobCreate)
 // only checked the multipart part's own claimed Content-Type — same gap
 // #823 already closed for thumbnail uploads via decodeThumbnailDataUrl's
@@ -1634,15 +1110,6 @@ function hasValidImageSignature(bytes, mimeType) {
   if (mimeType === 'image/jpeg') return matches(JPEG_SIGNATURE);
   if (mimeType === 'image/webp') return matches(WEBP_RIFF_SIGNATURE) && matches(WEBP_FORMAT_SIGNATURE, 8);
   return false;
-}
-
-function formatBytes(bytes) {
-  // #1539: MAX_TOTAL_STORAGE_BYTES is 8GB -- without this tier it rendered
-  // as "8192.0MB" in every reserveStorageBudget 507 error.
-  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)}KB`;
-  return `${bytes}B`;
 }
 
 // See the PATCH/PUT handler's own comment below (issue #361) — only gates
@@ -18119,40 +17586,6 @@ async function selectRowsByIdsChunked(db, table, idColumn, ids) {
   return rows;
 }
 
-// #2204: handleModelListing and cleanupUnreferencedModels (its scan loop
-// and its pre-delete re-check) each run the same 5-way UNION ALL --
-// catalog_templates.model_url/image_url, video_generation_jobs.model_url,
-// control_room_tasks/control_room_replies.image_url, see the #774/#1644/
-// #1655 comments on those callers for why all five need checking -- and
-// each one used to bind its own modelUrls/targetUrls array once per UNION
-// branch in a single unchunked query. D1_MAX_BOUND_PARAMETERS is a per-
-// query cap, not a per-array cap: with the same array bound 5 times into
-// one query, the real per-chunk size is a fifth of what
-// selectRowsByIdsChunked/assertReferencesExist above use for their own
-// single-bind-per-value queries, so a straight reuse of that constant
-// would still blow the limit at 100 urls instead of the real ~20.
-async function selectModelUrlReferencesChunked(db, urls) {
-  const chunkSize = Math.floor(D1_MAX_BOUND_PARAMETERS / 5);
-  const rows = [];
-  for (let i = 0; i < urls.length; i += chunkSize) {
-    const chunk = urls.slice(i, i + chunkSize);
-    const placeholders = chunk.map(() => '?').join(', ');
-    const { results } = await db.prepare(`
-      SELECT 'template' AS source, template_id AS id, model_url AS url FROM catalog_templates WHERE model_url IN (${placeholders})
-      UNION ALL
-      SELECT 'template' AS source, template_id AS id, image_url AS url FROM catalog_templates WHERE image_url IN (${placeholders})
-      UNION ALL
-      SELECT 'videoJob' AS source, job_id AS id, model_url AS url FROM video_generation_jobs WHERE model_url IN (${placeholders})
-      UNION ALL
-      SELECT 'controlRoom' AS source, task_id AS id, image_url AS url FROM control_room_tasks WHERE image_url IN (${placeholders})
-      UNION ALL
-      SELECT 'controlRoom' AS source, reply_id AS id, image_url AS url FROM control_room_replies WHERE image_url IN (${placeholders})
-    `).bind(...chunk, ...chunk, ...chunk, ...chunk, ...chunk).all();
-    rows.push(...results);
-  }
-  return rows;
-}
-
 // #729: saved_layout_instances (migrations/0080) and version_instances
 // (migrations/0007) both keep an immutable historical snapshot of a
 // template's placement, and both intentionally use ON DELETE RESTRICT (a
@@ -19151,12 +18584,6 @@ function validatePolygon(value) {
 function ratioNumber(value, field) {
   const number = finiteNumber(value, field);
   if (number < 0 || number > 1) throw new HttpError(`${field} must be between 0 and 1`, 400);
-  return number;
-}
-
-function positiveInteger(value, field) {
-  const number = Number(value);
-  if (!Number.isInteger(number) || number <= 0) throw new HttpError(`${field} must be a positive integer`, 400);
   return number;
 }
 

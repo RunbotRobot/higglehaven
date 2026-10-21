@@ -97,6 +97,19 @@ export function finiteNumber(value, field) {
   return number;
 }
 
+// #2530: a second-tier shared helper discovered while extracting
+// worker/lib/models.js (its own handleModelCleanup needs this), same
+// shape as #2528's own discovery of readJson/stringValue/etc. -- used far
+// beyond that one call site (bundles/auctions, offers, instances,
+// land-candidates, and more), so it belongs here alongside the other
+// generic validation primitives rather than only in the module that
+// happened to need it next. Extracted verbatim, zero behavior change.
+export function positiveInteger(value, field) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) throw new HttpError(`${field} must be a positive integer`, 400);
+  return number;
+}
+
 export function queryLimit(value, defaultValue) {
   if (value === null) return defaultValue;
   if (!/^\d+$/.test(value)) throw new HttpError('limit must be an integer between 1 and 100', 400);
