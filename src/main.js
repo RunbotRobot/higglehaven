@@ -214,14 +214,16 @@ scene.add(landlet);
 import { runClaimFlow } from './claim/flow.js';
 // #2554: login/signup/verify/session flow now lives in src/account/auth.js
 // (see that module's own comment for its dependency notes, including why
-// it in turn imports a few things back from this module — a temporary
-// circular import, same shape as claim/flow.js's own, until #2555's
-// account/identity.js extraction gives resetIdentityFlowPromises a real
-// home outside main.js).
+// it in turn imports loadStripeJs/START_MODE_KEY/setAccountSessionEnding
+// back from this module — a temporary circular import, same shape as
+// claim/flow.js's own, until those pieces get a real home outside main.js
+// via their own future extractions).
 import {
-  currentAuthUser, setCurrentAuthUser, requireLogin, requireVerification,
-  accountRecoveryFlowActive, authInitPromise,
+  currentAuthUser, setCurrentAuthUser, accountRecoveryFlowActive, authInitPromise,
 } from './account/auth.js';
+// #2555: ensureBuilderIdentity/ensureSellerIdentity/ensureShopperIdentity
+// now live in src/account/identity.js.
+import { ensureBuilderIdentity, ensureSellerIdentity, ensureShopperIdentity } from './account/identity.js';
 
 let activeBundleTab = 'mine';
 
@@ -10406,107 +10408,11 @@ async function resolveLandletId() {
   return runClaimFlow();
 }
 
-// Real login (docs/API.md's "Authentication") replaced the dev-mode
-// identity picker that used to live here — entering Build or Sell mode
-// now requires a real account, and the resulting builder/seller profile
-// is whichever one that account already has (auto-provisioned server-
-// side — see migrations/0054_link_builders_sellers_to_users.sql), not a
-// free-text label picked from a shared list. ensureBuilderIdentity/
-// ensureSellerIdentity below keep the exact same Promise<id-or-null>
-// contract the old picker-backed versions had (null only if the login
-// prompt is dismissed without logging in), so every other call site in
-// this file — bootstrap()'s Build-mode startup, openSellerModal, the
-// Upload Model fallback — needed no changes at all.
-
-// Blocks on a real login if nobody's logged in yet, opening #auth-modal
-// (openAuthModal/closeAuthModal/waitForAuthResult are defined with the
-// rest of the account-menu wiring further down) and resolving once
-// login/signup succeeds, or with null if the modal is dismissed without
-// either. Closes the modal itself once resolved — the generic signup
-// handler deliberately leaves it open afterward to show a dev-mode
-// verify-email link (see its own comment), which would otherwise sit on
-// top of the claim/build UI this is about to reveal.
 // requireLogin/requireVerification (login/signup, age+card verification
 // gate) now live in src/account/auth.js — see that module's own #2554
-// comment.
-
-// Two independent in-flight promises (not one shared "identity" flow),
-// for the same reason the old picker's own comment gave: Build mode's own
-// startup can be awaiting a login at the very moment the Sell nav button
-// triggers its own, and each needs to resolve independently.
-let builderIdentityFlowPromise = null;
-async function ensureBuilderIdentity() {
-  if (builderId) return builderId;
-  if (!builderIdentityFlowPromise) {
-    builderIdentityFlowPromise = (async () => {
-      let user = await requireLogin('signup', 'Sign up (or log in) to start building.');
-      if (!user) return null;
-      user = await requireVerification(user);
-      if (!user) return null;
-      const builder = await fetchMyBuilder();
-      setBuilderId(builder.builderId);
-      return builderId;
-    })();
-  }
-  const id = await builderIdentityFlowPromise;
-  builderIdentityFlowPromise = null;
-  return id;
-}
-
-let sellerIdentityFlowPromise = null;
-async function ensureSellerIdentity() {
-  if (sellerId) return sellerId;
-  if (!sellerIdentityFlowPromise) {
-    sellerIdentityFlowPromise = (async () => {
-      let user = await requireLogin('signup', 'Sign up (or log in) to start selling.');
-      if (!user) return null;
-      user = await requireVerification(user);
-      if (!user) return null;
-      const seller = await fetchMySeller();
-      setSellerId(seller.sellerId);
-      return sellerId;
-    })();
-  }
-  const id = await sellerIdentityFlowPromise;
-  sellerIdentityFlowPromise = null;
-  return id;
-}
-
-// #2554: src/account/auth.js's own resetLocalSessionState (shared by its
-// logout/delete-account flows, #432) needs to clear these two guards
-// alongside builderId/sellerId -- exported rather than left internal since
-// those flow-promise variables themselves still live here pending #2555's
-// account/identity.js extraction.
-export function resetIdentityFlowPromises() {
-  builderIdentityFlowPromise = null;
-  sellerIdentityFlowPromise = null;
-}
-
-// N44 (owner, Control Room, 2026-09-12): "I do want age attestation and
-// credit card to gate login for shopping... restrict minors from using any
-// part of the application" — Shop mode used to need no identity at all,
-// unlike Build/Sell above. Unlike those two, shopping has no separate
-// profile of its own to provision (no builderId/sellerId equivalent) — this
-// just blocks on the same login + #556 verification gate and hands back
-// the verified user, or null if they declined either step. requireLogin/
-// requireVerification already short-circuit once currentAuthUser is set and
-// verified, so — unlike builderId/sellerId above — there's no cheap
-// `if (x) return x` to check first; the flow-promise guard below still
-// exists to collapse concurrent callers (e.g. bootstrap() and a stray
-// re-entry) into one shared prompt instead of two.
-let shopperIdentityFlowPromise = null;
-async function ensureShopperIdentity() {
-  if (!shopperIdentityFlowPromise) {
-    shopperIdentityFlowPromise = (async () => {
-      let user = await requireLogin('signup', 'Sign up (or log in) — age verification is required to use higglehaven.');
-      if (!user) return null;
-      return requireVerification(user);
-    })();
-  }
-  const user = await shopperIdentityFlowPromise;
-  shopperIdentityFlowPromise = null;
-  return user;
-}
+// comment. ensureBuilderIdentity/ensureSellerIdentity/ensureShopperIdentity
+// (and their flow-promise guards, and resetIdentityFlowPromises) now live
+// in src/account/identity.js — see that module's own #2555 comment.
 
 // Builder-facing notifications (see migrations/0038_notifications.sql) —
 // currently only ever produced by a seller changing a placed product's
