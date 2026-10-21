@@ -1,8 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
-import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { cropGeometryFromEnd } from './meshCrop.js';
+import { getModalFocusable, openModalA11y, closeModalA11y } from './ui/modal.js';
 import { CATALOG as FALLBACK_CATALOG, DEFAULT_INSTANCES } from './catalog.js';
 import { loadInstances, saveInstances } from './layoutStorage.js';
 import {
@@ -152,11 +151,9 @@ import { sampleUniformDiskRadiusM } from './spawnLocation.js';
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from './itemHandling.js';
 import { computeSellerShowcasePages, layoutSellerShowcasePage } from './sellerShowcase.js';
 import { computeSavedLayoutGround, pointInDragRect } from './savedLayoutPreview.js';
-import { skeletonSignatureFromBones } from './skeletonSignature.js';
 import {
   curvatureDropM,
   curvedPosition,
-  flatPosition,
   footprintScaleAtHeight,
   relativeCurvatureDropM,
 } from '../worker/earthCurvature.js';
@@ -177,13 +174,56 @@ import {
   currentMode, setCurrentMode,
   LANDLET_AREA_M2, LANDLET_SIDE_M, LANDLET_HEIGHT_M,
 } from './world/state.js';
+// #2552: scene/camera/renderer/canvas and the shared animate()/
+// updateCompassNeedle/onResize loop now live in src/world/scene.js (see
+// that module's own comments) — registerModeFrameUpdate/registerFacing
+// Override are each mode's own hook into that now-shared loop (see
+// enterShopMode/enterSellMode/enterLayoutPreviewMode/bootstrap's own
+// calls to them, and buildModeFrameUpdate's own comment below).
+import {
+  scene, camera, renderer, canvas,
+  registerModeFrameUpdate, registerFacingOverride,
+} from './world/scene.js';
 
+// #2553 (part of #2504/#2500's src/main.js module split, see #2503's
+// design comment for the full dependency map): the catalog-template ->
+// Object3D pipeline, the ground plane, and LOD/dispose helpers now live in
+// src/world/models.js. That module exports `landlet` without adding it to
+// any scene -- `scene` lived in this file when world/models.js was
+// written, and now that #2552 moved it to world/scene.js too, the
+// scene.add(landlet) call right after this import still preserves the
+// exact original initialization order (world/scene.js's own module-eval
+// runs first, since it's imported above this).
+import {
+  curveGroundGeometry, flatGroundHitPoint,
+  createGroundTexture, normalizeGroundShapeUVs,
+  landlet, findTemplate,
+  loadModelAnimations, computeSkeletonSignature, loadModelInstance,
+  extensibleAxes, effectiveLength, meshDimensions,
+  buildInstanceLodProxy, setInstanceLodState,
+  AXIS_DIMENSION_KEY, AXIS_LIST, FLOORING_THICKNESS_M, isFlooringTemplate,
+  createMeshForInstance,
+  disposeMaterialTextures, disposeObject,
+} from './world/models.js';
+scene.add(landlet);
 // #2564: the mandatory first-claim flow (runClaimFlow, its own flyover-map
 // scene, and the plot pick/confirm handlers) now lives in src/claim/flow.js
 // — see that module's own comment for its dependency notes, including why
 // it in turn imports a few things back from this module (a temporary
 // circular import pending #2550's ui/modal.js extraction).
 import { runClaimFlow } from './claim/flow.js';
+// #2554: login/signup/verify/session flow now lives in src/account/auth.js
+// (see that module's own comment for its dependency notes, including why
+// it in turn imports loadStripeJs/START_MODE_KEY/setAccountSessionEnding
+// back from this module — a temporary circular import, same shape as
+// claim/flow.js's own, until those pieces get a real home outside main.js
+// via their own future extractions).
+import {
+  currentAuthUser, setCurrentAuthUser, accountRecoveryFlowActive, authInitPromise,
+} from './account/auth.js';
+// #2555: ensureBuilderIdentity/ensureSellerIdentity/ensureShopperIdentity
+// now live in src/account/identity.js.
+import { ensureBuilderIdentity, ensureSellerIdentity, ensureShopperIdentity } from './account/identity.js';
 
 let activeBundleTab = 'mine';
 
@@ -221,10 +261,12 @@ const PREVIEW_SAVED_LAYOUT_ID_KEY = 'higglehaven.previewSavedLayoutId';
 const BUILD_TARGET_LANDLET_ID_KEY = 'higglehaven.buildTargetLandletId';
 
 // Declared here (rather than alongside the rest of Shop mode, much further
-// down) because animate() below reads it on every frame starting from its
-// very first, synchronous call at module load — a `let` declared after
-// that point would be in its temporal dead zone the first time animate()
-// runs, throwing before the app ever renders a frame.
+// down) because several Shop-specific pointer/keyboard event handlers
+// declared well before the rest of Shop mode's own state gate on it — a
+// `let` declared after those would be in its temporal dead zone the first
+// time one of them ran. (#2552: animate() itself moved to world/scene.js
+// and no longer reads this directly — see registerModeFrameUpdate's own
+// comment — but plenty else in this file still does.)
 let shopActive = false;
 
 // Vertical construction (issue #167/#168/#169): the current lándlet's own
@@ -264,38 +306,10 @@ function levelLabel(levelIndex) {
   return levelIndex > 0 ? `Level +${levelIndex}` : `Level ${levelIndex}`;
 }
 
-const canvas = document.getElementById('app');
-
 // Shown in Settings' General tab (renderGeneralSettingsSection) rather than
 // an always-on-screen HUD overlay — decluttering the main view, now that
 // it's the only way to read/copy exactly which commit is deployed.
 const BUILD_INFO_TEXT = `build ${__BUILD_COMMIT__} · ${__BUILD_TIME__}`;
-
-const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x87ceeb); // flat placeholder sky color
-
-const camera = new THREE.PerspectiveCamera(
-  60,
-  window.innerWidth / window.innerHeight,
-  0.1,
-  1000,
-);
-// Three.js defaults to Y-up, which reads as backwards for a project whose
-// ground plane is naturally X/Y (latitude/longitude-shaped) with height as
-// the odd one out — Z-up matches that better. OrbitControls (and
-// Object3D.lookAt, used just below) both key off `camera.up` rather than
-// hard-coding Y, so this is enough to retarget the whole "vertical axis"
-// convention with no library patching. It has to happen before
-// `new OrbitControls(...)` — OrbitControls reads `object.up` once, at
-// construction, to build its internal up-axis-correction quaternion.
-camera.up.set(0, 0, 1);
-// Positioned up and back so the whole plot is in frame.
-camera.position.set(LANDLET_SIDE_M * 0.6, LANDLET_SIDE_M * 0.6, LANDLET_SIDE_M * 0.5);
-camera.lookAt(0, 0, 0);
-
-const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-renderer.setPixelRatio(window.devicePixelRatio);
-renderer.setSize(window.innerWidth, window.innerHeight);
 
 // Dev-only orbit camera so the scene is inspectable on a phone (pinch/drag)
 // before any real avatar movement exists. Not part of the in-world control scheme.
@@ -1204,144 +1218,13 @@ const sunLight = new THREE.DirectionalLight(0xffffff, 1.2);
 sunLight.position.set(20, 10, 30);
 scene.add(sunLight);
 
-// docs/SPEC.md §1's Earth-curvature coordinate system (issue #135): bends
-// a flat ground geometry's vertices onto the sphere via worker/
-// earthCurvature.js's curvedPosition, treating the mesh's own local origin
-// (0,0,0) as the tangent point on Earth's surface — correct for Build
-// mode, which always renders a landlet in its own local scene regardless
-// of that landlet's true position out in the wider world (unlike Shop
-// mode's shared-world view, where curvature between landlets, not just
-// within one, matters — a separate, larger piece of #133 this doesn't
-// attempt). Genuinely imperceptible at a landlet's ~31.6m scale (see
-// clampToLandlet's own comment on this) — this is about the underlying
-// geometry being correct, not a visible effect, per #135's own note not
-// to over-build visual fidelity here.
-function curveGroundGeometry(geometry) {
-  const position = geometry.attributes.position;
-  for (let i = 0; i < position.count; i++) {
-    const curved = curvedPosition({ x: position.getX(i), y: position.getY(i), z: position.getZ(i) });
-    position.setXYZ(i, curved.x, curved.y, curved.z);
-  }
-  position.needsUpdate = true;
-  geometry.computeVertexNormals();
-}
-
-// curveGroundGeometry's own inverse for a raycast hit: `landlet`'s
-// geometry is now the curved surface, so a hit against it lands on that
-// curve rather than the flat plane every other coordinate in this file
-// (placement, measuring, clamping) still assumes — convert back via
-// flatPosition before any of that math ever sees the point.
-function flatGroundHitPoint(hit) {
-  const flat = flatPosition(hit.point);
-  return new THREE.Vector3(flat.x, flat.y, flat.z);
-}
-
-// #220 (biome ground texture): #219's own real classification-data
-// pipeline (worker/geoData.js, scripts/ingest-geo-data.mjs) never actually
-// landed a `biome` field on a landlet — it only ever shipped water/
-// buildable landType (already given its own distinct look), and its
-// ingestion script has never been run against real data at all. Every
-// landlet this game currently generates therefore falls into exactly the
-// "no real classification" bucket #220 itself calls out needing a
-// fallback for — so rather than invent a speculative per-biome system
-// with nothing real to key off (the same call PR #238 already made for
-// this same issue), this just replaces the flat single-color ground
-// fill with a textured "default/unclassified" one.
-//
-// #2371 (sub-issue of #2368) is that real per-biome lookup, now that
-// #2369/#2370 actually landed a `biome` column with real ingested data
-// behind it. 'lowland' deliberately keeps the exact same palette as the
-// default/unclassified bucket below: it's the common, ordinary case
-// (#2370's own real ingestion run classified 87% of its sampled area as
-// lowland), not a visual change from today's world. near_water/upland/
-// alpine each get their own base color/speckle palette, picked by eye
-// against each band's real-world character (marshy/lush near water,
-// progressively drier/rockier moving upslope) — the same "lower fidelity
-// bar" (docs/SPEC.md §8) every other real-world classification in this
-// app already uses, not a precise biome model.
-//
-// Generated on a canvas rather than loaded from an image asset (matching
-// makeDimensionLabelSprite's own CanvasTexture precedent elsewhere in
-// this file) — small random dabs in a few close shades over a base fill
-// read as mottled ground without needing real art. colorSpace must be
-// set explicitly: THREE.Texture defaults to NoColorSpace, which reads a
-// canvas's colors washed-out/oversaturated against everything else in
-// the scene using the sRGB pipeline.
-const DEFAULT_GROUND_TEXTURE_PALETTE = { base: '#6ca42e', speckles: ['#7cb83a', '#5c9424', '#82c244', '#568c20'] };
-const GROUND_TEXTURE_PALETTES = {
-  near_water: { base: '#4a8f6b', speckles: ['#5aa87d', '#3d7a5a', '#6bc294', '#2f6548'] },
-  upland: { base: '#8a9a4a', speckles: ['#9aab56', '#78873c', '#a7b863', '#687532'] },
-  alpine: { base: '#9c9488', speckles: ['#aba398', '#8a8276', '#b8b0a4', '#766e64'] },
-};
-const cachedGroundTextures = new Map(); // palette key ('default' or a real biome) -> CanvasTexture
-function createGroundTexture(biome = null) {
-  const key = GROUND_TEXTURE_PALETTES[biome] ? biome : 'default';
-  if (cachedGroundTextures.has(key)) return cachedGroundTextures.get(key);
-  const { base, speckles } = GROUND_TEXTURE_PALETTES[biome] ?? DEFAULT_GROUND_TEXTURE_PALETTE;
-  const canvas = document.createElement('canvas');
-  canvas.width = 256;
-  canvas.height = 256;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = base;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  for (let i = 0; i < 4000; i++) {
-    ctx.fillStyle = speckles[i % speckles.length];
-    const w = 1 + Math.random() * 2;
-    const h = 3 + Math.random() * 4;
-    ctx.fillRect(Math.random() * canvas.width, Math.random() * canvas.height, w, h);
-  }
-  const texture = new THREE.CanvasTexture(canvas);
-  texture.wrapS = THREE.RepeatWrapping;
-  texture.wrapT = THREE.RepeatWrapping;
-  texture.repeat.set(8, 8);
-  texture.colorSpace = THREE.SRGBColorSpace;
-  cachedGroundTextures.set(key, texture);
-  return texture;
-}
-
-// THREE.ShapeGeometry's own UV convention is "world uvs" — literally each
-// vertex's raw local-space (x, y) in meters, not normalized to [0, 1] the
-// way PlaneGeometry/CircleGeometry's UVs are (three.js's own ShapeGeometry
-// source: `uvs.push(vertex.x, vertex.y)`). createGroundTexture()'s shared
-// texture.repeat (8, 8) was tuned against landletGeometry's PlaneGeometry
-// just below, whose UVs really do run 0..1 across its own LANDLET_SIDE_M
-// width — applied to a ShapeGeometry instead, those raw-meter UVs make the
-// same texture repeat hundreds of times across a landlet-sized shape, far
-// more than the GPU's mipmap minification can resolve, which washes the
-// whole surface out to a near-flat average color instead of visible grass
-// speckle (Control Room: "I see the grass ground texture load, then it
-// reverts to the old plain green plane" once applyLandletShape swaps in a
-// real landlet's ShapeGeometry). Dividing by LANDLET_SIDE_M puts a
-// ShapeGeometry's UVs back in that same "one unit per landlet-width" space
-// PlaneGeometry's naturally are, so the shared texture.repeat gives the
-// same physical tile density either way.
-function normalizeGroundShapeUVs(geometry) {
-  const uv = geometry.attributes.uv;
-  for (let i = 0; i < uv.count; i++) {
-    uv.setXY(i, uv.getX(i) / LANDLET_SIDE_M, uv.getY(i) / LANDLET_SIDE_M);
-  }
-  uv.needsUpdate = true;
-}
-
-// PlaneGeometry already lies flat in the XY plane by default — which is
-// now our ground plane (Z-up), so unlike before, no rotation is needed. This
-// square is only a placeholder shown before bootstrap() resolves which
-// landlet is actually being built on — applyLandletShape() below swaps the
-// geometry for the real polygon once that's known. The mesh itself (and its
-// raycasting target at line ~1343ish) has to exist immediately, since
-// ground-click placement can happen before that fetch resolves.
-const landletGeometry = new THREE.PlaneGeometry(LANDLET_SIDE_M, LANDLET_SIDE_M);
-curveGroundGeometry(landletGeometry);
-// DoubleSide so the plane stays visible from below during dev orbiting;
-// the finished game will never let a shopper get under the ground plane.
-const landletMaterial = new THREE.MeshStandardMaterial({ map: createGroundTexture(), side: THREE.DoubleSide });
-const landlet = new THREE.Mesh(landletGeometry, landletMaterial);
-scene.add(landlet);
-
 // Swaps the ground mesh's geometry for the landlet's real polygon (plot-
 // local offsets from its own center, per docs/API.md) once bootstrap() has
 // fetched it — a plain square fallback (shapeForLandlet's own fallback) for
 // legacy/placeholder landlets that predate real procedural generation.
+// landlet/createGroundTexture/normalizeGroundShapeUVs/curveGroundGeometry
+// now live in src/world/models.js (#2553); shapeForLandlet is still here,
+// pending claim/flow.js's own extraction of it.
 function applyLandletShape(landletRecord) {
   const oldGeometry = landlet.geometry;
   landlet.geometry = new THREE.ShapeGeometry(shapeForLandlet(landletRecord));
@@ -1356,274 +1239,11 @@ function applyLandletShape(landletRecord) {
   landlet.material.needsUpdate = true;
 }
 
-function findTemplate(templateId) {
-  return activeCatalog.find((template) => template.templateId === templateId);
-}
-
-// Real product models (glTF/.glb — see public/models/ and catalog.js's
-// modelUrl fields), not a generic box standing in for every product.
-// Loaded once per URL and cached; every placed instance after the first
-// gets a clone of the cached scene instead of re-fetching/re-parsing it.
-// Cached by the raw parsed GLTF (not just its .scene) so a caller that
-// also needs .animations (#682's avatar rig convention — see
-// loadModelAnimations below) never triggers a second fetch/parse for the
-// same URL.
-const gltfLoader = new GLTFLoader();
-const modelGltfCache = new Map(); // modelUrl -> Promise<GLTF>
-
-// #2438: a failed load used to cache the REJECTED promise just as
-// permanently as a successful one — a single transient failure (a dropped
-// request, an R2 read racing right behind the upload that created this
-// exact file) poisoned this URL for the rest of the tab's session, since
-// every later caller (a second placed instance of the same template, a
-// later view of the same product) got handed the same already-rejected
-// promise instead of a fresh attempt. Deleting the cache entry the moment
-// it rejects — before the rejection ever reaches this call's own caller —
-// means only the failing attempt itself sees that rejection; the next call
-// for the same url finds the cache empty again and genuinely retries.
-function loadModelGltf(url) {
-  if (!modelGltfCache.has(url)) {
-    modelGltfCache.set(url, gltfLoader.loadAsync(url).catch((err) => {
-      modelGltfCache.delete(url);
-      throw err;
-    }));
-  }
-  return modelGltfCache.get(url);
-}
-
-function loadModelScene(url) {
-  return loadModelGltf(url).then((gltf) => gltf.scene);
-}
-
-// #682 (sub-issue of #679/#680/#681): the named animation clips (if any)
-// an uploaded model carries — idle/walk/fly, per the convention documented
-// in docs/SPEC.md's "Avatar rig/animation clip convention" — for
-// createCustomShopAvatar to drive via AnimationMixer, and for the upload
-// wizard to surface at upload time (showUploadDimensionPreview).
-function loadModelAnimations(url) {
-  return loadModelGltf(url).then((gltf) => gltf.animations);
-}
-
-// #1162 (sub-issue of #1161, sellable avatar animations): a deterministic
-// signature of a model's skeleton — its bone names and parent/child
-// hierarchy — computed at upload time (showUploadDimensionPreview) and
-// persisted on the catalog template (skeletonSignature) alongside
-// modelSizeBytes, so a future standalone animation upload (#1163) and the
-// shop/equip UI (#1164) can compare two models' signatures for
-// compatibility by simple string equality rather than re-fetching and
-// re-parsing both models every time.
-//
-// Exact equality, not a fuzzy/partial match: Three.js's AnimationMixer
-// binds each keyframe track to a bone by name alone, so an animation
-// plays correctly against a different file's skeleton only when the two
-// skeletons share the exact same bone names in the exact same hierarchy
-// — anything looser risks a silently broken retarget (limbs not moving,
-// or moving through the wrong pivot) with no error to warn the shopper.
-// Root bones (no bone parent — normally just one, a hips/root joint, but
-// not assumed) and the rest (as parent>child edges) are each gathered and
-// sorted independently so the signature doesn't depend on the order bones
-// happen to appear in the file, then hashed to a fixed-length digest —
-// compact for storage, and content-opaque since a rig's bone names aren't
-// meaningful to store verbatim.
-//
-// Returns null for a model with no skeleton at all (an ordinary rigid
-// prop) — same "nothing to report" shape loadModelAnimations already
-// uses for a model with zero animation clips.
-//
-// #1233: the actual root/edge-sorting-and-hashing logic lives in the pure,
-// dependency-free skeletonSignatureFromBones (src/skeletonSignature.js),
-// extracted out of this function so it's directly unit-testable in the
-// workerd test pool (see vitest.config.js's own note on why code importing
-// three.js can't live there) — this function keeps only the three.js-
-// dependent part (loading the GLTF, finding the SkinnedMesh).
-async function computeSkeletonSignature(url) {
-  const gltf = await loadModelGltf(url);
-  let skinnedMesh = null;
-  gltf.scene.traverse((child) => {
-    if (!skinnedMesh && child.isSkinnedMesh) skinnedMesh = child;
-  });
-  if (!skinnedMesh) return null;
-  return skeletonSignatureFromBones(skinnedMesh.skeleton.bones);
-}
-
-// glTF is authored Y-up by convention (whatever tool exported it — Blender,
-// etc.) — our scene is Z-up (see camera.up.set above), and nothing about
-// loading a glTF file auto-corrects that; the raw vertex data just gets
-// used as-is. Wrapping the loaded scene in a container and rotating *that
-// inner copy* +90 degrees about X converts "up" from the model's Y to the
-// container's Z, so the container's own position/rotation.z then behaves
-// exactly like every other product's. This is the real correction any
-// future genuine seller-uploaded model will also need, not a shortcut
-// specific to these placeholder assets — which is why the placeholder
-// models here are deliberately authored in standard Y-up space rather than
-// pre-rotated to dodge it.
-async function loadModelInstance(url) {
-  const cachedScene = await loadModelScene(url);
-  const model = cachedScene.clone();
-  // Object3D.clone() shares materials/geometries by reference. Geometry
-  // being shared is fine (read-only), but materials need independent
-  // copies per instance so a future per-material tweak on one placed
-  // instance (recoloring, damage states, etc.) can't leak into every other
-  // instance sharing the same cached material.
-  model.traverse((child) => {
-    if (child.isMesh) {
-      child.material = Array.isArray(child.material)
-        ? child.material.map((material) => material.clone())
-        : child.material.clone();
-    }
-  });
-  model.rotation.x = Math.PI / 2;
-
-  // Every placeholder model in this file is deliberately authored centered
-  // on its own local origin, so "z = height / 2 rests it on the ground"
-  // (see createMeshForInstance) holds by construction. A real uploaded
-  // model can't be trusted to follow that convention — RealityScan (and
-  // photogrammetry tools generally) keep whatever pivot the original
-  // capture volume had, which does not move back to the geometry's center
-  // after cropping away part of a scan. An uncentered model was exactly
-  // this: cropping ~1.5in off the bottom of a 3in scan left the remaining
-  // geometry sitting off-center relative to its own origin, so the
-  // declared (correctly measured) height was right but the visual mesh
-  // rendered shifted from where the collision system placed it — the
-  // brick appeared to float exactly by the cropped-away amount whenever
-  // Snap rested it on the ground. Recentering here, once per loaded
-  // instance, makes the convention hold for any model regardless of the
-  // source tool's own pivot.
-  const box = new THREE.Box3().setFromObject(model);
-  const center = box.getCenter(new THREE.Vector3());
-  model.position.sub(center);
-
-  const container = new THREE.Group();
-  container.add(model);
-  // #682: the actual loaded node, for a caller (createCustomShopAvatar)
-  // that needs to bind a THREE.AnimationMixer to the same hierarchy the
-  // model's own animation clips (if any) were authored against — the
-  // wrapping container itself was never part of that hierarchy.
-  container.userData.model = model;
-  return container;
-}
-
-// axis ('x'/'y'/'z', matching how BoxGeometry's three arguments map onto
-// this scene below) -> { minM } declared by the seller on a template that
-// can be shortened, e.g. a brick or lumber board cut down to fit a gap
-// (see docs/API.md). Lives in the template's existing metadata_json rather
-// than needing its own column — same place `placeholder: true` already
-// lives.
-function extensibleAxes(template) {
-  return template.metadata?.extensible || null;
-}
-
-// The length actually in effect for one axis of an instance: the builder's
-// crop override if it has cropped that axis, else the template's full
-// (seller-uploaded maximum) size.
-function effectiveLength(template, instance, axis, dimensionKey) {
-  return instance.crop?.[axis] ?? template.dimensions[dimensionKey];
-}
-
-// A placed mesh's real, current footprint — its template's dimensions with
-// any crop (mesh.userData.crop, set in createMeshForInstance) and uniform
-// Resize scale (mesh.userData.scale) applied. Collision, landlet-bounds
-// clamping, and stacking all need this rather than the template's raw
-// dimensions, or a cropped/resized item would still claim its full
-// template-declared footprint for those purposes.
-function meshDimensions(mesh) {
-  const { template, crop, scale = 1 } = mesh.userData;
-  // Every caller here — clampToLandlet's own minimum-z floor, collision
-  // resolution, the group-move bounds clamp, alignment assist's own
-  // half-extent — needs to agree a flooring mesh is genuinely thin, not
-  // whatever height the seller declared for the (unused, for flooring)
-  // full-size model. Defined once here rather than special-cased at every
-  // call site.
-  if (isFlooringTemplate(template)) {
-    return { width: template.dimensions.width, depth: template.dimensions.depth, height: FLOORING_THICKNESS_M };
-  }
-  return {
-    width: (crop?.x ?? template.dimensions.width) * scale,
-    depth: (crop?.y ?? template.dimensions.depth) * scale,
-    height: (crop?.z ?? template.dimensions.height) * scale,
-  };
-}
-
-// #2378 (docs/SPEC.md §1's near/middle-LOD/far-panoramic-backdrop chunk
-// loading, #2377): a cheap box stand-in for a model-loaded instance's full
-// geometry, shown at the middle LOD band instead of leaving full detail
-// loaded all the way out to the unload radius. Added as an extra child of
-// the instance's own object rather than swapping object identity, so every
-// other per-object hook (entry.objects, sign/calendar/review registration,
-// userData) keeps working completely unchanged — only this proxy's and the
-// real model's own children's `.visible`/hit-testable state toggle (see
-// setInstanceLodState below, which also establishes the correct initial
-// raycast state right after this returns — see its own call site). Box-
-// fallback/flooring instances (object.isMesh true, from
-// createMeshForInstance's own box-fallback branches) return null here:
-// they're already a single cheap box, nothing left to simplify.
-function buildInstanceLodProxy(object) {
-  if (object.isMesh) return null;
-  const { width, depth, height } = meshDimensions(object);
-  const geometry = new THREE.BoxGeometry(width, depth, height);
-  const material = new THREE.MeshStandardMaterial({ color: object.userData.template.color });
-  const proxy = new THREE.Mesh(geometry, material);
-  proxy.visible = false;
-  return proxy;
-}
-
-// #2399: THREE.Raycaster's own tree walk (see intersect() in its source)
-// never checks `.visible` — only `.layers`, and then each object's own
-// raycast() return value. A plain no-op raycast override returns
-// `undefined`, not `false`, which still lets the walk recurse into that
-// object's own children — not enough to hide a real model's top-level
-// child when it's often a Group wrapping several meshes, not a single
-// Mesh. Returning exactly `false` stops that recursion outright, so a
-// hidden object (and everything under it) never contributes a hit;
-// deleting our own override restores whatever raycast method that
-// object's own class actually defines (Mesh.prototype.raycast, or the
-// inert Object3D.prototype.raycast for a plain Group), without having to
-// know or store which one that was.
-function setLodChildHitTestable(child, hitTestable) {
-  if (hitTestable) delete child.raycast;
-  else child.raycast = () => false;
-}
-
-// #2378: true switches an instance to its simplified middle-band proxy;
-// false restores full detail. A no-op for an instance with no proxy
-// (buildInstanceLodProxy returned null for it, stored as
-// object.userData.lodProxy in loadShopLandletInstances) — a box/flooring
-// instance has nothing to switch. Keeps hit-testability in sync with
-// visibility on both sides (#2399) — without this, the visible side of a
-// switch could tap-miss (invisible proxy/model still absorbing the hit)
-// while the hidden side keeps catching every tap meant for whichever
-// object the shopper can actually see.
-function setInstanceLodState(object, isMiddle) {
-  const proxy = object.userData.lodProxy;
-  if (!proxy) return;
-  proxy.visible = isMiddle;
-  setLodChildHitTestable(proxy, isMiddle);
-  for (const child of object.children) {
-    if (child === proxy) continue;
-    child.visible = !isMiddle;
-    setLodChildHitTestable(child, !isMiddle);
-  }
-}
-
-const AXIS_DIMENSION_KEY = { x: 'width', y: 'depth', z: 'height' };
-const AXIS_LIST = ['x', 'y', 'z'];
-
-// Ground/flooring products (docs/SPEC.md §3: "placing a specific real
-// flooring/sod product replaces [the default grass] within that
-// footprint") — a template opts in via metadata.flooring (toggled in the
-// Seller modal), not a separate catalog field, the same lightweight
-// pattern extensibleAxes already uses for metadata.extensible. Always
-// renders as a thin flat plane at true ground level regardless of the
-// template's own declared height or whether it has a real uploaded model
-// — true texture-masking of the shared ground mesh within an arbitrary
-// footprint is a real rendering problem or its own; a thin tinted slab
-// reads as "this patch of ground is now this product" without it, the
-// same simplification a placeholder box already stands in for any product
-// with no real model.
-const FLOORING_THICKNESS_M = 0.02;
-function isFlooringTemplate(template) {
-  return template.metadata?.flooring === true;
-}
+// loadModelGltf/loadModelScene/loadModelAnimations/computeSkeletonSignature/
+// loadModelInstance/extensibleAxes/effectiveLength/meshDimensions/
+// buildInstanceLodProxy/setLodChildHitTestable/setInstanceLodState/
+// AXIS_DIMENSION_KEY/AXIS_LIST/FLOORING_THICKNESS_M/isFlooringTemplate all
+// now live in src/world/models.js (#2553).
 
 // Swaps `mesh` for a freshly built Object3D reflecting `crop` — used by
 // the Trim UI itself, and by restoreSnapshot when an undo/redo jump
@@ -1704,258 +1324,8 @@ async function replaceMeshWithCrop(mesh, crop) {
   return newMesh;
 }
 
-// Downsamples a texture to a single pixel via an offscreen canvas to get
-// its overall average color — a cheap, dependency-free way to get "this
-// product's actual color" for a real uploaded model, whose catalog
-// template.color is usually just the upload flow's generic gray
-// placeholder rather than a color anyone actually picked (see
-// loadCroppedModelInstance's own use of this). Returns null for a
-// materialless mesh or a texture whose image hasn't finished decoding yet
-// (shouldn't happen in practice — GLTFLoader resolves textures before a
-// model's load promise does — but a null-safe fallback costs nothing).
-function averageTextureColor(texture) {
-  const image = texture?.image;
-  if (!image || !image.width || !image.height) return null;
-  const canvas = document.createElement('canvas');
-  canvas.width = 1;
-  canvas.height = 1;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(image, 0, 0, 1, 1);
-  const [r, g, b] = ctx.getImageData(0, 0, 1, 1).data;
-  return new THREE.Color(r / 255, g / 255, b / 255);
-}
-
-// For an extensible template that has a real model: loads it via
-// loadModelInstance (its usual Y-up-correction/recenter pipeline), then —
-// for each axis this particular instance is actually cropped shorter than
-// the template's declared maximum on (a template can declare more than
-// one extensible axis, see extensibleAxes, though most instances of it
-// won't be cropped on all of them at once) — bakes each mesh's
-// accumulated transform into its own geometry (putting it in the same
-// container-local space effectiveLength's width/depth/height already
-// describe) and runs it through meshCrop.js's plane clipper, once per
-// cropped axis. Cropping only ever removes material from the +axis end
-// (see meshCrop.js's own doc comment for why, and why the far end's cap
-// is never a fabricated flat disc) — see docs/API.md's "Extensible
-// products" section. Returns the container unmodified when there's
-// nothing to crop on any axis, so a full-length instance of an
-// extensible template still renders exactly like a normal one, model
-// and all.
-async function loadCroppedModelInstance(template, instance) {
-  const container = await loadModelInstance(template.modelUrl);
-  const extensible = extensibleAxes(template);
-  if (!extensible) return container;
-
-  const croppedAxes = ['x', 'y', 'z'].filter((axis) => {
-    if (!extensible[axis]) return false;
-    const dimensionKey = AXIS_DIMENSION_KEY[axis];
-    const fullLength = template.dimensions[dimensionKey];
-    const cropLength = effectiveLength(template, instance, axis, dimensionKey);
-    return cropLength < fullLength - 1e-6;
-  });
-  if (croppedAxes.length === 0) return container;
-
-  container.updateMatrixWorld(true);
-  const meshes = [];
-  container.traverse((child) => {
-    if (child.isMesh) meshes.push(child);
-  });
-
-  // Cropping only the +axis end leaves the remaining geometry's true
-  // center drifting toward -axis as cropLength shrinks — but every
-  // consumer of a placed mesh's own position (collision, landlet-bounds
-  // clamping, ...) assumes position IS the center, the same convention
-  // the box-fallback and uniformly-Resize-scaled cases already follow by
-  // construction. Translating the geometry back by that same drift
-  // restores that invariant: `position` continues to mark the true
-  // center of whatever's actually rendered, exactly like every other
-  // item type. (#272: this used to also push an equal-and-opposite
-  // offset onto this inner group, which canceled the translate below
-  // back out to a no-op — leaving a cropped real model's rendered
-  // footprint silently off-center from what collision/landlet-bounds
-  // clamping assumed.) Each cropped axis's own offset is independent of
-  // the others (different vector components), so accumulating them into
-  // one shift and applying it once, after every axis has been cropped,
-  // is equivalent to applying each axis's own shift right after its own
-  // crop — simpler to just do once at the end.
-  const shift = [0, 0, 0];
-  for (const axis of croppedAxes) {
-    const axisIndex = { x: 0, y: 1, z: 2 }[axis];
-    const dimensionKey = AXIS_DIMENSION_KEY[axis];
-    const fullLength = template.dimensions[dimensionKey];
-    const cropLength = effectiveLength(template, instance, axis, dimensionKey);
-    const recenterOffset = (cropLength - fullLength) / 2;
-    shift[axisIndex] = -recenterOffset;
-  }
-
-  // The manufactured backing cap (materialIndex 1 — see meshCrop.js) is
-  // meant to stay fully hidden behind the real, relocated end cap, but a
-  // real scanned cross-section — especially one that isn't a simple
-  // rectangular prism — can still leave some of it exposed even after
-  // cropGeometryFromEnd's own bounding-box coverage fit, which can only
-  // correct a size mismatch, not reshape a patch to a hole's actual
-  // (possibly irregular) outline. Rendering that sliver with the SAME
-  // textured material as the real surface used to mean sampling whatever
-  // texel happens to sit at the flat cap's UV(0,0) — an arbitrary,
-  // sometimes bizarrely-colored patch of the product's own texture atlas
-  // showing up out of context. template.color is scarcely better for a
-  // real uploaded model: it's near-universally the upload flow's generic
-  // placeholder swatch (`#999999`), not this product's actual color, so a
-  // visible sliver still read as a flat industrial-gray patch rather than
-  // "an ordinary surface" of the same product. Sampling the real
-  // material's own texture down to its average color instead means any
-  // exposed sliver blends into the surrounding real surface's actual tone
-  // — still not textured detail, but no longer an obviously wrong color.
-  // DoubleSide: a genuinely holey real scan (see this block's own comment
-  // above) can let a grazing view ray slip past the backing cap's front
-  // face without a clean hit — rendering its normally-invisible backface
-  // instead of falling through to empty space/background is a cheap,
-  // strictly-better hardening regardless of any one model's own defects.
-  const inner = new THREE.Group();
-  for (const mesh of meshes) {
-    let geometry = mesh.geometry.clone();
-    geometry.applyMatrix4(mesh.matrixWorld);
-    // Cropping two or three axes on the same instance runs this same
-    // geometry through cropGeometryFromEnd once per axis in turn — each
-    // pass only ever touches its own axis's coordinate, so an
-    // already-cropped x range is untouched by a following z crop and
-    // vice versa (see cropGeometryFromEnd's own doc comment: it assumes
-    // its axis is currently centered at 0, which chaining preserves
-    // since a crop on one axis never moves another axis's coordinates).
-    // The one real cost of chaining rather than cropping fresh geometry
-    // per axis: a later pass's toTriangleList normalizes every triangle
-    // it sees back to "real surface," including an earlier pass's own
-    // fabricated backing-cap sliver near a shared corner — a small,
-    // already-meant-to-be-hidden patch occasionally rendering with the
-    // real texture instead of its flat backing color, not the always-
-    // preserved surface a builder actually sees.
-    for (const axis of croppedAxes) {
-      const axisIndex = { x: 0, y: 1, z: 2 }[axis];
-      const dimensionKey = AXIS_DIMENSION_KEY[axis];
-      const fullLength = template.dimensions[dimensionKey];
-      const cropLength = effectiveLength(template, instance, axis, dimensionKey);
-      geometry = cropGeometryFromEnd(geometry, axisIndex, cropLength, fullLength);
-    }
-    geometry.translate(shift[0], shift[1], shift[2]);
-    const originalMaterial = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
-    const backingColor = averageTextureColor(originalMaterial?.map) || new THREE.Color(template.color);
-    const backingMaterial = new THREE.MeshStandardMaterial({ color: backingColor, side: THREE.DoubleSide });
-    inner.add(new THREE.Mesh(geometry, [originalMaterial, backingMaterial]));
-  }
-  const result = new THREE.Group();
-  result.add(inner);
-  return result;
-}
-
-// Builds the Object3D for a placed instance: its catalog template's real
-// model if it has one (cropped via loadCroppedModelInstance when the
-// template is extensible and this instance actually is cropped), falling
-// back to a colored box (still used by any template without a model yet,
-// and if a model fails to load or crop). Resting on the ground (z = height
-// / 2) by default since a fresh instance has no saved z yet.
-//
-// BoxGeometry's arguments are always (X-size, Y-size, Z-size) regardless of
-// which axis a scene treats as "up" — it has no idea about camera.up. Since
-// Z is our vertical axis, `height` (the product's real-world tallness) has
-// to go in the third argument, not the second.
-async function createMeshForInstance(instance) {
-  const template = findTemplate(instance.templateId);
-  if (!template) {
-    // Catalog and instance list came from different sources (e.g. one
-    // fetched from the API, the other loaded from a stale local cache) and
-    // disagree on templateIds. bootstrap() below fetches both together
-    // specifically to avoid this, but a defensive skip here is cheap
-    // insurance against crashing the whole scene over one bad instance.
-    console.warn(`No catalog template "${instance.templateId}" — skipping instance ${instance.instanceId ?? instance.id}`);
-    return null;
-  }
-  if (isFlooringTemplate(template)) {
-    // A deliberately separate, much simpler path — no model loading, no
-    // crop/extensibility, no uniform-scale legacy handling (none of the
-    // Resize/Trim tools apply to flooring — it's always its own declared
-    // footprint, always thin, always at the ground). Only x/y and
-    // rotationZ from the instance are meaningful; z is always the fixed
-    // ground thickness regardless of what's stored (see the
-    // objectChange handler's own flooring clamp for why a stale non-zero
-    // z from before this feature existed, or a stray drag, can't stick).
-    const width = template.dimensions.width;
-    const depth = template.dimensions.depth;
-    const geometry = new THREE.BoxGeometry(width, depth, FLOORING_THICKNESS_M);
-    const material = new THREE.MeshStandardMaterial({ color: template.color });
-    const object = new THREE.Mesh(geometry, material);
-    object.position.set(instance.x ?? 0, instance.y ?? 0, FLOORING_THICKNESS_M / 2);
-    object.rotation.z = instance.rotationZ ?? 0;
-    object.userData.instanceId = instance.instanceId ?? instance.id;
-    object.userData.template = template;
-    object.userData.crop = {};
-    object.userData.scale = 1;
-    object.userData.label = instance.label ?? null;
-    return object;
-  }
-  const width = effectiveLength(template, instance, 'x', 'width');
-  const depth = effectiveLength(template, instance, 'y', 'depth');
-  const height = effectiveLength(template, instance, 'z', 'height');
-  let object;
-  if (template.modelUrl) {
-    try {
-      object = extensibleAxes(template)
-        ? await loadCroppedModelInstance(template, instance)
-        : await loadModelInstance(template.modelUrl);
-    } catch (err) {
-      console.warn(`Failed to load model for "${template.templateId}" (${template.modelUrl}), falling back to a colored box:`, err);
-    }
-  }
-  if (!object) {
-    const geometry = new THREE.BoxGeometry(width, depth, height);
-    const material = new THREE.MeshStandardMaterial({ color: template.color });
-    object = new THREE.Mesh(geometry, material);
-  }
-  object.position.set(instance.x ?? 0, instance.y ?? 0, instance.z ?? height / 2);
-  object.rotation.set(instance.rotationX ?? 0, instance.rotationY ?? 0, instance.rotationZ ?? 0);
-  object.userData.instanceId = instance.instanceId ?? instance.id;
-  object.userData.template = template;
-  object.userData.crop = { ...(instance.crop || {}) };
-  // A uniform scale factor, separate from Trim's per-axis crop above.
-  // Builders can no longer set this (Resize was removed from Build mode —
-  // the world should be populated at each product's real, seller-declared
-  // size), but existing instances saved before that change still carry a
-  // non-1 value here and must keep rendering at it. Applied to the whole
-  // returned object (box fallback or real model container alike) so it
-  // scales everything uniformly, position included via Object3D's own
-  // transform.
-  object.userData.scale = instance.scale ?? 1;
-  object.scale.setScalar(object.userData.scale);
-  // Community signs (docs/API.md's "Community signs") — a per-instance
-  // flag, unlike flooring's per-template one, so it lives on the instance
-  // itself rather than being derived from the template. Flooring can't
-  // also be a sign (its own branch above never sets this), which is fine —
-  // nothing in the spec calls for a flat ground patch to double as one.
-  object.userData.isCommunitySign = instance.isCommunitySign ?? false;
-  // Community calendar (docs/API.md's "Community calendar") — same
-  // per-instance-flag reasoning as isCommunitySign just above, and
-  // independent of it.
-  object.userData.isCommunityCalendar = instance.isCommunityCalendar ?? false;
-  // Not editable anywhere in Build mode yet (#1294) — carried through
-  // purely so a value already on the row (set directly via the API)
-  // survives being rebuilt into a mesh and round-tripped back out again,
-  // the same reasoning as crop/scale/isCommunitySign/isCommunityCalendar
-  // just above.
-  object.userData.label = instance.label ?? null;
-  // #1254: exposes the real rendered bounding-box size of whichever
-  // instance's mesh this function last built — e2e-only, same "expose a
-  // minimal hook purely for test verification" precedent as
-  // window.__friendsMapPoints (#1229). Lets a test confirm meshCrop.js's
-  // crop actually shrank the right axis (and left the others untouched)
-  // or that rescaleModelFile's uniform rescale actually took effect on the
-  // real file, rather than only checking a persisted number.
-  const extentBox = new THREE.Box3().setFromObject(object);
-  const extentSize = new THREE.Vector3();
-  extentBox.getSize(extentSize);
-  window.__lastInstanceExtent = {
-    instanceId: object.userData.instanceId, x: extentSize.x, y: extentSize.y, z: extentSize.z,
-  };
-  return object;
-}
+// averageTextureColor/loadCroppedModelInstance/createMeshForInstance now
+// live in src/world/models.js (#2553).
 
 // Populated by bootstrap() once instance data (API or fallback) is
 // available. Declared here, empty, so everything below that references it
@@ -2221,45 +1591,8 @@ async function spawnInstanceAt(template, x, y, z, overrides = {}, { sync = true,
   return mesh;
 }
 
-// #1359: material.dispose() releases the material's own WebGL program/
-// uniform resources but never the THREE.Texture instances it references
-// (map, normalMap, roughnessMap, ... — any PBR map a real uploaded GLTF/GLB
-// can carry). Iterating the material's own properties and disposing
-// whatever's a real Texture (duck-typed via isTexture, same idiom sprite
-// cleanup elsewhere in this file already uses for .map specifically) covers
-// every current and future map property without hardcoding each name.
-function disposeMaterialTextures(material) {
-  for (const value of Object.values(material)) {
-    if (value?.isTexture) value.dispose();
-  }
-}
-
-// A product's Object3D might be a single Mesh (the box fallback) or a
-// Group wrapping a loaded model's own node hierarchy — traverse either way
-// rather than assuming a flat single-mesh shape, since a real seller-
-// uploaded model could have any number of parts/materials.
-function disposeObject(object) {
-  object.traverse((child) => {
-    // #1370: a THREE.Sprite (e.g. a billboard label) is neither isMesh nor
-    // does it carry .geometry to dispose — only its SpriteMaterial (and the
-    // CanvasTexture that material's own .map holds) needs cleanup, which
-    // disposeMaterialTextures already covers generically.
-    if (child.isSprite) {
-      if (child.material) {
-        disposeMaterialTextures(child.material);
-        child.material.dispose();
-      }
-      return;
-    }
-    if (!child.isMesh) return;
-    child.geometry.dispose();
-    const materials = Array.isArray(child.material) ? child.material : [child.material];
-    for (const material of materials) {
-      disposeMaterialTextures(material);
-      material.dispose();
-    }
-  });
-}
+// disposeMaterialTextures/disposeObject now live in src/world/models.js
+// (#2553).
 
 // sync: false is the multi-item counterpart to spawnInstanceAt's own —
 // used wherever several instances are deleted in one action (multi-delete,
@@ -3048,77 +2381,8 @@ catalogPickerCloseBtn.addEventListener('click', closeCatalogPicker);
 // This only works with the real backend reachable — creating a new
 // persistent catalog entry has nowhere to live in offline/fallback mode,
 // since catalog.js is a static file, not a runtime data store.
-// #1316: shared modal keyboard accessibility. role="dialog"/aria-modal are
-// set on each modal element in index.html; this covers what markup alone
-// can't — moving focus into a dialog when it opens, restoring it to
-// whatever opened the dialog once it closes, trapping Tab/Shift+Tab inside
-// the dialog while it's open, and closing the currently-open dialog on
-// Escape. Only one modal is ever open at a time in this app, so a single
-// tracked "active" modal (rather than a stack) matches how
-// openModalA11y/closeModalA11y are called below.
-let activeModalEl = null;
-let activeModalCloseFn = null;
-let modalReturnFocusEl = null;
-
-function getModalFocusable(modalEl) {
-  return Array.from(modalEl.querySelectorAll(
-    'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
-  )).filter((el) => el.offsetParent !== null);
-}
-
-// Exported: src/claim/flow.js (#2564) needs both of these — same temporary
-// circular-import note as START_MODE_KEY's own comment above. #2550 (the
-// ui/modal.js leaf) is this pair's real destination; nothing here should
-// still be exported from main.js once that lands.
-export function openModalA11y(modalEl, closeFn) {
-  activeModalEl = modalEl;
-  activeModalCloseFn = closeFn || null;
-  modalReturnFocusEl = document.activeElement;
-  const target = getModalFocusable(modalEl)[0] || modalEl;
-  target.focus({ preventScroll: true });
-}
-
-export function closeModalA11y(modalEl) {
-  if (activeModalEl !== modalEl) return;
-  activeModalEl = null;
-  activeModalCloseFn = null;
-  const returnTo = modalReturnFocusEl;
-  modalReturnFocusEl = null;
-  if (returnTo && document.body.contains(returnTo) && returnTo.offsetParent !== null) {
-    returnTo.focus({ preventScroll: true });
-  } else if (accountMenuToggle.offsetParent !== null) {
-    // The settings/notifications/friends/my-lands triggers all live inside
-    // the collapsible account-menu panel (see openAccountMenu's own
-    // comment in e2e/helpers.mjs), which auto-collapses — hiding the very
-    // button that opened the modal — the moment that button is clicked.
-    // Falling back to the toggle that controls the panel is a more useful
-    // landing spot than leaving focus wherever the browser defaults it
-    // (document.body) once the original trigger is no longer focusable.
-    accountMenuToggle.focus({ preventScroll: true });
-  }
-}
-
-document.addEventListener('keydown', (event) => {
-  if (!activeModalEl) return;
-  if (event.key === 'Escape') {
-    event.preventDefault();
-    activeModalCloseFn?.();
-    return;
-  }
-  if (event.key === 'Tab') {
-    const focusable = getModalFocusable(activeModalEl);
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (event.shiftKey && document.activeElement === first) {
-      event.preventDefault();
-      last.focus();
-    } else if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
-    }
-  }
-});
+// Generic modal a11y stack (focus move-in/restore, Tab trap, Escape-to-close)
+// lives in src/ui/modal.js — see that file's own #1316 comment.
 
 const uploadModalEl = document.getElementById('upload-modal');
 const uploadModalTitleEl = document.getElementById('upload-modal-title');
@@ -6591,7 +5855,7 @@ async function renderTaxPaperworkField() {
       for (const [key] of commonFields) payload[key] = inputs[key].value;
       for (const [key] of specificFields) payload[key] = inputs[key].value;
       const result = await submitTaxIdForm(payload);
-      currentAuthUser = { ...currentAuthUser, taxFormType: result.taxFormType, taxFormCompletedAt: result.taxFormCompletedAt };
+      setCurrentAuthUser({ ...currentAuthUser, taxFormType: result.taxFormType, taxFormCompletedAt: result.taxFormCompletedAt });
       refreshStatusNote();
       submitBtn.textContent = 'Update tax paperwork';
       formStatus.textContent = 'Submitted.';
@@ -9304,7 +8568,6 @@ const selectionFillGeometry = new THREE.BoxGeometry(1, 1, 1);
 const scratchBox = new THREE.Box3();
 const scratchBoxSize = new THREE.Vector3();
 const scratchBoxCenter = new THREE.Vector3();
-const compassNeedleEl = document.getElementById('compass-needle');
 
 function addSelectionOutline(mesh) {
   if (selectionOutlines.has(mesh)) return;
@@ -10719,13 +9982,6 @@ function endSwipe(event) {
 window.addEventListener('pointerup', endSwipe);
 window.addEventListener('pointercancel', endSwipe);
 
-function onResize() {
-  camera.aspect = window.innerWidth / window.innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(window.innerWidth, window.innerHeight);
-}
-window.addEventListener('resize', onResize);
-
 // OrbitControls' native "zoom" (wheel / pinch) is a *dolly*: it changes the
 // distance between the camera and a fixed orbit target. That's "zoom to a
 // point" — and it has a real failure mode, which is what made zoom feel
@@ -11086,51 +10342,19 @@ function applyEdgePanWhileDraggingProduct() {
   }
 }
 
-// #1169: on-screen compass (Shop and Build modes; hidden in Sell via
-// SELL_HIDDEN_BUILDER_UI_IDS). Shop mode already tracks a dedicated
-// avatar-facing angle (shopAvatarFacing, declared further down with the
-// rest of the Shop-mode state — safe to reference here since this only
-// ever runs once shopActive is true, well after full module evaluation);
-// Build mode has no avatar at all, just the free OrbitControls camera, so
-// its "facing" is read directly off the camera's own current look
-// direction instead. The two are deliberately not the same value
-// (shopAvatarFacing eases toward movement direction rather than tracking
-// the camera instantly), but each is the right analog for its own mode.
-//
-// "North" is a convention this codebase never previously defined for its
-// world coordinates — inferred here from the one existing precedent:
-// loadLandletMap's claim-flyover camera starts south of center looking
-// toward +Y, which only reads sensibly if +Y is already "up"/North on
-// that map. +X is then East, the only orientation consistent with
-// standard map/compass reading once a Z-up world has a chosen North.
-// Facing angle 0 means +Y (North); the in-world yaw convention turns a
-// positive angle toward -X (see applyShopCameraOrientation's own
-// comment), so the clockwise bearing an ordinary compass face uses is the
-// negation of that facing angle.
-const compassScratchDir = new THREE.Vector3();
-function currentFacingRad() {
-  if (shopActive) return shopAvatarFacing;
-  camera.getWorldDirection(compassScratchDir);
-  return Math.atan2(-compassScratchDir.x, compassScratchDir.y);
-}
-
-function updateCompassNeedle() {
-  const bearingDeg = THREE.MathUtils.radToDeg(-currentFacingRad());
-  compassNeedleEl.style.transform = `rotate(${bearingDeg}deg)`;
-}
-
-function animate(now) {
-  requestAnimationFrame(animate);
-  if (shopActive) {
-    updateShopMovement(now);
-    updateShopSky(now);
-  } else {
-    updateTargetTween(now);
-    applyEdgePanWhileDraggingProduct();
-    controls.update();
-    updateCameraDebug(now);
-  }
-  updateCompassNeedle();
+// #2552: Build mode (and layout-preview, which shares this same camera/
+// selection-adjacent machinery) registers this once on entry via
+// registerModeFrameUpdate (world/scene.js) — see that module's own
+// comment for why a single registered callback replaced animate()'s old
+// `if (shopActive) {...} else {...}` branch. Shop mode registers its own
+// movement+sky callback instead (see enterShopMode); Sell mode has no
+// per-frame work of its own (paginated, static between page turns) and
+// registers null (see enterSellMode).
+function buildModeFrameUpdate(now) {
+  updateTargetTween(now);
+  applyEdgePanWhileDraggingProduct();
+  controls.update();
+  updateCameraDebug(now);
   // A selected item's outline must track it live while the translate/rotate
   // gizmo drags it — BoxHelper doesn't auto-update, so it's recomputed here
   // every frame rather than only on selection change. The fill mesh reuses
@@ -11160,9 +10384,7 @@ function animate(now) {
     fill.scale.copy(scratchBoxSize).multiplyScalar(SELECTION_FILL_PADDING);
     fill.position.copy(scratchBoxCenter);
   }
-  renderer.render(scene, camera);
 }
-animate(0);
 
 // Which landlet this session builds on: a builder's own claimed landlet if
 // they already have one, otherwise a modal letting them claim a fresh one
@@ -11186,266 +10408,11 @@ async function resolveLandletId() {
   return runClaimFlow();
 }
 
-// Real login (docs/API.md's "Authentication") replaced the dev-mode
-// identity picker that used to live here — entering Build or Sell mode
-// now requires a real account, and the resulting builder/seller profile
-// is whichever one that account already has (auto-provisioned server-
-// side — see migrations/0054_link_builders_sellers_to_users.sql), not a
-// free-text label picked from a shared list. ensureBuilderIdentity/
-// ensureSellerIdentity below keep the exact same Promise<id-or-null>
-// contract the old picker-backed versions had (null only if the login
-// prompt is dismissed without logging in), so every other call site in
-// this file — bootstrap()'s Build-mode startup, openSellerModal, the
-// Upload Model fallback — needed no changes at all.
-
-// Blocks on a real login if nobody's logged in yet, opening #auth-modal
-// (openAuthModal/closeAuthModal/waitForAuthResult are defined with the
-// rest of the account-menu wiring further down) and resolving once
-// login/signup succeeds, or with null if the modal is dismissed without
-// either. Closes the modal itself once resolved — the generic signup
-// handler deliberately leaves it open afterward to show a dev-mode
-// verify-email link (see its own comment), which would otherwise sit on
-// top of the claim/build UI this is about to reveal.
-async function requireLogin(view = 'signup', hint) {
-  if (currentAuthUser) return currentAuthUser;
-  openAuthModal(view);
-  // openAuthModal itself clears any status text, so this has to come
-  // after — a plain, neutral message (no error/success styling) saying
-  // *why* a login wall just appeared, rather than leaving a first-time
-  // visitor to guess.
-  if (hint) setAuthStatus(hint);
-  const user = await waitForAuthResult();
-  closeAuthModal();
-  return user;
-}
-
-// docs/SPEC.md §6 / #556: age attestation plus credit-card (or eventual
-// government-ID, #589) verification, required to build or sell — owner
-// decision (Control Room, 2026-09-09): "force everyone through the new
-// gates, no grandfathering in," so this applies to every account,
-// including ones that logged in before this existed, not just brand-new
-// signups. Modeled closely on #auth-modal/#checkout-modal's own
-// open/wait/close pattern just above/below, but with no "just dismiss it"
-// escape — the only way out of #verify-modal that isn't clearing the gate
-// is logging out entirely (see verifyLogoutBtn below), since this app has
-// no unverified-but-logged-in state a Build/Sell session can sit in.
-let pendingVerifyResolvers = [];
-function notifyVerifyResult(user) {
-  const resolvers = pendingVerifyResolvers;
-  pendingVerifyResolvers = [];
-  for (const resolve of resolvers) resolve(user);
-}
-function waitForVerifyResult() {
-  return new Promise((resolve) => pendingVerifyResolvers.push(resolve));
-}
-
-const verifyModalEl = document.getElementById('verify-modal');
-const verifyAgeStepEl = document.getElementById('verify-age-step');
-const verifyAgeAttestInput = document.getElementById('verify-age-attest');
-const verifyCardStepEl = document.getElementById('verify-card-step');
-const verifyCardElementEl = document.getElementById('verify-card-element');
-const verifyStatusEl = document.getElementById('verify-status');
-const verifyContinueBtn = document.getElementById('verify-continue-btn');
-const verifyLogoutBtn = document.getElementById('verify-logout-btn');
-
-function setVerifyStatus(text, type) {
-  verifyStatusEl.textContent = text || '';
-  verifyStatusEl.classList.toggle('error', type === 'error');
-}
-
-let verifyCardElement = null;
-// Set once card-setup-intent resolves for the currently-open card step —
-// `simulated: true` (Stripe not configured on this deployment, see
-// handleCardSetupIntent's own comment in worker/index.js) means there's no
-// card element to mount at all; the Continue button goes straight to
-// confirmCard(null).
-let verifyStripeSetup = null;
-
-async function enterVerifyCardStep() {
-  verifyAgeStepEl.hidden = true;
-  verifyCardStepEl.hidden = false;
-  verifyContinueBtn.disabled = true;
-  setVerifyStatus('Loading verification form…');
-  try {
-    verifyStripeSetup = await cardSetupIntent();
-    if (verifyStripeSetup.simulated) {
-      verifyCardStepEl.hidden = true;
-      verifyContinueBtn.textContent = 'Verify (dev mode)';
-    } else {
-      const Stripe = await loadStripeJs();
-      const stripe = Stripe(verifyStripeSetup.publishableKey);
-      const elements = stripe.elements();
-      verifyCardElement = elements.create('card');
-      verifyCardElement.mount(verifyCardElementEl);
-      verifyContinueBtn.textContent = 'Verify card';
-    }
-    setVerifyStatus('');
-    verifyContinueBtn.disabled = false;
-  } catch (err) {
-    setVerifyStatus(err.message || 'Could not load card verification.', 'error');
-  }
-}
-
-function openVerifyModal(user) {
-  verifyStripeSetup = null;
-  verifyAgeAttestInput.checked = false;
-  verifyCardStepEl.hidden = true;
-  if (verifyCardElement) { verifyCardElement.unmount(); verifyCardElement = null; }
-  setVerifyStatus('');
-  verifyModalEl.classList.add('visible');
-  // #1731: no `closeFn` here, deliberately — see this modal's own "no
-  // escape" design comment above. Passing one would wire the shared
-  // Escape handler to close this modal like any other, which is exactly
-  // the bug: the only way out is verifyLogoutBtn (logging out), not
-  // Escape. Tab-focus-trapping is unaffected since it only depends on
-  // activeModalEl, not activeModalCloseFn.
-  openModalA11y(verifyModalEl, null);
-  if (!user.ageAttested) {
-    verifyAgeStepEl.hidden = false;
-    verifyContinueBtn.textContent = 'Continue';
-    verifyContinueBtn.disabled = false;
-  } else {
-    enterVerifyCardStep();
-  }
-}
-
-function closeVerifyModal() {
-  verifyModalEl.classList.remove('visible');
-  closeModalA11y(verifyModalEl);
-  if (verifyCardElement) { verifyCardElement.unmount(); verifyCardElement = null; }
-}
-
-verifyContinueBtn.addEventListener('click', async () => {
-  if (!verifyAgeStepEl.hidden) {
-    if (!verifyAgeAttestInput.checked) {
-      setVerifyStatus('Please confirm you meet the age requirement.', 'error');
-      return;
-    }
-    verifyContinueBtn.disabled = true;
-    setVerifyStatus('');
-    try {
-      const user = await ageAttest();
-      currentAuthUser = user;
-      if (user.trustTier !== 'none') { notifyVerifyResult(user); return; }
-      await enterVerifyCardStep();
-    } catch (err) {
-      setVerifyStatus(err.message || 'Could not confirm age.', 'error');
-      verifyContinueBtn.disabled = false;
-    }
-    return;
-  }
-
-  verifyContinueBtn.disabled = true;
-  setVerifyStatus('Verifying…');
-  try {
-    let setupIntentId = null;
-    if (!verifyStripeSetup?.simulated) {
-      const Stripe = await loadStripeJs();
-      const stripe = Stripe(verifyStripeSetup.publishableKey);
-      const result = await stripe.confirmCardSetup(verifyStripeSetup.clientSecret, {
-        payment_method: { card: verifyCardElement },
-      });
-      if (result.error) throw new Error(result.error.message || 'Card verification failed.');
-      setupIntentId = result.setupIntent.id;
-    }
-    const user = await confirmCard(setupIntentId);
-    currentAuthUser = user;
-    notifyVerifyResult(user);
-  } catch (err) {
-    setVerifyStatus(err.message || 'Card verification failed.', 'error');
-    verifyContinueBtn.disabled = false;
-  }
-});
-
-verifyLogoutBtn.addEventListener('click', async () => {
-  verifyLogoutBtn.disabled = true;
-  await logOut().catch(() => {});
-  currentAuthUser = null;
-  verifyLogoutBtn.disabled = false;
-  closeVerifyModal();
-  notifyVerifyResult(null);
-});
-
-// Blocks until `user` (already logged in) has cleared the age-attestation
-// + credit-card gate above, resolving with the updated, verified user — or
-// null if they logged out instead of clearing it (see verifyLogoutBtn).
-// Already-verified users resolve immediately without ever showing the
-// modal.
-async function requireVerification(user) {
-  if (user.ageAttested && user.trustTier !== 'none') return user;
-  openVerifyModal(user);
-  const result = await waitForVerifyResult();
-  closeVerifyModal();
-  return result;
-}
-
-// Two independent in-flight promises (not one shared "identity" flow),
-// for the same reason the old picker's own comment gave: Build mode's own
-// startup can be awaiting a login at the very moment the Sell nav button
-// triggers its own, and each needs to resolve independently.
-let builderIdentityFlowPromise = null;
-async function ensureBuilderIdentity() {
-  if (builderId) return builderId;
-  if (!builderIdentityFlowPromise) {
-    builderIdentityFlowPromise = (async () => {
-      let user = await requireLogin('signup', 'Sign up (or log in) to start building.');
-      if (!user) return null;
-      user = await requireVerification(user);
-      if (!user) return null;
-      const builder = await fetchMyBuilder();
-      setBuilderId(builder.builderId);
-      return builderId;
-    })();
-  }
-  const id = await builderIdentityFlowPromise;
-  builderIdentityFlowPromise = null;
-  return id;
-}
-
-let sellerIdentityFlowPromise = null;
-async function ensureSellerIdentity() {
-  if (sellerId) return sellerId;
-  if (!sellerIdentityFlowPromise) {
-    sellerIdentityFlowPromise = (async () => {
-      let user = await requireLogin('signup', 'Sign up (or log in) to start selling.');
-      if (!user) return null;
-      user = await requireVerification(user);
-      if (!user) return null;
-      const seller = await fetchMySeller();
-      setSellerId(seller.sellerId);
-      return sellerId;
-    })();
-  }
-  const id = await sellerIdentityFlowPromise;
-  sellerIdentityFlowPromise = null;
-  return id;
-}
-
-// N44 (owner, Control Room, 2026-09-12): "I do want age attestation and
-// credit card to gate login for shopping... restrict minors from using any
-// part of the application" — Shop mode used to need no identity at all,
-// unlike Build/Sell above. Unlike those two, shopping has no separate
-// profile of its own to provision (no builderId/sellerId equivalent) — this
-// just blocks on the same login + #556 verification gate and hands back
-// the verified user, or null if they declined either step. requireLogin/
-// requireVerification already short-circuit once currentAuthUser is set and
-// verified, so — unlike builderId/sellerId above — there's no cheap
-// `if (x) return x` to check first; the flow-promise guard below still
-// exists to collapse concurrent callers (e.g. bootstrap() and a stray
-// re-entry) into one shared prompt instead of two.
-let shopperIdentityFlowPromise = null;
-async function ensureShopperIdentity() {
-  if (!shopperIdentityFlowPromise) {
-    shopperIdentityFlowPromise = (async () => {
-      let user = await requireLogin('signup', 'Sign up (or log in) — age verification is required to use higglehaven.');
-      if (!user) return null;
-      return requireVerification(user);
-    })();
-  }
-  const user = await shopperIdentityFlowPromise;
-  shopperIdentityFlowPromise = null;
-  return user;
-}
+// requireLogin/requireVerification (login/signup, age+card verification
+// gate) now live in src/account/auth.js — see that module's own #2554
+// comment. ensureBuilderIdentity/ensureSellerIdentity/ensureShopperIdentity
+// (and their flow-promise guards, and resetIdentityFlowPromises) now live
+// in src/account/identity.js — see that module's own #2555 comment.
 
 // Builder-facing notifications (see migrations/0038_notifications.sql) —
 // currently only ever produced by a seller changing a placed product's
@@ -12372,702 +11339,18 @@ myLandsCloseBtn.addEventListener('click', closeMyLandsModal);
 // Real login (docs/API.md's "Authentication") — now the sole way a
 // builder/seller identity is established (see ensureBuilderIdentity/
 // ensureSellerIdentity above, migrations/0054_link_builders_sellers_to_users.sql).
-let currentAuthUser = null;
-let pendingResetToken = null;
-// Resolved by exactly one of: a successful login/signup (notifyAuthResult
-// is called with the new user from both submit handlers below), or
-// dismissing the modal without either (authCloseBtn calls it with null).
-// This is what lets ensureBuilderIdentity/ensureSellerIdentity block on
-// "the user just logged in, or gave up" regardless of which of those two
-// forms — or neither — they actually used.
-let pendingAuthResolvers = [];
-function notifyAuthResult(user) {
-  const resolvers = pendingAuthResolvers;
-  pendingAuthResolvers = [];
-  for (const resolve of resolvers) resolve(user);
-}
-function waitForAuthResult() {
-  return new Promise((resolve) => pendingAuthResolvers.push(resolve));
-}
-const accountAuthBtn = document.getElementById('account-auth-btn');
-const authModalEl = document.getElementById('auth-modal');
-const authModalTitle = document.getElementById('auth-modal-title');
-const authCloseBtn = document.getElementById('auth-close-btn');
-const authLoggedOutEl = document.getElementById('auth-logged-out');
-const authLoggedInEl = document.getElementById('auth-logged-in');
-const authTabBtns = [...document.querySelectorAll('.auth-tab-btn')];
-const authForms = {
-  login: document.getElementById('auth-login-form'),
-  signup: document.getElementById('auth-signup-form'),
-  forgot: document.getElementById('auth-forgot-form'),
-  reset: document.getElementById('auth-reset-form'),
-};
-const authStatusEl = document.getElementById('auth-status');
-const authAccountEmailEl = document.getElementById('auth-account-email');
-const authAccountVerifiedEl = document.getElementById('auth-account-verified');
-const authAccountTrustTierEl = document.getElementById('auth-account-trust-tier');
-const authVerifyIdBtn = document.getElementById('auth-verify-id-btn');
-const authResendVerifyBtn = document.getElementById('auth-resend-verify-btn');
-const authLogoutBtn = document.getElementById('auth-logout-btn');
-
-function setAuthStatus(text, type) {
-  authStatusEl.textContent = text || '';
-  authStatusEl.classList.toggle('error', type === 'error');
-  authStatusEl.classList.toggle('success', type === 'success');
-}
-
-const AUTH_VIEW_TITLES = {
-  login: 'Log In',
-  signup: 'Sign Up',
-  forgot: 'Reset Password',
-  reset: 'Reset Password',
-};
-
-// 'reset' is deliberately not one of the tab-switchable views (no
-// .auth-tab-btn targets it) — it's only ever entered programmatically, via
-// a password-reset email link (see the DOMContentLoaded handler below),
-// never something a user taps into on their own.
-function showAuthView(view) {
-  for (const [name, form] of Object.entries(authForms)) form.hidden = name !== view;
-  for (const btn of authTabBtns) {
-    btn.classList.toggle('active', btn.dataset.authView === view);
-    btn.setAttribute('aria-pressed', String(btn.dataset.authView === view));
-  }
-  authModalTitle.textContent = AUTH_VIEW_TITLES[view];
-  setAuthStatus('');
-  // Back to masked every time this view is (re)entered — form.reset()
-  // (called after a successful signup) only resets values, not the type
-  // attribute a toggle tap changes, so without this the field could still
-  // read as plain-text on a later visit despite being empty again.
-  setPasswordToggleState(authSignupPasswordInput, authSignupPasswordToggleBtn, false);
-  setPasswordToggleState(authLoginPasswordInput, authLoginPasswordToggleBtn, false);
-}
-
-// Found via backlog audit (#373): refreshAccountAuthUI's own async fetches
-// had no re-entrancy guard, unlike the monotonic load-token pattern used
-// everywhere else in this file for an async render that can be called
-// again before its own fetch resolves (axisPreviewLoadToken,
-// uploadFlowToken, friendsLoadToken above, ...). Reopening the account
-// menu quickly, or a login -> logout -> login-as-different-account
-// sequence within one round trip, could let an earlier, slower fetch
-// resolve after a newer one and overwrite the panel with stale data from
-// the wrong request.
-let accountAuthLoadToken = 0;
-
-function refreshAccountAuthUI() {
-  const myLoadToken = ++accountAuthLoadToken;
-  if (currentAuthUser) {
-    accountAuthBtn.textContent = currentAuthUser.username;
-    authLoggedOutEl.hidden = true;
-    authLoggedInEl.hidden = false;
-    authModalTitle.textContent = 'Account';
-    authAccountEmailEl.textContent = currentAuthUser.email;
-    authAccountVerifiedEl.textContent = currentAuthUser.emailVerified ? '✓ Email verified' : 'Email not verified yet';
-    authAccountVerifiedEl.classList.toggle('verified', currentAuthUser.emailVerified);
-    authResendVerifyBtn.hidden = currentAuthUser.emailVerified;
-    // docs/SPEC.md §6, #589 (sub-issue of #556): government-ID
-    // verification via Didit is the higher trust tier, above the
-    // credit-card tier — only offer the button while there's still
-    // somewhere to go (not yet id_verified).
-    const trustTierLabels = { none: 'Not ID-verified', credit_card: 'Credit-card verified', id_verified: '✓ ID-verified' };
-    authAccountTrustTierEl.textContent = trustTierLabels[currentAuthUser.trustTier] || '';
-    authAccountTrustTierEl.classList.toggle('verified', currentAuthUser.trustTier === 'id_verified');
-    authVerifyIdBtn.hidden = currentAuthUser.trustTier === 'id_verified';
-    // #1067: pollDiditVerificationStatus's own 5-minute-timeout copy
-    // promises this "will pick up automatically next time you open your
-    // account" — nothing here actually did that until now. Reconciles a
-    // stalled-pending session (one the redirect/poll never resolved) the
-    // same way pollDiditVerificationStatus itself does, fire-and-forget
-    // with the same accountAuthLoadToken re-entrancy guard the rest of
-    // this function uses. Cheap when there's nothing pending —
-    // handleDiditVerificationStatus no-ops with no outbound Didit call in
-    // that case.
-    if (currentAuthUser.trustTier !== 'id_verified') {
-      fetchDiditVerificationStatus().then(({ status }) => {
-        if (myLoadToken !== accountAuthLoadToken) return; // superseded while loading
-        if (status === 'approved') refreshCurrentUser();
-      }).catch(() => {});
-    }
-  } else {
-    accountAuthBtn.textContent = 'Log In / Sign Up';
-    authLoggedOutEl.hidden = false;
-    authLoggedInEl.hidden = true;
-  }
-}
-
-// #1730: armed each time the modal opens, disarmed by a login/signup
-// success path right before its own closeAuthModal() call (see those
-// handlers below) so this doesn't resolve pendingAuthResolvers with null
-// just ahead of the real notifyAuthResult(currentAuthUser) call that
-// follows. Everywhere else (Escape, the explicit × button, requireLogin's
-// own post-wait close, logout) wants exactly this null-resolution, the same
-// one authCloseBtn's handler used to perform by itself -- Escape never did,
-// leaving waitForAuthResult() permanently unsettled and wedging every
-// subsequent ensureBuilderIdentity/ensureSellerIdentity call for the rest
-// of the session. Same fix shape #1679 already applied to the Friends-map/
-// DM modal's own Escape gap.
-let notifyNullOnAuthModalClose = true;
-
-function openAuthModal(view = 'login') {
-  if (!currentAuthUser) showAuthView(view);
-  setAuthStatus('');
-  notifyNullOnAuthModalClose = true;
-  authModalEl.classList.add('visible');
-  openModalA11y(authModalEl, closeAuthModal);
-}
-
-function closeAuthModal() {
-  authModalEl.classList.remove('visible');
-  closeModalA11y(authModalEl);
-  if (notifyNullOnAuthModalClose) notifyAuthResult(null);
-}
-
-async function refreshCurrentUser() {
-  // fetchCurrentUser now throws on a genuine backend/network failure
-  // instead of returning null for it the same as "really logged out" (the
-  // one case /auth/me itself already returns 200/{user: null} for — see
-  // that function's own comment). Leaving currentAuthUser untouched on
-  // failure means a transient error here can't make an already-logged-in
-  // visitor's session appear to vanish; the next successful refresh (a
-  // login/signup, or simply reopening this panel) corrects it either way.
-  try {
-    currentAuthUser = await fetchCurrentUser();
-  } catch (err) {
-    console.warn('Could not refresh current user:', err);
-  }
-  refreshAccountAuthUI();
-  return currentAuthUser;
-}
-
-accountAuthBtn.addEventListener('click', () => {
-  // refreshAccountAuthUI's own trust-tier reconciliation fetch only
-  // otherwise runs right after a login/signup/logout state change —
-  // reopening the panel later without this would keep showing whatever
-  // was true at that moment.
-  if (currentAuthUser) refreshAccountAuthUI();
-  openAuthModal('login');
-});
-authCloseBtn.addEventListener('click', closeAuthModal);
-for (const btn of authTabBtns) {
-  btn.addEventListener('click', () => showAuthView(btn.dataset.authView));
-}
-document.getElementById('auth-forgot-btn').addEventListener('click', () => showAuthView('forgot'));
-document.getElementById('auth-forgot-back-btn').addEventListener('click', () => showAuthView('login'));
-
-// Lets a builder double-check what they actually typed into a password
-// field, rather than trusting a masked field with no way to catch a typo
-// before submitting — an eye/eye-off icon (not a text label, so it reads
-// the same regardless of the field's own current language) toggles the
-// field between masked and plain text. On login and signup; not on
-// reset's new-password field, which is short-lived enough not to need it.
-const EYE_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-  + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M1 12s4-7 11-7 11 7 11 7-4 7-11 7-11-7-11-7Z"/>'
-  + '<circle cx="12" cy="12" r="3"/></svg>';
-const EYE_OFF_ICON_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" '
-  + 'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 7 11 7a13.16 13.16 0 0 1-1.67 2.68M6.61 6.61A13.16 13.16 0 0 0 1 11s4 7 11 7a9.16 9.16 0 0 0 5.39-1.61M14.12 14.12a3 3 0 1 1-4.24-4.24"/>'
-  + '<line x1="1" y1="1" x2="23" y2="23"/></svg>';
-
-function setPasswordToggleState(input, btn, showing) {
-  input.type = showing ? 'text' : 'password';
-  btn.innerHTML = showing ? EYE_OFF_ICON_SVG : EYE_ICON_SVG;
-  const label = showing ? 'Hide password' : 'Show password';
-  btn.setAttribute('aria-label', label);
-  btn.title = label;
-}
-
-function bindPasswordToggle(input, btn) {
-  setPasswordToggleState(input, btn, false);
-  btn.addEventListener('click', () => setPasswordToggleState(input, btn, input.type === 'password'));
-}
-
-const authSignupPasswordInput = document.getElementById('auth-signup-password');
-const authSignupPasswordToggleBtn = document.getElementById('auth-signup-password-toggle');
-bindPasswordToggle(authSignupPasswordInput, authSignupPasswordToggleBtn);
-
-const authLoginPasswordInput = document.getElementById('auth-login-password');
-const authLoginPasswordToggleBtn = document.getElementById('auth-login-password-toggle');
-bindPasswordToggle(authLoginPasswordInput, authLoginPasswordToggleBtn);
-
-// A brief press flash (see .pressed in index.html) on every auth form's
-// submit button — these all wait on a network round-trip before anything
-// else visibly changes, so without this a tap can read as not having
-// registered at all rather than "working on it." Fired immediately on
-// submit, not after the request resolves, since it's the tap itself being
-// acknowledged, not the outcome.
-function flashSubmitPressed(form) {
-  const btn = form.querySelector('button[type="submit"]');
-  if (!btn) return;
-  btn.classList.add('pressed');
-  setTimeout(() => btn.classList.remove('pressed'), 220);
-}
-
-authForms.login.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  flashSubmitPressed(authForms.login);
-  const email = document.getElementById('auth-login-email').value;
-  const password = document.getElementById('auth-login-password').value;
-  setAuthStatus('');
-  try {
-    currentAuthUser = await logIn({ email, password });
-    refreshAccountAuthUI();
-    // #1730: disarm before closing -- notifyAuthResult(currentAuthUser)
-    // below must be what resolves pendingAuthResolvers, not closeAuthModal's
-    // own null-resolution.
-    notifyNullOnAuthModalClose = false;
-    closeAuthModal();
-    authForms.login.reset();
-    notifyAuthResult(currentAuthUser);
-  } catch (err) {
-    setAuthStatus(err.message || 'Could not log in.', 'error');
-  }
-});
-
-authForms.signup.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  flashSubmitPressed(authForms.signup);
-  const email = document.getElementById('auth-signup-email').value;
-  const password = document.getElementById('auth-signup-password').value;
-  const username = document.getElementById('auth-signup-username').value.trim();
-  const ageAttested = document.getElementById('auth-signup-age-attest').checked;
-  setAuthStatus('');
-  try {
-    const result = await signUp({ email, password, username, ageAttested });
-    currentAuthUser = result.user;
-    refreshAccountAuthUI();
-    authForms.signup.reset();
-    // devVerifyUrl only ever appears when no real email provider is
-    // configured (see sendEmail's own comment) — surfacing it here is what
-    // keeps this whole flow testable/usable in that dev-mode case, exactly
-    // the way the backend's own dev-mode fallback is meant to be used.
-    if (result.devVerifyUrl) {
-      setAuthStatus(`Account created! (dev mode, no email configured) Verify at: ${result.devVerifyUrl}`, 'success');
-    } else if (!result.verificationEmailSent) {
-      // #1451: devVerifyUrl is dev-mode-only (#811) -- a real production
-      // Resend failure shows up here instead, as verificationEmailSent:
-      // false, and was previously never checked, silently closing the
-      // modal as if the email had gone out.
-      setAuthStatus('Account created, but the verification email failed to send — use "Resend verification email" from your account menu.', 'error');
-    } else {
-      // #1730: same disarm as the login handler above -- the real
-      // notifyAuthResult(currentAuthUser) call just below must be what
-      // resolves pendingAuthResolvers.
-      notifyNullOnAuthModalClose = false;
-      closeAuthModal();
-    }
-    // Notified regardless of whether the modal itself just closed —
-    // requireLogin (ensureBuilderIdentity/ensureSellerIdentity's own gate)
-    // closes it unconditionally once resolved, since the dev-mode status
-    // message above would otherwise sit on top of the claim/build UI this
-    // unblocks.
-    notifyAuthResult(currentAuthUser);
-  } catch (err) {
-    setAuthStatus(err.message || 'Could not sign up.', 'error');
-  }
-});
-
-authForms.forgot.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  flashSubmitPressed(authForms.forgot);
-  const email = document.getElementById('auth-forgot-email').value;
-  setAuthStatus('');
-  try {
-    const result = await requestPasswordReset(email);
-    authForms.forgot.reset();
-    setAuthStatus(
-      result.devResetUrl
-        ? `If that email has an account, a reset link was sent. (dev mode: ${result.devResetUrl})`
-        : 'If that email has an account, a reset link was sent.',
-      'success',
-    );
-  } catch (err) {
-    setAuthStatus(err.message || 'Could not request a password reset.', 'error');
-  }
-});
-
-authForms.reset.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  flashSubmitPressed(authForms.reset);
-  const newPassword = document.getElementById('auth-reset-password').value;
-  setAuthStatus('');
-  try {
-    await resetPassword(pendingResetToken, newPassword);
-    pendingResetToken = null;
-    authForms.reset.reset();
-    // Order matters: showAuthView clears #auth-status itself (a plain view
-    // switch shouldn't carry over a stale message from whatever view came
-    // before it), so the real success message has to be set after it, not
-    // before.
-    showAuthView('login');
-    setAuthStatus('Password reset! You can log in with your new password now.', 'success');
-  } catch (err) {
-    setAuthStatus(err.message || 'Could not reset the password.', 'error');
-  }
-});
-
-authResendVerifyBtn.addEventListener('click', async () => {
-  setAuthStatus('');
-  try {
-    const result = await resendVerificationEmail();
-    if (result.devVerifyUrl) {
-      setAuthStatus(`Verification email sent. (dev mode: ${result.devVerifyUrl})`, 'success');
-    } else if (!result.verificationEmailSent) {
-      // #1451: same real-Resend-failure gap as the signup handler above.
-      setAuthStatus('Could not send the verification email — please try again in a moment.', 'error');
-    } else {
-      setAuthStatus('Verification email sent.', 'success');
-    }
-  } catch (err) {
-    setAuthStatus(err.message || 'Could not resend the verification email.', 'error');
-  }
-});
-
-// docs/SPEC.md §6, #589 (sub-issue of #556): government-ID verification
-// via Didit is a hosted flow in a separate tab, not an in-page form — this
-// tab has no way to know when the builder finishes it there except by
-// asking. Polls a bounded number of times rather than forever, so an
-// abandoned verification (tab closed, never finished) doesn't leave a
-// background timer running indefinitely; reopening the account panel and
-// clicking the button again always starts a fresh poll regardless.
-let diditPollTimer = null;
-
-function stopDiditPoll() {
-  if (diditPollTimer !== null) {
-    clearTimeout(diditPollTimer);
-    diditPollTimer = null;
-  }
-}
-
-async function pollDiditVerificationStatus() {
-  stopDiditPoll();
-  const intervalMs = 3000;
-  const deadline = Date.now() + 5 * 60 * 1000;
-  const tick = async () => {
-    diditPollTimer = null;
-    try {
-      const { status } = await fetchDiditVerificationStatus();
-      if (status === 'approved') {
-        await refreshCurrentUser();
-        setAuthStatus('Government-ID verification approved!', 'success');
-        return;
-      }
-      if (status === 'declined') {
-        setAuthStatus('Government-ID verification was declined — you can try again.', 'error');
-        return;
-      }
-    } catch (err) {
-      // #2405: a 401 here means this browser's session ended (or never
-      // existed, e.g. the Didit mobile-handoff return landing in a
-      // different browser) -- not a transient blip, and retrying it for
-      // the full 5 minutes never resolves since no session means the
-      // builder's real status can't be fetched from here. Stop and ask
-      // for a login instead of looking stuck.
-      if (err.status === 401) {
-        setAuthStatus('Log in to check your verification status.');
-        return;
-      }
-      // Any other failure shouldn't give up outright — keep polling
-      // until the deadline, the same "best-effort background refresh"
-      // spirit as refreshAccountAuthUI's own trust-tier fetch.
-      console.warn('Could not check Didit verification status:', err);
-    }
-    if (Date.now() >= deadline) {
-      setAuthStatus('Still waiting on verification — this will pick up automatically next time you open your account.', '');
-      return;
-    }
-    diditPollTimer = setTimeout(tick, intervalMs);
-  };
-  await tick();
-}
-
-authVerifyIdBtn.addEventListener('click', async () => {
-  setAuthStatus('');
-  try {
-    const { url } = await startDiditVerification();
-    window.open(url, '_blank', 'noopener');
-    setAuthStatus('Complete verification in the new tab, then come back here.');
-    pollDiditVerificationStatus();
-  } catch (err) {
-    setAuthStatus(err.message || 'Could not start government-ID verification.', 'error');
-  }
-});
-
-// #432: shared by logout and delete-account below — both end this
-// browser's session identically (no more currentAuthUser, no more cached
-// builder/seller identity), and both need the exact same reset or the
-// *next* login in this tab can inherit a previous account's cached
-// sellerId (see #432's own history: ensureSellerIdentity's own
-// `if (sellerId) return sellerId` short-circuit would otherwise hand the
-// next logged-in account's Sell tab the previous account's private "My
-// Products" listing).
-function resetLocalSessionState() {
-  currentAuthUser = null;
-  setBuilderId(null);
-  setSellerId(null);
-  builderIdentityFlowPromise = null;
-  sellerIdentityFlowPromise = null;
-}
-
-// Build, Sell, and layout-preview all require a real, logged-in account
-// (ensureBuilderIdentity/ensureSellerIdentity's own login walls) — staying
-// on any of them once that account is gone would just immediately reprompt
-// the login modal over whatever was on screen (or, for Sell/layout-preview,
-// strand the now-stale showcase/modal with no identity behind it). A reload
-// into Shop instead is the same clean-slate escape hatch #mode-nav's own
-// mode switching already uses (see its own comment), and Shop needs no
-// account at all, so it's always a safe place to land. Returns whether it
-// reloaded (the caller's own post-logout/-deletion UI update is moot if so).
-function leaveAccountScopedModeIfNeeded() {
-  if (currentMode === 'build' || currentMode === 'sell' || currentMode === 'layoutPreview') {
-    sessionStorage.setItem(START_MODE_KEY, 'shop');
-    location.reload();
-    return true;
-  }
-  return false;
-}
-
-authLogoutBtn.addEventListener('click', async () => {
-  stopDiditPoll();
-  // The button gave zero feedback while the request was in flight —
-  // nothing to distinguish a slow network from an unregistered click.
-  // Mirrors claimConfirmBtn's own disable-plus-status-text pattern. Reset
-  // unconditionally right after, rather than only on the non-reload path:
-  // this is the same persistent DOM button across logins within one tab
-  // (refreshAccountAuthUI only toggles #auth-logged-in's `hidden`, never
-  // touches `disabled`), so leaving it disabled on the Build-mode reload
-  // path would still matter if that reload ever stopped happening, and
-  // costs nothing when it does.
-  authLogoutBtn.disabled = true;
-  setAuthStatus('Logging out…');
-  try {
-    await logOut();
-  } catch {
-    // Best-effort — the cookie is cleared client-side visibility regardless
-    // once currentAuthUser is nulled out below, even if the network call
-    // itself failed.
-  }
-  authLogoutBtn.disabled = false;
-  resetLocalSessionState();
-  if (leaveAccountScopedModeIfNeeded()) return;
-  refreshAccountAuthUI();
-  closeAuthModal();
-});
-
-// #1182 (sub-issue of #1126): in-session change-email form, collapsed
-// behind its own trigger the same way delete-account is below — not
-// because it's irreversible, but to keep the logged-in panel's default
-// view uncluttered, matching the existing pattern for any action beyond
-// the always-visible ones.
-const authChangeEmailBtn = document.getElementById('auth-change-email-btn');
-const authChangeEmailForm = document.getElementById('auth-change-email-form');
-const authChangeEmailNewInput = document.getElementById('auth-change-email-new');
-const authChangeEmailPasswordInput = document.getElementById('auth-change-email-password');
-const authChangeEmailPasswordToggleBtn = document.getElementById('auth-change-email-password-toggle');
-const authChangeEmailCancelBtn = document.getElementById('auth-change-email-cancel-btn');
-bindPasswordToggle(authChangeEmailPasswordInput, authChangeEmailPasswordToggleBtn);
-
-function closeChangeEmailForm() {
-  authChangeEmailForm.hidden = true;
-  authChangeEmailBtn.hidden = false;
-  authChangeEmailForm.reset();
-  setPasswordToggleState(authChangeEmailPasswordInput, authChangeEmailPasswordToggleBtn, false);
-}
-
-authChangeEmailBtn.addEventListener('click', () => {
-  setAuthStatus('');
-  authChangeEmailBtn.hidden = true;
-  authChangeEmailForm.hidden = false;
-  authChangeEmailNewInput.focus();
-});
-authChangeEmailCancelBtn.addEventListener('click', () => {
-  closeChangeEmailForm();
-  setAuthStatus('');
-});
-
-authChangeEmailForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  flashSubmitPressed(authChangeEmailForm);
-  const newEmail = authChangeEmailNewInput.value;
-  const password = authChangeEmailPasswordInput.value;
-  const submitBtn = authChangeEmailForm.querySelector('button[type="submit"]');
-  submitBtn.disabled = true;
-  setAuthStatus('Changing your email…');
-  try {
-    const result = await changeEmail(password, newEmail);
-    currentAuthUser = result.user;
-    refreshAccountAuthUI();
-    closeChangeEmailForm();
-    // devVerifyUrl mirrors the signup handler's own dev-mode fallback
-    // above — only present when no real email provider is configured.
-    if (result.devVerifyUrl) {
-      setAuthStatus(`Email changed! (dev mode, no email configured) Verify at: ${result.devVerifyUrl}`, 'success');
-    } else if (!result.verificationEmailSent) {
-      // #1451: same real-Resend-failure gap as the signup handler above.
-      setAuthStatus('Email changed, but the verification email failed to send — use "Resend verification email" from your account menu.', 'error');
-    } else {
-      setAuthStatus('Email changed! Check your inbox to verify it.', 'success');
-    }
-  } catch (err) {
-    setAuthStatus(err.message || 'Could not change your email.', 'error');
-  } finally {
-    submitBtn.disabled = false;
-  }
-});
-
-// #1987 (sub-issue of #1983): triggers a browser download of the
-// GET /auth/export-data JSON bundle via a Blob/URL.createObjectURL link
-// -- no server-side file storage needed, same as extractVideoFrames'
-// own createObjectURL usage above, just for a download instead of
-// playback.
-const authExportDataBtn = document.getElementById('auth-export-data-btn');
-authExportDataBtn.addEventListener('click', async () => {
-  authExportDataBtn.disabled = true;
-  setAuthStatus('Preparing your data…');
-  try {
-    const data = await exportMyData();
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `higglehaven-data-export-${data.exportedAt.slice(0, 10)}.json`;
-    link.click();
-    URL.revokeObjectURL(url);
-    setAuthStatus('Your data export has started downloading.', 'success');
-  } catch (err) {
-    setAuthStatus(err.message || 'Could not export your data.', 'error');
-  } finally {
-    authExportDataBtn.disabled = false;
-  }
-});
-
-const authDeleteAccountBtn = document.getElementById('auth-delete-account-btn');
-const authDeleteAccountForm = document.getElementById('auth-delete-account-form');
-const authDeleteAccountPasswordInput = document.getElementById('auth-delete-account-password');
-const authDeleteAccountPasswordToggleBtn = document.getElementById('auth-delete-account-password-toggle');
-const authDeleteAccountCancelBtn = document.getElementById('auth-delete-account-cancel-btn');
-bindPasswordToggle(authDeleteAccountPasswordInput, authDeleteAccountPasswordToggleBtn);
-
-function closeDeleteAccountForm() {
-  authDeleteAccountForm.hidden = true;
-  authDeleteAccountBtn.hidden = false;
-  authDeleteAccountForm.reset();
-  setPasswordToggleState(authDeleteAccountPasswordInput, authDeleteAccountPasswordToggleBtn, false);
-}
-
-// Collapsed behind its own trigger rather than a single click straight
-// into the confirmation — this is the one action in this whole panel that
-// really can't be undone.
-authDeleteAccountBtn.addEventListener('click', () => {
-  setAuthStatus('');
-  authDeleteAccountBtn.hidden = true;
-  authDeleteAccountForm.hidden = false;
-  authDeleteAccountPasswordInput.focus();
-});
-authDeleteAccountCancelBtn.addEventListener('click', () => {
-  closeDeleteAccountForm();
-  setAuthStatus('');
-});
-
-authDeleteAccountForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  flashSubmitPressed(authDeleteAccountForm);
-  const password = authDeleteAccountPasswordInput.value;
-  const submitBtn = authDeleteAccountForm.querySelector('button[type="submit"]');
-  submitBtn.disabled = true;
-  setAuthStatus('Deleting your account…');
-  // #1771: set before the await, not after -- see hasVerifiedSession's own
-  // comment for why.
-  accountSessionEnding = true;
-  try {
-    await deleteAccount(password);
-  } catch (err) {
-    accountSessionEnding = false;
-    submitBtn.disabled = false;
-    setAuthStatus(err.message || 'Could not delete your account.', 'error');
-    return;
-  }
-  submitBtn.disabled = false;
-  stopDiditPoll();
-  closeDeleteAccountForm();
-  resetLocalSessionState();
-  if (leaveAccountScopedModeIfNeeded()) return;
-  // Deliberately left open (unlike logout's own closeAuthModal()) so this
-  // confirmation is actually seen — refreshAccountAuthUI already flips the
-  // panel back to the logged-out login/signup view underneath it.
-  refreshAccountAuthUI();
-  setAuthStatus('Your account has been deleted. You have been signed out.', 'success');
-});
-
-const authChangePasswordBtn = document.getElementById('auth-change-password-btn');
-const authChangePasswordForm = document.getElementById('auth-change-password-form');
-const authChangePasswordCurrentInput = document.getElementById('auth-change-password-current');
-const authChangePasswordCurrentToggleBtn = document.getElementById('auth-change-password-current-toggle');
-const authChangePasswordNewInput = document.getElementById('auth-change-password-new');
-const authChangePasswordNewToggleBtn = document.getElementById('auth-change-password-new-toggle');
-const authChangePasswordCancelBtn = document.getElementById('auth-change-password-cancel-btn');
-bindPasswordToggle(authChangePasswordCurrentInput, authChangePasswordCurrentToggleBtn);
-bindPasswordToggle(authChangePasswordNewInput, authChangePasswordNewToggleBtn);
-
-function closeChangePasswordForm() {
-  authChangePasswordForm.hidden = true;
-  authChangePasswordBtn.hidden = false;
-  authChangePasswordForm.reset();
-  setPasswordToggleState(authChangePasswordCurrentInput, authChangePasswordCurrentToggleBtn, false);
-  setPasswordToggleState(authChangePasswordNewInput, authChangePasswordNewToggleBtn, false);
-}
-
-// Same collapsed-behind-its-own-trigger shape as Delete Account above.
-authChangePasswordBtn.addEventListener('click', () => {
-  setAuthStatus('');
-  authChangePasswordBtn.hidden = true;
-  authChangePasswordForm.hidden = false;
-  authChangePasswordCurrentInput.focus();
-});
-authChangePasswordCancelBtn.addEventListener('click', () => {
-  closeChangePasswordForm();
-  setAuthStatus('');
-});
-
-authChangePasswordForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  flashSubmitPressed(authChangePasswordForm);
-  const currentPassword = authChangePasswordCurrentInput.value;
-  const newPassword = authChangePasswordNewInput.value;
-  const submitBtn = authChangePasswordForm.querySelector('button[type="submit"]');
-  submitBtn.disabled = true;
-  setAuthStatus('Changing your password…');
-  try {
-    await changePassword(currentPassword, newPassword);
-  } catch (err) {
-    submitBtn.disabled = false;
-    setAuthStatus(err.message || 'Could not change your password.', 'error');
-    return;
-  }
-  submitBtn.disabled = false;
-  closeChangePasswordForm();
-  setAuthStatus('Your password has been changed. You have been signed out of your other devices.', 'success');
-});
-
-// A verify-email or reset-password link (see issueEmailVerification/
-// handleRequestPasswordReset in worker/index.js) lands back on this same
-// page with a query param carrying the token — handled once, up front,
-// then stripped from the URL so a page refresh doesn't replay it. Also
-// where currentAuthUser first gets resolved on every page load — stored
-// as authInitPromise (rather than left as a bare fire-and-forget IIFE) so
-// bootstrap() below can await it before checking currentAuthUser itself.
-// Without that, a fresh page load with an already-valid session cookie
-// would race: bootstrap()'s own ensureBuilderIdentity check runs
-// synchronously, reaching `if (currentAuthUser) ...` before this
-// function's GET /api/auth/me round trip could possibly have resolved,
-// wrongly popping the login modal open over a session that was actually
-// fine (caught via a real reload-while-logged-in-and-in-Build-mode e2e
-// scenario, not something a fresh-every-time page load would ever surface
-// on its own).
+// currentAuthUser, the #auth-modal login/signup/verify flow, session
+// reset, and authInitPromise now live in src/account/auth.js — see that
+// module's own #2554 comment. This standalone IIFE stays here: unlike
+// authInitPromise, it's explicitly independent of this browser's own
+// login/session state (see its own comment).
 // #454: a buyer confirming delivery has no account here at all (see
 // "Simulated purchases") — this link works purely off the unguessable
-// token in the URL, entirely independent of authInitPromise below (which
-// is specifically about THIS browser's own login/session state, never
-// relevant to whichever purchase this token identifies). Handled
-// separately, at module load, rather than folded into that promise.
+// token in the URL, entirely independent of src/account/auth.js's
+// authInitPromise (which is specifically about this browser's own
+// login/session state, never relevant to whichever purchase this token
+// identifies). Handled separately, at module load, rather than folded
+// into that promise.
 (async () => {
   const params = new URLSearchParams(location.search);
   const confirmToken = params.get('confirmDelivery');
@@ -13078,74 +11361,6 @@ authChangePasswordForm.addEventListener('submit', async (event) => {
     alert('Delivery confirmed — thank you! The seller can now cash out for this order.');
   } catch (err) {
     alert(err.message || 'This delivery-confirmation link is invalid or has expired.');
-  }
-})();
-
-// N44: set before any of this promise's own async work below, so
-// enterShopMode (which awaits authInitPromise before running its own
-// shopper-login gate) can tell whether this load is one of these special
-// account-recovery flows the moment the promise settles, without
-// re-parsing a URL this same IIFE already strips the token from. Shop
-// mode's gate skips itself entirely in that case — see enterShopMode's own
-// comment for why forcing it on top here would actively get in the way,
-// not just look redundant.
-let accountRecoveryFlowActive = false;
-
-const authInitPromise = (async () => {
-  const params = new URLSearchParams(location.search);
-  const verifyToken = params.get('verifyEmail');
-  const resetToken = params.get('resetPassword');
-  // #589: the return leg of the Didit-hosted verification flow — Didit
-  // redirects back here once a builder finishes (or abandons) it there.
-  const diditReturn = params.get('diditReturn');
-  if (!verifyToken && !resetToken && !diditReturn) {
-    await refreshCurrentUser();
-    return;
-  }
-  accountRecoveryFlowActive = true;
-
-  history.replaceState(null, '', location.pathname);
-  await refreshCurrentUser();
-
-  if (verifyToken) {
-    try {
-      await verifyEmail(verifyToken);
-      await refreshCurrentUser();
-      openAuthModal('login');
-      setAuthStatus('Email verified!', 'success');
-    } catch (err) {
-      openAuthModal('login');
-      setAuthStatus(err.message || 'That verification link is invalid or has expired.', 'error');
-    }
-  } else if (diditReturn) {
-    // refreshCurrentUser() above already re-rendered the account panel if
-    // this browser has an active session; openAuthModal only needs to
-    // actually show it (a fresh page load starts with the modal closed).
-    openAuthModal();
-    // #2405: Didit's hosted flow supports a "continue on your phone" QR
-    // handoff, so this return leg can land in a browser/device with no
-    // session for the account that started verification. Polling a
-    // session-gated endpoint from there just 401s on every tick for 5
-    // minutes behind a login form — tell the user to log in instead of
-    // pretending a check is actually happening.
-    if (!currentAuthUser) {
-      setAuthStatus('Log in to check your verification status.');
-    } else {
-      setAuthStatus('Checking verification status…');
-      await pollDiditVerificationStatus();
-    }
-  } else if (resetToken) {
-    pendingResetToken = resetToken;
-    // Forced to the logged-out form view even if this browser happens to
-    // have an active session — resetting a password is about whichever
-    // account the token itself identifies, not necessarily the one
-    // currently logged in here, so it should never be hidden behind
-    // refreshAccountAuthUI's "you're logged in" panel.
-    authLoggedOutEl.hidden = false;
-    authLoggedInEl.hidden = true;
-    authModalEl.classList.add('visible');
-    openModalA11y(authModalEl, closeAuthModal);
-    showAuthView('reset');
   }
 })();
 
@@ -13984,7 +12199,21 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     // field but blends it so softly that the radial structure stops being
     // perceptible, without touching the swirl/shear-band fix (#1204) or the
     // per-octave aliasing fade (#1633) at all.
-    float cloudMask = smoothstep(-0.3, 1.3, clouds);
+    // owner-report-2026-10-20 (round 2, post-deploy): even with the
+    // drift term now bounded (see samplePos above) and this threshold
+    // already once widened by #2450, a sharp-edged patch is still
+    // occasionally visible near the wall/dome boundary. heightFrac is
+    // already fairly low there (uFadeLowZ sits well below the boundary,
+    // but the ramp isn't finished by the time visibility is still
+    // substantial at that height -- see heightFrac's own definition
+    // above), so a locally steep spot in the (now-bounded, but not
+    // perfectly flat) noise field is still enough to read as a hard edge
+    // once multiplied back up by a non-trivial heightFrac. Widening this
+    // threshold again trades a little more of the cloud layer's own
+    // contrast for a softer worst case everywhere, same direction as
+    // #2450's own change and with the same confirmed-safe-to-widen
+    // precedent noted below for apexFade.
+    float cloudMask = smoothstep(-0.6, 1.6, clouds);
     // Kept from before (#1204/#1585) as a modest extra safety margin right
     // at the literal pole specifically — on its own this barely moves the
     // result (confirmed: widening or disabling it entirely, independent of
@@ -14992,6 +13221,19 @@ let shopSitBlend = 0;
 // moving target to smooth out.
 let shopSitYawOffset = 0;
 let shopSitHeightOffset = 0;
+// #2480 (sub-issue of #2475): randomized once per sit episode, the instant
+// a 'sit' target is selected (same moment shopIdleInteractionTarget itself
+// gets set) -- shopSitBlend stays suppressed at 0 until this many seconds
+// of that same episode have elapsed, so the avatar doesn't always commit
+// to sitting at the exact same instant idle sway begins; sometimes it
+// lingers standing a bit first. Timing-side counterpart to the random
+// target selection in findShopIdleInteractionTarget above. Lean (just
+// below) gets the identical pattern applied to its own blend, per #2480's
+// own "across repeated idle cycles" scope covering both poses equally.
+const SHOP_SIT_SETTLE_DELAY_MIN_S = 0;
+const SHOP_SIT_SETTLE_DELAY_MAX_S = 2;
+let shopSitSettleDelayS = 0;
+let shopSitSettleElapsedS = 0; // seconds of real idle time with a 'sit' target selected, this episode
 // #2479 (sub-issue of #2475): same shape as #2478's own shopSitBlend/
 // shopSitYawOffset/shopSitHeightOffset just above, for a 'lean' target
 // instead of 'sit' -- a dedicated ease (not a reuse of shopIdleBlend) so
@@ -15004,6 +13246,12 @@ let shopSitHeightOffset = 0;
 let shopLeanBlend = 0;
 let shopLeanYawOffset = 0;
 let shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
+// #2480: lean's own settle-delay counterpart to shopSitSettleDelayS/
+// shopSitSettleElapsedS above -- identical pattern, separate state, since
+// a sit episode and a lean episode are never the same episode (sit always
+// outranks lean within one idle episode per findShopIdleInteractionTarget).
+let shopLeanSettleDelayS = 0;
+let shopLeanSettleElapsedS = 0; // seconds of real idle time with a 'lean' target selected, this episode
 
 // Flight state (docs/SPEC.md §2) — see updateShopFlight/toggleShopFlight.
 // 'grounded' | 'takingOff' | 'flying' | 'landing'. Toggling mid-transition
@@ -15120,9 +13368,11 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     shopSitBlend = 0; // #2478: instant ease-out, same as shopIdleBlend/shopAfkBlend just above
     shopSitYawOffset = 0;
     shopSitHeightOffset = 0;
+    shopSitSettleElapsedS = 0; // #2480: re-armed for the next sit episode's own randomized delay
     shopLeanBlend = 0; // #2479: same instant ease-out, mirroring sit's own just above
     shopLeanYawOffset = 0;
     shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
+    shopLeanSettleElapsedS = 0; // #2480: re-armed for the next lean episode's own randomized delay
   } else {
     // #2477: fires exactly once per idle episode, the instant elapsed time
     // first crosses SHOP_IDLE_DELAY_S -- not every frame afterward, since
@@ -15133,16 +13383,32 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
     const idleTarget = shopIdleElapsedS >= SHOP_IDLE_DELAY_S ? 1 : 0;
     if (!wasIdle && idleTarget === 1) {
       shopIdleInteractionTarget = findShopIdleInteractionTarget(shopAvatarPosition.x, shopAvatarPosition.y);
+      // #2480: re-randomized every time a fresh episode selects a new sit
+      // or lean target (including re-selecting the same one next time
+      // around) — see shopSitSettleDelayS's own declaration for why. Both
+      // get randomized here regardless of which kind was actually
+      // selected (the unused one's delay just sits idle until its own
+      // kind is picked in some future episode) — simpler than branching
+      // on kind here, and harmless since each only ever gates its own
+      // blend below.
+      shopSitSettleDelayS = THREE.MathUtils.randFloat(SHOP_SIT_SETTLE_DELAY_MIN_S, SHOP_SIT_SETTLE_DELAY_MAX_S);
+      shopSitSettleElapsedS = 0;
+      shopLeanSettleDelayS = THREE.MathUtils.randFloat(SHOP_SIT_SETTLE_DELAY_MIN_S, SHOP_SIT_SETTLE_DELAY_MAX_S);
+      shopLeanSettleElapsedS = 0;
     }
     shopIdleBlend += (idleTarget - shopIdleBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
     const afkTarget = shopIdleElapsedS >= SHOP_AFK_DELAY_S ? 1 : 0;
     shopAfkBlend += (afkTarget - shopAfkBlend) * Math.min(1, SHOP_AFK_BLEND_PER_S * dt);
 
-    // #2478: eases in only when this idle episode's own selected target
-    // (above) is a sit one — stays at 0, same as always, for a lean target
-    // or no target at all (ordinary stand sway keeps running regardless,
-    // same "fall back to stand sway unchanged" scope #2477 already cut).
-    const sitTarget = shopIdleInteractionTarget?.kind === 'sit' ? 1 : 0;
+    // #2478/#2480: eases in only once this idle episode's own selected
+    // target (above) is a sit one *and* its own randomized settle delay
+    // has elapsed — stays at 0, same as always, for a lean target, no
+    // target, or a sit target still within its settle delay (ordinary
+    // stand sway keeps running regardless, same "fall back to stand sway
+    // unchanged" scope #2477 already cut).
+    if (shopIdleInteractionTarget?.kind === 'sit') shopSitSettleElapsedS += dt;
+    const sitTarget =
+      shopIdleInteractionTarget?.kind === 'sit' && shopSitSettleElapsedS >= shopSitSettleDelayS ? 1 : 0;
     shopSitBlend += (sitTarget - shopSitBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
     if (shopIdleInteractionTarget?.kind === 'sit') {
       // Hip height (local z = SHOP_AVATAR_LEG_LENGTH_M above the group's
@@ -15169,16 +13435,20 @@ function updateShopAvatarIdle(hasActiveInput, dt) {
       shopSitYawOffset = 0;
     }
 
-    // #2479: same shape as #2478's sit block just above, for a 'lean'
-    // target -- eases in only when this idle episode's own selected target
-    // is a lean one (sit always outranks lean within the same episode per
-    // findShopIdleInteractionTarget, so these two blends are never both
-    // nonzero at once). Visual-only offset recomputed fresh each frame as a
-    // pure function of shopLeanBlend and the current target, same reasoning
-    // shopSitYawOffset/shopSitHeightOffset's own declaration gives -- never
-    // touches shopAvatarPosition/shopAvatarFacing, so leaning never affects
-    // movement, collision, curvature, or camera-follow code either.
-    const leanTarget = shopIdleInteractionTarget?.kind === 'lean' ? 1 : 0;
+    // #2479/#2480: same shape as #2478's sit block just above, for a
+    // 'lean' target -- eases in only once this idle episode's own
+    // selected target is a lean one *and* its own randomized settle
+    // delay has elapsed (sit always outranks lean within the same
+    // episode per findShopIdleInteractionTarget, so these two blends are
+    // never both nonzero at once). Visual-only offset recomputed fresh
+    // each frame as a pure function of shopLeanBlend and the current
+    // target, same reasoning shopSitYawOffset/shopSitHeightOffset's own
+    // declaration gives -- never touches shopAvatarPosition/
+    // shopAvatarFacing, so leaning never affects movement, collision,
+    // curvature, or camera-follow code either.
+    if (shopIdleInteractionTarget?.kind === 'lean') shopLeanSettleElapsedS += dt;
+    const leanTarget =
+      shopIdleInteractionTarget?.kind === 'lean' && shopLeanSettleElapsedS >= shopLeanSettleDelayS ? 1 : 0;
     shopLeanBlend += (leanTarget - shopLeanBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
     if (shopIdleInteractionTarget?.kind === 'lean') {
       shopLeanPositionOffset = {
@@ -15830,12 +14100,20 @@ function shopLandingObstructionTopZ(x, y) {
 // added to it, not any rotation.
 //
 // Prefers sit over lean when both are in range (sitting reads as a
-// stronger "resting" signal than leaning), then nearest within whichever
-// kind — simple nearest-wins, no pathfinding, matching #2044's own
-// "keep it simple" precedent for the sibling landing-spot search above.
+// stronger "resting" signal than leaning); within whichever kind,
+// #2480 (sub-issue of #2475) picks uniformly at random among every
+// in-range candidate of that kind, rather than deterministic nearest-
+// wins -- so standing idle in the same spot near several chairs doesn't
+// always settle into the exact same one, matching docs/SPEC.md §2's own
+// "with randomization" line (the same spirit as the existing stand-sway's
+// randomized sway period/head-turn interval just below, applied here to
+// *which* target gets picked instead of an ongoing motion parameter).
+// Still no pathfinding, matching #2044's own "keep it simple" precedent
+// for the sibling landing-spot search above.
 const SHOP_IDLE_INTERACTION_SEARCH_RADIUS_M = 3;
 function findShopIdleInteractionTarget(x, y) {
-  let best = null;
+  const sitCandidates = [];
+  const leanCandidates = [];
   for (const entry of shopLandlets.values()) {
     if (!entry.loaded) continue;
     for (const mesh of entry.objects) {
@@ -15850,10 +14128,8 @@ function findShopIdleInteractionTarget(x, y) {
         const worldY = entry.group.position.y + mesh.position.y + (target.offsetXM * sin + target.offsetYM * cos);
         const distance = Math.hypot(worldX - x, worldY - y);
         if (distance > SHOP_IDLE_INTERACTION_SEARCH_RADIUS_M) continue;
-        if (best && (best.kind === 'sit' && kind === 'lean')) continue; // sit already found elsewhere — lean never outranks it
-        if (best && best.kind === kind && best.distance <= distance) continue; // already have a closer one of this same kind
         const { height } = meshDimensions(mesh);
-        best = {
+        (kind === 'sit' ? sitCandidates : leanCandidates).push({
           kind,
           instanceId: mesh.userData.instanceId,
           worldX,
@@ -15861,11 +14137,13 @@ function findShopIdleInteractionTarget(x, y) {
           worldZ: mesh.position.z - height / 2 + target.heightM,
           worldFacingRad: mesh.rotation.z + target.facingRad,
           distance,
-        };
+        });
       }
     }
   }
-  return best;
+  const candidates = sitCandidates.length > 0 ? sitCandidates : leanCandidates;
+  if (candidates.length === 0) return null;
+  return candidates[Math.floor(Math.random() * candidates.length)];
 }
 // #2477: e2e-only hook, same convention as window.__testNearestOpenLandingSpot
 // above -- lets a test drive the real search function directly against
@@ -15888,6 +14166,12 @@ window.__testShopSitPose = () => ({
   heightOffset: shopSitHeightOffset,
   legRotationRad: shopAvatar.legPivotL.rotation.x,
   armRotationRad: shopAvatar.armPivotL.rotation.x,
+  // #2480: this episode's own randomized settle delay/elapsed (see their
+  // declarations above) -- lets a test confirm the delay itself varies
+  // across repeated episodes, and that shopSitBlend really does stay 0
+  // until shopSitSettleElapsedS catches up to it.
+  settleDelayS: shopSitSettleDelayS,
+  settleElapsedS: shopSitSettleElapsedS,
 });
 // #2479: same convention as window.__testShopSitPose just above, for the
 // lean pose's own visual-only state.
@@ -15895,6 +14179,9 @@ window.__testShopLeanPose = () => ({
   blend: shopLeanBlend,
   yawOffset: shopLeanYawOffset,
   positionOffset: { ...shopLeanPositionOffset },
+  // #2480: same settle-delay fields window.__testShopSitPose exposes above.
+  settleDelayS: shopLeanSettleDelayS,
+  settleElapsedS: shopLeanSettleElapsedS,
 });
 
 // #2044: the spec line SHOP_FLIGHT_TAKEOFF_DURATION_S's own comment above
@@ -16445,6 +14732,15 @@ function updateShopLandletInfo() {
 // Without this, a presence report/poll tick firing in that window still
 // passes this guard and 401s against a session that's already gone.
 let accountSessionEnding = false;
+
+// #2554: src/account/auth.js's own delete-account flow needs to set this
+// flag before deleteAccount()'s own await resolves (see the comment at
+// its declaration above) -- exported rather than left internal since
+// hasVerifiedSession/accountSessionEnding themselves still live here,
+// Shop-mode-specific state pending its own future extraction.
+export function setAccountSessionEnding(value) {
+  accountSessionEnding = value;
+}
 
 function hasVerifiedSession() {
   return !!currentAuthUser && currentAuthUser.ageAttested && currentAuthUser.trustTier !== 'none' && !accountSessionEnding;
@@ -17812,7 +16108,12 @@ shopProductPreviewReviewBtn.addEventListener('click', handleShopProductReviewCli
 // own comment in src/api.js), so there's no reason to pull in a
 // third-party script on every page load.
 let stripeJsPromise = null;
-function loadStripeJs() {
+// #2554: src/account/auth.js's own card-verification step also needs
+// this (exactly the same lazy-load-once shape the Shop-mode checkout
+// flow below already relies on) -- exported rather than left internal
+// since loadStripeJs/stripeJsPromise themselves still live here, pending
+// the eventual src/shop/mode.js extraction.
+export function loadStripeJs() {
   if (stripeJsPromise) return stripeJsPromise;
   stripeJsPromise = new Promise((resolve, reject) => {
     if (window.Stripe) { resolve(window.Stripe); return; }
@@ -18569,9 +16870,13 @@ async function enterShopMode() {
   shopSitBlend = 0;
   shopSitYawOffset = 0;
   shopSitHeightOffset = 0;
+  shopSitSettleDelayS = 0;
+  shopSitSettleElapsedS = 0;
   shopLeanBlend = 0;
   shopLeanYawOffset = 0;
   shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
+  shopLeanSettleDelayS = 0;
+  shopLeanSettleElapsedS = 0;
   // #1175 (docs/SPEC.md §1/§2): every spawn — not just a first-ever visit —
   // starts already flying, above a random world location, facing the
   // world center, and slowly orbiting it clockwise until the shopper gives
@@ -18645,6 +16950,15 @@ async function enterShopMode() {
   shopStatusEl.textContent = '';
   shopStatusEl.classList.remove('visible');
   shopActive = true;
+  // #2552: Shop's own per-frame work (movement + sky) and its own avatar-
+  // facing value for the compass (eases toward movement direction rather
+  // than tracking the camera instantly, unlike every other mode's default
+  // camera-derived bearing — see world/scene.js's own comment).
+  registerModeFrameUpdate((now) => {
+    updateShopMovement(now);
+    updateShopSky(now);
+  });
+  registerFacingOverride(() => shopAvatarFacing);
 }
 
 // #540: Sell mode's own "faux lándlet" — the seller's own products,
@@ -19055,6 +17369,12 @@ async function enterLayoutPreviewMode() {
   translateControls.detach();
   rotateControls.detach();
   controls.enabled = false;
+  // #2552: shares Build's own tween/edge-pan/controls/debug/selection-
+  // highlight per-frame work (selection/highlight are both empty here —
+  // clearSelection() above and this mode's own no-highlighting design —
+  // so those two loops are harmless no-ops, same as they already are
+  // whenever Build itself has nothing selected).
+  registerModeFrameUpdate(buildModeFrameUpdate);
 
   setBuilderId(await ensureBuilderIdentity());
   if (!builderId) {
@@ -19150,6 +17470,11 @@ async function enterLayoutPreviewMode() {
 // hide the builder chrome that doesn't apply, clear out whatever the
 // placeholder/real landlet scene had, load this seller's own content.
 async function enterSellMode() {
+  // #2552: Sell has no per-frame work of its own (paginated, static
+  // between page turns) — see world/scene.js's own comment on why this is
+  // an explicit null rather than just leaving whatever the previous page
+  // load registered.
+  registerModeFrameUpdate(null);
   for (const id of SELL_HIDDEN_BUILDER_UI_IDS) {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
@@ -19541,6 +17866,9 @@ async function bootstrap() {
     showShopAccessGate();
     return;
   }
+  // #2552: Build's own tween/edge-pan/controls/debug/selection-highlight
+  // per-frame work — see buildModeFrameUpdate's own comment.
+  registerModeFrameUpdate(buildModeFrameUpdate);
   refreshNotificationsBadge();
   refreshFriendsBadge();
   refreshDmBadge();

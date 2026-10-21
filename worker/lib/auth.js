@@ -4,24 +4,21 @@
 // cookie/hash/cookie-name primitives they depend on. Extracted verbatim,
 // zero behavior change.
 //
-// Deliberately NOT included here: requireSessionBuilder/requireVerifiedSession
-// (and assertVerified/assertOwner alongside them) -- #2501 already found
-// these drag in more than a mechanical move allows, and investigating
-// further for this issue confirmed why: requireSessionBuilder's own
-// getOrCreateBuilderForUser has 13 call sites of its own spanning many
-// handlers that have nothing to do with authentication (handleMyBuilder,
-// handleMyOwnedAvatars, and more), reading/writing the builders table --
-// genuinely builder-PROFILE domain logic, not an auth-chain internal, and
-// slated for its own feature-area leaf (#2535) under #2502's own
-// breakdown. Moving requireSessionBuilder here now would mean either this
-// module reaching back into worker/index.js for a function that's about
-// to move again once #2535 lands (exactly the churn #2528's own body
-// warned against), or dragging builder-profile logic into an "auth"
-// module where it doesn't belong. Filed as its own narrower follow-up
-// (see that issue for the full writeup) rather than forced through here.
+// #2543: requireSessionBuilder/requireVerifiedSession/assertVerified join
+// the chain here too, now that #2535 gave getOrCreateBuilderForUser (the
+// one thing that blocked this -- see the git history on this comment for
+// the full writeup) a stable home in worker/lib/builder-profile.js. That
+// module already imports requireCurrentUser from here, so this adds a
+// direct two-file cycle (auth.js <-> builder-profile.js) on top of the
+// existing builder-profile.js <-> worker/index.js one -- still safe by
+// the same reasoning builder-profile.js's own comment gives: every name
+// crossing either edge is only read inside an async function body at
+// request time, never at module-evaluation time, so ES module live
+// bindings resolve the cycle correctly regardless of load order
+// (confirmed via the full build + unit + e2e suite).
 import { HttpError } from './http.js';
 import { bytesToHex } from './crypto.js';
-import { stringValue } from './validation.js';
+import { getOrCreateBuilderForUser } from './builder-profile.js';
 
 export const SESSION_COOKIE_NAME = 'hh_session';
 
@@ -88,35 +85,53 @@ export async function requireAdmin(request, db) {
 
 // #2538: thrown wherever an existing row's own owner column doesn't match
 // the session's resolved builder/seller id -- the shared shape for every
-// "is this actually yours" check across the file. Pure/zero-dependency, so
-// safe to extract alongside the rest of this authorization chain even
-// though requireSessionBuilder (its most common caller) can't move yet
-// (see worker/index.js's own comment on why, above requireSessionBuilder).
+// "is this actually yours" check across the file. Pure/zero-dependency.
 export function assertOwner(actualOwnerId, sessionOwnerId, message) {
   if (actualOwnerId !== sessionOwnerId) throw new HttpError(message, 403);
 }
 
-// #2529: pure/zero-further-dependency, used well beyond admin code (login,
-// signup, password reset, ...) -- unlike requireSessionBuilder, neither of
-// these drags in anything not already in this file. Extracted verbatim,
-// zero behavior change.
-export function normalizeEmail(value) {
-  return stringValue(value, 'email').toLowerCase();
+// docs/SPEC.md §6 / #556: age attestation plus credit-card (or eventual
+// government-ID, #589) verification gates every builder/seller-owned
+// action from here on, not just newly created accounts. Owner decision
+// (Control Room, 2026-09-09): "force everyone through the new gates, no
+// grandfathering in" -- deliberately applied to every session, including
+// ones that signed up before this existed. Scoped to requireSessionBuilder/
+// requireSessionSeller (the latter still in worker/index.js, builder's own
+// seller-domain counterpart) -- the ones that actually gate world/shop-
+// selling activity -- not requireCurrentUser itself, so an unverified
+// session can still reach its own account state (GET /api/builders|
+// sellers/me) and the age-attest/card-setup-intent/confirm-card endpoints
+// needed to clear this gate in the first place.
+export function assertVerified(user) {
+  if (user.age_attested_at === null || user.trust_tier === 'none') {
+    throw new HttpError(
+      'Age attestation and credit-card (or government-ID) verification are required to continue.',
+      403,
+      { verificationRequired: true },
+    );
+  }
 }
 
-export function userFromRow(row) {
-  return {
-    userId: row.user_id,
-    email: row.email,
-    username: row.username,
-    emailVerified: row.email_verified_at !== null,
-    isAdmin: Boolean(row.is_admin),
-    ageAttested: row.age_attested_at !== null,
-    trustTier: row.trust_tier,
-    cardFunding: row.card_funding,
-    taxFormType: row.tax_form_type,
-    taxFormCompletedAt: row.tax_form_completed_at,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
+// The authorization workhorse for every builder-owned mutation: resolves
+// *your own* builder profile from the session (never a client-supplied
+// builderId -- that field is exactly what let anyone act as anyone else
+// before this pass, see the audit that prompted it) so a handler can
+// compare it against whatever it's about to modify.
+export async function requireSessionBuilder(request, db) {
+  const user = await requireCurrentUser(request, db);
+  assertVerified(user);
+  // last_active_at is kept fresh inside getOrCreateBuilderForUser itself,
+  // not here -- see that function's own comment.
+  return getOrCreateBuilderForUser(db, user);
+}
+
+// N44 (owner, 2026-09-12): shopping/purchasing now requires the same
+// age-attestation + credit-card-or-ID gate as Build/Sell ("restrict minors
+// from using any part of the application"), but a purchase doesn't need a
+// builder or seller profile the way requireSessionBuilder/requireSessionSeller
+// provision -- just a real, verified account. Used by handleInstancePurchase.
+export async function requireVerifiedSession(request, db) {
+  const user = await requireCurrentUser(request, db);
+  assertVerified(user);
+  return user;
 }

@@ -20,7 +20,7 @@ import {
 import { notificationStatement, fireNotification, fireNotifications } from './lib/notifications.js';
 import {
   SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser, requireAdmin, assertOwner,
-  normalizeEmail, userFromRow,
+  assertVerified, requireSessionBuilder, requireVerifiedSession,
 } from './lib/auth.js';
 import {
   requireControlRoomAccess, controlRoomTextValue, controlRoomStatusValue, controlRoomTaskFromRow,
@@ -32,6 +32,36 @@ import {
   handleAdminBootstrap, handleGrantAdmin, handleRevokeAdmin, handleListAdmins, handleSuspendAccount,
   handleUnsuspendAccount, handleSuspensionStatus,
 } from './lib/account-moderation.js';
+// #2535: the builder-profile domain (see that module's own comment for
+// why handleBuilders itself -- the /api/builders dispatcher these are
+// called from -- stays here rather than moving too, and for why this
+// creates an intentional, safe circular import with this file).
+import {
+  getOrCreateBuilderForUser, handleMyBuilder, handleMyOwnedAvatars, handleMyAvatar,
+  handleMyNotificationPreferences, handleMyOwnedAnimations, handleBuilderLowStock, handleMyAnimation,
+  builderFromRow, publicBuilderFromRow, requireBuilder,
+} from './lib/builder-profile.js';
+// #2541: Stripe webhook/card-setup, Didit verification, video generation,
+// and credit-orb route handlers, extracted into worker/lib/ -- see each
+// module's own comment for what deliberately stayed here instead (and why).
+import { handleStripeWebhook, handleCardSetupIntent, handleConfirmCard } from './lib/stripe.js';
+import { handleDiditVerificationSession, handleDiditVerificationStatus, handleDiditWebhook } from './lib/didit.js';
+import {
+  handleVideoGenerationJobCreate, handleVideoGenerationJobStatus, handleVideoGenerationWebhook,
+  expireStaleVideoGenerationJobs,
+} from './lib/video-generation.js';
+import { handleCreditOrbs, spawnCreditOrbIfDue } from './lib/credit-orbs.js';
+// #2542: the signup/login/logout/delete-account/change-password/me/
+// verify-email/request-password-reset/reset-password/resend-verification/
+// change-email/age-attest route handlers, extracted into
+// worker/lib/auth-routes.js -- see that module's own header comment for
+// what deliberately stayed here instead (handleAuth itself, handleExportData,
+// and the handful of helpers auth-routes.js imports back).
+import {
+  handleSignup, handleLogin, handleLogout, handleDeleteAccount, handleChangePassword, handleMe,
+  handleVerifyEmail, handleRequestPasswordReset, handleResetPassword, handleResendVerification,
+  handleChangeEmail, handleAgeAttest,
+} from './lib/auth-routes.js';
 
 // #1360: generic hardening every response from this Worker should carry,
 // regardless of path — applied in one place (fetch's own wrapper below)
@@ -120,7 +150,9 @@ const MAX_TOTAL_STORAGE_BYTES = 8 * 1024 * 1024 * 1024;
 // long even a slow connection needs to finish uploading MAX_MODEL_BYTES.
 const MODEL_UPLOAD_RESERVATION_TIMEOUT_MS = 5 * 60 * 1000;
 
-async function getStorageUsage(bucket) {
+// Exported for worker/lib/video-generation.js (#2541) -- storeTripoModelOutput
+// needs this same R2 storage-usage accounting.
+export async function getStorageUsage(bucket) {
   let usedBytes = 0;
   let objectCount = 0;
   let cursor;
@@ -145,7 +177,9 @@ async function getStorageUsage(bucket) {
 // between this reservation and its own put), just later in that one
 // request's own timeline. Returns a reservation id the caller must delete
 // (in a finally) once its own R2 write lands or fails.
-async function reserveStorageBudget(db, usage, sizeBytes, sizeLabel) {
+// Exported for worker/lib/video-generation.js (#2541) -- storeTripoModelOutput
+// needs this same storage-budget reservation.
+export async function reserveStorageBudget(db, usage, sizeBytes, sizeLabel) {
   const reservationId = `reservation-${crypto.randomUUID()}`;
   const now = Date.now();
   await db.prepare(`
@@ -1080,7 +1114,9 @@ export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAg
   };
 }
 
-function validateGlb(bytes) {
+// Exported for worker/lib/video-generation.js (#2541) -- storeTripoModelOutput
+// needs this same GLB validation before trusting a downloaded model.
+export function validateGlb(bytes) {
   const view = new DataView(bytes);
   if (bytes.byteLength < 20 || view.getUint32(0, true) !== GLB_MAGIC) {
     throw new HttpError('File is not a valid .glb (binary glTF) model', 400);
@@ -1132,7 +1168,9 @@ function validateGlb(bytes) {
 // #823 already closed for thumbnail uploads via decodeThumbnailDataUrl's
 // PNG_SIGNATURE check, just never applied to this sibling upload path (and
 // this one accepts JPEG/WebP too, not just PNG).
-function hasValidImageSignature(bytes, mimeType) {
+// Exported for worker/lib/video-generation.js (#2541) -- handleVideoGenerationJobCreate
+// needs this same magic-byte check on each uploaded view image.
+export function hasValidImageSignature(bytes, mimeType) {
   const view = new Uint8Array(bytes);
   const matches = (signature, offset = 0) => view.length >= offset + signature.length
     && signature.every((byte, i) => view[offset + i] === byte);
@@ -1142,7 +1180,9 @@ function hasValidImageSignature(bytes, mimeType) {
   return false;
 }
 
-function formatBytes(bytes) {
+// Exported for worker/lib/video-generation.js (#2541) -- storeTripoModelOutput
+// needs this same byte-count formatting for its own size-limit error.
+export function formatBytes(bytes) {
   // #1539: MAX_TOTAL_STORAGE_BYTES is 8GB -- without this tier it rendered
   // as "8192.0MB" in every reserveStorageBudget 507 error.
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
@@ -3531,497 +3571,6 @@ async function handleBuilders(request, env, db, route, url) {
   return json({ error: 'Not found' }, 404);
 }
 
-function builderFromRow(row) {
-  return {
-    ...publicBuilderFromRow(row),
-    // Land acquisition auctions (docs/SPEC.md §5, migrations/0045) — a
-    // real, persisted ledger credited when this builder sells a landlet
-    // via auction. See migrations/0045's own note on why bidding itself
-    // isn't gated by having a sufficient balance yet. A real Stripe-
-    // redeemable balance (handleBuilderRedeem) — never include this in a
-    // shape returned from an unauthenticated or cross-account lookup (#807:
-    // it was leaking through GET /api/builders and its ids/label variants,
-    // none of which are gated on the caller owning the row).
-    higglesBalanceCents: row.higgles_balance_cents,
-    // #2067: own-account-only, same reasoning as higglesBalanceCents above
-    // -- a communication preference has no reason to leak through a
-    // cross-account lookup either.
-    notifySoldOutEmail: !!row.notify_sold_out_email,
-    // #2442: own-account-only, same reasoning as higglesBalanceCents above
-    // -- this balance (migrations/0127) was never surfaced anywhere in the
-    // response shape at all, so the Upload Model modal had nothing to read
-    // to show a builder how many free video-to-3D generations they have
-    // left before they actually attempt one.
-    videoGenerationCredits: row.video_generation_credits,
-  };
-}
-
-// #807: the subset of builderFromRow safe to hand back for a lookup that
-// isn't scoped to the caller's own account — GET /api/builders and its
-// ?ids=/?label= variants (used by the "Add friend" name lookup, the Shop
-// mode owner-label map, and the auction bid-history label map), none of
-// which call requireCurrentUser. landCapM2/ownedAreaM2 stay in this public
-// shape (unlike higglesBalanceCents) since landlet ownership and its cap
-// are already visible to any Shop-mode visitor by design — only the real
-// money balance is the sensitive field here.
-function publicBuilderFromRow(row) {
-  return {
-    builderId: row.builder_id,
-    label: row.label,
-    // Land cap (docs/SPEC.md §3, migrations/0050) — how much total lándlet
-    // area this builder may own at once, distinct from higglesBalanceCents
-    // (which land-specific lándlets can be acquired via auction).
-    landCapM2: row.land_cap_m2,
-    // The real total currently counted against that cap — ground-level
-    // landlet area plus every level's own cap_consumed_m2 (docs/API.md's
-    // "Vertical construction"), the same sum recomputeLandCap/
-    // recomputeLandCapsBatch already compute internally to grow landCapM2
-    // itself. Only present (non-null) on a row that just went through one
-    // of those — GET /api/builders and GET /api/builders/me both do; a
-    // plain create/rename response doesn't recompute anything, so stays
-    // null rather than a stale or misleadingly-precise-looking number.
-    ownedAreaM2: row.owned_area_m2 ?? null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-async function requireBuilder(db, builderId) {
-  const row = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
-  if (!row) throw new HttpError('Builder not found', 404);
-  return row;
-}
-
-// Real accounts (migrations/0054_link_builders_sellers_to_users.sql) — the
-// builder profile behind the current session, auto-provisioned if somehow
-// missing. Every account already gets one at signup (see handleSignup,
-// docs/SPEC.md §3's "every user is automatically a builder"); the
-// get-or-create here is a defensive fallback for that invariant, not the
-// primary way a builder profile comes to exist, so this should really
-// only ever hit the "already exists" path in practice. 401 with no
-// session (requireCurrentUser); never a 404 either way.
-async function getOrCreateBuilderForUser(db, user) {
-  // #946: INSERT OR IGNORE + unconditional re-read (mirroring
-  // ownedAvatarStatement below) rather than SELECT-then-conditionally-
-  // INSERT — the latter raced two concurrent requests for the same
-  // account's builder profile against the partial UNIQUE INDEX on
-  // builders.user_id (migrations/0054), surfacing to the loser as a
-  // confusing 409 instead of a clean idempotent get-or-create.
-  const builderId = `builder-${crypto.randomUUID()}`;
-  await db.prepare('INSERT OR IGNORE INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
-    .bind(builderId, user.username, user.user_id).run();
-  const row = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(user.user_id).first();
-  // #336/#325: keeps a real "was this builder recently active" signal
-  // fresh — see migrations/0067's own comment for why neither of this
-  // table's existing timestamps works for that. Bumped here (every
-  // caller resolves "my builder profile," whether that's to mutate
-  // something or just to load it on entering a mode) rather than only in
-  // requireSessionBuilder, per the owner's #325 decision: "I'm inclined
-  // to count any login as activity — even if only logging in for
-  // shopping or selling." Every one of this function's own callers is
-  // already an authenticated request by definition (requireCurrentUser
-  // already ran), so there's nothing further to gate this on.
-  // #783: inactivity_warning_sent_at (migrations/0109) is re-armed to
-  // NULL in this same statement — real activity ends the current
-  // inactivity cycle, so warnInactiveLandletOwners should be free to warn
-  // again the next time this builder goes quiet, rather than staying
-  // permanently silenced by a warning from a previous cycle.
-  await db.prepare(
-    `UPDATE builders SET last_active_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), inactivity_warning_sent_at = NULL WHERE builder_id = ?`,
-  ).bind(row.builder_id).run();
-  return row;
-}
-
-async function handleMyBuilder(request, db) {
-  const user = await requireCurrentUser(request, db);
-  const row = await getOrCreateBuilderForUser(db, user);
-  const { nextCap, ownedAreaM2 } = await recomputeLandCap(db, row.builder_id);
-  row.land_cap_m2 = nextCap;
-  row.owned_area_m2 = ownedAreaM2;
-  return json({ builder: builderFromRow(row) });
-}
-
-// #680 (sub-issue of #679, N53): every "avatar"-category catalog template
-// this account currently owns (owned_avatars, migrations/0083) — for a
-// future picker UI to offer, independent of which one (if any) is
-// currently equipped. Same requireCurrentUser-only bar as
-// handleBuilderStripeAccount/handleBuilderRedeem just below (not the
-// full requireSessionBuilder/assertVerified gate) — reading your own
-// purchase history isn't a world/shop-selling action N44 was aimed at.
-async function handleMyOwnedAvatars(request, db) {
-  const user = await requireCurrentUser(request, db);
-  const builder = await getOrCreateBuilderForUser(db, user);
-  const { results } = await db.prepare(`
-    SELECT catalog_templates.*, owned_avatars.purchased_at AS owned_purchased_at
-    FROM owned_avatars
-    JOIN catalog_templates ON catalog_templates.template_id = owned_avatars.template_id
-    WHERE owned_avatars.builder_id = ?
-    ORDER BY owned_avatars.purchased_at DESC
-  `).bind(builder.builder_id).all();
-  return json({
-    avatars: results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
-  });
-}
-
-// #1057: PUT below had no rate limit at all, unlike every comparable
-// authenticated mutation resource in this file (BUNDLE_MUTATE_RATE_LIMIT_MAX
-// #892, FRIENDSHIP_MUTATE_RATE_LIMIT_MAX #899, and others) — #680 never got
-// the equivalent when it introduced this endpoint.
-const AVATAR_EQUIP_RATE_LIMIT_MAX = 20;
-
-// #680: which owned avatar (if any) this account currently has equipped
-// as their own in-world character. GET returns the current choice (null
-// means today's hardcoded default — see createShopAvatar in src/main.js
-// and #679's own "assigned instantly at registration" note, unaffected
-// either way). PUT changes it, rejecting anything not already present in
-// owned_avatars so equipping is only ever "pick one you've already paid
-// for," never a way to wear an arbitrary unbought template.
-async function handleMyAvatar(request, db) {
-  const user = await requireCurrentUser(request, db);
-  const builder = await getOrCreateBuilderForUser(db, user);
-
-  if (request.method === 'GET') {
-    return json({ avatar: await myAvatarJson(db, builder) });
-  }
-
-  if (request.method === 'PUT') {
-    await checkRateLimit(db, `avatar-equip:${builder.builder_id}`, AVATAR_EQUIP_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    let templateId = null;
-    if (input.templateId !== null && input.templateId !== undefined) {
-      templateId = labelValue(input.templateId, 'templateId');
-      // Eager check for a clear 403 in the common case — the atomic guard
-      // folded into the UPDATE's own WHERE clause below is the real race
-      // guard (#801): without it, a refund's owned_avatars revocation
-      // landing between this SELECT and the UPDATE could still let this
-      // request equip an item that was just revoked out from under it,
-      // same non-atomic-check-then-write class of bug this file guards
-      // against elsewhere (e.g. the refund's own conditional UPDATE).
-      const owned = await db.prepare(
-        'SELECT 1 FROM owned_avatars WHERE builder_id = ? AND template_id = ?',
-      ).bind(builder.builder_id, templateId).first();
-      if (!owned) throw new HttpError('You do not own this avatar', 403);
-    }
-    const result = await db.prepare(`
-      UPDATE builders SET equipped_avatar_template_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE builder_id = ?
-        AND (? IS NULL OR EXISTS (SELECT 1 FROM owned_avatars WHERE builder_id = ? AND template_id = ?))
-    `).bind(templateId, builder.builder_id, templateId, builder.builder_id, templateId).run();
-    if (result.meta.changes === 0) {
-      throw new HttpError('You do not own this avatar', 403);
-    }
-    const updated = await requireBuilder(db, builder.builder_id);
-    return json({ avatar: await myAvatarJson(db, updated) });
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-async function myAvatarJson(db, builder) {
-  if (!builder.equipped_avatar_template_id) {
-    return { equippedTemplateId: null, modelUrl: null, skeletonSignature: null };
-  }
-  // A template can vanish after being equipped (its seller later deletes
-  // it) — falls back to the default the same way a dangling seller_id/
-  // templateId elsewhere in this app already does, rather than erroring.
-  const template = await db.prepare(
-    'SELECT model_url, skeleton_signature FROM catalog_templates WHERE template_id = ?',
-  ).bind(builder.equipped_avatar_template_id).first();
-  return {
-    equippedTemplateId: template ? builder.equipped_avatar_template_id : null,
-    modelUrl: template?.model_url || null,
-    // #1164 (sub-issue of #1161): the equipped avatar's own skeleton
-    // signature (#1162), so the shop/equip UI can compare it against a
-    // purchasable/owned animation's own signature for compatibility
-    // without a second round trip. null for the default procedural avatar
-    // (no equipped template at all) or a custom avatar with no skeleton —
-    // either way, nothing for an animation to ever compare equal to.
-    skeletonSignature: template?.skeleton_signature || null,
-  };
-}
-
-// #2103: PUT below had no rate limit at all, unlike handleMyAvatar's own
-// PUT (AVATAR_EQUIP_RATE_LIMIT_MAX #1057) -- this function's own comment
-// already says it mirrors that handler's shape exactly, but never got the
-// rate limit that shape calls for.
-const NOTIFICATION_PREFERENCES_RATE_LIMIT_MAX = 20;
-
-// #2067 (leaf sub-issue of #1973, part of #1947): GET/PUT this account's
-// sold-out-email opt-in, same requireCurrentUser-only bar and GET/PUT
-// shape as handleMyAvatar above -- a communication preference isn't a
-// world/shop-selling action N44 was aimed at either.
-async function handleMyNotificationPreferences(request, db) {
-  const user = await requireCurrentUser(request, db);
-  const builder = await getOrCreateBuilderForUser(db, user);
-
-  if (request.method === 'GET') {
-    return json({ notifySoldOutEmail: !!builder.notify_sold_out_email });
-  }
-
-  if (request.method === 'PUT') {
-    await checkRateLimit(db, `notification-preferences:${builder.builder_id}`, NOTIFICATION_PREFERENCES_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    if (typeof input.notifySoldOutEmail !== 'boolean') {
-      throw new HttpError('notifySoldOutEmail must be a boolean', 400);
-    }
-    await db.prepare(`
-      UPDATE builders SET notify_sold_out_email = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE builder_id = ?
-    `).bind(input.notifySoldOutEmail ? 1 : 0, builder.builder_id).run();
-    return json({ notifySoldOutEmail: input.notifySoldOutEmail });
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-// #1164 (sub-issue of #1161): every "animation"-category template this
-// account currently owns (owned_animations, migration 0106), mirroring
-// handleMyOwnedAvatars above exactly.
-async function handleMyOwnedAnimations(request, db) {
-  const user = await requireCurrentUser(request, db);
-  const builder = await getOrCreateBuilderForUser(db, user);
-  const { results } = await db.prepare(`
-    SELECT catalog_templates.*, owned_animations.purchased_at AS owned_purchased_at
-    FROM owned_animations
-    JOIN catalog_templates ON catalog_templates.template_id = owned_animations.template_id
-    WHERE owned_animations.builder_id = ?
-    ORDER BY owned_animations.purchased_at DESC
-  `).bind(builder.builder_id).all();
-  return json({
-    animations: results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
-  });
-}
-
-// #1949 (sub-issue of #1947): a builder-facing view of every template they
-// currently have placed that carries finite stock (#1948's own
-// stock_quantity column), each annotated with an estimated days-remaining
-// figure -- lets a builder weigh which of their own placed products are at
-// risk of selling out and disappearing from their land (per #1947's own
-// framing, that's expected, normal behavior, not a bug to prevent).
-//
-// Owner guidance (direct conversation, 2026-10-13, captured on issue #1949
-// itself): no fixed trailing window -- "please have the assigned session
-// use its best judgment, probably using a more dynamic calculation rather
-// than a static 30-days, particularly for new products. It could be
-// beneficial to look at how quickly similar products have sold." A
-// one-of-a-kind item (stockQuantity === 1) is a single sale event, not a
-// queue being drawn down, so "for single-quantity items, the builder should
-// understand that it's going to be very unpredictable" -- it always gets an
-// explicit "unpredictable" state rather than a fabricated day count,
-// regardless of any sales data.
-async function handleBuilderLowStock(request, db) {
-  const user = await requireCurrentUser(request, db);
-  const builder = await getOrCreateBuilderForUser(db, user);
-  const { results: templates } = await db.prepare(`
-    SELECT ct.template_id AS templateId, ct.name AS name, ct.category AS category,
-           ct.stock_quantity AS stockQuantity, COUNT(*) AS placedInstanceCount
-    FROM placed_instances pi
-    JOIN landlets l ON l.landlet_id = pi.landlet_id
-    JOIN catalog_templates ct ON ct.template_id = pi.template_id
-    WHERE l.owner_builder_id = ? AND ct.stock_quantity IS NOT NULL
-    GROUP BY ct.template_id
-  `).bind(builder.builder_id).all();
-  if (templates.length === 0) return json({ templates: [] });
-
-  const templateIds = templates.map((t) => t.templateId);
-  const ownVelocityByTemplateId = await templateSalesVelocity(db, templateIds);
-  // Only the categories genuinely needed -- a template with sales history
-  // of its own never looks at this.
-  const categoriesNeedingFallback = [...new Set(
-    templates.filter((t) => !ownVelocityByTemplateId.has(t.templateId)).map((t) => t.category),
-  )];
-  const categoryVelocityByCategory = new Map(await Promise.all(
-    categoriesNeedingFallback.map(async (category) => [category, await categorySalesVelocityPerDay(db, category)]),
-  ));
-
-  return json({
-    templates: templates.map((t) => ({
-      templateId: t.templateId,
-      name: t.name,
-      category: t.category,
-      stockQuantity: t.stockQuantity,
-      placedInstanceCount: t.placedInstanceCount,
-      ...estimateDaysRemaining(t, ownVelocityByTemplateId.get(t.templateId), categoryVelocityByCategory.get(t.category)),
-    })),
-  });
-}
-
-function estimateDaysRemaining(template, ownUnitsPerDay, categoryUnitsPerDay) {
-  if (template.stockQuantity === 1) {
-    return { daysRemaining: null, predictability: 'unpredictable' };
-  }
-  const unitsPerDay = ownUnitsPerDay ?? categoryUnitsPerDay;
-  if (!unitsPerDay) {
-    return { daysRemaining: null, predictability: 'notEnoughData' };
-  }
-  return {
-    daysRemaining: Math.round((template.stockQuantity / unitsPerDay) * 10) / 10,
-    predictability: ownUnitsPerDay ? 'estimated' : 'estimatedFromCategory',
-  };
-}
-
-// One units-per-day rate per template, derived from every non-refunded sale
-// of that specific template across every builder who happens to host an
-// instance of it -- the same cross-builder, shared-stock-pool shape
-// GET /api/purchases?templateId= already uses, since #1947 itself requires
-// velocity to be "computed across every builder selling that same
-// template," not just this one builder's own sales.
-async function templateSalesVelocity(db, templateIds) {
-  const velocityByTemplateId = new Map();
-  // #2321: chunked at D1_MAX_BOUND_PARAMETERS -- a builder can own more than
-  // one landlet (auctions can transfer extra ones in, see the comment on
-  // ownersByBuilderId above) and place well over 100 distinct finite-stock
-  // templates across them, same bug class as #2038/#2204/#2216/#2233/#2283.
-  // Each chunk's own GROUP BY operates on a disjoint subset of template_id,
-  // so merging across chunks needs no further aggregation.
-  for (let i = 0; i < templateIds.length; i += D1_MAX_BOUND_PARAMETERS) {
-    const chunk = templateIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
-    const placeholders = chunk.map(() => '?').join(', ');
-    const { results } = await db.prepare(`
-      SELECT template_id AS templateId, SUM(quantity) AS totalSold,
-             MIN(created_at) AS firstSaleAt, MAX(created_at) AS lastSaleAt
-      FROM purchases
-      WHERE template_id IN (${placeholders}) AND refunded_at IS NULL
-      GROUP BY template_id
-    `).bind(...chunk).all();
-    for (const row of results) velocityByTemplateId.set(row.templateId, salesVelocityPerDay(row));
-  }
-  return velocityByTemplateId;
-}
-
-// #1949: the owner-endorsed fallback for a template with no sales history
-// of its own -- every other template in the same category, regardless of
-// seller, averaged into one rate. Deliberately not scoped to this builder's
-// own templates; "similar products" means the category as a whole, the
-// same freeform `category` column (indexed, always populated) every other
-// browse/filter feature in this file already groups by.
-async function categorySalesVelocityPerDay(db, category) {
-  const { results } = await db.prepare(`
-    SELECT p.template_id AS templateId, SUM(p.quantity) AS totalSold,
-           MIN(p.created_at) AS firstSaleAt, MAX(p.created_at) AS lastSaleAt
-    FROM purchases p
-    JOIN catalog_templates ct ON ct.template_id = p.template_id
-    WHERE ct.category = ? AND p.refunded_at IS NULL
-    GROUP BY p.template_id
-  `).bind(category).all();
-  if (results.length === 0) return null;
-  const rates = results.map(salesVelocityPerDay);
-  return rates.reduce((sum, rate) => sum + rate, 0) / rates.length;
-}
-
-// Spans however long this template has actually been selling (first sale to
-// last sale), never an assumed fixed window -- a single sale floors the
-// span at one day rather than dividing by zero, which is deliberately a
-// rough, early estimate (one data point) rather than a crash.
-function salesVelocityPerDay(row) {
-  const spanDays = Math.max(1, (new Date(row.lastSaleAt).getTime() - new Date(row.firstSaleAt).getTime()) / 86400000);
-  return row.totalSold / spanDays;
-}
-
-// #1057's own fix, mirrored for the new PUT below from day one rather than
-// shipping without it the way #680's own avatar-equip endpoint originally
-// did.
-const ANIMATION_EQUIP_RATE_LIMIT_MAX = 20;
-
-// #1164: which owned animation (if any) this account currently has
-// applied — mirrors handleMyAvatar above exactly, validated against
-// owned_animations instead. GET returns the current choice (null means
-// no animation applied, root motion plays as normal). PUT changes it,
-// rejecting anything not already present in owned_animations. Actually
-// making the applied choice play at runtime is #1165's own scope.
-async function handleMyAnimation(request, db) {
-  const user = await requireCurrentUser(request, db);
-  const builder = await getOrCreateBuilderForUser(db, user);
-
-  if (request.method === 'GET') {
-    return json({ animation: await myAnimationJson(db, builder) });
-  }
-
-  if (request.method === 'PUT') {
-    await checkRateLimit(db, `animation-equip:${builder.builder_id}`, ANIMATION_EQUIP_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    let templateId = null;
-    if (input.templateId !== null && input.templateId !== undefined) {
-      templateId = labelValue(input.templateId, 'templateId');
-      const owned = await db.prepare(
-        'SELECT 1 FROM owned_animations WHERE builder_id = ? AND template_id = ?',
-      ).bind(builder.builder_id, templateId).first();
-      if (!owned) throw new HttpError('You do not own this animation', 403);
-    }
-    const result = await db.prepare(`
-      UPDATE builders SET equipped_animation_template_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE builder_id = ?
-        AND (? IS NULL OR EXISTS (SELECT 1 FROM owned_animations WHERE builder_id = ? AND template_id = ?))
-    `).bind(templateId, builder.builder_id, templateId, builder.builder_id, templateId).run();
-    if (result.meta.changes === 0) {
-      throw new HttpError('You do not own this animation', 403);
-    }
-    const updated = await requireBuilder(db, builder.builder_id);
-    return json({ animation: await myAnimationJson(db, updated) });
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-async function myAnimationJson(db, builder) {
-  if (!builder.equipped_animation_template_id) {
-    return { equippedTemplateId: null, modelUrl: null, skeletonSignature: null };
-  }
-  const template = await db.prepare(
-    'SELECT model_url, skeleton_signature FROM catalog_templates WHERE template_id = ?',
-  ).bind(builder.equipped_animation_template_id).first();
-  return {
-    equippedTemplateId: template ? builder.equipped_animation_template_id : null,
-    modelUrl: template?.model_url || null,
-    skeletonSignature: template?.skeleton_signature || null,
-  };
-}
-
-// docs/SPEC.md §6 / #556: age attestation plus credit-card (or eventual
-// government-ID, #589) verification gates every builder/seller-owned
-// action from here on, not just newly created accounts. Owner decision
-// (Control Room, 2026-09-09): "force everyone through the new gates, no
-// grandfathering in" — deliberately applied to every session, including
-// ones that signed up before this existed. Scoped to requireSessionBuilder/
-// requireSessionSeller below (the ones that actually gate world/shop-
-// selling activity), not requireCurrentUser itself, so an unverified
-// session can still reach its own account state (GET /api/builders|
-// sellers/me) and the age-attest/card-setup-intent/confirm-card endpoints
-// needed to clear this gate in the first place.
-function assertVerified(user) {
-  if (user.age_attested_at === null || user.trust_tier === 'none') {
-    throw new HttpError(
-      'Age attestation and credit-card (or government-ID) verification are required to continue.',
-      403,
-      { verificationRequired: true },
-    );
-  }
-}
-
-// The authorization workhorse for every builder-owned mutation below:
-// resolves *your own* builder profile from the session (never a
-// client-supplied builderId — that field is exactly what let anyone act
-// as anyone else before this pass, see the audit that prompted it) so a
-// handler can compare it against whatever it's about to modify.
-async function requireSessionBuilder(request, db) {
-  const user = await requireCurrentUser(request, db);
-  assertVerified(user);
-  // last_active_at is kept fresh inside getOrCreateBuilderForUser itself
-  // now, not here — see that function's own comment.
-  return getOrCreateBuilderForUser(db, user);
-}
-
-// N44 (owner, 2026-09-12): shopping/purchasing now requires the same
-// age-attestation + credit-card-or-ID gate as Build/Sell ("restrict minors
-// from using any part of the application"), but a purchase doesn't need a
-// builder or seller profile the way requireSessionBuilder/requireSessionSeller
-// provision — just a real, verified account. Used by handleInstancePurchase.
-async function requireVerifiedSession(request, db) {
-  const user = await requireCurrentUser(request, db);
-  assertVerified(user);
-  return user;
-}
-
 // A row's own seller_id column can be non-null yet dangling — pointing at
 // a seller that DELETE /api/sellers/:sellerId already removed (see that
 // handler's own comment: intentionally left as-is, "the same way a
@@ -6318,7 +5867,7 @@ function computeNextLandCap(currentCapM2, trailingEarningsCents, ownedAreaM2) {
 // exposes it so the frontend's own "you own X of Y" display (#312) never
 // has to re-derive it (and risk leaving out level area the way its
 // original ground-only-landlets sum did).
-async function recomputeLandCap(db, builderId) {
+export async function recomputeLandCap(db, builderId) {
   const builder = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
   if (!builder) return { nextCap: LAND_CAP_STARTER_M2, ownedAreaM2: 0 };
   const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
@@ -6938,7 +6487,9 @@ async function handleMySeller(request, db) {
   return json({ seller: sellerFromRow(row) });
 }
 
-// Same reasoning as requireSessionBuilder above, for seller-owned mutations.
+// Same reasoning as requireSessionBuilder (worker/lib/auth.js), for
+// seller-owned mutations -- stays here since getOrCreateSellerForUser is
+// seller-domain logic, not yet extracted to its own #2502 leaf.
 async function requireSessionSeller(request, db) {
   const user = await requireCurrentUser(request, db);
   assertVerified(user);
@@ -6948,16 +6499,17 @@ async function requireSessionSeller(request, db) {
 // Real accounts (migrations/0053_users_auth.sql) — the first genuinely
 // unforgeable identity in this app. Everything below is scoped to this
 // one concern: prove an email is real, prove a password is correct, and
-// hand back a session cookie. requireSessionBuilder/requireSessionSeller
-// above (and every ownership check built on them throughout this file)
-// are what actually put that unforgeable identity to work.
+// hand back a session cookie. requireSessionBuilder (worker/lib/auth.js)/
+// requireSessionSeller above (and every ownership check built on them
+// throughout this file) are what actually put that unforgeable identity
+// to work.
 
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const PBKDF2_ITERATIONS = 100000; // see the migration's own comment on why this is tunable per-hash, not global
-const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour — shorter than email verification since a leaked reset link is higher-stakes
-const FAILED_LOGIN_LOCK_THRESHOLD = 5;
-const FAILED_LOGIN_LOCK_DURATION_MS = 15 * 60 * 1000;
+// #2542: SESSION_TTL_MS/EMAIL_VERIFICATION_TTL_MS/PASSWORD_RESET_TTL_MS/
+// FAILED_LOGIN_LOCK_THRESHOLD/FAILED_LOGIN_LOCK_DURATION_MS all moved to
+// worker/lib/auth-routes.js (each exclusively used by handlers that moved
+// there) -- see that module's own header comment. PBKDF2_ITERATIONS stays
+// here since hashPassword (also staying, see above) depends on it.
 
 // checkRateLimit only ever prunes the one bucket it's currently checking —
 // a bucket that's hit once and never revisited (e.g. signup/reset attempts
@@ -7082,7 +6634,10 @@ export async function pruneOldDatabaseBackups(bucket) {
 // carries). Only ever stored server-side as a SHA-256 hash (see sha256Hex
 // below and each table's own token_hash column) — see
 // migrations/0053_users_auth.sql for why.
-function generateToken() {
+// Exported for worker/lib/auth-routes.js (#2542) -- also called from this
+// file's own delivery-confirmation token flow below, so it stays here
+// rather than moving with the auth routes themselves.
+export function generateToken() {
   return bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
 }
 
@@ -7090,7 +6645,10 @@ function generateToken() {
 // the migration's own comment) computed via the Workers runtime's native
 // Web Crypto PBKDF2 support — no dependency, no WASM build needed the way
 // bcrypt/scrypt would require here.
-async function hashPassword(password) {
+// Exported for worker/lib/auth-routes.js (#2542) -- also called from
+// cascadeDeleteAccount's own password-revocation hash below, so it stays
+// here rather than moving with handleSignup/handleResetPassword.
+export async function hashPassword(password) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits(
@@ -7099,18 +6657,8 @@ async function hashPassword(password) {
   return `pbkdf2$${PBKDF2_ITERATIONS}$${bytesToHex(salt)}$${bytesToHex(new Uint8Array(bits))}`;
 }
 
-async function verifyPassword(password, stored) {
-  const parts = typeof stored === 'string' ? stored.split('$') : [];
-  if (parts.length !== 4 || parts[0] !== 'pbkdf2') return false;
-  const [, iterationsText, saltHex, hashHex] = parts;
-  const iterations = Number(iterationsText);
-  if (!Number.isInteger(iterations) || iterations <= 0) return false;
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt: hexToBytes(saltHex), iterations }, key, 256,
-  );
-  return timingSafeEqual(bytesToHex(new Uint8Array(bits)), hashHex);
-}
+// #2542: verifyPassword moved to worker/lib/auth-routes.js (used only by
+// handlers that moved there) -- see that module's own header comment.
 
 // #771: not a real password's derivation, ever compared against a real
 // account — exists only so handleLogin's no-such-user path can burn the
@@ -7118,103 +6666,53 @@ async function verifyPassword(password, stored) {
 // doesn't let an attacker enumerate registered emails despite the
 // identical response body/status that path already returns.
 const DUMMY_PASSWORD_HASH = `pbkdf2$${PBKDF2_ITERATIONS}$${'00'.repeat(16)}$${'00'.repeat(32)}`;
-
-// Issue #200's owner decision: one real account per email, closing the
-// sybil vector plain lowercasing leaves open — someone can otherwise
-// register unlimited distinct accounts against one real inbox
-// (`you+tag@gmail.com`, or Gmail's own dot-insensitivity:
-// `first.last@gmail.com`/`firstlast@gmail.com` are the same inbox), which
-// matters here specifically because of the one-claimed-landlet-per-builder
-// fairness invariant. Deliberately only
-// used to *detect* a collision at signup (see handleSignup) — the actual
-// `email` column stays the plain lowercased address forever, so this
-// never touches login, password reset, or any already-stored row.
-//
-// "+tag" stripping applies to every domain (a general catch, not
-// Gmail-specific — the owner's own framing: "if those apply to emails
-// other than Gmail as well, then we need a general catch"), since "+"
-// sub-addressing is a de facto standard most major providers honor
-// (Gmail, Outlook/Office365, Yahoo, FastMail, ProtonMail...), not a
-// Gmail-only quirk. Dot-removal, by contrast, IS Gmail-specific — no
-// other mainstream provider folds dots this way — so it's scoped to
-// gmail.com and its googlemail.com alias only, rather than applied
-// universally where it would incorrectly collide real distinct inboxes
-// on every other domain.
-function canonicalizeEmail(value) {
-  const email = normalizeEmail(value);
-  const atIndex = email.lastIndexOf('@');
-  if (atIndex === -1) return email;
-  const domain = email.slice(atIndex + 1);
-  let local = email.slice(0, atIndex);
-  const plusIndex = local.indexOf('+');
-  if (plusIndex !== -1) local = local.slice(0, plusIndex);
-  if (domain === 'gmail.com' || domain === 'googlemail.com') {
-    local = local.replaceAll('.', '');
-  }
-  return `${local}@${domain}`;
+// #2542: DUMMY_PASSWORD_HASH itself can't be a named export of this file --
+// workerd requires every named export of the main Worker entry module to
+// be a function/class binding, not a plain value (#1978, same constraint
+// worker/lib/builder-profile.js's own comment documents for
+// D1_MAX_BOUND_PARAMETERS) -- exported as a getter instead, for
+// worker/lib/auth-routes.js's own handleLogin to call.
+export function dummyPasswordHash() {
+  return DUMMY_PASSWORD_HASH;
 }
 
-// Deliberately permissive — "does this look roughly like an email" rather
-// than a fully RFC-5322-correct pattern (famously not worth chasing; the
-// only real validation of an email address is actually receiving mail at
-// it, which email verification below already does).
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function emailValue(value) {
-  const email = normalizeEmail(value);
-  if (!EMAIL_PATTERN.test(email)) throw new HttpError('email is not a valid email address', 400);
-  return email;
+// Exported for worker/lib/auth-routes.js (#2542) -- also used by
+// handleGrantAdmin/handleRevokeAdmin/handleSuspendAccount/
+// handleUnsuspendAccount/handleSuspensionStatus (#2529, now in
+// worker/lib/account-moderation.js, importing this back from here), so it
+// stays here rather than moving with the signup/login routes.
+export function normalizeEmail(value) {
+  return stringValue(value, 'email').toLowerCase();
 }
 
-function passwordValue(value) {
-  if (typeof value !== 'string') throw new HttpError('password is required', 400);
-  // NIST 800-63B's current guidance: a reasonable minimum length beats
-  // forced complexity rules (mandatory symbols/digits push people toward
-  // predictable substitutions, not real entropy). No upper bound close to
-  // 200 chars would ever be reached by a real password; it exists only to
-  // reject an absurd input before it reaches PBKDF2.
-  if (value.length < 8) throw new HttpError('password must be at least 8 characters', 400);
-  if (value.length > 200) throw new HttpError('password must be at most 200 characters', 400);
-  return value;
+// #2542: canonicalizeEmail/EMAIL_PATTERN/emailValue/passwordValue/
+// usernameValue all moved to worker/lib/auth-routes.js (each exclusively
+// used by handlers that moved there) -- see that module's own header
+// comment.
+
+// Exported for worker/lib/stripe.js (#2541) and worker/lib/account-
+// moderation.js (#2529) -- both need this same user-row shape for their
+// response bodies.
+export function userFromRow(row) {
+  return {
+    userId: row.user_id,
+    email: row.email,
+    username: row.username,
+    emailVerified: row.email_verified_at !== null,
+    isAdmin: Boolean(row.is_admin),
+    ageAttested: row.age_attested_at !== null,
+    trustTier: row.trust_tier,
+    cardFunding: row.card_funding,
+    taxFormType: row.tax_form_type,
+    taxFormCompletedAt: row.tax_form_completed_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
 }
 
-// Required, unlike the old free-text-or-blank display_name it replaces
-// (see migrations/0056_username_required_unique.sql) — how users
-// identify each other now, so a blank one defeats the point. No character
-// restriction beyond that, matching this codebase's existing minimal-
-// validation style for other free-text labels (builder/seller names).
-// Uniqueness itself is checked separately against the DB (see
-// handleSignup) since it isn't something a single value can validate.
-function usernameValue(value) {
-  const username = stringValue(value, 'username');
-  if (username.length > 40) throw new HttpError('username must be at most 40 characters', 400);
-  return username;
-}
-
-async function createSession(db, userId) {
-  const token = generateToken();
-  const tokenHash = await sha256Hex(token);
-  const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
-  await db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
-    .bind(tokenHash, userId, expiresAt).run();
-  return token;
-}
-
-// Mirrors checkAccessGate's own cookie-attribute reasoning above (HttpOnly
-// so frontend JS can never read the session token even via XSS; SameSite=
-// Lax rather than a separate CSRF token, since every mutating endpoint
-// here is POST and Lax cookies are already withheld from cross-site
-// POST/fetch/form-submit by every modern browser; Secure omitted only for
-// plain-http local dev).
-function sessionCookieHeader(url, token, maxAgeSeconds) {
-  const attrs = [`${SESSION_COOKIE_NAME}=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSeconds}`];
-  if (url.protocol === 'https:') attrs.push('Secure');
-  return attrs.join('; ');
-}
-
-function clearSessionCookieHeader(url) {
-  return sessionCookieHeader(url, '', 0);
-}
+// #2542: createSession/sessionCookieHeader/clearSessionCookieHeader all
+// moved to worker/lib/auth-routes.js (each exclusively used by handlers
+// that moved there) -- see that module's own header comment.
 
 // Neither `new URL(request.url).origin` nor the raw `Host` header can be
 // trusted here — confirmed by hand: curling
@@ -7233,7 +6731,9 @@ function clearSessionCookieHeader(url) {
 // `APP_BASE_URL=http://localhost:8787` in `.dev.vars` (gitignored,
 // wrangler's standard mechanism for exactly this kind of local-only
 // override) so links built here are actually reachable while testing.
-function appBaseUrl(env) {
+// Exported for worker/lib/didit.js (#2541) -- its own session-create
+// handler needs this for the Didit callback URL.
+export function appBaseUrl(env) {
   return env.APP_BASE_URL || 'https://higglehaven.com';
 }
 
@@ -7262,7 +6762,10 @@ export function escapeHtml(value) {
 // handleRequestPasswordReset), the same "dev-mode" spirit already used
 // throughout this codebase, so the whole flow stays fully testable
 // without a real email provider.
-async function sendEmail(env, { to, subject, html, text }) {
+// Exported for worker/lib/auth-routes.js (#2542) -- also called from this
+// file's own scheduled()-driven migration-drift alert email below, so it
+// stays here rather than moving with the auth routes themselves.
+export async function sendEmail(env, { to, subject, html, text }) {
   if (!env.RESEND_API_KEY) return false;
   // #1283: fetch itself can reject (DNS failure, connection reset, TLS
   // error, timeout) rather than merely resolving with a non-2xx response —
@@ -7344,7 +6847,9 @@ async function generateConceptImageBytes(env, prompt) {
 // notification email, a seller mid-onboarding needs to actually know it
 // didn't go through — so stripeConfigured is checked explicitly by the
 // route handler below and returns a real error, not a silent no-op.
-function stripeConfigured(env) {
+// Exported for worker/lib/stripe.js (#2541) -- its own card-setup/confirm
+// handlers need this same guarded-secret check.
+export function stripeConfigured(env) {
   return !!env.STRIPE_SECRET_KEY;
 }
 
@@ -7379,7 +6884,9 @@ function flattenStripeParams(value, prefix) {
 // THAT account's own balance, not the platform's. Every existing caller
 // (checkout, refunds, onboarding) omits it and keeps acting as the
 // platform itself, exactly as before.
-async function stripeRequest(env, method, path, params, idempotencyKey, stripeAccountId) {
+// Exported for worker/lib/stripe.js (#2541) -- its own card-setup/confirm
+// handlers need this same Stripe REST client.
+export async function stripeRequest(env, method, path, params, idempotencyKey, stripeAccountId) {
   const headers = {
     authorization: `Basic ${btoa(`${env.STRIPE_SECRET_KEY}:`)}`,
     'content-type': 'application/x-www-form-urlencoded',
@@ -7405,165 +6912,18 @@ async function stripeRequest(env, method, path, params, idempotencyKey, stripeAc
 // Stripe's own account.requirements is the source of truth for what's
 // still needed — this just collapses it into one of a few states the
 // frontend can show without re-deriving Stripe's own logic.
-function deriveStripeOnboardingStatus(account) {
+// Exported for worker/lib/stripe.js (#2541) -- its own webhook handler
+// needs this same account.updated status mapping.
+export function deriveStripeOnboardingStatus(account) {
   if (account.requirements?.disabled_reason) return 'action_needed';
   if ((account.requirements?.currently_due || []).length > 0) return 'requirements_due';
   if (account.charges_enabled && account.payouts_enabled) return 'complete';
   return 'pending';
 }
 
-// #766: stripe_onboarding_status/stripe_requirements_due are only ever
-// written by a seller/builder actively resubmitting the onboarding form
-// (handleSellerStripeAccount/handleBuilderStripeAccount above) — nothing
-// ever re-checks Stripe on its own, so a previously-complete account that
-// Stripe later disables (re-KYC, a compliance hold, fraud review) reads as
-// "fully set up" here indefinitely, including at the real-money
-// checkout-eligibility gate (handleInstancePurchase). This mirrors the
-// Didit webhook above: Stripe signs each delivery as
-// `Stripe-Signature: t=<timestamp>,v1=<hex-hmac>`
-// (https://docs.stripe.com/webhooks#verify-manually), the HMAC-SHA256 is
-// computed over `${timestamp}.${rawBody}` keyed by a webhook-specific
-// secret, and verified via the same constant-time timingSafeEqual, never a
-// plain ===. `account.updated` is handled by looking up the account id
-// against both sellers and builders (a Custom account belongs to exactly
-// one, never both) since the event alone doesn't say which role created
-// it; #1086 added the three purchase-reversal event types below.
-// #872: Stripe's own webhook-verification guidance requires rejecting a
-// signature whose timestamp is more than a few minutes old, in addition to
-// the HMAC check itself -- otherwise a captured, still-cryptographically-
-// valid payload (a proxy log, an exposed devtools session, a compromised
-// intermediary) could be replayed against this endpoint indefinitely.
-const STRIPE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 5 * 60;
-
-// #1086: a charge can be reversed by Stripe's own initiative -- a bank
-// chargeback (charge.dispute.created withholds the disputed amount from
-// the connected account's balance immediately, not just once resolved;
-// charge.dispute.closed follows once the dispute's outcome is final) or a
-// dashboard-initiated refund (charge.refunded) -- entirely outside this
-// app's own POST /purchases/:id/refund. Each of these three event types'
-// own object (a Charge or a Dispute) carries a top-level `payment_intent`
-// field, the same join key handlePurchaseReversalWebhookEvent below looks
-// purchases up by.
-const STRIPE_PURCHASE_REVERSAL_EVENT_TYPES = ['charge.refunded', 'charge.dispute.created', 'charge.dispute.closed'];
-
-async function handleStripeWebhook(request, env, db) {
-  if (!env.STRIPE_WEBHOOK_SECRET) throw new HttpError('Stripe webhook is not configured on this server yet.', 503);
-  const rawBody = await request.text();
-  const signatureHeader = request.headers.get('stripe-signature') || '';
-  const signatureEntries = signatureHeader.split(',').map((part) => part.split('=').map((piece) => piece.trim()));
-  const timestamp = signatureEntries.find(([entryKey]) => entryKey === 't')?.[1];
-  // #2418: during a secret rotation Stripe keeps the old secret active for
-  // up to 24h and signs each event with BOTH secrets, sending every
-  // resulting v1 signature in the same header (Stripe's own "Verify
-  // manually" docs) -- collapsing to a single v1 value (this used to go
-  // through Object.fromEntries, which keeps only the last of any repeated
-  // key) silently discarded whichever signature wasn't the header's last
-  // v1 entry, rejecting a real event whenever that happened to be the one
-  // actually matching this server's current secret.
-  const v1Signatures = signatureEntries.filter(([entryKey]) => entryKey === 'v1').map(([, value]) => value);
-  if (!timestamp || v1Signatures.length === 0) throw new HttpError('Invalid webhook signature', 401);
-  const key = await crypto.subtle.importKey(
-    'raw', new TextEncoder().encode(env.STRIPE_WEBHOOK_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
-  );
-  const signedPayload = `${timestamp}.${rawBody}`;
-  const expectedSignature = bytesToHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signedPayload))));
-  if (!v1Signatures.some((signature) => timingSafeEqual(signature, expectedSignature))) {
-    throw new HttpError('Invalid webhook signature', 401);
-  }
-  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > STRIPE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS) {
-    throw new HttpError('Invalid webhook signature', 401);
-  }
-  let event;
-  try {
-    event = JSON.parse(rawBody);
-  } catch {
-    throw new HttpError('Webhook body is not valid JSON', 400);
-  }
-  if (event.type === 'account.updated') {
-    const account = event.data?.object;
-    if (!account?.id) return json({ received: true });
-    const status = deriveStripeOnboardingStatus(account);
-    const requirementsDue = account.requirements?.currently_due || [];
-    const nowIso = new Date().toISOString();
-    await db.batch([
-      db.prepare(`
-        UPDATE sellers SET stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
-        WHERE stripe_account_id = ?
-      `).bind(status, JSON.stringify(requirementsDue), nowIso, nowIso, account.id),
-      db.prepare(`
-        UPDATE builders SET stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
-        WHERE stripe_account_id = ?
-      `).bind(status, JSON.stringify(requirementsDue), nowIso, nowIso, account.id),
-    ]);
-    return json({ received: true });
-  }
-  if (STRIPE_PURCHASE_REVERSAL_EVENT_TYPES.includes(event.type)) {
-    await handlePurchaseReversalWebhookEvent(db, event);
-  }
-  return json({ received: true });
-}
-
-// Owner (Control Room, 2026-10-01, on #1086): claw back the full
-// builder_share_cents the same way an ordinary refund already does,
-// balance allowed to go negative -- same precedent as the 2026-09-10
-// decision on #651 that handlePurchaseRefund's own comments reference.
-// Whichever of a purchase's possibly-several reversal events (a dispute
-// created then later closed, or a retried webhook delivery) lands first
-// wins the clawback via the same refunded_at-guarded update
-// handlePurchaseRefund itself uses below; every later one for the same
-// purchase affects 0 rows and is a deliberate no-op, not an error. Unlike
-// handlePurchaseRefund, this never checks paid_out_at: that guard exists
-// there to let the endpoint *refuse* a refund it would otherwise have to
-// initiate itself, but a webhook is reporting money Stripe has already
-// moved on its own -- there's nothing left here to refuse by rejecting
-// this write, only a payout-bookkeeping mismatch to leave for manual
-// reconciliation separately (same "leave the policy call to a human"
-// shape as writeOrphanedPurchaseRow's own comment elsewhere in this file).
-// Known residual gap, accepted rather than solved here (owner, same
-// thread): a chargeback can't be capped at REFUND_PAYOUT_RATE the way a
-// self-service refund is -- the card network controls the reversed
-// amount, not us -- so the fraud triangle #651 closed for ordinary
-// refunds is still open for a real chargeback; tracked separately at
-// #1109, not a blocker for this fix.
-async function handlePurchaseReversalWebhookEvent(db, event) {
-  // #2231: charge.dispute.closed fires on every final dispute outcome, not
-  // just a loss -- its own object's `status` is 'won', 'lost', or
-  // 'warning_closed'. 'won' means the card network ruled for the merchant
-  // and returned the withheld funds -- nothing was actually reversed, so
-  // there's nothing to claw back. This only covers the case where no
-  // earlier dispute.created event already clawed back this purchase (the
-  // refunded_at guard below already no-ops that case, same as before --
-  // reversing an already-applied clawback is a separate, non-mechanical
-  // follow-up, not decided here).
-  if (event.type === 'charge.dispute.closed' && event.data?.object?.status === 'won') return;
-
-  const paymentIntentId = event.data?.object?.payment_intent;
-  if (!paymentIntentId) return;
-  // #2232: charge.refunded fires for ANY refund on a charge, partial or
-  // full -- the Charge object's own `refunded` boolean is the only
-  // authoritative signal for "fully refunded" (it's true only once
-  // amount_refunded reaches the full charge amount). Without this check, a
-  // $1 goodwill partial refund on a $100 purchase clawed back the builder's
-  // entire commission and revoked all ownership that purchase granted, the
-  // same way a genuine full refund does -- even though the buyer kept 99%
-  // of their payment and the product. Dispute events (charge.dispute.*)
-  // carry no `refunded` field at all, so this only applies to
-  // charge.refunded itself; a real chargeback/dispute still claws back in
-  // full immediately, per #1086's own deliberate design.
-  if (event.type === 'charge.refunded' && event.data?.object?.refunded !== true) return;
-  const purchase = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
-  if (!purchase) return;
-
-  const guard = await db.prepare(
-    `UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-     WHERE purchase_id = ? AND refunded_at IS NULL`,
-  ).bind(purchase.purchase_id).run();
-  if (guard.meta.changes === 0) return;
-
-  const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
-    .bind(purchase.template_id).first();
-  await clawBackPurchaseCommission(db, purchase, template?.name || 'A product');
-}
+// #2541: handleStripeWebhook/handlePurchaseReversalWebhookEvent moved to
+// worker/lib/stripe.js, alongside handleCardSetupIntent/handleConfirmCard
+// below -- see that module's own header comment.
 
 // ---- W-9/W-8BEN tax-ID collection (#614, sub-issue of #350) — the
 // submitted form's sensitive identifying data (SSN/EIN, foreign tax ID,
@@ -7693,1168 +7053,7 @@ async function handleTaxIdForm(request, env, db, user) {
   return json({ taxFormType: form.formType, taxFormCompletedAt: completedAt });
 }
 
-// ---- Government-ID verification via Didit (#589, sub-issue of #556,
-// docs/SPEC.md §6) — the higher trust tier that gates full social
-// features, above the credit-card tier card-setup-intent/confirm-card
-// establish. Same guarded-secret shape as STRIPE_SECRET_KEY/
-// OPENAI_API_KEY above: with env.DIDIT_API_KEY unset (never configured in
-// local dev or the automated test suite), diditConfigured(env) is false
-// and the route handlers below return a real 503 rather than attempting a
-// live network call.
-function diditConfigured(env) {
-  return !!env.DIDIT_API_KEY;
-}
-
-// Didit's Verification Session API (https://docs.didit.me/) — a plain
-// bearer-style API-key header and a JSON body, simpler than Stripe's
-// Basic-auth-with-empty-password + form-encoded shape above.
-async function diditRequest(env, method, path, body) {
-  const response = await fetch(`https://verification.didit.me/${path}`, {
-    method,
-    headers: { 'x-api-key': env.DIDIT_API_KEY, 'content-type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
-  // upstream gateway error page makes response.json() itself throw before
-  // the !response.ok check below ever runs, otherwise surfacing as an
-  // uncaught 500 instead of this function's own intended 502/400.
-  const data = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new HttpError(data?.message || 'Didit request failed', response.status >= 500 ? 502 : 400);
-  }
-  return data;
-}
-
-// A real (if small — $0.33/verification beyond Didit's 500/month free
-// tier, per #589's own research) per-call cost, same reasoning as
-// CONCEPT_IMAGE_RATE_LIMIT_MAX above — bucketed per-user since this is a
-// session-gated action, not a public/anonymous endpoint an IP-based
-// bucket would need to cover.
-const DIDIT_SESSION_RATE_LIMIT_MAX = 10;
-// #1037: handleDiditVerificationStatus below forwards straight through to a
-// live outbound Didit API call whenever the caller's latest session is
-// still pending, with no local throttle before this fix -- the same
-// "unrate-limited third-party call" gap #839 fixed for purchase finalize.
-// Sized around the legitimate client cadence (pollDiditVerificationStatus,
-// src/main.js: every 3s for up to 5 minutes, ~100 calls per verification
-// attempt), with headroom for a retry or two inside the same 15-minute
-// RATE_LIMIT_WINDOW_MS rather than the tighter ~20 this file's ordinary
-// one-shot mutations use.
-const DIDIT_STATUS_RATE_LIMIT_MAX = 120;
-
-// If the Worker is interrupted between Didit's session-create call
-// succeeding and the UPDATE that records its real session_id below (an
-// isolate eviction, a network drop mid-await -- anything short of a thrown
-// JS exception, which the try/catch around that sequence already handles),
-// the reservation is left behind forever with only its local placeholder
-// id ('pending-<uuid>') and processed_at still NULL. Every later attempt
-// then reconciles against Didit using that fake id (reconcileDiditSession
-// below), which Didit will never recognize, and
-// idx_didit_verification_sessions_one_pending_per_user blocks a fresh
-// reservation from ever being created for this user again -- a permanent
-// lockout with no self-healing path. Comfortably above how long a Didit
-// session-create call should ever take, matching the reasoning
-// MODEL_UPLOAD_RESERVATION_TIMEOUT_MS already uses for the identical
-// "claimed, then abandoned mid-flight" shape on model uploads.
-const DIDIT_RESERVATION_TIMEOUT_MS = 5 * 60 * 1000;
-
-// Shared by handleDiditVerificationSession (dedup an already-pending
-// session rather than starting a real-cost new one) and
-// handleDiditVerificationStatus (poll the current one) — both need the
-// same "most recent session row for this user" lookup.
-export async function latestDiditSession(db, userId) {
-  return db.prepare(`
-    SELECT * FROM didit_verification_sessions WHERE user_id = ? ORDER BY created_at DESC LIMIT 1
-  `).bind(userId).first();
-}
-
-// #2485: reserveDiditSession's own race-loser `existing` row (read in a
-// separate, later query than the INSERT's own NOT EXISTS check that lost)
-// isn't automatically still the same still-in-flight session that check
-// saw -- it can be gone entirely (deleted in between), already resolved
-// (processed_at set by a concurrent webhook/poll), or still just a local
-// 'pending-<uuid>' placeholder with no real url to hand back yet. Exported
-// (same reasoning as latestDiditSession/reserveDiditSession just above --
-// DIDIT_API_KEY is deliberately never configured for a real HTTP request
-// in the test files exercising handleDiditVerificationSession) so this
-// guard's own logic can be tested directly without a live network call.
-export function diditReservationStillUsable(existing) {
-  return !!existing && existing.processed_at === null && !existing.session_id.startsWith('pending-');
-}
-
-// Starts a fresh Didit-hosted verification session for the requesting
-// builder and records it so the webhook/status-poll below have a row to
-// resolve against.
-async function handleDiditVerificationSession(request, env, db) {
-  const user = await requireCurrentUser(request, db);
-  if (user.trust_tier === 'id_verified') {
-    throw new HttpError('This account is already ID-verified.', 400);
-  }
-  if (!diditConfigured(env)) {
-    throw new HttpError('Government-ID verification is not configured on this server yet.', 503);
-  }
-  // #607: idx_didit_verification_sessions_user_id's own migration comment
-  // says this table is "looked up by user_id when starting a new session
-  // (to reuse/report an already-pending one)" — that lookup never
-  // actually happened, so a re-click of "Verify ID" (or two open tabs)
-  // started a brand new, real-cost Didit session every time instead of
-  // handing back the one still in flight.
-  const latest = await latestDiditSession(db, user.user_id);
-  // A still-local placeholder (session_id still 'pending-<uuid>') was never
-  // actually told to Didit -- reusing it here would hand the client a
-  // sessionId with no real url to open (reconcileDiditSession now reports
-  // it as 'pending' rather than throwing, see its own comment, but that
-  // status alone isn't something this caller can act on the way it can for
-  // a real session). Falling through to reserveDiditSession below is what
-  // actually resolves this: either it's still genuinely in-flight (a
-  // concurrent request already holds it, same race #1039 already handles)
-  // or it's aged out and reserveDiditSession's own cleanup clears the way
-  // for a real fresh reservation.
-  if (latest && latest.processed_at === null && !latest.session_id.startsWith('pending-')) {
-    // #1038: a merely locally-pending session can already be dead on
-    // Didit's side -- expired, abandoned, or (rarer) actually approved --
-    // if the webhook never landed and the builder never returned to
-    // trigger a status poll. Reconcile it the same way
-    // handleDiditVerificationStatus already does before trusting it,
-    // rather than handing back a session URL that's aged out, or starting
-    // a redundant new session below for an account that just turned out
-    // to already be verified. Same rate-limit bucket as that endpoint's
-    // own reconciliation call, since this hits the identical Didit
-    // decision endpoint -- not the real-cost session-create call below.
-    await checkRateLimit(db, `didit-status:${user.user_id}`, DIDIT_STATUS_RATE_LIMIT_MAX);
-    const status = await reconcileDiditSession(env, db, latest, user.user_id);
-    if (status === 'pending') {
-      return json({ sessionId: latest.session_id, url: latest.url });
-    }
-    if (status === 'approved') {
-      throw new HttpError('This account is already ID-verified.', 400);
-    }
-    // status === 'declined' -- this session is dead, fall through and
-    // start a fresh one below.
-  }
-  await checkRateLimit(db, `didit-session:${user.user_id}`, DIDIT_SESSION_RATE_LIMIT_MAX);
-  // #1039: reserved atomically before ever calling Didit's real, billed
-  // session-create API -- without this, two concurrent requests (a
-  // double-click, or two open tabs) that both observed no pending session
-  // just above would both reach the outbound call and both get billed.
-  // Same "claim first, only the winner calls out" idiom
-  // claimOrResumeBuilderRedemption (#852) already uses for Stripe.
-  const { reservationId, existing } = await reserveDiditSession(db, user.user_id);
-  if (!reservationId) {
-    // Lost the race -- a concurrent request already reserved this user's
-    // pending session; hand back that one instead of ever calling Didit.
-    // #2485: `existing` is a separate, later query than the INSERT's own
-    // NOT EXISTS check above, so by the time it runs the row it's reading
-    // may no longer be the still-in-flight one that check saw -- it can be
-    // gone entirely (deleted in between), already resolved (processed_at
-    // set by a concurrent webhook/poll), or still just this function's own
-    // local 'pending-<uuid>' placeholder with no real url yet to hand
-    // back. None of those are safe to report as "here's your in-flight
-    // session" -- a clean 409 tells the client to retry, and the `latest`
-    // check at the top of this handler resolves correctly next time
-    // regardless of which of those states it turns out to be.
-    if (!diditReservationStillUsable(existing)) {
-      throw new HttpError('A verification session is already starting -- please try again in a moment', 409);
-    }
-    return json({ sessionId: existing.session_id, url: existing.url });
-  }
-  // #1886/#2313 (porting the same durable-logging fix from the identical
-  // reservation shape on the Tripo side, handleVideoGenerationJobCreate):
-  // set only once the billed diditRequest call has actually returned a
-  // real session_id -- lets the catch below tell "the outbound call itself
-  // failed" (never billed, or at least no session_id in hand) apart from
-  // "the billed call succeeded but persisting its result failed," which
-  // needs a durable record rather than a silent delete.
-  let billedSessionId = null;
-  try {
-    const session = await diditRequest(env, 'POST', 'v3/session/', {
-      vendor_data: user.user_id,
-      callback: `${appBaseUrl(env)}/?diditReturn=1`,
-    });
-    // #1563: same response-shape validation generateConceptImageBytes/
-    // fetchTax1099EfilingToken (#1548) already do for their own third-party
-    // JSON -- without it, an unexpected 2xx body binds undefined into
-    // session_id's TEXT PRIMARY KEY below, which D1 throws on synchronously,
-    // surfacing as a generic 500 instead of this clean 502.
-    if (!session?.session_id || !session?.url) {
-      throw new HttpError('Didit session creation failed — please try again', 502);
-    }
-    billedSessionId = session.session_id;
-    // The reservation's own session_id was only ever a local placeholder --
-    // nothing external has referenced it, so overwriting it with Didit's
-    // real one (along with the url a reused session needs, #607) is safe.
-    await db.prepare(`
-      UPDATE didit_verification_sessions SET session_id = ?, url = ? WHERE session_id = ?
-    `).bind(session.session_id, session.url, reservationId).run();
-    return json({ sessionId: session.session_id, url: session.url });
-  } catch (err) {
-    // #1886/#2313: if billedSessionId is set, the outbound call didn't
-    // fail -- only persisting its result did (a transient D1 write error;
-    // a hard kill between the two never reaches this catch at all, see
-    // reserveDiditSession's own stale-sweep logging above for that case
-    // instead). Deleting the reservation below either way (so this user
-    // isn't permanently blocked) would otherwise discard the only local
-    // record that a real, billed session is now untracked -- log it
-    // durably first.
-    if (billedSessionId) {
-      await adminActionLogStatement(db, null, 'didit_session_id_lost', 'user', user.user_id, {
-        providerSessionId: billedSessionId,
-        error: err instanceof Error ? err.message : String(err),
-      }).run();
-    }
-    // The outbound call itself failed (or Didit isn't configured) --
-    // release the reservation so it doesn't permanently block this user
-    // from ever starting verification again.
-    await db.prepare('DELETE FROM didit_verification_sessions WHERE session_id = ?').bind(reservationId).run();
-    throw err;
-  }
-}
-
-// Exported for direct testing, the same reasoning latestDiditSession's own
-// callers already rely on -- DIDIT_API_KEY is never configured in any test
-// file (deliberately, per worker/didit-verification.test.js's own top
-// comment), so handleDiditVerificationSession itself always 503s before
-// ever reaching this far through a real HTTP request.
-export async function reserveDiditSession(db, userId) {
-  // DIDIT_RESERVATION_TIMEOUT_MS's own comment above: a placeholder left
-  // behind by a crash between Didit's session-create call succeeding and
-  // the local UPDATE that records its real id never resolves on its own --
-  // nothing ever calls Didit with the right id again to find out it's
-  // done. Clearing out this user's own stale placeholder first (scoped to
-  // them, not a global sweep -- unlike model uploads' shared R2 budget,
-  // one user's stuck row costs nothing but that same user's own ability to
-  // retry) lets the NOT EXISTS guard below admit a genuinely fresh
-  // reservation instead of blocking on a reservation nothing will ever
-  // resolve.
-  //
-  // #1886/#2313 (porting the same durable-logging fix from the identical
-  // reservation shape on the Tripo side, reserveVideoGenerationJob): a row
-  // swept here might be exactly the residual gap DIDIT_RESERVATION_TIMEOUT_MS's
-  // own comment documents -- a real, billed Didit call whose result never
-  // got persisted. Log every sweep that actually removes a row, durably,
-  // rather than only ever being reconstructable by reading code.
-  const staleCleanup = await db.prepare(`
-    DELETE FROM didit_verification_sessions
-    WHERE user_id = ? AND processed_at IS NULL AND session_id LIKE 'pending-%' AND created_at < ?
-  `).bind(userId, new Date(Date.now() - DIDIT_RESERVATION_TIMEOUT_MS).toISOString()).run();
-  if (staleCleanup.meta.changes > 0) {
-    await adminActionLogStatement(db, null, 'didit_stale_reservation_swept', 'user', userId, {
-      rowsDeleted: staleCleanup.meta.changes,
-      reservationTimeoutMs: DIDIT_RESERVATION_TIMEOUT_MS,
-    }).run();
-  }
-  const reservationId = `pending-${crypto.randomUUID()}`;
-  const result = await db.prepare(`
-    INSERT INTO didit_verification_sessions (session_id, user_id, status)
-    SELECT ?, ?, 'pending'
-    WHERE NOT EXISTS (
-      SELECT 1 FROM didit_verification_sessions WHERE user_id = ? AND processed_at IS NULL
-    )
-  `).bind(reservationId, userId, userId).run();
-  if (result.meta.changes === 0) {
-    return { reservationId: null, existing: await latestDiditSession(db, userId) };
-  }
-  return { reservationId, existing: null };
-}
-
-// Didit's own decision statuses (https://docs.didit.me/): 'Approved' is
-// the only one that raises trust_tier; every other terminal status
-// ('Declined', 'Abandoned', 'Expired', 'Kyc Expired') is recorded as
-// declined so a stuck 'pending' row doesn't linger forever — a builder can
-// always just start a fresh session afterward. 'In Review'/'In Progress'
-// leave the row pending (absent from this map, handled by callers as
-// "nothing to resolve yet").
-const DIDIT_TERMINAL_STATUSES = { Approved: true, Declined: false, Abandoned: false, Expired: false, 'Kyc Expired': false };
-
-// Shared by the webhook and the status-poll fallback below, so "a builder
-// finishes verification but the webhook is slow or never arrives" doesn't
-// leave them stuck. The atomic `processed_at IS NULL` guard is the same
-// idiom this file already uses for purchases.paid_out_at — whichever of
-// the webhook or a poll gets there first applies the change; the other is
-// a safe no-op, so this can't double-apply from a race or a repeat
-// webhook delivery.
-// #2484: the session claim and the trust_tier raise used to be two
-// sequential awaited .run() calls -- an interruption between them (a
-// transient D1 error, or the isolate hitting a CPU/time limit) could leave
-// processed_at already set with trust_tier never raised, and since every
-// retry's own claim above short-circuits on processed_at IS NOT NULL, that
-// stranded state had no retry path at all. Batched into one D1 transaction
-// (same shape as #2174) so the two writes can no longer split. The users
-// UPDATE's own EXISTS guard reads the session row *as this same batch just
-// left it* (D1 batch statements run sequentially within one transaction),
-// so it only fires when this call's own claim actually landed (or had
-// already landed from an earlier, fully-completed call -- a replayed
-// webhook re-applying the same value is a safe no-op either way); it's
-// only ever included in the batch when `approved` is true in the first
-// place, so a decline never reaches it.
-async function applyDiditDecision(db, sessionId, userId, approved) {
-  const statements = [
-    db.prepare(`
-      UPDATE didit_verification_sessions SET status = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE session_id = ? AND processed_at IS NULL
-    `).bind(approved ? 'approved' : 'declined', sessionId),
-  ];
-  if (approved) {
-    statements.push(db.prepare(`
-      UPDATE users SET trust_tier = 'id_verified', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ? AND EXISTS (
-        SELECT 1 FROM didit_verification_sessions WHERE session_id = ? AND status = 'approved' AND processed_at IS NOT NULL
-      )
-    `).bind(userId, sessionId));
-  }
-  await db.batch(statements);
-}
-
-// Shared by handleDiditVerificationStatus (poll the current session) and
-// handleDiditVerificationSession (#1038: reconcile a reused pending session
-// before trusting it) -- both need to check a still-locally-pending session
-// against Didit's own decision endpoint and apply any terminal outcome the
-// same way the webhook does. Returns the resulting status
-// ('approved'/'declined'/'pending'), or the session's own already-local
-// status unchanged if Didit isn't configured to check.
-export async function reconcileDiditSession(env, db, latest, userId) {
-  // DIDIT_RESERVATION_TIMEOUT_MS's own comment: a session_id that's still
-  // its own local placeholder was never actually told to Didit, so asking
-  // Didit about it can only ever fail (it recognizes no such session) --
-  // every caller reaching this function from a still-pending `latest` row
-  // was treating that failure as an uncaught exception before this guard.
-  // Reported as 'pending' (its own real, current status) rather than
-  // throwing; reserveDiditSession's own stale-placeholder cleanup is what
-  // actually unblocks a genuinely abandoned one, not this function.
-  if (latest.session_id.startsWith('pending-')) return 'pending';
-  if (!diditConfigured(env)) return latest.status;
-  const decision = await diditRequest(env, 'GET', `v3/session/${encodeURIComponent(latest.session_id)}/decision/`);
-  const overallStatus = decision.status;
-  if (!Object.prototype.hasOwnProperty.call(DIDIT_TERMINAL_STATUSES, overallStatus)) {
-    return 'pending';
-  }
-  const approved = DIDIT_TERMINAL_STATUSES[overallStatus];
-  await applyDiditDecision(db, latest.session_id, userId, approved);
-  return approved ? 'approved' : 'declined';
-}
-
-// Polling fallback for the frontend after a builder returns from Didit's
-// hosted verification UI: reconciles directly against Didit's own session
-// endpoint whenever a builder's latest session is still locally pending,
-// rather than requiring the webhook to have already landed.
-async function handleDiditVerificationStatus(request, env, db) {
-  const user = await requireCurrentUser(request, db);
-  if (user.trust_tier === 'id_verified') return json({ status: 'approved' });
-  const latest = await latestDiditSession(db, user.user_id);
-  if (!latest) return json({ status: 'none' });
-  if (latest.processed_at !== null) {
-    return json({ status: latest.status });
-  }
-  // #1037: rate-limited before the diditConfigured check inside
-  // reconcileDiditSession (not after), same ordering #839 already
-  // established for handlePurchaseFinalize's own "unrate-limited
-  // third-party call" fix — this way the guard still applies to every
-  // still-pending poll regardless of whether Didit happens to be
-  // configured, rather than only in production. Nothing to rate-limit yet
-  // if processed_at is already set above: no outbound call would ever
-  // happen for a session that's no longer pending.
-  await checkRateLimit(db, `didit-status:${user.user_id}`, DIDIT_STATUS_RATE_LIMIT_MAX);
-  const status = await reconcileDiditSession(env, db, latest, user.user_id);
-  return json({ status });
-}
-
-// Didit signs its webhook deliveries with an HMAC-SHA256 of the raw body,
-// keyed by a webhook-specific secret configured in the Didit dashboard —
-// verified here via a constant-time hex comparison (timingSafeEqual,
-// already used elsewhere in this file for password/token checks), never a
-// plain ===, so response timing can't leak how close a forged signature
-// got. Reads the raw body text (not readJson) because the signature is
-// computed over the exact bytes Didit sent, not this codebase's own
-// re-serialization of a parsed object.
-async function handleDiditWebhook(request, env, db) {
-  if (!env.DIDIT_WEBHOOK_SECRET) throw new HttpError('Didit webhook is not configured on this server yet.', 503);
-  const rawBody = await request.text();
-  const signatureHeader = request.headers.get('x-signature') || '';
-  const key = await crypto.subtle.importKey(
-    'raw', new TextEncoder().encode(env.DIDIT_WEBHOOK_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
-  );
-  const expectedSignature = bytesToHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(rawBody))));
-  if (!timingSafeEqual(signatureHeader, expectedSignature)) {
-    throw new HttpError('Invalid webhook signature', 401);
-  }
-  let payload;
-  try {
-    payload = JSON.parse(rawBody);
-  } catch {
-    throw new HttpError('Webhook body is not valid JSON', 400);
-  }
-  const sessionId = payload.session_id;
-  const overallStatus = payload.status;
-  if (!sessionId || !Object.prototype.hasOwnProperty.call(DIDIT_TERMINAL_STATUSES, overallStatus)) {
-    return json({ received: true });
-  }
-  const session = await db.prepare('SELECT * FROM didit_verification_sessions WHERE session_id = ?').bind(sessionId).first();
-  if (!session) return json({ received: true });
-  await applyDiditDecision(db, sessionId, session.user_id, DIDIT_TERMINAL_STATUSES[overallStatus]);
-  return json({ received: true });
-}
-
-// ---- Video-to-3D generation via Tripo3D (#1619, sub-issue of #1616,
-// docs/SPEC.md) ----
-//
-// Same never-configured-in-tests convention as STRIPE_SECRET_KEY/
-// DIDIT_API_KEY/OPENAI_API_KEY above: with env.TRIPO_API_KEY unset,
-// tripoConfigured(env) is false and the route handlers below return a
-// real 503 rather than attempting a live network call.
-function tripoConfigured(env) {
-  return !!env.TRIPO_API_KEY;
-}
-
-// Tripo's V3 API (https://developers.tripo3d.com/) — plain
-// bearer-token auth and a JSON body for task-creation/status calls.
-// File upload (tripoUploadFile below) is the one call that needs a
-// multipart body instead, so it doesn't go through this helper.
-async function tripoRequest(env, method, path, body) {
-  const response = await fetch(`https://openapi.tripo3d.com/v3/${path}`, {
-    method,
-    headers: { authorization: `Bearer ${env.TRIPO_API_KEY}`, 'content-type': 'application/json' },
-    body: body ? JSON.stringify(body) : undefined,
-  });
-  const data = await response.json().catch(() => null);
-  if (!response.ok || data?.code !== 0) {
-    throw new HttpError(data?.message || 'Tripo request failed', response.status >= 500 ? 502 : 400);
-  }
-  return data.data;
-}
-
-// POST /files — uploads one view image and returns the file_token
-// multiview-to-model's own `inputs` field below takes in place of a
-// public URL. Separate from tripoRequest since this is the one Tripo
-// call that's multipart, not JSON.
-async function tripoUploadFile(env, bytes, filename, contentType) {
-  const form = new FormData();
-  form.append('file', new Blob([bytes], { type: contentType }), filename);
-  const response = await fetch('https://openapi.tripo3d.com/v3/files', {
-    method: 'POST',
-    headers: { authorization: `Bearer ${env.TRIPO_API_KEY}` },
-    body: form,
-  });
-  const data = await response.json().catch(() => null);
-  // Same response-shape validation generateConceptImageBytes/
-  // fetchTax1099EfilingToken (#1548/#1563) already do for their own
-  // third-party JSON -- without it, an unexpected 2xx body would carry
-  // an undefined file_token all the way into the multiview-to-model
-  // call below instead of failing here with a clean error.
-  if (!response.ok || data?.code !== 0 || !data?.data?.file_token) {
-    throw new HttpError('Video-to-3D image upload failed — please try again', response.status >= 500 ? 502 : 400);
-  }
-  return data.data.file_token;
-}
-
-// Pinned to a specific Tripo model version (rather than always "latest")
-// so a provider-side default change can't silently alter output quality/
-// cost out from under this integration. v3.0-20250812 is docs' own
-// "stable" tier as of #1617's research; the "latest" v3.1 tier is newer
-// and less proven.
-const TRIPO_MODEL_VERSION = 'v3.0-20250812';
-
-// A real (non-trivial) per-call cost -- ~$0.20-0.30/generation per #1617's
-// own research -- same reasoning as DIDIT_SESSION_RATE_LIMIT_MAX above,
-// bucketed per-builder since this is a session-gated seller action.
-const VIDEO_GENERATION_RATE_LIMIT_MAX = 10;
-
-// #1993 (sub-issue of #1976): the honest-budget message the owner asked
-// for directly, shown whenever a builder has no video_generation_credits
-// left (migrations/0127) -- not a bare cap, an explanation plus a real
-// free alternative that doesn't need a credit at all.
-const VIDEO_GENERATION_NO_CREDITS_MESSAGE = 'No free model-generation credits available right now — this platform is '
-  + 'bootstrapped from very little budget, so generations are rationed. Collect a credit orb in the world, or '
-  + 'generate a model for free elsewhere (e.g. Sketchfab) and upload it here directly — no credit needed for that.';
-// handleVideoGenerationJobStatus below reconciles against a live Tripo
-// status call whenever a job is still pending -- same cadence reasoning
-// as DIDIT_STATUS_RATE_LIMIT_MAX, generous enough to cover the frontend's
-// own poll loop across one generation attempt (which can take up to ~2
-// minutes per #1617) without ever starving a legitimate caller.
-const VIDEO_GENERATION_STATUS_RATE_LIMIT_MAX = 120;
-const VIDEO_GENERATION_VIEWS = ['front', 'left', 'back', 'right'];
-const VIDEO_GENERATION_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/webp'];
-// Headroom under Tripo's own 20MB-per-image cap -- a single extracted
-// video frame has no business approaching that.
-const MAX_VIDEO_GENERATION_FRAME_BYTES = 10 * 1024 * 1024;
-// #1782: same reasoning as DIDIT_RESERVATION_TIMEOUT_MS above -- a
-// reservation left behind by a crash between reserveVideoGenerationJob's
-// own INSERT and handleVideoGenerationJobCreate either flipping it to
-// 'processing' or its catch block deleting it outright never resolves on
-// its own if that crash didn't run the catch (a CPU-limit kill, isolate
-// eviction -- not a thrown JS exception). A legitimate pending->processing
-// transition happens within the same request, well under a minute even
-// with the frame uploads ahead of it, so this stays well clear of that
-// while still being far shorter than DIDIT_RESERVATION_TIMEOUT_MS.
-// #1899/#1886: earlier wording here claimed "no real Didit/Tripo cost is
-// ever in flight during this specific window (the row is still 'pending',
-// not yet billed)" -- false. handleVideoGenerationJobCreate's own billed
-// tripoUploadFile/tripoRequest calls happen *while* the row is still
-// 'pending'; it only flips to 'processing' after Tripo has already been
-// called and billed. A crash landing in that exact sub-window (the row
-// genuinely is 'pending' with a real Tripo task already in flight) still
-// gets swept by this timeout like any other stale 'pending' row -- a real,
-// known residual gap, tracked separately at #1886 (which needs a durable
-// task_id-persistence design, not a one-line fix) rather than solved here.
-const VIDEO_GENERATION_RESERVATION_TIMEOUT_MS = 2 * 60 * 1000;
-
-// Shared by handleVideoGenerationJobCreate (dedup an already-in-flight
-// job) and handleVideoGenerationJobStatus (poll the current one) -- both
-// need the same "most recent job row for this builder" lookup.
-async function latestVideoGenerationJob(db, builderId) {
-  return db.prepare(`
-    SELECT * FROM video_generation_jobs WHERE builder_id = ? ORDER BY created_at DESC LIMIT 1
-  `).bind(builderId).first();
-}
-
-// #2485: reserveVideoGenerationJob's own race-loser `existing` row (read in
-// a separate, later query than the INSERT's own NOT EXISTS check that
-// lost) isn't automatically still the same still-in-flight job that check
-// saw -- it can be gone entirely (deleted in between) or already resolved
-// (processed_at set by a concurrent completion) in the narrow window
-// between that failed INSERT and this re-read. Exported, same direct-
-// testing reasoning as reserveVideoGenerationJob just below, so this
-// guard's own logic can be exercised without forcing that exact race
-// window's own precise timing.
-export function videoGenerationReservationStillUsable(existing) {
-  return !!existing && existing.processed_at === null;
-}
-
-// Exported for direct testing, the same reasoning reserveDiditSession's
-// own callers rely on -- TRIPO_API_KEY is never configured in any test
-// file, so handleVideoGenerationJobCreate itself always 503s before ever
-// reaching this far through a real HTTP request. Reserved atomically
-// before ever calling Tripo's real, billed task-create API -- without
-// this, two concurrent requests (a double-click, two open tabs) that
-// both observed no in-flight job would both reach the outbound call and
-// both get billed. Same "claim first, only the winner calls out" idiom
-// reserveDiditSession (#1039) already uses.
-export async function reserveVideoGenerationJob(db, builderId) {
-  // #1782: same per-caller stale-placeholder cleanup as reserveDiditSession
-  // (#1039) runs first, for the identical reason -- clearing out this
-  // builder's own stuck 'pending' reservation (scoped to them, not a
-  // global sweep) lets the NOT EXISTS guard below admit a genuinely fresh
-  // reservation instead of blocking on one nothing will ever resolve.
-  //
-  // #1886 (piece 1 -- making the failure loud, not the still-open retry/
-  // cost policy): a row swept here might be the exact residual gap
-  // VIDEO_GENERATION_RESERVATION_TIMEOUT_MS's own comment documents -- a
-  // real, billed Tripo call whose result never got persisted because the
-  // worker was killed before handleVideoGenerationJobCreate's own UPDATE
-  // ever ran. There's no way to tell from this row alone whether that
-  // happened or whether it's just an abandoned, never-submitted
-  // reservation -- so log every sweep that actually removes a row,
-  // durably, rather than only ever being reconstructable by reading code.
-  const staleCleanup = await db.prepare(`
-    DELETE FROM video_generation_jobs
-    WHERE builder_id = ? AND status = 'pending' AND processed_at IS NULL AND created_at < ?
-  `).bind(builderId, new Date(Date.now() - VIDEO_GENERATION_RESERVATION_TIMEOUT_MS).toISOString()).run();
-  if (staleCleanup.meta.changes > 0) {
-    await adminActionLogStatement(db, null, 'video_generation_stale_reservation_swept', 'builder', builderId, {
-      rowsDeleted: staleCleanup.meta.changes,
-      reservationTimeoutMs: VIDEO_GENERATION_RESERVATION_TIMEOUT_MS,
-    }).run();
-  }
-  const jobId = `job-${crypto.randomUUID()}`;
-  const result = await db.prepare(`
-    INSERT INTO video_generation_jobs (job_id, builder_id, status)
-    SELECT ?, ?, 'pending'
-    WHERE NOT EXISTS (
-      SELECT 1 FROM video_generation_jobs WHERE builder_id = ? AND processed_at IS NULL
-    )
-  `).bind(jobId, builderId, builderId).run();
-  if (result.meta.changes === 0) {
-    return { reservationId: null, existing: await latestVideoGenerationJob(db, builderId) };
-  }
-  return { reservationId: jobId, existing: null };
-}
-
-// #2410: handleVideoGenerationJobCreate's own dedup pre-check (below,
-// before the real-cost rate limit) must not treat a stale 'pending' row --
-// the exact row reserveVideoGenerationJob's own sweep above exists to
-// recover -- as still in flight. Without this, that pre-check intercepts
-// every subsequent request for this builder forever, since it never routes
-// through reserveVideoGenerationJob (or its sweep) at all once it does.
-function isStaleVideoGenerationReservation(row) {
-  return row.status === 'pending'
-    && new Date(row.created_at).getTime() < Date.now() - VIDEO_GENERATION_RESERVATION_TIMEOUT_MS;
-}
-
-// Downloads Tripo's own (third-party, time-limited) output URL and
-// re-stores the bytes in the same MODELS R2 bucket/content-addressed
-// shape POST /api/models (handleModelUpload) already produces, so the
-// client-side model optimizer pipeline (the pipeline-wiring sub-issue)
-// gets an identical `/uploads/models/<hash>.glb` URL regardless of
-// whether a model came from a direct upload or a video-to-3D job.
-async function storeTripoModelOutput(env, tripoModelUrl) {
-  const response = await fetch(tripoModelUrl);
-  if (!response.ok) {
-    throw new HttpError('Failed to download the generated model from the video-to-3D provider', 502);
-  }
-  const bytes = await response.arrayBuffer();
-  // #1755: every other writer into MODELS enforces this same per-file cap
-  // before trusting the bytes any further (handleModelUpload checks
-  // file.size, modelSizeBytes validation bounds itself against the same
-  // constant) -- this path never did, so a generated model could land in
-  // R2 well over the limit the rest of the app assumes every model is
-  // under, with only the unrelated aggregate MAX_TOTAL_STORAGE_BYTES
-  // budget below ever checked.
-  if (bytes.byteLength > MAX_MODEL_BYTES) {
-    throw new HttpError(`Generated model is ${formatBytes(bytes.byteLength)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`, 502);
-  }
-  validateGlb(bytes);
-
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
-  const hash = bytesToHex(digest);
-  const key = `models/${hash}.glb`;
-  const existing = await env.MODELS.head(key);
-  if (existing) {
-    return { modelUrl: `/uploads/${key}`, sizeBytes: existing.size };
-  }
-
-  const usage = await getStorageUsage(env.MODELS);
-  const reservationId = await reserveStorageBudget(env.DB, usage, bytes.byteLength, 'Generated video-to-3D model');
-  try {
-    await env.MODELS.put(key, bytes, { httpMetadata: { contentType: 'model/gltf-binary' } });
-  } finally {
-    await env.DB.prepare('DELETE FROM model_upload_reservations WHERE reservation_id = ?').bind(reservationId).run();
-  }
-  return { modelUrl: `/uploads/${key}`, sizeBytes: bytes.byteLength };
-}
-
-// Tripo's own task statuses (https://developers.tripo3d.com/): 'success'
-// means the output is ready to fetch; 'failed'/'cancelled'/'banned'/
-// 'expired' are all terminal failures (banned = input violated content
-// policy, expired = output no longer available) -- recorded as 'failed'
-// so a stuck 'processing' row doesn't linger forever. 'queued'/'running'
-// leave the row as-is, handled by callers as "nothing to resolve yet".
-const TRIPO_TERMINAL_FAILURE_STATUSES = new Set(['failed', 'cancelled', 'banned', 'expired']);
-
-// Shared by the webhook and the status-poll fallback below, so "a job
-// finishes but the webhook is slow or never arrives" doesn't leave it
-// stuck. The atomic `processed_at IS NULL` guard is the same idiom
-// applyDiditDecision above uses -- whichever of the webhook or a poll
-// gets there first applies the result; the other is a safe no-op.
-async function applyTripoTaskResult(db, env, jobId, task) {
-  if (task.status === 'success') {
-    // #2226: sibling case to the #1673 catch below -- Tripo can also report
-    // success with the output/model_url missing entirely (not just an
-    // output URL that fails to download). Without marking the job failed
-    // here too, this left the row stuck at status='processing' until the
-    // cron sweep's own generic "timed out" message, since the thrown error
-    // below was never caught by either caller (the webhook handler, or the
-    // status-poll path).
-    if (!task?.output?.model_url) {
-      await db.prepare(`
-        UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE job_id = ? AND processed_at IS NULL
-      `).bind('Video-to-3D provider reported success with no output file', jobId).run();
-      return;
-    }
-    // Fetching/storing happens before the atomic claim below (unlike
-    // applyDiditDecision, which has no slow step) -- a race between the
-    // webhook and a poll can therefore both redundantly store the same
-    // content-addressed object, which is harmless (identical bytes,
-    // identical key, env.MODELS.head's own dedup check above), rather
-    // than risking only a losing caller's unused upload ever reaching R2.
-    //
-    // #1673: storeTripoModelOutput can throw (Tripo's own output URL is
-    // third-party and time-limited -- its own comment says so -- plus any
-    // transient download failure or a GLB that fails validateGlb). Without
-    // this catch, that exception propagated straight up to the caller and
-    // the row below never got updated -- left at status='processing' until
-    // expireStaleVideoGenerationJobs' cron sweep eventually caught it (up to
-    // ~25 min later) with a misleading generic "timed out" message, instead
-    // of failing immediately with the real cause.
-    let stored;
-    try {
-      stored = await storeTripoModelOutput(env, task.output.model_url);
-    } catch (err) {
-      await db.prepare(`
-        UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE job_id = ? AND processed_at IS NULL
-      `).bind('Failed to retrieve the generated model — please try again', jobId).run();
-      return;
-    }
-    await db.prepare(`
-      UPDATE video_generation_jobs SET status = 'complete', model_url = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE job_id = ? AND processed_at IS NULL
-    `).bind(stored.modelUrl, jobId).run();
-    return;
-  }
-  if (TRIPO_TERMINAL_FAILURE_STATUSES.has(task.status)) {
-    await db.prepare(`
-      UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE job_id = ? AND processed_at IS NULL
-    `).bind(`Video generation ${task.status} — please try a different video`, jobId).run();
-  }
-}
-
-// #1619: a job that never reaches a terminal status on Tripo's side
-// (provider silence, a dropped webhook with no further poll ever
-// arriving) would otherwise sit in 'processing' forever -- nothing else
-// ever revisits it once handleVideoGenerationJobCreate's own 201 response
-// has gone out. Mirrors pruneStaleAvatarPresence's own cutoff-sweep shape,
-// called from scheduled() on the existing cron. 15 minutes is a generous
-// multiple of the ~2-minute typical completion time (see
-// VIDEO_GENERATION_STATUS_RATE_LIMIT_MAX's own comment above) -- long
-// enough that a merely-slow job never gets falsely failed, short enough
-// that a genuinely stuck one doesn't block its builder's
-// one-pending-per-builder slot (idx_video_generation_jobs_one_pending_per_builder)
-// indefinitely. Scoped to 'processing' specifically -- a job still
-// 'pending' (died between the reservation and ever reaching Tripo) is a
-// different crash class, handled instead by reserveVideoGenerationJob's
-// own per-caller stale-placeholder cleanup (#1782) -- handleVideoGenerationJobCreate's
-// catch block alone only covers a thrown-exception crash, not a harder
-// kill (CPU limit, isolate eviction) that never reaches it.
-const VIDEO_GENERATION_PROCESSING_TIMEOUT_MS = 15 * 60 * 1000;
-
-export async function expireStaleVideoGenerationJobs(db) {
-  const cutoff = new Date(Date.now() - VIDEO_GENERATION_PROCESSING_TIMEOUT_MS).toISOString();
-  await db.prepare(`
-    UPDATE video_generation_jobs
-    SET status = 'failed', error_message = 'Video generation timed out — please try again', processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE status = 'processing' AND processed_at IS NULL AND created_at < ?
-  `).bind(cutoff).run();
-}
-
-// Shared by handleVideoGenerationJobStatus (poll the current job's task)
-// and the webhook below, so a slow/missing webhook doesn't leave a
-// builder stuck reading "processing" forever.
-async function reconcileVideoGenerationJob(env, db, job) {
-  if (!tripoConfigured(env)) return;
-  const task = await tripoRequest(env, 'GET', `tasks/${encodeURIComponent(job.provider_task_id)}`);
-  await applyTripoTaskResult(db, env, job.job_id, task);
-}
-
-// Accepts a few still frames extracted client-side from the seller's
-// walkaround video (no provider evaluated by #1617 accepts raw video
-// directly, and Cloudflare Workers has no video-decoding capability to
-// extract frames server-side) and kicks off an async Tripo
-// multiview-to-model job. Tracking the job to completion is
-// handleVideoGenerationJobStatus/handleVideoGenerationWebhook's job, not
-// this one.
-async function handleVideoGenerationJobCreate(request, env, db) {
-  const sessionBuilder = await requireSessionBuilder(request, db);
-
-  const contentType = request.headers.get('content-type') || '';
-  if (!contentType.includes('multipart/form-data')) {
-    throw new HttpError('Expected multipart/form-data', 415);
-  }
-  const form = await request.formData().catch(() => {
-    throw new HttpError('Request body is not valid multipart/form-data', 400);
-  });
-
-  // Front is required (Tripo rejects a job without it); at least one more
-  // view is required too (Tripo rejects a job with fewer than 2 images).
-  // Validated before the "is this configured" check below, so a malformed
-  // request always gets a real, specific 400/413/415 rather than being
-  // masked by a 503 -- same convention POST /api/catalog/concept-image's
-  // own prompt-length check already establishes.
-  const views = VIDEO_GENERATION_VIEWS
-    .map((view) => [view, form.get(view)])
-    .filter(([, file]) => file && typeof file.arrayBuffer === 'function');
-  if (!views.some(([view]) => view === 'front')) {
-    throw new HttpError('A "front" view image is required', 400);
-  }
-  if (views.length < 2) {
-    throw new HttpError('At least 2 view images are required (front plus at least one of left/back/right)', 400);
-  }
-  for (const [, file] of views) {
-    if (file.size > MAX_VIDEO_GENERATION_FRAME_BYTES) {
-      throw new HttpError(`Image is ${formatBytes(file.size)}, over the ${formatBytes(MAX_VIDEO_GENERATION_FRAME_BYTES)} limit`, 413);
-    }
-    if (!VIDEO_GENERATION_IMAGE_TYPES.includes(file.type)) {
-      throw new HttpError('Each view image must be PNG, JPEG, or WebP', 415);
-    }
-    // #1713: file.type is only the client's claimed Content-Type for this
-    // multipart part -- check the real magic bytes before this ever reaches
-    // Tripo, same posture as validateGlb/decodeThumbnailDataUrl.
-    if (!hasValidImageSignature(await file.arrayBuffer(), file.type)) {
-      throw new HttpError('Each view image must be a real PNG, JPEG, or WebP file', 415);
-    }
-  }
-
-  if (!tripoConfigured(env)) {
-    throw new HttpError('Video-to-3D generation is not configured on this server yet.', 503);
-  }
-  // #1783: a repeat call while a job is already in flight is the common
-  // case, not the rare one -- the frontend's own disabled-button guard
-  // resets on a page reload, so a builder waiting out a ~2-minute Tripo
-  // job can easily re-trigger this several times. Checking for one here,
-  // before the real-cost rate limit below, means that never charges it --
-  // same shape as handleDiditVerificationSession's own latestDiditSession
-  // pre-check, which resolves an already-pending session via a separate,
-  // cheaper bucket before its real-cost didit-session: one is ever
-  // reached. (reserveVideoGenerationJob's own dedup branch below still
-  // exists to atomically catch a genuine concurrent-race double-submit
-  // this pre-check can't see -- same residual gap Didit's own
-  // reserveDiditSession has for the identical reason.)
-  const latest = await latestVideoGenerationJob(db, sessionBuilder.builder_id);
-  if (latest && latest.processed_at === null && !isStaleVideoGenerationReservation(latest)) {
-    return json({ jobId: latest.job_id, status: latest.status });
-  }
-  await checkRateLimit(db, `video-generation:${sessionBuilder.builder_id}`, VIDEO_GENERATION_RATE_LIMIT_MAX);
-  // #1993: alongside (not instead of) the rate limit above -- the rate
-  // limit still guards against abuse of a large credit balance, this
-  // guards against spending credits the builder doesn't have. Folding the
-  // balance check into the UPDATE's own WHERE clause makes "is there a
-  // credit" and "spend it" one atomic statement, the same race-safe shape
-  // checkRateLimit's own INSERT...WHERE uses just above.
-  const creditSpent = await db.prepare(
-    'UPDATE builders SET video_generation_credits = video_generation_credits - 1 WHERE builder_id = ? AND video_generation_credits > 0',
-  ).bind(sessionBuilder.builder_id).run();
-  if (creditSpent.meta.changes === 0) {
-    throw new HttpError(VIDEO_GENERATION_NO_CREDITS_MESSAGE, 402);
-  }
-  const { reservationId, existing } = await reserveVideoGenerationJob(db, sessionBuilder.builder_id);
-  if (!reservationId) {
-    // Lost a genuine concurrent race against another request for this
-    // same builder -- hand back that one instead of ever calling Tripo.
-    // #1993: no new job actually started here, so the credit spent above
-    // was never really used -- refund it rather than charging a request
-    // that just relayed an already-in-flight job's own status.
-    await db.prepare('UPDATE builders SET video_generation_credits = video_generation_credits + 1 WHERE builder_id = ?')
-      .bind(sessionBuilder.builder_id).run();
-    // #2485: `existing` is a separate, later query than the INSERT's own
-    // NOT EXISTS check above, so by the time it runs the row it's reading
-    // may no longer be the still-in-flight job that check saw -- it can be
-    // gone entirely (deleted in between), or already resolved
-    // (processed_at set by a concurrent completion) while this request was
-    // still mid-flight. Handing back a resolved job's own stale status
-    // here would make pollVideoGenerationJob load an old, already-consumed
-    // result into the upload wizard for free -- a clean 409 (credit
-    // already refunded above) tells the client to retry, and the `latest`
-    // check at the top of this handler reports the real current state
-    // next time.
-    if (!videoGenerationReservationStillUsable(existing)) {
-      throw new HttpError('A video-generation job is already starting -- please try again in a moment', 409);
-    }
-    return json({ jobId: existing.job_id, status: existing.status });
-  }
-
-  // #1886 (piece 1): set only once the billed tripoRequest call has
-  // actually returned a real task_id -- lets the catch below tell "the
-  // outbound call itself failed" (never billed, or at least no task_id in
-  // hand) apart from "the billed call succeeded but persisting its result
-  // failed," which needs a durable record rather than a silent delete.
-  let billedTaskId = null;
-  try {
-    const inputs = [];
-    for (const [view, file] of views) {
-      const bytes = await file.arrayBuffer();
-      const fileToken = await tripoUploadFile(env, bytes, file.name || `${view}.png`, file.type);
-      inputs.push({ [view]: fileToken });
-    }
-    const task = await tripoRequest(env, 'POST', 'generation/multiview-to-model', {
-      inputs,
-      model: TRIPO_MODEL_VERSION,
-    });
-    if (!task?.task_id) {
-      throw new HttpError('Video-to-3D job creation failed — please try again', 502);
-    }
-    billedTaskId = task.task_id;
-    await db.prepare(`
-      UPDATE video_generation_jobs SET provider_task_id = ?, status = 'processing' WHERE job_id = ?
-    `).bind(task.task_id, reservationId).run();
-    return json({ jobId: reservationId, status: 'processing' }, 201);
-  } catch (err) {
-    // #1886 (piece 1 -- making the failure loud, not the still-open retry/
-    // cost policy, which stays owner-judgment): if billedTaskId is set, the
-    // outbound call didn't fail -- only persisting its result did (a
-    // transient D1 write error; a hard kill between the two never reaches
-    // this catch at all, see reserveVideoGenerationJob's own stale-sweep
-    // logging above for that case instead). Deleting the reservation below
-    // either way (so this builder isn't permanently blocked) would
-    // otherwise discard the only local record that a real, billed
-    // generation is now untracked -- log it durably first.
-    if (billedTaskId) {
-      await adminActionLogStatement(db, null, 'video_generation_task_id_lost', 'video_generation_job', reservationId, {
-        builderId: sessionBuilder.builder_id,
-        providerTaskId: billedTaskId,
-        error: err instanceof Error ? err.message : String(err),
-      }).run();
-    }
-    // The outbound call itself failed (or a later view's upload failed
-    // after an earlier one succeeded) -- release the reservation so it
-    // doesn't permanently block this builder from ever starting a video-
-    // to-3D job again.
-    await db.prepare('DELETE FROM video_generation_jobs WHERE job_id = ?').bind(reservationId).run();
-    // #1993: if the billed call never went out (or never got a real
-    // task_id back), the credit spent above paid for nothing -- refund it.
-    // If it's already billed, the credit was legitimately spent regardless
-    // of what happened after (same "billed means billed" reasoning the
-    // #1886/#1935 durable-logging above already applies).
-    if (!billedTaskId) {
-      await db.prepare('UPDATE builders SET video_generation_credits = video_generation_credits + 1 WHERE builder_id = ?')
-        .bind(sessionBuilder.builder_id).run();
-    }
-    throw err;
-  }
-}
-
-// Polling fallback for the frontend while a job is in flight: reconciles
-// directly against Tripo's own task-status endpoint whenever the
-// builder's job is still locally pending, rather than requiring the
-// webhook to have already landed.
-async function handleVideoGenerationJobStatus(request, env, db, jobId) {
-  const sessionBuilder = await requireSessionBuilder(request, db);
-  const job = await db.prepare('SELECT * FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
-  if (!job) throw new HttpError('Video-to-3D job not found', 404);
-  assertOwner(job.builder_id, sessionBuilder.builder_id, 'This video-to-3D job belongs to a different builder.');
-  if (job.processed_at !== null) {
-    return json({ jobId: job.job_id, status: job.status, modelUrl: job.model_url, error: job.error_message });
-  }
-  if (!job.provider_task_id) {
-    // Still mid-creation, or the create call died before ever reaching
-    // Tripo -- nothing to reconcile against yet.
-    return json({ jobId: job.job_id, status: job.status });
-  }
-  await checkRateLimit(db, `video-generation-status:${sessionBuilder.builder_id}`, VIDEO_GENERATION_STATUS_RATE_LIMIT_MAX);
-  await reconcileVideoGenerationJob(env, db, job);
-  const refreshed = await db.prepare('SELECT * FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
-  return json({ jobId: refreshed.job_id, status: refreshed.status, modelUrl: refreshed.model_url, error: refreshed.error_message });
-}
-
-// Tripo signs each webhook delivery with an HMAC-SHA256 of
-// `${t}.${rawBody}` (https://developers.tripo3d.com/en/docs/webhooks),
-// keyed by a webhook-specific secret -- verified here via a constant-time
-// hex comparison (timingSafeEqual, already used elsewhere in this file
-// for password/token/Didit-signature checks), never a plain ===. Reads
-// the raw body text (not readJson) because the signature is computed
-// over the exact bytes Tripo sent, not this codebase's own
-// re-serialization of a parsed object.
-//
-// #1659: same `t=...,v1=...` scheme as the Stripe webhook below, so it
-// needs the identical timestamp-tolerance check (see
-// STRIPE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS' own comment, #872) -- without
-// it, a captured-but-still-valid delivery could be replayed indefinitely.
-const TRIPO_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 5 * 60;
-
-async function handleVideoGenerationWebhook(request, env, db) {
-  if (!env.TRIPO_WEBHOOK_SECRET) throw new HttpError('Video-to-3D webhook is not configured on this server yet.', 503);
-  const rawBody = await request.text();
-  const signatureHeader = request.headers.get('tripo-webhook-signature') || '';
-  const match = /^t=(\d+),v1=([0-9a-f]+)$/.exec(signatureHeader);
-  if (!match) throw new HttpError('Invalid webhook signature', 401);
-  const [, timestamp, signature] = match;
-  const key = await crypto.subtle.importKey(
-    'raw', new TextEncoder().encode(env.TRIPO_WEBHOOK_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
-  );
-  const expectedSignature = bytesToHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${timestamp}.${rawBody}`))));
-  if (!timingSafeEqual(signature, expectedSignature)) {
-    throw new HttpError('Invalid webhook signature', 401);
-  }
-  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > TRIPO_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS) {
-    throw new HttpError('Invalid webhook signature', 401);
-  }
-  let payload;
-  try {
-    payload = JSON.parse(rawBody);
-  } catch {
-    throw new HttpError('Webhook body is not valid JSON', 400);
-  }
-  const taskId = payload?.data?.task_id;
-  const status = payload?.data?.status;
-  if (!taskId || !status) return json({ received: true });
-  const job = await db.prepare('SELECT * FROM video_generation_jobs WHERE provider_task_id = ?').bind(taskId).first();
-  if (!job || job.processed_at !== null) return json({ received: true });
-  await applyTripoTaskResult(db, env, job.job_id, payload.data);
-  return json({ received: true });
-}
-
-// #1994 (sub-issue of #1976, "Orb-collection mechanic to ration free
-// video-to-3D generation credits within a hard $5/day budget"): the real
-// per-generation cost isn't tracked anywhere in this codebase yet (see
-// VIDEO_GENERATION_RATE_LIMIT_MAX's own comment above), so this is a
-// named, adjustable placeholder rather than derived from live cost data.
-// #1617's own research cites ~$0.20-0.30/generation -- a conservative
-// $0.25 mid-point (CREDIT_ORB_COST_CENTS_PER_GENERATION below) against a
-// $5/day budget funds 20 credits/day, not the owner's own original "5/day"
-// illustrative example (that used a hypothetical $1/generation). Raise or
-// lower CREDIT_ORB_COST_CENTS_PER_GENERATION once real Tripo billing is
-// confirmed -- neither constant is load-bearing beyond this feature.
-const CREDIT_ORB_BUDGET_CENTS_PER_DAY = 500;
-const CREDIT_ORB_COST_CENTS_PER_GENERATION = 25;
-const CREDIT_ORBS_PER_DAY = Math.floor(CREDIT_ORB_BUDGET_CENTS_PER_DAY / CREDIT_ORB_COST_CENTS_PER_GENERATION);
-// Owner's own spec: interval = 1440 minutes ÷ credits-funded-that-day, so
-// orbs spawn spread evenly across the day rather than in a burst.
-const CREDIT_ORB_SPAWN_INTERVAL_MS = (24 * 60 * 60 * 1000) / CREDIT_ORBS_PER_DAY;
-
-// Keeps a spawned orb's center comfortably inside the buildable footprint
-// landlets.live/handleInstances already enforce (LANDLET_SIDE_M, #789) --
-// an 0.8 margin so it never spawns flush against the very edge, which
-// would read as half-buried in a neighboring landlet once rendered.
-const CREDIT_ORB_SPAWN_MARGIN_FACTOR = 0.8;
-
-// Called from scheduled() on the existing */10 cron (no dedicated cron of
-// its own needed -- the 10-minute granularity is well under
-// CREDIT_ORB_SPAWN_INTERVAL_MS at any plausible CREDIT_ORBS_PER_DAY, so the
-// actual cadence this produces stays close to even). Reuses credit_orbs'
-// own most recent spawned_at (across every orb, collected or not) as the
-// "last spawn time" anchor rather than a separate single-row state table
-// -- there's already exactly one row to read it from once any orb exists,
-// and the INSERT...WHERE NOT EXISTS below folds the "is one due" check and
-// the spawn into one atomic statement, the same race-proofing idiom
-// reserveVideoGenerationJob/reserveDiditSession already use for their own
-// concurrent-caller races: two overlapping cron ticks can never both spawn
-// one, because D1/SQLite serializes writes and the second caller's own
-// NOT EXISTS subquery sees the first caller's already-committed INSERT.
-export async function spawnCreditOrbIfDue(db) {
-  const cutoff = new Date(Date.now() - CREDIT_ORB_SPAWN_INTERVAL_MS).toISOString();
-  const halfSpan = (LANDLET_SIDE_M / 2) * CREDIT_ORB_SPAWN_MARGIN_FACTOR;
-  const x = (Math.random() * 2 - 1) * halfSpan;
-  const y = (Math.random() * 2 - 1) * halfSpan;
-  const orbId = `orb-${crypto.randomUUID()}`;
-  await db.prepare(`
-    INSERT INTO credit_orbs (orb_id, landlet_id, x_m, y_m, z_m)
-    SELECT ?, landlet_id, ?, ?, 0 FROM landlets
-    WHERE status = 'greenbelt'
-      AND NOT EXISTS (SELECT 1 FROM credit_orbs WHERE spawned_at > ?)
-    ORDER BY RANDOM() LIMIT 1
-  `).bind(orbId, x, y, cutoff).run();
-}
-
-function creditOrbFromRow(row) {
-  return {
-    orbId: row.orb_id,
-    landletId: row.landlet_id,
-    x: row.x_m,
-    y: row.y_m,
-    z: row.z_m,
-    spawnedAt: row.spawned_at,
-  };
-}
-
-// #2092: every other authenticated, repeatable-write endpoint in this file
-// rate-limits itself -- the collect branch below never did, letting a
-// scripted caller drive unbounded D1 load via repeated claim attempts
-// (including against bogus/already-collected orb ids, which 404 cheaply but
-// still cost a full batch round-trip).
-const CREDIT_ORB_COLLECT_RATE_LIMIT_MAX = 20;
-
-// #2222: the collect branch had no server-side presence/proximity check at
-// all -- a scripted caller could skip the client's own "walk up to it"
-// gesture (src/main.js's CREDIT_ORB_COLLECT_RADIUS_M = 1.5m check) entirely
-// and drain the whole CREDIT_ORB_BUDGET_CENTS_PER_DAY budget via direct API
-// calls. Reuses this file's only other avatar_presence-freshness idiom
-// (PRESENCE_STALE_AFTER_MS, #1767) rather than inventing a second one, and
-// a radius generous enough to tolerate that same staleness window's worth
-// of real movement at SHOP_RUN_SPEED_M_S (#2481: 4.4704m/s/10mph as of
-// #2444, ~45m -- was 2.7m/s/~27m when this constant was first set, see
-// #2481) on top of the client's own 1.5m collect radius -- the point of
-// this check is requiring *some* fresh, correctly-landletted presence at
-// all (what the scripted exploit has none of), not pixel-perfect
-// anti-cheat precision.
-const CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M = 50;
-
-// GET /api/credit-orbs (optionally ?landletId=... to scope to one landlet,
-// per #1994's own "or scoped by landlet" note) -- the frontend's read path
-// for #1995's own rendering/collection sub-issue. Deliberately
-// unauthenticated/unsession-gated: an active orb's existence and position
-// are the same kind of public, visible-in-the-3D-scene information
-// GET /api/instances already serves for ordinary placed items, not a
-// builder-specific secret.
-async function handleCreditOrbs(request, db, route, url) {
-  if (request.method === 'GET' && route.length === 1) {
-    const landletId = url.searchParams.get('landletId');
-    const conditions = ['collected_at IS NULL'];
-    const bindings = [];
-    if (landletId !== null) {
-      conditions.push('landlet_id = ?');
-      bindings.push(stringValue(landletId, 'landletId'));
-    }
-    const { results } = await db.prepare(`
-      SELECT orb_id, landlet_id, x_m, y_m, z_m, spawned_at FROM credit_orbs
-      WHERE ${conditions.join(' AND ')}
-      ORDER BY spawned_at
-    `).bind(...bindings).all();
-    return json({ orbs: results.map(creditOrbFromRow) });
-  }
-  // POST /api/credit-orbs -- admin-gated test/ops fixture, same escape-hatch
-  // reasoning as POST /api/landlets/.../land-cap-grants/higgles-grants: the
-  // real spawn cadence (spawnCreditOrbIfDue, ~70min apart by default) is far
-  // too slow for a test that only cares about what happens once an orb
-  // exists to self-time against reliably. Inserts directly into a caller-
-  // specified landlet (any status, not gated to 'greenbelt' -- a caller
-  // using this already knows exactly what it wants to seed).
-  if (request.method === 'POST' && route.length === 1) {
-    const admin = await requireAdmin(request, db);
-    const input = await readJson(request);
-    const landletId = stringValue(input.landletId, 'landletId');
-    const x = input.x === undefined ? 0 : finiteNumber(input.x, 'x');
-    const y = input.y === undefined ? 0 : finiteNumber(input.y, 'y');
-    const orbId = `orb-${crypto.randomUUID()}`;
-    const inserted = await db.prepare(`
-      INSERT INTO credit_orbs (orb_id, landlet_id, x_m, y_m, z_m)
-      SELECT ?, landlet_id, ?, ?, 0 FROM landlets WHERE landlet_id = ?
-    `).bind(orbId, x, y, landletId).run();
-    if (inserted.meta.changes === 0) throw new HttpError('Landlet not found', 404);
-    await adminActionLogStatement(db, admin.user_id, 'credit_orb_seed', 'landlet', landletId, { orbId }).run();
-    return json({ orbId }, 201);
-  }
-  // POST /api/credit-orbs/:orbId/collect (#1995) -- session-gated (unlike
-  // the GET above) since collecting actually credits the calling builder's
-  // own video_generation_credits. Race-safe the same way every other
-  // claim-before-act endpoint in this file already is: the UPDATE's own
-  // `WHERE collected_at IS NULL` is the atomic "first builder wins" claim,
-  // and the credit grant is batched in the same D1 transaction, gated on
-  // an EXISTS check against the row this same batch's first statement just
-  // committed -- so a crash between the two can never happen (they're one
-  // atomic unit), and two shoppers racing the same orb can never both grant
-  // themselves a credit for it.
-  if (request.method === 'POST' && route.length === 3 && route[2] === 'collect') {
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `credit-orb-collect:${sessionBuilder.builder_id}`, CREDIT_ORB_COLLECT_RATE_LIMIT_MAX);
-    const orbId = stringValue(route[1], 'orbId');
-    // x_m/y_m are landlet-local offsets (added to the owning landlet's own
-    // center_x_m/center_y_m to get a world position, same convention every
-    // other per-landlet placed thing in this file uses) -- joined here
-    // since avatar_presence (below) only ever stores a world x/y.
-    const orb = await db.prepare(`
-      SELECT credit_orbs.landlet_id, landlets.center_x_m + credit_orbs.x_m AS world_x,
-        landlets.center_y_m + credit_orbs.y_m AS world_y
-      FROM credit_orbs JOIN landlets ON landlets.landlet_id = credit_orbs.landlet_id
-      WHERE credit_orbs.orb_id = ? AND credit_orbs.collected_at IS NULL
-    `).bind(orbId).first();
-    if (!orb) {
-      throw new HttpError('This credit orb is no longer available -- someone else may have already collected it.', 404);
-    }
-    // Deliberately no landlet_id match against avatar_presence here, unlike
-    // the "nearby avatars" GET above -- updateShopLandletInfo (src/main.js)
-    // only ever sets a reported landletId while standing on a *claimed*
-    // landlet (whose land is this), and every credit orb spawns on a
-    // greenbelt one (spawnCreditOrbIfDue's own `WHERE status = 'greenbelt'`)
-    // by definition, so a real collector's own presence row would always
-    // report landlet_id: null here. World-position proximity (below) is
-    // the actual "walked up to it" signal, independent of land ownership.
-    const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
-    const presence = await db.prepare('SELECT x, y, updated_at FROM avatar_presence WHERE builder_id = ?')
-      .bind(sessionBuilder.builder_id).first();
-    const nearby = presence
-      && presence.updated_at >= staleBefore
-      && Math.hypot(presence.x - orb.world_x, presence.y - orb.world_y) <= CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M;
-    if (!nearby) {
-      throw new HttpError('You need to be near this credit orb in the world to collect it', 403);
-    }
-    const [claim] = await db.batch([
-      db.prepare(`
-        UPDATE credit_orbs SET collected_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), collected_by_builder_id = ?
-        WHERE orb_id = ? AND collected_at IS NULL
-      `).bind(sessionBuilder.builder_id, orbId),
-      db.prepare(`
-        UPDATE builders SET video_generation_credits = video_generation_credits + 1
-        WHERE builder_id = ? AND EXISTS (
-          SELECT 1 FROM credit_orbs WHERE orb_id = ? AND collected_by_builder_id = ?
-        )
-      `).bind(sessionBuilder.builder_id, orbId, sessionBuilder.builder_id),
-    ]);
-    if (claim.meta.changes === 0) {
-      throw new HttpError('This credit orb is no longer available -- someone else may have already collected it.', 404);
-    }
-    return json({ collected: true });
-  }
-  return json({ error: 'Not found' }, 404);
-}
+// #2541: Didit verification handlers moved to worker/lib/didit.js, video-generation handlers to worker/lib/video-generation.js, and credit-orb handlers to worker/lib/credit-orbs.js -- see each module's own header comment.
 
 function boundedIntegerValue(value, field, min, max) {
   const number = integerValue(value, field);
@@ -9115,19 +7314,19 @@ async function handleBuilderStripeAccount(request, env, db) {
 // pretending to apportion which "layer" of a lifetime balance corresponds
 // to this year's earnings specifically.
 //
-// Pending #NNN (owner-flagged, 2026-09-10): higgles_balance_cents is one
-// fungible pool with no provenance tracking back to real money — the
-// simulated/free purchase path (handleInstancePurchase's dev-mode
-// fallback, no real payment ever collected) credits builder commission
-// exactly like a real Stripe sale does, so redeeming it for real cash is a
-// zero-capital, zero-auth mint of real money. Same root cause #629 already
-// found on the auction side, but reachable here with no capital and no
-// exploit skill at all. Pausing real-cash redemption again — same
-// stopgap-first-ask-later precedent as #629/#630 — until provenance
-// tracking (or some other bound) closes this; independent of any auction-
-// side flag, since that root cause was already fixed for auctions.
-const REDEMPTION_PAUSED_PENDING_PROVENANCE = true;
-
+// #653 (fixed): higgles_balance_cents is one fungible pool with no
+// provenance tracking back to real money, so the simulated/free purchase
+// path (handleInstancePurchase's dev-mode fallback) crediting builder
+// commission exactly like a real Stripe sale used to let an
+// unauthenticated real shopper mint real-redeemable commission with zero
+// capital — same root cause #629 already found on the auction side, but
+// reachable here with no capital and no exploit skill at all. Paused via
+// REDEMPTION_PAUSED_PENDING_PROVENANCE (same stopgap-first-ask-later
+// precedent as #629/#630) until the owner's actual fix shipped: that
+// simulated path is now admin-only (see handleInstancePurchase's own
+// #653 comment), so a real shopper can no longer reach it at all, closing
+// this off by construction rather than by a provenance-tracked ledger.
+//
 // #869: finds this builder's own last still-incomplete redemption
 // (claimed, but not yet confirmed by a payout) and resumes it instead of
 // claiming a fresh one — the actual fix for the duplicate-payout race
@@ -9136,9 +7335,9 @@ const REDEMPTION_PAUSED_PENDING_PROVENANCE = true;
 // own key). Exported so this — the part of the fix that doesn't require a
 // real Stripe call — can be unit-tested directly; POST /api/builders/me/
 // redeem itself always 503s before reaching this in the test suite
-// (REDEMPTION_PAUSED_PENDING_PROVENANCE, and Stripe is never configured
-// either), the same limitation claimPurchasesForPayout's own tests above
-// already accept for the seller side.
+// (Stripe is never configured there), the same limitation
+// claimPurchasesForPayout's own tests above already accept for the
+// seller side.
 export async function claimOrResumeBuilderRedemption(db, builderId, amountCents) {
   const pending = await db.prepare(`
     SELECT * FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL
@@ -9207,9 +7406,10 @@ async function handleBuilderRedeem(request, env, db) {
   if (request.method === 'POST') {
     // #1050: same "real outbound Stripe API call on the shared key" gap
     // #839/#948 already closed for the stripe-account handlers — this POST
-    // branch's Stripe transfers/payouts calls further down (currently
-    // unreachable while REDEMPTION_PAUSED_PENDING_PROVENANCE holds, but not
-    // forever) need the identical guard, same placement precedent as #948.
+    // branch's Stripe transfers/payouts calls further down (unreachable in
+    // this test suite since Stripe is never configured there, but not in a
+    // real deployment) need the identical guard, same placement precedent
+    // as #948.
     await checkRateLimit(db, `builder-redeem:${sessionBuilder.builder_id}`, STRIPE_RATE_LIMIT_MAX);
     if (availableCents <= 0) {
       throw new HttpError('Nothing is available to redeem yet.', 400);
@@ -9230,18 +7430,6 @@ async function handleBuilderRedeem(request, env, db) {
     const hasTaxPaperworkOnFile = !!user.tax_form_completed_at;
     if (!hasTaxPaperworkOnFile && grossIncome.totalCents > TAX_REPORTING_THRESHOLD_CENTS) {
       throw taxThresholdPayoutBlockedError();
-    }
-
-    // Paused pending the provenance-tracking design question above — same
-    // slot the #629 pause (REDEMPTION_PAUSED_PENDING_629, since lifted)
-    // occupied: after every other validation, so a malformed/oversized/
-    // threshold-blocked request still gets its own real status code, and
-    // only a redemption that would otherwise actually succeed hits this.
-    if (REDEMPTION_PAUSED_PENDING_PROVENANCE) {
-      throw new HttpError(
-        'Redeeming higgles for real cash is temporarily paused while we close a fraud gap — nothing about your balance is lost, this only affects new redemptions. Check back soon.',
-        503,
-      );
     }
 
     if (!stripeConfigured(env)) {
@@ -9609,8 +7797,7 @@ async function handleSellerPayouts(request, env, db) {
     // exist elsewhere in this codebase: an auction win *does* atomically
     // debit the winning bidder's own balance (#629, see resolveAuction),
     // and #349's higgle-to-cash redemption *is* built (#625,
-    // handleBuilderRedeem) — currently paused via
-    // REDEMPTION_PAUSED_PENDING_PROVENANCE (#653/#836) rather than unbuilt.
+    // handleBuilderRedeem) and, as of #653, no longer paused.
     // #615's own scoping left extending this tax gate to cover either of
     // those as an explicit open question, not yet resolved. Computed
     // before the Stripe-configuration/onboarding checks below so a caller
@@ -10421,460 +8608,23 @@ async function handleAuth(request, env, db, route, url, ctx) {
   return json({ error: 'Not found' }, 404);
 }
 
-// #556 (docs/SPEC.md §6): credit-card-type detection at signup, the
-// zero-new-vendor half of the registration gate (the other half, real
-// government-ID verification via Didit, is #589). A SetupIntent collects
-// and confirms a card without charging it — Stripe doesn't bill for
-// creating one, only for an actual payment_intent charge — so this tier
-// costs nothing beyond the Stripe account this app already has for seller
-// Connect payouts and checkout.
-//
-// Now that assertVerified above actually gates real activity on this tier
-// (owner: "force everyone through the new gates, no grandfathering in"),
-// a deployment that never sets STRIPE_SECRET_KEY (local dev, this test
-// suite, or a fresh install before the platform owner adds real keys)
-// would otherwise lock every builder/seller action out entirely with no
-// way to clear the gate. Same silent simulated-fallback convention this
-// file already uses for real-money purchases and seller-payout onboarding
-// when Stripe isn't configured (see handleInstancePurchase's own comment)
-// — `simulated: true` tells the frontend to skip loading Stripe.js/
-// collecting a card at all and go straight to confirm-card.
-async function handleCardSetupIntent(request, env, db) {
-  const user = await requireCurrentUser(request, db);
-  // #948: same placement as #839's own precedent (checkRateLimit ahead of
-  // the stripeConfigured check) — this is what makes the limiter itself
-  // exercisable in a test suite that never configures Stripe at all, and it
-  // matches every other authenticated mutation in this file, which all cap
-  // near the top regardless of what happens further down.
-  await checkRateLimit(db, `card-setup:${user.user_id}`, STRIPE_RATE_LIMIT_MAX);
-  if (!stripeConfigured(env)) {
-    return json({ clientSecret: null, publishableKey: null, simulated: true });
-  }
-  const setupIntent = await stripeRequest(env, 'POST', 'setup_intents', {
-    'payment_method_types[]': 'card',
-    metadata: { userId: user.user_id },
-  });
-  return json({ clientSecret: setupIntent.client_secret, publishableKey: env.STRIPE_PUBLISHABLE_KEY });
-}
+// #2541: handleCardSetupIntent/handleConfirmCard/claimCardFingerprint moved to worker/lib/stripe.js -- see that module's own header comment.
 
-// #1072 (owner direction, Control Room 2026-10-01): "one card, one
-// account, permanently" -- a PaymentMethod/SetupIntent id alone isn't a
-// stable per-card identity (a caller can mint a fresh SetupIntent/
-// PaymentMethod from the exact same physical card), but Stripe's own
-// card.fingerprint is stable across all of them. migrations/0104's
-// card_fingerprints is a dedicated claim table (not a column on users) for
-// the same reason owned_avatar_purchases is its own table rather than a
-// column (see that migration's own comment) -- INSERT OR IGNORE + an
-// unconditional re-read is the same atomic claim idiom this file already
-// uses for builders/sellers (see getOrCreateBuilderForUser's own comment)
-// -- whichever caller's INSERT actually lands first wins the claim, and
-// every later caller (this same account retrying, or a different account
-// entirely) re-reads the same row rather than racing a separate
-// SELECT-then-INSERT against card_fingerprints' own PRIMARY KEY. Returns
-// whether this fingerprint is owned by a *different* account than
-// `userId` -- false both for a brand-new fingerprint and for this same
-// account re-confirming a card it already claimed.
-export async function claimCardFingerprint(db, fingerprint, userId) {
-  await db.prepare('INSERT OR IGNORE INTO card_fingerprints (fingerprint, user_id) VALUES (?, ?)')
-    .bind(fingerprint, userId).run();
-  const claim = await db.prepare('SELECT user_id FROM card_fingerprints WHERE fingerprint = ?')
-    .bind(fingerprint).first();
-  return claim.user_id !== userId;
-}
-
-// Reads back the card the frontend just collected/confirmed against the
-// SetupIntent above and checks Stripe's own card.funding field — "credit"
-// (not "debit"/"prepaid", per SPEC §6's own reasoning that those are too
-// accessible to minors to serve as an age signal) is the only path this
-// tier accepts. card_funding is recorded either way so a rejected
-// debit/prepaid attempt is still visible on the account, not a silent
-// no-op the builder has no way to explain to themselves later.
-//
-// Mirrors handleCardSetupIntent's own simulated fallback when Stripe isn't
-// configured — no real card to check, so this tier is granted directly
-// (the same "no real Stripe balance to ever hold against" reasoning
-// simulated purchases already document) rather than the 400/503 a real
-// deployment would ever actually see.
-async function handleConfirmCard(request, env, db) {
-  const user = await requireCurrentUser(request, db);
-  // #948: same placement as #839's own precedent — see handleCardSetupIntent's
-  // own comment above.
-  await checkRateLimit(db, `confirm-card:${user.user_id}`, STRIPE_RATE_LIMIT_MAX);
-  // #954: trust_tier is a one-way ratchet elsewhere in this file (see
-  // handleDiditVerificationSession's own "already ID-verified" guard, and
-  // computeNextLandCap's land_cap_m2 ratchet) -- id_verified must never be
-  // written back down to credit_card just because this endpoint fired
-  // again (a stale tab, a retried flow, a direct API call).
-  if (!stripeConfigured(env)) {
-    await db.prepare(`
-      UPDATE users SET card_funding = 'credit',
-        trust_tier = CASE WHEN trust_tier = 'id_verified' THEN trust_tier ELSE 'credit_card' END,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(user.user_id).run();
-    const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
-    // #2430: a concurrent account deletion (self-delete from another
-    // session, or escalateExpiredSuspensions' own cascade) landing in the
-    // await gap since the UPDATE above can remove this row before this
-    // re-SELECT runs -- same race shape #2334/#2354/#2364/#2391/#2392
-    // already fixed elsewhere, not an uncaught userFromRow(undefined) crash.
-    if (!updated) return json({ error: 'Account no longer exists' }, 404);
-    return json({ user: userFromRow(updated) });
-  }
-  // #1072: this used to trust a client-supplied paymentMethodId directly,
-  // never checking it against anything -- a GET on any PaymentMethod that
-  // exists anywhere in this platform's own connected Stripe account
-  // succeeds, so a replayed id (this user's own from a prior session,
-  // another user's, or one obtained some other way) granted credit_card
-  // trust tier with no real verification at all. Trusting the SetupIntent
-  // id instead of the PaymentMethod id closes that: the SetupIntent was
-  // created server-side by handleCardSetupIntent above with this specific
-  // user's id stamped into its own metadata, and its payment_method is
-  // only ever set by Stripe once a real card has actually been confirmed
-  // against it -- so this endpoint now derives the PaymentMethod id itself
-  // from a resource it already knows belongs to this user, rather than
-  // trusting whatever id the caller happens to send.
-  const input = await readJson(request);
-  const setupIntentId = stringValue(input.setupIntentId, 'setupIntentId');
-  const setupIntent = await stripeRequest(env, 'GET', `setup_intents/${encodeURIComponent(setupIntentId)}`);
-  if (setupIntent.metadata?.userId !== user.user_id) {
-    throw new HttpError('This card verification session does not belong to you.', 403);
-  }
-  if (setupIntent.status !== 'succeeded' || !setupIntent.payment_method) {
-    throw new HttpError('Card verification is not complete yet.', 400);
-  }
-  const paymentMethod = await stripeRequest(env, 'GET', `payment_methods/${encodeURIComponent(setupIntent.payment_method)}`);
-  const funding = paymentMethod.card?.funding || null;
-  const fundingAccepted = funding === 'credit';
-  // Only claimed for an otherwise-accepted (real credit) card -- a rejected
-  // debit/prepaid attempt never grants the tier in the first place, so
-  // there's nothing worth permanently locking the fingerprint against.
-  const fingerprint = paymentMethod.card?.fingerprint || null;
-  const fingerprintOwnedByAnotherAccount = fundingAccepted && fingerprint
-    ? await claimCardFingerprint(db, fingerprint, user.user_id)
-    : false;
-  const accepted = fundingAccepted && !fingerprintOwnedByAnotherAccount;
-  await db.prepare(`
-    UPDATE users SET card_funding = ?,
-      trust_tier = CASE WHEN trust_tier = 'id_verified' THEN trust_tier WHEN ? THEN 'credit_card' ELSE trust_tier END,
-      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE user_id = ?
-  `).bind(funding, accepted ? 1 : 0, user.user_id).run();
-  if (fingerprintOwnedByAnotherAccount) {
-    throw new HttpError('This card has already been used to verify a different account.', 409);
-  }
-  if (!accepted) {
-    throw new HttpError('Only credit cards are accepted for this step — debit and prepaid cards can\'t be used.', 400);
-  }
-  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
-  // #2430: same concurrent-account-deletion race as handleConfirmCard's own
-  // re-SELECT above -- a concurrent delete landing in the await gap since
-  // the UPDATE can remove this row before this re-SELECT runs.
-  if (!updated) return json({ error: 'Account no longer exists' }, 404);
-  return json({ user: userFromRow(updated) });
-}
-
-// #2240: this file's own convention is that every authenticated,
-// repeatable mutation gets a checkRateLimit call regardless of how cheap
-// or idempotent it is (handleCardSetupIntent/handleConfirmCard/
-// handleDiditVerificationSession, the structurally closest siblings,
-// all have one) -- this endpoint was the one gap. requireCurrentUser's
-// own session + account_suspensions SELECTs still cost real D1 reads on
-// every call even once already attested, same unthrottled-flood shape
-// #827/#944/#990/#2123 were each filed and fixed for elsewhere.
-const AGE_ATTEST_RATE_LIMIT_MAX = 20;
-
-// #556: lets an existing session attest age after the fact. Signup's own
-// ageAttested checkbox (handleSignup above) only covers brand-new
-// accounts — every account created before that existed, plus the owner's
-// "force everyone through, no grandfathering" decision on trust_tier
-// (Control Room, 2026-09-09), needs a way to clear the same bar without
-// re-signing-up. Idempotent: attesting again on an already-attested
-// account is a no-op, not an error.
-async function handleAgeAttest(request, db) {
-  const user = await requireCurrentUser(request, db);
-  await checkRateLimit(db, `age-attest:${user.user_id}`, AGE_ATTEST_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  if (input.ageAttested !== true) {
-    throw new HttpError('You must confirm you meet the age requirement to continue.', 400);
-  }
-  if (user.age_attested_at === null) {
-    await db.prepare(`
-      UPDATE users SET age_attested_at = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(new Date().toISOString(), user.user_id).run();
-  }
-  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
-  // #2430: same concurrent-account-deletion race as handleConfirmCard's own
-  // re-SELECT above (self-delete from another session, or
-  // escalateExpiredSuspensions' own cascade) -- can remove this row in the
-  // await gap since the UPDATE (or, when already attested, since the
-  // requireCurrentUser read at the top of this handler).
-  if (!updated) return json({ error: 'Account no longer exists' }, 404);
-  return json({ user: userFromRow(updated) });
-}
+// #2542: handleAgeAttest moved to worker/lib/auth-routes.js -- see that
+// module's own header comment.
 
 // #2124: stripe-account-reset (builder + seller) mutates a live Stripe
 // linkage the same way suspend-account above mutates account standing --
 // rate-limited the same way, unlike its own sibling admin mutations.
 const STRIPE_ACCOUNT_RESET_RATE_LIMIT_MAX = 20;
 
-async function handleSignup(request, env, db, url) {
-  const input = await readJson(request);
-  const email = emailValue(input.email);
-  const password = passwordValue(input.password);
-  const username = usernameValue(input.username);
+// #2542: handleSignup/issueEmailVerification/handleResendVerification/
+// handleChangeEmail/handleLogin/handleLogout all moved to
+// worker/lib/auth-routes.js -- see that module's own header comment.
 
-  // Counted against the rate limit the same as every other rejection below
-  // (see the duplicate-email 409's own comment on why) before checking it —
-  // a cheap validation failure shouldn't be a free, unlimited way to probe
-  // past the limiter.
-  await checkRateLimit(db, `signup:${clientIp(request)}:${email}`, 5);
-
-  // docs/SPEC.md §6, #556: registration requires age attestation. A plain
-  // boolean checkbox, not a birthdate collection — the spec's own bar here
-  // is attestation, not age verification (that's what the credit-card/
-  // government-ID tier immediately below is for).
-  if (input.ageAttested !== true) {
-    throw new HttpError('You must confirm you meet the age requirement to sign up.', 400);
-  }
-
-  // #200: canonicalizeEmail catches a "+tag"/dot variant of an already-
-  // registered address the same way a literal duplicate is caught —
-  // nothing about *why* it collides is any of an unauthenticated caller's
-  // business, so it gets the exact same message as a literal email
-  // conflict below, not called out as its own case.
-  const emailCanonical = canonicalizeEmail(email);
-  // Folds all three duplicate checks (email, canonical email, username —
-  // COLLATE NOCASE on users.username, migrations/0056, already makes
-  // "Ada"/"ada" collide at the column level) into the INSERT's own WHERE
-  // NOT EXISTS, the same atomic idiom this file already uses for
-  // friendships/product_reviews/auction_bids — a separate SELECT-then-
-  // INSERT here would let two concurrent signups (e.g. racing "+tag"
-  // variants of the same address) both pass every check before either
-  // INSERT commits, silently creating two accounts issue #200 is
-  // specifically meant to prevent.
-  const userId = `user-${crypto.randomUUID()}`;
-  const passwordHash = await hashPassword(password);
-  const ageAttestedAt = new Date().toISOString();
-  const inserted = await db.prepare(`
-    INSERT INTO users (user_id, email, password_hash, username, email_canonical, age_attested_at)
-    SELECT ?, ?, ?, ?, ?, ?
-    WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = ? OR email_canonical = ? OR username = ?)
-  `).bind(
-    userId, email, passwordHash, username, emailCanonical, ageAttestedAt,
-    email, emailCanonical, username,
-  ).run();
-  if (inserted.meta.changes === 0) {
-    // The atomic insert above already refused to happen — reading again
-    // here only decides which friendly message to show, it can't itself
-    // let a duplicate through.
-    const emailConflict = await db.prepare('SELECT 1 FROM users WHERE email = ? OR email_canonical = ?').bind(email, emailCanonical).first();
-    if (emailConflict) throw new HttpError('Email is already registered', 409);
-    throw new HttpError('Username is already taken', 409);
-  }
-
-  // docs/SPEC.md §3: "every user is automatically a builder — no separate
-  // account types." A seller profile stays deliberately lazy instead (see
-  // handleMySeller below) — selling is the more opt-in of the two per that
-  // same section ("uploading a product needs a seller identity chosen,
-  // quite apart from whichever builder identity is active").
-  await db.prepare('INSERT INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
-    .bind(`builder-${crypto.randomUUID()}`, username, userId).run();
-
-  const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, userId, email);
-  const sessionToken = await createSession(db, userId);
-  const row = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(userId).first();
-
-  return json({
-    user: userFromRow(row),
-    verificationEmailSent: emailSent,
-    ...(devVerifyUrl ? { devVerifyUrl } : {}),
-  }, 201, { 'set-cookie': sessionCookieHeader(url, sessionToken, SESSION_TTL_MS / 1000) });
-}
-
-async function issueEmailVerification(env, db, userId, email) {
-  const token = generateToken();
-  const tokenHash = await sha256Hex(token);
-  const expiresAt = new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS).toISOString();
-  await db.prepare('INSERT INTO email_verification_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
-    .bind(tokenHash, userId, expiresAt).run();
-  const verifyUrl = `${appBaseUrl(env)}/?verifyEmail=${token}`;
-  const emailSent = await sendEmail(env, {
-    to: email,
-    subject: 'Verify your higglehaven email',
-    html: `<p>Welcome to higglehaven! Confirm your email address to finish setting up your account:</p><p><a href="${verifyUrl}">${verifyUrl}</a></p><p>This link expires in 24 hours.</p>`,
-    text: `Welcome to higglehaven! Confirm your email address: ${verifyUrl} (expires in 24 hours)`,
-  });
-  // #811: devVerifyUrl must reflect whether Resend is *configured*, not
-  // whether the send happened to succeed — sendEmail returns false for both
-  // "no RESEND_API_KEY" (dev/test) and a genuine production send failure, so
-  // gating on emailSent alone would echo the real single-use token back to
-  // the client mislabeled as a harmless dev-mode convenience whenever Resend
-  // has a transient failure. Mirrors handleRequestPasswordReset's existing
-  // env.RESEND_API_KEY gate for the identical sendEmail ambiguity.
-  return { emailSent, devVerifyUrl: env.RESEND_API_KEY ? null : verifyUrl };
-}
-
-async function handleResendVerification(request, env, db) {
-  const user = await requireCurrentUser(request, db);
-  if (user.email_verified_at !== null) throw new HttpError('Email is already verified', 400);
-  // #363: this endpoint requires a session, so it doesn't need the IP+email
-  // bucketing signup/password-reset use to stop targeted enumeration/
-  // harassment — but with no limit at all, one logged-in user could still
-  // loop this to burn the operator's Resend quota/sending reputation.
-  // Keyed by user id alone since the caller's identity is already proven.
-  await checkRateLimit(db, `resend-verification:${user.user_id}`, 5);
-  const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, user.email);
-  return json({ verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
-}
-
-// #1182 (sub-issue of #1126, owner direction via Control Room 2026-10-01):
-// an in-session way to change your account email. Same current-password
-// bar as handleDeleteAccount, and the same atomic email/email_canonical
-// uniqueness idiom handleSignup's own INSERT ... WHERE NOT EXISTS uses
-// (a separate SELECT-then-UPDATE here would let two concurrent requests
-// both pass a pre-check before either write commits).
-//
-// Re-verification: the owner flagged "should changing email reset the
-// email-verification status" as its own open call rather than deciding it
-// up front. Resolved here by reading what email_verified_at actually does
-// in this codebase rather than guessing: userFromRow/docs/API.md's own
-// description of it is purely an informational "✓ Email verified" badge
-// (src/main.js's authAccountVerifiedEl) — unlike trust_tier/age_attested_at,
-// nothing gates real functionality on it (see assertVerified above, which
-// checks those two, never email_verified_at). So resetting it to NULL and
-// re-sending the verification email here is the direct, low-risk
-// application of the exact mechanism issueEmailVerification already uses
-// at signup to this same "new address, not yet confirmed" situation — not
-// a new policy, just the existing one applied consistently. Worth a glance
-// from the owner given they flagged it, but not blocking on it: nothing is
-// lost either way (no privilege revoked), and the alternative (leaving a
-// stale verified badge on an address that was never actually confirmed)
-// is the one that reads as clearly wrong.
-const CHANGE_EMAIL_RATE_LIMIT_MAX = 5;
-async function handleChangeEmail(request, env, db) {
-  const user = await requireCurrentUser(request, db);
-  await checkRateLimit(db, `change-email:${user.user_id}`, CHANGE_EMAIL_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const password = typeof input.password === 'string' ? input.password : '';
-  if (!(await verifyPassword(password, user.password_hash))) {
-    throw new HttpError('Incorrect password', 401);
-  }
-  const email = emailValue(input.email);
-  if (email === user.email) throw new HttpError('That is already your current email', 400);
-  const emailCanonical = canonicalizeEmail(email);
-  const result = await db.prepare(`
-    UPDATE users SET email = ?, email_canonical = ?, email_verified_at = NULL,
-      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE user_id = ?
-      AND NOT EXISTS (SELECT 1 FROM users WHERE (email = ? OR email_canonical = ?) AND user_id != ?)
-  `).bind(email, emailCanonical, user.user_id, email, emailCanonical, user.user_id).run();
-  if (result.meta.changes === 0) throw new HttpError('Email is already registered', 409);
-  const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, email);
-  const row = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
-  // #2430: the UPDATE's own meta.changes check above only confirms it
-  // matched a row (and won the email-collision race) at the moment it ran
-  // -- a concurrent account deletion landing in the await gap since (the
-  // issueEmailVerification call above) can still remove the row before
-  // this re-SELECT runs, same race shape #2334/#2354/#2364/#2391/#2392
-  // already fixed elsewhere.
-  if (!row) return json({ error: 'Account no longer exists' }, 404);
-  return json({ user: userFromRow(row), verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
-}
-
-// #833: every sibling auth endpoint in this file rate-limits by IP
-// (signup/password-reset key by ip+email; access-login's passphrase gate
-// keys by ip alone) — this one had neither, unlike them with no comment
-// explaining an exemption. The per-account lockout below (failed_login_
-// attempts >= threshold) stops brute-forcing *one* known account, but does
-// nothing against spraying one guessed/leaked password across many
-// different emails from the same IP, since each email gets its own
-// independent lockout budget. Bucketed by IP alone (not ip+email, unlike
-// signup/password-reset) specifically because spraying across many emails
-// is the attack this needs to stop.
-const LOGIN_RATE_LIMIT_MAX = 10;
-
-async function handleLogin(request, db, url) {
-  await checkRateLimit(db, `login:${clientIp(request)}`, LOGIN_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const email = normalizeEmail(input.email);
-  const password = typeof input.password === 'string' ? input.password : '';
-
-  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
-  // Same generic message whether the email doesn't exist or the password
-  // is wrong — telling the two apart lets an attacker enumerate which
-  // emails have accounts here. #771: the response *body* being identical
-  // isn't enough on its own — burn the same PBKDF2 cost here that a real
-  // verifyPassword call below would, so response latency can't be used to
-  // tell the two cases apart either.
-  const invalidCredentials = () => new HttpError('Invalid email or password', 401);
-  if (!row) {
-    await verifyPassword(password, DUMMY_PASSWORD_HASH);
-    throw invalidCredentials();
-  }
-
-  if (row.locked_until && row.locked_until > new Date().toISOString()) {
-    throw new HttpError('Too many failed attempts. Try again in a few minutes.', 423);
-  }
-
-  const valid = await verifyPassword(password, row.password_hash);
-  if (!valid) {
-    // The increment itself has to be the atomic operation, not a value
-    // computed from the stale `row` read above and written back separately
-    // — otherwise concurrent requests all compute the same
-    // `attempts = row.failed_login_attempts + 1` from the same starting
-    // count and each writes that same small number back, so the lockout
-    // threshold is never actually reached no matter how many guesses run
-    // in parallel. `failed_login_attempts + 1` here (both in SET and in
-    // the CASE) refers to this row's own pre-update value, same as any
-    // single UPDATE statement's SET list — safe against lost updates the
-    // same way `handlePurchaseRefund`'s `WHERE refunded_at IS NULL` guard
-    // is, just via an atomic increment instead of an atomic guard.
-    await db.prepare(`
-      UPDATE users SET
-        failed_login_attempts = failed_login_attempts + 1,
-        locked_until = CASE WHEN failed_login_attempts + 1 >= ? THEN ? ELSE locked_until END,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(
-      FAILED_LOGIN_LOCK_THRESHOLD,
-      new Date(Date.now() + FAILED_LOGIN_LOCK_DURATION_MS).toISOString(),
-      row.user_id,
-    ).run();
-    throw invalidCredentials();
-  }
-
-  await db.prepare(`
-    UPDATE users SET failed_login_attempts = 0, locked_until = NULL,
-      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE user_id = ?
-  `).bind(row.user_id).run();
-
-  const sessionToken = await createSession(db, row.user_id);
-  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(row.user_id).first();
-  // #2430: a concurrent account deletion (another session's own self-
-  // delete, or escalateExpiredSuspensions' own cascade) landing in the
-  // await gap since the UPDATE above (or createSession just before) can
-  // remove this row before this re-SELECT runs, same race shape
-  // #2334/#2354/#2364/#2391/#2392 already fixed elsewhere.
-  if (!updated) return json({ error: 'Account no longer exists' }, 404);
-  return json(
-    { user: userFromRow(updated) },
-    200,
-    { 'set-cookie': sessionCookieHeader(url, sessionToken, SESSION_TTL_MS / 1000) },
-  );
-}
-
-async function handleLogout(request, db, url) {
-  const cookies = parseCookies(request.headers.get('cookie'));
-  const token = cookies[SESSION_COOKIE_NAME];
-  if (token) {
-    const tokenHash = await sha256Hex(token);
-    await db.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(tokenHash).run();
-  }
-  return json({ loggedOut: true }, 200, { 'set-cookie': clearSessionCookieHeader(url) });
-}
+// #2529: removeSuspendedUserPostedContent/handleSuspendAccount/
+// handleUnsuspendAccount/handleSuspensionStatus all moved to
+// worker/lib/account-moderation.js -- see that module's own header comment.
 
 // #1146 (sub-issue of #1145, owner decision via a live Control Room
 // conversation): real account deletion, not the pre-existing "Delete
@@ -10893,8 +8643,8 @@ async function handleLogout(request, db, url) {
 // kill an account, so this requires re-entering the current password, the
 // same bar a real "verify it's still you" action needs -- and like every
 // other password check in this file, it's rate-limited per-account so the
-// check itself can't be used to brute-force the real password.
-const DELETE_ACCOUNT_RATE_LIMIT_MAX = 5;
+// check itself can't be used to brute-force the real password (see
+// handleDeleteAccount, worker/lib/auth-routes.js, #2542).
 
 // #2033 (sub-issue of #1201): the actual row-mutating cascade, split out
 // of handleDeleteAccount so the 30-day grace-period auto-escalation (see
@@ -10918,7 +8668,10 @@ const DELETE_ACCOUNT_RATE_LIMIT_MAX = 5;
 // first, inside the same atomic db.batch() as everything else: if either
 // guard blocks, this WHERE simply matches nothing, leaving the account
 // (and its session) exactly as live as it was before the call.
-async function cascadeDeleteAccount(db, userId) {
+// Exported for worker/lib/auth-routes.js (#2542) -- also called from this
+// file's own escalateExpiredSuspensions cron job above, so it stays here
+// rather than moving with handleDeleteAccount itself.
+export async function cascadeDeleteAccount(db, userId) {
   // Freed rather than hard-deleted, per #1145's "email/username freed ...
   // per the owner's chosen approach" -- rewritten to a placeholder unique
   // to this user_id so the real email/username are available again for a
@@ -11016,19 +8769,9 @@ async function cascadeDeleteAccount(db, userId) {
   };
 }
 
-async function handleDeleteAccount(request, db, url) {
-  const user = await requireCurrentUser(request, db);
-  await checkRateLimit(db, `delete-account:${user.user_id}`, DELETE_ACCOUNT_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const password = typeof input.password === 'string' ? input.password : '';
-  if (!(await verifyPassword(password, user.password_hash))) {
-    throw new HttpError('Incorrect password', 401);
-  }
-
-  await cascadeDeleteAccount(db, user.user_id);
-
-  return json({ accountDeleted: true }, 200, { 'set-cookie': clearSessionCookieHeader(url) });
-}
+// #2542: handleDeleteAccount moved to worker/lib/auth-routes.js (calls
+// cascadeDeleteAccount above, imported back) -- see that module's own
+// header comment.
 
 // #2033 (sub-issue of #1201): an admin-initiated suspension (#2029) that
 // nobody lifts within its own grace_period_ends_at auto-escalates into
@@ -11081,57 +8824,9 @@ export async function escalateExpiredSuspensions(db) {
 // action would be pure friction, not a real security improvement -- the
 // actual risk this closes (an old password still working on some other
 // device/session) is the same either way.
-const CHANGE_PASSWORD_RATE_LIMIT_MAX = 5;
-
-async function handleChangePassword(request, db) {
-  const user = await requireCurrentUser(request, db);
-  await checkRateLimit(db, `change-password:${user.user_id}`, CHANGE_PASSWORD_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const currentPassword = typeof input.currentPassword === 'string' ? input.currentPassword : '';
-  if (!(await verifyPassword(currentPassword, user.password_hash))) {
-    throw new HttpError('Incorrect password', 401);
-  }
-  const newPassword = passwordValue(input.newPassword);
-  const passwordHash = await hashPassword(newPassword);
-  const cookies = parseCookies(request.headers.get('cookie'));
-  const currentTokenHash = await sha256Hex(cookies[SESSION_COOKIE_NAME]);
-
-  await db.batch([
-    db.prepare(`
-      UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(passwordHash, user.user_id),
-    db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').bind(user.user_id, currentTokenHash),
-    // #2293: same #843 invariant handleResetPassword's own DELETE already
-    // enforces -- a password-changing event for this account must
-    // invalidate any outstanding reset token too, or an older, still-
-    // unexpired reset link (e.g. minted by an attacker with momentary
-    // email access, never used immediately) remains valid and can
-    // silently undo this very change afterward. #843's fix landed only on
-    // the reset-password side; this is the sibling in-session change path
-    // that never got it.
-    db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').bind(user.user_id),
-  ]);
-  return json({ changed: true });
-}
-
-// Deliberately always 200, even with no session — a 401 here would be more
-// conventionally RESTful, but this endpoint gets called unconditionally on
-// every single page load (see the frontend's own bootstrap) specifically
-// to answer "is anyone logged in right now," and the overwhelmingly common
-// case for most visitors is "no." A 4xx response logs a "Failed to load
-// resource" message straight from the browser's own network stack — not
-// something application code can suppress — which every e2e test's shared
-// console-error collector (see e2e/helpers.mjs) then reads as a real page
-// error, on every single test, whether or not it has anything to do with
-// auth. requireCurrentUser (a real 401) is still exactly right for actual
-// protected actions like resend-verification below, just not for this
-// passive status check.
-async function handleMe(request, db) {
-  const user = await currentUser(request, db);
-  return json({ user: user ? userFromRow(user) : null });
-}
+//
+// #2542: handleChangePassword/handleMe both moved to
+// worker/lib/auth-routes.js -- see that module's own header comment.
 
 // #1984 (sub-issue of #1983, owner-greenlit on #1480): GDPR/CCPA "right to
 // access" companion to #1145's own "right to erasure" -- the requesting
@@ -11397,141 +9092,9 @@ async function exportCommerceData(db, builderRow) {
   };
 }
 
-// #1323: handleResendVerification (the token-issuing side) already
-// rate-limits itself (#363) -- this, the token-consuming side, never did,
-// leaving it the one public, cheap-to-hit, always-does-a-DB-read-per-call
-// mutation endpoint in this file with no throttle at all. Same
-// LOGIN_RATE_LIMIT_MAX/CONFIRM_DELIVERY_RATE_LIMIT_MAX "= 20" convention
-// for an unauthenticated repeatable write, bucketed by IP since no
-// builder/user identity exists yet at this point in the handler.
-const EMAIL_VERIFY_RATE_LIMIT_MAX = 20;
-
-async function handleVerifyEmail(request, db) {
-  await checkRateLimit(db, `email-verify:${clientIp(request)}`, EMAIL_VERIFY_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const token = stringValue(input.token, 'token');
-  const tokenHash = await sha256Hex(token);
-  const row = await db.prepare(`
-    SELECT * FROM email_verification_tokens
-    WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-  `).bind(tokenHash).first();
-  if (!row) throw new HttpError('Verification link is invalid or has expired', 400);
-
-  // #377: the WHERE ... consumed_at IS NULL guard on this UPDATE (run
-  // standalone before the follow-up write, not batched with it) is what
-  // makes this safe against a concurrent double-use of the same token —
-  // only whichever call's UPDATE actually lands first changes any rows,
-  // same idiom as handleCalendarEventTrigger's own triggered_at guard.
-  const result = await db.prepare(`
-    UPDATE email_verification_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE token_hash = ? AND consumed_at IS NULL
-  `).bind(tokenHash).run();
-  if (result.meta.changes !== 1) throw new HttpError('Verification link is invalid or has expired', 400);
-
-  await db.prepare(`
-    UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE user_id = ?
-  `).bind(row.user_id).run();
-  return json({ verified: true });
-}
-
-async function handleRequestPasswordReset(request, env, db, ctx) {
-  const input = await readJson(request);
-  const email = normalizeEmail(input.email);
-
-  await checkRateLimit(db, `password-reset:${clientIp(request)}:${email}`, 5);
-
-  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
-
-  // Always the same response regardless of whether the account exists —
-  // unlike signup (which does reveal a duplicate email, common and
-  // accepted practice), this specific endpoint is the classic account-
-  // enumeration vector, so it stays generic on purpose.
-  let devResetUrl = null;
-  if (row) {
-    const token = generateToken();
-    const tokenHash = await sha256Hex(token);
-    const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString();
-    await db.prepare('INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
-      .bind(tokenHash, row.user_id, expiresAt).run();
-    const resetUrl = `${appBaseUrl(env)}/?resetPassword=${token}`;
-    const emailPayload = {
-      to: email,
-      subject: 'Reset your higglehaven password',
-      html: `<p>Someone requested a password reset for this higglehaven account. If that was you:</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>This link expires in 1 hour. If you didn't request this, you can ignore this email.</p>`,
-      text: `Reset your higglehaven password: ${resetUrl} (expires in 1 hour). If you didn't request this, ignore this email.`,
-    };
-    // #778: awaiting sendEmail here used to put a real Resend API round-trip
-    // on this branch's response path while the no-such-user branch above
-    // returns almost instantly, letting an attacker enumerate registered
-    // emails by latency despite the identical response body — the same bug
-    // class #771 fixed for login's PBKDF2 cost. When Resend is actually
-    // configured (production), fire the send in the background via
-    // ctx.waitUntil instead of awaiting it, so both branches return in
-    // comparable time. In dev/test (RESEND_API_KEY unset), sendEmail
-    // returns false synchronously with no network call — no timing gap to
-    // close — so it stays awaited there, which is what lets devResetUrl
-    // keep working for local testing.
-    if (env.RESEND_API_KEY) {
-      ctx.waitUntil(sendEmail(env, emailPayload).catch((error) => {
-        console.error('Password reset email failed', error);
-      }));
-    } else {
-      const emailSent = await sendEmail(env, emailPayload);
-      if (!emailSent) devResetUrl = resetUrl;
-    }
-  }
-  return json({ requested: true, ...(devResetUrl ? { devResetUrl } : {}) });
-}
-
-// #1323: same gap as EMAIL_VERIFY_RATE_LIMIT_MAX just above, for the
-// password-reset token's own consuming side -- handleRequestPasswordReset
-// (the issuing side) already rate-limits itself.
-const PASSWORD_RESET_CONSUME_RATE_LIMIT_MAX = 20;
-
-async function handleResetPassword(request, db) {
-  await checkRateLimit(db, `password-reset-consume:${clientIp(request)}`, PASSWORD_RESET_CONSUME_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const token = stringValue(input.token, 'token');
-  const newPassword = passwordValue(input.newPassword);
-  const tokenHash = await sha256Hex(token);
-
-  const row = await db.prepare(`
-    SELECT * FROM password_reset_tokens
-    WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-  `).bind(tokenHash).first();
-  if (!row) throw new HttpError('Reset link is invalid or has expired', 400);
-
-  // #377: same atomic-guard idiom as handleVerifyEmail above — checked
-  // before hashing the new password or touching users/sessions at all, so
-  // a lost race short-circuits before any of that work.
-  const result = await db.prepare(`
-    UPDATE password_reset_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE token_hash = ? AND consumed_at IS NULL
-  `).bind(tokenHash).run();
-  if (result.meta.changes !== 1) throw new HttpError('Reset link is invalid or has expired', 400);
-
-  const passwordHash = await hashPassword(newPassword);
-  await db.batch([
-    db.prepare(`
-      UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(passwordHash, row.user_id),
-    // Resetting a password signs every device out — standard practice, and
-    // the right call if the reset was prompted by a compromised password:
-    // an attacker who was riding an existing session loses it too.
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(row.user_id),
-    // #843: also invalidate any other outstanding reset tokens for this
-    // account — otherwise an older, still-unexpired link from an earlier
-    // request remains valid and can silently undo this reset afterward,
-    // the same account-takeover shape the session wipe above exists to
-    // close, just via an old email link instead of an old session.
-    db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').bind(row.user_id),
-  ]);
-  return json({ reset: true });
-}
+// #2542: handleVerifyEmail/handleRequestPasswordReset/handleResetPassword
+// all moved to worker/lib/auth-routes.js -- see that module's own header
+// comment.
 
 // #199: a seller's claimed landlet (aliased `owned` by every caller of
 // this fragment) stops locking their "one claimed landlet" slot the
@@ -15158,20 +12721,31 @@ async function handleInstancePurchase(request, env, instanceId) {
 
   // #453: a product whose seller has fully completed Stripe Connect
   // onboarding (#452) checks out with real money instead of this
-  // endpoint's original dev-mode simulation (migrations/0051) — every
-  // other seller (none connected yet, or still mid-onboarding) keeps
-  // today's exact behavior unchanged, so existing demo/test flows never
-  // need a connected Stripe account to keep working. The stripeConfigured
-  // check here is deliberately a silent fallback to the simulation, not a
-  // 503 — a deployment that never sets STRIPE_SECRET_KEY at all (local
-  // dev, this test suite, or simply a fresh install before the platform
-  // owner adds it) should still have a working storefront, exactly as
-  // before this feature existed.
+  // endpoint's original dev-mode simulation (migrations/0051). The
+  // stripeConfigured check here is deliberately a silent fallback to the
+  // simulation, not a 503 — a deployment that never sets
+  // STRIPE_SECRET_KEY at all (local dev, this test suite, or simply a
+  // fresh install before the platform owner adds it) should still have a
+  // working storefront, exactly as before this feature existed.
   const seller = template.seller_id
     ? await db.prepare('SELECT stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?').bind(template.seller_id).first()
     : null;
   if (seller?.stripe_account_id && seller.stripe_onboarding_status === 'complete' && stripeConfigured(env)) {
     return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label);
+  }
+  // #653 (owner, 2026-09-11): "real-world shoppers should not be able to
+  // purchase from dev sellers" — any seller who hasn't (yet) fully
+  // completed Stripe Connect onboarding is, for this purpose, a dev
+  // seller, and the simulated/free path below is the dev/test pathway
+  // the owner wants kept available in parallel with real-money checkout
+  // ("the whole point of simulating is to test the real-world code"),
+  // not opened up to real shoppers. Closing this off to non-admins is
+  // what lets REDEMPTION_PAUSED_PENDING_PROVENANCE's stopgap (below) lift
+  // for good: the zero-capital higgles-mint that pause existed for
+  // required an unauthenticated real shopper reaching this exact path,
+  // which is no longer possible.
+  if (!user.is_admin) {
+    throw new HttpError('This product is not yet available for purchase — its seller has not finished setting up real payments.', 403);
   }
   // #1231: e2e/*.test.mjs only ever talks HTTP to a running dev server (no
   // direct D1 access the way worker/commerce.test.js's own mark-shipped/
@@ -17923,7 +15497,7 @@ function landletParams(landlet) {
   return [landlet.landletId, landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status, landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt, landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType, landlet.biome ?? null];
 }
 
-function templateFromRow(row) {
+export function templateFromRow(row) {
   return {
     templateId: row.template_id,
     name: row.name,

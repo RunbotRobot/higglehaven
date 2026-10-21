@@ -1745,18 +1745,19 @@ both higgles balance and land cap until the bidder is outbid or the
 auction closes, atomically enforced at resolution — see "Land acquisition
 auctions" below.
 
-**#653 (currently paused, unlike #629 above):** `POST` unconditionally
-`503`s past every other validation (`REDEMPTION_PAUSED_PENDING_PROVENANCE`,
-worker/index.js) — `higglesBalanceCents` is one fungible pool with no
-provenance tracking back to real money, so the free/simulated purchase
-path (no real payment ever collected) can mint real-redeemable commission
-exactly like a genuine sale, a zero-capital exploit with no auth or
-capital required at all. Same stopgap-first precedent as #629 above, but
-not yet lifted — needs a provenance-tracking design (or some other bound)
-first, an owner-judgment call. `GET` and `.../stripe-account` above are
-unaffected: a builder can fully connect their payout account and see
-their available balance today, they just can't complete an actual
-redemption yet.
+**#653 (fixed — no longer paused):** `higglesBalanceCents` is one fungible
+pool with no provenance tracking back to real money, so the free/simulated
+purchase path (no real payment ever collected) used to be able to mint
+real-redeemable commission exactly like a genuine sale — a zero-capital
+exploit with no auth or capital required at all. Same stopgap-first
+precedent as #629 above (`POST` unconditionally `503`d past every other
+validation while the fix was pending), but the actual fix shipped a
+different shape than #629's: rather than a provenance-tracking design,
+the owner's direction ("real-world shoppers should not be able to
+purchase from dev sellers") closed the exploit upstream, at its own
+source — see `POST /api/instances/:instanceId/purchase`'s "Two paths"
+below, now three. The pause is gone; redemption behaves exactly like any
+other Stripe-gated flow on this endpoint.
 
 Both require a session (`401` otherwise) and act on the calling account's
 own builder profile.
@@ -6448,25 +6449,40 @@ session as of N44 (see "Session and verification requirement" below) —
 no longer reachable anonymously, either path.
 
 **Two paths, chosen automatically per product, per the owner's #331
-answer:**
+answer — but as of #653, the simulated one is admin-only:**
 
-- **Dev-mode simulation** (the original, and still the default for the
-  vast majority of products): no real payment is ever processed and a
-  shopper is charged nothing. What *is* real is the commission math: a
-  successful purchase credits an actual builder's `higgles_balance_cents`
-  and `higgles_earnings_events` ledger (migrations/0050), so it feeds land
-  cap's own formula for real.
+- **Dev-mode simulation** (the original path, still the default for the
+  vast majority of products — no seller here has completed Stripe Connect
+  onboarding yet): no real payment is ever processed and the caller is
+  charged nothing. What *is* real is the commission math: a successful
+  purchase credits an actual builder's `higgles_balance_cents` and
+  `higgles_earnings_events` ledger (migrations/0050), so it feeds land
+  cap's own formula for real. **#653 (owner, 2026-09-11): "real-world
+  shoppers should not be able to purchase from dev sellers"** — any
+  seller who hasn't (yet) fully completed Stripe Connect onboarding is,
+  for this purpose, a dev seller, so this path now requires the caller to
+  be an admin (`403` otherwise — see "Session and verification
+  requirement" below). This isn't a new restriction on *admins*: it's the
+  owner's own framing of the dev/real-world split — the simulated path
+  stays available, in parallel with real-money checkout, for exercising
+  the real-world code against ("the whole point of simulating is to test
+  the real-world code"), just no longer reachable by an ordinary real
+  shopper. Before a seller ever connects Stripe, this means ordinary
+  shoppers simply can't buy from them yet — an accepted tradeoff, not an
+  oversight.
 - **Real-money checkout** (#453, sub-issue of #347/#324): once a
   product's seller has *fully completed* Stripe Connect Custom onboarding
   (`stripe_onboarding_status = 'complete'`, see "Stripe Connect" above)
   and this server has `STRIPE_SECRET_KEY` configured, this same endpoint
   instead creates a real Stripe PaymentIntent — see "Real-money checkout"
-  below.
+  below. Open to any verified caller, admin or not — the dev/real-world
+  split above only ever restricts the simulated path.
 
 Which path a given call takes is entirely server-side, based on the
 product's own seller — nothing in the request body selects one or the
 other, and a seller who hasn't connected (or hasn't finished onboarding)
-keeps the exact simulated behavior this endpoint always had.
+falls to the simulated path, same as this endpoint always has, now
+gated to admins per #653 above.
 
 ### Request/response
 
@@ -6543,10 +6559,19 @@ but never purchasable, real money or simulated alike), the template's
 the instance sits on an unclaimed lándlet (no builder to credit), or
 `quantity` exceeds `1000` — a sanity bound (not a spec requirement, same
 reasoning as auctions' `durationHours` cap above) against one request
-turning into an unbounded `higgles_balance_cents`/land-cap credit. `429`
-past 30 calls per 15 minutes from one account (see "Rate limiting" above)
-closes the other half of that gap — repeated smaller requests instead of
-one large one.
+turning into an unbounded `higgles_balance_cents`/land-cap credit.
+
+A second `403`, distinct from the verification one above: **#653** — the
+target product's seller hasn't fully completed Stripe Connect onboarding
+(the condition that would otherwise fall to the simulated path above) and
+the calling account isn't an admin (`isAdmin` — see "Authentication"
+above). Checked after every `400` case, right before this endpoint would
+otherwise write the simulated purchase — a connected seller's real-money
+path (above) never hits this check at all.
+
+`429` past 30 calls per 15 minutes from one account (see "Rate limiting"
+above) closes the other half of the unbounded-credit gap — repeated
+smaller requests instead of one large one.
 
 ### Sold-out templates (#1948)
 
@@ -9593,6 +9618,59 @@ exactly, for a leanable wall and `window.__testShopLeanPose()` (mirroring
 `shopLeanBlend` and the position/yaw offsets) in place of the sit pose's
 own hook, plus checking `shopAvatarPitch` via `window.__shopAvatarOrientation`
 for the backward tilt.
+
+### Randomized sit/lean selection and timing (#2480)
+
+Sub-issue of #2475, depending on at least one of the sit/lean pose sub-
+issues landing first (sit, #2478, had, at the time this sub-issue was
+picked up; lean, #2479, landed separately around the same time — see the
+note below on scope). docs/SPEC.md §2 asks for the idle state machine to
+work "with randomization," matching how the existing
+stand sway already randomizes its sway period and head-turn interval
+(`SHOP_IDLE_SWAY_PERIOD_MIN_S`/`MAX_S`, `SHOP_IDLE_HEAD_TURN_INTERVAL_MIN_S`/
+`MAX_S`). Two independent randomizations, both in `src/main.js`:
+
+- **Which target gets picked.** `findShopIdleInteractionTarget` used to be
+  deterministic nearest-wins within whichever kind (sit outranking lean).
+  It now collects every in-range candidate of the preferred kind into an
+  array and picks uniformly at random among them (`Math.random()`), so
+  standing idle near several sittable/leanable items doesn't always settle
+  into the exact same one. Sit still always outranks lean when both have
+  at least one in-range candidate; the random pick only applies within
+  whichever kind is chosen. A single in-range candidate (the common case,
+  and every existing test's own setup) reduces to the old deterministic
+  behavior — nothing to pick among.
+- **When the sit/lean pose actually starts.** `shopSitSettleDelayS`/
+  `shopLeanSettleDelayS` are each randomized independently
+  (`SHOP_SIT_SETTLE_DELAY_MIN_S`..`SHOP_SIT_SETTLE_DELAY_MAX_S`, 0 to 2
+  seconds — shared range, separate state per kind) the instant a fresh
+  idle episode selects a target of that kind, and the matching
+  `shopSitBlend`/`shopLeanBlend` stays suppressed at 0 until
+  `shopSitSettleElapsedS`/`shopLeanSettleElapsedS` (real idle time with
+  that target selected) first reaches it — so the avatar doesn't always
+  commit to sitting or leaning at the exact same instant idle sway
+  begins; sometimes it lingers standing a bit first. Both kinds' delays
+  are re-randomized together at selection time regardless of which kind
+  was actually picked that episode (the unused one's delay just sits
+  idle until its own kind is eventually selected in some future episode
+  — simpler than branching on kind, and harmless since each only ever
+  gates its own blend). `shopIdleInteractionTarget` itself is still set
+  immediately at idle start either way (unaffected — this only gates the
+  pose's own blend, not the target selection #2477 already covers).
+
+#### Testing note
+
+`e2e/shop-idle-sit-randomization.test.mjs` places several sittable chairs
+within range of one spot, repeatedly drives `window.__testFindShopIdleInteractionTarget`
+in a loop, and confirms more than one of them gets picked at least once
+(not just "something non-null" every time, which the old deterministic
+code already satisfied) — then drives repeated real idle episodes via
+`window.__testShopSitPose()`'s `settleDelayS`/`settleElapsedS` fields and
+confirms the delay itself takes more than one distinct value across
+several episodes, and that `blend` stays at 0 until `settleElapsedS`
+reaches `settleDelayS` within a single episode.
+`e2e/shop-idle-lean-randomization.test.mjs` mirrors the settle-delay half
+of that for `window.__testShopLeanPose()`'s own equivalent fields.
 
 ## Control Room API (N31)
 

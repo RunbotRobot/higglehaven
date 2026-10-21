@@ -151,8 +151,14 @@ const baselineFacingRad = (await page.evaluate(() => window.__shopAvatarOrientat
 // to actually pick the sit target up, then for shopSitBlend (eased at
 // SHOP_IDLE_BLEND_PER_S = 0.6/s) to substantially engage rather than a
 // fixed real-time sleep.
-await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'sit', { timeout: 15000 });
-await page.waitForFunction(() => window.__testShopSitPose().blend > 0.9, { timeout: 20000 });
+// #2598: waitForFunction's signature is (pageFunction, arg, options) --
+// these 2-arg calls put the options object in the arg slot instead, so the
+// real applied timeout was always Playwright's own default (30000ms), not
+// the written values -- and even those were too tight under current CI
+// load. The explicit `null` arg reaches the options slot, and the
+// timeouts are widened for real headroom.
+await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'sit', null, { timeout: 60000 });
+await page.waitForFunction(() => window.__testShopSitPose().blend > 0.9, null, { timeout: 60000 });
 
 const engagedPose = await page.evaluate(() => window.__testShopSitPose());
 console.log('seated pose once substantially engaged (blend should be > 0.9):', engagedPose);

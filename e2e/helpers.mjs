@@ -75,6 +75,37 @@ export async function ensureAdminSession() {
   return adminCookiePromise;
 }
 
+// The exact email chooseIdentity derives from a label for its own signup
+// call below — exported so a test that needs to act on that same account
+// from outside the page (grantAdmin below, or a raw adminApi/fetchJson
+// call keyed by email) never risks drifting from chooseIdentity's own
+// derivation by keeping a second copy of this regex.
+export function emailForLabel(label) {
+  return `${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}@e2e.test`;
+}
+
+// #653: grants admin to an already-signed-up account by email, via the
+// real POST /api/auth/grant-admin endpoint — for a test whose own in-world
+// browser-session account (not ensureAdminSession's separate throwaway
+// one) needs to be an admin, e.g. to keep exercising the now-admin-only
+// simulated-purchase path (handleInstancePurchase's own #653 comment)
+// without losing whatever in-world state (a claimed landlet, an uploaded
+// product) that session already built up under its own cookie jar.
+// is_admin takes effect on this account's very next request — currentUser
+// (worker/lib/auth.js) re-joins the live users row every time, nothing
+// about it is cached in the session token itself.
+export async function grantAdmin(email) {
+  const adminCookie = await ensureAdminSession();
+  const granted = await adminApi('/auth/grant-admin', adminCookie, {
+    method: 'POST',
+    body: JSON.stringify({ email }),
+  });
+  if (granted.response.status !== 200) {
+    throw new Error(`grantAdmin: grant-admin failed (${granted.response.status}) for ${email}`);
+  }
+  return granted.body;
+}
+
 const GROW_WORLD_MAX_STEPS = 20;
 
 // The real growth mechanism is now automatic (worker/index.js's scheduled()
@@ -327,7 +358,7 @@ export async function chooseIdentity(page, { mode, label, isNew = true }) {
   if (!isNew) {
     throw new Error(`chooseIdentity: isNew:false but no session is active — expected to already be logged in as "${label}"`);
   }
-  const email = `${label.toLowerCase().replace(/[^a-z0-9]+/g, '-')}@e2e.test`;
+  const email = emailForLabel(label);
   await page.click('.auth-tab-btn[data-auth-view="signup"]');
   await page.fill('#auth-signup-username', label);
   await page.fill('#auth-signup-email', email);
@@ -415,20 +446,45 @@ export async function clearVerifyModalIfShown(page) {
   // the older, tighter margins.
   const verifyModalShown = await page.waitForSelector('#verify-modal.visible', { timeout: 15000 }).then(() => true).catch(() => false);
   if (!verifyModalShown) return;
+
+  // #2544: the real cost here was never the click() action itself -- it's
+  // the button's own click handler (src/main.js's verifyContinueBtn
+  // listener) awaiting a network round trip (POST /auth/age-attest, then
+  // conditionally /auth/card-setup-intent) before re-enabling itself.
+  // Playwright's click() auto-waits for the target to become actionable,
+  // which includes "enabled", so a flat click() timeout (#2153/#2416) was
+  // quietly absorbing that same network cost disguised as "waiting to be
+  // clickable" -- every escalation was really just re-widening a margin
+  // around the wrong operation, same #1388/#1896/#2048/#2360-class shape as
+  // chooseIdentity's own signup wait before #2400's fix. Polling the real
+  // end state directly (the button actually re-enabled, or the modal having
+  // closed outright for an already-trusted user) needs setting generously
+  // only once, and keeps the click() calls themselves on a short, tight
+  // timeout -- a genuine new bug (the button never re-enabling at all)
+  // still fails in 15s instead of hiding behind the same oversized margin
+  // the network wait needs.
+  const verifyButtonReady = () => page.waitForFunction(
+    () => {
+      const modalEl = document.getElementById('verify-modal');
+      if (!modalEl.classList.contains('visible')) return true;
+      return !document.getElementById('verify-continue-btn').disabled;
+    },
+    { timeout: 120000 },
+  );
+
   if (await page.locator('#verify-age-step').isVisible()) {
     await page.check('#verify-age-attest');
-    // #2153/#2416: the click's own actionability wait (not just the selector
-    // wait above) can outlast Playwright's 30000ms default under the same
-    // CI-wide contention #1896 already accounts for -- the button stays
-    // disabled until a signup/didit-verification-status round trip resolves.
-    // #2153's own 30000ms bump was itself outpaced within two days (#2416),
-    // same recurring-margin-exhaustion shape as #1388/#1896/#2048/#2360's own
-    // escalations elsewhere in this file -- bumped both of this function's
-    // own calls to the next step up.
-    await page.click('#verify-continue-btn', { timeout: 60000 });
+    await page.click('#verify-continue-btn', { timeout: 15000 });
+    await verifyButtonReady();
   }
   if (await page.locator('#verify-modal.visible').count() > 0) {
-    await page.click('#verify-continue-btn', { timeout: 60000 });
+    // Reached directly (age step never shown -- user.ageAttested was
+    // already true) means enterVerifyCardStep() started as part of opening
+    // the modal, before this helper ever ran; its own card-setup-intent
+    // request is what the button is waiting on here. Reached after the
+    // block above, the button is already ready and this resolves at once.
+    await verifyButtonReady();
+    await page.click('#verify-continue-btn', { timeout: 15000 });
   }
   await page.waitForSelector('#verify-modal:not(.visible)', { state: 'attached', timeout: 15000 });
 }
@@ -439,13 +495,32 @@ export async function clearVerifyModalIfShown(page) {
 // facing button click), tries a handful of candidate points until one
 // reads "Available," and confirms.
 export async function claimLandlet(page) {
-  await page.waitForSelector('#claim-modal.visible', { timeout: 10000 });
-  await page.waitForTimeout(2000);
+  // #2582: '#claim-modal.visible' appearing is gated behind
+  // resolveLandletId's own fetchLandlets() round trip (src/main.js) --
+  // that request starts before this helper ever runs and isn't anything a
+  // click here triggers, same already-in-flight-or-already-resolved shape
+  // #2544 hit for the verify modal. Playwright's selector wait already
+  // polls for the real end state here (no click()-actionability trap like
+  // #2544's), so the fix is simply widening the margin to match comparable
+  // modal-open waits elsewhere in this file (e.g. the account-menu-modal
+  // wait at 60000ms) instead of re-escalating a tighter one yet again.
+  await page.waitForSelector('#claim-modal.visible', { timeout: 60000 });
+  // loadLandletMap's own real cost (fetchWorld + two fetchAllLandlets calls,
+  // then building the flyover scene -- src/claim/flow.js) was hidden behind
+  // a flat 2000ms sleep here. #claim-status starts as the synchronous
+  // 'Loading the world…' placeholder loadLandletMap itself sets before any
+  // of that work begins, and only changes once it actually finishes -- poll
+  // for that transition directly instead of guessing how long it takes.
+  const claimMapLoaded = () => page.waitForFunction(
+    () => document.getElementById('claim-status').textContent !== 'Loading the world…',
+    { timeout: 60000 },
+  );
+  await claimMapLoaded();
   const status = await page.textContent('#claim-status');
   if (status?.includes('check back again shortly')) {
     await growWorldAsAdmin();
     await page.click('#claim-refresh-btn');
-    await page.waitForTimeout(2000);
+    await claimMapLoaded();
   }
   const canvasBox = await page.locator('#claim-map-canvas').boundingBox();
   const candidatePoints = [[0.5, 0.5], [0.4, 0.4], [0.4, 0.3], [0.5, 0.3], [0.2, 0.4], [0.1, 0.4]];
@@ -455,14 +530,30 @@ export async function claimLandlet(page) {
     const selection = await page.textContent('#claim-selection-name');
     if (selection && selection.includes('Available')) break;
   }
-  await page.click('#claim-confirm-btn');
+  // #2582: unlike the modal-open wait above, this click is what fires the
+  // real request (claimConfirmBtn's own onclick -> claimSelectedLandlet ->
+  // POST /landlets/:id/claim), so pairing page.waitForResponse with the
+  // click itself is safe here -- same #2400/chooseIdentity pattern, no race
+  // on an already-in-flight request.
+  const [claimResponse] = await Promise.all([
+    page.waitForResponse(
+      (response) => response.request().method() === 'POST' && /\/api\/landlets\/[^/]+\/claim$/.test(new URL(response.url()).pathname),
+      { timeout: 60000 },
+    ),
+    page.click('#claim-confirm-btn'),
+  ]);
+  if (!claimResponse.ok()) {
+    throw new Error(`claimLandlet: POST .../claim failed with HTTP ${claimResponse.status()}`);
+  }
   // #1368: #account-menu-toggle is unconditionally present/visible in
   // #topbar-left from the moment the page loads -- #claim-modal only dims
   // it visually with a higher z-index overlay, which Playwright's default
   // "visible" check doesn't account for. Waiting for it here never actually
   // verified the claim succeeded. #claim-modal:not(.visible) (same pattern
   // as #auth-modal/#verify-modal above) is the real "did the modal close"
-  // signal.
+  // signal -- short margin is enough now that the response above already
+  // absorbed the real network cost, leaving only the synchronous
+  // disposeClaimFlyover()/class-removal that follows it.
   await page.waitForSelector('#claim-modal:not(.visible)', { state: 'attached', timeout: 10000 });
 }
 

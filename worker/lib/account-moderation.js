@@ -6,10 +6,16 @@
 import { json, HttpError, clientIp } from './http.js';
 import { readJson, stringValue } from './validation.js';
 import { timingSafeEqual } from './crypto.js';
-import { requireCurrentUser, requireAdmin, normalizeEmail, userFromRow } from './auth.js';
+import { requireCurrentUser, requireAdmin } from './auth.js';
 import { checkRateLimit } from './rate-limit.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { fireNotification } from './notifications.js';
+// #2542 (landed on main while this leaf's PR was in flight): normalizeEmail/
+// userFromRow stay defined in worker/index.js itself (re-exported for
+// worker/lib/auth-routes.js and worker/lib/stripe.js too) rather than
+// worker/lib/auth.js -- imported back from there, same established
+// worker/index.js <-> worker/lib/* shape auth-routes.js/stripe.js already use.
+import { normalizeEmail, userFromRow } from '../index.js';
 
 // The only way to become an admin (see migrations/0055_admin_role.sql) —
 // requires both a real session AND a Worker secret only whoever deploys

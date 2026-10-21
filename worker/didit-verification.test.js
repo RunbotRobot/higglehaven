@@ -1,6 +1,6 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { diditReservationStillUsable, latestDiditSession, reconcileDiditSession, reserveDiditSession } from './index.js';
+import { diditReservationStillUsable, latestDiditSession, reconcileDiditSession, reserveDiditSession } from './lib/didit.js';
 import { api, signupBuilder, signupSeller } from './test-helpers.js';
 
 // Own file (own D1/worker isolate — see test-helpers.js's own comment on
