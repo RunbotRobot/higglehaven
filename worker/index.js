@@ -42,6 +42,17 @@ import { handleCreditOrbs, spawnCreditOrbIfDue } from './lib/credit-orbs.js';
 // handler, extracted into worker/lib/ -- see that module's own comment for
 // what deliberately stayed here instead (and why).
 import { handleCatalog } from './lib/catalog.js';
+// #2542: the signup/login/logout/delete-account/change-password/me/
+// verify-email/request-password-reset/reset-password/resend-verification/
+// change-email/age-attest route handlers, extracted into
+// worker/lib/auth-routes.js -- see that module's own header comment for
+// what deliberately stayed here instead (handleAuth itself, handleExportData,
+// and the handful of helpers auth-routes.js imports back).
+import {
+  handleSignup, handleLogin, handleLogout, handleDeleteAccount, handleChangePassword, handleMe,
+  handleVerifyEmail, handleRequestPasswordReset, handleResetPassword, handleResendVerification,
+  handleChangeEmail, handleAgeAttest,
+} from './lib/auth-routes.js';
 
 // #1360: generic hardening every response from this Worker should carry,
 // regardless of path — applied in one place (fetch's own wrapper below)
@@ -6169,12 +6180,12 @@ export async function requireSessionSeller(request, db) {
 // above (and every ownership check built on them throughout this file)
 // are what actually put that unforgeable identity to work.
 
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const PBKDF2_ITERATIONS = 100000; // see the migration's own comment on why this is tunable per-hash, not global
-const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour — shorter than email verification since a leaked reset link is higher-stakes
-const FAILED_LOGIN_LOCK_THRESHOLD = 5;
-const FAILED_LOGIN_LOCK_DURATION_MS = 15 * 60 * 1000;
+// #2542: SESSION_TTL_MS/EMAIL_VERIFICATION_TTL_MS/PASSWORD_RESET_TTL_MS/
+// FAILED_LOGIN_LOCK_THRESHOLD/FAILED_LOGIN_LOCK_DURATION_MS all moved to
+// worker/lib/auth-routes.js (each exclusively used by handlers that moved
+// there) -- see that module's own header comment. PBKDF2_ITERATIONS stays
+// here since hashPassword (also staying, see above) depends on it.
 
 // checkRateLimit only ever prunes the one bucket it's currently checking —
 // a bucket that's hit once and never revisited (e.g. signup/reset attempts
@@ -6299,7 +6310,10 @@ export async function pruneOldDatabaseBackups(bucket) {
 // carries). Only ever stored server-side as a SHA-256 hash (see sha256Hex
 // below and each table's own token_hash column) — see
 // migrations/0053_users_auth.sql for why.
-function generateToken() {
+// Exported for worker/lib/auth-routes.js (#2542) -- also called from this
+// file's own delivery-confirmation token flow below, so it stays here
+// rather than moving with the auth routes themselves.
+export function generateToken() {
   return bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
 }
 
@@ -6307,7 +6321,10 @@ function generateToken() {
 // the migration's own comment) computed via the Workers runtime's native
 // Web Crypto PBKDF2 support — no dependency, no WASM build needed the way
 // bcrypt/scrypt would require here.
-async function hashPassword(password) {
+// Exported for worker/lib/auth-routes.js (#2542) -- also called from
+// cascadeDeleteAccount's own password-revocation hash below, so it stays
+// here rather than moving with handleSignup/handleResetPassword.
+export async function hashPassword(password) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits(
@@ -6316,18 +6333,8 @@ async function hashPassword(password) {
   return `pbkdf2$${PBKDF2_ITERATIONS}$${bytesToHex(salt)}$${bytesToHex(new Uint8Array(bits))}`;
 }
 
-async function verifyPassword(password, stored) {
-  const parts = typeof stored === 'string' ? stored.split('$') : [];
-  if (parts.length !== 4 || parts[0] !== 'pbkdf2') return false;
-  const [, iterationsText, saltHex, hashHex] = parts;
-  const iterations = Number(iterationsText);
-  if (!Number.isInteger(iterations) || iterations <= 0) return false;
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt: hexToBytes(saltHex), iterations }, key, 256,
-  );
-  return timingSafeEqual(bytesToHex(new Uint8Array(bits)), hashHex);
-}
+// #2542: verifyPassword moved to worker/lib/auth-routes.js (used only by
+// handlers that moved there) -- see that module's own header comment.
 
 // #771: not a real password's derivation, ever compared against a real
 // account — exists only so handleLogin's no-such-user path can burn the
@@ -6335,82 +6342,29 @@ async function verifyPassword(password, stored) {
 // doesn't let an attacker enumerate registered emails despite the
 // identical response body/status that path already returns.
 const DUMMY_PASSWORD_HASH = `pbkdf2$${PBKDF2_ITERATIONS}$${'00'.repeat(16)}$${'00'.repeat(32)}`;
+// #2542: DUMMY_PASSWORD_HASH itself can't be a named export of this file --
+// workerd requires every named export of the main Worker entry module to
+// be a function/class binding, not a plain value (#1978, same constraint
+// worker/lib/builder-profile.js's own comment documents for
+// D1_MAX_BOUND_PARAMETERS) -- exported as a getter instead, for
+// worker/lib/auth-routes.js's own handleLogin to call.
+export function dummyPasswordHash() {
+  return DUMMY_PASSWORD_HASH;
+}
 
-function normalizeEmail(value) {
+// Exported for worker/lib/auth-routes.js (#2542) -- also used by
+// handleGrantAdmin/handleRevokeAdmin/handleSuspendAccount/
+// handleUnsuspendAccount/handleSuspensionStatus below (admin/suspension
+// domain, not yet split out of this file), so it stays here rather than
+// moving with the signup/login routes.
+export function normalizeEmail(value) {
   return stringValue(value, 'email').toLowerCase();
 }
 
-// Issue #200's owner decision: one real account per email, closing the
-// sybil vector plain lowercasing leaves open — someone can otherwise
-// register unlimited distinct accounts against one real inbox
-// (`you+tag@gmail.com`, or Gmail's own dot-insensitivity:
-// `first.last@gmail.com`/`firstlast@gmail.com` are the same inbox), which
-// matters here specifically because of the one-claimed-landlet-per-builder
-// fairness invariant. Deliberately only
-// used to *detect* a collision at signup (see handleSignup) — the actual
-// `email` column stays the plain lowercased address forever, so this
-// never touches login, password reset, or any already-stored row.
-//
-// "+tag" stripping applies to every domain (a general catch, not
-// Gmail-specific — the owner's own framing: "if those apply to emails
-// other than Gmail as well, then we need a general catch"), since "+"
-// sub-addressing is a de facto standard most major providers honor
-// (Gmail, Outlook/Office365, Yahoo, FastMail, ProtonMail...), not a
-// Gmail-only quirk. Dot-removal, by contrast, IS Gmail-specific — no
-// other mainstream provider folds dots this way — so it's scoped to
-// gmail.com and its googlemail.com alias only, rather than applied
-// universally where it would incorrectly collide real distinct inboxes
-// on every other domain.
-function canonicalizeEmail(value) {
-  const email = normalizeEmail(value);
-  const atIndex = email.lastIndexOf('@');
-  if (atIndex === -1) return email;
-  const domain = email.slice(atIndex + 1);
-  let local = email.slice(0, atIndex);
-  const plusIndex = local.indexOf('+');
-  if (plusIndex !== -1) local = local.slice(0, plusIndex);
-  if (domain === 'gmail.com' || domain === 'googlemail.com') {
-    local = local.replaceAll('.', '');
-  }
-  return `${local}@${domain}`;
-}
-
-// Deliberately permissive — "does this look roughly like an email" rather
-// than a fully RFC-5322-correct pattern (famously not worth chasing; the
-// only real validation of an email address is actually receiving mail at
-// it, which email verification below already does).
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function emailValue(value) {
-  const email = normalizeEmail(value);
-  if (!EMAIL_PATTERN.test(email)) throw new HttpError('email is not a valid email address', 400);
-  return email;
-}
-
-function passwordValue(value) {
-  if (typeof value !== 'string') throw new HttpError('password is required', 400);
-  // NIST 800-63B's current guidance: a reasonable minimum length beats
-  // forced complexity rules (mandatory symbols/digits push people toward
-  // predictable substitutions, not real entropy). No upper bound close to
-  // 200 chars would ever be reached by a real password; it exists only to
-  // reject an absurd input before it reaches PBKDF2.
-  if (value.length < 8) throw new HttpError('password must be at least 8 characters', 400);
-  if (value.length > 200) throw new HttpError('password must be at most 200 characters', 400);
-  return value;
-}
-
-// Required, unlike the old free-text-or-blank display_name it replaces
-// (see migrations/0056_username_required_unique.sql) — how users
-// identify each other now, so a blank one defeats the point. No character
-// restriction beyond that, matching this codebase's existing minimal-
-// validation style for other free-text labels (builder/seller names).
-// Uniqueness itself is checked separately against the DB (see
-// handleSignup) since it isn't something a single value can validate.
-function usernameValue(value) {
-  const username = stringValue(value, 'username');
-  if (username.length > 40) throw new HttpError('username must be at most 40 characters', 400);
-  return username;
-}
+// #2542: canonicalizeEmail/EMAIL_PATTERN/emailValue/passwordValue/
+// usernameValue all moved to worker/lib/auth-routes.js (each exclusively
+// used by handlers that moved there) -- see that module's own header
+// comment.
 
 // Exported for worker/lib/stripe.js (#2541) -- its own card-setup/confirm
 // handlers need this same user-row shape for their response bodies.
@@ -6431,30 +6385,9 @@ export function userFromRow(row) {
   };
 }
 
-async function createSession(db, userId) {
-  const token = generateToken();
-  const tokenHash = await sha256Hex(token);
-  const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
-  await db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
-    .bind(tokenHash, userId, expiresAt).run();
-  return token;
-}
-
-// Mirrors checkAccessGate's own cookie-attribute reasoning above (HttpOnly
-// so frontend JS can never read the session token even via XSS; SameSite=
-// Lax rather than a separate CSRF token, since every mutating endpoint
-// here is POST and Lax cookies are already withheld from cross-site
-// POST/fetch/form-submit by every modern browser; Secure omitted only for
-// plain-http local dev).
-function sessionCookieHeader(url, token, maxAgeSeconds) {
-  const attrs = [`${SESSION_COOKIE_NAME}=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSeconds}`];
-  if (url.protocol === 'https:') attrs.push('Secure');
-  return attrs.join('; ');
-}
-
-function clearSessionCookieHeader(url) {
-  return sessionCookieHeader(url, '', 0);
-}
+// #2542: createSession/sessionCookieHeader/clearSessionCookieHeader all
+// moved to worker/lib/auth-routes.js (each exclusively used by handlers
+// that moved there) -- see that module's own header comment.
 
 // Neither `new URL(request.url).origin` nor the raw `Host` header can be
 // trusted here — confirmed by hand: curling
@@ -6504,7 +6437,10 @@ export function escapeHtml(value) {
 // handleRequestPasswordReset), the same "dev-mode" spirit already used
 // throughout this codebase, so the whole flow stays fully testable
 // without a real email provider.
-async function sendEmail(env, { to, subject, html, text }) {
+// Exported for worker/lib/auth-routes.js (#2542) -- also called from this
+// file's own scheduled()-driven migration-drift alert email below, so it
+// stays here rather than moving with the auth routes themselves.
+export async function sendEmail(env, { to, subject, html, text }) {
   if (!env.RESEND_API_KEY) return false;
   // #1283: fetch itself can reject (DNS failure, connection reset, TLS
   // error, timeout) rather than merely resolving with a non-2xx response —
@@ -8314,45 +8250,8 @@ async function handleAuth(request, env, db, route, url, ctx) {
 
 // #2541: handleCardSetupIntent/handleConfirmCard/claimCardFingerprint moved to worker/lib/stripe.js -- see that module's own header comment.
 
-// #2240: this file's own convention is that every authenticated,
-// repeatable mutation gets a checkRateLimit call regardless of how cheap
-// or idempotent it is (handleCardSetupIntent/handleConfirmCard/
-// handleDiditVerificationSession, the structurally closest siblings,
-// all have one) -- this endpoint was the one gap. requireCurrentUser's
-// own session + account_suspensions SELECTs still cost real D1 reads on
-// every call even once already attested, same unthrottled-flood shape
-// #827/#944/#990/#2123 were each filed and fixed for elsewhere.
-const AGE_ATTEST_RATE_LIMIT_MAX = 20;
-
-// #556: lets an existing session attest age after the fact. Signup's own
-// ageAttested checkbox (handleSignup above) only covers brand-new
-// accounts — every account created before that existed, plus the owner's
-// "force everyone through, no grandfathering" decision on trust_tier
-// (Control Room, 2026-09-09), needs a way to clear the same bar without
-// re-signing-up. Idempotent: attesting again on an already-attested
-// account is a no-op, not an error.
-async function handleAgeAttest(request, db) {
-  const user = await requireCurrentUser(request, db);
-  await checkRateLimit(db, `age-attest:${user.user_id}`, AGE_ATTEST_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  if (input.ageAttested !== true) {
-    throw new HttpError('You must confirm you meet the age requirement to continue.', 400);
-  }
-  if (user.age_attested_at === null) {
-    await db.prepare(`
-      UPDATE users SET age_attested_at = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(new Date().toISOString(), user.user_id).run();
-  }
-  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
-  // #2430: same concurrent-account-deletion race as handleConfirmCard's own
-  // re-SELECT above (self-delete from another session, or
-  // escalateExpiredSuspensions' own cascade) -- can remove this row in the
-  // await gap since the UPDATE (or, when already attested, since the
-  // requireCurrentUser read at the top of this handler).
-  if (!updated) return json({ error: 'Account no longer exists' }, 404);
-  return json({ user: userFromRow(updated) });
-}
+// #2542: handleAgeAttest moved to worker/lib/auth-routes.js -- see that
+// module's own header comment.
 
 // The only way to become an admin (see migrations/0055_admin_role.sql) —
 // requires both a real session AND a Worker secret only whoever deploys
@@ -8769,262 +8668,9 @@ async function handleSuspensionStatus(request, db, url) {
   });
 }
 
-async function handleSignup(request, env, db, url) {
-  const input = await readJson(request);
-  const email = emailValue(input.email);
-  const password = passwordValue(input.password);
-  const username = usernameValue(input.username);
-
-  // Counted against the rate limit the same as every other rejection below
-  // (see the duplicate-email 409's own comment on why) before checking it —
-  // a cheap validation failure shouldn't be a free, unlimited way to probe
-  // past the limiter.
-  await checkRateLimit(db, `signup:${clientIp(request)}:${email}`, 5);
-
-  // docs/SPEC.md §6, #556: registration requires age attestation. A plain
-  // boolean checkbox, not a birthdate collection — the spec's own bar here
-  // is attestation, not age verification (that's what the credit-card/
-  // government-ID tier immediately below is for).
-  if (input.ageAttested !== true) {
-    throw new HttpError('You must confirm you meet the age requirement to sign up.', 400);
-  }
-
-  // #200: canonicalizeEmail catches a "+tag"/dot variant of an already-
-  // registered address the same way a literal duplicate is caught —
-  // nothing about *why* it collides is any of an unauthenticated caller's
-  // business, so it gets the exact same message as a literal email
-  // conflict below, not called out as its own case.
-  const emailCanonical = canonicalizeEmail(email);
-  // Folds all three duplicate checks (email, canonical email, username —
-  // COLLATE NOCASE on users.username, migrations/0056, already makes
-  // "Ada"/"ada" collide at the column level) into the INSERT's own WHERE
-  // NOT EXISTS, the same atomic idiom this file already uses for
-  // friendships/product_reviews/auction_bids — a separate SELECT-then-
-  // INSERT here would let two concurrent signups (e.g. racing "+tag"
-  // variants of the same address) both pass every check before either
-  // INSERT commits, silently creating two accounts issue #200 is
-  // specifically meant to prevent.
-  const userId = `user-${crypto.randomUUID()}`;
-  const passwordHash = await hashPassword(password);
-  const ageAttestedAt = new Date().toISOString();
-  const inserted = await db.prepare(`
-    INSERT INTO users (user_id, email, password_hash, username, email_canonical, age_attested_at)
-    SELECT ?, ?, ?, ?, ?, ?
-    WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = ? OR email_canonical = ? OR username = ?)
-  `).bind(
-    userId, email, passwordHash, username, emailCanonical, ageAttestedAt,
-    email, emailCanonical, username,
-  ).run();
-  if (inserted.meta.changes === 0) {
-    // The atomic insert above already refused to happen — reading again
-    // here only decides which friendly message to show, it can't itself
-    // let a duplicate through.
-    const emailConflict = await db.prepare('SELECT 1 FROM users WHERE email = ? OR email_canonical = ?').bind(email, emailCanonical).first();
-    if (emailConflict) throw new HttpError('Email is already registered', 409);
-    throw new HttpError('Username is already taken', 409);
-  }
-
-  // docs/SPEC.md §3: "every user is automatically a builder — no separate
-  // account types." A seller profile stays deliberately lazy instead (see
-  // handleMySeller below) — selling is the more opt-in of the two per that
-  // same section ("uploading a product needs a seller identity chosen,
-  // quite apart from whichever builder identity is active").
-  await db.prepare('INSERT INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
-    .bind(`builder-${crypto.randomUUID()}`, username, userId).run();
-
-  const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, userId, email);
-  const sessionToken = await createSession(db, userId);
-  const row = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(userId).first();
-
-  return json({
-    user: userFromRow(row),
-    verificationEmailSent: emailSent,
-    ...(devVerifyUrl ? { devVerifyUrl } : {}),
-  }, 201, { 'set-cookie': sessionCookieHeader(url, sessionToken, SESSION_TTL_MS / 1000) });
-}
-
-async function issueEmailVerification(env, db, userId, email) {
-  const token = generateToken();
-  const tokenHash = await sha256Hex(token);
-  const expiresAt = new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS).toISOString();
-  await db.prepare('INSERT INTO email_verification_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
-    .bind(tokenHash, userId, expiresAt).run();
-  const verifyUrl = `${appBaseUrl(env)}/?verifyEmail=${token}`;
-  const emailSent = await sendEmail(env, {
-    to: email,
-    subject: 'Verify your higglehaven email',
-    html: `<p>Welcome to higglehaven! Confirm your email address to finish setting up your account:</p><p><a href="${verifyUrl}">${verifyUrl}</a></p><p>This link expires in 24 hours.</p>`,
-    text: `Welcome to higglehaven! Confirm your email address: ${verifyUrl} (expires in 24 hours)`,
-  });
-  // #811: devVerifyUrl must reflect whether Resend is *configured*, not
-  // whether the send happened to succeed — sendEmail returns false for both
-  // "no RESEND_API_KEY" (dev/test) and a genuine production send failure, so
-  // gating on emailSent alone would echo the real single-use token back to
-  // the client mislabeled as a harmless dev-mode convenience whenever Resend
-  // has a transient failure. Mirrors handleRequestPasswordReset's existing
-  // env.RESEND_API_KEY gate for the identical sendEmail ambiguity.
-  return { emailSent, devVerifyUrl: env.RESEND_API_KEY ? null : verifyUrl };
-}
-
-async function handleResendVerification(request, env, db) {
-  const user = await requireCurrentUser(request, db);
-  if (user.email_verified_at !== null) throw new HttpError('Email is already verified', 400);
-  // #363: this endpoint requires a session, so it doesn't need the IP+email
-  // bucketing signup/password-reset use to stop targeted enumeration/
-  // harassment — but with no limit at all, one logged-in user could still
-  // loop this to burn the operator's Resend quota/sending reputation.
-  // Keyed by user id alone since the caller's identity is already proven.
-  await checkRateLimit(db, `resend-verification:${user.user_id}`, 5);
-  const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, user.email);
-  return json({ verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
-}
-
-// #1182 (sub-issue of #1126, owner direction via Control Room 2026-10-01):
-// an in-session way to change your account email. Same current-password
-// bar as handleDeleteAccount, and the same atomic email/email_canonical
-// uniqueness idiom handleSignup's own INSERT ... WHERE NOT EXISTS uses
-// (a separate SELECT-then-UPDATE here would let two concurrent requests
-// both pass a pre-check before either write commits).
-//
-// Re-verification: the owner flagged "should changing email reset the
-// email-verification status" as its own open call rather than deciding it
-// up front. Resolved here by reading what email_verified_at actually does
-// in this codebase rather than guessing: userFromRow/docs/API.md's own
-// description of it is purely an informational "✓ Email verified" badge
-// (src/main.js's authAccountVerifiedEl) — unlike trust_tier/age_attested_at,
-// nothing gates real functionality on it (see assertVerified above, which
-// checks those two, never email_verified_at). So resetting it to NULL and
-// re-sending the verification email here is the direct, low-risk
-// application of the exact mechanism issueEmailVerification already uses
-// at signup to this same "new address, not yet confirmed" situation — not
-// a new policy, just the existing one applied consistently. Worth a glance
-// from the owner given they flagged it, but not blocking on it: nothing is
-// lost either way (no privilege revoked), and the alternative (leaving a
-// stale verified badge on an address that was never actually confirmed)
-// is the one that reads as clearly wrong.
-const CHANGE_EMAIL_RATE_LIMIT_MAX = 5;
-async function handleChangeEmail(request, env, db) {
-  const user = await requireCurrentUser(request, db);
-  await checkRateLimit(db, `change-email:${user.user_id}`, CHANGE_EMAIL_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const password = typeof input.password === 'string' ? input.password : '';
-  if (!(await verifyPassword(password, user.password_hash))) {
-    throw new HttpError('Incorrect password', 401);
-  }
-  const email = emailValue(input.email);
-  if (email === user.email) throw new HttpError('That is already your current email', 400);
-  const emailCanonical = canonicalizeEmail(email);
-  const result = await db.prepare(`
-    UPDATE users SET email = ?, email_canonical = ?, email_verified_at = NULL,
-      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE user_id = ?
-      AND NOT EXISTS (SELECT 1 FROM users WHERE (email = ? OR email_canonical = ?) AND user_id != ?)
-  `).bind(email, emailCanonical, user.user_id, email, emailCanonical, user.user_id).run();
-  if (result.meta.changes === 0) throw new HttpError('Email is already registered', 409);
-  const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, email);
-  const row = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
-  // #2430: the UPDATE's own meta.changes check above only confirms it
-  // matched a row (and won the email-collision race) at the moment it ran
-  // -- a concurrent account deletion landing in the await gap since (the
-  // issueEmailVerification call above) can still remove the row before
-  // this re-SELECT runs, same race shape #2334/#2354/#2364/#2391/#2392
-  // already fixed elsewhere.
-  if (!row) return json({ error: 'Account no longer exists' }, 404);
-  return json({ user: userFromRow(row), verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
-}
-
-// #833: every sibling auth endpoint in this file rate-limits by IP
-// (signup/password-reset key by ip+email; access-login's passphrase gate
-// keys by ip alone) — this one had neither, unlike them with no comment
-// explaining an exemption. The per-account lockout below (failed_login_
-// attempts >= threshold) stops brute-forcing *one* known account, but does
-// nothing against spraying one guessed/leaked password across many
-// different emails from the same IP, since each email gets its own
-// independent lockout budget. Bucketed by IP alone (not ip+email, unlike
-// signup/password-reset) specifically because spraying across many emails
-// is the attack this needs to stop.
-const LOGIN_RATE_LIMIT_MAX = 10;
-
-async function handleLogin(request, db, url) {
-  await checkRateLimit(db, `login:${clientIp(request)}`, LOGIN_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const email = normalizeEmail(input.email);
-  const password = typeof input.password === 'string' ? input.password : '';
-
-  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
-  // Same generic message whether the email doesn't exist or the password
-  // is wrong — telling the two apart lets an attacker enumerate which
-  // emails have accounts here. #771: the response *body* being identical
-  // isn't enough on its own — burn the same PBKDF2 cost here that a real
-  // verifyPassword call below would, so response latency can't be used to
-  // tell the two cases apart either.
-  const invalidCredentials = () => new HttpError('Invalid email or password', 401);
-  if (!row) {
-    await verifyPassword(password, DUMMY_PASSWORD_HASH);
-    throw invalidCredentials();
-  }
-
-  if (row.locked_until && row.locked_until > new Date().toISOString()) {
-    throw new HttpError('Too many failed attempts. Try again in a few minutes.', 423);
-  }
-
-  const valid = await verifyPassword(password, row.password_hash);
-  if (!valid) {
-    // The increment itself has to be the atomic operation, not a value
-    // computed from the stale `row` read above and written back separately
-    // — otherwise concurrent requests all compute the same
-    // `attempts = row.failed_login_attempts + 1` from the same starting
-    // count and each writes that same small number back, so the lockout
-    // threshold is never actually reached no matter how many guesses run
-    // in parallel. `failed_login_attempts + 1` here (both in SET and in
-    // the CASE) refers to this row's own pre-update value, same as any
-    // single UPDATE statement's SET list — safe against lost updates the
-    // same way `handlePurchaseRefund`'s `WHERE refunded_at IS NULL` guard
-    // is, just via an atomic increment instead of an atomic guard.
-    await db.prepare(`
-      UPDATE users SET
-        failed_login_attempts = failed_login_attempts + 1,
-        locked_until = CASE WHEN failed_login_attempts + 1 >= ? THEN ? ELSE locked_until END,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(
-      FAILED_LOGIN_LOCK_THRESHOLD,
-      new Date(Date.now() + FAILED_LOGIN_LOCK_DURATION_MS).toISOString(),
-      row.user_id,
-    ).run();
-    throw invalidCredentials();
-  }
-
-  await db.prepare(`
-    UPDATE users SET failed_login_attempts = 0, locked_until = NULL,
-      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE user_id = ?
-  `).bind(row.user_id).run();
-
-  const sessionToken = await createSession(db, row.user_id);
-  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(row.user_id).first();
-  // #2430: a concurrent account deletion (another session's own self-
-  // delete, or escalateExpiredSuspensions' own cascade) landing in the
-  // await gap since the UPDATE above (or createSession just before) can
-  // remove this row before this re-SELECT runs, same race shape
-  // #2334/#2354/#2364/#2391/#2392 already fixed elsewhere.
-  if (!updated) return json({ error: 'Account no longer exists' }, 404);
-  return json(
-    { user: userFromRow(updated) },
-    200,
-    { 'set-cookie': sessionCookieHeader(url, sessionToken, SESSION_TTL_MS / 1000) },
-  );
-}
-
-async function handleLogout(request, db, url) {
-  const cookies = parseCookies(request.headers.get('cookie'));
-  const token = cookies[SESSION_COOKIE_NAME];
-  if (token) {
-    const tokenHash = await sha256Hex(token);
-    await db.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(tokenHash).run();
-  }
-  return json({ loggedOut: true }, 200, { 'set-cookie': clearSessionCookieHeader(url) });
-}
+// #2542: handleSignup/issueEmailVerification/handleResendVerification/
+// handleChangeEmail/handleLogin/handleLogout all moved to
+// worker/lib/auth-routes.js -- see that module's own header comment.
 
 // #1146 (sub-issue of #1145, owner decision via a live Control Room
 // conversation): real account deletion, not the pre-existing "Delete
@@ -9043,8 +8689,8 @@ async function handleLogout(request, db, url) {
 // kill an account, so this requires re-entering the current password, the
 // same bar a real "verify it's still you" action needs -- and like every
 // other password check in this file, it's rate-limited per-account so the
-// check itself can't be used to brute-force the real password.
-const DELETE_ACCOUNT_RATE_LIMIT_MAX = 5;
+// check itself can't be used to brute-force the real password (see
+// handleDeleteAccount, worker/lib/auth-routes.js, #2542).
 
 // #2033 (sub-issue of #1201): the actual row-mutating cascade, split out
 // of handleDeleteAccount so the 30-day grace-period auto-escalation (see
@@ -9068,7 +8714,10 @@ const DELETE_ACCOUNT_RATE_LIMIT_MAX = 5;
 // first, inside the same atomic db.batch() as everything else: if either
 // guard blocks, this WHERE simply matches nothing, leaving the account
 // (and its session) exactly as live as it was before the call.
-async function cascadeDeleteAccount(db, userId) {
+// Exported for worker/lib/auth-routes.js (#2542) -- also called from this
+// file's own escalateExpiredSuspensions cron job above, so it stays here
+// rather than moving with handleDeleteAccount itself.
+export async function cascadeDeleteAccount(db, userId) {
   // Freed rather than hard-deleted, per #1145's "email/username freed ...
   // per the owner's chosen approach" -- rewritten to a placeholder unique
   // to this user_id so the real email/username are available again for a
@@ -9166,19 +8815,9 @@ async function cascadeDeleteAccount(db, userId) {
   };
 }
 
-async function handleDeleteAccount(request, db, url) {
-  const user = await requireCurrentUser(request, db);
-  await checkRateLimit(db, `delete-account:${user.user_id}`, DELETE_ACCOUNT_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const password = typeof input.password === 'string' ? input.password : '';
-  if (!(await verifyPassword(password, user.password_hash))) {
-    throw new HttpError('Incorrect password', 401);
-  }
-
-  await cascadeDeleteAccount(db, user.user_id);
-
-  return json({ accountDeleted: true }, 200, { 'set-cookie': clearSessionCookieHeader(url) });
-}
+// #2542: handleDeleteAccount moved to worker/lib/auth-routes.js (calls
+// cascadeDeleteAccount above, imported back) -- see that module's own
+// header comment.
 
 // #2033 (sub-issue of #1201): an admin-initiated suspension (#2029) that
 // nobody lifts within its own grace_period_ends_at auto-escalates into
@@ -9231,57 +8870,9 @@ export async function escalateExpiredSuspensions(db) {
 // action would be pure friction, not a real security improvement -- the
 // actual risk this closes (an old password still working on some other
 // device/session) is the same either way.
-const CHANGE_PASSWORD_RATE_LIMIT_MAX = 5;
-
-async function handleChangePassword(request, db) {
-  const user = await requireCurrentUser(request, db);
-  await checkRateLimit(db, `change-password:${user.user_id}`, CHANGE_PASSWORD_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const currentPassword = typeof input.currentPassword === 'string' ? input.currentPassword : '';
-  if (!(await verifyPassword(currentPassword, user.password_hash))) {
-    throw new HttpError('Incorrect password', 401);
-  }
-  const newPassword = passwordValue(input.newPassword);
-  const passwordHash = await hashPassword(newPassword);
-  const cookies = parseCookies(request.headers.get('cookie'));
-  const currentTokenHash = await sha256Hex(cookies[SESSION_COOKIE_NAME]);
-
-  await db.batch([
-    db.prepare(`
-      UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(passwordHash, user.user_id),
-    db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').bind(user.user_id, currentTokenHash),
-    // #2293: same #843 invariant handleResetPassword's own DELETE already
-    // enforces -- a password-changing event for this account must
-    // invalidate any outstanding reset token too, or an older, still-
-    // unexpired reset link (e.g. minted by an attacker with momentary
-    // email access, never used immediately) remains valid and can
-    // silently undo this very change afterward. #843's fix landed only on
-    // the reset-password side; this is the sibling in-session change path
-    // that never got it.
-    db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').bind(user.user_id),
-  ]);
-  return json({ changed: true });
-}
-
-// Deliberately always 200, even with no session — a 401 here would be more
-// conventionally RESTful, but this endpoint gets called unconditionally on
-// every single page load (see the frontend's own bootstrap) specifically
-// to answer "is anyone logged in right now," and the overwhelmingly common
-// case for most visitors is "no." A 4xx response logs a "Failed to load
-// resource" message straight from the browser's own network stack — not
-// something application code can suppress — which every e2e test's shared
-// console-error collector (see e2e/helpers.mjs) then reads as a real page
-// error, on every single test, whether or not it has anything to do with
-// auth. requireCurrentUser (a real 401) is still exactly right for actual
-// protected actions like resend-verification below, just not for this
-// passive status check.
-async function handleMe(request, db) {
-  const user = await currentUser(request, db);
-  return json({ user: user ? userFromRow(user) : null });
-}
+//
+// #2542: handleChangePassword/handleMe both moved to
+// worker/lib/auth-routes.js -- see that module's own header comment.
 
 // #1984 (sub-issue of #1983, owner-greenlit on #1480): GDPR/CCPA "right to
 // access" companion to #1145's own "right to erasure" -- the requesting
@@ -9547,141 +9138,9 @@ async function exportCommerceData(db, builderRow) {
   };
 }
 
-// #1323: handleResendVerification (the token-issuing side) already
-// rate-limits itself (#363) -- this, the token-consuming side, never did,
-// leaving it the one public, cheap-to-hit, always-does-a-DB-read-per-call
-// mutation endpoint in this file with no throttle at all. Same
-// LOGIN_RATE_LIMIT_MAX/CONFIRM_DELIVERY_RATE_LIMIT_MAX "= 20" convention
-// for an unauthenticated repeatable write, bucketed by IP since no
-// builder/user identity exists yet at this point in the handler.
-const EMAIL_VERIFY_RATE_LIMIT_MAX = 20;
-
-async function handleVerifyEmail(request, db) {
-  await checkRateLimit(db, `email-verify:${clientIp(request)}`, EMAIL_VERIFY_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const token = stringValue(input.token, 'token');
-  const tokenHash = await sha256Hex(token);
-  const row = await db.prepare(`
-    SELECT * FROM email_verification_tokens
-    WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-  `).bind(tokenHash).first();
-  if (!row) throw new HttpError('Verification link is invalid or has expired', 400);
-
-  // #377: the WHERE ... consumed_at IS NULL guard on this UPDATE (run
-  // standalone before the follow-up write, not batched with it) is what
-  // makes this safe against a concurrent double-use of the same token —
-  // only whichever call's UPDATE actually lands first changes any rows,
-  // same idiom as handleCalendarEventTrigger's own triggered_at guard.
-  const result = await db.prepare(`
-    UPDATE email_verification_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE token_hash = ? AND consumed_at IS NULL
-  `).bind(tokenHash).run();
-  if (result.meta.changes !== 1) throw new HttpError('Verification link is invalid or has expired', 400);
-
-  await db.prepare(`
-    UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE user_id = ?
-  `).bind(row.user_id).run();
-  return json({ verified: true });
-}
-
-async function handleRequestPasswordReset(request, env, db, ctx) {
-  const input = await readJson(request);
-  const email = normalizeEmail(input.email);
-
-  await checkRateLimit(db, `password-reset:${clientIp(request)}:${email}`, 5);
-
-  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
-
-  // Always the same response regardless of whether the account exists —
-  // unlike signup (which does reveal a duplicate email, common and
-  // accepted practice), this specific endpoint is the classic account-
-  // enumeration vector, so it stays generic on purpose.
-  let devResetUrl = null;
-  if (row) {
-    const token = generateToken();
-    const tokenHash = await sha256Hex(token);
-    const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString();
-    await db.prepare('INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
-      .bind(tokenHash, row.user_id, expiresAt).run();
-    const resetUrl = `${appBaseUrl(env)}/?resetPassword=${token}`;
-    const emailPayload = {
-      to: email,
-      subject: 'Reset your higglehaven password',
-      html: `<p>Someone requested a password reset for this higglehaven account. If that was you:</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>This link expires in 1 hour. If you didn't request this, you can ignore this email.</p>`,
-      text: `Reset your higglehaven password: ${resetUrl} (expires in 1 hour). If you didn't request this, ignore this email.`,
-    };
-    // #778: awaiting sendEmail here used to put a real Resend API round-trip
-    // on this branch's response path while the no-such-user branch above
-    // returns almost instantly, letting an attacker enumerate registered
-    // emails by latency despite the identical response body — the same bug
-    // class #771 fixed for login's PBKDF2 cost. When Resend is actually
-    // configured (production), fire the send in the background via
-    // ctx.waitUntil instead of awaiting it, so both branches return in
-    // comparable time. In dev/test (RESEND_API_KEY unset), sendEmail
-    // returns false synchronously with no network call — no timing gap to
-    // close — so it stays awaited there, which is what lets devResetUrl
-    // keep working for local testing.
-    if (env.RESEND_API_KEY) {
-      ctx.waitUntil(sendEmail(env, emailPayload).catch((error) => {
-        console.error('Password reset email failed', error);
-      }));
-    } else {
-      const emailSent = await sendEmail(env, emailPayload);
-      if (!emailSent) devResetUrl = resetUrl;
-    }
-  }
-  return json({ requested: true, ...(devResetUrl ? { devResetUrl } : {}) });
-}
-
-// #1323: same gap as EMAIL_VERIFY_RATE_LIMIT_MAX just above, for the
-// password-reset token's own consuming side -- handleRequestPasswordReset
-// (the issuing side) already rate-limits itself.
-const PASSWORD_RESET_CONSUME_RATE_LIMIT_MAX = 20;
-
-async function handleResetPassword(request, db) {
-  await checkRateLimit(db, `password-reset-consume:${clientIp(request)}`, PASSWORD_RESET_CONSUME_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const token = stringValue(input.token, 'token');
-  const newPassword = passwordValue(input.newPassword);
-  const tokenHash = await sha256Hex(token);
-
-  const row = await db.prepare(`
-    SELECT * FROM password_reset_tokens
-    WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-  `).bind(tokenHash).first();
-  if (!row) throw new HttpError('Reset link is invalid or has expired', 400);
-
-  // #377: same atomic-guard idiom as handleVerifyEmail above — checked
-  // before hashing the new password or touching users/sessions at all, so
-  // a lost race short-circuits before any of that work.
-  const result = await db.prepare(`
-    UPDATE password_reset_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE token_hash = ? AND consumed_at IS NULL
-  `).bind(tokenHash).run();
-  if (result.meta.changes !== 1) throw new HttpError('Reset link is invalid or has expired', 400);
-
-  const passwordHash = await hashPassword(newPassword);
-  await db.batch([
-    db.prepare(`
-      UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(passwordHash, row.user_id),
-    // Resetting a password signs every device out — standard practice, and
-    // the right call if the reset was prompted by a compromised password:
-    // an attacker who was riding an existing session loses it too.
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(row.user_id),
-    // #843: also invalidate any other outstanding reset tokens for this
-    // account — otherwise an older, still-unexpired link from an earlier
-    // request remains valid and can silently undo this reset afterward,
-    // the same account-takeover shape the session wipe above exists to
-    // close, just via an old email link instead of an old session.
-    db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').bind(row.user_id),
-  ]);
-  return json({ reset: true });
-}
+// #2542: handleVerifyEmail/handleRequestPasswordReset/handleResetPassword
+// all moved to worker/lib/auth-routes.js -- see that module's own header
+// comment.
 
 // #199: a seller's claimed landlet (aliased `owned` by every caller of
 // this fragment) stops locking their "one claimed landlet" slot the
