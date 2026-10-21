@@ -1395,9 +1395,22 @@ function findTemplate(templateId) {
 const gltfLoader = new GLTFLoader();
 const modelGltfCache = new Map(); // modelUrl -> Promise<GLTF>
 
+// #2438: a failed load used to cache the REJECTED promise just as
+// permanently as a successful one — a single transient failure (a dropped
+// request, an R2 read racing right behind the upload that created this
+// exact file) poisoned this URL for the rest of the tab's session, since
+// every later caller (a second placed instance of the same template, a
+// later view of the same product) got handed the same already-rejected
+// promise instead of a fresh attempt. Deleting the cache entry the moment
+// it rejects — before the rejection ever reaches this call's own caller —
+// means only the failing attempt itself sees that rejection; the next call
+// for the same url finds the cache empty again and genuinely retries.
 function loadModelGltf(url) {
   if (!modelGltfCache.has(url)) {
-    modelGltfCache.set(url, gltfLoader.loadAsync(url));
+    modelGltfCache.set(url, gltfLoader.loadAsync(url).catch((err) => {
+      modelGltfCache.delete(url);
+      throw err;
+    }));
   }
   return modelGltfCache.get(url);
 }
