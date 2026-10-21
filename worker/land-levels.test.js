@@ -1182,7 +1182,7 @@ describe('Landlet levels', () => {
 
     it('lists purchases with a dangling seller_id, admin-only', async () => {
       const seller = await signupSeller('purchase-dangling-seller');
-      const builder = await signupBuilder('purchase-dangling-seller-builder');
+      const builder = await signupAdmin('purchase-dangling-seller-builder');
       await createGreenbeltLandletWithArea('purchase-dangling-seller-landlet', 1000);
       await claim('purchase-dangling-seller-landlet', builder);
       const created = await api('/catalog', seller.session({
