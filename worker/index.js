@@ -30,6 +30,15 @@ import {
   handleUploadedAsset, handleModelUpload, handleModelListing, handleModelStorage, handleModelCleanup,
   scheduledModelCleanup, cleanupUnreferencedModels,
 } from './lib/models.js';
+// #2535: the builder-profile domain (see that module's own comment for
+// why handleBuilders itself -- the /api/builders dispatcher these are
+// called from -- stays here rather than moving too, and for why this
+// creates an intentional, safe circular import with this file).
+import {
+  getOrCreateBuilderForUser, handleMyBuilder, handleMyOwnedAvatars, handleMyAvatar,
+  handleMyNotificationPreferences, handleMyOwnedAnimations, handleBuilderLowStock, handleMyAnimation,
+  builderFromRow, publicBuilderFromRow, requireBuilder,
+} from './lib/builder-profile.js';
 // #2541: Stripe webhook/card-setup, Didit verification, video generation,
 // and credit-orb route handlers, extracted into worker/lib/ -- see each
 // module's own comment for what deliberately stayed here instead (and why).
@@ -40,6 +49,17 @@ import {
   expireStaleVideoGenerationJobs,
 } from './lib/video-generation.js';
 import { handleCreditOrbs, spawnCreditOrbIfDue } from './lib/credit-orbs.js';
+// #2542: the signup/login/logout/delete-account/change-password/me/
+// verify-email/request-password-reset/reset-password/resend-verification/
+// change-email/age-attest route handlers, extracted into
+// worker/lib/auth-routes.js -- see that module's own header comment for
+// what deliberately stayed here instead (handleAuth itself, handleExportData,
+// and the handful of helpers auth-routes.js imports back).
+import {
+  handleSignup, handleLogin, handleLogout, handleDeleteAccount, handleChangePassword, handleMe,
+  handleVerifyEmail, handleRequestPasswordReset, handleResetPassword, handleResendVerification,
+  handleChangeEmail, handleAgeAttest,
+} from './lib/auth-routes.js';
 
 // #1360: generic hardening every response from this Worker should carry,
 // regardless of path — applied in one place (fetch's own wrapper below)
@@ -3503,452 +3523,6 @@ async function handleBuilders(request, env, db, route, url) {
   return json({ error: 'Not found' }, 404);
 }
 
-function builderFromRow(row) {
-  return {
-    ...publicBuilderFromRow(row),
-    // Land acquisition auctions (docs/SPEC.md §5, migrations/0045) — a
-    // real, persisted ledger credited when this builder sells a landlet
-    // via auction. See migrations/0045's own note on why bidding itself
-    // isn't gated by having a sufficient balance yet. A real Stripe-
-    // redeemable balance (handleBuilderRedeem) — never include this in a
-    // shape returned from an unauthenticated or cross-account lookup (#807:
-    // it was leaking through GET /api/builders and its ids/label variants,
-    // none of which are gated on the caller owning the row).
-    higglesBalanceCents: row.higgles_balance_cents,
-    // #2067: own-account-only, same reasoning as higglesBalanceCents above
-    // -- a communication preference has no reason to leak through a
-    // cross-account lookup either.
-    notifySoldOutEmail: !!row.notify_sold_out_email,
-    // #2442: own-account-only, same reasoning as higglesBalanceCents above
-    // -- this balance (migrations/0127) was never surfaced anywhere in the
-    // response shape at all, so the Upload Model modal had nothing to read
-    // to show a builder how many free video-to-3D generations they have
-    // left before they actually attempt one.
-    videoGenerationCredits: row.video_generation_credits,
-  };
-}
-
-// #807: the subset of builderFromRow safe to hand back for a lookup that
-// isn't scoped to the caller's own account — GET /api/builders and its
-// ?ids=/?label= variants (used by the "Add friend" name lookup, the Shop
-// mode owner-label map, and the auction bid-history label map), none of
-// which call requireCurrentUser. landCapM2/ownedAreaM2 stay in this public
-// shape (unlike higglesBalanceCents) since landlet ownership and its cap
-// are already visible to any Shop-mode visitor by design — only the real
-// money balance is the sensitive field here.
-function publicBuilderFromRow(row) {
-  return {
-    builderId: row.builder_id,
-    label: row.label,
-    // Land cap (docs/SPEC.md §3, migrations/0050) — how much total lándlet
-    // area this builder may own at once, distinct from higglesBalanceCents
-    // (which land-specific lándlets can be acquired via auction).
-    landCapM2: row.land_cap_m2,
-    // The real total currently counted against that cap — ground-level
-    // landlet area plus every level's own cap_consumed_m2 (docs/API.md's
-    // "Vertical construction"), the same sum recomputeLandCap/
-    // recomputeLandCapsBatch already compute internally to grow landCapM2
-    // itself. Only present (non-null) on a row that just went through one
-    // of those — GET /api/builders and GET /api/builders/me both do; a
-    // plain create/rename response doesn't recompute anything, so stays
-    // null rather than a stale or misleadingly-precise-looking number.
-    ownedAreaM2: row.owned_area_m2 ?? null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
-async function requireBuilder(db, builderId) {
-  const row = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
-  if (!row) throw new HttpError('Builder not found', 404);
-  return row;
-}
-
-// Real accounts (migrations/0054_link_builders_sellers_to_users.sql) — the
-// builder profile behind the current session, auto-provisioned if somehow
-// missing. Every account already gets one at signup (see handleSignup,
-// docs/SPEC.md §3's "every user is automatically a builder"); the
-// get-or-create here is a defensive fallback for that invariant, not the
-// primary way a builder profile comes to exist, so this should really
-// only ever hit the "already exists" path in practice. 401 with no
-// session (requireCurrentUser); never a 404 either way.
-async function getOrCreateBuilderForUser(db, user) {
-  // #946: INSERT OR IGNORE + unconditional re-read (mirroring
-  // ownedAvatarStatement below) rather than SELECT-then-conditionally-
-  // INSERT — the latter raced two concurrent requests for the same
-  // account's builder profile against the partial UNIQUE INDEX on
-  // builders.user_id (migrations/0054), surfacing to the loser as a
-  // confusing 409 instead of a clean idempotent get-or-create.
-  const builderId = `builder-${crypto.randomUUID()}`;
-  await db.prepare('INSERT OR IGNORE INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
-    .bind(builderId, user.username, user.user_id).run();
-  const row = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(user.user_id).first();
-  // #336/#325: keeps a real "was this builder recently active" signal
-  // fresh — see migrations/0067's own comment for why neither of this
-  // table's existing timestamps works for that. Bumped here (every
-  // caller resolves "my builder profile," whether that's to mutate
-  // something or just to load it on entering a mode) rather than only in
-  // requireSessionBuilder, per the owner's #325 decision: "I'm inclined
-  // to count any login as activity — even if only logging in for
-  // shopping or selling." Every one of this function's own callers is
-  // already an authenticated request by definition (requireCurrentUser
-  // already ran), so there's nothing further to gate this on.
-  // #783: inactivity_warning_sent_at (migrations/0109) is re-armed to
-  // NULL in this same statement — real activity ends the current
-  // inactivity cycle, so warnInactiveLandletOwners should be free to warn
-  // again the next time this builder goes quiet, rather than staying
-  // permanently silenced by a warning from a previous cycle.
-  await db.prepare(
-    `UPDATE builders SET last_active_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), inactivity_warning_sent_at = NULL WHERE builder_id = ?`,
-  ).bind(row.builder_id).run();
-  return row;
-}
-
-async function handleMyBuilder(request, db) {
-  const user = await requireCurrentUser(request, db);
-  const row = await getOrCreateBuilderForUser(db, user);
-  const { nextCap, ownedAreaM2 } = await recomputeLandCap(db, row.builder_id);
-  row.land_cap_m2 = nextCap;
-  row.owned_area_m2 = ownedAreaM2;
-  return json({ builder: builderFromRow(row) });
-}
-
-// #680 (sub-issue of #679, N53): every "avatar"-category catalog template
-// this account currently owns (owned_avatars, migrations/0083) — for a
-// future picker UI to offer, independent of which one (if any) is
-// currently equipped. Same requireCurrentUser-only bar as
-// handleBuilderStripeAccount/handleBuilderRedeem just below (not the
-// full requireSessionBuilder/assertVerified gate) — reading your own
-// purchase history isn't a world/shop-selling action N44 was aimed at.
-async function handleMyOwnedAvatars(request, db) {
-  const user = await requireCurrentUser(request, db);
-  const builder = await getOrCreateBuilderForUser(db, user);
-  const { results } = await db.prepare(`
-    SELECT catalog_templates.*, owned_avatars.purchased_at AS owned_purchased_at
-    FROM owned_avatars
-    JOIN catalog_templates ON catalog_templates.template_id = owned_avatars.template_id
-    WHERE owned_avatars.builder_id = ?
-    ORDER BY owned_avatars.purchased_at DESC
-  `).bind(builder.builder_id).all();
-  return json({
-    avatars: results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
-  });
-}
-
-// #1057: PUT below had no rate limit at all, unlike every comparable
-// authenticated mutation resource in this file (BUNDLE_MUTATE_RATE_LIMIT_MAX
-// #892, FRIENDSHIP_MUTATE_RATE_LIMIT_MAX #899, and others) — #680 never got
-// the equivalent when it introduced this endpoint.
-const AVATAR_EQUIP_RATE_LIMIT_MAX = 20;
-
-// #680: which owned avatar (if any) this account currently has equipped
-// as their own in-world character. GET returns the current choice (null
-// means today's hardcoded default — see createShopAvatar in src/main.js
-// and #679's own "assigned instantly at registration" note, unaffected
-// either way). PUT changes it, rejecting anything not already present in
-// owned_avatars so equipping is only ever "pick one you've already paid
-// for," never a way to wear an arbitrary unbought template.
-async function handleMyAvatar(request, db) {
-  const user = await requireCurrentUser(request, db);
-  const builder = await getOrCreateBuilderForUser(db, user);
-
-  if (request.method === 'GET') {
-    return json({ avatar: await myAvatarJson(db, builder) });
-  }
-
-  if (request.method === 'PUT') {
-    await checkRateLimit(db, `avatar-equip:${builder.builder_id}`, AVATAR_EQUIP_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    let templateId = null;
-    if (input.templateId !== null && input.templateId !== undefined) {
-      templateId = labelValue(input.templateId, 'templateId');
-      // Eager check for a clear 403 in the common case — the atomic guard
-      // folded into the UPDATE's own WHERE clause below is the real race
-      // guard (#801): without it, a refund's owned_avatars revocation
-      // landing between this SELECT and the UPDATE could still let this
-      // request equip an item that was just revoked out from under it,
-      // same non-atomic-check-then-write class of bug this file guards
-      // against elsewhere (e.g. the refund's own conditional UPDATE).
-      const owned = await db.prepare(
-        'SELECT 1 FROM owned_avatars WHERE builder_id = ? AND template_id = ?',
-      ).bind(builder.builder_id, templateId).first();
-      if (!owned) throw new HttpError('You do not own this avatar', 403);
-    }
-    const result = await db.prepare(`
-      UPDATE builders SET equipped_avatar_template_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE builder_id = ?
-        AND (? IS NULL OR EXISTS (SELECT 1 FROM owned_avatars WHERE builder_id = ? AND template_id = ?))
-    `).bind(templateId, builder.builder_id, templateId, builder.builder_id, templateId).run();
-    if (result.meta.changes === 0) {
-      throw new HttpError('You do not own this avatar', 403);
-    }
-    const updated = await requireBuilder(db, builder.builder_id);
-    return json({ avatar: await myAvatarJson(db, updated) });
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-async function myAvatarJson(db, builder) {
-  if (!builder.equipped_avatar_template_id) {
-    return { equippedTemplateId: null, modelUrl: null, skeletonSignature: null };
-  }
-  // A template can vanish after being equipped (its seller later deletes
-  // it) — falls back to the default the same way a dangling seller_id/
-  // templateId elsewhere in this app already does, rather than erroring.
-  const template = await db.prepare(
-    'SELECT model_url, skeleton_signature FROM catalog_templates WHERE template_id = ?',
-  ).bind(builder.equipped_avatar_template_id).first();
-  return {
-    equippedTemplateId: template ? builder.equipped_avatar_template_id : null,
-    modelUrl: template?.model_url || null,
-    // #1164 (sub-issue of #1161): the equipped avatar's own skeleton
-    // signature (#1162), so the shop/equip UI can compare it against a
-    // purchasable/owned animation's own signature for compatibility
-    // without a second round trip. null for the default procedural avatar
-    // (no equipped template at all) or a custom avatar with no skeleton —
-    // either way, nothing for an animation to ever compare equal to.
-    skeletonSignature: template?.skeleton_signature || null,
-  };
-}
-
-// #2103: PUT below had no rate limit at all, unlike handleMyAvatar's own
-// PUT (AVATAR_EQUIP_RATE_LIMIT_MAX #1057) -- this function's own comment
-// already says it mirrors that handler's shape exactly, but never got the
-// rate limit that shape calls for.
-const NOTIFICATION_PREFERENCES_RATE_LIMIT_MAX = 20;
-
-// #2067 (leaf sub-issue of #1973, part of #1947): GET/PUT this account's
-// sold-out-email opt-in, same requireCurrentUser-only bar and GET/PUT
-// shape as handleMyAvatar above -- a communication preference isn't a
-// world/shop-selling action N44 was aimed at either.
-async function handleMyNotificationPreferences(request, db) {
-  const user = await requireCurrentUser(request, db);
-  const builder = await getOrCreateBuilderForUser(db, user);
-
-  if (request.method === 'GET') {
-    return json({ notifySoldOutEmail: !!builder.notify_sold_out_email });
-  }
-
-  if (request.method === 'PUT') {
-    await checkRateLimit(db, `notification-preferences:${builder.builder_id}`, NOTIFICATION_PREFERENCES_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    if (typeof input.notifySoldOutEmail !== 'boolean') {
-      throw new HttpError('notifySoldOutEmail must be a boolean', 400);
-    }
-    await db.prepare(`
-      UPDATE builders SET notify_sold_out_email = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE builder_id = ?
-    `).bind(input.notifySoldOutEmail ? 1 : 0, builder.builder_id).run();
-    return json({ notifySoldOutEmail: input.notifySoldOutEmail });
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-// #1164 (sub-issue of #1161): every "animation"-category template this
-// account currently owns (owned_animations, migration 0106), mirroring
-// handleMyOwnedAvatars above exactly.
-async function handleMyOwnedAnimations(request, db) {
-  const user = await requireCurrentUser(request, db);
-  const builder = await getOrCreateBuilderForUser(db, user);
-  const { results } = await db.prepare(`
-    SELECT catalog_templates.*, owned_animations.purchased_at AS owned_purchased_at
-    FROM owned_animations
-    JOIN catalog_templates ON catalog_templates.template_id = owned_animations.template_id
-    WHERE owned_animations.builder_id = ?
-    ORDER BY owned_animations.purchased_at DESC
-  `).bind(builder.builder_id).all();
-  return json({
-    animations: results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
-  });
-}
-
-// #1949 (sub-issue of #1947): a builder-facing view of every template they
-// currently have placed that carries finite stock (#1948's own
-// stock_quantity column), each annotated with an estimated days-remaining
-// figure -- lets a builder weigh which of their own placed products are at
-// risk of selling out and disappearing from their land (per #1947's own
-// framing, that's expected, normal behavior, not a bug to prevent).
-//
-// Owner guidance (direct conversation, 2026-10-13, captured on issue #1949
-// itself): no fixed trailing window -- "please have the assigned session
-// use its best judgment, probably using a more dynamic calculation rather
-// than a static 30-days, particularly for new products. It could be
-// beneficial to look at how quickly similar products have sold." A
-// one-of-a-kind item (stockQuantity === 1) is a single sale event, not a
-// queue being drawn down, so "for single-quantity items, the builder should
-// understand that it's going to be very unpredictable" -- it always gets an
-// explicit "unpredictable" state rather than a fabricated day count,
-// regardless of any sales data.
-async function handleBuilderLowStock(request, db) {
-  const user = await requireCurrentUser(request, db);
-  const builder = await getOrCreateBuilderForUser(db, user);
-  const { results: templates } = await db.prepare(`
-    SELECT ct.template_id AS templateId, ct.name AS name, ct.category AS category,
-           ct.stock_quantity AS stockQuantity, COUNT(*) AS placedInstanceCount
-    FROM placed_instances pi
-    JOIN landlets l ON l.landlet_id = pi.landlet_id
-    JOIN catalog_templates ct ON ct.template_id = pi.template_id
-    WHERE l.owner_builder_id = ? AND ct.stock_quantity IS NOT NULL
-    GROUP BY ct.template_id
-  `).bind(builder.builder_id).all();
-  if (templates.length === 0) return json({ templates: [] });
-
-  const templateIds = templates.map((t) => t.templateId);
-  const ownVelocityByTemplateId = await templateSalesVelocity(db, templateIds);
-  // Only the categories genuinely needed -- a template with sales history
-  // of its own never looks at this.
-  const categoriesNeedingFallback = [...new Set(
-    templates.filter((t) => !ownVelocityByTemplateId.has(t.templateId)).map((t) => t.category),
-  )];
-  const categoryVelocityByCategory = new Map(await Promise.all(
-    categoriesNeedingFallback.map(async (category) => [category, await categorySalesVelocityPerDay(db, category)]),
-  ));
-
-  return json({
-    templates: templates.map((t) => ({
-      templateId: t.templateId,
-      name: t.name,
-      category: t.category,
-      stockQuantity: t.stockQuantity,
-      placedInstanceCount: t.placedInstanceCount,
-      ...estimateDaysRemaining(t, ownVelocityByTemplateId.get(t.templateId), categoryVelocityByCategory.get(t.category)),
-    })),
-  });
-}
-
-function estimateDaysRemaining(template, ownUnitsPerDay, categoryUnitsPerDay) {
-  if (template.stockQuantity === 1) {
-    return { daysRemaining: null, predictability: 'unpredictable' };
-  }
-  const unitsPerDay = ownUnitsPerDay ?? categoryUnitsPerDay;
-  if (!unitsPerDay) {
-    return { daysRemaining: null, predictability: 'notEnoughData' };
-  }
-  return {
-    daysRemaining: Math.round((template.stockQuantity / unitsPerDay) * 10) / 10,
-    predictability: ownUnitsPerDay ? 'estimated' : 'estimatedFromCategory',
-  };
-}
-
-// One units-per-day rate per template, derived from every non-refunded sale
-// of that specific template across every builder who happens to host an
-// instance of it -- the same cross-builder, shared-stock-pool shape
-// GET /api/purchases?templateId= already uses, since #1947 itself requires
-// velocity to be "computed across every builder selling that same
-// template," not just this one builder's own sales.
-async function templateSalesVelocity(db, templateIds) {
-  const velocityByTemplateId = new Map();
-  // #2321: chunked at D1_MAX_BOUND_PARAMETERS -- a builder can own more than
-  // one landlet (auctions can transfer extra ones in, see the comment on
-  // ownersByBuilderId above) and place well over 100 distinct finite-stock
-  // templates across them, same bug class as #2038/#2204/#2216/#2233/#2283.
-  // Each chunk's own GROUP BY operates on a disjoint subset of template_id,
-  // so merging across chunks needs no further aggregation.
-  for (let i = 0; i < templateIds.length; i += D1_MAX_BOUND_PARAMETERS) {
-    const chunk = templateIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
-    const placeholders = chunk.map(() => '?').join(', ');
-    const { results } = await db.prepare(`
-      SELECT template_id AS templateId, SUM(quantity) AS totalSold,
-             MIN(created_at) AS firstSaleAt, MAX(created_at) AS lastSaleAt
-      FROM purchases
-      WHERE template_id IN (${placeholders}) AND refunded_at IS NULL
-      GROUP BY template_id
-    `).bind(...chunk).all();
-    for (const row of results) velocityByTemplateId.set(row.templateId, salesVelocityPerDay(row));
-  }
-  return velocityByTemplateId;
-}
-
-// #1949: the owner-endorsed fallback for a template with no sales history
-// of its own -- every other template in the same category, regardless of
-// seller, averaged into one rate. Deliberately not scoped to this builder's
-// own templates; "similar products" means the category as a whole, the
-// same freeform `category` column (indexed, always populated) every other
-// browse/filter feature in this file already groups by.
-async function categorySalesVelocityPerDay(db, category) {
-  const { results } = await db.prepare(`
-    SELECT p.template_id AS templateId, SUM(p.quantity) AS totalSold,
-           MIN(p.created_at) AS firstSaleAt, MAX(p.created_at) AS lastSaleAt
-    FROM purchases p
-    JOIN catalog_templates ct ON ct.template_id = p.template_id
-    WHERE ct.category = ? AND p.refunded_at IS NULL
-    GROUP BY p.template_id
-  `).bind(category).all();
-  if (results.length === 0) return null;
-  const rates = results.map(salesVelocityPerDay);
-  return rates.reduce((sum, rate) => sum + rate, 0) / rates.length;
-}
-
-// Spans however long this template has actually been selling (first sale to
-// last sale), never an assumed fixed window -- a single sale floors the
-// span at one day rather than dividing by zero, which is deliberately a
-// rough, early estimate (one data point) rather than a crash.
-function salesVelocityPerDay(row) {
-  const spanDays = Math.max(1, (new Date(row.lastSaleAt).getTime() - new Date(row.firstSaleAt).getTime()) / 86400000);
-  return row.totalSold / spanDays;
-}
-
-// #1057's own fix, mirrored for the new PUT below from day one rather than
-// shipping without it the way #680's own avatar-equip endpoint originally
-// did.
-const ANIMATION_EQUIP_RATE_LIMIT_MAX = 20;
-
-// #1164: which owned animation (if any) this account currently has
-// applied — mirrors handleMyAvatar above exactly, validated against
-// owned_animations instead. GET returns the current choice (null means
-// no animation applied, root motion plays as normal). PUT changes it,
-// rejecting anything not already present in owned_animations. Actually
-// making the applied choice play at runtime is #1165's own scope.
-async function handleMyAnimation(request, db) {
-  const user = await requireCurrentUser(request, db);
-  const builder = await getOrCreateBuilderForUser(db, user);
-
-  if (request.method === 'GET') {
-    return json({ animation: await myAnimationJson(db, builder) });
-  }
-
-  if (request.method === 'PUT') {
-    await checkRateLimit(db, `animation-equip:${builder.builder_id}`, ANIMATION_EQUIP_RATE_LIMIT_MAX);
-    const input = await readJson(request);
-    let templateId = null;
-    if (input.templateId !== null && input.templateId !== undefined) {
-      templateId = labelValue(input.templateId, 'templateId');
-      const owned = await db.prepare(
-        'SELECT 1 FROM owned_animations WHERE builder_id = ? AND template_id = ?',
-      ).bind(builder.builder_id, templateId).first();
-      if (!owned) throw new HttpError('You do not own this animation', 403);
-    }
-    const result = await db.prepare(`
-      UPDATE builders SET equipped_animation_template_id = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE builder_id = ?
-        AND (? IS NULL OR EXISTS (SELECT 1 FROM owned_animations WHERE builder_id = ? AND template_id = ?))
-    `).bind(templateId, builder.builder_id, templateId, builder.builder_id, templateId).run();
-    if (result.meta.changes === 0) {
-      throw new HttpError('You do not own this animation', 403);
-    }
-    const updated = await requireBuilder(db, builder.builder_id);
-    return json({ animation: await myAnimationJson(db, updated) });
-  }
-
-  return json({ error: 'Not found' }, 404);
-}
-
-async function myAnimationJson(db, builder) {
-  if (!builder.equipped_animation_template_id) {
-    return { equippedTemplateId: null, modelUrl: null, skeletonSignature: null };
-  }
-  const template = await db.prepare(
-    'SELECT model_url, skeleton_signature FROM catalog_templates WHERE template_id = ?',
-  ).bind(builder.equipped_animation_template_id).first();
-  return {
-    equippedTemplateId: template ? builder.equipped_animation_template_id : null,
-    modelUrl: template?.model_url || null,
-    skeletonSignature: template?.skeleton_signature || null,
-  };
-}
-
 // docs/SPEC.md §6 / #556: age attestation plus credit-card (or eventual
 // government-ID, #589) verification gates every builder/seller-owned
 // action from here on, not just newly created accounts. Owner decision
@@ -6296,7 +5870,7 @@ function computeNextLandCap(currentCapM2, trailingEarningsCents, ownedAreaM2) {
 // exposes it so the frontend's own "you own X of Y" display (#312) never
 // has to re-derive it (and risk leaving out level area the way its
 // original ground-only-landlets sum did).
-async function recomputeLandCap(db, builderId) {
+export async function recomputeLandCap(db, builderId) {
   const builder = await db.prepare('SELECT * FROM builders WHERE builder_id = ?').bind(builderId).first();
   if (!builder) return { nextCap: LAND_CAP_STARTER_M2, ownedAreaM2: 0 };
   const windowStart = new Date(Date.now() - LAND_CAP_TRAILING_WINDOW_DAYS * 24 * 60 * 60 * 1000).toISOString();
@@ -6986,12 +6560,12 @@ async function requireSessionSeller(request, db) {
 // above (and every ownership check built on them throughout this file)
 // are what actually put that unforgeable identity to work.
 
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const PBKDF2_ITERATIONS = 100000; // see the migration's own comment on why this is tunable per-hash, not global
-const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour — shorter than email verification since a leaked reset link is higher-stakes
-const FAILED_LOGIN_LOCK_THRESHOLD = 5;
-const FAILED_LOGIN_LOCK_DURATION_MS = 15 * 60 * 1000;
+// #2542: SESSION_TTL_MS/EMAIL_VERIFICATION_TTL_MS/PASSWORD_RESET_TTL_MS/
+// FAILED_LOGIN_LOCK_THRESHOLD/FAILED_LOGIN_LOCK_DURATION_MS all moved to
+// worker/lib/auth-routes.js (each exclusively used by handlers that moved
+// there) -- see that module's own header comment. PBKDF2_ITERATIONS stays
+// here since hashPassword (also staying, see above) depends on it.
 
 // checkRateLimit only ever prunes the one bucket it's currently checking —
 // a bucket that's hit once and never revisited (e.g. signup/reset attempts
@@ -7116,7 +6690,10 @@ export async function pruneOldDatabaseBackups(bucket) {
 // carries). Only ever stored server-side as a SHA-256 hash (see sha256Hex
 // below and each table's own token_hash column) — see
 // migrations/0053_users_auth.sql for why.
-function generateToken() {
+// Exported for worker/lib/auth-routes.js (#2542) -- also called from this
+// file's own delivery-confirmation token flow below, so it stays here
+// rather than moving with the auth routes themselves.
+export function generateToken() {
   return bytesToHex(crypto.getRandomValues(new Uint8Array(32)));
 }
 
@@ -7124,7 +6701,10 @@ function generateToken() {
 // the migration's own comment) computed via the Workers runtime's native
 // Web Crypto PBKDF2 support — no dependency, no WASM build needed the way
 // bcrypt/scrypt would require here.
-async function hashPassword(password) {
+// Exported for worker/lib/auth-routes.js (#2542) -- also called from
+// cascadeDeleteAccount's own password-revocation hash below, so it stays
+// here rather than moving with handleSignup/handleResetPassword.
+export async function hashPassword(password) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
   const bits = await crypto.subtle.deriveBits(
@@ -7133,18 +6713,8 @@ async function hashPassword(password) {
   return `pbkdf2$${PBKDF2_ITERATIONS}$${bytesToHex(salt)}$${bytesToHex(new Uint8Array(bits))}`;
 }
 
-async function verifyPassword(password, stored) {
-  const parts = typeof stored === 'string' ? stored.split('$') : [];
-  if (parts.length !== 4 || parts[0] !== 'pbkdf2') return false;
-  const [, iterationsText, saltHex, hashHex] = parts;
-  const iterations = Number(iterationsText);
-  if (!Number.isInteger(iterations) || iterations <= 0) return false;
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', hash: 'SHA-256', salt: hexToBytes(saltHex), iterations }, key, 256,
-  );
-  return timingSafeEqual(bytesToHex(new Uint8Array(bits)), hashHex);
-}
+// #2542: verifyPassword moved to worker/lib/auth-routes.js (used only by
+// handlers that moved there) -- see that module's own header comment.
 
 // #771: not a real password's derivation, ever compared against a real
 // account — exists only so handleLogin's no-such-user path can burn the
@@ -7152,82 +6722,29 @@ async function verifyPassword(password, stored) {
 // doesn't let an attacker enumerate registered emails despite the
 // identical response body/status that path already returns.
 const DUMMY_PASSWORD_HASH = `pbkdf2$${PBKDF2_ITERATIONS}$${'00'.repeat(16)}$${'00'.repeat(32)}`;
+// #2542: DUMMY_PASSWORD_HASH itself can't be a named export of this file --
+// workerd requires every named export of the main Worker entry module to
+// be a function/class binding, not a plain value (#1978, same constraint
+// worker/lib/builder-profile.js's own comment documents for
+// D1_MAX_BOUND_PARAMETERS) -- exported as a getter instead, for
+// worker/lib/auth-routes.js's own handleLogin to call.
+export function dummyPasswordHash() {
+  return DUMMY_PASSWORD_HASH;
+}
 
-function normalizeEmail(value) {
+// Exported for worker/lib/auth-routes.js (#2542) -- also used by
+// handleGrantAdmin/handleRevokeAdmin/handleSuspendAccount/
+// handleUnsuspendAccount/handleSuspensionStatus below (admin/suspension
+// domain, not yet split out of this file), so it stays here rather than
+// moving with the signup/login routes.
+export function normalizeEmail(value) {
   return stringValue(value, 'email').toLowerCase();
 }
 
-// Issue #200's owner decision: one real account per email, closing the
-// sybil vector plain lowercasing leaves open — someone can otherwise
-// register unlimited distinct accounts against one real inbox
-// (`you+tag@gmail.com`, or Gmail's own dot-insensitivity:
-// `first.last@gmail.com`/`firstlast@gmail.com` are the same inbox), which
-// matters here specifically because of the one-claimed-landlet-per-builder
-// fairness invariant. Deliberately only
-// used to *detect* a collision at signup (see handleSignup) — the actual
-// `email` column stays the plain lowercased address forever, so this
-// never touches login, password reset, or any already-stored row.
-//
-// "+tag" stripping applies to every domain (a general catch, not
-// Gmail-specific — the owner's own framing: "if those apply to emails
-// other than Gmail as well, then we need a general catch"), since "+"
-// sub-addressing is a de facto standard most major providers honor
-// (Gmail, Outlook/Office365, Yahoo, FastMail, ProtonMail...), not a
-// Gmail-only quirk. Dot-removal, by contrast, IS Gmail-specific — no
-// other mainstream provider folds dots this way — so it's scoped to
-// gmail.com and its googlemail.com alias only, rather than applied
-// universally where it would incorrectly collide real distinct inboxes
-// on every other domain.
-function canonicalizeEmail(value) {
-  const email = normalizeEmail(value);
-  const atIndex = email.lastIndexOf('@');
-  if (atIndex === -1) return email;
-  const domain = email.slice(atIndex + 1);
-  let local = email.slice(0, atIndex);
-  const plusIndex = local.indexOf('+');
-  if (plusIndex !== -1) local = local.slice(0, plusIndex);
-  if (domain === 'gmail.com' || domain === 'googlemail.com') {
-    local = local.replaceAll('.', '');
-  }
-  return `${local}@${domain}`;
-}
-
-// Deliberately permissive — "does this look roughly like an email" rather
-// than a fully RFC-5322-correct pattern (famously not worth chasing; the
-// only real validation of an email address is actually receiving mail at
-// it, which email verification below already does).
-const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function emailValue(value) {
-  const email = normalizeEmail(value);
-  if (!EMAIL_PATTERN.test(email)) throw new HttpError('email is not a valid email address', 400);
-  return email;
-}
-
-function passwordValue(value) {
-  if (typeof value !== 'string') throw new HttpError('password is required', 400);
-  // NIST 800-63B's current guidance: a reasonable minimum length beats
-  // forced complexity rules (mandatory symbols/digits push people toward
-  // predictable substitutions, not real entropy). No upper bound close to
-  // 200 chars would ever be reached by a real password; it exists only to
-  // reject an absurd input before it reaches PBKDF2.
-  if (value.length < 8) throw new HttpError('password must be at least 8 characters', 400);
-  if (value.length > 200) throw new HttpError('password must be at most 200 characters', 400);
-  return value;
-}
-
-// Required, unlike the old free-text-or-blank display_name it replaces
-// (see migrations/0056_username_required_unique.sql) — how users
-// identify each other now, so a blank one defeats the point. No character
-// restriction beyond that, matching this codebase's existing minimal-
-// validation style for other free-text labels (builder/seller names).
-// Uniqueness itself is checked separately against the DB (see
-// handleSignup) since it isn't something a single value can validate.
-function usernameValue(value) {
-  const username = stringValue(value, 'username');
-  if (username.length > 40) throw new HttpError('username must be at most 40 characters', 400);
-  return username;
-}
+// #2542: canonicalizeEmail/EMAIL_PATTERN/emailValue/passwordValue/
+// usernameValue all moved to worker/lib/auth-routes.js (each exclusively
+// used by handlers that moved there) -- see that module's own header
+// comment.
 
 // Exported for worker/lib/stripe.js (#2541) -- its own card-setup/confirm
 // handlers need this same user-row shape for their response bodies.
@@ -7248,30 +6765,9 @@ export function userFromRow(row) {
   };
 }
 
-async function createSession(db, userId) {
-  const token = generateToken();
-  const tokenHash = await sha256Hex(token);
-  const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
-  await db.prepare('INSERT INTO sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
-    .bind(tokenHash, userId, expiresAt).run();
-  return token;
-}
-
-// Mirrors checkAccessGate's own cookie-attribute reasoning above (HttpOnly
-// so frontend JS can never read the session token even via XSS; SameSite=
-// Lax rather than a separate CSRF token, since every mutating endpoint
-// here is POST and Lax cookies are already withheld from cross-site
-// POST/fetch/form-submit by every modern browser; Secure omitted only for
-// plain-http local dev).
-function sessionCookieHeader(url, token, maxAgeSeconds) {
-  const attrs = [`${SESSION_COOKIE_NAME}=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSeconds}`];
-  if (url.protocol === 'https:') attrs.push('Secure');
-  return attrs.join('; ');
-}
-
-function clearSessionCookieHeader(url) {
-  return sessionCookieHeader(url, '', 0);
-}
+// #2542: createSession/sessionCookieHeader/clearSessionCookieHeader all
+// moved to worker/lib/auth-routes.js (each exclusively used by handlers
+// that moved there) -- see that module's own header comment.
 
 // Neither `new URL(request.url).origin` nor the raw `Host` header can be
 // trusted here — confirmed by hand: curling
@@ -7321,7 +6817,10 @@ export function escapeHtml(value) {
 // handleRequestPasswordReset), the same "dev-mode" spirit already used
 // throughout this codebase, so the whole flow stays fully testable
 // without a real email provider.
-async function sendEmail(env, { to, subject, html, text }) {
+// Exported for worker/lib/auth-routes.js (#2542) -- also called from this
+// file's own scheduled()-driven migration-drift alert email below, so it
+// stays here rather than moving with the auth routes themselves.
+export async function sendEmail(env, { to, subject, html, text }) {
   if (!env.RESEND_API_KEY) return false;
   // #1283: fetch itself can reject (DNS failure, connection reset, TLS
   // error, timeout) rather than merely resolving with a non-2xx response —
@@ -9178,45 +8677,8 @@ async function handleAuth(request, env, db, route, url, ctx) {
 
 // #2541: handleCardSetupIntent/handleConfirmCard/claimCardFingerprint moved to worker/lib/stripe.js -- see that module's own header comment.
 
-// #2240: this file's own convention is that every authenticated,
-// repeatable mutation gets a checkRateLimit call regardless of how cheap
-// or idempotent it is (handleCardSetupIntent/handleConfirmCard/
-// handleDiditVerificationSession, the structurally closest siblings,
-// all have one) -- this endpoint was the one gap. requireCurrentUser's
-// own session + account_suspensions SELECTs still cost real D1 reads on
-// every call even once already attested, same unthrottled-flood shape
-// #827/#944/#990/#2123 were each filed and fixed for elsewhere.
-const AGE_ATTEST_RATE_LIMIT_MAX = 20;
-
-// #556: lets an existing session attest age after the fact. Signup's own
-// ageAttested checkbox (handleSignup above) only covers brand-new
-// accounts — every account created before that existed, plus the owner's
-// "force everyone through, no grandfathering" decision on trust_tier
-// (Control Room, 2026-09-09), needs a way to clear the same bar without
-// re-signing-up. Idempotent: attesting again on an already-attested
-// account is a no-op, not an error.
-async function handleAgeAttest(request, db) {
-  const user = await requireCurrentUser(request, db);
-  await checkRateLimit(db, `age-attest:${user.user_id}`, AGE_ATTEST_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  if (input.ageAttested !== true) {
-    throw new HttpError('You must confirm you meet the age requirement to continue.', 400);
-  }
-  if (user.age_attested_at === null) {
-    await db.prepare(`
-      UPDATE users SET age_attested_at = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(new Date().toISOString(), user.user_id).run();
-  }
-  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
-  // #2430: same concurrent-account-deletion race as handleConfirmCard's own
-  // re-SELECT above (self-delete from another session, or
-  // escalateExpiredSuspensions' own cascade) -- can remove this row in the
-  // await gap since the UPDATE (or, when already attested, since the
-  // requireCurrentUser read at the top of this handler).
-  if (!updated) return json({ error: 'Account no longer exists' }, 404);
-  return json({ user: userFromRow(updated) });
-}
+// #2542: handleAgeAttest moved to worker/lib/auth-routes.js -- see that
+// module's own header comment.
 
 // The only way to become an admin (see migrations/0055_admin_role.sql) —
 // requires both a real session AND a Worker secret only whoever deploys
@@ -9633,262 +9095,9 @@ async function handleSuspensionStatus(request, db, url) {
   });
 }
 
-async function handleSignup(request, env, db, url) {
-  const input = await readJson(request);
-  const email = emailValue(input.email);
-  const password = passwordValue(input.password);
-  const username = usernameValue(input.username);
-
-  // Counted against the rate limit the same as every other rejection below
-  // (see the duplicate-email 409's own comment on why) before checking it —
-  // a cheap validation failure shouldn't be a free, unlimited way to probe
-  // past the limiter.
-  await checkRateLimit(db, `signup:${clientIp(request)}:${email}`, 5);
-
-  // docs/SPEC.md §6, #556: registration requires age attestation. A plain
-  // boolean checkbox, not a birthdate collection — the spec's own bar here
-  // is attestation, not age verification (that's what the credit-card/
-  // government-ID tier immediately below is for).
-  if (input.ageAttested !== true) {
-    throw new HttpError('You must confirm you meet the age requirement to sign up.', 400);
-  }
-
-  // #200: canonicalizeEmail catches a "+tag"/dot variant of an already-
-  // registered address the same way a literal duplicate is caught —
-  // nothing about *why* it collides is any of an unauthenticated caller's
-  // business, so it gets the exact same message as a literal email
-  // conflict below, not called out as its own case.
-  const emailCanonical = canonicalizeEmail(email);
-  // Folds all three duplicate checks (email, canonical email, username —
-  // COLLATE NOCASE on users.username, migrations/0056, already makes
-  // "Ada"/"ada" collide at the column level) into the INSERT's own WHERE
-  // NOT EXISTS, the same atomic idiom this file already uses for
-  // friendships/product_reviews/auction_bids — a separate SELECT-then-
-  // INSERT here would let two concurrent signups (e.g. racing "+tag"
-  // variants of the same address) both pass every check before either
-  // INSERT commits, silently creating two accounts issue #200 is
-  // specifically meant to prevent.
-  const userId = `user-${crypto.randomUUID()}`;
-  const passwordHash = await hashPassword(password);
-  const ageAttestedAt = new Date().toISOString();
-  const inserted = await db.prepare(`
-    INSERT INTO users (user_id, email, password_hash, username, email_canonical, age_attested_at)
-    SELECT ?, ?, ?, ?, ?, ?
-    WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = ? OR email_canonical = ? OR username = ?)
-  `).bind(
-    userId, email, passwordHash, username, emailCanonical, ageAttestedAt,
-    email, emailCanonical, username,
-  ).run();
-  if (inserted.meta.changes === 0) {
-    // The atomic insert above already refused to happen — reading again
-    // here only decides which friendly message to show, it can't itself
-    // let a duplicate through.
-    const emailConflict = await db.prepare('SELECT 1 FROM users WHERE email = ? OR email_canonical = ?').bind(email, emailCanonical).first();
-    if (emailConflict) throw new HttpError('Email is already registered', 409);
-    throw new HttpError('Username is already taken', 409);
-  }
-
-  // docs/SPEC.md §3: "every user is automatically a builder — no separate
-  // account types." A seller profile stays deliberately lazy instead (see
-  // handleMySeller below) — selling is the more opt-in of the two per that
-  // same section ("uploading a product needs a seller identity chosen,
-  // quite apart from whichever builder identity is active").
-  await db.prepare('INSERT INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
-    .bind(`builder-${crypto.randomUUID()}`, username, userId).run();
-
-  const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, userId, email);
-  const sessionToken = await createSession(db, userId);
-  const row = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(userId).first();
-
-  return json({
-    user: userFromRow(row),
-    verificationEmailSent: emailSent,
-    ...(devVerifyUrl ? { devVerifyUrl } : {}),
-  }, 201, { 'set-cookie': sessionCookieHeader(url, sessionToken, SESSION_TTL_MS / 1000) });
-}
-
-async function issueEmailVerification(env, db, userId, email) {
-  const token = generateToken();
-  const tokenHash = await sha256Hex(token);
-  const expiresAt = new Date(Date.now() + EMAIL_VERIFICATION_TTL_MS).toISOString();
-  await db.prepare('INSERT INTO email_verification_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
-    .bind(tokenHash, userId, expiresAt).run();
-  const verifyUrl = `${appBaseUrl(env)}/?verifyEmail=${token}`;
-  const emailSent = await sendEmail(env, {
-    to: email,
-    subject: 'Verify your higglehaven email',
-    html: `<p>Welcome to higglehaven! Confirm your email address to finish setting up your account:</p><p><a href="${verifyUrl}">${verifyUrl}</a></p><p>This link expires in 24 hours.</p>`,
-    text: `Welcome to higglehaven! Confirm your email address: ${verifyUrl} (expires in 24 hours)`,
-  });
-  // #811: devVerifyUrl must reflect whether Resend is *configured*, not
-  // whether the send happened to succeed — sendEmail returns false for both
-  // "no RESEND_API_KEY" (dev/test) and a genuine production send failure, so
-  // gating on emailSent alone would echo the real single-use token back to
-  // the client mislabeled as a harmless dev-mode convenience whenever Resend
-  // has a transient failure. Mirrors handleRequestPasswordReset's existing
-  // env.RESEND_API_KEY gate for the identical sendEmail ambiguity.
-  return { emailSent, devVerifyUrl: env.RESEND_API_KEY ? null : verifyUrl };
-}
-
-async function handleResendVerification(request, env, db) {
-  const user = await requireCurrentUser(request, db);
-  if (user.email_verified_at !== null) throw new HttpError('Email is already verified', 400);
-  // #363: this endpoint requires a session, so it doesn't need the IP+email
-  // bucketing signup/password-reset use to stop targeted enumeration/
-  // harassment — but with no limit at all, one logged-in user could still
-  // loop this to burn the operator's Resend quota/sending reputation.
-  // Keyed by user id alone since the caller's identity is already proven.
-  await checkRateLimit(db, `resend-verification:${user.user_id}`, 5);
-  const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, user.email);
-  return json({ verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
-}
-
-// #1182 (sub-issue of #1126, owner direction via Control Room 2026-10-01):
-// an in-session way to change your account email. Same current-password
-// bar as handleDeleteAccount, and the same atomic email/email_canonical
-// uniqueness idiom handleSignup's own INSERT ... WHERE NOT EXISTS uses
-// (a separate SELECT-then-UPDATE here would let two concurrent requests
-// both pass a pre-check before either write commits).
-//
-// Re-verification: the owner flagged "should changing email reset the
-// email-verification status" as its own open call rather than deciding it
-// up front. Resolved here by reading what email_verified_at actually does
-// in this codebase rather than guessing: userFromRow/docs/API.md's own
-// description of it is purely an informational "✓ Email verified" badge
-// (src/main.js's authAccountVerifiedEl) — unlike trust_tier/age_attested_at,
-// nothing gates real functionality on it (see assertVerified above, which
-// checks those two, never email_verified_at). So resetting it to NULL and
-// re-sending the verification email here is the direct, low-risk
-// application of the exact mechanism issueEmailVerification already uses
-// at signup to this same "new address, not yet confirmed" situation — not
-// a new policy, just the existing one applied consistently. Worth a glance
-// from the owner given they flagged it, but not blocking on it: nothing is
-// lost either way (no privilege revoked), and the alternative (leaving a
-// stale verified badge on an address that was never actually confirmed)
-// is the one that reads as clearly wrong.
-const CHANGE_EMAIL_RATE_LIMIT_MAX = 5;
-async function handleChangeEmail(request, env, db) {
-  const user = await requireCurrentUser(request, db);
-  await checkRateLimit(db, `change-email:${user.user_id}`, CHANGE_EMAIL_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const password = typeof input.password === 'string' ? input.password : '';
-  if (!(await verifyPassword(password, user.password_hash))) {
-    throw new HttpError('Incorrect password', 401);
-  }
-  const email = emailValue(input.email);
-  if (email === user.email) throw new HttpError('That is already your current email', 400);
-  const emailCanonical = canonicalizeEmail(email);
-  const result = await db.prepare(`
-    UPDATE users SET email = ?, email_canonical = ?, email_verified_at = NULL,
-      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE user_id = ?
-      AND NOT EXISTS (SELECT 1 FROM users WHERE (email = ? OR email_canonical = ?) AND user_id != ?)
-  `).bind(email, emailCanonical, user.user_id, email, emailCanonical, user.user_id).run();
-  if (result.meta.changes === 0) throw new HttpError('Email is already registered', 409);
-  const { emailSent, devVerifyUrl } = await issueEmailVerification(env, db, user.user_id, email);
-  const row = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
-  // #2430: the UPDATE's own meta.changes check above only confirms it
-  // matched a row (and won the email-collision race) at the moment it ran
-  // -- a concurrent account deletion landing in the await gap since (the
-  // issueEmailVerification call above) can still remove the row before
-  // this re-SELECT runs, same race shape #2334/#2354/#2364/#2391/#2392
-  // already fixed elsewhere.
-  if (!row) return json({ error: 'Account no longer exists' }, 404);
-  return json({ user: userFromRow(row), verificationEmailSent: emailSent, ...(devVerifyUrl ? { devVerifyUrl } : {}) });
-}
-
-// #833: every sibling auth endpoint in this file rate-limits by IP
-// (signup/password-reset key by ip+email; access-login's passphrase gate
-// keys by ip alone) — this one had neither, unlike them with no comment
-// explaining an exemption. The per-account lockout below (failed_login_
-// attempts >= threshold) stops brute-forcing *one* known account, but does
-// nothing against spraying one guessed/leaked password across many
-// different emails from the same IP, since each email gets its own
-// independent lockout budget. Bucketed by IP alone (not ip+email, unlike
-// signup/password-reset) specifically because spraying across many emails
-// is the attack this needs to stop.
-const LOGIN_RATE_LIMIT_MAX = 10;
-
-async function handleLogin(request, db, url) {
-  await checkRateLimit(db, `login:${clientIp(request)}`, LOGIN_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const email = normalizeEmail(input.email);
-  const password = typeof input.password === 'string' ? input.password : '';
-
-  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
-  // Same generic message whether the email doesn't exist or the password
-  // is wrong — telling the two apart lets an attacker enumerate which
-  // emails have accounts here. #771: the response *body* being identical
-  // isn't enough on its own — burn the same PBKDF2 cost here that a real
-  // verifyPassword call below would, so response latency can't be used to
-  // tell the two cases apart either.
-  const invalidCredentials = () => new HttpError('Invalid email or password', 401);
-  if (!row) {
-    await verifyPassword(password, DUMMY_PASSWORD_HASH);
-    throw invalidCredentials();
-  }
-
-  if (row.locked_until && row.locked_until > new Date().toISOString()) {
-    throw new HttpError('Too many failed attempts. Try again in a few minutes.', 423);
-  }
-
-  const valid = await verifyPassword(password, row.password_hash);
-  if (!valid) {
-    // The increment itself has to be the atomic operation, not a value
-    // computed from the stale `row` read above and written back separately
-    // — otherwise concurrent requests all compute the same
-    // `attempts = row.failed_login_attempts + 1` from the same starting
-    // count and each writes that same small number back, so the lockout
-    // threshold is never actually reached no matter how many guesses run
-    // in parallel. `failed_login_attempts + 1` here (both in SET and in
-    // the CASE) refers to this row's own pre-update value, same as any
-    // single UPDATE statement's SET list — safe against lost updates the
-    // same way `handlePurchaseRefund`'s `WHERE refunded_at IS NULL` guard
-    // is, just via an atomic increment instead of an atomic guard.
-    await db.prepare(`
-      UPDATE users SET
-        failed_login_attempts = failed_login_attempts + 1,
-        locked_until = CASE WHEN failed_login_attempts + 1 >= ? THEN ? ELSE locked_until END,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(
-      FAILED_LOGIN_LOCK_THRESHOLD,
-      new Date(Date.now() + FAILED_LOGIN_LOCK_DURATION_MS).toISOString(),
-      row.user_id,
-    ).run();
-    throw invalidCredentials();
-  }
-
-  await db.prepare(`
-    UPDATE users SET failed_login_attempts = 0, locked_until = NULL,
-      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE user_id = ?
-  `).bind(row.user_id).run();
-
-  const sessionToken = await createSession(db, row.user_id);
-  const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(row.user_id).first();
-  // #2430: a concurrent account deletion (another session's own self-
-  // delete, or escalateExpiredSuspensions' own cascade) landing in the
-  // await gap since the UPDATE above (or createSession just before) can
-  // remove this row before this re-SELECT runs, same race shape
-  // #2334/#2354/#2364/#2391/#2392 already fixed elsewhere.
-  if (!updated) return json({ error: 'Account no longer exists' }, 404);
-  return json(
-    { user: userFromRow(updated) },
-    200,
-    { 'set-cookie': sessionCookieHeader(url, sessionToken, SESSION_TTL_MS / 1000) },
-  );
-}
-
-async function handleLogout(request, db, url) {
-  const cookies = parseCookies(request.headers.get('cookie'));
-  const token = cookies[SESSION_COOKIE_NAME];
-  if (token) {
-    const tokenHash = await sha256Hex(token);
-    await db.prepare('DELETE FROM sessions WHERE token_hash = ?').bind(tokenHash).run();
-  }
-  return json({ loggedOut: true }, 200, { 'set-cookie': clearSessionCookieHeader(url) });
-}
+// #2542: handleSignup/issueEmailVerification/handleResendVerification/
+// handleChangeEmail/handleLogin/handleLogout all moved to
+// worker/lib/auth-routes.js -- see that module's own header comment.
 
 // #1146 (sub-issue of #1145, owner decision via a live Control Room
 // conversation): real account deletion, not the pre-existing "Delete
@@ -9907,8 +9116,8 @@ async function handleLogout(request, db, url) {
 // kill an account, so this requires re-entering the current password, the
 // same bar a real "verify it's still you" action needs -- and like every
 // other password check in this file, it's rate-limited per-account so the
-// check itself can't be used to brute-force the real password.
-const DELETE_ACCOUNT_RATE_LIMIT_MAX = 5;
+// check itself can't be used to brute-force the real password (see
+// handleDeleteAccount, worker/lib/auth-routes.js, #2542).
 
 // #2033 (sub-issue of #1201): the actual row-mutating cascade, split out
 // of handleDeleteAccount so the 30-day grace-period auto-escalation (see
@@ -9932,7 +9141,10 @@ const DELETE_ACCOUNT_RATE_LIMIT_MAX = 5;
 // first, inside the same atomic db.batch() as everything else: if either
 // guard blocks, this WHERE simply matches nothing, leaving the account
 // (and its session) exactly as live as it was before the call.
-async function cascadeDeleteAccount(db, userId) {
+// Exported for worker/lib/auth-routes.js (#2542) -- also called from this
+// file's own escalateExpiredSuspensions cron job above, so it stays here
+// rather than moving with handleDeleteAccount itself.
+export async function cascadeDeleteAccount(db, userId) {
   // Freed rather than hard-deleted, per #1145's "email/username freed ...
   // per the owner's chosen approach" -- rewritten to a placeholder unique
   // to this user_id so the real email/username are available again for a
@@ -10030,19 +9242,9 @@ async function cascadeDeleteAccount(db, userId) {
   };
 }
 
-async function handleDeleteAccount(request, db, url) {
-  const user = await requireCurrentUser(request, db);
-  await checkRateLimit(db, `delete-account:${user.user_id}`, DELETE_ACCOUNT_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const password = typeof input.password === 'string' ? input.password : '';
-  if (!(await verifyPassword(password, user.password_hash))) {
-    throw new HttpError('Incorrect password', 401);
-  }
-
-  await cascadeDeleteAccount(db, user.user_id);
-
-  return json({ accountDeleted: true }, 200, { 'set-cookie': clearSessionCookieHeader(url) });
-}
+// #2542: handleDeleteAccount moved to worker/lib/auth-routes.js (calls
+// cascadeDeleteAccount above, imported back) -- see that module's own
+// header comment.
 
 // #2033 (sub-issue of #1201): an admin-initiated suspension (#2029) that
 // nobody lifts within its own grace_period_ends_at auto-escalates into
@@ -10095,57 +9297,9 @@ export async function escalateExpiredSuspensions(db) {
 // action would be pure friction, not a real security improvement -- the
 // actual risk this closes (an old password still working on some other
 // device/session) is the same either way.
-const CHANGE_PASSWORD_RATE_LIMIT_MAX = 5;
-
-async function handleChangePassword(request, db) {
-  const user = await requireCurrentUser(request, db);
-  await checkRateLimit(db, `change-password:${user.user_id}`, CHANGE_PASSWORD_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const currentPassword = typeof input.currentPassword === 'string' ? input.currentPassword : '';
-  if (!(await verifyPassword(currentPassword, user.password_hash))) {
-    throw new HttpError('Incorrect password', 401);
-  }
-  const newPassword = passwordValue(input.newPassword);
-  const passwordHash = await hashPassword(newPassword);
-  const cookies = parseCookies(request.headers.get('cookie'));
-  const currentTokenHash = await sha256Hex(cookies[SESSION_COOKIE_NAME]);
-
-  await db.batch([
-    db.prepare(`
-      UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(passwordHash, user.user_id),
-    db.prepare('DELETE FROM sessions WHERE user_id = ? AND token_hash != ?').bind(user.user_id, currentTokenHash),
-    // #2293: same #843 invariant handleResetPassword's own DELETE already
-    // enforces -- a password-changing event for this account must
-    // invalidate any outstanding reset token too, or an older, still-
-    // unexpired reset link (e.g. minted by an attacker with momentary
-    // email access, never used immediately) remains valid and can
-    // silently undo this very change afterward. #843's fix landed only on
-    // the reset-password side; this is the sibling in-session change path
-    // that never got it.
-    db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').bind(user.user_id),
-  ]);
-  return json({ changed: true });
-}
-
-// Deliberately always 200, even with no session — a 401 here would be more
-// conventionally RESTful, but this endpoint gets called unconditionally on
-// every single page load (see the frontend's own bootstrap) specifically
-// to answer "is anyone logged in right now," and the overwhelmingly common
-// case for most visitors is "no." A 4xx response logs a "Failed to load
-// resource" message straight from the browser's own network stack — not
-// something application code can suppress — which every e2e test's shared
-// console-error collector (see e2e/helpers.mjs) then reads as a real page
-// error, on every single test, whether or not it has anything to do with
-// auth. requireCurrentUser (a real 401) is still exactly right for actual
-// protected actions like resend-verification below, just not for this
-// passive status check.
-async function handleMe(request, db) {
-  const user = await currentUser(request, db);
-  return json({ user: user ? userFromRow(user) : null });
-}
+//
+// #2542: handleChangePassword/handleMe both moved to
+// worker/lib/auth-routes.js -- see that module's own header comment.
 
 // #1984 (sub-issue of #1983, owner-greenlit on #1480): GDPR/CCPA "right to
 // access" companion to #1145's own "right to erasure" -- the requesting
@@ -10411,141 +9565,9 @@ async function exportCommerceData(db, builderRow) {
   };
 }
 
-// #1323: handleResendVerification (the token-issuing side) already
-// rate-limits itself (#363) -- this, the token-consuming side, never did,
-// leaving it the one public, cheap-to-hit, always-does-a-DB-read-per-call
-// mutation endpoint in this file with no throttle at all. Same
-// LOGIN_RATE_LIMIT_MAX/CONFIRM_DELIVERY_RATE_LIMIT_MAX "= 20" convention
-// for an unauthenticated repeatable write, bucketed by IP since no
-// builder/user identity exists yet at this point in the handler.
-const EMAIL_VERIFY_RATE_LIMIT_MAX = 20;
-
-async function handleVerifyEmail(request, db) {
-  await checkRateLimit(db, `email-verify:${clientIp(request)}`, EMAIL_VERIFY_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const token = stringValue(input.token, 'token');
-  const tokenHash = await sha256Hex(token);
-  const row = await db.prepare(`
-    SELECT * FROM email_verification_tokens
-    WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-  `).bind(tokenHash).first();
-  if (!row) throw new HttpError('Verification link is invalid or has expired', 400);
-
-  // #377: the WHERE ... consumed_at IS NULL guard on this UPDATE (run
-  // standalone before the follow-up write, not batched with it) is what
-  // makes this safe against a concurrent double-use of the same token —
-  // only whichever call's UPDATE actually lands first changes any rows,
-  // same idiom as handleCalendarEventTrigger's own triggered_at guard.
-  const result = await db.prepare(`
-    UPDATE email_verification_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE token_hash = ? AND consumed_at IS NULL
-  `).bind(tokenHash).run();
-  if (result.meta.changes !== 1) throw new HttpError('Verification link is invalid or has expired', 400);
-
-  await db.prepare(`
-    UPDATE users SET email_verified_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
-      updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE user_id = ?
-  `).bind(row.user_id).run();
-  return json({ verified: true });
-}
-
-async function handleRequestPasswordReset(request, env, db, ctx) {
-  const input = await readJson(request);
-  const email = normalizeEmail(input.email);
-
-  await checkRateLimit(db, `password-reset:${clientIp(request)}:${email}`, 5);
-
-  const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
-
-  // Always the same response regardless of whether the account exists —
-  // unlike signup (which does reveal a duplicate email, common and
-  // accepted practice), this specific endpoint is the classic account-
-  // enumeration vector, so it stays generic on purpose.
-  let devResetUrl = null;
-  if (row) {
-    const token = generateToken();
-    const tokenHash = await sha256Hex(token);
-    const expiresAt = new Date(Date.now() + PASSWORD_RESET_TTL_MS).toISOString();
-    await db.prepare('INSERT INTO password_reset_tokens (token_hash, user_id, expires_at) VALUES (?, ?, ?)')
-      .bind(tokenHash, row.user_id, expiresAt).run();
-    const resetUrl = `${appBaseUrl(env)}/?resetPassword=${token}`;
-    const emailPayload = {
-      to: email,
-      subject: 'Reset your higglehaven password',
-      html: `<p>Someone requested a password reset for this higglehaven account. If that was you:</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>This link expires in 1 hour. If you didn't request this, you can ignore this email.</p>`,
-      text: `Reset your higglehaven password: ${resetUrl} (expires in 1 hour). If you didn't request this, ignore this email.`,
-    };
-    // #778: awaiting sendEmail here used to put a real Resend API round-trip
-    // on this branch's response path while the no-such-user branch above
-    // returns almost instantly, letting an attacker enumerate registered
-    // emails by latency despite the identical response body — the same bug
-    // class #771 fixed for login's PBKDF2 cost. When Resend is actually
-    // configured (production), fire the send in the background via
-    // ctx.waitUntil instead of awaiting it, so both branches return in
-    // comparable time. In dev/test (RESEND_API_KEY unset), sendEmail
-    // returns false synchronously with no network call — no timing gap to
-    // close — so it stays awaited there, which is what lets devResetUrl
-    // keep working for local testing.
-    if (env.RESEND_API_KEY) {
-      ctx.waitUntil(sendEmail(env, emailPayload).catch((error) => {
-        console.error('Password reset email failed', error);
-      }));
-    } else {
-      const emailSent = await sendEmail(env, emailPayload);
-      if (!emailSent) devResetUrl = resetUrl;
-    }
-  }
-  return json({ requested: true, ...(devResetUrl ? { devResetUrl } : {}) });
-}
-
-// #1323: same gap as EMAIL_VERIFY_RATE_LIMIT_MAX just above, for the
-// password-reset token's own consuming side -- handleRequestPasswordReset
-// (the issuing side) already rate-limits itself.
-const PASSWORD_RESET_CONSUME_RATE_LIMIT_MAX = 20;
-
-async function handleResetPassword(request, db) {
-  await checkRateLimit(db, `password-reset-consume:${clientIp(request)}`, PASSWORD_RESET_CONSUME_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const token = stringValue(input.token, 'token');
-  const newPassword = passwordValue(input.newPassword);
-  const tokenHash = await sha256Hex(token);
-
-  const row = await db.prepare(`
-    SELECT * FROM password_reset_tokens
-    WHERE token_hash = ? AND consumed_at IS NULL AND expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-  `).bind(tokenHash).first();
-  if (!row) throw new HttpError('Reset link is invalid or has expired', 400);
-
-  // #377: same atomic-guard idiom as handleVerifyEmail above — checked
-  // before hashing the new password or touching users/sessions at all, so
-  // a lost race short-circuits before any of that work.
-  const result = await db.prepare(`
-    UPDATE password_reset_tokens SET consumed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE token_hash = ? AND consumed_at IS NULL
-  `).bind(tokenHash).run();
-  if (result.meta.changes !== 1) throw new HttpError('Reset link is invalid or has expired', 400);
-
-  const passwordHash = await hashPassword(newPassword);
-  await db.batch([
-    db.prepare(`
-      UPDATE users SET password_hash = ?, failed_login_attempts = 0, locked_until = NULL,
-        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE user_id = ?
-    `).bind(passwordHash, row.user_id),
-    // Resetting a password signs every device out — standard practice, and
-    // the right call if the reset was prompted by a compromised password:
-    // an attacker who was riding an existing session loses it too.
-    db.prepare('DELETE FROM sessions WHERE user_id = ?').bind(row.user_id),
-    // #843: also invalidate any other outstanding reset tokens for this
-    // account — otherwise an older, still-unexpired link from an earlier
-    // request remains valid and can silently undo this reset afterward,
-    // the same account-takeover shape the session wipe above exists to
-    // close, just via an old email link instead of an old session.
-    db.prepare('DELETE FROM password_reset_tokens WHERE user_id = ?').bind(row.user_id),
-  ]);
-  return json({ reset: true });
-}
+// #2542: handleVerifyEmail/handleRequestPasswordReset/handleResetPassword
+// all moved to worker/lib/auth-routes.js -- see that module's own header
+// comment.
 
 // #199: a seller's claimed landlet (aliased `owned` by every caller of
 // this fragment) stops locking their "one claimed landlet" slot the
@@ -16903,7 +15925,7 @@ function landletParams(landlet) {
   return [landlet.landletId, landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status, landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt, landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType, landlet.biome ?? null];
 }
 
-function templateFromRow(row) {
+export function templateFromRow(row) {
   return {
     templateId: row.template_id,
     name: row.name,
