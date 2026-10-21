@@ -8,7 +8,7 @@
 // claimOrResumeBuilderRedemption tests already use.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { claimCardFingerprint } from './index.js';
+import { claimCardFingerprint } from './lib/stripe.js';
 import { api, signupBuilder } from './test-helpers.js';
 
 beforeAll(async () => {
