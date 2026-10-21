@@ -3,7 +3,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { fetchWorld, fetchAllLandlets, claimLandlet } from '../api.js';
 import { formatArea } from '../settings.js';
 import { curvedPosition } from '../../worker/earthCurvature.js';
-import { shapeForLandlet, plotColorKeyForLandlet, openModalA11y, closeModalA11y, START_MODE_KEY } from '../main.js';
+import { shapeForLandlet, plotColorKeyForLandlet, START_MODE_KEY } from '../main.js';
+import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 
 // #2564 (part of #2504/#2500's src/main.js module split, see #2503's design
 // comment for the full dependency map): the mandatory first-claim flow a
