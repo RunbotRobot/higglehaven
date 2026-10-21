@@ -35,7 +35,7 @@ import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
 import { chromium } from 'playwright';
 import {
-  launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish,
+  launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish, emailForLabel, grantAdmin,
 } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -94,6 +94,13 @@ await fetchJson('/api/instances', {
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ instanceId, landletId: landlet.landletId, templateId: template.templateId, x: 0, y: 0 }),
 });
+
+// #653: the simulated path is now admin-only (this seller hasn't
+// completed Stripe Connect onboarding) — grant it to this same seeding
+// account rather than switching to a separate one, so this purchase
+// still lands against the product/landlet it already built up under
+// this session's own cookie.
+await grantAdmin(emailForLabel(LABEL));
 
 const purchased = await fetchJson(`/api/instances/${instanceId}/purchase`, {
   method: 'POST',

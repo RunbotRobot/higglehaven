@@ -145,8 +145,14 @@ const baselineFacingRad = (await page.evaluate(() => window.__shopAvatarOrientat
 // own comment documents -- waits for the idle episode to actually pick the
 // lean target up, then for shopLeanBlend (eased at SHOP_IDLE_BLEND_PER_S =
 // 0.6/s) to substantially engage rather than a fixed real-time sleep.
-await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'lean', { timeout: 15000 });
-await page.waitForFunction(() => window.__testShopLeanPose().blend > 0.9, { timeout: 20000 });
+// #2598: waitForFunction's signature is (pageFunction, arg, options) --
+// these 2-arg calls put the options object in the arg slot instead, so the
+// real applied timeout was always Playwright's own default (30000ms), not
+// the written values -- and even those were too tight under current CI
+// load. The explicit `null` arg reaches the options slot, and the
+// timeouts are widened for real headroom.
+await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'lean', null, { timeout: 60000 });
+await page.waitForFunction(() => window.__testShopLeanPose().blend > 0.9, null, { timeout: 60000 });
 
 const engagedPose = await page.evaluate(() => window.__testShopLeanPose());
 const engagedOrientation = await page.evaluate(() => window.__shopAvatarOrientation);

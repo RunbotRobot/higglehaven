@@ -178,7 +178,7 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
 
   it('reject: resolves all pending flags, restores purchasability, does not strike the seller', async () => {
     const seller = await signupSeller('flag-reject-seller');
-    const builder = await signupBuilder('flag-reject-owner');
+    const builder = await signupAdmin('flag-reject-owner');
     await api('/landlets', adminSession({
       method: 'POST',
       body: JSON.stringify({ landletId: 'flag-reject-landlet', name: 'Flag reject landlet', areaM2: 1000, status: 'greenbelt' }),

@@ -1,6 +1,6 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { api, signupBuilder, signupAdmin } from './test-helpers.js';
+import { api, signupBuilder, signupAdmin, grantAdminTo } from './test-helpers.js';
 
 let adminSession;
 
@@ -44,6 +44,9 @@ describe('Buyer-initiated purchase disputes (#2020)', () => {
       body: JSON.stringify({ instanceId, landletId, templateId, x: 0, y: 0 }),
     }));
     expect(placed.response.status).toBe(201);
+    // #653: this template's seller never completes Stripe Connect
+    // onboarding, so this always hits the now admin-only simulated path.
+    await grantAdminTo(buyer);
     const purchased = await api(`/instances/${instanceId}/purchase`, buyer.session({ method: 'POST' }));
     expect(purchased.response.status).toBe(201);
     return purchased.body.purchase;
