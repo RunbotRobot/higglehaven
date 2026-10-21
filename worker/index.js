@@ -9691,19 +9691,19 @@ async function handleBuilderStripeAccount(request, env, db) {
 // pretending to apportion which "layer" of a lifetime balance corresponds
 // to this year's earnings specifically.
 //
-// Pending #NNN (owner-flagged, 2026-09-10): higgles_balance_cents is one
-// fungible pool with no provenance tracking back to real money — the
-// simulated/free purchase path (handleInstancePurchase's dev-mode
-// fallback, no real payment ever collected) credits builder commission
-// exactly like a real Stripe sale does, so redeeming it for real cash is a
-// zero-capital, zero-auth mint of real money. Same root cause #629 already
-// found on the auction side, but reachable here with no capital and no
-// exploit skill at all. Pausing real-cash redemption again — same
-// stopgap-first-ask-later precedent as #629/#630 — until provenance
-// tracking (or some other bound) closes this; independent of any auction-
-// side flag, since that root cause was already fixed for auctions.
-const REDEMPTION_PAUSED_PENDING_PROVENANCE = true;
-
+// #653 (fixed): higgles_balance_cents is one fungible pool with no
+// provenance tracking back to real money, so the simulated/free purchase
+// path (handleInstancePurchase's dev-mode fallback) crediting builder
+// commission exactly like a real Stripe sale used to let an
+// unauthenticated real shopper mint real-redeemable commission with zero
+// capital — same root cause #629 already found on the auction side, but
+// reachable here with no capital and no exploit skill at all. Paused via
+// REDEMPTION_PAUSED_PENDING_PROVENANCE (same stopgap-first-ask-later
+// precedent as #629/#630) until the owner's actual fix shipped: that
+// simulated path is now admin-only (see handleInstancePurchase's own
+// #653 comment), so a real shopper can no longer reach it at all, closing
+// this off by construction rather than by a provenance-tracked ledger.
+//
 // #869: finds this builder's own last still-incomplete redemption
 // (claimed, but not yet confirmed by a payout) and resumes it instead of
 // claiming a fresh one — the actual fix for the duplicate-payout race
@@ -9712,9 +9712,9 @@ const REDEMPTION_PAUSED_PENDING_PROVENANCE = true;
 // own key). Exported so this — the part of the fix that doesn't require a
 // real Stripe call — can be unit-tested directly; POST /api/builders/me/
 // redeem itself always 503s before reaching this in the test suite
-// (REDEMPTION_PAUSED_PENDING_PROVENANCE, and Stripe is never configured
-// either), the same limitation claimPurchasesForPayout's own tests above
-// already accept for the seller side.
+// (Stripe is never configured there), the same limitation
+// claimPurchasesForPayout's own tests above already accept for the
+// seller side.
 export async function claimOrResumeBuilderRedemption(db, builderId, amountCents) {
   const pending = await db.prepare(`
     SELECT * FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL
@@ -9783,9 +9783,10 @@ async function handleBuilderRedeem(request, env, db) {
   if (request.method === 'POST') {
     // #1050: same "real outbound Stripe API call on the shared key" gap
     // #839/#948 already closed for the stripe-account handlers — this POST
-    // branch's Stripe transfers/payouts calls further down (currently
-    // unreachable while REDEMPTION_PAUSED_PENDING_PROVENANCE holds, but not
-    // forever) need the identical guard, same placement precedent as #948.
+    // branch's Stripe transfers/payouts calls further down (unreachable in
+    // this test suite since Stripe is never configured there, but not in a
+    // real deployment) need the identical guard, same placement precedent
+    // as #948.
     await checkRateLimit(db, `builder-redeem:${sessionBuilder.builder_id}`, STRIPE_RATE_LIMIT_MAX);
     if (availableCents <= 0) {
       throw new HttpError('Nothing is available to redeem yet.', 400);
@@ -9806,18 +9807,6 @@ async function handleBuilderRedeem(request, env, db) {
     const hasTaxPaperworkOnFile = !!user.tax_form_completed_at;
     if (!hasTaxPaperworkOnFile && grossIncome.totalCents > TAX_REPORTING_THRESHOLD_CENTS) {
       throw taxThresholdPayoutBlockedError();
-    }
-
-    // Paused pending the provenance-tracking design question above — same
-    // slot the #629 pause (REDEMPTION_PAUSED_PENDING_629, since lifted)
-    // occupied: after every other validation, so a malformed/oversized/
-    // threshold-blocked request still gets its own real status code, and
-    // only a redemption that would otherwise actually succeed hits this.
-    if (REDEMPTION_PAUSED_PENDING_PROVENANCE) {
-      throw new HttpError(
-        'Redeeming higgles for real cash is temporarily paused while we close a fraud gap — nothing about your balance is lost, this only affects new redemptions. Check back soon.',
-        503,
-      );
     }
 
     if (!stripeConfigured(env)) {
@@ -10185,8 +10174,7 @@ async function handleSellerPayouts(request, env, db) {
     // exist elsewhere in this codebase: an auction win *does* atomically
     // debit the winning bidder's own balance (#629, see resolveAuction),
     // and #349's higgle-to-cash redemption *is* built (#625,
-    // handleBuilderRedeem) — currently paused via
-    // REDEMPTION_PAUSED_PENDING_PROVENANCE (#653/#836) rather than unbuilt.
+    // handleBuilderRedeem) and, as of #653, no longer paused.
     // #615's own scoping left extending this tax gate to cover either of
     // those as an explicit open question, not yet resolved. Computed
     // before the Stripe-configuration/onboarding checks below so a caller
@@ -16144,20 +16132,31 @@ async function handleInstancePurchase(request, env, instanceId) {
 
   // #453: a product whose seller has fully completed Stripe Connect
   // onboarding (#452) checks out with real money instead of this
-  // endpoint's original dev-mode simulation (migrations/0051) — every
-  // other seller (none connected yet, or still mid-onboarding) keeps
-  // today's exact behavior unchanged, so existing demo/test flows never
-  // need a connected Stripe account to keep working. The stripeConfigured
-  // check here is deliberately a silent fallback to the simulation, not a
-  // 503 — a deployment that never sets STRIPE_SECRET_KEY at all (local
-  // dev, this test suite, or simply a fresh install before the platform
-  // owner adds it) should still have a working storefront, exactly as
-  // before this feature existed.
+  // endpoint's original dev-mode simulation (migrations/0051). The
+  // stripeConfigured check here is deliberately a silent fallback to the
+  // simulation, not a 503 — a deployment that never sets
+  // STRIPE_SECRET_KEY at all (local dev, this test suite, or simply a
+  // fresh install before the platform owner adds it) should still have a
+  // working storefront, exactly as before this feature existed.
   const seller = template.seller_id
     ? await db.prepare('SELECT stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?').bind(template.seller_id).first()
     : null;
   if (seller?.stripe_account_id && seller.stripe_onboarding_status === 'complete' && stripeConfigured(env)) {
     return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label);
+  }
+  // #653 (owner, 2026-09-11): "real-world shoppers should not be able to
+  // purchase from dev sellers" — any seller who hasn't (yet) fully
+  // completed Stripe Connect onboarding is, for this purpose, a dev
+  // seller, and the simulated/free path below is the dev/test pathway
+  // the owner wants kept available in parallel with real-money checkout
+  // ("the whole point of simulating is to test the real-world code"),
+  // not opened up to real shoppers. Closing this off to non-admins is
+  // what lets REDEMPTION_PAUSED_PENDING_PROVENANCE's stopgap (below) lift
+  // for good: the zero-capital higgles-mint that pause existed for
+  // required an unauthenticated real shopper reaching this exact path,
+  // which is no longer possible.
+  if (!user.is_admin) {
+    throw new HttpError('This product is not yet available for purchase — its seller has not finished setting up real payments.', 403);
   }
   // #1231: e2e/*.test.mjs only ever talks HTTP to a running dev server (no
   // direct D1 access the way worker/commerce.test.js's own mark-shipped/
