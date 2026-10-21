@@ -43,11 +43,17 @@ await sellerPage.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 // (renderForLandlet, scoped to one landlet) from the sibling
 // fetchAllAuctions call renderAuctionList fires concurrently for the
 // Active Auctions list below (world-wide, no landletId).
+// #2593: 60000ms stopped being enough under further CI-load growth --
+// timed out on an entirely unrelated PR (#2572) and passed clean on a
+// local re-run of the exact same commit, confirming a load-dependent
+// margin issue rather than a real claim/auction-flow regression. Widened
+// to 120000ms, same mitigation shape as #2570/#2589's own margin bumps
+// for this fleet's well-established runner-load-margin flakes.
 const [auctionsForLandletResponse] = await Promise.all([
   sellerPage.waitForResponse(
     (response) => response.request().method() === 'GET' &&
       response.url().includes('/auctions') && response.url().includes('landletId='),
-    { timeout: 60000 },
+    { timeout: 120000 },
   ),
   sellerPage.click('.settings-tab-btn[data-section="build"]'),
 ]);
