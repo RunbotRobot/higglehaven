@@ -7,7 +7,7 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
-  api, signupAdmin, signupBuilder, signupSeller,
+  api, grantAdminTo, signupAdmin, signupBuilder, signupSeller,
 } from './test-helpers.js';
 import { writeOrphanedPurchaseRow } from './index.js';
 
@@ -40,6 +40,11 @@ async function createTemplate(templateId, seller) {
 describe('Self-dealing flags (#2019)', () => {
   it('flags a purchase where the buyer and the listing\'s own seller are the same account', async () => {
     const seller = await signupSeller('self-dealing-same-account');
+    // #653: this test is deliberately buyer === seller, and the simulated
+    // purchase path below is now admin-only — grantAdminTo keeps this
+    // account's seller profile (sellerId, matching email) intact rather
+    // than signing up an unrelated second admin identity.
+    await grantAdminTo(seller);
     await createGreenbeltLandlet('self-dealing-same-landlet');
     await api('/landlets/self-dealing-same-landlet/claim', seller.session({ method: 'POST' }));
     await createTemplate('self-dealing-same-template', seller);
@@ -60,7 +65,7 @@ describe('Self-dealing flags (#2019)', () => {
 
   it('does not flag an ordinary purchase between two different accounts', async () => {
     const seller = await signupSeller('self-dealing-different-seller');
-    const buyer = await signupBuilder('self-dealing-different-buyer');
+    const buyer = await signupAdmin('self-dealing-different-buyer');
     await createGreenbeltLandlet('self-dealing-different-landlet');
     await api('/landlets/self-dealing-different-landlet/claim', seller.session({ method: 'POST' }));
     await createTemplate('self-dealing-different-template', seller);
@@ -78,7 +83,7 @@ describe('Self-dealing flags (#2019)', () => {
   });
 
   it('never flags a listing with no linked seller account (seller_id null)', async () => {
-    const buyer = await signupBuilder('self-dealing-no-seller-buyer');
+    const buyer = await signupAdmin('self-dealing-no-seller-buyer');
     await createGreenbeltLandlet('self-dealing-no-seller-landlet');
     await api('/landlets/self-dealing-no-seller-landlet/claim', buyer.session({ method: 'POST' }));
     const created = await api('/catalog', {
@@ -113,6 +118,8 @@ describe('Self-dealing flags (#2019)', () => {
 
     it('lists pending flags, newest first, joined against their own purchase', async () => {
       const seller = await signupSeller('self-dealing-list-seller');
+      // #653: same buyer === seller shape as the test above.
+      await grantAdminTo(seller);
       await createGreenbeltLandlet('self-dealing-list-landlet');
       await api('/landlets/self-dealing-list-landlet/claim', seller.session({ method: 'POST' }));
       await createTemplate('self-dealing-list-template', seller);
@@ -138,6 +145,9 @@ describe('Self-dealing flags (#2019)', () => {
   describe('POST /api/self-dealing-flags/:flagId/review', () => {
     async function createFlaggedPurchase(prefix) {
       const seller = await signupSeller(`${prefix}-seller`);
+      // #653: same buyer === seller shape as the tests above — the
+      // simulated purchase below needs this account to be admin too.
+      await grantAdminTo(seller);
       await createGreenbeltLandlet(`${prefix}-landlet`);
       await api(`/landlets/${prefix}-landlet/claim`, seller.session({ method: 'POST' }));
       await createTemplate(`${prefix}-template`, seller);

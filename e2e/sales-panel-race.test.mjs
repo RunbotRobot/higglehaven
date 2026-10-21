@@ -6,7 +6,7 @@
 // deterministic reordering, matching the exact repro in the issue.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -68,6 +68,14 @@ await fetchJson('/api/instances', {
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ instanceId, landletId: landlet.landletId, templateId: template.templateId, x: 0, y: 0 }),
 });
+
+// #653: the simulated path is now admin-only (this seller hasn't
+// completed Stripe Connect onboarding) — grant it to this same
+// browser-session account now, before the race below starts, so the
+// purchase fetch mid-race stays an ordinary single request rather than
+// picking up an extra grant-admin round trip that could itself perturb
+// the timing this test depends on.
+await grantAdmin(emailForLabel(LABEL));
 
 // Delay only the first GET /api/purchases (the initial, still-empty
 // fetch) so it resolves *after* a real purchase is created and a second,

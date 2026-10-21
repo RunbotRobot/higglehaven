@@ -11,7 +11,7 @@
 // the default avatar.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -83,6 +83,12 @@ console.log('instance placed (status should be 201):', placed.status);
 // verified session (N44) regardless of who's buying, the same shortcut
 // worker/avatar-ownership.test.js and worker/commerce.test.js's own #683
 // test already use.
+// #653: the simulated path is now admin-only (this seller hasn't
+// completed Stripe Connect onboarding) — grant it to this same
+// browser-session account rather than switching to a separate one, so
+// the purchase below still lands against the product/landlet this test
+// already built up under this session's own cookie.
+await grantAdmin(emailForLabel(LABEL));
 const purchased = await fetchJson(`/api/instances/${instanceId}/purchase`, { method: 'POST' });
 console.log('purchase response (status should be 201):', purchased.status);
 

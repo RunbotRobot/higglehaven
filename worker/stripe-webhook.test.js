@@ -293,7 +293,10 @@ describe('Stripe purchase-reversal webhooks (#1086)', () => {
   // earns builder_share_cents commission on sale — returns everything a
   // reversal-event test needs to assert against.
   async function createRealMoneyPurchase(label, paymentIntentId) {
-    const builder = await signupBuilder(`${label}-builder`);
+    // #653: the simulated purchase path (what this writes before the test
+    // itself bolts on a payment_intent_id to stand in for a real one) is
+    // now admin-only.
+    const builder = await signupAdmin(`${label}-builder`);
     await createGreenbeltLandletWithArea(`${label}-landlet`, 1000);
     await claim(`${label}-landlet`, builder);
     await createTemplate(`${label}-template`, { priceCents: 10000 });

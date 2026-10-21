@@ -11,7 +11,7 @@
 // priced through the real Seller-modal UI.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, emailForLabel, grantAdmin } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -68,6 +68,13 @@ const placed = await fetchJson('/api/instances', {
   body: JSON.stringify({ instanceId, landletId: landlet.landletId, templateId: template.templateId, x: 0, y: 0 }),
 });
 console.log('instance placed (status should be 201):', placed.status);
+
+// #653: the simulated path is now admin-only (this seller hasn't
+// completed Stripe Connect onboarding) — grant it to this same
+// browser-session account rather than switching to a separate one, so
+// the purchase below still lands against the product/landlet this test
+// already built up under this session's own cookie.
+await grantAdmin(emailForLabel(LABEL));
 
 // Purchase it through the exact API the in-world hint calls
 // (purchaseInstance in src/api.js) — quantity 2, a named buyer.

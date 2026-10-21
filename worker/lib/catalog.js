@@ -15,7 +15,8 @@
 // own handlers/validators too; getStorageUsage/reserveStorageBudget/
 // formatBytes -- the shared model-upload infrastructure handleModelUpload
 // also depends on; handleProductReviews/handleProductFlags -- their own
-// not-yet-extracted domain (#2532), just dispatched to from here.
+// domain, extracted separately into worker/lib/reputation.js (#2532),
+// just dispatched to from here.
 // MAX_MODEL_BYTES/MAX_MONEY_CENTS/PNG_SIGNATURE/
 // EXTENSIBLE_DIMENSION_KEY_BY_AXIS are likewise genuinely shared constants
 // -- duplicated below rather than exported, since (per #1978, confirmed
@@ -32,8 +33,8 @@ import { fireNotifications } from './notifications.js';
 import {
   templateFromRow, sellerExists, requireSessionSeller, requireSessionBuilder, assertReferenceExists,
   optionalLabelValue, positiveNumber, getStorageUsage, reserveStorageBudget, formatBytes,
-  handleProductReviews, handleProductFlags,
 } from '../index.js';
+import { handleProductReviews, handleProductFlags } from './reputation.js';
 
 // #1978: see this file's own header comment above for why these are
 // duplicated rather than imported -- each is the exact value worker/

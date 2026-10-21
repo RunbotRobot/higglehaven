@@ -180,11 +180,38 @@ export function glbFile({
 // path — this mirrors handleAdminBootstrap's real contract (sign up, then
 // prove you hold ADMIN_BOOTSTRAP_SECRET) using the fixed test-env secret
 // vitest.config.js configures.
+// #653: admin-bootstrap is rate-limited by client IP (ADMIN_BOOTSTRAP_RATE_LIMIT_MAX,
+// worker/index.js), which clientIp falls back to a shared 'unknown' bucket for
+// absent any cf-connecting-ip header — harmless while this helper was only
+// ever called once or twice per file (one "shared-admin"), but #653's
+// admin-only simulated-purchase gate means some files now call this dozens
+// of times each, which used to all share that one bucket and 429 past the
+// 10th call. A synthetic, per-call unique IP (same dodge the purchase
+// rate-limit tests already use for themselves) sidesteps it for every
+// caller, not just this leaf's own new ones.
 export async function signupAdmin(label) {
   const account = await signupBuilder(label);
   const bootstrapped = await api('/auth/admin-bootstrap', account.session({
     method: 'POST',
     body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    headers: { 'cf-connecting-ip': `test-admin-bootstrap-${crypto.randomUUID()}` },
   }));
   return { ...account, isAdmin: bootstrapped.body.user.isAdmin };
+}
+
+// #653: same bootstrap call as signupAdmin above, but for an account
+// that already exists under some other profile (typically signupSeller)
+// and needs to ALSO become admin without losing it — e.g. a self-dealing
+// test whose one account is deliberately both the seller and the buyer,
+// and now also needs admin to reach handleInstancePurchase's admin-only
+// simulated path. signupAdmin itself can't be reused here since it signs
+// up a brand-new account from scratch, which would just be a second,
+// unrelated identity.
+export async function grantAdminTo(account) {
+  await api('/auth/admin-bootstrap', account.session({
+    method: 'POST',
+    body: JSON.stringify({ secret: env.ADMIN_BOOTSTRAP_SECRET }),
+    headers: { 'cf-connecting-ip': `test-admin-bootstrap-${crypto.randomUUID()}` },
+  }));
+  return account;
 }
