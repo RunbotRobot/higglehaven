@@ -10997,7 +10997,7 @@ let shopWorldRadiusM = null;
 let shopDomeMesh = null;
 let shopWallMesh = null;
 let shopDomeRiseM = SHOP_DOME_INITIAL_RISE_M;
-let shopSkyMaterial = null; // shared by both wall and dome — see createShopSkyMaterial
+let shopSkyMaterial = null; // the wall's own material — the dome gets its own material instance (see enterShopMode) sharing this one's `uniforms` object by reference, not the material itself, so both still animate off one clock — see createShopSkyMaterial
 let shopSkyClockStart = null;
 
 // Clouds only ever show in the upper portion of the wall (its own hazy-
@@ -15837,7 +15837,33 @@ async function enterShopMode() {
     out.copy(SHOP_HAZY_HORIZON_COLOR).lerp(SHOP_SKY_DOME_COLOR, t);
   });
   shopDomeRiseM = SHOP_DOME_INITIAL_RISE_M;
-  shopDomeMesh = new THREE.Mesh(domeGeometry, shopSkyMaterial);
+  // owner-report-2026-10-21: matching segment counts (above) makes the
+  // wall's and dome's rims the same ideal 64-gon, but CylinderGeometry
+  // and SphereGeometry still compute that shared rim's vertex positions
+  // via two different trig code paths (the cylinder's theta parameter
+  // isn't the same floating-point expression as the sphere's equivalent
+  // phi, even though they describe the same circle -- see #2523's own
+  // 90-degree-phase-offset analysis). That leaves a sub-ULP gap/overlap
+  // right at the seam, which the depth test resolves inconsistently --
+  // worse at a distance, where depth-buffer precision is coarser, and
+  // gone up close, exactly matching the owner's own report ("disappears
+  // when I try to get closer"): classic z-fighting, not noise. A
+  // dedicated material for the dome -- sharing the wall's own `uniforms`
+  // object *by reference* (not a deep clone) so both stay on the exact
+  // same clock -- with a small polygonOffset settles the ambiguity
+  // deterministically in the wall's favor instead of leaving it to
+  // whichever float value happens to round which way.
+  const shopDomeMaterial = new THREE.ShaderMaterial({
+    uniforms: shopSkyMaterial.uniforms,
+    vertexShader: SHOP_SKY_VERTEX_SHADER,
+    fragmentShader: SHOP_SKY_FRAGMENT_SHADER,
+    side: THREE.BackSide,
+    extensions: { derivatives: true },
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
+  });
+  shopDomeMesh = new THREE.Mesh(domeGeometry, shopDomeMaterial);
   shopDomeMesh.rotation.x = Math.PI / 2;
   shopDomeMesh.position.z = SHOP_WALL_HEIGHT_M - wallGroundDropM;
   shopDomeMesh.scale.set(shopWorldRadiusM, shopDomeRiseM, shopWorldRadiusM);
