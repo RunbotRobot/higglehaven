@@ -134,7 +134,13 @@ for (let i = 0; i < EPISODE_SAMPLES; i++) {
   // test actually doing that reliably (3/3 standalone runs failed with a
   // waitForFunction timeout here before this fix).
   await page.evaluate(([x, y]) => window.__testTeleportShopAvatar(x, y, 0), [AVATAR_X, AVATAR_Y]);
-  await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'lean', { timeout: 15000 });
+  // #2598: waitForFunction's signature is (pageFunction, arg, options) --
+  // this 2-arg call put { timeout: 15000 } in the arg slot instead, so the
+  // real applied timeout was always Playwright's own default (30000ms),
+  // not 15000ms -- and even the intended 15000ms wasn't enough margin
+  // under current CI load. The explicit `null` arg reaches the options
+  // slot, and the timeout is widened for real headroom.
+  await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'lean', null, { timeout: 60000 });
   const rightAfterSelection = await page.evaluate(() => window.__testShopLeanPose());
   settleDelays.add(Math.round(rightAfterSelection.settleDelayS * 1000)); // ms, so float noise doesn't fracture the set
   if (rightAfterSelection.settleElapsedS < rightAfterSelection.settleDelayS && rightAfterSelection.blend === 0) {
