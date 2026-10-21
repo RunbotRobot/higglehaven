@@ -5,9 +5,14 @@
 // notifications, and the cursor/query-param helpers this resource's own
 // listing endpoint uses. Extracted verbatim, zero behavior change.
 //
+// requireSessionBuilder itself now lives in ./auth.js (moved there after
+// this file's own initial extraction, by #2543) -- imported from there
+// directly, same as every other already-extracted worker/lib/ module
+// (video-generation.js, credit-orbs.js, reputation.js).
+//
 // Deliberately NOT included here (genuinely shared beyond this file, same
 // reverse-import shape worker/lib/video-generation.js's own comment
-// documents for its own requireSessionBuilder/MAX_MODEL_BYTES/etc.):
+// documents for its own MAX_MODEL_BYTES/etc.):
 // templateFromRow -- read by non-catalog handlers too (owned-avatar/
 // -animation listings, instance crop/XY-bounds validation); sellerExists,
 // requireSessionSeller, assertReferenceExists, optionalLabelValue,
@@ -27,11 +32,11 @@
 import { json, HttpError, clientIp } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue, labelValue, assertReferencesExist, queryLimit } from './validation.js';
-import { assertOwner } from './auth.js';
+import { assertOwner, requireSessionBuilder } from './auth.js';
 import { bytesToHex } from './crypto.js';
 import { fireNotifications } from './notifications.js';
 import {
-  templateFromRow, sellerExists, requireSessionSeller, requireSessionBuilder, assertReferenceExists,
+  templateFromRow, sellerExists, requireSessionSeller, assertReferenceExists,
   optionalLabelValue, positiveNumber, getStorageUsage, reserveStorageBudget, formatBytes,
 } from '../index.js';
 import { handleProductReviews, handleProductFlags } from './reputation.js';
