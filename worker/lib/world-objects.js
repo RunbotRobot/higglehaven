@@ -8,21 +8,20 @@ import { checkRateLimit } from './rate-limit.js';
 import {
   readJson, stringValue, queryLimit, decodeCursor, encodeCursor, assertReferencesExist,
 } from './validation.js';
-import { currentUser } from './auth.js';
+import { currentUser, requireSessionBuilder, requireVerifiedSession } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
 // #2535 (see its own module's comment for the general shape): these
-// haven't been extracted from worker/index.js yet -- requireSessionBuilder/
-// requireVerifiedSession/requireOwnedLandlet(s) are genuinely cross-cutting
-// auth/ownership helpers used from dozens of unrelated handlers, and
-// assertReferenceExists/the instance-validation helpers below live
-// alongside handleInstancePurchase's own use of them, not just this
-// module's. Importing them back from the main file (rather than
-// duplicating or prematurely relocating them) is an intentional, safe
+// haven't been extracted from worker/index.js yet -- requireOwnedLandlet(s)
+// is a genuinely cross-cutting auth/ownership helper used from dozens of
+// unrelated handlers, and assertReferenceExists/the instance-validation
+// helpers below live alongside handleInstancePurchase's own use of them,
+// not just this module's. Importing them back from the main file (rather
+// than duplicating or prematurely relocating them) is an intentional, safe
 // circular import -- every one of these is only ever called at request
 // time, long after both modules have finished their own top-level
 // evaluation, so the cycle never actually binds an undefined value.
 import {
-  requireSessionBuilder, requireVerifiedSession, requireOwnedLandlet, requireOwnedLandlets,
+  requireOwnedLandlet, requireOwnedLandlets,
   assertReferenceExists, assertCropWithinTemplateBounds, assertInstanceZWithinLevels,
   assertInstanceXYWithinLandlet, assertInstanceScaleWithinBounds, cropsEqual, instanceParams, instanceFromRow,
   getInstancesById, validateInstance, recordContentEditHistory,

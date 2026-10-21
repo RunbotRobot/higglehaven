@@ -48,7 +48,16 @@ async function openAuthModal(page) {
     throw error;
   }
   await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
-  await page.click('#account-auth-btn');
+  // #2586 (follow-up to #2087): the same N44 gate can just as easily pop
+  // #auth-modal open in the window between the panel expanding and this
+  // click, leaving #account-auth-btn covered by the modal's own overlay --
+  // same guard shape as the #account-menu-toggle click just above.
+  try {
+    await page.click('#account-auth-btn', { timeout: 5000 });
+  } catch (error) {
+    if ((await page.locator('#auth-modal.visible').count()) > 0) return;
+    throw error;
+  }
   await page.waitForSelector('#auth-modal.visible', { timeout: 5000 });
 }
 
