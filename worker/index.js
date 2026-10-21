@@ -23,9 +23,7 @@ import {
   assertVerified, requireSessionBuilder, requireVerifiedSession,
 } from './lib/auth.js';
 import {
-  requireControlRoomAccess, controlRoomTextValue, controlRoomStatusValue, controlRoomTaskFromRow,
-  controlRoomReplyFromRow, controlRoomTaskIdValue, urlValue, imageUrlValue, subIssuesValue,
-  subIssueSummariesValue, handleControlRoomAdminPage, handleAdminActionLogPage, handleAdminDashboardPage,
+  handleControlRoomAdminPage, handleAdminActionLogPage, handleAdminDashboardPage,
   handleControlRoom, handleAdminActionLogList,
 } from './lib/control-room.js';
 import {
