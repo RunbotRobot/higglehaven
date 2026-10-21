@@ -507,7 +507,10 @@
         : null;
     listEl.innerHTML = html;
     if (focusState) {
-      const el = listEl.querySelector(focusState.selector + focusState.taskId + '"]');
+      // #2526: taskId can come from a direct-D1-written row whose id skipped
+      // the HTTP API's controlRoomTaskIdValue regex -- escape it so a quote
+      // or other selector metacharacter doesn't throw a SyntaxError here.
+      const el = listEl.querySelector(focusState.selector + CSS.escape(focusState.taskId) + '"]');
       if (el) {
         el.focus();
         el.setSelectionRange(focusState.selectionStart, focusState.selectionEnd);
@@ -603,7 +606,9 @@
       expanded.add(target.id);
       if (!repliesCache.has(target.id)) loadReplies(target.id);
       render();
-      const targetEl = listEl.querySelector('[data-task-id="' + target.id + '"]');
+      // #2526: see setListHTML's own comment above -- target.id may contain
+      // a selector metacharacter if written via the direct-D1 fallback.
+      const targetEl = listEl.querySelector('[data-task-id="' + CSS.escape(target.id) + '"]');
       if (targetEl) targetEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
@@ -654,7 +659,9 @@
           method: 'PATCH', body: JSON.stringify({ caller: 'owner', viewed: !(task && task.viewed) }),
         });
       } else if (action === 'reply') {
-        const textEl = listEl.querySelector('[data-reply-text="' + taskId + '"]');
+        // #2526: see setListHTML's own comment above -- taskId may contain
+        // a selector metacharacter if written via the direct-D1 fallback.
+        const textEl = listEl.querySelector('[data-reply-text="' + CSS.escape(taskId) + '"]');
         const fromEl = textEl.closest('.reply-row').querySelector('input[name="replyFrom"]');
         const text = textEl.value.trim();
         if (!text) return;
