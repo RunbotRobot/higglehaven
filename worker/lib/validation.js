@@ -85,3 +85,67 @@ export function labelValue(value, field) {
   }
   return label;
 }
+
+// #2538: generic number/pagination/existence validators, used from dozens
+// of unrelated route handlers across the file (finiteNumber: 29 call sites,
+// queryLimit: 16, decodeCursor: 13, encodeCursor: 14, assertReferencesExist:
+// 5) -- domain-agnostic in the same way readJson/stringValue/labelValue
+// above already are. Extracted verbatim, zero behavior change.
+export function finiteNumber(value, field) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) throw new HttpError(`${field} must be a finite number`, 400);
+  return number;
+}
+
+export function queryLimit(value, defaultValue) {
+  if (value === null) return defaultValue;
+  if (!/^\d+$/.test(value)) throw new HttpError('limit must be an integer between 1 and 100', 400);
+  const limit = Number(value);
+  if (limit < 1 || limit > 100) throw new HttpError('limit must be an integer between 1 and 100', 400);
+  return limit;
+}
+
+export function encodeCursor(createdAt, id) {
+  const bytes = new TextEncoder().encode(JSON.stringify([createdAt, id]));
+  return btoa(String.fromCharCode(...bytes));
+}
+
+export function decodeCursor(value) {
+  if (value === null) return null;
+  try {
+    const bytes = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
+    const decoded = JSON.parse(new TextDecoder().decode(bytes));
+    // #1470: same empty-string guard decodeCatalogCursor/decodeCatalogPriceCursor
+    // (still in worker/index.js) already have -- without it, a cursor
+    // encoding ["",""] (never produced by encodeCursor itself) silently
+    // matches every row on a descending-sort endpoint's
+    // `created_at < '' OR (... id < '')` check, returning an empty page
+    // instead of the 400 a malformed cursor should get.
+    if (!Array.isArray(decoded) || decoded.length !== 2 ||
+        typeof decoded[0] !== 'string' || decoded[0] === '' ||
+        typeof decoded[1] !== 'string' || decoded[1] === '') throw new Error();
+    return { createdAt: decoded[0], id: decoded[1] };
+  } catch {
+    throw new HttpError('cursor is invalid', 400);
+  }
+}
+
+// D1's own per-statement bound-parameter ceiling -- chunking a large
+// `IN (...)` check against it the same way assertReferencesExist below
+// already does is this constant's only use.
+const D1_MAX_BOUND_PARAMETERS = 100;
+
+export async function assertReferencesExist(db, table, column, values, field) {
+  const uniqueValues = [...new Set(values)];
+  const found = new Set();
+  for (let i = 0; i < uniqueValues.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = uniqueValues.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(
+      `SELECT ${column} AS value FROM ${table} WHERE ${column} IN (${placeholders})`,
+    ).bind(...chunk).all();
+    for (const row of results) found.add(row.value);
+  }
+  const missing = uniqueValues.find((value) => !found.has(value));
+  if (missing !== undefined) throw new HttpError(`${field} "${missing}" does not exist`, 400);
+}
