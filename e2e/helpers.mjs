@@ -415,20 +415,45 @@ export async function clearVerifyModalIfShown(page) {
   // the older, tighter margins.
   const verifyModalShown = await page.waitForSelector('#verify-modal.visible', { timeout: 15000 }).then(() => true).catch(() => false);
   if (!verifyModalShown) return;
+
+  // #2544: the real cost here was never the click() action itself -- it's
+  // the button's own click handler (src/main.js's verifyContinueBtn
+  // listener) awaiting a network round trip (POST /auth/age-attest, then
+  // conditionally /auth/card-setup-intent) before re-enabling itself.
+  // Playwright's click() auto-waits for the target to become actionable,
+  // which includes "enabled", so a flat click() timeout (#2153/#2416) was
+  // quietly absorbing that same network cost disguised as "waiting to be
+  // clickable" -- every escalation was really just re-widening a margin
+  // around the wrong operation, same #1388/#1896/#2048/#2360-class shape as
+  // chooseIdentity's own signup wait before #2400's fix. Polling the real
+  // end state directly (the button actually re-enabled, or the modal having
+  // closed outright for an already-trusted user) needs setting generously
+  // only once, and keeps the click() calls themselves on a short, tight
+  // timeout -- a genuine new bug (the button never re-enabling at all)
+  // still fails in 15s instead of hiding behind the same oversized margin
+  // the network wait needs.
+  const verifyButtonReady = () => page.waitForFunction(
+    () => {
+      const modalEl = document.getElementById('verify-modal');
+      if (!modalEl.classList.contains('visible')) return true;
+      return !document.getElementById('verify-continue-btn').disabled;
+    },
+    { timeout: 120000 },
+  );
+
   if (await page.locator('#verify-age-step').isVisible()) {
     await page.check('#verify-age-attest');
-    // #2153/#2416: the click's own actionability wait (not just the selector
-    // wait above) can outlast Playwright's 30000ms default under the same
-    // CI-wide contention #1896 already accounts for -- the button stays
-    // disabled until a signup/didit-verification-status round trip resolves.
-    // #2153's own 30000ms bump was itself outpaced within two days (#2416),
-    // same recurring-margin-exhaustion shape as #1388/#1896/#2048/#2360's own
-    // escalations elsewhere in this file -- bumped both of this function's
-    // own calls to the next step up.
-    await page.click('#verify-continue-btn', { timeout: 60000 });
+    await page.click('#verify-continue-btn', { timeout: 15000 });
+    await verifyButtonReady();
   }
   if (await page.locator('#verify-modal.visible').count() > 0) {
-    await page.click('#verify-continue-btn', { timeout: 60000 });
+    // Reached directly (age step never shown -- user.ageAttested was
+    // already true) means enterVerifyCardStep() started as part of opening
+    // the modal, before this helper ever ran; its own card-setup-intent
+    // request is what the button is waiting on here. Reached after the
+    // block above, the button is already ready and this resolves at once.
+    await verifyButtonReady();
+    await page.click('#verify-continue-btn', { timeout: 15000 });
   }
   await page.waitForSelector('#verify-modal:not(.visible)', { state: 'attached', timeout: 15000 });
 }
