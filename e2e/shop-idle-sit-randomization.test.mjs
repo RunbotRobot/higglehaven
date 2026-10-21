@@ -161,7 +161,13 @@ for (let i = 0; i < EPISODE_SAMPLES; i++) {
   await deflectMoveJoystick(page); // ends the previous episode, re-arms the idle timer
   // Polls for the fresh episode's own target selection rather than a fixed
   // wait, same #2423-established reasoning as the sibling targeting test.
-  await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'sit', { timeout: 15000 });
+  // #2598: waitForFunction's signature is (pageFunction, arg, options) --
+  // this 2-arg call put { timeout: 15000 } in the arg slot instead, so the
+  // real applied timeout was always Playwright's own default (30000ms),
+  // not 15000ms -- and even the intended 15000ms wasn't enough margin
+  // under current CI load. The explicit `null` arg reaches the options
+  // slot, and the timeout is widened for real headroom.
+  await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'sit', null, { timeout: 60000 });
   const rightAfterSelection = await page.evaluate(() => window.__testShopSitPose());
   settleDelays.add(Math.round(rightAfterSelection.settleDelayS * 1000)); // ms, so float noise doesn't fracture the set
   if (rightAfterSelection.settleElapsedS < rightAfterSelection.settleDelayS && rightAfterSelection.blend === 0) {
