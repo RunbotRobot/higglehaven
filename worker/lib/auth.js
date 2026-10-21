@@ -84,3 +84,13 @@ export async function requireAdmin(request, db) {
   if (!user.is_admin) throw new HttpError('Admin access required', 403);
   return user;
 }
+
+// #2538: thrown wherever an existing row's own owner column doesn't match
+// the session's resolved builder/seller id -- the shared shape for every
+// "is this actually yours" check across the file. Pure/zero-dependency, so
+// safe to extract alongside the rest of this authorization chain even
+// though requireSessionBuilder (its most common caller) can't move yet
+// (see worker/index.js's own comment on why, above requireSessionBuilder).
+export function assertOwner(actualOwnerId, sessionOwnerId, message) {
+  if (actualOwnerId !== sessionOwnerId) throw new HttpError(message, 403);
+}

@@ -9,7 +9,7 @@
 // since it's the lightest real table with no FK constraints to seed.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { assertReferencesExist } from './index.js';
+import { assertReferencesExist } from './lib/validation.js';
 
 beforeAll(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
