@@ -18,7 +18,10 @@ import {
   finiteNumber, queryLimit, decodeCursor, encodeCursor, assertReferencesExist, positiveInteger,
 } from './lib/validation.js';
 import { notificationStatement, fireNotification, fireNotifications } from './lib/notifications.js';
-import { SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser, requireAdmin, assertOwner } from './lib/auth.js';
+import {
+  SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser, requireAdmin, assertOwner,
+  assertVerified, requireSessionBuilder, requireVerifiedSession,
+} from './lib/auth.js';
 // #2530: the shared R2 storage-budget machinery (genuinely cross-domain --
 // see worker/lib/storage.js's own comment) plus the models/uploaded-assets
 // domain handlers themselves, extracted into worker/lib/.
@@ -3523,57 +3526,6 @@ async function handleBuilders(request, env, db, route, url) {
   return json({ error: 'Not found' }, 404);
 }
 
-// docs/SPEC.md §6 / #556: age attestation plus credit-card (or eventual
-// government-ID, #589) verification gates every builder/seller-owned
-// action from here on, not just newly created accounts. Owner decision
-// (Control Room, 2026-09-09): "force everyone through the new gates, no
-// grandfathering in" — deliberately applied to every session, including
-// ones that signed up before this existed. Scoped to requireSessionBuilder/
-// requireSessionSeller below (the ones that actually gate world/shop-
-// selling activity), not requireCurrentUser itself, so an unverified
-// session can still reach its own account state (GET /api/builders|
-// sellers/me) and the age-attest/card-setup-intent/confirm-card endpoints
-// needed to clear this gate in the first place.
-function assertVerified(user) {
-  if (user.age_attested_at === null || user.trust_tier === 'none') {
-    throw new HttpError(
-      'Age attestation and credit-card (or government-ID) verification are required to continue.',
-      403,
-      { verificationRequired: true },
-    );
-  }
-}
-
-// The authorization workhorse for every builder-owned mutation below:
-// resolves *your own* builder profile from the session (never a
-// client-supplied builderId — that field is exactly what let anyone act
-// as anyone else before this pass, see the audit that prompted it) so a
-// handler can compare it against whatever it's about to modify.
-// Exported for worker/lib/video-generation.js and worker/lib/credit-orbs.js
-// (#2541) -- their own route handlers need this same auth-chain gate, but
-// it can't move with them (see worker/lib/auth.js's own comment on why,
-// and #2543 for the issue that'll finally extract it). A function export
-// is safe for workerd's main-entry-module constraint (#1978, see
-// worker/lib/builder-profile.js's own comment) unlike a plain const.
-export async function requireSessionBuilder(request, db) {
-  const user = await requireCurrentUser(request, db);
-  assertVerified(user);
-  // last_active_at is kept fresh inside getOrCreateBuilderForUser itself
-  // now, not here — see that function's own comment.
-  return getOrCreateBuilderForUser(db, user);
-}
-
-// N44 (owner, 2026-09-12): shopping/purchasing now requires the same
-// age-attestation + credit-card-or-ID gate as Build/Sell ("restrict minors
-// from using any part of the application"), but a purchase doesn't need a
-// builder or seller profile the way requireSessionBuilder/requireSessionSeller
-// provision — just a real, verified account. Used by handleInstancePurchase.
-async function requireVerifiedSession(request, db) {
-  const user = await requireCurrentUser(request, db);
-  assertVerified(user);
-  return user;
-}
-
 // A row's own seller_id column can be non-null yet dangling — pointing at
 // a seller that DELETE /api/sellers/:sellerId already removed (see that
 // handler's own comment: intentionally left as-is, "the same way a
@@ -6546,7 +6498,9 @@ async function handleMySeller(request, db) {
   return json({ seller: sellerFromRow(row) });
 }
 
-// Same reasoning as requireSessionBuilder above, for seller-owned mutations.
+// Same reasoning as requireSessionBuilder (worker/lib/auth.js), for
+// seller-owned mutations -- stays here since getOrCreateSellerForUser is
+// seller-domain logic, not yet extracted to its own #2502 leaf.
 async function requireSessionSeller(request, db) {
   const user = await requireCurrentUser(request, db);
   assertVerified(user);
@@ -6556,9 +6510,10 @@ async function requireSessionSeller(request, db) {
 // Real accounts (migrations/0053_users_auth.sql) — the first genuinely
 // unforgeable identity in this app. Everything below is scoped to this
 // one concern: prove an email is real, prove a password is correct, and
-// hand back a session cookie. requireSessionBuilder/requireSessionSeller
-// above (and every ownership check built on them throughout this file)
-// are what actually put that unforgeable identity to work.
+// hand back a session cookie. requireSessionBuilder (worker/lib/auth.js)/
+// requireSessionSeller above (and every ownership check built on them
+// throughout this file) are what actually put that unforgeable identity
+// to work.
 
 const PBKDF2_ITERATIONS = 100000; // see the migration's own comment on why this is tunable per-hash, not global
 // #2542: SESSION_TTL_MS/EMAIL_VERIFICATION_TTL_MS/PASSWORD_RESET_TTL_MS/
