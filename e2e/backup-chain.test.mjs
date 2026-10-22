@@ -115,10 +115,17 @@ await page.locator('.backup-chain-row').filter({ hasText: 'Table' }).locator('.b
 // a wait.
 const rowButtonsDisabledMidReorder = await page.locator('.backup-chain-row button:not(:disabled)').count();
 console.log('every row button disabled while a reorder is in flight (should be 0):', rowButtonsDisabledMidReorder);
+// #2639 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeout itself is widened to 60000ms for real headroom under
+// CI load.
 await page.waitForFunction(() => {
   const first = document.querySelector('.backup-chain-row');
   return first && first.textContent.includes('Table');
-}, { timeout: 5000 });
+}, null, { timeout: 60000 });
 const rowButtonsReenabledAfterReorder = await page.locator('.backup-chain-row button:not(:disabled)').count();
 console.log('row buttons re-enabled again once the reorder completes (should be > 0):', rowButtonsReenabledAfterReorder);
 const firstRowAfterReorder = await page.locator('.backup-chain-row').first().textContent();
@@ -129,7 +136,9 @@ console.log('backend chain order after reordering (should be [placeholder-table,
 
 // Remove the tree (now second) via its row's own × button.
 await page.locator('.backup-chain-row').filter({ hasText: 'Tree' }).locator('.backup-chain-row-remove').click();
-await page.waitForFunction(() => document.querySelectorAll('.backup-chain-row').length === 1, { timeout: 5000 });
+// #2639 (sub-issue of #2635): same waitForFunction arg/options bug as above
+// -- null arg, timeout widened to 60000ms.
+await page.waitForFunction(() => document.querySelectorAll('.backup-chain-row').length === 1, null, { timeout: 60000 });
 const rowsAfterRemove = await page.locator('.backup-chain-row').count();
 console.log('rows shown after removing one via the panel (should be 1):', rowsAfterRemove);
 

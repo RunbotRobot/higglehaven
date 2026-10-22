@@ -26,9 +26,17 @@ console.log('auth modal closed by Escape (should be true):', modalClosedByEscape
 // resolves (with null, since nothing was signed in) and enterShopMode's
 // decline branch (showShopAccessGate) runs -- before the fix, this never
 // appears at all, and the wait below times out.
+// #2639 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeout itself is widened to 60000ms for real headroom under
+// CI load.
 await page.waitForFunction(
   () => document.getElementById('shop-status')?.textContent === 'Sign in and complete age verification to continue.',
-  { timeout: 5000 },
+  null,
+  { timeout: 60000 },
 );
 const shopStatusText = await page.textContent('#shop-status');
 console.log('Shop access-gate status text after declining via Escape (should be the sign-in prompt):', shopStatusText);

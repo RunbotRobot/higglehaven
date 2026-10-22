@@ -8,17 +8,11 @@
 // src/build/) and surfaces the open question again in this PR rather than
 // deciding it unilaterally.
 //
-// build/scene.js (#2559, the rest of Build mode's own internals — gizmos,
-// controls, selection, undo/redo, etc.) hasn't been extracted yet as of
-// this leaf, so this module temporarily imports several Build-internal
-// pieces straight from main.js (controls/rotateControls/translateControls,
-// clearSelection/addSelectionOutline/removeSelectionOutline,
-// buildModeFrameUpdate, setLastKnownDistance, showShopAccessGate,
-// SELL_HIDDEN_BUILDER_UI_IDS, updateModeNavUI) — same temporary-import
-// shape account/auth.js's and account/menu.js's own comments already use
-// for their own not-yet-extracted dependencies. Once #2559 lands, those
-// imports should be repointed to build/scene.js the same way #2555
-// repointed claim/flow.js's stale ui/modal.js import.
+// #2559: build/scene.js now owns the rest of Build mode's own internals
+// (gizmos, controls, selection, undo/redo, etc.) — the Build-internal
+// imports below are repointed there from main.js's own stopgap re-exports
+// (same "fix the stale import" step #2555 did for claim/flow.js's own
+// ui/modal.js import once ui/modal.js itself landed).
 import * as THREE from 'three';
 import { fetchCatalog, fetchSavedLayout, fetchAllLandlets, createInstancesRemote } from '../api.js';
 import { computeSavedLayoutGround, pointInDragRect } from '../savedLayoutPreview.js';
@@ -32,11 +26,11 @@ import {
 import { ensureBuilderIdentity } from '../account/identity.js';
 import { refreshNotificationsBadge, refreshFriendsBadge, refreshDmBadge } from '../account/menu.js';
 import {
-  START_MODE_KEY, PREVIEW_SAVED_LAYOUT_ID_KEY, SELL_HIDDEN_BUILDER_UI_IDS,
   controls, rotateControls, translateControls,
   clearSelection, addSelectionOutline, removeSelectionOutline,
-  buildModeFrameUpdate, setLastKnownDistance, showShopAccessGate, updateModeNavUI,
-} from '../main.js';
+  buildModeFrameUpdate, setLastKnownDistance,
+} from './scene.js';
+import { START_MODE_KEY, PREVIEW_SAVED_LAYOUT_ID_KEY, SELL_HIDDEN_BUILDER_UI_IDS, showShopAccessGate, updateModeNavUI } from '../main.js';
 
 // #635 (sub-issue of #631): the faux-layout preview — a dedicated,
 // read-only 3D view rendering one saved layout's instances at their true

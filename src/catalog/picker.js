@@ -33,9 +33,11 @@ import {
 } from '../world/state.js';
 import {
   catalogThumbnailCache, renderCatalogThumbnail, solidColorDataUrl, computeThumbnailEmbedding,
-  enterPlacementMode, cancelPlacementMode, pendingPlacement, hideBackupReferenceMesh,
-  activeBundleTab, setActiveBundleTab,
+  hideBackupReferenceMesh, activeBundleTab, setActiveBundleTab,
 } from '../main.js';
+// #2559: enterPlacementMode/cancelPlacementMode/pendingPlacement now live in
+// src/build/scene.js -- see that module's own comment.
+import { enterPlacementMode, cancelPlacementMode, pendingPlacement } from '../build/scene.js';
 
 // Add-item catalog picker: a toggled panel listing every activeCatalog
 // template as a grid of thumbnails with the name below each, rather than a
