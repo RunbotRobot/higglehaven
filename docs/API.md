@@ -2865,6 +2865,10 @@ role" under "Authorization model" above). Updates world settings. The
 current implementation merges request fields with the existing world
 settings before validation.
 
+Rate-limited to 20 attempts per 15-minute window, bucketed by the calling
+admin's own user id (#2657) — same generous-but-bounded-burst convention as
+every other admin mutation in this section.
+
 Request body example:
 
 ```json
@@ -2891,7 +2895,9 @@ Validation notes:
 
 ### `POST /api/world/expand`
 
-Requires a session logged in as an admin (`403` otherwise). This is the
+Requires a session logged in as an admin (`403` otherwise). Rate-limited to
+20 attempts per 15-minute window, bucketed by the calling admin's own user
+id (#2657). This is the
 manual/troubleshooting path now — see "Automatic world growth" above for
 the mechanism that calls it (well, its internals) day to day. Expands the
 circular world boundary by exactly one configured
@@ -2942,6 +2948,12 @@ Every mutating endpoint below requires a session logged in as an admin
 `generate-ring` specifically is also called internally (bypassing HTTP
 entirely, so no session applies) by the automatic world-growth job — see
 "Automatic world growth" under "World settings" above.
+
+Every mutating endpoint below is also rate-limited, bucketed by the calling
+admin's own user id, 15-minute fixed window (#2657) — see each endpoint
+below for its specific limit. The internal `generate-ring` call path above
+bypasses this too, same as it bypasses the session check, since there's no
+admin user id to bucket on outside an HTTP request.
 
 ### `POST /api/land-candidates/generate-mosaic`
 
@@ -2996,6 +3008,9 @@ data in `geo_biome_cells` (migrations/0149) when its center falls near a
 classified cell — `near_water`, `lowland`, `upland`, or `alpine` — rather
 than staying `null`. Same forward-generation-only scope as `landType`
 above, and never overwrites a `biome` a cell was already generated with.
+
+Rate-limited to 20 attempts per 15-minute window, bucketed by the calling
+admin's own user id (#2657).
 
 ### `POST /api/land-candidates/generate-ring`
 
@@ -3056,6 +3071,10 @@ plot's `biome` is set from real ingested `geo_biome_cells` data when its
 center falls near a classified cell, unless the plot was already generated
 with an explicit `biome` (never overwritten).
 
+Rate-limited to 20 attempts per 15-minute window, bucketed by the calling
+admin's own user id (#2657) — not applied to the internal auto-growth call
+path above, which has no admin user id to bucket on.
+
 ## Land candidate rings
 
 ### `GET /api/land-candidate-rings`
@@ -3104,7 +3123,10 @@ prefix instead of editing or removing one member of a reserved band.
 
 Requires a session logged in as an admin (`403` otherwise) — also called
 internally, bypassing HTTP, by the automatic world-growth job (see
-"Automatic world growth" under "World settings" above). Marks every
+"Automatic world growth" under "World settings" above). Rate-limited to 20
+attempts per 15-minute window, bucketed by the calling admin's own user id
+(#2657) — like the session check, not applied to the internal call path,
+which has no admin user id to bucket on. Marks every
 materialized landlet in a generated ring complete with one bounded
 D1 update. All candidates in the ring must already be materialized; otherwise
 the endpoint returns `409` without changing any landlet. The operation is
@@ -3159,6 +3181,9 @@ correcting or replacing queued procedural-generation output before the world
 circle reaches it. Materialized candidates already have a corresponding
 generating landlet and return `409` instead of deleting either record.
 
+Rate-limited to 20 attempts per 15-minute window, bucketed by the calling
+admin's own user id (#2657).
+
 Response:
 
 ```json
@@ -3180,6 +3205,9 @@ landlet.
 As with candidate creation, moving or reshaping a pending candidate so it now
 overlaps the current world circle immediately materializes it. The response
 contains both `candidate` and `landlet`; `landlet` is null if it remains queued.
+
+Rate-limited to 20 attempts per 15-minute window, bucketed by the calling
+admin's own user id (#2657).
 
 ### `POST /api/land-candidates`
 
@@ -3212,6 +3240,11 @@ candidate with no explicit `polygon` is treated as a circle of radius
 (`landletMinWorldRadius`/`landletMaxWorldRadius`) already reads such a row —
 not an unchecked zero-area point.
 
+Rate-limited to 30 attempts per 15-minute window, bucketed by the calling
+admin's own user id (#2657) — higher than this section's other buckets
+since `worker/worker-api.test.js`'s own land-candidate test suite exercises
+this specific endpoint most heavily.
+
 ### `POST /api/land-candidates/batch`
 
 Atomically queues between 1 and 100 candidates for efficient world-generation
@@ -3243,6 +3276,9 @@ single-create endpoint above — checked against existing land *and* against
 the other candidates in the same batch request, since a manually-submitted
 batch (unlike `generate-mosaic`'s own output) isn't guaranteed internally
 non-overlapping.
+
+Rate-limited to 20 attempts per 15-minute window, bucketed by the calling
+admin's own user id (#2657).
 
 ## Landlets
 
