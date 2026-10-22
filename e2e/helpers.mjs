@@ -501,10 +501,10 @@ export async function claimLandlet(page) {
   // click here triggers, same already-in-flight-or-already-resolved shape
   // #2544 hit for the verify modal. Playwright's selector wait already
   // polls for the real end state here (no click()-actionability trap like
-  // #2544's), so the fix is simply widening the margin to match comparable
-  // modal-open waits elsewhere in this file (e.g. the account-menu-modal
-  // wait at 60000ms) instead of re-escalating a tighter one yet again.
-  await page.waitForSelector('#claim-modal.visible', { timeout: 60000 });
+  // #2544's). #2654: 60000ms stopped being enough under further CI-load
+  // growth -- widened again to 120000ms, same mitigation shape as
+  // #2570/#2589/#2643's own margin bumps elsewhere in this file/suite.
+  await page.waitForSelector('#claim-modal.visible', { timeout: 120000 });
   // loadLandletMap's own real cost (fetchWorld + two fetchAllLandlets calls,
   // then building the flyover scene -- src/claim/flow.js) was hidden behind
   // a flat 2000ms sleep here. #claim-status starts as the synchronous
