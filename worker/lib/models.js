@@ -8,22 +8,26 @@
 // behind in worker/index.js would split one cohesive cleanup mechanism
 // across two files for no reason).
 //
-// Deliberately NOT included here: handleListSavedLayouts/handleSavedLayouts
-// (also named in this issue's own scope). Both call requireSessionBuilder,
-// which still lives in worker/index.js -- #2501's own comment already
-// explains why it was deliberately left there (genuinely builder-profile
-// domain logic via getOrCreateBuilderForUser, slated for #2535's own
-// leaf), and moving these two handlers here now would need this module to
-// import requireSessionBuilder back from worker/index.js, which itself
-// imports this module's own handlers to dispatch to them -- the exact
-// circular import #2502's own scoping comment warned splitting a domain
-// out before a shared dependency lands would risk. Picking this back up
-// once #2535 lands is this issue's own remaining scope, not a separate
-// follow-up issue.
+// handleListSavedLayouts/handleSavedLayouts (also named in this issue's
+// own scope) were originally left behind for the same reason just
+// described -- both call requireSessionBuilder, which lived in
+// worker/index.js at the time, and worker/index.js imports this module's
+// own handlers to dispatch to them, so importing requireSessionBuilder
+// back would have been circular. That's resolved now: requireSessionBuilder
+// moved into worker/lib/auth.js (landed on main independently while this
+// issue's own first PR, #2594, was still in CI), so this module can import
+// it as a forward, non-circular dependency the same way every other
+// handler here already imports from auth.js. Picking this back up now.
+// savedLayoutFromRow/savedLayoutInstanceFromRow move here too (their own
+// natural home, alongside the handlers that are these rows' only real
+// owner) and are exported for worker/index.js's own exportSocialSection,
+// which still needs them for the full-account-data-export feature --
+// not a circular import, just worker/index.js importing one more name
+// from this module the same way it already imports handleModelUpload etc.
 import { json, HttpError, clientIp } from './http.js';
-import { requireAdmin } from './auth.js';
+import { requireAdmin, requireSessionBuilder, assertOwner } from './auth.js';
 import { checkRateLimit } from './rate-limit.js';
-import { readJson, queryLimit, stringValue, positiveInteger } from './validation.js';
+import { readJson, queryLimit, decodeCursor, encodeCursor, stringValue, positiveInteger } from './validation.js';
 import { adminActionLogStatement } from './admin-log.js';
 import {
   MAX_MODEL_BYTES, MAX_TOTAL_STORAGE_BYTES, MODEL_UPLOAD_RESERVATION_TIMEOUT_MS,
@@ -466,4 +470,119 @@ export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAg
   };
 }
 
-export { handleUploadedAsset, handleModelUpload, handleModelListing, handleModelStorage, handleModelCleanup };
+export function savedLayoutFromRow(row) {
+  return {
+    savedLayoutId: row.saved_layout_id,
+    sourceLandletId: row.source_landlet_id,
+    sourceLevelIndex: row.source_level_index,
+    name: row.name,
+    createdAt: row.created_at,
+    instanceCount: row.instance_count,
+  };
+}
+
+// #634 (sub-issue of #631): GET /api/builders/me/saved-layouts — newest
+// first, same cursor shape as GET /api/notifications (DESC on both
+// created_at and the tiebreak id, "older than the last row already seen"
+// on the next page) since a builder's own saved-layout history reads the
+// same way a notification feed does, not like the ascending lists
+// (auctions, landlets, instances) elsewhere in worker/index.js.
+async function handleListSavedLayouts(request, db, url) {
+  const sessionBuilder = await requireSessionBuilder(request, db);
+  const limit = queryLimit(url.searchParams.get('limit'), 100);
+  const cursor = decodeCursor(url.searchParams.get('cursor'));
+  const conditions = ['l.builder_id = ?'];
+  const bindings = [sessionBuilder.builder_id];
+  if (cursor) {
+    conditions.push('(l.created_at < ? OR (l.created_at = ? AND l.saved_layout_id < ?))');
+    bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+  }
+  const { results } = await db.prepare(`
+    SELECT l.*, COUNT(i.source_instance_id) AS instance_count
+    FROM saved_level_layouts l
+    LEFT JOIN saved_layout_instances i ON i.saved_layout_id = l.saved_layout_id
+    WHERE ${conditions.join(' AND ')}
+    GROUP BY l.saved_layout_id
+    ORDER BY l.created_at DESC, l.saved_layout_id DESC LIMIT ?
+  `).bind(...bindings, limit + 1).all();
+  const hasMore = results.length > limit;
+  const page = results.slice(0, limit);
+  const last = page.at(-1);
+  return json({
+    savedLayouts: page.map(savedLayoutFromRow),
+    nextCursor: hasMore ? encodeCursor(last.created_at, last.saved_layout_id) : null,
+  });
+}
+
+// #635's own preview needs each instance's full snapshot (template,
+// position, rotation, crop, scale) to actually render it — the same shape
+// versionInstanceFromRow already gives createMeshForInstance for a landlet
+// version's own snapshot rows, just read off saved_layout_instances
+// instead of version_instances.
+export function savedLayoutInstanceFromRow(row) {
+  return {
+    instanceId: row.source_instance_id,
+    id: row.source_instance_id,
+    templateId: row.template_id,
+    x: row.x_m,
+    y: row.y_m,
+    z: row.z_m,
+    rotationX: row.rotation_x_rad,
+    rotationY: row.rotation_y_rad,
+    rotationZ: row.rotation_z_rad,
+    label: row.label,
+    crop: JSON.parse(row.crop_json || '{}'),
+    scale: row.scale,
+    isCommunitySign: Boolean(row.is_community_sign),
+    isCommunityCalendar: Boolean(row.is_community_calendar),
+  };
+}
+
+// #944: the DELETE branch below is an authenticated, owner-gated,
+// repeatable mutation with no rate limit at all -- unlike this file's other
+// owner-gated CRUD DELETEs (friendship-mutate, bundle-mutate) and unlike
+// saved-layout *creation* itself (SAVED_LAYOUT_CREATE_RATE_LIMIT_MAX,
+// worker/lib/land.js -- a layout is auto-created there as a side effect of
+// removing a landlet level, not through a handler in this file).
+const SAVED_LAYOUT_DELETE_RATE_LIMIT_MAX = 20;
+
+// #634: GET/DELETE /api/saved-layouts/:id — owner-gated the same way every
+// other builder-owned resource is (assertOwner against the session's own
+// resolved builder id), a separate top-level collection rather than nested
+// under /builders/me since a single saved layout is addressed by its own
+// id, not by the builder's — the list above is the only place that needs
+// the builder's own id in its path.
+async function handleSavedLayouts(request, db, route) {
+  if (request.method === 'GET' && route.length === 2) {
+    const savedLayoutId = route[1];
+    const row = await db.prepare('SELECT * FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).first();
+    if (!row) throw new HttpError('Saved layout not found', 404);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(row.builder_id, sessionBuilder.builder_id, 'Not your saved layout');
+    const { results } = await db.prepare(
+      'SELECT * FROM saved_layout_instances WHERE saved_layout_id = ? ORDER BY source_instance_id',
+    ).bind(savedLayoutId).all();
+    return json({
+      savedLayout: { ...savedLayoutFromRow(row), instanceCount: results.length, instances: results.map(savedLayoutInstanceFromRow) },
+    });
+  }
+
+  if (request.method === 'DELETE' && route.length === 2) {
+    const savedLayoutId = route[1];
+    const row = await db.prepare('SELECT * FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).first();
+    if (!row) throw new HttpError('Saved layout not found', 404);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(row.builder_id, sessionBuilder.builder_id, 'Not your saved layout');
+    await checkRateLimit(db, `saved-layout-delete:${sessionBuilder.builder_id}`, SAVED_LAYOUT_DELETE_RATE_LIMIT_MAX);
+    // saved_layout_instances cascades via its own FOREIGN KEY ... ON
+    // DELETE CASCADE (migration 0080) — nothing else to clean up here.
+    await db.prepare('DELETE FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).run();
+    return json({ deleted: true });
+  }
+  return json({ error: 'Not found' }, 404);
+}
+
+export {
+  handleUploadedAsset, handleModelUpload, handleModelListing, handleModelStorage, handleModelCleanup,
+  handleListSavedLayouts, handleSavedLayouts,
+};
