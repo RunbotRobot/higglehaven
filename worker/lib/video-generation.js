@@ -5,27 +5,25 @@
 // verbatim, zero behavior change.
 //
 // requireSessionBuilder now lives in worker/lib/auth.js (#2543/#2528).
-// MAX_MODEL_BYTES/formatBytes/validateGlb/getStorageUsage/
-// reserveStorageBudget/hasValidImageSignature are the shared model-upload
-// infrastructure handleModelUpload (worker/index.js) also depends on, not
-// video-generation-specific -- still imported back from there below.
+// hasValidImageSignature is still inline in worker/index.js (not yet its
+// own leaf) and imported back from there below.
+//
+// MAX_MODEL_BYTES/formatBytes/validateGlb/getStorageUsage/reserveStorageBudget
+// are the shared R2 storage-budget machinery (#2530) -- genuinely cross-domain
+// (concept-image generation, catalog thumbnails, model uploads, and this
+// video-to-3D pipeline all write into the same MODELS bucket under the same
+// cap), so they live in worker/lib/storage.js, not worker/index.js -- imported
+// from there directly rather than duplicated or routed back through
+// worker/index.js.
 import { json, HttpError } from './http.js';
 import { timingSafeEqual, bytesToHex } from './crypto.js';
 import { checkRateLimit } from './rate-limit.js';
 import { assertOwner, requireSessionBuilder } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
+import { hasValidImageSignature } from '../index.js';
 import {
-  formatBytes, validateGlb, getStorageUsage, reserveStorageBudget, hasValidImageSignature,
-} from '../index.js';
-
-// #1978: workerd requires every named export of the main Worker entry
-// module (worker/index.js) to be a function/class binding, not a plain
-// const -- confirmed the hard way, per worker/lib/builder-profile.js's own
-// comment on its identical D1_MAX_BOUND_PARAMETERS duplication. Duplicated
-// here rather than exported-and-imported for that reason; MAX_MODEL_BYTES
-// in worker/index.js stays the source of truth for every other R2 writer
-// (handleModelUpload and its own size-limit check).
-const MAX_MODEL_BYTES = 20 * 1024 * 1024;
+  MAX_MODEL_BYTES, formatBytes, validateGlb, getStorageUsage, reserveStorageBudget,
+} from './storage.js';
 
 // ---- Video-to-3D generation via Tripo3D (#1619, sub-issue of #1616,
 // docs/SPEC.md) ----
