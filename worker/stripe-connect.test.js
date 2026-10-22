@@ -1,6 +1,6 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { claimOrResumeBuilderRedemption } from './index.js';
+import { claimOrResumeBuilderRedemption } from './lib/seller-payouts-tax.js';
 import { api, signupAdmin, signupBuilder, signupSeller, createGreenbeltLandletAs } from './test-helpers.js';
 
 let adminSession;
