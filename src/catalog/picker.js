@@ -33,10 +33,12 @@ import {
 } from '../world/state.js';
 import {
   catalogThumbnailCache, renderCatalogThumbnail, solidColorDataUrl, computeThumbnailEmbedding,
-  hideBackupReferenceMesh, activeBundleTab, setActiveBundleTab,
+  activeBundleTab, setActiveBundleTab,
 } from '../main.js';
 // #2559: enterPlacementMode/cancelPlacementMode/pendingPlacement now live in
 // src/build/scene.js -- see that module's own comment.
+// #2560: hideBackupReferenceMesh now lives in src/build/metadataModals.js.
+import { hideBackupReferenceMesh } from '../build/metadataModals.js';
 import { enterPlacementMode, cancelPlacementMode, pendingPlacement } from '../build/scene.js';
 
 // Add-item catalog picker: a toggled panel listing every activeCatalog
