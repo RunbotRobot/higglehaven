@@ -34,6 +34,13 @@ import {
   formatBytes, getStorageUsage, reserveStorageBudget, validateGlb,
 } from './storage.js';
 
+// #2668: this admin-gated single-object delete had no checkRateLimit call
+// at all, unlike every comparable admin mutation elsewhere (e.g.
+// purchases-admin.js's SELF_DEALING_FLAG_REVIEW_RATE_LIMIT_MAX, or
+// world-generation.js's own buckets from #2657/#2659) -- same 20-per-window
+// shape as those, bucketed on the admin's own user_id.
+const UPLOADED_ASSET_DELETE_RATE_LIMIT_MAX = 20;
+
 async function handleUploadedAsset(request, env) {
   if (!env.MODELS) return json({ error: 'R2 binding MODELS is not configured' }, 500);
   if (request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'DELETE') {
@@ -56,6 +63,7 @@ async function handleUploadedAsset(request, env) {
     // has no owning builder/seller to check against, so "logged in" alone
     // isn't a meaningful bar here.
     const admin = await requireAdmin(request, env.DB);
+    await checkRateLimit(env.DB, `uploaded-asset-delete:${admin.user_id}`, UPLOADED_ASSET_DELETE_RATE_LIMIT_MAX);
     const modelUrl = `/uploads/${key}`;
     const existing = await env.MODELS.head(key);
     if (!existing) return json({ error: 'Not found' }, 404);
@@ -312,6 +320,11 @@ async function handleModelStorage(request, env) {
   });
 }
 
+// #2668: same gap as UPLOADED_ASSET_DELETE_RATE_LIMIT_MAX above — this
+// admin-gated bulk delete (up to 100 objects per call) had no rate limit
+// at all either.
+const MODEL_CLEANUP_RATE_LIMIT_MAX = 20;
+
 async function handleModelCleanup(request, env) {
   if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
   // Admin-only: this bulk-deletes any unreferenced upload in the shared R2
@@ -322,6 +335,7 @@ async function handleModelCleanup(request, env) {
   // guarantees env.DB is configured before routing here, unlike
   // handleUploadedAsset below, which sits outside handleApi entirely.)
   const admin = await requireAdmin(request, env.DB);
+  await checkRateLimit(env.DB, `model-cleanup:${admin.user_id}`, MODEL_CLEANUP_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const maxDeletes = positiveInteger(input.maxDeletes ?? 100, 'maxDeletes');
   if (maxDeletes > 100) throw new HttpError('maxDeletes must be at most 100', 400);
