@@ -8,18 +8,19 @@
 // import) and surfaces the open question again in this PR rather than
 // deciding it unilaterally.
 //
-// Build's catalog picker (#2558) and Sell mode (#2562) haven't been
-// extracted yet as of this leaf, so this module temporarily imports several
-// of their pieces straight from main.js (closeCatalogPicker,
-// buildCatalogPickerButtons, sellerModalEl, closeSellerModal,
-// refreshSellerShowcase, renderActiveSellerView, hasDuplicateProductName,
-// persistCatalogThumbnail, formatPriceCents, parsePriceInputDollars,
-// formatDollarsForPriceInput, AXIS_ARROW_COLORS, MAX_MONEY_CENTS) — same
-// temporary-import shape account/auth.js's, account/menu.js's, and
-// build/layoutPreview.js's own comments already use for their own
-// not-yet-extracted dependencies. Once #2558/#2562 land, the catalog-picker
-// and Seller-modal pieces should be repointed there the same way #2555
-// repointed claim/flow.js's stale ui/modal.js import.
+// Sell mode (#2562) hasn't been extracted yet as of this leaf, so this
+// module temporarily imports several of its pieces straight from main.js
+// (sellerModalEl, closeSellerModal, refreshSellerShowcase,
+// renderActiveSellerView, hasDuplicateProductName, persistCatalogThumbnail,
+// formatPriceCents, parsePriceInputDollars, formatDollarsForPriceInput,
+// AXIS_ARROW_COLORS, MAX_MONEY_CENTS) — same temporary-import shape
+// account/auth.js's, account/menu.js's, and build/layoutPreview.js's own
+// comments already use for their own not-yet-extracted dependencies. Once
+// #2562 lands, the Seller-modal pieces should be repointed there the same
+// way #2555 repointed claim/flow.js's stale ui/modal.js import.
+// closeCatalogPicker/buildCatalogPickerButtons used to be on this same
+// temporary list but now import from catalog/picker.js (#2558), which
+// landed after this leaf.
 //
 // MAX_MONEY_CENTS in particular must stay declared in main.js rather than
 // moving here — it's genuinely shared well beyond this leaf (Sell's own
@@ -42,12 +43,14 @@ import {
   createCatalogTemplate, fetchMyBuilder,
 } from '../api.js';
 import {
-  closeCatalogPicker, buildCatalogPickerButtons,
   sellerModalEl, closeSellerModal, refreshSellerShowcase, renderActiveSellerView,
   hasDuplicateProductName, persistCatalogThumbnail,
   formatPriceCents, parsePriceInputDollars, formatDollarsForPriceInput,
   AXIS_ARROW_COLORS, MAX_MONEY_CENTS,
 } from '../main.js';
+// #2558: closeCatalogPicker/buildCatalogPickerButtons now live in
+// src/catalog/picker.js (extracted after this module) rather than main.js.
+import { closeCatalogPicker, buildCatalogPickerButtons } from './picker.js';
 
 // Custom product upload: a builder's own model (photogrammetry scan,
 // etc.) becomes a real catalog_templates row via two independent backend
