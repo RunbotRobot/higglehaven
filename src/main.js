@@ -42,7 +42,6 @@ import {
   fetchLandlets,
   fetchLandlet,
   claimLandlet,
-  renameLandlet,
   fetchLandletLevels,
   addLandletLevel,
   deleteLandletLevel,
@@ -63,7 +62,6 @@ import {
   fetchMyEquippedAnimation,
   fetchMyOwnedAnimations,
   equipAnimation,
-  fetchTaxSummary,
   submitTaxIdForm,
   fetchSellerStripeAccount,
   submitSellerStripeAccount,
@@ -71,19 +69,6 @@ import {
   fetchBuilderRedeemStatus,
   redeemHiggles,
   fetchAllLandlets,
-  fetchNotifications,
-  fetchUnreadNotificationCount,
-  markNotificationRead,
-  markAllNotificationsRead,
-  fetchFriendships,
-  sendFriendRequest,
-  acceptFriendRequest,
-  removeFriendship,
-  fetchDirectMessages,
-  sendDirectMessage,
-  clearDirectMessageIdempotencyKey,
-  markDirectMessagesRead,
-  fetchUnreadDirectMessageCount,
   fetchLandletVersions,
   saveLandletVersion,
   clearVersionIdempotencyKey,
@@ -224,6 +209,17 @@ import {
 // #2555: ensureBuilderIdentity/ensureSellerIdentity/ensureShopperIdentity
 // now live in src/account/identity.js.
 import { ensureBuilderIdentity, ensureSellerIdentity, ensureShopperIdentity } from './account/identity.js';
+// #2556: the notifications/friends/DM/my-lands account-menu chrome now
+// lives in src/account/menu.js — see that module's own comment for its
+// dependency notes, including why it in turn imports formatHiggles/
+// START_MODE_KEY/BUILD_TARGET_LANDLET_ID_KEY back from this module (a
+// temporary circular import, same shape as auth.js's/identity.js's own,
+// until those pieces get a real home outside main.js via their own
+// future extractions).
+import { refreshNotificationsBadge, refreshFriendsBadge, refreshDmBadge } from './account/menu.js';
+// #2561: the faux-layout preview mode now lives in src/build/layoutPreview.js
+// — see that module's own comment for its dependency notes.
+import { enterLayoutPreviewMode } from './build/layoutPreview.js';
 
 let activeBundleTab = 'mine';
 
@@ -252,13 +248,13 @@ export const START_MODE_KEY = 'higglehaven.startMode';
 // switch (see START_MODE_KEY's own comment above) — this carries which
 // saved layout to load across that reload, since START_MODE_KEY itself
 // only ever holds a bare mode name.
-const PREVIEW_SAVED_LAYOUT_ID_KEY = 'higglehaven.previewSavedLayoutId';
+export const PREVIEW_SAVED_LAYOUT_ID_KEY = 'higglehaven.previewSavedLayoutId';
 // #1150: same reload-carries-one-value shape as PREVIEW_SAVED_LAYOUT_ID_KEY
 // above — the "My Lands" list's own "open for editing" link reaches a
 // specific one of a builder's (possibly several — see
 // resolveLandletId's own comment) owned landlets this way, since bootstrap()
 // is the only place Build mode ever loads a landlet from.
-const BUILD_TARGET_LANDLET_ID_KEY = 'higglehaven.buildTargetLandletId';
+export const BUILD_TARGET_LANDLET_ID_KEY = 'higglehaven.buildTargetLandletId';
 
 // Declared here (rather than alongside the rest of Shop mode, much further
 // down) because several Shop-specific pointer/keyboard event handlers
@@ -313,7 +309,7 @@ const BUILD_INFO_TEXT = `build ${__BUILD_COMMIT__} · ${__BUILD_TIME__}`;
 
 // Dev-only orbit camera so the scene is inspectable on a phone (pinch/drag)
 // before any real avatar movement exists. Not part of the in-world control scheme.
-const controls = new OrbitControls(camera, renderer.domElement);
+export const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0, 0);
 controls.enableDamping = true;
 // Bounds how far a single scroll/pinch tick can move the camera (see the
@@ -627,7 +623,7 @@ function wireDraggingBehavior(transformControls) {
 // captured level/upright (a real RealityScan brick scan came out tilted),
 // so a builder needs to be able to correct that on any axis, not just
 // spin the product in place.
-const rotateControls = new TransformControls(camera, renderer.domElement);
+export const rotateControls = new TransformControls(camera, renderer.domElement);
 rotateControls.setMode('rotate');
 scene.add(rotateControls.getHelper());
 wireDraggingBehavior(rotateControls);
@@ -643,7 +639,7 @@ wireDraggingBehavior(rotateControls);
 // Rotate the object to match the wall once, and its move handles are then
 // "along the wall" / "into the wall" — no need to think in world axes at
 // all.
-const translateControls = new TransformControls(camera, renderer.domElement);
+export const translateControls = new TransformControls(camera, renderer.domElement);
 translateControls.setMode('translate');
 translateControls.space = 'local';
 scene.add(translateControls.getHelper());
@@ -6896,7 +6892,7 @@ function daysInMonth(year, month) {
 // below, the one money formatter in this file that already used
 // toLocaleString. A real amount like TAX_REPORTING_THRESHOLD_CENTS
 // ($20,000) rendered as "$20000.00".
-function formatHiggles(cents) {
+export function formatHiggles(cents) {
   return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
@@ -7036,7 +7032,11 @@ async function renderAuctionSection() {
     if (myToken !== landletRenderToken) return;
     if (activeForMine.length > 0) {
       const row = document.createElement('div');
-      row.className = 'auction-row';
+      // #2607: also carries auction-row-mine -- the sibling Active Auctions
+      // list (buildAuctionRow, below) renders plain .auction-row elements
+      // for every site-wide active auction, so .auction-row alone no longer
+      // uniquely identifies this picker's own "your auction is live" row.
+      row.className = 'auction-row auction-row-mine';
       const info = document.createElement('div');
       info.className = 'auction-row-info';
       info.textContent = `Your auction is live — ${formatAuctionSummary(activeForMine[0])}`;
@@ -8569,7 +8569,7 @@ const scratchBox = new THREE.Box3();
 const scratchBoxSize = new THREE.Vector3();
 const scratchBoxCenter = new THREE.Vector3();
 
-function addSelectionOutline(mesh) {
+export function addSelectionOutline(mesh) {
   if (selectionOutlines.has(mesh)) return;
   const helper = new THREE.BoxHelper(mesh, SELECTION_OUTLINE_COLOR);
   scene.add(helper);
@@ -8586,7 +8586,7 @@ function addSelectionOutline(mesh) {
   selectionOutlines.set(mesh, { helper, fill });
 }
 
-function removeSelectionOutline(mesh) {
+export function removeSelectionOutline(mesh) {
   const entry = selectionOutlines.get(mesh);
   if (!entry) return;
   scene.remove(entry.helper);
@@ -8842,7 +8842,7 @@ function updateSelectionUI() {
   }
 }
 
-function clearSelection() {
+export function clearSelection() {
   for (const mesh of selectedMeshes) removeSelectionOutline(mesh);
   selectedMeshes.clear();
 }
@@ -10008,6 +10008,13 @@ window.addEventListener('pointercancel', endSwipe);
 // next frame — so by the time our own animate() loop calls update(), the
 // dolly has already happened and there's nothing left to measure.
 let lastKnownDistance = camera.position.distanceTo(controls.target);
+// src/build/layoutPreview.js (#2561) needs to resync this on its own
+// one-time camera jump (see that module's own comment) — an ES import
+// binding is read-only from its side, so it goes through this setter
+// rather than a direct assignment.
+export function setLastKnownDistance(value) {
+  lastKnownDistance = value;
+}
 
 // Re-centering on the selected product needs to happen only for an actual
 // one-finger rotate — not a two-finger pan, and not the tail end of a pan
@@ -10350,7 +10357,7 @@ function applyEdgePanWhileDraggingProduct() {
 // movement+sky callback instead (see enterShopMode); Sell mode has no
 // per-frame work of its own (paginated, static between page turns) and
 // registers null (see enterSellMode).
-function buildModeFrameUpdate(now) {
+export function buildModeFrameUpdate(now) {
   updateTargetTween(now);
   applyEdgePanWhileDraggingProduct();
   controls.update();
@@ -10414,790 +10421,14 @@ async function resolveLandletId() {
 // (and their flow-promise guards, and resetIdentityFlowPromises) now live
 // in src/account/identity.js — see that module's own #2555 comment.
 
-// Builder-facing notifications (see migrations/0038_notifications.sql) —
-// currently only ever produced by a seller changing a placed product's
-// dimensions (notifyBuildersOfDimensionChange, worker/index.js). A plain
-// pill button + badge count, refreshed whenever a builder identity
-// resolves or the modal itself opens/closes — no live polling, since
-// nothing else in this app pushes updates to an already-open tab either.
-const notificationsBtn = document.getElementById('notifications-btn');
-const notificationsBadgeEl = document.getElementById('notifications-badge');
-const notificationsModalEl = document.getElementById('notifications-modal');
-const notificationsCloseBtn = document.getElementById('notifications-close-btn');
-const notificationsListEl = document.getElementById('notifications-list');
-const notificationsEmptyEl = document.getElementById('notifications-empty');
-const notificationsMarkAllBtn = document.getElementById('notifications-mark-all-btn');
-const notificationsLoadMoreBtn = document.getElementById('notifications-load-more-btn');
-
-async function refreshNotificationsBadge() {
-  if (!builderId) return;
-  try {
-    // A real count query, not fetchNotifications({ unreadOnly: true })'s
-    // own first page — that list is cursor-paginated (issue #320) one
-    // page at a time, which would still undercount the badge if this read
-    // only the first page's own .length (e.g. a popular auction's worth
-    // of bid notifications).
-    const count = await fetchUnreadNotificationCount();
-    notificationsBadgeEl.textContent = String(count);
-    notificationsBadgeEl.hidden = count === 0;
-  } catch (err) {
-    console.warn('Could not refresh notifications badge:', err);
-  }
-}
-
-function formatNotificationTime(isoString) {
-  const date = new Date(isoString);
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
-}
-
-// #245: renderNotifications awaits fetchNotifications() before populating
-// the panel; if it's invoked again (e.g. the bell clicked twice in quick
-// succession) before that await resolves, the second call's own
-// `innerHTML = ''` clears whatever the first call is about to append,
-// but nothing then stops the first call's now-stale fetch from appending
-// its rows on top of the second call's fresh ones once it resolves —
-// duplicate rows, the same missing-re-entrancy-guard shape #244 already
-// fixed for renderSignPosts/renderCalendarEvents (lower severity here:
-// this always renders the same session-wide list, never a per-click
-// target that could show the wrong object's data). Each call captures the
-// token's value before it starts awaiting, then checks it's still the
-// latest afterward; a superseded call bails out quietly instead of
-// rendering anything.
-let notificationsLoadToken = 0;
-// The cursor for whatever page comes after the ones currently rendered —
-// null once there's nothing more to load (see fetchNotifications'/
-// handleNotifications' nextCursor, issue #320). Reset to null every time
-// renderNotifications starts a fresh first page; advanced by
-// loadMoreNotifications as later pages come in.
-let notificationsNextCursor = null;
-
-function appendNotificationRow(notification) {
-  const row = document.createElement('div');
-  row.className = 'notification-row';
-  row.classList.toggle('unread', !notification.readAt);
-  const message = document.createElement('div');
-  message.textContent = notification.message;
-  row.appendChild(message);
-  const time = document.createElement('div');
-  time.className = 'notification-row-time';
-  time.textContent = formatNotificationTime(notification.createdAt);
-  row.appendChild(time);
-  // Tapping any notice marks just that one read — simpler than a
-  // separate per-row dismiss button, and "Mark all read" still exists
-  // for clearing the whole list at once.
-  if (!notification.readAt) {
-    const markReadOnClick = async () => {
-      try {
-        await markNotificationRead(notification.notificationId);
-        row.classList.remove('unread');
-        row.removeEventListener('click', markReadOnClick);
-        row.removeEventListener('keydown', markReadOnKeydown);
-        row.removeAttribute('role');
-        row.removeAttribute('tabindex');
-        row.removeAttribute('aria-label');
-        refreshNotificationsBadge();
-      } catch (err) {
-        console.warn('Could not mark notification read:', err);
-      }
-    };
-    // #2329: this row has no native button underneath it, so without an
-    // explicit role/tabindex/keydown handler it's reachable by mouse only —
-    // every other interactive control in this file is a real <button>.
-    const markReadOnKeydown = (event) => {
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-      event.preventDefault();
-      markReadOnClick();
-    };
-    row.setAttribute('role', 'button');
-    row.setAttribute('tabindex', '0');
-    row.setAttribute('aria-label', `Mark notification as read: ${notification.message}`);
-    row.addEventListener('click', markReadOnClick);
-    row.addEventListener('keydown', markReadOnKeydown);
-  }
-  notificationsListEl.appendChild(row);
-}
-
-async function renderNotifications() {
-  const myLoadToken = ++notificationsLoadToken;
-  notificationsListEl.innerHTML = '';
-  notificationsLoadMoreBtn.hidden = true;
-  notificationsNextCursor = null;
-  if (!builderId) return;
-  let page;
-  try {
-    page = await fetchNotifications();
-  } catch (err) {
-    if (myLoadToken !== notificationsLoadToken) return; // superseded while loading — a newer call owns the panel now
-    notificationsEmptyEl.textContent = err.message || 'Could not load notices.';
-    notificationsEmptyEl.hidden = false;
-    return;
-  }
-  if (myLoadToken !== notificationsLoadToken) return; // superseded while loading — a newer call owns the panel now
-  // #1128: same reset-on-success fix as reviewEmptyEl in the Seller
-  // modal — without it a past fetch failure leaves this stuck on its
-  // error message forever, even once a later load succeeds with zero
-  // notifications.
-  notificationsEmptyEl.textContent = 'Nothing here yet.';
-  notificationsEmptyEl.hidden = page.notifications.length > 0;
-  for (const notification of page.notifications) appendNotificationRow(notification);
-  notificationsNextCursor = page.nextCursor;
-  notificationsLoadMoreBtn.hidden = !notificationsNextCursor;
-}
-
-notificationsLoadMoreBtn.addEventListener('click', async () => {
-  const myLoadToken = notificationsLoadToken; // this panel's current, already-rendered load — not a fresh reset
-  notificationsLoadMoreBtn.disabled = true;
-  try {
-    const page = await fetchNotifications({ cursor: notificationsNextCursor });
-    if (myLoadToken !== notificationsLoadToken) return; // panel was reset while this page was loading
-    for (const notification of page.notifications) appendNotificationRow(notification);
-    notificationsNextCursor = page.nextCursor;
-    notificationsLoadMoreBtn.hidden = !notificationsNextCursor;
-  } catch (err) {
-    console.warn('Could not load more notifications:', err);
-  } finally {
-    notificationsLoadMoreBtn.disabled = false;
-  }
-});
-
-function closeNotificationsModal() {
-  notificationsModalEl.classList.remove('visible');
-  refreshNotificationsBadge();
-  closeModalA11y(notificationsModalEl);
-}
-notificationsBtn.addEventListener('click', () => {
-  notificationsModalEl.classList.add('visible');
-  openModalA11y(notificationsModalEl, closeNotificationsModal);
-  renderNotifications();
-});
-notificationsCloseBtn.addEventListener('click', closeNotificationsModal);
-notificationsMarkAllBtn.addEventListener('click', async () => {
-  if (!builderId) return;
-  notificationsMarkAllBtn.disabled = true;
-  try {
-    await markAllNotificationsRead();
-    await renderNotifications();
-    await refreshNotificationsBadge();
-  } catch (err) {
-    console.warn('Could not mark all notifications read:', err);
-  } finally {
-    notificationsMarkAllBtn.disabled = false;
-  }
-});
-
-// Owner (Control Room feedback): "Builders should see their lánd cap in
-// the menu somewhere" — until now the only place it appeared was Settings
-// > Build (renderLandCapField above), which needs Build mode active *and*
-// Settings opened *and* its Build tab picked. Same "no live polling,
-// refresh on open" approach as refreshNotificationsBadge/refreshFriendsBadge
-// just below, except the source of truth to refresh against is this panel
-// itself (see the accountMenuToggle click handler further down) rather
-// than a separate modal.
-const accountMenuLandCapEl = document.getElementById('account-menu-landcap');
-async function refreshAccountMenuLandCap() {
-  if (!builderId) {
-    accountMenuLandCapEl.hidden = true;
-    return;
-  }
-  try {
-    // fetchMyBuilder (GET /api/builders/me), not a full-roster scan — see
-    // renderLandCapField's own comment above on why.
-    const me = await fetchMyBuilder();
-    accountMenuLandCapEl.textContent = `Land cap: ${formatArea(me.ownedAreaM2 ?? 0, 0)} / ${formatArea(me.landCapM2, 0)}`;
-    accountMenuLandCapEl.hidden = false;
-  } catch (err) {
-    console.warn('Could not refresh land cap menu display:', err);
-    accountMenuLandCapEl.hidden = true;
-  }
-}
-
-// Tax reporting notice (#613, sub-issue of #350) — same "no live polling,
-// refresh on open" approach as refreshAccountMenuLandCap just above. This
-// notice itself is purely informational and never blocks anything — #615's
-// actual earnings-above-threshold gate (worker/index.js's
-// taxThresholdPayoutBlockedError, both live) re-derives "crossed" straight
-// from the same totalCents/thresholdCents this notice shows, independent of
-// this element ever having been read.
-const accountMenuTaxNoticeEl = document.getElementById('account-menu-tax-notice');
-const TAX_NOTICE_TEXT = {
-  early: (total, threshold) =>
-    `You've earned ${formatHiggles(total)} of this year's ${formatHiggles(threshold)} tax-reporting threshold — no action needed yet.`,
-  approaching: (total, threshold) =>
-    `You're nearing this year's ${formatHiggles(threshold)} tax-reporting threshold (${formatHiggles(total)} so far) — ` +
-    `tax paperwork will be required once you cross it.`,
-  crossed: (total, threshold) =>
-    `You've crossed this year's ${formatHiggles(threshold)} tax-reporting threshold (${formatHiggles(total)} earned) — ` +
-    `tax paperwork will be required to access earnings above it.`,
-};
-async function refreshAccountMenuTaxNotice() {
-  if (!builderId) {
-    accountMenuTaxNoticeEl.hidden = true;
-    return;
-  }
-  try {
-    const summary = await fetchTaxSummary();
-    const text = TAX_NOTICE_TEXT[summary.noticeLevel];
-    if (!text) {
-      accountMenuTaxNoticeEl.hidden = true;
-      return;
-    }
-    accountMenuTaxNoticeEl.textContent = text(summary.totalCents, summary.thresholdCents);
-    accountMenuTaxNoticeEl.classList.toggle('crossed', summary.noticeLevel === 'crossed');
-    accountMenuTaxNoticeEl.hidden = false;
-  } catch (err) {
-    console.warn('Could not refresh tax notice:', err);
-    accountMenuTaxNoticeEl.hidden = true;
-  }
-}
-
-// Friend requests (docs/SPEC.md §6: "Friend/group systems: standard friend
-// requests; social map shows an accepted friend's location.") Same plain
-// pill-button-plus-badge design as Notices just above, badge counting
-// pending incoming requests rather than unread notices.
-const friendsBtn = document.getElementById('friends-btn');
-const friendsBadgeEl = document.getElementById('friends-badge');
-// #1661: shares friends-btn with friendsBadgeEl above but counts something
-// different (unread direct messages, not pending incoming requests) —
-// messaging has no top-level entry point of its own (openDmModal is only
-// reached per-friend from inside the Friends panel), so this rides the
-// one button that leads there.
-const dmBadgeEl = document.getElementById('dm-badge');
-const friendsModalEl = document.getElementById('friends-modal');
-const friendsCloseBtn = document.getElementById('friends-close-btn');
-const friendsAddBtn = document.getElementById('friends-add-btn');
-const friendsStatusEl = document.getElementById('friends-status');
-const friendsIncomingListEl = document.getElementById('friends-incoming-list');
-const friendsIncomingEmptyEl = document.getElementById('friends-incoming-empty');
-const friendsOutgoingListEl = document.getElementById('friends-outgoing-list');
-const friendsOutgoingEmptyEl = document.getElementById('friends-outgoing-empty');
-const friendsAcceptedListEl = document.getElementById('friends-accepted-list');
-const friendsAcceptedEmptyEl = document.getElementById('friends-accepted-empty');
-const friendsMapBtn = document.getElementById('friends-map-btn');
-const friendsMapModalEl = document.getElementById('friends-map-modal');
-const friendsMapCloseBtn = document.getElementById('friends-map-close-btn');
-const friendsMapCanvas = document.getElementById('friends-map-canvas');
-const friendsMapEmptyEl = document.getElementById('friends-map-empty');
-
-// Direct messages (#1637) — a thread with one other builder, reached only
-// via each accepted friend's own "Message" button below, same "swaps
-// places with #friends-modal" idiom friends-map-modal already uses rather
-// than stacking as a second modal layer.
-const dmModalEl = document.getElementById('dm-modal');
-const dmCloseBtn = document.getElementById('dm-close-btn');
-const dmModalTitleEl = document.getElementById('dm-modal-title');
-const dmStatusEl = document.getElementById('dm-status');
-const dmLoadMoreBtn = document.getElementById('dm-load-more-btn');
-const dmListEl = document.getElementById('dm-list');
-const dmEmptyEl = document.getElementById('dm-empty');
-const dmComposeForm = document.getElementById('dm-compose-form');
-const dmComposeInput = document.getElementById('dm-compose-input');
-const dmSendBtn = document.getElementById('dm-send-btn');
-let dmOtherBuilderId = null;
-let dmOtherLabel = '';
-// Same missing-re-entrancy-guard shape as friendsLoadToken just above —
-// opening a thread, sending a message, and the mark-read call each await
-// before touching the DOM, so a stale response landing after a fresher one
-// (e.g. the modal reopened against a different friend in between) would
-// otherwise append that friend's messages into the wrong thread.
-let dmLoadToken = 0;
-// #1677: the cursor for whatever page of OLDER messages comes after the
-// ones currently rendered — null once there's nothing more to load. Same
-// shape as savedLayoutsNextCursor/notificationsNextCursor, just paired
-// with a "Load more" that prepends above the thread instead of appending
-// below it, since older messages belong visually above what's already shown.
-let dmNextCursor = null;
-
-function createDmRow(message) {
-  const row = document.createElement('div');
-  row.className = message.senderBuilderId === builderId ? 'dm-row sent' : 'dm-row';
-  const text = document.createElement('div');
-  text.textContent = message.text;
-  row.appendChild(text);
-  const time = document.createElement('div');
-  time.className = 'dm-row-time';
-  time.textContent = formatNotificationTime(message.createdAt);
-  row.appendChild(time);
-  return row;
-}
-
-async function renderDmThread() {
-  const myLoadToken = ++dmLoadToken;
-  dmListEl.innerHTML = '';
-  dmStatusEl.textContent = '';
-  dmStatusEl.classList.remove('error');
-  dmLoadMoreBtn.hidden = true;
-  dmNextCursor = null;
-  if (!dmOtherBuilderId) return;
-  let messages;
-  let nextCursor;
-  try {
-    const page = await fetchDirectMessages(dmOtherBuilderId);
-    messages = page.messages;
-    nextCursor = page.nextCursor;
-  } catch (err) {
-    if (myLoadToken !== dmLoadToken) return; // superseded while loading — a newer call owns the panel now
-    dmStatusEl.textContent = err.message || 'Could not load messages.';
-    dmStatusEl.classList.add('error');
-    return;
-  }
-  if (myLoadToken !== dmLoadToken) return; // superseded while loading — a newer call owns the panel now
-  dmEmptyEl.hidden = messages.length > 0;
-  // Newest-first from the server (same shape as notifications) — reversed
-  // here so the thread reads chronologically top-to-bottom, like any chat.
-  for (const message of [...messages].reverse()) {
-    dmListEl.appendChild(createDmRow(message));
-  }
-  dmNextCursor = nextCursor;
-  dmLoadMoreBtn.hidden = !dmNextCursor;
-  dmListEl.scrollTop = dmListEl.scrollHeight;
-  // Best-effort — opening the thread is "reading" it, same as notifications'
-  // own read-on-click idiom, just for the whole thread at once rather than
-  // one row at a time.
-  try {
-    await markDirectMessagesRead(dmOtherBuilderId);
-    // #1661: the just-read thread's own messages no longer count toward
-    // the unread total — reflect that promptly rather than waiting for
-    // some unrelated later refresh to catch up.
-    refreshDmBadge();
-  } catch (err) {
-    console.warn('Could not mark messages read:', err);
-  }
-}
-
-dmLoadMoreBtn.addEventListener('click', async () => {
-  const myLoadToken = dmLoadToken; // this thread's current render — not a fresh reset
-  dmLoadMoreBtn.disabled = true;
-  try {
-    const page = await fetchDirectMessages(dmOtherBuilderId, { cursor: dmNextCursor });
-    if (myLoadToken !== dmLoadToken) return; // thread was closed/reopened against someone else while this page was loading
-    // Prepend above the currently-rendered messages (this page is also
-    // newest-first, so reverse it the same way the initial render does) and
-    // keep the scroll position anchored to what was already visible, rather
-    // than jumping to the newly-inserted top the way a plain append-below
-    // (saved layouts'/notifications' own idiom) never has to worry about.
-    const scrollHeightBefore = dmListEl.scrollHeight;
-    const scrollTopBefore = dmListEl.scrollTop;
-    const fragment = document.createDocumentFragment();
-    for (const message of [...page.messages].reverse()) {
-      fragment.appendChild(createDmRow(message));
-    }
-    dmListEl.insertBefore(fragment, dmListEl.firstChild);
-    dmListEl.scrollTop = scrollTopBefore + (dmListEl.scrollHeight - scrollHeightBefore);
-    dmNextCursor = page.nextCursor;
-    dmLoadMoreBtn.hidden = !dmNextCursor;
-  } catch (err) {
-    console.warn('Could not load more messages:', err);
-  } finally {
-    dmLoadMoreBtn.disabled = false;
-  }
-});
-
-function closeDmModal() {
-  dmModalEl.classList.remove('visible');
-  closeModalA11y(dmModalEl);
-  friendsModalEl.classList.add('visible');
-  openModalA11y(friendsModalEl, closeFriendsModal);
-}
-
-function openDmModal(otherBuilderId, otherLabel) {
-  dmOtherBuilderId = otherBuilderId;
-  dmOtherLabel = otherLabel;
-  dmModalTitleEl.textContent = `Messages: ${otherLabel}`;
-  dmComposeInput.value = '';
-  friendsModalEl.classList.remove('visible');
-  closeModalA11y(friendsModalEl);
-  dmModalEl.classList.add('visible');
-  openModalA11y(dmModalEl, closeDmModal);
-  renderDmThread();
-}
-
-dmCloseBtn.addEventListener('click', closeDmModal);
-
-dmComposeForm.addEventListener('submit', async (event) => {
-  event.preventDefault();
-  const text = dmComposeInput.value.trim();
-  if (!text || !dmOtherBuilderId) return;
-  dmStatusEl.textContent = '';
-  dmStatusEl.classList.remove('error');
-  dmSendBtn.disabled = true;
-  try {
-    await sendDirectMessage(dmOtherBuilderId, text);
-    clearDirectMessageIdempotencyKey(dmOtherBuilderId);
-    dmComposeInput.value = '';
-    await renderDmThread();
-  } catch (err) {
-    dmStatusEl.textContent = err.message || 'Could not send this message.';
-    dmStatusEl.classList.add('error');
-  } finally {
-    dmSendBtn.disabled = false;
-  }
-});
-
-async function refreshFriendsBadge() {
-  if (!builderId) return;
-  try {
-    const friendships = await fetchFriendships();
-    const incoming = friendships.filter((f) => f.direction === 'incoming' && f.status === 'pending');
-    friendsBadgeEl.textContent = String(incoming.length);
-    friendsBadgeEl.hidden = incoming.length === 0;
-  } catch (err) {
-    console.warn('Could not refresh friends badge:', err);
-  }
-}
-
-// #1661: same shape as refreshFriendsBadge/refreshNotificationsBadge just
-// above — fetchUnreadDirectMessageCount already existed (and the backend
-// endpoint/index behind it), just never had a caller. Same id_verified gate
-// the "Message" button itself uses (see its own #1637 comment above) --
-// the endpoint is requireIdVerifiedSessionBuilder-gated server-side, so
-// calling it for a non-id_verified account would just always 403.
-async function refreshDmBadge() {
-  if (!builderId || currentAuthUser?.trustTier !== 'id_verified') return;
-  try {
-    const count = await fetchUnreadDirectMessageCount();
-    dmBadgeEl.textContent = String(count);
-    dmBadgeEl.hidden = count === 0;
-  } catch (err) {
-    console.warn('Could not refresh DM badge:', err);
-  }
-}
-
-// "Social map" (see worker/index.js's own comment on handleFriendships for
-// why this is simplified to a friend's claimed lándlet rather than a live
-// position — exact coordinates, not fuzzed, per #1195's owner decision) —
-// rendered here as plain text, not an actual map widget. A real map would
-// need its own renderer/camera the way the claim flyover does (a full
-// WebGL scene, not something to spin up just for a small modal list) —
-// this ships the underlying "where do my friends live" data first.
-function friendLocationText(friendship) {
-  if (!friendship.otherLandlet) return "Hasn't claimed a lándlet yet";
-  const { name, center } = friendship.otherLandlet;
-  return `${name} (${center.x.toFixed(0)}, ${center.y.toFixed(0)})`;
-}
-
-// #257: same missing-re-entrancy-guard shape as #244/#245 —
-// renderFriends() is called from many places in quick succession (opening
-// the panel, accepting/declining/cancelling a request, closing/reopening
-// via friendsCloseBtn's own refreshFriendsBadge()), and each of those
-// awaits fetchFriendships() before touching the DOM. An earlier call's
-// now-stale response would otherwise append duplicate rows on top of a
-// later call's fresh ones once it resolves. Same monotonic-token fix as
-// axisPreviewLoadToken/notificationsLoadToken.
-let friendsLoadToken = 0;
-
-async function renderFriends() {
-  const myLoadToken = ++friendsLoadToken;
-  friendsIncomingListEl.innerHTML = '';
-  friendsOutgoingListEl.innerHTML = '';
-  friendsAcceptedListEl.innerHTML = '';
-  if (!builderId) return;
-  let friendships;
-  try {
-    friendships = await fetchFriendships();
-  } catch (err) {
-    if (myLoadToken !== friendsLoadToken) return; // superseded while loading — a newer call owns the panel now
-    friendsStatusEl.textContent = err.message || 'Could not load friends.';
-    friendsStatusEl.classList.add('error');
-    return;
-  }
-  if (myLoadToken !== friendsLoadToken) return; // superseded while loading — a newer call owns the panel now
-  const incoming = friendships.filter((f) => f.direction === 'incoming' && f.status === 'pending');
-  const outgoing = friendships.filter((f) => f.direction === 'outgoing' && f.status === 'pending');
-  const accepted = friendships.filter((f) => f.status === 'accepted');
-
-  friendsIncomingEmptyEl.hidden = incoming.length > 0;
-  for (const friendship of incoming) {
-    const row = document.createElement('div');
-    row.className = 'friend-row';
-    const body = document.createElement('div');
-    body.className = 'friend-row-body';
-    const label = document.createElement('div');
-    label.className = 'friend-row-label';
-    label.textContent = friendship.otherLabel;
-    body.appendChild(label);
-    row.appendChild(body);
-    const actions = document.createElement('div');
-    actions.className = 'friend-row-actions';
-    const acceptBtn = document.createElement('button');
-    acceptBtn.type = 'button';
-    acceptBtn.textContent = 'Accept';
-    acceptBtn.addEventListener('click', async () => {
-      acceptBtn.disabled = true;
-      try {
-        await acceptFriendRequest(friendship.friendshipId);
-        await renderFriends();
-        await refreshFriendsBadge();
-      } catch (err) {
-        friendsStatusEl.textContent = err.message || 'Could not accept this friend request.';
-        friendsStatusEl.classList.add('error');
-        acceptBtn.disabled = false;
-      }
-    });
-    actions.appendChild(acceptBtn);
-    const declineBtn = document.createElement('button');
-    declineBtn.type = 'button';
-    declineBtn.className = 'danger';
-    declineBtn.textContent = 'Decline';
-    declineBtn.addEventListener('click', async () => {
-      declineBtn.disabled = true;
-      try {
-        await removeFriendship(friendship.friendshipId);
-        await renderFriends();
-        await refreshFriendsBadge();
-      } catch (err) {
-        friendsStatusEl.textContent = err.message || 'Could not decline this friend request.';
-        friendsStatusEl.classList.add('error');
-        declineBtn.disabled = false;
-      }
-    });
-    actions.appendChild(declineBtn);
-    row.appendChild(actions);
-    friendsIncomingListEl.appendChild(row);
-  }
-
-  friendsOutgoingEmptyEl.hidden = outgoing.length > 0;
-  for (const friendship of outgoing) {
-    const row = document.createElement('div');
-    row.className = 'friend-row';
-    const body = document.createElement('div');
-    body.className = 'friend-row-body';
-    const label = document.createElement('div');
-    label.className = 'friend-row-label';
-    label.textContent = friendship.otherLabel;
-    body.appendChild(label);
-    row.appendChild(body);
-    const actions = document.createElement('div');
-    actions.className = 'friend-row-actions';
-    const cancelBtn = document.createElement('button');
-    cancelBtn.type = 'button';
-    cancelBtn.className = 'danger';
-    cancelBtn.textContent = 'Cancel';
-    cancelBtn.addEventListener('click', async () => {
-      cancelBtn.disabled = true;
-      try {
-        await removeFriendship(friendship.friendshipId);
-        await renderFriends();
-      } catch (err) {
-        friendsStatusEl.textContent = err.message || 'Could not cancel this friend request.';
-        friendsStatusEl.classList.add('error');
-        cancelBtn.disabled = false;
-      }
-    });
-    actions.appendChild(cancelBtn);
-    row.appendChild(actions);
-    friendsOutgoingListEl.appendChild(row);
-  }
-
-  friendsAcceptedEmptyEl.hidden = accepted.length > 0;
-  for (const friendship of accepted) {
-    const row = document.createElement('div');
-    row.className = 'friend-row';
-    const body = document.createElement('div');
-    body.className = 'friend-row-body';
-    const label = document.createElement('div');
-    label.className = 'friend-row-label';
-    label.textContent = friendship.otherLabel;
-    body.appendChild(label);
-    const location = document.createElement('div');
-    location.className = 'friend-row-location';
-    location.textContent = friendLocationText(friendship);
-    body.appendChild(location);
-    row.appendChild(body);
-    const actions = document.createElement('div');
-    actions.className = 'friend-row-actions';
-    // #1637: DM requires BOTH sides to be trust_tier === 'id_verified' —
-    // only this viewer's own tier is known client-side, so the button is
-    // gated on that alone; if the other side isn't id_verified, sending
-    // still fails with the server's own clear error, shown in dmStatusEl.
-    if (currentAuthUser?.trustTier === 'id_verified') {
-      const messageBtn = document.createElement('button');
-      messageBtn.type = 'button';
-      messageBtn.textContent = 'Message';
-      messageBtn.addEventListener('click', () => openDmModal(friendship.otherBuilderId, friendship.otherLabel));
-      actions.appendChild(messageBtn);
-    }
-    const removeBtn = document.createElement('button');
-    removeBtn.type = 'button';
-    removeBtn.className = 'danger';
-    removeBtn.textContent = 'Remove';
-    removeBtn.addEventListener('click', async () => {
-      if (!confirm(`Remove ${friendship.otherLabel} as a friend?`)) return;
-      removeBtn.disabled = true;
-      try {
-        await removeFriendship(friendship.friendshipId);
-        await renderFriends();
-      } catch (err) {
-        friendsStatusEl.textContent = err.message || 'Could not remove this friend.';
-        friendsStatusEl.classList.add('error');
-        removeBtn.disabled = false;
-      }
-    });
-    actions.appendChild(removeBtn);
-    row.appendChild(actions);
-    friendsAcceptedListEl.appendChild(row);
-  }
-}
-
-// #1205: plots every accepted friend's claimed lándlet at once, rather
-// than the per-friend inline text friendLocationText already shows.
-// Deliberately a plain 2D canvas, not a three.js scene like the claim
-// flyover's own world map (loadLandletMap) — that one needs a full WebGL
-// renderer because it draws every landlet's real polygon with click-to-
-// select/confirm wiring; this only needs to plot a handful of already-known
-// (x, y) points with labels, which a 2D canvas context does directly with
-// no scene/camera/renderer setup at all. World-radius-scaled the same way
-// the claim flyover sizes itself, just via a linear 2D transform instead of
-// a 3D camera. A friend with no claimed lándlet (otherLandlet null) is
-// simply omitted, same as friendLocationText's own "hasn't claimed a
-// lándlet yet" case — there's no position to plot for them.
-//
-// #1348: closing and quickly reopening the map modal fires a second
-// drawFriendsMap() before the first's own fetch has resolved — the same
-// stale-response-lands-after-a-fresher-one race renderFriends/renderSignPosts/
-// renderCalendarEvents already guard against with their own load token. No
-// guard existed here, so the earlier (slower) call's response could still
-// clear the canvas and redraw with stale points on top of the later call's
-// already-correct ones.
-let friendsMapLoadToken = 0;
-async function drawFriendsMap() {
-  const myLoadToken = ++friendsMapLoadToken;
-  let world;
-  let friendships;
-  try {
-    [world, friendships] = await Promise.all([fetchWorld(), fetchFriendships()]);
-  } catch (err) {
-    if (myLoadToken !== friendsMapLoadToken) return; // superseded while loading — a newer call owns the map now
-    console.warn('Could not load the friends map:', err);
-    friendsMapEmptyEl.textContent = err.message || 'Could not load the friends map.';
-    friendsMapEmptyEl.hidden = false;
-    return;
-  }
-  if (myLoadToken !== friendsMapLoadToken) return; // superseded while loading — a newer call owns the map now
-  const located = friendships.filter((f) => f.status === 'accepted' && f.otherLandlet);
-  friendsMapEmptyEl.hidden = located.length > 0;
-  // #1252: clear any stale canvas content/points from a previous render
-  // before the early return below -- otherwise reopening the map after
-  // going from "has located friends" back to zero left the last drawn
-  // dots/labels on screen underneath the (now-shown) empty-state message,
-  // and window.__friendsMapPoints kept pointing at friends who are no
-  // longer located.
-  friendsMapCanvas.getContext('2d').clearRect(0, 0, friendsMapCanvas.width, friendsMapCanvas.height);
-  window.__friendsMapPoints = [];
-  if (located.length === 0) return;
-
-  // Matches the canvas's own CSS size (width: 100%, aspect-ratio: 1) in
-  // real pixels, so the drawing isn't blurrily upscaled/downscaled from a
-  // mismatched default 300x150 canvas backing size.
-  const rect = friendsMapCanvas.getBoundingClientRect();
-  friendsMapCanvas.width = rect.width;
-  friendsMapCanvas.height = rect.height;
-  const ctx = friendsMapCanvas.getContext('2d');
-  const centerPx = { x: friendsMapCanvas.width / 2, y: friendsMapCanvas.height / 2 };
-  // A little inset so a friend right at the world edge doesn't plot a dot
-  // half-clipped by the canvas border.
-  const pxPerMeter = (Math.min(centerPx.x, centerPx.y) * 0.9) / world.radiusM;
-  // World +Y is "up"/North (see updateCompassNeedle's own comment on this
-  // app's one existing map-orientation convention) — canvas +Y is down, so
-  // the y axis is negated going from world meters to canvas pixels.
-  function worldToCanvas(x, y) {
-    return { x: centerPx.x + x * pxPerMeter, y: centerPx.y - y * pxPerMeter };
-  }
-
-  ctx.clearRect(0, 0, friendsMapCanvas.width, friendsMapCanvas.height);
-  ctx.strokeStyle = 'rgba(0, 0, 0, 0.25)';
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.arc(centerPx.x, centerPx.y, Math.min(centerPx.x, centerPx.y) * 0.9, 0, Math.PI * 2);
-  ctx.stroke();
-
-  // A canvas fillStyle has to be an actual resolved color, not a raw
-  // `var(...)` reference the way a stylesheet declaration can use —
-  // resolved once here via getComputedStyle rather than per-point below.
-  const labelColor = getComputedStyle(document.documentElement).getPropertyValue('--pill-text').trim();
-
-  // #1205's own test diagnostic (same "expose what a test needs to read
-  // back" idiom as window.__shopAvatarOrientation/__shopOtherAvatars) —
-  // canvas pixel content isn't otherwise inspectable from an e2e test
-  // without reading back raw ImageData.
-  window.__friendsMapPoints = [];
-  for (const friendship of located) {
-    const { x, y } = worldToCanvas(friendship.otherLandlet.center.x, friendship.otherLandlet.center.y);
-    ctx.fillStyle = '#2f7de1';
-    ctx.beginPath();
-    ctx.arc(x, y, 5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = labelColor;
-    ctx.font = '12px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText(friendship.otherLabel ?? '', x, y - 10);
-    window.__friendsMapPoints.push({ builderId: friendship.otherBuilderId, label: friendship.otherLabel, x, y });
-  }
-}
-
-function closeFriendsMapModal() {
-  friendsMapModalEl.classList.remove('visible');
-  closeModalA11y(friendsMapModalEl);
-  friendsModalEl.classList.add('visible');
-  openModalA11y(friendsModalEl, closeFriendsModal);
-}
-friendsMapBtn.addEventListener('click', () => {
-  friendsModalEl.classList.remove('visible');
-  closeModalA11y(friendsModalEl);
-  friendsMapModalEl.classList.add('visible');
-  openModalA11y(friendsMapModalEl, closeFriendsMapModal);
-  drawFriendsMap();
-});
-friendsMapCloseBtn.addEventListener('click', closeFriendsMapModal);
-
-// Account menu (docs/API.md's "Frontend-only account menu") — the
-// Log In/Notices/Friends/Settings buttons above are unchanged in every
-// other respect; this only adds the expand/collapse chrome around them.
-// Each row's own click handler (accountAuthBtn/notificationsBtn/
-// friendsBtn/settingsBtn, all defined elsewhere) already opens its own
-// modal, so the only extra behavior needed here is closing the menu once
-// a row is picked, and closing it on an outside tap the way every other
-// transient popover in this app does.
-const accountMenuToggle = document.getElementById('account-menu-toggle');
-const accountMenuPanel = document.getElementById('account-menu-panel');
-accountMenuToggle.addEventListener('click', () => {
-  const expanding = !accountMenuPanel.classList.contains('expanded');
-  accountMenuPanel.classList.toggle('expanded');
-  accountMenuToggle.classList.toggle('active', accountMenuPanel.classList.contains('expanded'));
-  accountMenuToggle.setAttribute('aria-expanded', String(expanding));
-  if (expanding) {
-    refreshAccountMenuLandCap();
-    refreshAccountMenuTaxNotice();
-    // #1167 (owner direction, 2026-10-01): My Lands only makes sense from
-    // the Build tab, not Shop or Sell — it shipped visible in every mode
-    // since nothing here ever gated it on currentMode. Recomputed on open
-    // rather than at mode-switch time, same timing refreshAccountMenuLandCap
-    // just above already uses for this same panel.
-    myLandsBtn.hidden = currentMode !== 'build';
-  }
-});
-for (const row of accountMenuPanel.querySelectorAll('button')) {
-  row.addEventListener('click', () => {
-    accountMenuPanel.classList.remove('expanded');
-    accountMenuToggle.classList.remove('active');
-    accountMenuToggle.setAttribute('aria-expanded', 'false');
-  });
-}
-document.addEventListener('click', (event) => {
-  if (!accountMenuPanel.classList.contains('expanded')) return;
-  if (event.target === accountMenuToggle || accountMenuPanel.contains(event.target)) return;
-  accountMenuPanel.classList.remove('expanded');
-  accountMenuToggle.classList.remove('active');
-  accountMenuToggle.setAttribute('aria-expanded', 'false');
-});
-
 // #1602: generic "?" info-tooltip toggle -- reveals a popup of explanatory
 // text next to the control it describes, instead of that text sitting
 // inline and permanently taking up space (the owner's own complaint about
 // #upload-hint/#upload-dimensions-hint). One delegated listener covers
 // every .info-tooltip-btn/.info-tooltip-popup pair (present or future),
-// unlike the one-off #level-menu-toggle/#account-menu-toggle wiring above,
-// since this pattern is meant to be dropped in anywhere, not just at one
-// fixed spot.
+// unlike the one-off #level-menu-toggle/#account-menu-toggle wiring in
+// src/account/menu.js, since this pattern is meant to be dropped in
+// anywhere, not just at one fixed spot.
 document.addEventListener('click', (event) => {
   const clickedBtn = event.target.closest('.info-tooltip-btn');
   document.querySelectorAll('.info-tooltip-btn[aria-expanded="true"]').forEach((openBtn) => {
@@ -11214,127 +10445,6 @@ document.addEventListener('click', (event) => {
   clickedBtn.setAttribute('aria-expanded', String(expanding));
   popup.toggleAttribute('hidden', !expanding);
 });
-
-// #1150 (owner request, 2026-10-01, via a live Control Room conversation):
-// a land's name/size were visible while standing on it in Shop mode
-// (updateShopLandletInfo above) but nowhere in Build mode at all, and a
-// builder who owns more than one claimed landlet (auctions can transfer
-// extra ones in — see ownedLandletsByBuilderId's own comment in
-// worker/index.js, and resolveLandletId's own comment above) had no way to
-// see or switch between them. Same modal shell/row-reuse shape as the
-// Settings > Build version-history list just above (.version-row/
-// .version-action-btn), and the same plain prompt()-based rename flow as
-// renameBuilder/renameSeller/updateCatalogTemplate's own UI call sites.
-const myLandsBtn = document.getElementById('my-lands-btn');
-const myLandsModalEl = document.getElementById('my-lands-modal');
-const myLandsCloseBtn = document.getElementById('my-lands-close-btn');
-const myLandsStatusEl = document.getElementById('my-lands-status');
-const myLandsListEl = document.getElementById('my-lands-list');
-const myLandsEmptyEl = document.getElementById('my-lands-empty');
-
-// Monotonic-token guard, same idiom as friendsLoadToken/notificationsLoadToken
-// above: myLandsBtn's click handler calls renderMyLands() directly on every
-// click, including while a previous call's fetchAllLandlets() is still in
-// flight (rapid double-click, or close-then-reopen before it resolves) — an
-// earlier call's now-stale response would otherwise overwrite a later call's
-// fresh render.
-let myLandsLoadToken = 0;
-
-async function renderMyLands() {
-  const myToken = ++myLandsLoadToken;
-  myLandsStatusEl.textContent = '';
-  myLandsStatusEl.classList.remove('error');
-  myLandsEmptyEl.hidden = true;
-  myLandsListEl.innerHTML = '<div class="settings-empty-note">Loading…</div>';
-  if (!builderId) {
-    myLandsListEl.innerHTML = '';
-    myLandsEmptyEl.hidden = false;
-    return;
-  }
-  let owned;
-  try {
-    owned = await fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId });
-  } catch (err) {
-    if (myToken !== myLandsLoadToken) return; // superseded while loading — a newer call owns the panel now
-    myLandsListEl.innerHTML = '';
-    myLandsStatusEl.textContent = err.message || 'Could not load your lands.';
-    myLandsStatusEl.classList.add('error');
-    return;
-  }
-  if (myToken !== myLandsLoadToken) return; // superseded while loading — a newer call owns the panel now
-  myLandsListEl.innerHTML = '';
-  if (owned.length === 0) {
-    myLandsEmptyEl.hidden = false;
-    return;
-  }
-  for (const landlet of owned) {
-    const row = document.createElement('div');
-    row.className = 'version-row';
-
-    const info = document.createElement('div');
-    info.className = 'version-row-info';
-    // A real <button>, not an <a> — this always goes through the same
-    // reload-into-Build dance every mode switch in this file already uses
-    // (START_MODE_KEY's own comment), never a same-page navigation.
-    const openLink = document.createElement('button');
-    openLink.type = 'button';
-    openLink.className = 'my-lands-open-link';
-    openLink.textContent = landlet.name;
-    openLink.addEventListener('click', () => {
-      sessionStorage.setItem(BUILD_TARGET_LANDLET_ID_KEY, landlet.landletId);
-      sessionStorage.setItem(START_MODE_KEY, 'build');
-      location.reload();
-    });
-    info.appendChild(openLink);
-    info.append(` — ${formatArea(landlet.areaM2)}`);
-    row.appendChild(info);
-
-    const actions = document.createElement('div');
-    actions.className = 'version-row-actions';
-    const renameBtn = document.createElement('button');
-    renameBtn.className = 'version-action-btn';
-    renameBtn.type = 'button';
-    renameBtn.textContent = 'Rename';
-    renameBtn.addEventListener('click', async () => {
-      const next = prompt('Rename this land', landlet.name);
-      if (!next || !next.trim() || next.trim() === landlet.name) return;
-      if (next.trim().length > 100) {
-        alert('Keep it to 100 characters or fewer.');
-        return;
-      }
-      myLandsStatusEl.textContent = '';
-      myLandsStatusEl.classList.remove('error');
-      renameBtn.disabled = true;
-      try {
-        // #1150: server enforces uniqueness across every landlet, not just
-        // this builder's own — a collision surfaces here as the server's
-        // own friendly message via requestJson's rejection.
-        const updated = await renameLandlet(landlet.landletId, next.trim());
-        landlet.name = updated.name;
-        openLink.textContent = landlet.name;
-      } catch (err) {
-        myLandsStatusEl.textContent = err.message || 'Could not rename this land.';
-        myLandsStatusEl.classList.add('error');
-      } finally {
-        renameBtn.disabled = false;
-      }
-    });
-    actions.appendChild(renameBtn);
-    row.appendChild(actions);
-    myLandsListEl.appendChild(row);
-  }
-}
-
-myLandsBtn.addEventListener('click', () => {
-  myLandsModalEl.classList.add('visible');
-  openModalA11y(myLandsModalEl, closeMyLandsModal);
-  renderMyLands();
-});
-function closeMyLandsModal() {
-  myLandsModalEl.classList.remove('visible');
-  closeModalA11y(myLandsModalEl);
-}
-myLandsCloseBtn.addEventListener('click', closeMyLandsModal);
 
 // Real login (docs/API.md's "Authentication") — now the sole way a
 // builder/seller identity is established (see ensureBuilderIdentity/
@@ -11364,59 +10474,14 @@ myLandsCloseBtn.addEventListener('click', closeMyLandsModal);
   }
 })();
 
-function closeFriendsModal() {
-  friendsModalEl.classList.remove('visible');
-  refreshFriendsBadge();
-  // #1661: openDmModal is only reached from inside this panel, so this is
-  // also a natural point to re-sync the DM badge for anyone who read a
-  // thread and is now backing out to the top-level menu.
-  refreshDmBadge();
-  closeModalA11y(friendsModalEl);
-}
-friendsBtn.addEventListener('click', () => {
-  friendsModalEl.classList.add('visible');
-  openModalA11y(friendsModalEl, closeFriendsModal);
-  friendsStatusEl.textContent = '';
-  friendsStatusEl.classList.remove('error');
-  renderFriends();
-});
-friendsCloseBtn.addEventListener('click', closeFriendsModal);
-friendsAddBtn.addEventListener('click', async () => {
-  const label = prompt("Friend's name (must match their identity exactly):", '');
-  if (!label || !label.trim()) return;
-  friendsStatusEl.textContent = '';
-  friendsStatusEl.classList.remove('error');
-  friendsAddBtn.disabled = true;
-  try {
-    const trimmed = label.trim();
-    const matches = await fetchBuilders({ label: trimmed });
-    if (matches.length === 0) {
-      friendsStatusEl.textContent = `No builder named "${trimmed}" found.`;
-      friendsStatusEl.classList.add('error');
-      return;
-    }
-    // Builder labels have no uniqueness constraint (migrations/0054's own
-    // comment: "a unique label was never even guaranteed") — docs/API.md's
-    // "unmatched or ambiguous label surfaces as a status message rather
-    // than a dead end" promise covers this case explicitly, so more than
-    // one match must never silently resolve to whichever one happened to
-    // sort first.
-    if (matches.length > 1) {
-      friendsStatusEl.textContent = `Multiple builders are named "${trimmed}" — ask them to rename to something unique before sending a request.`;
-      friendsStatusEl.classList.add('error');
-      return;
-    }
-    const match = matches[0];
-    await sendFriendRequest(match.builderId);
-    friendsStatusEl.textContent = `Friend request sent to ${match.label}.`;
-    await renderFriends();
-  } catch (err) {
-    friendsStatusEl.textContent = err.message || 'Could not send friend request.';
-    friendsStatusEl.classList.add('error');
-  } finally {
-    friendsAddBtn.disabled = false;
-  }
-});
+// #2556 (part of #2504/#2500's src/main.js module split, see #2503's
+// design comment for the full dependency map): the notifications/
+// friends/DM/my-lands account-menu chrome now lives in
+// src/account/menu.js — see that module's own comment for its
+// dependency notes. refreshNotificationsBadge/refreshFriendsBadge/
+// refreshDmBadge (still called directly from this file after Shop/
+// Sell/layout-preview mode entry and the seller Edit Size save flow)
+// are imported back above.
 
 // Shop: a visitor mode reached straight from the builder-choice screen, no
 // identity needed, since visiting doesn't build or claim anything. Unlike
@@ -11946,7 +11011,7 @@ let shopWorldRadiusM = null;
 let shopDomeMesh = null;
 let shopWallMesh = null;
 let shopDomeRiseM = SHOP_DOME_INITIAL_RISE_M;
-let shopSkyMaterial = null; // shared by both wall and dome — see createShopSkyMaterial
+let shopSkyMaterial = null; // the wall's own material — the dome gets its own material instance (see enterShopMode) sharing this one's `uniforms` object by reference, not the material itself, so both still animate off one clock — see createShopSkyMaterial
 let shopSkyClockStart = null;
 
 // Clouds only ever show in the upper portion of the wall (its own hazy-
@@ -16497,7 +15562,7 @@ const SHOP_HIDDEN_BUILDER_UI_IDS = [
 // modal it expected gone had already reopened by the time it checked).
 // Landing on this same inert end state instead means declining anywhere
 // always reads the same way, with no redundant second prompt.
-function showShopAccessGate() {
+export function showShopAccessGate() {
   for (const id of SHOP_HIDDEN_BUILDER_UI_IDS) {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
@@ -16786,7 +15851,33 @@ async function enterShopMode() {
     out.copy(SHOP_HAZY_HORIZON_COLOR).lerp(SHOP_SKY_DOME_COLOR, t);
   });
   shopDomeRiseM = SHOP_DOME_INITIAL_RISE_M;
-  shopDomeMesh = new THREE.Mesh(domeGeometry, shopSkyMaterial);
+  // owner-report-2026-10-21: matching segment counts (above) makes the
+  // wall's and dome's rims the same ideal 64-gon, but CylinderGeometry
+  // and SphereGeometry still compute that shared rim's vertex positions
+  // via two different trig code paths (the cylinder's theta parameter
+  // isn't the same floating-point expression as the sphere's equivalent
+  // phi, even though they describe the same circle -- see #2523's own
+  // 90-degree-phase-offset analysis). That leaves a sub-ULP gap/overlap
+  // right at the seam, which the depth test resolves inconsistently --
+  // worse at a distance, where depth-buffer precision is coarser, and
+  // gone up close, exactly matching the owner's own report ("disappears
+  // when I try to get closer"): classic z-fighting, not noise. A
+  // dedicated material for the dome -- sharing the wall's own `uniforms`
+  // object *by reference* (not a deep clone) so both stay on the exact
+  // same clock -- with a small polygonOffset settles the ambiguity
+  // deterministically in the wall's favor instead of leaving it to
+  // whichever float value happens to round which way.
+  const shopDomeMaterial = new THREE.ShaderMaterial({
+    uniforms: shopSkyMaterial.uniforms,
+    vertexShader: SHOP_SKY_VERTEX_SHADER,
+    fragmentShader: SHOP_SKY_FRAGMENT_SHADER,
+    side: THREE.BackSide,
+    extensions: { derivatives: true },
+    polygonOffset: true,
+    polygonOffsetFactor: 1,
+    polygonOffsetUnits: 1,
+  });
+  shopDomeMesh = new THREE.Mesh(domeGeometry, shopDomeMaterial);
   shopDomeMesh.rotation.x = Math.PI / 2;
   shopDomeMesh.position.z = SHOP_WALL_HEIGHT_M - wallGroundDropM;
   shopDomeMesh.scale.set(shopWorldRadiusM, shopDomeRiseM, shopWorldRadiusM);
@@ -17134,7 +16225,7 @@ function findRootSellerShowcaseMesh(object) {
 // Shop's own list, notifications/friends stay reachable — Sell (unlike
 // Shop) always runs under a real logged-in account, which those features
 // are genuinely useful for.
-const SELL_HIDDEN_BUILDER_UI_IDS = [
+export const SELL_HIDDEN_BUILDER_UI_IDS = [
   'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel', 'level-controls',
   // #1169: the compass orients by Shop/Build's own free-look camera or
   // avatar facing — Sell has neither (its own faux-landlet showcase is a
@@ -17142,326 +16233,13 @@ const SELL_HIDDEN_BUILDER_UI_IDS = [
   'compass-panel',
 ];
 
-// #635 (sub-issue of #631): the faux-layout preview — a dedicated,
-// read-only 3D view rendering one saved layout's instances at their true
-// original relative positions (never sellerShowcase's own grid-repacking —
-// see savedLayoutPreview.js's own comment on why), plus drag-rectangle
-// marquee selection over them (the v1 interaction agreed on #631 in place
-// of a literal freehand circle). Reuses the same "faux ground plane +
-// real instance meshes" technique sellerShowcase already established
-// (curveGroundGeometry on a swapped `landlet.geometry`, createMeshForInstance
-// for real content) and the existing addSelectionOutline/removeSelectionOutline
-// highlight Build mode's own single-selection already uses, rather than
-// inventing either from scratch.
-let layoutPreviewMeshes = [];
-// The saved layout's own instance records, exactly as #635's GET endpoint
-// returned them (never recentered the way the meshes' render positions
-// are) — #636's "Paste" reads a selected instance's real x/y/z/rotation/
-// crop/scale/flags back out of here, since those (not the preview-only
-// recentered mesh position) are what should land on the target landlet.
-let layoutPreviewInstances = [];
-const selectedSavedInstanceIds = new Set();
-// {x, y} in client (viewport) coordinates while a marquee drag is in
-// progress, else null — the one piece of state every pointer handler below
-// checks to know whether a drag is actually happening right now.
-let layoutPreviewDragStart = null;
-
-const layoutPreviewToolbarEl = document.getElementById('layout-preview-toolbar');
-const layoutPreviewBackBtn = document.getElementById('layout-preview-back-btn');
-const layoutPreviewNameEl = document.getElementById('layout-preview-name');
-const layoutPreviewSelectionCountEl = document.getElementById('layout-preview-selection-count');
-const layoutPreviewMarqueeEl = document.getElementById('layout-preview-marquee');
-const layoutPreviewPasteTargetEl = document.getElementById('layout-preview-paste-target');
-const layoutPreviewPasteBtn = document.getElementById('layout-preview-paste-btn');
-
-function updateLayoutPreviewSelectionUI() {
-  const n = selectedSavedInstanceIds.size;
-  layoutPreviewSelectionCountEl.textContent = n === 0 ? '' : `${n} selected`;
-  layoutPreviewPasteBtn.hidden = n === 0;
-}
-
-// A raw pointerdown-then-pointerup with no real movement between them is a
-// plain click, not a drag — treated as "clear the selection" (the same
-// click-empty-space-to-deselect convention Build mode's own clearSelection
-// already follows) rather than as a zero-area rectangle that happens to
-// contain nothing.
-const LAYOUT_PREVIEW_DRAG_THRESHOLD_PX = 4;
-
-function updateLayoutPreviewMarquee(clientX, clientY) {
-  const x = Math.min(layoutPreviewDragStart.x, clientX);
-  const y = Math.min(layoutPreviewDragStart.y, clientY);
-  layoutPreviewMarqueeEl.style.left = `${x}px`;
-  layoutPreviewMarqueeEl.style.top = `${y}px`;
-  layoutPreviewMarqueeEl.style.width = `${Math.abs(clientX - layoutPreviewDragStart.x)}px`;
-  layoutPreviewMarqueeEl.style.height = `${Math.abs(clientY - layoutPreviewDragStart.y)}px`;
-}
-
-// Finishes a marquee drag: projects each preview mesh's real world position
-// through the live camera into screen-pixel space (the same NDC-to-pixel
-// conversion the renderer itself does internally, just done here explicitly
-// since three.js doesn't expose a mesh's own last-rendered screen position)
-// and keeps whichever ones land inside the dragged rectangle, via the same
-// pointInDragRect axis-aligned test savedLayoutPreview.js's own tests cover.
-function finishLayoutPreviewDrag(clientX, clientY) {
-  const rect = { x1: layoutPreviewDragStart.x, y1: layoutPreviewDragStart.y, x2: clientX, y2: clientY };
-  layoutPreviewDragStart = null;
-  layoutPreviewMarqueeEl.classList.remove('visible');
-
-  for (const mesh of layoutPreviewMeshes) removeSelectionOutline(mesh);
-  selectedSavedInstanceIds.clear();
-
-  const dragDistance = Math.hypot(rect.x2 - rect.x1, rect.y2 - rect.y1);
-  if (dragDistance >= LAYOUT_PREVIEW_DRAG_THRESHOLD_PX) {
-    const projected = new THREE.Vector3();
-    for (const mesh of layoutPreviewMeshes) {
-      projected.copy(mesh.position).project(camera);
-      // z > 1 in NDC space means behind the camera — never "in frame" even
-      // if its projected x/y happens to fall inside the rect.
-      if (projected.z > 1) continue;
-      const screenPoint = {
-        x: (projected.x + 1) / 2 * window.innerWidth,
-        y: (1 - projected.y) / 2 * window.innerHeight,
-      };
-      if (pointInDragRect(screenPoint, rect)) {
-        selectedSavedInstanceIds.add(mesh.userData.savedInstanceId);
-        addSelectionOutline(mesh);
-      }
-    }
-  }
-  updateLayoutPreviewSelectionUI();
-}
-
-renderer.domElement.addEventListener('pointerdown', (event) => {
-  if (currentMode !== 'layoutPreview') return;
-  layoutPreviewDragStart = { x: event.clientX, y: event.clientY };
-  layoutPreviewMarqueeEl.classList.add('visible');
-  updateLayoutPreviewMarquee(event.clientX, event.clientY);
-});
-renderer.domElement.addEventListener('pointermove', (event) => {
-  if (currentMode !== 'layoutPreview' || !layoutPreviewDragStart) return;
-  updateLayoutPreviewMarquee(event.clientX, event.clientY);
-});
-// On window, not just the canvas — a drag that ends after the pointer has
-// left the canvas (dragging the marquee out past the toolbar, say) still
-// needs to finish cleanly rather than leaving layoutPreviewDragStart set
-// forever with no matching pointerup ever landing on the canvas itself.
-window.addEventListener('pointerup', (event) => {
-  if (currentMode !== 'layoutPreview' || !layoutPreviewDragStart) return;
-  finishLayoutPreviewDrag(event.clientX, event.clientY);
-});
-
-layoutPreviewBackBtn.addEventListener('click', () => {
-  sessionStorage.setItem(START_MODE_KEY, 'build');
-  location.reload();
-});
-
-// #636 (sub-issue of #631): pastes the currently-selected saved instances
-// onto a landlet the builder owns, as brand-new placed_instances rows.
-//
-// Deliberately routed through the exact same POST /instances/batch
-// createInstancesRemote already uses for every other bulk-create — the
-// server applies its normal ownership/z-bounds checks with no special
-// "trusted paste" path, so e.g. a target landlet that hasn't purchased the
-// level a saved instance's z requires rejects it exactly like a normal
-// create would. instanceId is deliberately omitted from each payload
-// entry: the original ids belonged to placed_instances rows that no
-// longer exist (they were swept into this saved_layout_instances snapshot
-// when the level was removed), and the batch endpoint already assigns a
-// fresh id to any entry that omits one.
-
-// #648: "target landlet" was first shipped as never a real picker, on the
-// premise that a builder can only ever have one landlet claimed at a
-// time. That's not actually true here — ownedLandletsByBuilderId's own
-// comment in worker/index.js ("a builder can own more than one lándlet —
-// auctions can transfer extra ones in") and this same file's own
-// auction-start picker (renderStartSection, built for exactly #199/#249's
-// two-simultaneously-claimed-landlets case) both establish it as a real,
-// already-handled shape. Populated once per preview session (owned
-// landlets don't change mid-preview), same "fetch-all + default to
-// currentLandletId when it's in the list + only show a picker when
-// there's more than one" convention renderStartSection already uses.
-async function populateLayoutPreviewPasteTarget() {
-  let owned;
-  try {
-    owned = await fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId });
-  } catch {
-    owned = []; // surfaced instead at paste time, same as the empty-owned case below
-  }
-  layoutPreviewPasteTargetEl.innerHTML = '';
-  for (const ownedLandlet of owned) {
-    const option = document.createElement('option');
-    option.value = ownedLandlet.landletId;
-    option.textContent = ownedLandlet.name || ownedLandlet.landletId;
-    if (ownedLandlet.landletId === currentLandletId) option.selected = true;
-    layoutPreviewPasteTargetEl.appendChild(option);
-  }
-  layoutPreviewPasteTargetEl.hidden = owned.length <= 1;
-}
-
-layoutPreviewPasteBtn.addEventListener('click', async () => {
-  const selected = layoutPreviewInstances.filter((instance) => selectedSavedInstanceIds.has(instance.instanceId));
-  if (selected.length === 0) return;
-  const targetLandletId = layoutPreviewPasteTargetEl.value;
-  if (!targetLandletId) {
-    alert("You don't have a claimed lándlet to paste onto — claim one first.");
-    return;
-  }
-  layoutPreviewPasteBtn.disabled = true;
-  try {
-    // Both instanceId and id (savedLayoutInstanceFromRow's own alias for
-    // it) need stripping — validateInstance on the server falls back to
-    // input.id just as readily as input.instanceId, so leaving either one
-    // in place would hand the old, now-nonexistent id straight back
-    // instead of letting the server assign a fresh one.
-    await createInstancesRemote(selected.map(({ instanceId, id, ...instance }) => ({
-      ...instance,
-      landletId: targetLandletId,
-    })));
-    sessionStorage.setItem(START_MODE_KEY, 'build');
-    location.reload();
-  } catch (err) {
-    // #1362: a mid-chunk failure (createInstancesRemote's own #903
-    // succeededCount) already landed the earlier chunks server-side — a
-    // plain alert()-and-retry left selectedSavedInstanceIds covering the
-    // full original selection, so clicking Paste again resubmitted
-    // already-succeeded items too and created duplicates (ids are always
-    // stripped before submission, so the server just assigns them fresh
-    // ones). Dropping the already-succeeded prefix from the selection
-    // before re-enabling the button means a retry only resends what
-    // actually still needs it, same as syncBatchCreate's own use of this
-    // field.
-    const succeededCount = err.succeededCount ?? 0;
-    for (const instance of selected.slice(0, succeededCount)) {
-      selectedSavedInstanceIds.delete(instance.instanceId);
-    }
-    const remaining = selected.length - succeededCount;
-    alert(
-      succeededCount > 0
-        ? `Pasted ${succeededCount} item(s), but ${remaining} failed: ${err.message || ''}`.trim()
-        : (err.message || "Couldn't paste these items."),
-    );
-    layoutPreviewPasteBtn.disabled = false;
-  }
-});
-
-// Entered only via bootstrap() below (reached the same way Shop/Build/Sell
-// are — see START_MODE_KEY's own comment), never as an in-place transition
-// from another live mode, so there's no other mode's leftover scene state
-// to tear down here the way enterSellMode has to for a builder switching
-// tabs mid-session.
-async function enterLayoutPreviewMode() {
-  const savedLayoutId = sessionStorage.getItem(PREVIEW_SAVED_LAYOUT_ID_KEY);
-  sessionStorage.removeItem(PREVIEW_SAVED_LAYOUT_ID_KEY);
-  if (!savedLayoutId) {
-    // Reached with no id to actually preview (a stale/direct reload) —
-    // nothing to show, so land somewhere real instead of a blank scene.
-    sessionStorage.setItem(START_MODE_KEY, 'build');
-    location.reload();
-    return;
-  }
-
-  for (const id of SELL_HIDDEN_BUILDER_UI_IDS) {
-    const el = document.getElementById(id);
-    if (el) el.style.display = 'none';
-  }
-  layoutPreviewToolbarEl.classList.add('visible');
-  clearSelection();
-  translateControls.detach();
-  rotateControls.detach();
-  controls.enabled = false;
-  // #2552: shares Build's own tween/edge-pan/controls/debug/selection-
-  // highlight per-frame work (selection/highlight are both empty here —
-  // clearSelection() above and this mode's own no-highlighting design —
-  // so those two loops are harmless no-ops, same as they already are
-  // whenever Build itself has nothing selected).
-  registerModeFrameUpdate(buildModeFrameUpdate);
-
-  setBuilderId(await ensureBuilderIdentity());
-  if (!builderId) {
-    // N44: lands on showShopAccessGate's shared end state, not a full
-    // enterShopMode() call — see that function's own comment for why.
-    setCurrentMode('shop');
-    updateModeNavUI();
-    showShopAccessGate();
-    return;
-  }
-  // #1958: notifications/friends/DM stay reachable from this mode (see
-  // SELL_HIDDEN_BUILDER_UI_IDS's own comment below), same as Sell/Build --
-  // enterSellMode and bootstrap()'s own Build branch both refresh these
-  // three badges right after resolving builderId; this mode-entry path
-  // resolved it the same way but never did, leaving the bell/friends/DM
-  // badges stuck at their stale default while fully visible and clickable.
-  refreshNotificationsBadge();
-  refreshFriendsBadge();
-  refreshDmBadge();
-  populateLayoutPreviewPasteTarget();
-
-  let layout;
-  try {
-    const [catalog, loadedLayout] = await Promise.all([fetchCatalog(), fetchSavedLayout(savedLayoutId)]);
-    setActiveCatalog(catalog);
-    layout = loadedLayout;
-  } catch (err) {
-    layoutPreviewNameEl.textContent = err.message || 'Could not load this saved layout.';
-    return;
-  }
-  layoutPreviewNameEl.textContent = layout.name;
-  layoutPreviewInstances = layout.instances;
-
-  const ground = computeSavedLayoutGround(layout.instances);
-  const oldGeometry = landlet.geometry;
-  const halfWidth = ground.width / 2;
-  const halfDepth = ground.depth / 2;
-  const groundShape = new THREE.Shape([
-    new THREE.Vector2(-halfWidth, -halfDepth),
-    new THREE.Vector2(halfWidth, -halfDepth),
-    new THREE.Vector2(halfWidth, halfDepth),
-    new THREE.Vector2(-halfWidth, halfDepth),
-  ]);
-  landlet.geometry = new THREE.ShapeGeometry(groundShape);
-  normalizeGroundShapeUVs(landlet.geometry);
-  curveGroundGeometry(landlet.geometry);
-  oldGeometry.dispose();
-
-  // Frame the camera on the ground plane's own size right away, before
-  // waiting on each instance's (network-dependent) model load below — a
-  // camera still parked wherever Build mode left it, while the toolbar and
-  // name already read as "loaded", would show the wrong part of the world
-  // for as long as the slowest model takes to fetch.
-  const dist = Math.max(ground.width, ground.depth);
-  camera.position.set(dist * 0.75, -dist * 0.95, dist * 0.65);
-  camera.lookAt(0, 0, 0);
-  controls.target.set(0, 0, 0);
-  // The free-fly dolly-to-truck conversion (see the controls 'change'
-  // listener above, near lastKnownDistance's own declaration) compares the
-  // camera's distance-to-target against that stale module-level value on
-  // the very next 'change' event to infer a scroll/pinch dolly amount —
-  // without resyncing it here, this mode's own one-time camera jump reads
-  // as a huge dolly nothing actually did, and immediately flings
-  // controls.target far from the origin this preview is centered on.
-  lastKnownDistance = camera.position.distanceTo(controls.target);
-
-  const meshes = await Promise.all(layout.instances.map((instance) => createMeshForInstance({
-    ...instance,
-    x: instance.x - ground.centerX,
-    y: instance.y - ground.centerY,
-    z: instance.z - ground.centerZ,
-  })));
-  for (const mesh of meshes) {
-    if (!mesh) continue;
-    scene.add(mesh);
-    layoutPreviewMeshes.push(mesh);
-  }
-  // mesh.userData.instanceId is already set (to the same source instance
-  // id) by createMeshForInstance itself — savedInstanceId is just a
-  // same-value alias so this mode's own selection code reads its own
-  // clearly-named field rather than reaching into a field named for a
-  // concept (a live, ownable placed instance) that doesn't really apply
-  // to this read-only preview.
-  for (let i = 0; i < meshes.length; i++) {
-    if (meshes[i]) meshes[i].userData.savedInstanceId = layout.instances[i].instanceId;
-  }
-}
+// #2561: the faux-layout preview mode (layoutPreviewMeshes/Instances,
+// selectedSavedInstanceIds, marquee selection, paste, enterLayoutPreviewMode)
+// now lives in src/build/layoutPreview.js — see that module's own comment
+// for its dependency notes, including why it in turn imports several
+// Build-internal pieces back from this module (a temporary circular
+// import, same shape as account/menu.js's own, until build/scene.js's own
+// future extraction gives them a real home outside main.js).
 
 // #539/#540: makes Sell a genuine currentMode (the mode-architecture
 // plumbing #539 itself was closed without ever landing — see #540's own
@@ -17577,7 +16355,7 @@ const modeNavButtons = [...document.querySelectorAll('.mode-nav-btn')];
 // #1503: same gap as updateSellerViewToggleUI's own fix -- the .active
 // class alone communicated "current mode" visually but not to a screen
 // reader.
-function updateModeNavUI() {
+export function updateModeNavUI() {
   for (const btn of modeNavButtons) {
     const isActive = btn.dataset.mode === currentMode;
     btn.classList.toggle('active', isActive);

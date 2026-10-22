@@ -17,7 +17,7 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll } from 'vitest';
 import { describe, expect, it } from 'vitest';
-import { biomeAt } from './index.js';
+import { biomeAt } from './lib/world-generation.js';
 import { generateLandletRing } from './landGenerator.js';
 import { generateOrganicMosaic } from './organicLandGenerator.js';
 import { pointInPolygon } from './geometry.js';
