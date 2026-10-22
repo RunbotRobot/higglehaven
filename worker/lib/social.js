@@ -20,23 +20,26 @@ import {
   readJson, stringValue, finiteNumber, queryLimit, decodeCursor, encodeCursor,
 } from './validation.js';
 import { checkRateLimit } from './rate-limit.js';
-import { requireCurrentUser, assertOwner } from './auth.js';
+import { requireCurrentUser, assertOwner, requireSessionBuilder } from './auth.js';
 import { fireNotification } from './notifications.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
-// requireSessionBuilder/requireLandlet/assertReferenceExists/
-// labelsByBuilderId/ownedLandletsByBuilderId all stay in worker/index.js --
-// each is shared well outside the social domain (requireSessionBuilder
-// alone has dozens of call sites across nearly every handler in that file)
-// or, for labelsByBuilderId/ownedLandletsByBuilderId, is also needed by
-// exportSocialSection (handleExportData), which itself stays in
-// worker/index.js. See each symbol's own comment there for why it can't
-// move here instead. This is the same intentional, safe circular import
-// worker/lib/builder-profile.js and worker/lib/auth-routes.js already
-// establish -- safe because every cross-reference below is read only
-// inside an async handler function at request time, never at module
-// evaluation time.
+// requireLandlet/assertReferenceExists/labelsByBuilderId/
+// ownedLandletsByBuilderId all stay in worker/index.js -- each is shared
+// well outside the social domain, or, for labelsByBuilderId/
+// ownedLandletsByBuilderId, is also needed by exportSocialSection
+// (handleExportData), which itself stays in worker/index.js. See each
+// symbol's own comment there for why it can't move here instead. This is
+// the same intentional, safe circular import worker/lib/builder-profile.js
+// and worker/lib/auth-routes.js already establish -- safe because every
+// cross-reference below is read only inside an async handler function at
+// request time, never at module evaluation time.
+//
+// requireSessionBuilder itself now lives in ./auth.js (moved there by
+// #2543 after this module was first written -- see worker/lib/
+// reputation.js's own comment for the same note) and is imported directly
+// from there above, not re-imported back from index.js.
 import {
-  requireSessionBuilder, requireLandlet, assertReferenceExists,
+  requireLandlet, assertReferenceExists,
   labelsByBuilderId, ownedLandletsByBuilderId,
 } from '../index.js';
 
