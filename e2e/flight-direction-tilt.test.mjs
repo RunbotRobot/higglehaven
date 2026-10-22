@@ -32,9 +32,17 @@ await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', ti
 // for that convergence directly (rather than a fixed sleep guessing how
 // long it takes) via the same diagnostic snapshot the assertions below
 // already read.
+// #2639 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeout itself is widened to 60000ms for real headroom under
+// CI load.
 await page.waitForFunction(
   () => Math.abs(window.__shopAvatarOrientation?.pitchRad ?? 0) > 0.5,
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 
 // Drags the move joystick (left stick — walks/flies forward-back-strafe,
