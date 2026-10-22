@@ -221,7 +221,13 @@ import { refreshNotificationsBadge, refreshFriendsBadge, refreshDmBadge } from '
 // — see that module's own comment for its dependency notes.
 import { enterLayoutPreviewMode } from './build/layoutPreview.js';
 
-let activeBundleTab = 'mine';
+// Exported for src/catalog/picker.js (#2558) -- its own renderBundlePicker/
+// currentBundleTabList/bundle-tab-click handler need this same state; a
+// setter since an ES import binding is read-only from the importing side.
+export let activeBundleTab = 'mine';
+export function setActiveBundleTab(tab) {
+  activeBundleTab = tab;
+}
 
 // Shop, Build, and Sell are the three peer top-level views (#mode-nav in
 // index.html) — genuine currentMode values now (#540 gave Sell the real
@@ -1625,50 +1631,6 @@ function setProductInfo(text) {
 }
 productInfoEl.hidden = true;
 
-// Add-item catalog picker: a toggled panel listing every activeCatalog
-// template as a grid of thumbnails with the name below each, rather than a
-// plain list of name-only buttons — much faster to recognize a product by
-// its actual shape/color than by reading through a list of names. Tapping
-// one doesn't place anything yet — it arms placement mode (see
-// enterPlacementMode) so the next tap in the world, wherever that is, is
-// where the item actually goes. Tiles are (re)built in bootstrap() once
-// activeCatalog is settled, since the API's catalog isn't known until that
-// fetch resolves.
-const addItemBtn = document.getElementById('add-item-btn');
-const catalogPickerEl = document.getElementById('catalog-picker');
-const catalogPickerGridEl = document.getElementById('catalog-picker-grid');
-const catalogPickerCloseBtn = document.getElementById('catalog-picker-close-btn');
-const catalogSearchInputEl = document.getElementById('catalog-search-input');
-const catalogPickerEmptyEl = document.getElementById('catalog-picker-empty');
-const catalogPickerEmptyQueryEl = document.getElementById('catalog-picker-empty-query');
-const bundlePickerSectionEl = document.getElementById('bundle-picker-section');
-const bundlePickerGridEl = document.getElementById('bundle-picker-grid');
-const bundlePickerEmptyEl = document.getElementById('bundle-picker-empty');
-const bundleTabButtons = [...document.querySelectorAll('.bundle-tab-btn')];
-
-// #1082 (owner's own call): one search box covering both the product grid
-// above and the bundle section below, with this scope toggle picking which
-// section(s) it actually applies to — 'both' is the default so existing
-// "search products" behavior is unchanged until a builder deliberately
-// narrows it.
-const searchScopeButtons = [...document.querySelectorAll('.search-scope-btn')];
-const catalogSearchScopeTabsEl = document.getElementById('catalog-search-scope-tabs');
-let catalogSearchScope = 'both'; // 'products' | 'bundles' | 'both'
-
-// #329/#330: "Prompt mode" — a second way into the exact same
-// enterPlacementMode({type:'template',...}) flow manual mode's own tiles
-// use above, just arrived at via a generated concept image and a
-// similarity search instead of browsing/searching the catalog directly.
-const catalogModeTabButtons = [...document.querySelectorAll('.catalog-mode-tab-btn')];
-const catalogManualModeEl = document.getElementById('catalog-manual-mode');
-const catalogPromptModeEl = document.getElementById('catalog-prompt-mode');
-const promptModeInputEl = document.getElementById('prompt-mode-input');
-const promptModeGenerateBtn = document.getElementById('prompt-mode-generate-btn');
-const promptModeStatusEl = document.getElementById('prompt-mode-status');
-const promptModeGridEl = document.getElementById('prompt-mode-grid');
-const promptModeEmptyEl = document.getElementById('prompt-mode-empty');
-let activeCatalogMode = 'manual';
-
 // A template's appearance never changes after creation (there's no edit
 // flow for its color), so a thumbnail rendered once this session is good
 // for the rest of it — keyed by templateId rather than re-rendered every
@@ -1679,7 +1641,11 @@ let activeCatalogMode = 'manual';
 // its own success handler deletes this template's cache entry before
 // rebuilding the picker, so this cache would otherwise keep serving a
 // stale pre-resize thumbnail for the rest of the session.
-const catalogThumbnailCache = new Map();
+// Exported for src/catalog/picker.js (#2558) -- its own
+// buildCatalogTemplateTile/buildCatalogPickerButtons read this same cache
+// (also still used directly here, by Sell mode's own product-tile
+// rendering and Save Size's cache-invalidation on resize).
+export const catalogThumbnailCache = new Map();
 // #327: the cheap stand-in visual embedding computed alongside each
 // thumbnail render (computeThumbnailEmbedding below) — kept as its own
 // map, not folded into catalogThumbnailCache's value, so that cache's
@@ -1702,7 +1668,10 @@ let catalogThumbnailQueue = Promise.resolve();
 // real render (which needs an async model load for anything with a
 // modelUrl) is still in flight — closer to the real product than a blank
 // or generic placeholder icon would be.
-function solidColorDataUrl(color) {
+// Exported for src/catalog/picker.js (#2558) -- its own
+// buildCatalogTemplateTile needs this same fallback swatch (also still
+// used directly here, by Sell mode's own product-tile rendering).
+export function solidColorDataUrl(color) {
   const canvas = document.createElement('canvas');
   canvas.width = 1;
   canvas.height = 1;
@@ -1776,7 +1745,10 @@ const THUMBNAIL_EMBEDDING_GRID = 8;
 // thumbnail, or an <img> for #328's downloaded concept image below) so
 // prompt mode's search query is computed the exact same way a product's own
 // stored embedding was, rather than a second, subtly different formula.
-function computeThumbnailEmbedding(source) {
+// Exported for src/catalog/picker.js (#2558) -- its own prompt-mode search
+// needs this same embedding formula on the generated concept image, so the
+// query is computed identically to a product's own stored embedding.
+export function computeThumbnailEmbedding(source) {
   const grid = document.createElement('canvas');
   grid.width = THUMBNAIL_EMBEDDING_GRID;
   grid.height = THUMBNAIL_EMBEDDING_GRID;
@@ -1790,7 +1762,9 @@ function computeThumbnailEmbedding(source) {
   return embedding;
 }
 
-function renderCatalogThumbnail(template) {
+// Exported for src/catalog/picker.js (#2558) -- its own
+// buildCatalogPickerButtons needs this same render-or-cached-fetch call.
+export function renderCatalogThumbnail(template) {
   if (catalogThumbnailCache.has(template.templateId)) {
     return Promise.resolve(catalogThumbnailCache.get(template.templateId));
   }
@@ -1836,7 +1810,9 @@ function renderCatalogThumbnail(template) {
 // above, just keyed per templateId since persistCatalogThumbnail calls for
 // different templates run independently and shouldn't block each other.
 const catalogThumbnailPersistTokens = new Map(); // templateId -> generation of the most recently started call
-async function persistCatalogThumbnail(template) {
+// Exported for src/catalog/upload.js (#2557) -- its own
+// handleUploadDimensionsStep needs this same fire-and-forget call.
+export async function persistCatalogThumbnail(template) {
   const generation = (catalogThumbnailPersistTokens.get(template.templateId) || 0) + 1;
   catalogThumbnailPersistTokens.set(template.templateId, generation);
   try {
@@ -1854,1404 +1830,44 @@ async function persistCatalogThumbnail(template) {
   }
 }
 
-// Client-side name filtering (see #catalog-search-input's own CSS comment)
-// — toggles each already-built tile's `hidden` attribute rather than
-// re-querying the catalog or touching the thumbnail cache, since neither a
-// template's name nor its appearance changes mid-session. Reads whatever
-// buildCatalogPickerButtons last stamped into each tile's dataset.name, so
-// it's safe to call any time after the grid exists, including right after
-// a rebuild while the picker itself is closed.
-//
-// #1082: the whole product grid (not just its tiles) hides outright when
-// catalogSearchScope narrows the search to Bundles only — the empty-state
-// message is product-specific wording ("No products match...") so it's
-// suppressed too rather than shown for an unrelated, deliberately-hidden
-// section.
-function filterCatalogTiles() {
-  const showProducts = catalogSearchScope !== 'bundles';
-  catalogPickerGridEl.hidden = !showProducts;
-  const query = catalogSearchInputEl.value.trim().toLowerCase();
-  let anyVisible = false;
-  if (showProducts) {
-    for (const tile of catalogPickerGridEl.children) {
-      const matches = !query || tile.dataset.name.includes(query);
-      tile.hidden = !matches;
-      if (matches) anyVisible = true;
-    }
-  }
-  catalogPickerEmptyEl.hidden = !showProducts || anyVisible || !query;
-  catalogPickerEmptyQueryEl.textContent = catalogSearchInputEl.value.trim();
-}
+// #2557: the Upload-model modal (shared between Build's catalog picker and
+// Sell's product list) now lives in src/catalog/upload.js — see that
+// module's own comment for its dependency notes, including why it in turn
+// imports several Build/Sell-internal pieces back from this module (a
+// temporary circular import, same shape claim/flow.js's and account/auth.js's
+// own already use). dimensionsChanged is imported back from it here because
+// the Seller modal's own "Save Size" resize handler below needs this exact
+// same check, not just this modal's own handleUploadDimensionsStep.
+import { dimensionsChanged } from './catalog/upload.js';
+
+// #2558: the catalog/bundle picker modal (Build's add-item flow, "prompt
+// mode" concept-image search, and the bundle picker's own tabs/rename/
+// share/delete) now lives in src/catalog/picker.js — see that module's own
+// comment for its dependency notes, including why it in turn imports
+// several Build-internal pieces back from this module (a temporary
+// circular import, same shape the other extracted modules above already
+// use). addItemBtn/buildCatalogPickerButtons/closeCatalogPicker/
+// openCatalogPickerForPick/renderBundlePicker/bumpBundlePickerLoadToken are
+// imported back from it here because main.js's own Backup Chain panel and
+// Save Bundle/bundle-list-refresh call sites (not yet extracted) still
+// need them.
+import {
+  addItemBtn, buildCatalogPickerButtons, closeCatalogPicker,
+  openCatalogPickerForPick, renderBundlePicker,
+  bundlePickerLoadToken, bumpBundlePickerLoadToken,
+} from './catalog/picker.js';
 
-// #1082: re-applies both the product filter and the bundle filter/visibility
-// together — the one handler for anything that can change what the search
-// box's scope covers (typing, or switching the scope toggle itself).
-function updateCatalogSearchPanel() {
-  filterCatalogTiles();
-  renderBundlePicker();
-}
-catalogSearchInputEl.addEventListener('input', updateCatalogSearchPanel);
-for (const btn of searchScopeButtons) {
-  btn.addEventListener('click', () => {
-    catalogSearchScope = btn.dataset.searchScope;
-    for (const b of searchScopeButtons) {
-      b.classList.toggle('active', b === btn);
-      b.setAttribute('aria-pressed', String(b === btn));
-    }
-    updateCatalogSearchPanel();
-  });
-}
-
-// Shared by manual mode's own grid below and prompt mode's search-result
-// grid (#329/#330) — both list catalog template objects and both arm the
-// exact same enterPlacementMode({type:'template',...}) flow on click, so
-// neither needs its own copy of this tile's look or click behavior.
-function buildCatalogTemplateTile(template) {
-  const tile = document.createElement('button');
-  tile.type = 'button';
-  tile.className = 'catalog-tile';
-  tile.dataset.name = template.name.toLowerCase();
-
-  const thumb = document.createElement('img');
-  thumb.className = 'catalog-thumb';
-  thumb.alt = '';
-  // #327: a persisted image_url (once one exists) is a real, already-
-  // rendered image straight from storage — cheaper than the client
-  // re-rendering this template's full GLTF model just to redraw the
-  // same picture the live render already produced once before. The
-  // in-session cache still wins when both exist since it's already in
-  // memory (no network round trip) and, right after a fresh upload,
-  // may be more current than a not-yet-finished persistCatalogThumbnail
-  // call.
-  thumb.src = catalogThumbnailCache.get(template.templateId) ?? template.imageUrl ?? solidColorDataUrl(template.color);
-  // The ?? chain above only falls back to a flat-color swatch when
-  // imageUrl is itself missing — it never fires if imageUrl is present
-  // but the actual request for it fails (a 404 on a since-deleted R2
-  // object, a transient network error, ...), which otherwise leaves a
-  // permanently broken-image icon in the tile instead of the same
-  // on-brand placeholder the ?? chain already has on hand. onerror
-  // clears itself before swapping in the data: URL fallback so a
-  // (never actually expected) failure to render *that* can't loop.
-  thumb.onerror = () => {
-    thumb.onerror = null;
-    thumb.src = solidColorDataUrl(template.color);
-  };
-  tile.appendChild(thumb);
-
-  const name = document.createElement('span');
-  name.className = 'catalog-tile-name';
-  name.textContent = template.name;
-  tile.appendChild(name);
-
-  // #1951: stockQuantity is already in every template object #1948 put
-  // there (null means unlimited, the default/common case -- no indicator
-  // at all, so an ordinary tile stays uncluttered). A finite, nonzero
-  // value is the real signal the issue asks for: enough to let a builder
-  // weigh risk before placing (a one-off "antique lamp" vs. a bottomless
-  // "cottage bricks" restock) without needing a sales-velocity/"days
-  // remaining" estimate -- that math doesn't exist anywhere in this
-  // codebase yet, and #1947's own tracking issue already flags it as an
-  // undecided owner question (what trailing window, what to show with no
-  // sales history), so it's deliberately not built here.
-  if (template.stockQuantity != null) {
-    const stock = document.createElement('span');
-    stock.className = 'catalog-tile-stock';
-    if (template.stockQuantity === 0) {
-      stock.classList.add('catalog-tile-stock-sold-out');
-      stock.textContent = 'Sold out';
-    } else {
-      stock.textContent = `${template.stockQuantity} left`;
-    }
-    tile.appendChild(stock);
-  }
-
-  tile.addEventListener('click', () => {
-    // #2051: when set, the Backup Chain panel's "+ Add Backup" wants the
-    // chosen template handed back to it instead of an ordinary world
-    // placement -- captured before closeCatalogPicker() below, which
-    // clears it as part of leaving pick mode.
-    const onPick = catalogPickerPickCallback;
-    closeCatalogPicker();
-    if (onPick) {
-      onPick(template);
-      return;
-    }
-    enterPlacementMode({ type: 'template', template }, `Tap a spot to place ${template.name}`);
-  });
-  return { tile, thumb };
-}
-
-function buildCatalogPickerButtons() {
-  catalogPickerGridEl.replaceChildren();
-  for (const template of activeCatalog) {
-    const { tile, thumb } = buildCatalogTemplateTile(template);
-    catalogPickerGridEl.appendChild(tile);
-
-    if (!catalogThumbnailCache.has(template.templateId) && !template.imageUrl) {
-      renderCatalogThumbnail(template).then((dataUrl) => {
-        if (dataUrl) thumb.src = dataUrl;
-      });
-    }
-  }
-  filterCatalogTiles();
-}
-
-// #329/#330: "Prompt mode" — a builder types a free-text description, an
-// AI-generated concept image stands in for a product photo, and the
-// catalog's own stored embeddings (see uploadCatalogTemplateThumbnail
-// above) are searched for the closest visual matches. A hit is placed the
-// exact same way a manual-mode tile is (buildCatalogTemplateTile above)
-// — this mode only changes how candidates are *found*, not how one ends
-// up in the world.
-function renderCatalogMode() {
-  const promptActive = activeCatalogMode === 'prompt';
-  catalogManualModeEl.hidden = promptActive;
-  catalogPromptModeEl.hidden = !promptActive;
-  for (const btn of catalogModeTabButtons) {
-    const isActive = btn.dataset.catalogMode === activeCatalogMode;
-    btn.classList.toggle('active', isActive);
-    btn.setAttribute('aria-pressed', String(isActive));
-  }
-}
-for (const btn of catalogModeTabButtons) {
-  btn.addEventListener('click', () => {
-    activeCatalogMode = btn.dataset.catalogMode;
-    renderCatalogMode();
-  });
-}
-// #1965: unlike its sibling toggle groups in this same modal (e.g.
-// searchScopeButtons, re-synced every time the picker opens via
-// updateCatalogSearchPanel), renderCatalogMode() was previously only ever
-// invoked from its own click handler above -- so aria-pressed would never
-// get set at all until a builder's first click on either tab. One eager
-// call here gives both buttons a correct initial aria-pressed from page
-// load, matching the already-correct initial .active/hidden state the
-// static markup provides.
-renderCatalogMode();
-
-function setPromptModeStatus(text) {
-  promptModeStatusEl.textContent = text;
-  promptModeStatusEl.hidden = !text;
-}
-
-function renderPromptModeResults(templates) {
-  promptModeGridEl.replaceChildren();
-  promptModeEmptyEl.hidden = templates.length > 0;
-  for (const template of templates) {
-    const { tile } = buildCatalogTemplateTile(template);
-    promptModeGridEl.appendChild(tile);
-  }
-}
-
-// Loads a same-origin image URL (the concept-image endpoint's own
-// response, always a /uploads/... path) into a real <img> so
-// computeThumbnailEmbedding can drawImage it the same way it draws a
-// just-rendered catalog thumbnail's canvas.
-function loadImageElement(src) {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('Could not load the generated concept image.'));
-    img.src = src;
-  });
-}
-
-promptModeGenerateBtn.addEventListener('click', async () => {
-  const prompt = promptModeInputEl.value.trim();
-  if (!prompt) {
-    setPromptModeStatus('Describe what you’re looking for first.');
-    return;
-  }
-  promptModeGenerateBtn.disabled = true;
-  promptModeEmptyEl.hidden = true;
-  try {
-    setPromptModeStatus('Generating a concept image…');
-    const imageUrl = await generateConceptImage(prompt);
-    setPromptModeStatus('Finding similar products…');
-    const image = await loadImageElement(imageUrl);
-    const embedding = computeThumbnailEmbedding(image);
-    const templates = await searchCatalogBySimilarity(embedding, 20);
-    renderPromptModeResults(templates);
-    setPromptModeStatus('');
-  } catch (err) {
-    console.warn('Prompt mode search failed:', err);
-    // #2440: previously a generic "Something went wrong. Please try again."
-    setPromptModeStatus(err.message || "Couldn't find similar products for that — please try again in a moment.");
-  } finally {
-    promptModeGenerateBtn.disabled = false;
-  }
-});
-
-// Bundles (see migrations/0039_bundles.sql, 0040_bundle_sharing.sql) — no
-// thumbnail, just a name and item count; tapping one arms placement mode
-// with exactly the same {type:'clipboard', items} shape a Paste does, so
-// handlePlacementClick's existing clipboard-placement path
-// (placeClipboardItems) needs no changes to place a bundle.
-//
-// The whole section stays hidden until either list has something — a
-// builder who's never saved a bundle themselves but whose neighbors have
-// shared some still gets to discover the Community tab. Delete (and the
-// Shared/Private toggle) only ever show on a tile this builder actually
-// owns — a shared bundle is still owned by whoever created it (see
-// handleBundles' own comment in worker/index.js); the backend does no
-// ownership check, so this is the only place that's actually enforced.
-//
-// #1082: also hidden outright when catalogSearchScope narrows the search
-// to Products only — same reasoning as filterCatalogTiles hiding the
-// product grid for the Bundles-only case, just the other section.
-function currentBundleTabList() {
-  return activeBundleTab === 'mine' ? myBundles : communityBundles;
-}
-
-// #1349: the rename and share-toggle handlers below each do their own
-// updateBundle -> refetch-both-lists -> renderBundlePicker() round trip
-// against this same shared myBundles/communityBundles state — without a
-// shared token, a rename and a share-toggle fired close together could
-// have the slower refetch land last and redraw from a snapshot that's
-// already stale relative to the other's already-applied change. Same
-// monotonic-token fix as friendsLoadToken/notificationsLoadToken.
-let bundlePickerLoadToken = 0;
-
-function renderBundlePicker() {
-  const hasAnyBundles = myBundles.length > 0 || communityBundles.length > 0;
-  bundlePickerSectionEl.hidden = catalogSearchScope === 'products' || !hasAnyBundles;
-  if (bundlePickerSectionEl.hidden) return;
-
-  for (const btn of bundleTabButtons) {
-    btn.classList.toggle('active', btn.dataset.bundleTab === activeBundleTab);
-    btn.setAttribute('aria-pressed', String(btn.dataset.bundleTab === activeBundleTab));
-  }
-
-  const bundles = currentBundleTabList();
-  bundlePickerGridEl.replaceChildren();
-  bundlePickerEmptyEl.hidden = bundles.length > 0;
-  if (bundles.length === 0) {
-    bundlePickerEmptyEl.textContent = activeBundleTab === 'mine'
-      ? "You haven't saved any bundles yet — select items and use Save Bundle."
-      : 'No one has shared a bundle yet.';
-    return;
-  }
-
-  for (const bundle of bundles) {
-    const tile = document.createElement('div');
-    tile.className = 'bundle-tile';
-    // #1082: read by filterBundleTiles below, same dataset.name idiom
-    // buildCatalogTemplateTile already uses for the product grid.
-    tile.dataset.name = bundle.name.toLowerCase();
-    const owned = bundle.builderId === builderId;
-
-    const placeBtn = document.createElement('button');
-    placeBtn.type = 'button';
-    placeBtn.className = 'bundle-tile-place';
-    const name = document.createElement('span');
-    name.className = 'bundle-tile-name';
-    name.textContent = bundle.name;
-    const count = document.createElement('span');
-    count.className = 'bundle-tile-count';
-    count.textContent = `${bundle.items.length} item${bundle.items.length === 1 ? '' : 's'}`;
-    placeBtn.append(name, count);
-    placeBtn.addEventListener('click', () => {
-      closeCatalogPicker();
-      enterPlacementMode({ type: 'clipboard', items: bundle.items }, `Tap a spot to place "${bundle.name}"`);
-    });
-    tile.appendChild(placeBtn);
-
-    if (owned) {
-      const renameBtn = document.createElement('button');
-      renameBtn.type = 'button';
-      renameBtn.className = 'bundle-tile-rename';
-      renameBtn.textContent = '✎';
-      renameBtn.setAttribute('aria-label', `Rename bundle "${bundle.name}"`);
-      renameBtn.addEventListener('click', async (event) => {
-        event.stopPropagation();
-        const next = prompt('Rename this bundle', bundle.name);
-        if (!next || !next.trim() || next.trim() === bundle.name) return;
-        if (next.trim().length > 100) {
-          alert('Keep it to 100 characters or fewer.');
-          return;
-        }
-        renameBtn.disabled = true;
-        const myLoadToken = ++bundlePickerLoadToken;
-        try {
-          const updated = await updateBundle(bundle.bundleId, { name: next.trim() });
-          Object.assign(bundle, updated);
-          // #435: a shared bundle intentionally exists as two separate JS
-          // objects, one per tab's own fetch (myBundles/communityBundles)
-          // — the Object.assign above only ever patches whichever tab's
-          // copy this rename was triggered from, leaving the other tab's
-          // tile showing the stale name. Refetching both, the same fix
-          // the share-toggle handler below already uses for the same
-          // divergence risk, keeps both tabs' copies in sync.
-          const [freshMine, freshShared] = await Promise.all([fetchBundles(), fetchSharedBundles()]);
-          if (myLoadToken !== bundlePickerLoadToken) return; // superseded while loading — a newer rename/share-toggle owns the picker now
-          setMyBundles(freshMine);
-          setCommunityBundles(freshShared);
-          renderBundlePicker();
-        } catch (err) {
-          alert(err.message || 'Could not rename this bundle.');
-          renameBtn.disabled = false;
-        }
-      });
-      tile.appendChild(renameBtn);
-
-      const shareToggleBtn = document.createElement('button');
-      shareToggleBtn.type = 'button';
-      // Own class, not shared with .bundle-tile-delete despite the same
-      // look — a page.click('.bundle-tile-delete') would otherwise hit
-      // whichever of the two buttons happens to render first in the DOM
-      // instead of the one actually intended.
-      shareToggleBtn.className = 'bundle-tile-share';
-      shareToggleBtn.textContent = bundle.shared ? '⇩' : '⇧';
-      shareToggleBtn.setAttribute(
-        'aria-label',
-        bundle.shared ? `Stop sharing "${bundle.name}"` : `Share "${bundle.name}" to the Community tab`,
-      );
-      shareToggleBtn.addEventListener('click', async (event) => {
-        event.stopPropagation();
-        shareToggleBtn.disabled = true;
-        const myLoadToken = ++bundlePickerLoadToken;
-        try {
-          const updated = await updateBundle(bundle.bundleId, { shared: !bundle.shared });
-          Object.assign(bundle, updated);
-          // Sharing/unsharing changes which list(s) this bundle belongs in
-          // — simplest to just re-fetch both rather than hand-patch
-          // communityBundles for an add/remove that only affects this one
-          // tab's membership.
-          const [freshMine, freshShared] = await Promise.all([fetchBundles(), fetchSharedBundles()]);
-          if (myLoadToken !== bundlePickerLoadToken) return; // superseded while loading — a newer rename/share-toggle owns the picker now
-          setMyBundles(freshMine);
-          setCommunityBundles(freshShared);
-          renderBundlePicker();
-        } catch (err) {
-          alert(err.message || 'Could not update this bundle\'s sharing.');
-          shareToggleBtn.disabled = false;
-        }
-      });
-      tile.appendChild(shareToggleBtn);
-
-      const deleteTileBtn = document.createElement('button');
-      deleteTileBtn.type = 'button';
-      deleteTileBtn.className = 'bundle-tile-delete';
-      deleteTileBtn.setAttribute('aria-label', `Delete bundle "${bundle.name}"`);
-      deleteTileBtn.textContent = '×';
-      deleteTileBtn.addEventListener('click', async (event) => {
-        event.stopPropagation();
-        if (!confirm(`Delete bundle "${bundle.name}"? This can't be undone.`)) return;
-        // #1787: same bundlePickerLoadToken guard as the rename/share-toggle
-        // handlers above — without it, a slower concurrent rename/share-
-        // toggle on a different tile can resolve after this delete and
-        // overwrite myBundles/communityBundles with a refetched snapshot
-        // that still contains the bundle this handler just deleted.
-        const myLoadToken = ++bundlePickerLoadToken;
-        try {
-          await deleteBundle(bundle.bundleId);
-          if (myLoadToken !== bundlePickerLoadToken) return; // superseded while loading — a newer rename/share-toggle owns the picker now
-          setMyBundles(myBundles.filter((b) => b.bundleId !== bundle.bundleId));
-          setCommunityBundles(communityBundles.filter((b) => b.bundleId !== bundle.bundleId));
-          renderBundlePicker();
-        } catch (err) {
-          alert(err.message || 'Could not delete this bundle.');
-        }
-      });
-      tile.appendChild(deleteTileBtn);
-    }
-
-    bundlePickerGridEl.appendChild(tile);
-  }
-
-  filterBundleTiles();
-}
-
-// #1082: applies the shared search box's query to the just-built bundle
-// tiles, same hidden-toggling idiom filterCatalogTiles uses for products.
-// Only reachable once renderBundlePicker has already confirmed the
-// section isn't hidden and the active tab has at least one bundle, so
-// bundlePickerGridEl always has real tiles here — the "no bundles in this
-// tab at all" empty-state text renderBundlePicker sets above is left
-// alone in that case rather than this function ever running against an
-// empty grid.
-function filterBundleTiles() {
-  const query = catalogSearchInputEl.value.trim().toLowerCase();
-  let anyVisible = false;
-  for (const tile of bundlePickerGridEl.children) {
-    const matches = !query || tile.dataset.name.includes(query);
-    tile.hidden = !matches;
-    if (matches) anyVisible = true;
-  }
-  if (query && !anyVisible) {
-    bundlePickerEmptyEl.hidden = false;
-    bundlePickerEmptyEl.textContent = `No bundles match "${catalogSearchInputEl.value.trim()}".`;
-  }
-}
-for (const btn of bundleTabButtons) {
-  btn.addEventListener('click', () => {
-    activeBundleTab = btn.dataset.bundleTab;
-    renderBundlePicker();
-  });
-}
-// #1554: shared modal keyboard accessibility (#1316) missed this panel —
-// open/close now go through openModalA11y/closeModalA11y like every other
-// real modal dialog in this file.
-//
-// #2051: when the picker was opened via openCatalogPickerForPick (the
-// Backup Chain panel's "+ Add Backup" button), closing it by any route —
-// a tile pick, the close button, Escape, or a backdrop click via
-// openModalA11y — must also leave pick mode: clear the callbacks, restore
-// the ordinary scope-tab row that mode hides, drop the low-opacity
-// reference mesh it showed, and (via the stored "done" callback) hand
-// control back to whatever opened the picker for a pick. One choke point
-// here rather than duplicating this at every close trigger. onDone fires
-// exactly once per pick session, whether the picker closed via an actual
-// pick (see buildCatalogTemplateTile's tile click, which calls
-// closeCatalogPicker before invoking the picked template's own callback)
-// or a plain cancel — openModalA11y only ever tracks one modal at a time
-// (see its own comment above), so the Backup Chain panel closes itself
-// before opening this picker and relies on onDone to reopen+re-render
-// itself afterward, rather than both staying visible at once.
-let catalogPickerPickCallback = null;
-let catalogPickerPickDoneCallback = null;
-function closeCatalogPicker() {
-  catalogPickerEl.classList.remove('visible');
-  closeModalA11y(catalogPickerEl);
-  if (catalogPickerPickCallback) {
-    catalogPickerPickCallback = null;
-    const onDone = catalogPickerPickDoneCallback;
-    catalogPickerPickDoneCallback = null;
-    catalogSearchScopeTabsEl.hidden = false;
-    hideBackupReferenceMesh();
-    if (onDone) onDone();
-  }
-}
-// A backup must be a single catalog product, not a bundle — forces
-// Products-only scope and hides the scope-tab row for the duration of the
-// pick so there's nothing tappable that wouldn't do anything (a bundle
-// tile calls its own multi-item placement flow, never this callback).
-// Reuses the exact same picker UI/search/thumbnails as the ordinary
-// "+ Add Item" flow below rather than building a second one.
-function openCatalogPickerForPick(onPick, onDone) {
-  catalogPickerPickCallback = onPick;
-  catalogPickerPickDoneCallback = onDone;
-  catalogPickerEl.classList.add('visible');
-  catalogSearchInputEl.value = '';
-  catalogSearchScope = 'products';
-  for (const b of searchScopeButtons) {
-    b.classList.toggle('active', b.dataset.searchScope === 'products');
-    b.setAttribute('aria-pressed', String(b.dataset.searchScope === 'products'));
-  }
-  catalogSearchScopeTabsEl.hidden = true;
-  updateCatalogSearchPanel();
-  openModalA11y(catalogPickerEl, closeCatalogPicker);
-}
-addItemBtn.addEventListener('click', () => {
-  if (pendingPlacement) {
-    cancelPlacementMode();
-    return;
-  }
-  const opening = !catalogPickerEl.classList.contains('visible');
-  if (!opening) {
-    closeCatalogPicker();
-    return;
-  }
-  catalogPickerEl.classList.add('visible');
-  // Fresh search each time the picker opens, rather than carrying over
-  // whatever was last typed (or last scoped to) — the same "reset on
-  // open" pattern the upload modal's own file step uses. #1082 extends
-  // this to the scope toggle: reopening with Bundles-only still
-  // selected would otherwise leave the product grid silently hidden
-  // with no query typed to explain why.
-  catalogSearchInputEl.value = '';
-  catalogSearchScope = 'both';
-  for (const b of searchScopeButtons) {
-    b.classList.toggle('active', b.dataset.searchScope === 'both');
-    b.setAttribute('aria-pressed', String(b.dataset.searchScope === 'both'));
-  }
-  updateCatalogSearchPanel();
-  openModalA11y(catalogPickerEl, closeCatalogPicker);
-});
-catalogPickerCloseBtn.addEventListener('click', closeCatalogPicker);
-
-// Custom product upload: a builder's own model (photogrammetry scan,
-// etc.) becomes a real catalog_templates row via two independent backend
-// calls — POST /api/models to get bytes into storage and back a modelUrl,
-// then the ordinary POST /api/catalog to register a product using it.
-// This only works with the real backend reachable — creating a new
-// persistent catalog entry has nowhere to live in offline/fallback mode,
-// since catalog.js is a static file, not a runtime data store.
-// Generic modal a11y stack (focus move-in/restore, Tab trap, Escape-to-close)
-// lives in src/ui/modal.js — see that file's own #1316 comment.
-
-const uploadModalEl = document.getElementById('upload-modal');
-const uploadModalTitleEl = document.getElementById('upload-modal-title');
-const uploadStepFileEl = document.getElementById('upload-step-file');
-const uploadStepDimensionsEl = document.getElementById('upload-step-dimensions');
-const uploadDimensionsPreviewEl = document.getElementById('upload-dimensions-preview');
-const uploadAnimationsDetectedEl = document.getElementById('upload-animations-detected');
-const uploadNameInput = document.getElementById('upload-name');
-const uploadPriceInput = document.getElementById('upload-price');
-const uploadDigitalGoodCheckbox = document.getElementById('upload-digital-good-checkbox');
-const uploadDigitalGoodDisclaimerLabel = document.getElementById('upload-digital-good-disclaimer-label');
-const uploadDigitalGoodDisclaimerSelect = document.getElementById('upload-digital-good-disclaimer-select');
-const uploadAvatarCategoryCheckbox = document.getElementById('upload-avatar-category-checkbox');
-const uploadAnimationCategoryCheckbox = document.getElementById('upload-animation-category-checkbox');
-
-// #1163 (sub-issue of #1161): a listing is "avatar" or "animation" or
-// neither, never both — checking one clears the other rather than
-// letting handleUploadDimensionsStep's own category pick silently favor
-// whichever it happens to check first.
-uploadAvatarCategoryCheckbox.addEventListener('change', () => {
-  if (uploadAvatarCategoryCheckbox.checked) uploadAnimationCategoryCheckbox.checked = false;
-});
-uploadAnimationCategoryCheckbox.addEventListener('change', () => {
-  if (uploadAnimationCategoryCheckbox.checked) uploadAvatarCategoryCheckbox.checked = false;
-});
-
-uploadDigitalGoodCheckbox.addEventListener('change', () => {
-  uploadDigitalGoodDisclaimerLabel.hidden = !uploadDigitalGoodCheckbox.checked;
-});
-// N50: reformat to "$123.45" once the seller leaves the field — leave a
-// blank or not-yet-valid value alone so the submit-time check below still
-// catches it and reports the same error message.
-uploadPriceInput.addEventListener('blur', () => {
-  const dollars = parsePriceInputDollars(uploadPriceInput.value);
-  if (Number.isFinite(dollars) && dollars >= 0) {
-    uploadPriceInput.value = formatDollarsForPriceInput(dollars);
-  }
-});
-const uploadFileInput = document.getElementById('upload-file-input');
-const uploadFileFieldRowEl = document.getElementById('upload-file-field-row');
-const uploadHintEl = document.getElementById('upload-hint');
-const uploadHintBtn = document.getElementById('upload-hint-btn');
-const uploadModeVideoBtn = document.getElementById('upload-mode-video-btn');
-const uploadModeFileBtn = document.getElementById('upload-mode-file-btn');
-const uploadVideoSectionEl = document.getElementById('upload-video-section');
-const uploadVideoCreditsEl = document.getElementById('upload-video-credits');
-const uploadVideoInput = document.getElementById('upload-video-input');
-const uploadRetryVideoBtn = document.getElementById('upload-retry-video-btn');
-const uploadStatusEl = document.getElementById('upload-status');
-const uploadCancelBtn = document.getElementById('upload-cancel-btn');
-const uploadSubmitBtn = document.getElementById('upload-submit-btn');
-const uploadModelBtn = document.getElementById('upload-model-btn');
-const uploadDimensionInputEls = {
-  x: document.querySelector('.upload-dimension-input[data-axis="x"]'),
-  y: document.querySelector('.upload-dimension-input[data-axis="y"]'),
-  z: document.querySelector('.upload-dimension-input[data-axis="z"]'),
-};
-const uploadDimensionUnitEls = [...document.querySelectorAll('.upload-dimension-unit')];
-
-// Upload is a two-step wizard sharing one modal shell: 'file' (name + pick
-// a .glb) then 'dimensions' (confirm/adjust the measured real-world size
-// before the product is actually created). uploadModelUrl/
-// uploadOriginalDimensions hold what step 'file' produced, since step
-// 'dimensions' needs them and the R2 upload shouldn't happen twice.
-let uploadStep = 'file';
-let uploadModelUrl = null;
-// #540: the seller's own "faux lándlet" 3D array paginates by a cumulative
-// model-file-size cap — this is what step 'dimensions' passes through to
-// createCatalogTemplate as modelSizeBytes, alongside uploadModelUrl.
-let uploadModelSizeBytes = null;
-// #1162: computed in showUploadDimensionPreview alongside the animation
-// detection below, passed through to createCatalogTemplate the same way
-// uploadModelSizeBytes already is.
-let uploadSkeletonSignature = null;
-let uploadOriginalDimensions = null;
-let uploadDimensionPreview = null;
-// #1620 (sub-issue of #1616): within step 'file', the seller picks either
-// a .glb/.fbx file (mode 'file', the original flow) or a short video to
-// generate one from (mode 'video') -- mutually exclusive input methods
-// sharing the same name/price/digital-good fields and the same eventual
-// handoff into step 'dimensions'.
-let uploadFileMode = 'file';
-// #1622 (sub-issue of #1616): which path produced the model currently
-// showing in step 'dimensions' -- 'video' only while finishVideoGeneration
-// is mid-handoff into handleUploadFileStep, reset to 'file' the moment
-// that step is left any other way (resetUploadModalToFileStep). Drives
-// uploadRetryVideoBtn's visibility: a seller who generated from video, but
-// isn't happy with the result once they can actually see it in the
-// dimensions-step preview, gets a one-click way back into video mode
-// without losing the name/price they already typed -- the issue's own
-// "post-generation review step... decide to retry" ask. A manually picked
-// file has no equivalent need (nothing asynchronous or variable-quality
-// about it), so this button only ever shows for the video path.
-let uploadModelSource = 'file';
-
-// handleUploadFileStep runs a long async chain (optimize -> upload ->
-// measure -> showUploadDimensionPreview) before committing to the shared
-// state above and advancing uploadStep. uploadCancelBtn stays enabled
-// throughout, and reopening the modal force-resets uploadSubmitBtn's
-// disabled state — so without a guard, canceling mid-upload (or a fast
-// cancel-then-reopen, or reopen-and-resubmit) could let a stale call's
-// awaits resolve later and silently resurrect/overwrite a canceled or
-// superseded upload's UI state. Same monotonic load-token pattern already
-// used for this exact bug shape elsewhere in this file (loadLandletMap,
-// commit 80625ff; showAxisPreview, issue #205): bumped both when a new
-// handleUploadFileStep call starts and whenever resetUploadModalToFileStep
-// runs (cancel or reopen), checked after every await, with a superseded
-// call bailing out before touching shared state further.
-let uploadFlowToken = 0;
-
-function setUploadStatus(text, isError) {
-  uploadStatusEl.textContent = text;
-  uploadStatusEl.classList.toggle('error', Boolean(isError));
-}
-
-function formatBytes(bytes) {
-  // #1571: same GB tier worker/index.js's own copy of this function already
-  // got in #1539/#1540 -- without it, a raw pre-optimization upload over 1GB
-  // rendered as e.g. "1536.0MB" in the model-upload status line instead of
-  // "1.5GB".
-  if (bytes >= 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
-  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)}KB`;
-  return `${bytes}B`;
-}
-
-function disposeUploadDimensionPreview() {
-  uploadDimensionsPreviewEl.innerHTML = '';
-  uploadAnimationsDetectedEl.hidden = true;
-  if (!uploadDimensionPreview) return;
-  uploadDimensionPreview.controls.dispose();
-  uploadDimensionPreview.renderer.dispose();
-  disposeObject(uploadDimensionPreview.previewObject);
-  for (const arrow of uploadDimensionPreview.arrows) {
-    arrow.line.geometry.dispose();
-    arrow.line.material.dispose();
-    arrow.cone.geometry.dispose();
-    arrow.cone.material.dispose();
-  }
-  for (const sprite of uploadDimensionPreview.labels) {
-    sprite.material.map.dispose();
-    sprite.material.dispose();
-  }
-  uploadDimensionPreview = null;
-}
-
-// #2442: `builders.video_generation_credits` (migrations/0127) was never
-// surfaced anywhere in the Upload Model modal -- a seller had no way to
-// tell they were out of free generations before actually attempting one
-// and hitting VIDEO_GENERATION_NO_CREDITS_MESSAGE's 402. Best-effort: a
-// failed fetch (offline, logged out mid-flow) just leaves the line blank
-// rather than blocking entry into video mode over it.
-async function refreshUploadVideoCredits() {
-  uploadVideoCreditsEl.textContent = '';
-  try {
-    const { videoGenerationCredits } = await fetchMyBuilder();
-    uploadVideoCreditsEl.textContent =
-      `${videoGenerationCredits} free model generation${videoGenerationCredits === 1 ? '' : 's'} remaining`;
-  } catch (err) {
-    console.warn('Failed to load the video-generation credit balance:', err);
-  }
-}
-
-// Switches step 'file' between its two mutually-exclusive input methods.
-// #1602's info-tooltip popups (upload-hint, upload-video-hint) are
-// siblings of their own field row, not nested inside it, so each one is
-// force-collapsed here rather than relying on hiding the row above it to
-// also hide the popup -- video mode's own hint lives inside
-// uploadVideoSectionEl and so is already covered by that toggle alone.
-function setUploadFileMode(mode) {
-  uploadFileMode = mode;
-  uploadFileFieldRowEl.hidden = mode !== 'file';
-  uploadHintEl.hidden = true;
-  uploadHintBtn.setAttribute('aria-expanded', 'false');
-  uploadModeVideoBtn.hidden = mode !== 'file';
-  uploadVideoSectionEl.hidden = mode !== 'video';
-  uploadSubmitBtn.textContent = mode === 'video' ? 'Generate Model' : 'Add Product';
-  // #2442: refreshed every time video mode is (re-)entered, not just once
-  // per modal open -- a generation attempt since the last time this
-  // section was shown (success or the 402 no-credits rejection) changes
-  // the real balance, and uploadRetryVideoBtn can land back here more than
-  // once in the same modal session.
-  if (mode === 'video') refreshUploadVideoCredits();
-}
-uploadModeVideoBtn.addEventListener('click', () => setUploadFileMode('video'));
-uploadModeFileBtn.addEventListener('click', () => setUploadFileMode('file'));
-
-// mode lets a caller land back on step 'file' already in video mode
-// (uploadRetryVideoBtn below) rather than always defaulting to the plain
-// file picker -- every other caller (closing/opening the modal) wants the
-// plain 'file' default.
-function resetUploadModalToFileStep(mode = 'file') {
-  uploadFlowToken++; // invalidate any in-flight handleUploadFileStep/startVideoGeneration call
-  stopVideoGenPoll();
-  uploadStep = 'file';
-  uploadModelUrl = null;
-  uploadModelSizeBytes = null;
-  uploadSkeletonSignature = null;
-  uploadOriginalDimensions = null;
-  uploadModelSource = 'file';
-  uploadAvatarCategoryCheckbox.checked = false;
-  uploadAnimationCategoryCheckbox.checked = false;
-  disposeUploadDimensionPreview();
-  uploadModalTitleEl.textContent = 'Upload Model';
-  uploadStepFileEl.hidden = false;
-  uploadStepDimensionsEl.hidden = true;
-  setUploadFileMode(mode);
-}
-// #1622: "Not quite right? Generate from a different video" -- visible
-// only once a video-generated model is actually showing in the dimensions
-// preview (toggled in handleUploadFileStep below). Keeps whatever
-// name/price/digital-good state the seller already entered, unlike
-// closing and reopening the whole modal.
-uploadRetryVideoBtn.addEventListener('click', () => resetUploadModalToFileStep('video'));
-
-function openUploadModal() {
-  closeCatalogPicker();
-  uploadNameInput.value = '';
-  uploadPriceInput.value = '';
-  uploadDigitalGoodCheckbox.checked = false;
-  uploadDigitalGoodDisclaimerLabel.hidden = true;
-  uploadDigitalGoodDisclaimerSelect.value = 'gift-card';
-  uploadFileInput.value = '';
-  uploadVideoInput.value = '';
-  setUploadStatus('');
-  uploadSubmitBtn.disabled = false;
-  resetUploadModalToFileStep();
-  uploadModalEl.classList.add('visible');
-  openModalA11y(uploadModalEl, closeUploadModal);
-}
-
-function closeUploadModal() {
-  uploadModalEl.classList.remove('visible');
-  resetUploadModalToFileStep();
-  closeModalA11y(uploadModalEl);
-  // #2515: this modal only ever opens stacked on top of the still-visible
-  // Seller modal (openUploadModal never hides it) -- closeModalA11y above
-  // only clears activeModalEl, so without re-arming here the Seller modal
-  // is left on screen but untrapped, same bug class #1679 fixed for the
-  // Friends-map/DM pair.
-  sellerModalEl.classList.add('visible');
-  openModalA11y(sellerModalEl, closeSellerModal);
-}
-
-uploadModelBtn.addEventListener('click', openUploadModal);
-uploadCancelBtn.addEventListener('click', closeUploadModal);
-
-// Measures a freshly-uploaded model's own real-world size by loading it
-// through the exact same path every placed instance uses (loadModelInstance
-// — including the Y-up -> Z-up correction), rather than trusting whatever
-// the source tool claims. The measured container is never added to the
-// scene, just disposed once its bounding box is read.
-async function measureModelDimensions(modelUrl) {
-  const container = await loadModelInstance(modelUrl);
-  const box = new THREE.Box3().setFromObject(container);
-  const size = box.getSize(new THREE.Vector3());
-  disposeObject(container);
-  return { width: size.x, depth: size.y, height: size.z };
-}
-
-function setUploadDimensionInputs(dimensionsMeters) {
-  for (const axis of AXIS_LIST) {
-    const key = AXIS_DIMENSION_KEY[axis];
-    uploadDimensionInputEls[axis].value = toDisplayLength(dimensionsMeters[key]).toFixed(2);
-  }
-}
-
-function currentUploadDimensionsMeters() {
-  const dims = {};
-  for (const axis of AXIS_LIST) {
-    const key = AXIS_DIMENSION_KEY[axis];
-    dims[key] = fromDisplayLength(Number(uploadDimensionInputEls[axis].value));
-  }
-  return dims;
-}
-
-function refreshUploadDimensionUnits() {
-  const suffix = unitSuffix();
-  for (const el of uploadDimensionUnitEls) el.textContent = suffix;
-}
-
-// Editing any one dimension field rescales the OTHER TWO in lockstep to
-// hold the model's original proportions — always computed fresh off the
-// originally-measured dimensions (never off whatever's currently
-// displayed), so repeated edits can't compound rounding error.
-for (const axis of AXIS_LIST) {
-  uploadDimensionInputEls[axis].addEventListener('input', () => {
-    if (!uploadOriginalDimensions) return;
-    const key = AXIS_DIMENSION_KEY[axis];
-    const editedMeters = fromDisplayLength(Number(uploadDimensionInputEls[axis].value));
-    if (!Number.isFinite(editedMeters) || editedMeters <= 0) return;
-    const scaleFactor = editedMeters / uploadOriginalDimensions[key];
-    if (!Number.isFinite(scaleFactor) || scaleFactor <= 0) return;
-    for (const otherAxis of AXIS_LIST) {
-      if (otherAxis === axis) continue;
-      const otherKey = AXIS_DIMENSION_KEY[otherAxis];
-      uploadDimensionInputEls[otherAxis].value = toDisplayLength(uploadOriginalDimensions[otherKey] * scaleFactor).toFixed(2);
-    }
-    updateUploadDimensionLabels();
-  });
-}
-
-// A wider rounded-rect badge sized for a numeric string like "1.24m",
-// unlike makeAxisLabelSprite's single-letter circular badge. Exposes
-// userData.setText so the same sprite can be redrawn in place as the
-// seller edits a dimension field.
-function makeDimensionLabelSprite(text, colorHex) {
-  const canvas = document.createElement('canvas');
-  canvas.width = 160;
-  canvas.height = 64;
-  const ctx = canvas.getContext('2d');
-  const texture = new THREE.CanvasTexture(canvas);
-  const draw = (label) => {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = `#${colorHex.toString(16).padStart(6, '0')}`;
-    ctx.beginPath();
-    ctx.roundRect(2, 12, canvas.width - 4, canvas.height - 24, 16);
-    ctx.fill();
-    ctx.fillStyle = '#16240a';
-    ctx.font = 'bold 28px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(label, canvas.width / 2, canvas.height / 2);
-    texture.needsUpdate = true;
-  };
-  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: texture, depthTest: false }));
-  sprite.renderOrder = 1;
-  draw(text);
-  sprite.userData.setText = draw;
-  return sprite;
-}
-
-// Shows the freshly-uploaded (not-yet-created) model with its X/Y/Z
-// dimensions labeled, mirroring the Seller modal's extensibility axis
-// preview (showAxisPreview) but for a model that has no catalog template
-// yet, so it's loaded directly via loadModelInstance rather than
-// createMeshForInstance. The arrows/geometry are sized once to the
-// original measured bounding box and never rescaled afterward — since
-// dimension edits are always proportion-preserving (a uniform scale),
-// every possible edit renders identically, so only the label text needs
-// to change as the seller types (see updateUploadDimensionLabels).
-async function showUploadDimensionPreview(modelUrl) {
-  const myFlowToken = uploadFlowToken;
-  disposeUploadDimensionPreview();
-
-  const canvas = document.createElement('canvas');
-  canvas.className = 'seller-preview-canvas';
-  uploadDimensionsPreviewEl.appendChild(canvas);
-
-  const scene = new THREE.Scene();
-  scene.add(new THREE.AmbientLight(0xffffff, 0.9));
-  const sun = new THREE.DirectionalLight(0xffffff, 0.8);
-  sun.position.set(2, -3, 4);
-  scene.add(sun);
-
-  // #1465: lets an e2e test simulate a slow load deterministically, same
-  // reasoning as window.__testAvatarLoadDelayMs (#982) — modelUrl is
-  // already cached by the time this runs (handleUploadFileStep's own
-  // "Measuring model…" step already fully loaded it via this same
-  // loadModelInstance pipeline), so there's no real network request left
-  // here to delay via page.route(), and #982's own comment on that hook
-  // found route-interception delays unreliable for this anyway. Always
-  // undefined outside of that one test.
-  if (window.__testUploadPreviewLoadDelayMs) {
-    await new Promise((resolve) => setTimeout(resolve, window.__testUploadPreviewLoadDelayMs));
-  }
-  const previewObject = await loadModelInstance(modelUrl);
-  if (myFlowToken !== uploadFlowToken) {
-    // A newer/canceled flow owns things now — this one's just-built object
-    // was never added to any scene disposeUploadDimensionPreview knows
-    // about, so without this it leaks the exact same way #1426/#1427 did
-    // for their own superseded in-flight loads (see showAxisPreview).
-    disposeObject(previewObject);
-    // Exposed purely so an e2e test can confirm the dispose above actually
-    // ran, same reasoning as window.__supersededAvatarDisposals (#1426) and
-    // window.__sellerShowcaseDisposedMeshCount (#1427/#1432).
-    window.__supersededUploadPreviewDisposals = (window.__supersededUploadPreviewDisposals ?? 0) + 1;
-    return;
-  }
-  scene.add(previewObject);
-
-  // #1162: awaited (unlike the animation detection just below, which is
-  // fire-and-forget since it only drives a hint label) because
-  // uploadSkeletonSignature needs to be settled before the user can reach
-  // handleUploadDimensionsStep's createCatalogTemplate call — loadModelGltf
-  // caches by URL, so this doesn't re-fetch anything loadModelInstance
-  // above didn't already fetch.
-  uploadSkeletonSignature = await computeSkeletonSignature(modelUrl);
-  if (myFlowToken !== uploadFlowToken) return; // superseded while computing — a newer/canceled flow owns things now
-
-  // #682: surfaces which (if any) of the idle/walk/fly avatar-rig clips
-  // this upload carries, per docs/SPEC.md's own "Avatar rig/animation
-  // clip convention" — checked for every upload, not just avatar-category
-  // ones (category isn't chosen until after this step, per #680/#681's
-  // own findings). Stays hidden for the overwhelmingly common case (an
-  // ordinary product with no animations at all, e.g. a chair or a brick)
-  // rather than telling every seller their table doesn't have a "fly"
-  // clip; only speaks up when there's something to actually flag: real
-  // clips present, so either confirming the ones that matched or naming
-  // the gap for a model that clearly tried to animate but used different
-  // clip names, rather than a seller silently discovering that gap only
-  // once it's equipped in-world.
-  loadModelAnimations(modelUrl).then((animations) => {
-    if (myFlowToken !== uploadFlowToken || animations.length === 0) return;
-    const matched = ['idle', 'walk', 'fly'].filter((name) => THREE.AnimationClip.findByName(animations, name));
-    uploadAnimationsDetectedEl.textContent = matched.length > 0
-      ? `Avatar animations detected: ${matched.join(', ')} — these play automatically if this is equipped as an avatar.`
-      : `This model has ${animations.length} animation clip${animations.length === 1 ? '' : 's'}, but none named idle/walk/fly — if equipped as an avatar it'll still move, just without playing them.`;
-    uploadAnimationsDetectedEl.hidden = false;
-  }).catch(() => {});
-
-  const box = new THREE.Box3().setFromObject(previewObject);
-  const size = box.getSize(new THREE.Vector3());
-  const sphere = box.getBoundingSphere(new THREE.Sphere());
-  const radius = Math.max(sphere.radius, 0.05);
-
-  const rect = canvas.getBoundingClientRect();
-  const camera = new THREE.PerspectiveCamera(45, rect.width / Math.max(rect.height, 1), 0.01, 100);
-  camera.up.set(0, 0, 1);
-  const dist = radius * 2.6;
-  camera.position.set(dist * 0.75, -dist * 0.95, dist * 0.65);
-  camera.lookAt(0, 0, 0);
-
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.setSize(rect.width, rect.height, false);
-
-  const controls = new OrbitControls(camera, canvas);
-  controls.target.set(0, 0, 0);
-  controls.enableDamping = false;
-  controls.enablePan = false;
-  controls.minDistance = dist * 0.35;
-  controls.maxDistance = dist * 3;
-  const render = () => renderer.render(scene, camera);
-  controls.addEventListener('change', render);
-
-  const axisDims = { x: size.x, y: size.y, z: size.z };
-  const dirs = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
-  const arrows = [];
-  const labels = [];
-  for (const axis of AXIS_LIST) {
-    const length = axisDims[axis] / 2 + radius * 0.35;
-    const color = AXIS_ARROW_COLORS[axis];
-    const arrow = new THREE.ArrowHelper(dirs[axis], new THREE.Vector3(0, 0, 0), length, color, length * 0.3, length * 0.18);
-    scene.add(arrow);
-    arrows.push(arrow);
-    const label = makeDimensionLabelSprite('', color);
-    label.position.copy(dirs[axis]).multiplyScalar(length * 1.25);
-    const labelScale = radius * 0.5;
-    label.scale.set(labelScale, labelScale * 0.4, labelScale);
-    scene.add(label);
-    labels.push(label);
-  }
-
-  uploadDimensionPreview = { renderer, scene, camera, controls, previewObject, arrows, labels, render };
-  updateUploadDimensionLabels();
-}
-
-function updateUploadDimensionLabels() {
-  if (!uploadDimensionPreview) return;
-  const dims = currentUploadDimensionsMeters();
-  const axisLabelDims = { x: dims.width, y: dims.depth, z: dims.height };
-  AXIS_LIST.forEach((axis, i) => {
-    uploadDimensionPreview.labels[i].userData.setText(formatLength(axisLabelDims[axis]));
-  });
-  uploadDimensionPreview.render();
-}
-
-async function handleUploadFileStep() {
-  const name = uploadNameInput.value.trim();
-  if (!name) {
-    setUploadStatus('Name is required.', true);
-    return;
-  }
-  const file = uploadFileInput.files[0];
-  if (!file) {
-    setUploadStatus('Choose a .glb or .fbx file first.', true);
-    return;
-  }
-  if (hasDuplicateProductName(name, null) && !confirm(`You already have a product named "${name}". Continue anyway?`)) {
-    return;
-  }
-
-  const myFlowToken = ++uploadFlowToken;
-  uploadSubmitBtn.disabled = true;
-  try {
-    let uploadable = file;
-    // #1166: an .fbx pick is converted to .glb right here, before anything
-    // else in this function ever sees it -- optimizeModelFile below (and
-    // the server) only ever deal with .glb, matching #1166's own direction
-    // that storage format stays exactly as it is today. Unlike
-    // optimization just below, a conversion failure has no original .glb
-    // to fall back to, so it aborts this upload attempt outright with a
-    // clear error pointing back at the manual Blender path, rather than
-    // silently uploading something broken (or the raw .fbx).
-    if (/\.fbx$/i.test(file.name)) {
-      setUploadStatus('Converting from FBX…');
-      try {
-        const glbBlob = await convertFbxToGlb(file, (status) => setUploadStatus(status));
-        uploadable = new File([glbBlob], file.name.replace(/\.fbx$/i, '.glb'), { type: 'model/gltf-binary' });
-        if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while converting
-      } catch (err) {
-        console.warn('Client-side FBX conversion failed:', err);
-        setUploadStatus(
-          `Could not convert this .fbx file (${err.message || 'unknown error'}). ` +
-            'Try exporting it to .glb in Blender first and uploading that instead.',
-          true,
-        );
-        return;
-      }
-    }
-    try {
-      const optimized = await optimizeModelFile(uploadable, (status) => setUploadStatus(status));
-      uploadable = new File([optimized.blob], uploadable.name, { type: 'model/gltf-binary' });
-      const trianglePct = optimized.trianglesBefore > 0 ? Math.round((optimized.trianglesAfter / optimized.trianglesBefore) * 100) : 100;
-      setUploadStatus(
-        `Reduced ${optimized.trianglesBefore.toLocaleString()} -> ${optimized.trianglesAfter.toLocaleString()} triangles ` +
-          `(${trianglePct}%), ${formatBytes(optimized.bytesBefore)} -> ${formatBytes(optimized.bytesAfter)}. Uploading…`,
-      );
-    } catch (err) {
-      // Optimization is a nice-to-have, not a requirement — if it fails
-      // for any reason (an unusual mesh the simplifier chokes on, etc.)
-      // fall back to uploading the original file rather than blocking
-      // the whole thing on it.
-      console.warn('Client-side model optimization failed, uploading original file:', err);
-      setUploadStatus('Could not auto-reduce the model — uploading as-is…');
-    }
-    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — abandon before uploading anything
-    const { modelUrl, sizeBytes } = await uploadModelFile(uploadable);
-    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while uploading
-
-    setUploadStatus('Measuring model…');
-    const dimensions = await measureModelDimensions(modelUrl);
-    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while measuring
-    uploadModelUrl = modelUrl;
-    uploadModelSizeBytes = sizeBytes;
-    uploadOriginalDimensions = dimensions;
-    setUploadDimensionInputs(dimensions);
-    refreshUploadDimensionUnits();
-
-    setUploadStatus('Loading preview…');
-    await showUploadDimensionPreview(modelUrl);
-    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while loading the preview
-
-    uploadStep = 'dimensions';
-    uploadModalTitleEl.textContent = 'Confirm Dimensions';
-    uploadStepFileEl.hidden = true;
-    uploadStepDimensionsEl.hidden = false;
-    uploadSubmitBtn.textContent = 'Create Product';
-    uploadRetryVideoBtn.hidden = uploadModelSource !== 'video';
-    setUploadStatus('');
-  } catch (err) {
-    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
-    console.error('Custom product upload failed:', err);
-    // #2440: previously a generic "Something went wrong."
-    setUploadStatus(err.message || "Couldn't load a preview of that model — please try again in a moment.", true);
-  } finally {
-    if (myFlowToken === uploadFlowToken) uploadSubmitBtn.disabled = false;
-  }
-}
-
-// #1620 (sub-issue of #1616): the video-to-3D counterpart to
-// handleUploadFileStep above. Extracts a few frames from the seller's
-// video, kicks off an async generation job (worker/index.js's
-// handleVideoGenerationJobCreate, #1619), polls it to completion, then
-// hands the resulting model off into handleUploadFileStep's own existing
-// optimize -> upload -> measure -> preview chain unmodified -- confirmed
-// in #1621 that a generated mesh needs no special-casing there.
 // #2330: mirrors worker/index.js's own MAX_MONEY_CENTS -- the ceiling
 // nonnegativeInteger()/optionalInteger() enforce on every dollar-amount
 // field server-side. Checked client-side at every price/bid input (same
 // "surface a friendly message, not the raw server one" reasoning #1922
 // already established for the Start Auction form's duration field).
-const MAX_MONEY_CENTS = 100_000_000;
-
-const VIDEO_GEN_FRAME_COUNT = 4;
-const VIDEO_GEN_POLL_INTERVAL_MS = 3000;
-// Matches the client-cadence budget worker/index.js's own
-// VIDEO_GENERATION_STATUS_RATE_LIMIT_MAX (120) was sized around -- the
-// same "every 3s for up to 5 minutes" shape pollDiditVerificationStatus
-// below already uses for its own identically-reasoned polling budget.
-const VIDEO_GEN_POLL_DEADLINE_MS = 5 * 60 * 1000;
-
-let videoGenPollTimer = null;
-
-function stopVideoGenPoll() {
-  if (videoGenPollTimer !== null) {
-    clearTimeout(videoGenPollTimer);
-    videoGenPollTimer = null;
-  }
-}
-
-// Draws a handful of evenly-spaced still frames from a video file --
-// no provider evaluated by #1617 accepts raw video directly, and this
-// has to happen here in the browser (Cloudflare Workers has no video-
-// decoding capability) before the video's own bytes ever go anywhere.
-async function extractVideoFrames(videoFile, frameCount) {
-  const video = document.createElement('video');
-  video.muted = true;
-  video.playsInline = true;
-  const url = URL.createObjectURL(videoFile);
-  try {
-    video.src = url;
-    await new Promise((resolve, reject) => {
-      video.onloadedmetadata = resolve;
-      video.onerror = () => reject(new Error('Could not read this video file.'));
-    });
-    if (!Number.isFinite(video.duration) || video.duration <= 0) {
-      throw new Error("Could not determine this video's length.");
-    }
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-    const frames = [];
-    for (let i = 0; i < frameCount; i++) {
-      // The midpoint of each equal slice, not i/frameCount itself -- skips
-      // sampling the very first/last instant, often a half-raised phone or
-      // a hand still entering/leaving frame.
-      const t = ((i + 0.5) / frameCount) * video.duration;
-      await new Promise((resolve, reject) => {
-        video.onseeked = resolve;
-        video.onerror = () => reject(new Error('Could not read this video file.'));
-        video.currentTime = t;
-      });
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.92));
-      frames.push(blob);
-    }
-    return frames;
-  } finally {
-    URL.revokeObjectURL(url);
-  }
-}
-
-// Once a job's modelUrl is ready it's an ordinary same-origin
-// /uploads/... URL (#1619's storeTripoModelOutput re-stores the
-// provider's output in the same R2 bucket/shape a direct upload uses,
-// confirmed in #1621 needs no special routing) -- fetching it into a
-// File and injecting it into the real file <input> (via DataTransfer,
-// since .files can't be assigned a plain array) lets
-// handleUploadFileStep run completely unmodified, the same as any
-// manually picked file.
-async function finishVideoGeneration(modelUrl) {
-  setUploadStatus('Generated! Optimizing…');
-  const response = await fetch(modelUrl);
-  if (!response.ok) throw new Error('Could not download the generated model.');
-  const bytes = await response.blob();
-  const file = new File([bytes], 'generated-model.glb', { type: 'model/gltf-binary' });
-  const dataTransfer = new DataTransfer();
-  dataTransfer.items.add(file);
-  uploadFileInput.files = dataTransfer.files;
-  // Read by handleUploadFileStep once it reaches step 'dimensions', to
-  // decide whether uploadRetryVideoBtn should show (#1622).
-  uploadModelSource = 'video';
-  await handleUploadFileStep();
-}
-
-function pollVideoGenerationJob(jobId, myFlowToken) {
-  stopVideoGenPoll();
-  const deadline = Date.now() + VIDEO_GEN_POLL_DEADLINE_MS;
-  const tick = async () => {
-    videoGenPollTimer = null;
-    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while waiting
-    try {
-      const { status, modelUrl, error } = await fetchVideoGenerationJobStatus(jobId);
-      if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while checking
-      if (status === 'complete') {
-        await finishVideoGeneration(modelUrl);
-        return;
-      }
-      if (status === 'failed') {
-        setUploadStatus(error || 'Video-to-3D generation failed — try a different video, or fall back to a manual upload.', true);
-        uploadSubmitBtn.disabled = false;
-        return;
-      }
-      setUploadStatus('Generating your 3D model… this can take a couple of minutes.');
-    } catch (err) {
-      // A transient failure here shouldn't give up outright -- keep
-      // polling until the deadline, the same "best-effort background
-      // poll" spirit pollDiditVerificationStatus below already uses.
-      console.warn('Could not check video generation status:', err);
-    }
-    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while deciding whether to reschedule
-    if (Date.now() >= deadline) {
-      setUploadStatus('Still generating — this is taking longer than expected. Try again later, or fall back to a manual upload.', true);
-      uploadSubmitBtn.disabled = false;
-      return;
-    }
-    videoGenPollTimer = setTimeout(tick, VIDEO_GEN_POLL_INTERVAL_MS);
-  };
-  tick();
-}
-
-async function startVideoGeneration(videoFile, myFlowToken) {
-  setUploadStatus('Reading video…');
-  const frames = await extractVideoFrames(videoFile, VIDEO_GEN_FRAME_COUNT);
-  if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while extracting frames
-
-  setUploadStatus('Starting generation…');
-  const fieldNames = ['front', 'left', 'back', 'right'];
-  const form = new FormData();
-  frames.forEach((blob, i) => form.append(fieldNames[i], blob, `frame-${i}.jpg`));
-  const { jobId } = await createVideoGenerationJob(form);
-  if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while starting the job
-
-  setUploadStatus('Generating your 3D model… this can take a couple of minutes.');
-  pollVideoGenerationJob(jobId, myFlowToken);
-}
-
-async function handleUploadVideoStep() {
-  const name = uploadNameInput.value.trim();
-  if (!name) {
-    setUploadStatus('Name is required.', true);
-    return;
-  }
-  const videoFile = uploadVideoInput.files[0];
-  if (!videoFile) {
-    setUploadStatus('Choose a video first.', true);
-    return;
-  }
-  if (hasDuplicateProductName(name, null) && !confirm(`You already have a product named "${name}". Continue anyway?`)) {
-    return;
-  }
-
-  const myFlowToken = ++uploadFlowToken;
-  uploadSubmitBtn.disabled = true;
-  try {
-    await startVideoGeneration(videoFile, myFlowToken);
-  } catch (err) {
-    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
-    console.error('Video-to-3D generation failed:', err);
-    // #2440: previously a generic "Something went wrong starting video generation."
-    setUploadStatus(err.message || "Couldn't start turning that video into a 3D model — please try again in a moment.", true);
-    uploadSubmitBtn.disabled = false;
-  }
-}
-
-// A seller-edited dimension only counts as a real change worth re-encoding
-// the model over — not just float noise from round-tripping through
-// display units and a fixed 2-decimal display precision.
-function dimensionsChanged(a, b) {
-  return AXIS_LIST.some((axis) => {
-    const key = AXIS_DIMENSION_KEY[axis];
-    return Math.abs(a[key] - b[key]) > Math.max(0.001, a[key] * 0.005);
-  });
-}
-
-async function handleUploadDimensionsStep() {
-  const name = uploadNameInput.value.trim();
-  const dimensions = currentUploadDimensionsMeters();
-  if (!Object.values(dimensions).every((value) => Number.isFinite(value) && value > 0)) {
-    setUploadStatus('Enter a positive size for each dimension.', true);
-    return;
-  }
-  // #1601: price is required at upload time — a free digital good is
-  // entered as an explicit $0, not left blank. priceCents can still end up
-  // null later via the separate "Edit Price" panel (docs/API.md's "Seller-
-  // side: setting a price"), which keeps its own null-means-unset
-  // convention; this is just the one-time creation step.
-  const priceInput = uploadPriceInput.value.trim();
-  if (!priceInput) {
-    setUploadStatus('Enter a price — use 0 for a free product.', true);
-    return;
-  }
-  const dollars = parsePriceInputDollars(priceInput);
-  if (!Number.isFinite(dollars) || dollars < 0) {
-    setUploadStatus('Price must be a non-negative number.', true);
-    return;
-  }
-  if (Math.round(dollars * 100) > MAX_MONEY_CENTS) {
-    setUploadStatus(`Price must be ${formatPriceCents(MAX_MONEY_CENTS)} or less.`, true);
-    return;
-  }
-  const priceCents = Math.round(dollars * 100);
-
-  // #423: same uploadFlowToken idiom as handleUploadFileStep above — this
-  // step's own await chain (rescale/upload/create) is just as cancelable
-  // via uploadCancelBtn (which stays enabled throughout, per its own
-  // comment) as the file step's, but without this it kept running to
-  // completion in the background after Cancel, silently creating the
-  // product anyway.
-  const myFlowToken = uploadFlowToken;
-  uploadSubmitBtn.disabled = true;
-  try {
-    let finalModelUrl = uploadModelUrl;
-    // createMeshForInstance and (especially) loadCroppedModelInstance's
-    // crop math both assume a template's declared dimensions exactly equal
-    // the loaded model's own rendered size — see rescaleModelFile's own
-    // doc comment. If the seller changed the size away from what was
-    // actually measured, the uploaded file itself has to be rescaled to
-    // match, not just the number stored alongside it.
-    if (dimensionsChanged(dimensions, uploadOriginalDimensions)) {
-      setUploadStatus('Applying your size change…');
-      const scaleFactor = dimensions.width / uploadOriginalDimensions.width;
-      const originalBlob = await fetch(uploadModelUrl).then((res) => res.blob());
-      if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while re-fetching the original
-      const rescaledBlob = await rescaleModelFile(originalBlob, scaleFactor);
-      if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while rescaling
-      setUploadStatus('Uploading resized model…');
-      const rescaled = await uploadModelFile(new File([rescaledBlob], 'model.glb', { type: 'model/gltf-binary' }));
-      finalModelUrl = rescaled.modelUrl;
-      uploadModelSizeBytes = rescaled.sizeBytes;
-      if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while uploading the resized model
-    }
-
-    setUploadStatus('Creating product…');
-    // Upload Model only lives inside the (already-open) Seller modal now,
-    // which already guaranteed a seller identity to open at all — this is
-    // just a defensive fallback, not the primary path to one.
-    const uploaderSellerId = await ensureSellerIdentity();
-    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while resolving the seller identity
-    const metadata = {};
-    if (uploadDigitalGoodCheckbox.checked) {
-      metadata.digitalGoodDisclaimer = uploadDigitalGoodDisclaimerSelect.value;
-    }
-    const template = await createCatalogTemplate({
-      name,
-      dimensions,
-      color: '#999999', // only ever used if the model itself fails to load later
-      modelUrl: finalModelUrl,
-      modelSizeBytes: uploadModelSizeBytes,
-      skeletonSignature: uploadSkeletonSignature,
-      sellerId: uploaderSellerId,
-      // #680/#681's own "upload flow itself" was deliberately deferred as
-      // separate scope — until now, category could only ever be set to
-      // 'avatar' via a raw API call, so nothing sold through the app UI
-      // could ever actually be bought and equipped. Omit rather than send
-      // 'placeholder' explicitly, so the server's own default (worker/
-      // index.js's createCatalogTemplate) stays the one source of truth
-      // for what an unchecked listing's category actually is.
-      // #1163: same reasoning, for the sibling "standalone animation"
-      // category — the two checkboxes are mutually exclusive (see their
-      // own change listeners above), so at most one of these ever applies.
-      category: uploadAvatarCategoryCheckbox.checked
-        ? 'avatar'
-        : uploadAnimationCategoryCheckbox.checked ? 'animation' : undefined,
-      priceCents,
-      metadata,
-    });
-    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — the template still exists server-side, but nothing here should act on it
-
-    // #327: fire-and-forget, deliberately not awaited — this only feeds
-    // future page loads and #329's not-yet-built embedding search, so it
-    // shouldn't hold up the seller actually seeing their new product.
-    persistCatalogThumbnail(template);
-    activeCatalog.push(template);
-    buildCatalogPickerButtons();
-    refreshSellerShowcase();
-    closeUploadModal();
-    // Back to the Seller modal it was opened from, with the new product
-    // showing up right away — not straight into a Build-mode tap-to-place
-    // flow, since Upload Model can now be reached from Shop (no landlet to
-    // place onto at all) as easily as from Build.
-    renderActiveSellerView();
-  } catch (err) {
-    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
-    console.error('Custom product creation failed:', err);
-    // #2440: previously a generic "Something went wrong."
-    setUploadStatus(err.message || "Couldn't create that product — please try again in a moment.", true);
-  } finally {
-    if (myFlowToken === uploadFlowToken) uploadSubmitBtn.disabled = false;
-  }
-}
-
-uploadSubmitBtn.addEventListener('click', () => {
-  if (uploadStep === 'file') {
-    if (uploadFileMode === 'video') handleUploadVideoStep();
-    else handleUploadFileStep();
-  } else {
-    handleUploadDimensionsStep();
-  }
-});
+// Genuinely shared well beyond the Upload-model modal (Sell's own Edit
+// Price panel, Start Auction form, auction bidding below) -- stays
+// declared here rather than moving into src/catalog/upload.js (#2557),
+// same reasoning #2614's own issue gives for the identical worker-side
+// const. Exported for that module to import back.
+export const MAX_MONEY_CENTS = 100_000_000;
 
 // Seller product management: lets a seller mark their own uploaded
 // products extensible (see extensibleAxes) after the fact — the upload
@@ -3264,7 +1880,10 @@ uploadSubmitBtn.addEventListener('click', () => {
 // sellers existed as their own concept — like a real scanned model
 // uploaded before this feature — are still reachable here instead of
 // stuck unmanageable.
-const sellerModalEl = document.getElementById('seller-modal');
+// Exported for src/catalog/upload.js (#2557) -- its own closeUploadModal
+// needs this same element (Upload Model always opens stacked on top of
+// the still-visible Seller modal, and re-shows it on close).
+export const sellerModalEl = document.getElementById('seller-modal');
 const sellerFeedbackSummaryEl = document.getElementById('seller-feedback-summary');
 const sellerFeedbackListEl = document.getElementById('seller-feedback-list');
 const sellerListEl = document.getElementById('seller-list');
@@ -3289,7 +1908,9 @@ function myProducts() {
 // rename) than something intentional, so this just confirms rather than
 // blocking. excludeTemplateId lets a rename skip comparing the product
 // against its own pre-rename name.
-function hasDuplicateProductName(name, excludeTemplateId) {
+// Exported for src/catalog/upload.js (#2557) -- its own
+// handleUploadFileStep/handleUploadVideoStep need this same check.
+export function hasDuplicateProductName(name, excludeTemplateId) {
   const normalized = name.toLowerCase();
   return myProducts().some((other) =>
     other.templateId !== excludeTemplateId && other.name.toLowerCase() === normalized);
@@ -3375,7 +1996,11 @@ const sellerPreviewCanvas = document.createElement('canvas');
 sellerPreviewCanvas.className = 'seller-preview-canvas';
 const sellerPreviewHintEl = document.createElement('div');
 sellerPreviewHintEl.className = 'seller-preview-hint';
-const AXIS_ARROW_COLORS = { x: 0xff5555, y: 0x55dd55, z: 0x5599ff };
+// Exported for src/catalog/upload.js (#2557) -- its own
+// showUploadDimensionPreview needs this same color map (also still used
+// directly here, below, by the Seller modal's own extensibility axis
+// preview).
+export const AXIS_ARROW_COLORS = { x: 0xff5555, y: 0x55dd55, z: 0x5599ff };
 let axisPreview = null;
 
 // showAxisPreview awaits a model load (createMeshForInstance) before
@@ -5098,7 +3723,10 @@ function focusSellerManageRow(templateId) {
 // unconditionally (opening the modal, a Units-setting change) goes through
 // here now so it keeps refreshing whichever view the seller actually has
 // open, not always Manage.
-function renderActiveSellerView() {
+// Exported for src/catalog/upload.js (#2557) -- its own
+// handleUploadDimensionsStep needs this same refresh after creating a
+// product, to show it in whichever Seller view is currently active.
+export function renderActiveSellerView() {
   sellerListEl.hidden = sellerActiveView !== 'manage';
   sellerListViewEl.hidden = sellerActiveView !== 'list';
   if (sellerActiveView === 'list') renderSellerListView();
@@ -5228,7 +3856,9 @@ async function openSellerModal() {
   sellerModalEl.classList.add('visible');
   openModalA11y(sellerModalEl, closeSellerModal);
 }
-function closeSellerModal() {
+// Exported for src/catalog/upload.js (#2557) -- its own closeUploadModal
+// needs this same handler to re-arm the Seller modal's focus trap.
+export function closeSellerModal() {
   sellerModalEl.classList.remove('visible');
   closeModalA11y(sellerModalEl);
   disposeAxisPreview();
@@ -6902,7 +5532,10 @@ export function formatHiggles(cents) {
 // currency, formatHiggles above) even though the cents-to-dollars math is
 // identical, so this stays its own named helper rather than reusing that
 // one.
-function formatPriceCents(cents) {
+// Exported for src/catalog/upload.js (#2557) -- its own
+// handleUploadDimensionsStep needs this same formatter for its price-ceiling
+// error message.
+export function formatPriceCents(cents) {
   return (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
@@ -6913,11 +5546,14 @@ function formatPriceCents(cents) {
 // bare-number native <input type=number> with an "e.g. 12.99" placeholder.
 // Parsing strips the cosmetic $/, characters back out so the existing
 // submit-time validation still sees a plain number.
-function parsePriceInputDollars(raw) {
+// Exported for src/catalog/upload.js (#2557) -- its own upload-price field
+// needs these same two parse/format helpers, per this comment's own note
+// above ("the price fields (upload wizard + Seller Edit Price)").
+export function parsePriceInputDollars(raw) {
   const cleaned = String(raw).trim().replace(/[$,]/g, '');
   return cleaned === '' ? NaN : Number(cleaned);
 }
-function formatDollarsForPriceInput(dollars) {
+export function formatDollarsForPriceInput(dollars) {
   return dollars.toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 }
 
@@ -9018,7 +7654,7 @@ saveBundleBtn.addEventListener('click', async () => {
     // mutation can't later be clobbered by a slower, now-stale concurrent
     // fetch (e.g. Build mode's own deferred initial bundles load) landing
     // after and overwriting it — same guard rename/share/delete already use.
-    ++bundlePickerLoadToken;
+    bumpBundlePickerLoadToken();
     myBundles.unshift(bundle);
     // #1873: read the server's own `bundle.shared`, not the local `shared`
     // variable this click computed -- on a same-key resubmit after a lost
@@ -9410,7 +8046,9 @@ async function showBackupReferenceMesh(mesh) {
   backupReferenceMesh = reference;
 }
 
-function hideBackupReferenceMesh() {
+// Exported for src/catalog/picker.js (#2558) -- its own closeCatalogPicker
+// needs this same cleanup when a Backup Chain pick session ends.
+export function hideBackupReferenceMesh() {
   if (!backupReferenceMesh) return;
   scene.remove(backupReferenceMesh);
   disposeObject(backupReferenceMesh);
@@ -9557,9 +8195,13 @@ backupChainAddBtn.addEventListener('click', async () => {
 // flow's freshly-created product, or Paste — none of those place anything
 // immediately anymore. The next world tap (see the click handler below)
 // consumes this and does the actual placing.
-let pendingPlacement = null;
+// Exported for src/catalog/picker.js (#2558) -- its own addItemBtn click
+// handler reads this same state.
+export let pendingPlacement = null;
 
-function enterPlacementMode(pending, statusText) {
+// Exported for src/catalog/picker.js (#2558) -- its own tile-click and
+// bundle-tile-click handlers arm placement the same way.
+export function enterPlacementMode(pending, statusText) {
   clearSelection();
   // Multi-select repurposes a one-finger drag into a selection swipe (see
   // the swipe-select handlers below) instead of orbiting the camera —
@@ -9585,7 +8227,9 @@ function enterPlacementMode(pending, statusText) {
   addItemBtn.textContent = '✕ Cancel';
 }
 
-function cancelPlacementMode() {
+// Exported for src/catalog/picker.js (#2558) -- its own addItemBtn click
+// handler calls this same cancel path.
+export function cancelPlacementMode() {
   pendingPlacement = null;
   addItemBtn.textContent = '+ Add Item';
   updateSelectionUI();
@@ -16243,7 +14887,10 @@ sellerShowcaseNextBtn.addEventListener('click', () => {
 // button's disabled-while-saving state past that test's own timing
 // window).
 let sellerShowcaseMeshesStale = false;
-function refreshSellerShowcase() {
+// Exported for src/catalog/upload.js (#2557) -- its own
+// handleUploadDimensionsStep needs this same showcase refresh after
+// creating a product.
+export function refreshSellerShowcase() {
   sellerShowcasePages = computeSellerShowcasePages(myProducts());
   if (currentMode !== 'sell') return;
   sellerShowcasePageIndex = Math.min(sellerShowcasePageIndex, Math.max(0, sellerShowcasePages.length - 1));
@@ -16728,7 +15375,7 @@ async function bootstrap() {
     // in flight by the time Build mode's scene renders, so a builder who
     // saves a new bundle before it resolves must not have it clobbered by
     // this slower, now-stale snapshot landing after.
-    const bundlesLoadToken = ++bundlePickerLoadToken;
+    const bundlesLoadToken = bumpBundlePickerLoadToken();
     Promise.all([fetchBundles(), fetchSharedBundles()])
       .then(([bundles, shared]) => {
         if (bundlesLoadToken !== bundlePickerLoadToken) return; // superseded while loading -- a newer bundle-picker action owns the picker now

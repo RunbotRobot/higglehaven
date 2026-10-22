@@ -35,9 +35,17 @@ console.log('purchases panel visible after clicking its nav item (should be true
 // (every seeded/simulated purchase's own seller is still live) — exactly
 // the empty-list path, which still needs the real fetch call to
 // /api/purchases?danglingSeller=1 to succeed and parse correctly to reach.
+// #2636 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeout itself is widened to 60000ms for real headroom under
+// CI load, same as this suite's other admin-dashboard-panel waits.
 await page.waitForFunction(
   () => document.getElementById('purchasesStatusLine')?.textContent !== 'Loading…',
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 const statusText = await page.textContent('#purchasesStatusLine');
 const errText = await page.locator('#purchasesErrLine').isVisible();
