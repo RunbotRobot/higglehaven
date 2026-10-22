@@ -167,7 +167,11 @@ for (let i = 0; i < EPISODE_SAMPLES; i++) {
   // not 15000ms -- and even the intended 15000ms wasn't enough margin
   // under current CI load. The explicit `null` arg reaches the options
   // slot, and the timeout is widened for real headroom.
-  await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'sit', null, { timeout: 60000 });
+  // #2655: #2598's 60000ms margin timed out again under tonight's heavier
+  // CI load, same well-established timing-margin flake class -- widened
+  // further to 120000ms, matching #2589/#2632's own settled value for the
+  // same recurring flake shape.
+  await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'sit', null, { timeout: 120000 });
   const rightAfterSelection = await page.evaluate(() => window.__testShopSitPose());
   settleDelays.add(Math.round(rightAfterSelection.settleDelayS * 1000)); // ms, so float noise doesn't fracture the set
   if (rightAfterSelection.settleElapsedS < rightAfterSelection.settleDelayS && rightAfterSelection.blend === 0) {
