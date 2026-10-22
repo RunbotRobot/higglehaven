@@ -86,7 +86,13 @@ await page.evaluate(([x, y]) => {
   window.__testForceShopProximityCheck();
 }, [myLandlet.center.x, myLandlet.center.y]);
 
-await page.waitForFunction(() => (window.__lastSignSpriteDebug?.spriteZs?.length ?? 0) > 0, { timeout: 10000 });
+// #2635 (2nd waitForFunction arg/options sweep): the real applied timeout
+// was always Playwright's dishonored 30000ms default, never 10000 -- the
+// explicit null arg reaches the options slot for real; widened to 60000ms
+// (rather than just matching the old default) since this condition depends
+// on the sign-sprite render pipeline actually running a frame, not just a
+// cheap DOM/local-store update.
+await page.waitForFunction(() => (window.__lastSignSpriteDebug?.spriteZs?.length ?? 0) > 0, null, { timeout: 60000 });
 
 const debug = await page.evaluate(() => window.__lastSignSpriteDebug);
 console.log('sign mesh z / measured height / post sprite z values:', debug);
