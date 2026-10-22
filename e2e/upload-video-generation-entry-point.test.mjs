@@ -53,9 +53,17 @@ const submitLabelInVideoMode = await page.textContent('#upload-submit-btn');
 // without awaiting it. Reading textContent synchronously right after the
 // click raced that fetch under CI load and intermittently saw '' instead of
 // the populated line (#2521) -- wait for it to actually populate first.
+// #2639 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeout itself is widened to 60000ms for real headroom under
+// CI load.
 await page.waitForFunction(
   () => document.getElementById('upload-video-credits').textContent.trim().length > 0,
-  { timeout: 5000 },
+  null,
+  { timeout: 60000 },
 );
 const videoCreditsTextAfterToggle = (await page.textContent('#upload-video-credits')).trim();
 console.log('video section visible after toggling (should be true):', videoSectionVisibleAfterToggle);
@@ -69,13 +77,16 @@ await page.click('#upload-submit-btn');
 // extractVideoFrames (real decode + canvas draw of the real fixture) runs
 // before the job-create request ever fires -- generous timeout for that
 // plus the request/response round trip.
+// #2639 (sub-issue of #2635): same waitForFunction arg/options bug as above
+// -- null arg, timeout widened to 60000ms.
 const reachedTerminalStatus = await page
   .waitForFunction(
     () => {
       const status = document.getElementById('upload-status');
       return status && status.classList.contains('error') && status.textContent.trim().length > 0;
     },
-    { timeout: 20000 },
+    null,
+    { timeout: 60000 },
   )
   .then(() => true)
   .catch(() => false);

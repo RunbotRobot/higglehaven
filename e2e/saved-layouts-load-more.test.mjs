@@ -67,17 +67,27 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
-await page.waitForFunction(() => document.getElementById('saved-layouts-load-more-btn') != null, { timeout: 10000 });
+// #2639 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeout itself is widened to 60000ms for real headroom under
+// CI load.
+await page.waitForFunction(() => document.getElementById('saved-layouts-load-more-btn') != null, null, { timeout: 60000 });
 
 const savedLayoutsField = page.locator('.settings-field', { hasText: 'Saved Layouts' });
 const loadMoreBtn = page.locator('#saved-layouts-load-more-btn');
 
 // First (mocked) page: exactly 20 rows, Load More visible since the mock
 // reported a next page.
+// #2639 (sub-issue of #2635): same waitForFunction arg/options bug as above
+// -- null arg, timeout widened to 60000ms.
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.settings-field')).find((f) => f.textContent.includes('Saved Layouts'))
     ?.querySelectorAll('.version-row').length === 20,
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 const rowCountFirstPage = await savedLayoutsField.locator('.version-row').count();
 const loadMoreVisibleFirstPage = await loadMoreBtn.isVisible();
@@ -97,10 +107,13 @@ requestedCursors.length = 0;
 // first 20), and since the mock's second page had no nextCursor, the
 // button itself hides again.
 await loadMoreBtn.click();
+// #2639 (sub-issue of #2635): same waitForFunction arg/options bug as above
+// -- null arg, timeout widened to 60000ms.
 await page.waitForFunction(
   () => Array.from(document.querySelectorAll('.settings-field')).find((f) => f.textContent.includes('Saved Layouts'))
     ?.querySelectorAll('.version-row').length === 21,
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 const rowCountAfterLoadMore = await savedLayoutsField.locator('.version-row').count();
 const loadMoreHiddenAfterLastPage = !(await loadMoreBtn.isVisible());

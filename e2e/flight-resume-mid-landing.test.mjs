@@ -28,7 +28,15 @@ const flyingOnSpawn = (await flightState()) === 'flying';
 
 // Start landing from the spawn's own flight.
 await page.click('#shop-fly-btn');
-await page.waitForFunction(() => window.__testShopFlightState() === 'landing', { timeout: 5000 });
+// #2639 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeout itself is widened to 60000ms for real headroom under
+// CI load. (The sibling waitForFunction a few lines below already passes a
+// real `arg` correctly and isn't affected by this bug.)
+await page.waitForFunction(() => window.__testShopFlightState() === 'landing', null, { timeout: 60000 });
 const altitudeAtLandingStart = await altitudeZ();
 
 // Let the descent run partway down before resuming — polling the avatar's
