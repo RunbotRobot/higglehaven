@@ -9944,6 +9944,54 @@ Same shape as `GET /admin/control-room` just above: `requireAdmin`-gated
 with the four filter fields above and a refresh button. No polling —
 this is a browse-on-demand audit trail, not a live-updating board.
 
+## Admin Dashboard (#1817): `GET /admin/dashboard`
+
+Owner, Control Room (2026-10-13): "I want to create a UI so I don't have
+to rely on any APIs." Before this, every `requireAdmin`-gated capability
+other than the Control Room board and the action log was DevTools-console
+`fetch()`-only. `GET /admin/dashboard` (`worker/index.js`, `requireAdmin`-
+gated the same way as the two admin pages above — a plain `401`/`403`
+HTML page otherwise, same-origin so the owner's ordinary `hh_session`
+admin cookie is sent automatically, no `CONTROL_ROOM_API_KEY`-style secret
+ever needed in browser JS) serves `public/admin-dashboard.html`, a single
+dependency-free page with one nav button per panel. Each panel lazy-loads
+its own `<script>` block only on first activation (not on page load), so
+an unopened panel never fires a fetch for no reason.
+
+Every panel is a thin UI wrapper around endpoints already documented
+elsewhere in this file — this section exists only to record that the page
+itself exists and which already-documented API(s) each panel calls, not
+to introduce new request/response shapes:
+
+- **Admin roster & access** (#1819) — `GET /api/auth/admins`,
+  `POST /api/auth/grant-admin`, and revoke-admin (see "Authorization
+  model" above for all three).
+- **R2 model storage** (#1820) — `GET /api/models`,
+  `GET /api/models/storage`, `POST /api/models/cleanup` (see "Custom
+  model uploads" above).
+- **World & land candidates** (#1821) — world settings, land-candidate
+  generate-mosaic/generate-ring, candidate CRUD/batch, and land-candidate
+  ring lookups (see the `land-candidates`/`land-candidate-rings`/`world`
+  sections above).
+- **Landlet overrides** (#1822) — force-complete a stuck generating
+  landlet, and reassign a claimed landlet's owner by hand.
+- **Tax / 1099 e-filing** (#1823) — `GET /api/tax/admin-forms` and its
+  `approve`/`file`/`void` siblings, plus the e-filing connection test (see
+  that section above).
+- **Purchases (admin fallback)** (#1824) — refund/mark-shipped for a
+  purchase whose seller has since deleted their account; ordinary
+  seller-initiated refund/ship has its own seller-facing UI and isn't
+  reachable from here.
+- **Trust & Safety flags** (#2178) — the counterfeit/policy flag queue
+  (#2017) and the self-dealing flag queue (#2019); see "Product flags"
+  and "Self-dealing flags" above.
+- **Account suspension** (#2299, endpoints themselves per #1201/#2029) —
+  suspend, unsuspend, and look up an account's current suspension status
+  (see "Account suspension" above).
+- **Test/Ops Fixtures** (#1826) — `POST /api/builders/:id/land-cap-grants`
+  and `/higgles-grants`, visually set apart with a "Test/Ops only — not a
+  real transaction" badge so neither ever reads as a genuine income event.
+
 ## Avatar ownership + equip endpoint (#680, sub-issue of #679/N53)
 
 Owner direction on Control Room (N53): "I do want to allow users to upload
