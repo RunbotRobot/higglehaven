@@ -32,13 +32,13 @@ import { generateLandletRing, powerLawPlots } from '../landGenerator.js';
 import { generateOrganicMosaic } from '../organicLandGenerator.js';
 import { json, HttpError } from './http.js';
 import {
-  readJson, stringValue, finiteNumber, queryLimit, decodeCursor, encodeCursor,
+  readJson, stringValue, finiteNumber, queryLimit, decodeCursor, encodeCursor, positiveInteger,
 } from './validation.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { requireAdmin } from './auth.js';
 import {
   candidateFromRow, landletFromRow, landCandidateRingFromRow, worldFromRow, validateLandlet, validateWorld,
-  positiveInteger, requireLandlet,
+  requireLandlet,
 } from '../index.js';
 
 // Owner (issue-570, 2026-09-09 -- picked option (a), "apply unconditionally

@@ -29,10 +29,14 @@ import {
 import { requireCurrentUser, requireAdmin, assertOwner } from './auth.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 import { handleSellerFeedbackList } from './reputation.js';
+// #2619 landed on main while this PR was in CI and already moved
+// handleSellerPayouts out of worker/index.js -- import it from its real
+// home instead of back through index.js.
+import { handleSellerPayouts } from './seller-payouts-tax.js';
 import {
   sellerFromRow, getOrCreateSellerForUser, stripeAccountStatusJson, stripeConfigured, stripeRequest,
   deriveStripeOnboardingStatus, requireSessionSeller, integerValue, selectRowsByIdsChunked,
-  sellerDeletionStatements, handleSellerPayouts,
+  sellerDeletionStatements,
 } from '../index.js';
 
 const SELLER_CREATE_RATE_LIMIT_MAX = 20;
