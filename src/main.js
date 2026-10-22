@@ -11083,9 +11083,13 @@ const SHOP_SKY_VERTEX_SHADER = `
   attribute vec3 color;
   varying vec3 vColor;
   varying vec3 vWorldPosition;
+  varying vec3 vNormalWorld;
   void main() {
     vColor = color;
     vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+    // See the fragment shader's own owner-report-2026-10-21 comment on
+    // grazeFade -- this is purely that fix's input, not used for lighting.
+    vNormalWorld = normalize(mat3(modelMatrix) * normal);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
@@ -11093,6 +11097,7 @@ const SHOP_SKY_VERTEX_SHADER = `
 const SHOP_SKY_FRAGMENT_SHADER = `
   varying vec3 vColor;
   varying vec3 vWorldPosition;
+  varying vec3 vNormalWorld;
   uniform float uTime;
   uniform float uFadeLowZ;
   uniform float uFadeHighZ;
@@ -11305,7 +11310,48 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     // is the pole-distance in sin(angle-from-zenith) terms, independent of
     // the current world radius — 0 at the apex, growing toward the horizon.
     float apexFade = smoothstep(0.0, 0.08, length(normalizedXY));
-    float visibility = heightFrac * cloudMask * apexFade * 0.5; // kept subtle — an overlay, not a repaint
+    // owner-report-2026-10-21 (round 3): none of the fixes above touch a
+    // different failure mode from the same fbm() footprint-fade logic --
+    // confirmed via a from-scratch repro harness (matching wall/dome
+    // geometry+shader at the real production world's own scale, since the
+    // only sandbox account available keeps every camera distance inside the
+    // depth buffer's high-precision near range, same limitation #2606's own
+    // honesty check flagged) that isolated the *dome* mesh alone (wall
+    // hidden entirely) as sufficient to reproduce a crisp, stair-stepped
+    // crack through the sky -- present identically regardless of the wall,
+    // regardless of #2606's polygonOffset (even at 1000x its shipped
+    // magnitude), and regardless of giving the dome real (multi-meter, not
+    // sub-ULP) geometric overlap with the wall. Forcing cloudMask's own
+    // visibility contribution to zero made the crack vanish outright, which
+    // the wall/dome-seam theory never explained: this was the fbm()
+    // footprint-threshold aliasing from #1585/#1799 all along, just not
+    // triggered by any camera angle those two fixes were tuned against --
+    // true grazing/near-tangential incidence (flying close alongside the
+    // wall, looking almost straight along it) drives fwidth(p) for *every*
+    // octave far past even #1799's widened 0.03 upper bound, and GPU quad-
+    // derivative blockiness turns that threshold crossing into a visible
+    // stair-step rather than a smooth fade, exactly as #1799's own comment
+    // already predicted for this mechanism in general.
+    // Widening the threshold a third time would eventually hit the same
+    // wall again at a steep enough angle, so this instead fades the cloud
+    // overlay itself out as the view approaches grazing incidence against
+    // the dome/wall surface -- a Fresnel-style facing term, not another
+    // footprint-threshold tweak. facing is 1.0 looking straight at the
+    // surface (normal viewing, including straight up at the zenith) and
+    // approaches 0.0 at true grazing/tangential incidence, exactly where
+    // fwidth()'s blockiness becomes visible. Confirmed via the same repro
+    // harness across every previously-clean case (zenith, moderate-pitch
+    // ground view, realistic near-wall flight) that this is pixel-identical
+    // to the unfixed shader -- the fade only ever engages in the narrow
+    // facing range right at the silhouette, where a human player is never
+    // looking at ordinary cloud detail anyway. 0.35 was the narrowest
+    // margin that still fully cleared the crack even at a deliberately
+    // pathological near-impossible test angle (camera 0.2m from a 300m-
+    // radius wall, pitch 2°, almost perfectly tangential) with headroom.
+    vec3 viewDir = normalize(cameraPosition - vWorldPosition);
+    float facing = abs(dot(normalize(vNormalWorld), viewDir));
+    float grazeFade = smoothstep(0.0, 0.35, facing);
+    float visibility = heightFrac * cloudMask * apexFade * grazeFade * 0.5; // kept subtle — an overlay, not a repaint
     vec3 cloudColor = vec3(0.99, 0.99, 1.0);
     gl_FragColor = vec4(mix(vColor, cloudColor, visibility), 1.0);
   }
