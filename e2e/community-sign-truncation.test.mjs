@@ -67,7 +67,10 @@ await page.route(`**/api/instances/${signInstance.instanceId}/posts*`, async (ro
 // Manage Posts instead of un-flagging.
 await communitySignBtn().click();
 await page.waitForSelector('#sign-posts-modal.visible', { timeout: 5000 });
-await page.waitForFunction(() => document.querySelectorAll('.sign-post-row').length === 3, { timeout: 5000 });
+// #2635 (2nd waitForFunction arg/options sweep): the real applied timeout
+// was always Playwright's dishonored 30000ms default, never 5000 -- 30000ms
+// here matches that previously-dishonored default so this can't regress.
+await page.waitForFunction(() => document.querySelectorAll('.sign-post-row').length === 3, null, { timeout: 30000 });
 
 const rowCount = await page.locator('.sign-post-row').count();
 const truncatedHidden = await page.locator('#sign-posts-truncated').evaluate((el) => el.hidden);
