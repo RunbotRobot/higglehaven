@@ -26,7 +26,8 @@ import {
 } from './lib/storage.js';
 import {
   handleUploadedAsset, handleModelUpload, handleModelListing, handleModelStorage, handleModelCleanup,
-  scheduledModelCleanup, cleanupUnreferencedModels,
+  scheduledModelCleanup, cleanupUnreferencedModels, handleListSavedLayouts, handleSavedLayouts,
+  savedLayoutFromRow, savedLayoutInstanceFromRow,
 } from './lib/models.js';
 import {
   handleControlRoomAdminPage, handleAdminActionLogPage, handleAdminDashboardPage,
@@ -1578,117 +1579,6 @@ const LANDLET_SIDE_M = Math.sqrt(LANDLET_AREA_M2);
 // (validating a placement) and handleLandletLevels' own DELETE branch
 // (deciding what still fits once a level is removed).
 const HALF_LEVEL_HEIGHT_M = LEVEL_HEIGHT_M / 2;
-
-
-function savedLayoutFromRow(row) {
-  return {
-    savedLayoutId: row.saved_layout_id,
-    sourceLandletId: row.source_landlet_id,
-    sourceLevelIndex: row.source_level_index,
-    name: row.name,
-    createdAt: row.created_at,
-    instanceCount: row.instance_count,
-  };
-}
-
-// #634 (sub-issue of #631): GET /api/builders/me/saved-layouts — newest
-// first, same cursor shape as GET /api/notifications above (DESC on both
-// created_at and the tiebreak id, "older than the last row already seen"
-// on the next page) since a builder's own saved-layout history reads the
-// same way a notification feed does, not like the ascending lists
-// (auctions, landlets, instances) elsewhere in this file.
-async function handleListSavedLayouts(request, db, url) {
-  const sessionBuilder = await requireSessionBuilder(request, db);
-  const limit = queryLimit(url.searchParams.get('limit'), 100);
-  const cursor = decodeCursor(url.searchParams.get('cursor'));
-  const conditions = ['l.builder_id = ?'];
-  const bindings = [sessionBuilder.builder_id];
-  if (cursor) {
-    conditions.push('(l.created_at < ? OR (l.created_at = ? AND l.saved_layout_id < ?))');
-    bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
-  }
-  const { results } = await db.prepare(`
-    SELECT l.*, COUNT(i.source_instance_id) AS instance_count
-    FROM saved_level_layouts l
-    LEFT JOIN saved_layout_instances i ON i.saved_layout_id = l.saved_layout_id
-    WHERE ${conditions.join(' AND ')}
-    GROUP BY l.saved_layout_id
-    ORDER BY l.created_at DESC, l.saved_layout_id DESC LIMIT ?
-  `).bind(...bindings, limit + 1).all();
-  const hasMore = results.length > limit;
-  const page = results.slice(0, limit);
-  const last = page.at(-1);
-  return json({
-    savedLayouts: page.map(savedLayoutFromRow),
-    nextCursor: hasMore ? encodeCursor(last.created_at, last.saved_layout_id) : null,
-  });
-}
-
-// #635's own preview needs each instance's full snapshot (template,
-// position, rotation, crop, scale) to actually render it — the same shape
-// versionInstanceFromRow already gives createMeshForInstance for a landlet
-// version's own snapshot rows, just read off saved_layout_instances
-// instead of version_instances.
-function savedLayoutInstanceFromRow(row) {
-  return {
-    instanceId: row.source_instance_id,
-    id: row.source_instance_id,
-    templateId: row.template_id,
-    x: row.x_m,
-    y: row.y_m,
-    z: row.z_m,
-    rotationX: row.rotation_x_rad,
-    rotationY: row.rotation_y_rad,
-    rotationZ: row.rotation_z_rad,
-    label: row.label,
-    crop: JSON.parse(row.crop_json || '{}'),
-    scale: row.scale,
-    isCommunitySign: Boolean(row.is_community_sign),
-    isCommunityCalendar: Boolean(row.is_community_calendar),
-  };
-}
-
-// #944: the DELETE branch below is an authenticated, owner-gated,
-// repeatable mutation with no rate limit at all -- unlike this file's other
-// owner-gated CRUD DELETEs (friendship-mutate, bundle-mutate) and unlike
-// saved-layout *creation* itself (SAVED_LAYOUT_CREATE_RATE_LIMIT_MAX).
-const SAVED_LAYOUT_DELETE_RATE_LIMIT_MAX = 20;
-
-// #634: GET/DELETE /api/saved-layouts/:id — owner-gated the same way every
-// other builder-owned resource in this file is (assertOwner against the
-// session's own resolved builder id), a separate top-level collection
-// rather than nested under /builders/me since a single saved layout is
-// addressed by its own id, not by the builder's — the list above is the
-// only place that needs the builder's own id in its path.
-async function handleSavedLayouts(request, db, route) {
-  if (request.method === 'GET' && route.length === 2) {
-    const savedLayoutId = route[1];
-    const row = await db.prepare('SELECT * FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).first();
-    if (!row) throw new HttpError('Saved layout not found', 404);
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    assertOwner(row.builder_id, sessionBuilder.builder_id, 'Not your saved layout');
-    const { results } = await db.prepare(
-      'SELECT * FROM saved_layout_instances WHERE saved_layout_id = ? ORDER BY source_instance_id',
-    ).bind(savedLayoutId).all();
-    return json({
-      savedLayout: { ...savedLayoutFromRow(row), instanceCount: results.length, instances: results.map(savedLayoutInstanceFromRow) },
-    });
-  }
-
-  if (request.method === 'DELETE' && route.length === 2) {
-    const savedLayoutId = route[1];
-    const row = await db.prepare('SELECT * FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).first();
-    if (!row) throw new HttpError('Saved layout not found', 404);
-    const sessionBuilder = await requireSessionBuilder(request, db);
-    assertOwner(row.builder_id, sessionBuilder.builder_id, 'Not your saved layout');
-    await checkRateLimit(db, `saved-layout-delete:${sessionBuilder.builder_id}`, SAVED_LAYOUT_DELETE_RATE_LIMIT_MAX);
-    // saved_layout_instances cascades via its own FOREIGN KEY ... ON
-    // DELETE CASCADE (migration 0080) — nothing else to clean up here.
-    await db.prepare('DELETE FROM saved_level_layouts WHERE saved_layout_id = ?').bind(savedLayoutId).run();
-    return json({ deleted: true });
-  }
-  return json({ error: 'Not found' }, 404);
-}
 
 // Land cap (docs/SPEC.md §3: "Grows via a formula converting trailing-30-day
 // higgles earnings per 1,000 m² owned into cap increases. Ratcheting: once
