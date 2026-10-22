@@ -68,10 +68,17 @@ await seedPage.fill('#upload-name', PRODUCT_NAME);
 await seedPage.fill('#upload-price', '25');
 await seedPage.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await seedPage.click('#upload-submit-btn');
-await seedPage.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+// #2636 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeouts themselves are widened for real headroom under CI
+// load, same margins e2e/purchase-refunds.test.mjs's own upload-flow waits use.
+await seedPage.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
 await seedPage.waitForTimeout(300);
 await seedPage.click('#upload-submit-btn');
-await seedPage.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), { timeout: 10000 });
+await seedPage.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 20000 });
 await seedPage.waitForTimeout(500);
 
 async function fetchJson(pathAndQuery, options) {
