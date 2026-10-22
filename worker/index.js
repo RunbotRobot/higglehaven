@@ -66,6 +66,7 @@ import {
 import {
   handleBundles, handleStartAuction, handleAuctions, handleAuctionBids, bundleFromRow,
 } from './lib/auctions.js';
+import { LANDLET_RELEASED_VIA_AUCTION_SQL, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 } from './lib/land-cap.js';
 
 // #1360: generic hardening every response from this Worker should carry,
 // regardless of path — applied in one place (fetch's own wrapper below)
@@ -5130,10 +5131,10 @@ async function handleSavedLayouts(request, db, route) {
 // barely-too-big one read as allowed, purely because of where the display
 // rounded.
 const LAND_CAP_STARTER_M2 = 1000; // matches the free starter lándlet exactly
-// See the land-cap comment block above — a builder comparing two numbers
-// the UI itself only ever shows rounded to the nearest whole m² shouldn't
-// get a different answer than what those rounded numbers themselves imply.
-export const LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 = 1;
+// LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 (see the land-cap comment block
+// above) moved to worker/lib/land-cap.js, re-imported below — see that
+// module's own header comment for why exporting it directly from this
+// file (wrangler.jsonc's "main") broke `wrangler dev`.
 const LAND_CAP_TRAILING_WINDOW_DAYS = 30;
 const LAND_CAP_M2_PER_DOLLAR_PER_1000M2 = 100;
 
@@ -8810,13 +8811,10 @@ async function exportCommerceData(db, builderRow) {
 // landlet state — ownership itself doesn't move until the auction
 // actually resolves (resolveAuction), so this only changes claim
 // eligibility, never who currently owns/builds on the landlet.
-export const LANDLET_RELEASED_VIA_AUCTION_SQL = `EXISTS (
-  SELECT 1 FROM auctions
-  WHERE auctions.landlet_id = owned.landlet_id AND auctions.status = 'active'
-    AND (auctions.starting_bid_cents = 0 OR EXISTS (
-      SELECT 1 FROM auction_bids WHERE auction_bids.auction_id = auctions.auction_id
-    ))
-)`;
+//
+// Moved to worker/lib/land-cap.js (see that module's own header comment) —
+// re-imported below rather than declared here because exporting it
+// directly from this file (wrangler.jsonc's "main") broke `wrangler dev`.
 
 // #1711 (owner decision, 2026-10-13): surfaces an active auction on a
 // landlet as a structured 409 conflict -- "current high bid, bidder

@@ -6,8 +6,7 @@
 //
 // Deliberately NOT included here: requireSessionBuilder/assertOwner
 // (shared across dozens of other handlers), requireLandlet (shared by
-// every landlet-touching handler), recomputeLandCap/LANDLET_RELEASED_VIA_
-// AUCTION_SQL/LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 (the land-cap domain —
+// every landlet-touching handler), recomputeLandCap (the land-cap domain —
 // shared by handleLandletLevels too, not auction-specific), formatCents/
 // nonnegativeInteger/positiveInteger/validateCropShape/validateScale
 // (generic utilities used across the whole file), and resolveAuctionIfDue/
@@ -16,7 +15,10 @@
 // -- each of these stays in worker/index.js and is imported back below,
 // the same one-directional-except-for-genuinely-shared-state shape
 // worker/lib/reputation.js's own comment documents for requireSessionSeller
-// (#2532).
+// (#2532). LANDLET_RELEASED_VIA_AUCTION_SQL/LAND_CAP_DISPLAY_ROUNDING_
+// BUFFER_M2 (also land-cap domain) are the one exception to "imported back
+// from worker/index.js": see worker/lib/land-cap.js's own header comment
+// for why those two specifically needed their own module instead.
 import { json, HttpError, clientIp } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import {
@@ -24,10 +26,10 @@ import {
 } from './validation.js';
 import { fireNotifications } from './notifications.js';
 import { requireSessionBuilder, assertOwner } from './auth.js';
+import { LANDLET_RELEASED_VIA_AUCTION_SQL, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 } from './land-cap.js';
 import {
   requireLandlet, recomputeLandCap, resolveAuctionIfDue, resolveDueAuctions,
   nonnegativeInteger, positiveInteger, validateCropShape, validateScale, formatCents,
-  LANDLET_RELEASED_VIA_AUCTION_SQL, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2,
 } from '../index.js';
 
 // Saved groups a builder can stamp down together in one tap (see
