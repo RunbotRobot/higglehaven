@@ -19,10 +19,12 @@
 // both unit and e2e) -- same precedent as worker/lib/builder-profile.js's
 // own circular import of templateFromRow/recomputeLandCap.
 //
-// candidateRowFromLandlet moved homes mid-flight: #2534 (merged into main
-// while this extraction was in progress) moved it into
-// worker/lib/world-generation.js, so it's imported from there directly
-// instead of circularly through worker/index.js.
+// candidateRowFromLandlet and handleSoldOutMarkers both moved homes
+// mid-flight: #2534 (merged into main while this extraction was in
+// progress) moved candidateRowFromLandlet into worker/lib/world-generation.js,
+// and #2616 moved handleSoldOutMarkers into worker/lib/purchases-admin.js --
+// both are imported from their real homes directly instead of circularly
+// through worker/index.js.
 //
 // LEVEL_HEIGHT_M/HALF_LEVEL_HEIGHT_M/LANDLET_AREA_M2/LANDLET_RELEASED_VIA_AUCTION_SQL
 // are duplicated below rather than imported -- each is also used by code
@@ -39,6 +41,7 @@ import { fireNotifications } from './notifications.js';
 import { requireSessionBuilder, assertOwner, requireAdmin } from './auth.js';
 import { requireBuilder } from './builder-profile.js';
 import { candidateRowFromLandlet } from './world-generation.js';
+import { handleSoldOutMarkers } from './purchases-admin.js';
 import { landletMaxWorldRadius } from '../geometry.js';
 import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from '../earthCurvature.js';
 import {
@@ -46,7 +49,7 @@ import {
   optionalLabelValue, integerValue, recomputeLandCap,
   cropsEqual, assertInstanceZWithinLevels, assertInstanceXYWithinLandlet, assertInstanceScaleWithinBounds,
   getInstancesById, validateLandlet, validateInstance, instanceFromRow,
-  assertCropWithinTemplateBounds, handleSoldOutMarkers, handleStartAuction,
+  assertCropWithinTemplateBounds, handleStartAuction,
 } from '../index.js';
 
 // docs/SPEC.md §1's vertical construction (issue #167/#168): matches

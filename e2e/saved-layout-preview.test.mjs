@@ -171,8 +171,11 @@ await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
 // #2146 (sub-issue of #2138): same waitForFunction arg/options bug as above
-// -- null arg, 60000ms real timeout.
-await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, null, { timeout: 60000 });
+// -- null arg, real timeout. #2589: 60000ms stopped being enough under
+// further CI-load growth -- widened to 120000ms, same mitigation shape as
+// #2570's own margin bump elsewhere in this suite. No step/job-level
+// timeout configured on this CI job, so there's ample headroom.
+await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, null, { timeout: 120000 });
 await page.locator('.settings-field', { hasText: 'Saved Layouts' }).locator('.version-row')
   .locator('button', { hasText: 'Delete' }).click();
 await page.waitForFunction(

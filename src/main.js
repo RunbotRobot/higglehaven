@@ -217,6 +217,9 @@ import { ensureBuilderIdentity, ensureSellerIdentity, ensureShopperIdentity } fr
 // until those pieces get a real home outside main.js via their own
 // future extractions).
 import { refreshNotificationsBadge, refreshFriendsBadge, refreshDmBadge } from './account/menu.js';
+// #2561: the faux-layout preview mode now lives in src/build/layoutPreview.js
+// — see that module's own comment for its dependency notes.
+import { enterLayoutPreviewMode } from './build/layoutPreview.js';
 
 let activeBundleTab = 'mine';
 
@@ -245,7 +248,7 @@ export const START_MODE_KEY = 'higglehaven.startMode';
 // switch (see START_MODE_KEY's own comment above) — this carries which
 // saved layout to load across that reload, since START_MODE_KEY itself
 // only ever holds a bare mode name.
-const PREVIEW_SAVED_LAYOUT_ID_KEY = 'higglehaven.previewSavedLayoutId';
+export const PREVIEW_SAVED_LAYOUT_ID_KEY = 'higglehaven.previewSavedLayoutId';
 // #1150: same reload-carries-one-value shape as PREVIEW_SAVED_LAYOUT_ID_KEY
 // above — the "My Lands" list's own "open for editing" link reaches a
 // specific one of a builder's (possibly several — see
@@ -306,7 +309,7 @@ const BUILD_INFO_TEXT = `build ${__BUILD_COMMIT__} · ${__BUILD_TIME__}`;
 
 // Dev-only orbit camera so the scene is inspectable on a phone (pinch/drag)
 // before any real avatar movement exists. Not part of the in-world control scheme.
-const controls = new OrbitControls(camera, renderer.domElement);
+export const controls = new OrbitControls(camera, renderer.domElement);
 controls.target.set(0, 0, 0);
 controls.enableDamping = true;
 // Bounds how far a single scroll/pinch tick can move the camera (see the
@@ -620,7 +623,7 @@ function wireDraggingBehavior(transformControls) {
 // captured level/upright (a real RealityScan brick scan came out tilted),
 // so a builder needs to be able to correct that on any axis, not just
 // spin the product in place.
-const rotateControls = new TransformControls(camera, renderer.domElement);
+export const rotateControls = new TransformControls(camera, renderer.domElement);
 rotateControls.setMode('rotate');
 scene.add(rotateControls.getHelper());
 wireDraggingBehavior(rotateControls);
@@ -636,7 +639,7 @@ wireDraggingBehavior(rotateControls);
 // Rotate the object to match the wall once, and its move handles are then
 // "along the wall" / "into the wall" — no need to think in world axes at
 // all.
-const translateControls = new TransformControls(camera, renderer.domElement);
+export const translateControls = new TransformControls(camera, renderer.domElement);
 translateControls.setMode('translate');
 translateControls.space = 'local';
 scene.add(translateControls.getHelper());
@@ -7029,7 +7032,11 @@ async function renderAuctionSection() {
     if (myToken !== landletRenderToken) return;
     if (activeForMine.length > 0) {
       const row = document.createElement('div');
-      row.className = 'auction-row';
+      // #2607: also carries auction-row-mine -- the sibling Active Auctions
+      // list (buildAuctionRow, below) renders plain .auction-row elements
+      // for every site-wide active auction, so .auction-row alone no longer
+      // uniquely identifies this picker's own "your auction is live" row.
+      row.className = 'auction-row auction-row-mine';
       const info = document.createElement('div');
       info.className = 'auction-row-info';
       info.textContent = `Your auction is live — ${formatAuctionSummary(activeForMine[0])}`;
@@ -8562,7 +8569,7 @@ const scratchBox = new THREE.Box3();
 const scratchBoxSize = new THREE.Vector3();
 const scratchBoxCenter = new THREE.Vector3();
 
-function addSelectionOutline(mesh) {
+export function addSelectionOutline(mesh) {
   if (selectionOutlines.has(mesh)) return;
   const helper = new THREE.BoxHelper(mesh, SELECTION_OUTLINE_COLOR);
   scene.add(helper);
@@ -8579,7 +8586,7 @@ function addSelectionOutline(mesh) {
   selectionOutlines.set(mesh, { helper, fill });
 }
 
-function removeSelectionOutline(mesh) {
+export function removeSelectionOutline(mesh) {
   const entry = selectionOutlines.get(mesh);
   if (!entry) return;
   scene.remove(entry.helper);
@@ -8835,7 +8842,7 @@ function updateSelectionUI() {
   }
 }
 
-function clearSelection() {
+export function clearSelection() {
   for (const mesh of selectedMeshes) removeSelectionOutline(mesh);
   selectedMeshes.clear();
 }
@@ -10001,6 +10008,13 @@ window.addEventListener('pointercancel', endSwipe);
 // next frame — so by the time our own animate() loop calls update(), the
 // dolly has already happened and there's nothing left to measure.
 let lastKnownDistance = camera.position.distanceTo(controls.target);
+// src/build/layoutPreview.js (#2561) needs to resync this on its own
+// one-time camera jump (see that module's own comment) — an ES import
+// binding is read-only from its side, so it goes through this setter
+// rather than a direct assignment.
+export function setLastKnownDistance(value) {
+  lastKnownDistance = value;
+}
 
 // Re-centering on the selected product needs to happen only for an actual
 // one-finger rotate — not a two-finger pan, and not the tail end of a pan
@@ -10343,7 +10357,7 @@ function applyEdgePanWhileDraggingProduct() {
 // movement+sky callback instead (see enterShopMode); Sell mode has no
 // per-frame work of its own (paginated, static between page turns) and
 // registers null (see enterSellMode).
-function buildModeFrameUpdate(now) {
+export function buildModeFrameUpdate(now) {
   updateTargetTween(now);
   applyEdgePanWhileDraggingProduct();
   controls.update();
@@ -11051,9 +11065,13 @@ const SHOP_SKY_VERTEX_SHADER = `
   attribute vec3 color;
   varying vec3 vColor;
   varying vec3 vWorldPosition;
+  varying vec3 vNormalWorld;
   void main() {
     vColor = color;
     vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+    // See the fragment shader's own owner-report-2026-10-21 comment on
+    // grazeFade -- this is purely that fix's input, not used for lighting.
+    vNormalWorld = normalize(mat3(modelMatrix) * normal);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
@@ -11061,6 +11079,7 @@ const SHOP_SKY_VERTEX_SHADER = `
 const SHOP_SKY_FRAGMENT_SHADER = `
   varying vec3 vColor;
   varying vec3 vWorldPosition;
+  varying vec3 vNormalWorld;
   uniform float uTime;
   uniform float uFadeLowZ;
   uniform float uFadeHighZ;
@@ -11273,7 +11292,48 @@ const SHOP_SKY_FRAGMENT_SHADER = `
     // is the pole-distance in sin(angle-from-zenith) terms, independent of
     // the current world radius — 0 at the apex, growing toward the horizon.
     float apexFade = smoothstep(0.0, 0.08, length(normalizedXY));
-    float visibility = heightFrac * cloudMask * apexFade * 0.5; // kept subtle — an overlay, not a repaint
+    // owner-report-2026-10-21 (round 3): none of the fixes above touch a
+    // different failure mode from the same fbm() footprint-fade logic --
+    // confirmed via a from-scratch repro harness (matching wall/dome
+    // geometry+shader at the real production world's own scale, since the
+    // only sandbox account available keeps every camera distance inside the
+    // depth buffer's high-precision near range, same limitation #2606's own
+    // honesty check flagged) that isolated the *dome* mesh alone (wall
+    // hidden entirely) as sufficient to reproduce a crisp, stair-stepped
+    // crack through the sky -- present identically regardless of the wall,
+    // regardless of #2606's polygonOffset (even at 1000x its shipped
+    // magnitude), and regardless of giving the dome real (multi-meter, not
+    // sub-ULP) geometric overlap with the wall. Forcing cloudMask's own
+    // visibility contribution to zero made the crack vanish outright, which
+    // the wall/dome-seam theory never explained: this was the fbm()
+    // footprint-threshold aliasing from #1585/#1799 all along, just not
+    // triggered by any camera angle those two fixes were tuned against --
+    // true grazing/near-tangential incidence (flying close alongside the
+    // wall, looking almost straight along it) drives fwidth(p) for *every*
+    // octave far past even #1799's widened 0.03 upper bound, and GPU quad-
+    // derivative blockiness turns that threshold crossing into a visible
+    // stair-step rather than a smooth fade, exactly as #1799's own comment
+    // already predicted for this mechanism in general.
+    // Widening the threshold a third time would eventually hit the same
+    // wall again at a steep enough angle, so this instead fades the cloud
+    // overlay itself out as the view approaches grazing incidence against
+    // the dome/wall surface -- a Fresnel-style facing term, not another
+    // footprint-threshold tweak. facing is 1.0 looking straight at the
+    // surface (normal viewing, including straight up at the zenith) and
+    // approaches 0.0 at true grazing/tangential incidence, exactly where
+    // fwidth()'s blockiness becomes visible. Confirmed via the same repro
+    // harness across every previously-clean case (zenith, moderate-pitch
+    // ground view, realistic near-wall flight) that this is pixel-identical
+    // to the unfixed shader -- the fade only ever engages in the narrow
+    // facing range right at the silhouette, where a human player is never
+    // looking at ordinary cloud detail anyway. 0.35 was the narrowest
+    // margin that still fully cleared the crack even at a deliberately
+    // pathological near-impossible test angle (camera 0.2m from a 300m-
+    // radius wall, pitch 2°, almost perfectly tangential) with headroom.
+    vec3 viewDir = normalize(cameraPosition - vWorldPosition);
+    float facing = abs(dot(normalize(vNormalWorld), viewDir));
+    float grazeFade = smoothstep(0.0, 0.35, facing);
+    float visibility = heightFrac * cloudMask * apexFade * grazeFade * 0.5; // kept subtle — an overlay, not a repaint
     vec3 cloudColor = vec3(0.99, 0.99, 1.0);
     gl_FragColor = vec4(mix(vColor, cloudColor, visibility), 1.0);
   }
@@ -15548,7 +15608,7 @@ const SHOP_HIDDEN_BUILDER_UI_IDS = [
 // modal it expected gone had already reopened by the time it checked).
 // Landing on this same inert end state instead means declining anywhere
 // always reads the same way, with no redundant second prompt.
-function showShopAccessGate() {
+export function showShopAccessGate() {
   for (const id of SHOP_HIDDEN_BUILDER_UI_IDS) {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
@@ -16211,7 +16271,7 @@ function findRootSellerShowcaseMesh(object) {
 // Shop's own list, notifications/friends stay reachable — Sell (unlike
 // Shop) always runs under a real logged-in account, which those features
 // are genuinely useful for.
-const SELL_HIDDEN_BUILDER_UI_IDS = [
+export const SELL_HIDDEN_BUILDER_UI_IDS = [
   'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel', 'level-controls',
   // #1169: the compass orients by Shop/Build's own free-look camera or
   // avatar facing — Sell has neither (its own faux-landlet showcase is a
@@ -16219,326 +16279,13 @@ const SELL_HIDDEN_BUILDER_UI_IDS = [
   'compass-panel',
 ];
 
-// #635 (sub-issue of #631): the faux-layout preview — a dedicated,
-// read-only 3D view rendering one saved layout's instances at their true
-// original relative positions (never sellerShowcase's own grid-repacking —
-// see savedLayoutPreview.js's own comment on why), plus drag-rectangle
-// marquee selection over them (the v1 interaction agreed on #631 in place
-// of a literal freehand circle). Reuses the same "faux ground plane +
-// real instance meshes" technique sellerShowcase already established
-// (curveGroundGeometry on a swapped `landlet.geometry`, createMeshForInstance
-// for real content) and the existing addSelectionOutline/removeSelectionOutline
-// highlight Build mode's own single-selection already uses, rather than
-// inventing either from scratch.
-let layoutPreviewMeshes = [];
-// The saved layout's own instance records, exactly as #635's GET endpoint
-// returned them (never recentered the way the meshes' render positions
-// are) — #636's "Paste" reads a selected instance's real x/y/z/rotation/
-// crop/scale/flags back out of here, since those (not the preview-only
-// recentered mesh position) are what should land on the target landlet.
-let layoutPreviewInstances = [];
-const selectedSavedInstanceIds = new Set();
-// {x, y} in client (viewport) coordinates while a marquee drag is in
-// progress, else null — the one piece of state every pointer handler below
-// checks to know whether a drag is actually happening right now.
-let layoutPreviewDragStart = null;
-
-const layoutPreviewToolbarEl = document.getElementById('layout-preview-toolbar');
-const layoutPreviewBackBtn = document.getElementById('layout-preview-back-btn');
-const layoutPreviewNameEl = document.getElementById('layout-preview-name');
-const layoutPreviewSelectionCountEl = document.getElementById('layout-preview-selection-count');
-const layoutPreviewMarqueeEl = document.getElementById('layout-preview-marquee');
-const layoutPreviewPasteTargetEl = document.getElementById('layout-preview-paste-target');
-const layoutPreviewPasteBtn = document.getElementById('layout-preview-paste-btn');
-
-function updateLayoutPreviewSelectionUI() {
-  const n = selectedSavedInstanceIds.size;
-  layoutPreviewSelectionCountEl.textContent = n === 0 ? '' : `${n} selected`;
-  layoutPreviewPasteBtn.hidden = n === 0;
-}
-
-// A raw pointerdown-then-pointerup with no real movement between them is a
-// plain click, not a drag — treated as "clear the selection" (the same
-// click-empty-space-to-deselect convention Build mode's own clearSelection
-// already follows) rather than as a zero-area rectangle that happens to
-// contain nothing.
-const LAYOUT_PREVIEW_DRAG_THRESHOLD_PX = 4;
-
-function updateLayoutPreviewMarquee(clientX, clientY) {
-  const x = Math.min(layoutPreviewDragStart.x, clientX);
-  const y = Math.min(layoutPreviewDragStart.y, clientY);
-  layoutPreviewMarqueeEl.style.left = `${x}px`;
-  layoutPreviewMarqueeEl.style.top = `${y}px`;
-  layoutPreviewMarqueeEl.style.width = `${Math.abs(clientX - layoutPreviewDragStart.x)}px`;
-  layoutPreviewMarqueeEl.style.height = `${Math.abs(clientY - layoutPreviewDragStart.y)}px`;
-}
-
-// Finishes a marquee drag: projects each preview mesh's real world position
-// through the live camera into screen-pixel space (the same NDC-to-pixel
-// conversion the renderer itself does internally, just done here explicitly
-// since three.js doesn't expose a mesh's own last-rendered screen position)
-// and keeps whichever ones land inside the dragged rectangle, via the same
-// pointInDragRect axis-aligned test savedLayoutPreview.js's own tests cover.
-function finishLayoutPreviewDrag(clientX, clientY) {
-  const rect = { x1: layoutPreviewDragStart.x, y1: layoutPreviewDragStart.y, x2: clientX, y2: clientY };
-  layoutPreviewDragStart = null;
-  layoutPreviewMarqueeEl.classList.remove('visible');
-
-  for (const mesh of layoutPreviewMeshes) removeSelectionOutline(mesh);
-  selectedSavedInstanceIds.clear();
-
-  const dragDistance = Math.hypot(rect.x2 - rect.x1, rect.y2 - rect.y1);
-  if (dragDistance >= LAYOUT_PREVIEW_DRAG_THRESHOLD_PX) {
-    const projected = new THREE.Vector3();
-    for (const mesh of layoutPreviewMeshes) {
-      projected.copy(mesh.position).project(camera);
-      // z > 1 in NDC space means behind the camera — never "in frame" even
-      // if its projected x/y happens to fall inside the rect.
-      if (projected.z > 1) continue;
-      const screenPoint = {
-        x: (projected.x + 1) / 2 * window.innerWidth,
-        y: (1 - projected.y) / 2 * window.innerHeight,
-      };
-      if (pointInDragRect(screenPoint, rect)) {
-        selectedSavedInstanceIds.add(mesh.userData.savedInstanceId);
-        addSelectionOutline(mesh);
-      }
-    }
-  }
-  updateLayoutPreviewSelectionUI();
-}
-
-renderer.domElement.addEventListener('pointerdown', (event) => {
-  if (currentMode !== 'layoutPreview') return;
-  layoutPreviewDragStart = { x: event.clientX, y: event.clientY };
-  layoutPreviewMarqueeEl.classList.add('visible');
-  updateLayoutPreviewMarquee(event.clientX, event.clientY);
-});
-renderer.domElement.addEventListener('pointermove', (event) => {
-  if (currentMode !== 'layoutPreview' || !layoutPreviewDragStart) return;
-  updateLayoutPreviewMarquee(event.clientX, event.clientY);
-});
-// On window, not just the canvas — a drag that ends after the pointer has
-// left the canvas (dragging the marquee out past the toolbar, say) still
-// needs to finish cleanly rather than leaving layoutPreviewDragStart set
-// forever with no matching pointerup ever landing on the canvas itself.
-window.addEventListener('pointerup', (event) => {
-  if (currentMode !== 'layoutPreview' || !layoutPreviewDragStart) return;
-  finishLayoutPreviewDrag(event.clientX, event.clientY);
-});
-
-layoutPreviewBackBtn.addEventListener('click', () => {
-  sessionStorage.setItem(START_MODE_KEY, 'build');
-  location.reload();
-});
-
-// #636 (sub-issue of #631): pastes the currently-selected saved instances
-// onto a landlet the builder owns, as brand-new placed_instances rows.
-//
-// Deliberately routed through the exact same POST /instances/batch
-// createInstancesRemote already uses for every other bulk-create — the
-// server applies its normal ownership/z-bounds checks with no special
-// "trusted paste" path, so e.g. a target landlet that hasn't purchased the
-// level a saved instance's z requires rejects it exactly like a normal
-// create would. instanceId is deliberately omitted from each payload
-// entry: the original ids belonged to placed_instances rows that no
-// longer exist (they were swept into this saved_layout_instances snapshot
-// when the level was removed), and the batch endpoint already assigns a
-// fresh id to any entry that omits one.
-
-// #648: "target landlet" was first shipped as never a real picker, on the
-// premise that a builder can only ever have one landlet claimed at a
-// time. That's not actually true here — ownedLandletsByBuilderId's own
-// comment in worker/index.js ("a builder can own more than one lándlet —
-// auctions can transfer extra ones in") and this same file's own
-// auction-start picker (renderStartSection, built for exactly #199/#249's
-// two-simultaneously-claimed-landlets case) both establish it as a real,
-// already-handled shape. Populated once per preview session (owned
-// landlets don't change mid-preview), same "fetch-all + default to
-// currentLandletId when it's in the list + only show a picker when
-// there's more than one" convention renderStartSection already uses.
-async function populateLayoutPreviewPasteTarget() {
-  let owned;
-  try {
-    owned = await fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId });
-  } catch {
-    owned = []; // surfaced instead at paste time, same as the empty-owned case below
-  }
-  layoutPreviewPasteTargetEl.innerHTML = '';
-  for (const ownedLandlet of owned) {
-    const option = document.createElement('option');
-    option.value = ownedLandlet.landletId;
-    option.textContent = ownedLandlet.name || ownedLandlet.landletId;
-    if (ownedLandlet.landletId === currentLandletId) option.selected = true;
-    layoutPreviewPasteTargetEl.appendChild(option);
-  }
-  layoutPreviewPasteTargetEl.hidden = owned.length <= 1;
-}
-
-layoutPreviewPasteBtn.addEventListener('click', async () => {
-  const selected = layoutPreviewInstances.filter((instance) => selectedSavedInstanceIds.has(instance.instanceId));
-  if (selected.length === 0) return;
-  const targetLandletId = layoutPreviewPasteTargetEl.value;
-  if (!targetLandletId) {
-    alert("You don't have a claimed lándlet to paste onto — claim one first.");
-    return;
-  }
-  layoutPreviewPasteBtn.disabled = true;
-  try {
-    // Both instanceId and id (savedLayoutInstanceFromRow's own alias for
-    // it) need stripping — validateInstance on the server falls back to
-    // input.id just as readily as input.instanceId, so leaving either one
-    // in place would hand the old, now-nonexistent id straight back
-    // instead of letting the server assign a fresh one.
-    await createInstancesRemote(selected.map(({ instanceId, id, ...instance }) => ({
-      ...instance,
-      landletId: targetLandletId,
-    })));
-    sessionStorage.setItem(START_MODE_KEY, 'build');
-    location.reload();
-  } catch (err) {
-    // #1362: a mid-chunk failure (createInstancesRemote's own #903
-    // succeededCount) already landed the earlier chunks server-side — a
-    // plain alert()-and-retry left selectedSavedInstanceIds covering the
-    // full original selection, so clicking Paste again resubmitted
-    // already-succeeded items too and created duplicates (ids are always
-    // stripped before submission, so the server just assigns them fresh
-    // ones). Dropping the already-succeeded prefix from the selection
-    // before re-enabling the button means a retry only resends what
-    // actually still needs it, same as syncBatchCreate's own use of this
-    // field.
-    const succeededCount = err.succeededCount ?? 0;
-    for (const instance of selected.slice(0, succeededCount)) {
-      selectedSavedInstanceIds.delete(instance.instanceId);
-    }
-    const remaining = selected.length - succeededCount;
-    alert(
-      succeededCount > 0
-        ? `Pasted ${succeededCount} item(s), but ${remaining} failed: ${err.message || ''}`.trim()
-        : (err.message || "Couldn't paste these items."),
-    );
-    layoutPreviewPasteBtn.disabled = false;
-  }
-});
-
-// Entered only via bootstrap() below (reached the same way Shop/Build/Sell
-// are — see START_MODE_KEY's own comment), never as an in-place transition
-// from another live mode, so there's no other mode's leftover scene state
-// to tear down here the way enterSellMode has to for a builder switching
-// tabs mid-session.
-async function enterLayoutPreviewMode() {
-  const savedLayoutId = sessionStorage.getItem(PREVIEW_SAVED_LAYOUT_ID_KEY);
-  sessionStorage.removeItem(PREVIEW_SAVED_LAYOUT_ID_KEY);
-  if (!savedLayoutId) {
-    // Reached with no id to actually preview (a stale/direct reload) —
-    // nothing to show, so land somewhere real instead of a blank scene.
-    sessionStorage.setItem(START_MODE_KEY, 'build');
-    location.reload();
-    return;
-  }
-
-  for (const id of SELL_HIDDEN_BUILDER_UI_IDS) {
-    const el = document.getElementById(id);
-    if (el) el.style.display = 'none';
-  }
-  layoutPreviewToolbarEl.classList.add('visible');
-  clearSelection();
-  translateControls.detach();
-  rotateControls.detach();
-  controls.enabled = false;
-  // #2552: shares Build's own tween/edge-pan/controls/debug/selection-
-  // highlight per-frame work (selection/highlight are both empty here —
-  // clearSelection() above and this mode's own no-highlighting design —
-  // so those two loops are harmless no-ops, same as they already are
-  // whenever Build itself has nothing selected).
-  registerModeFrameUpdate(buildModeFrameUpdate);
-
-  setBuilderId(await ensureBuilderIdentity());
-  if (!builderId) {
-    // N44: lands on showShopAccessGate's shared end state, not a full
-    // enterShopMode() call — see that function's own comment for why.
-    setCurrentMode('shop');
-    updateModeNavUI();
-    showShopAccessGate();
-    return;
-  }
-  // #1958: notifications/friends/DM stay reachable from this mode (see
-  // SELL_HIDDEN_BUILDER_UI_IDS's own comment below), same as Sell/Build --
-  // enterSellMode and bootstrap()'s own Build branch both refresh these
-  // three badges right after resolving builderId; this mode-entry path
-  // resolved it the same way but never did, leaving the bell/friends/DM
-  // badges stuck at their stale default while fully visible and clickable.
-  refreshNotificationsBadge();
-  refreshFriendsBadge();
-  refreshDmBadge();
-  populateLayoutPreviewPasteTarget();
-
-  let layout;
-  try {
-    const [catalog, loadedLayout] = await Promise.all([fetchCatalog(), fetchSavedLayout(savedLayoutId)]);
-    setActiveCatalog(catalog);
-    layout = loadedLayout;
-  } catch (err) {
-    layoutPreviewNameEl.textContent = err.message || 'Could not load this saved layout.';
-    return;
-  }
-  layoutPreviewNameEl.textContent = layout.name;
-  layoutPreviewInstances = layout.instances;
-
-  const ground = computeSavedLayoutGround(layout.instances);
-  const oldGeometry = landlet.geometry;
-  const halfWidth = ground.width / 2;
-  const halfDepth = ground.depth / 2;
-  const groundShape = new THREE.Shape([
-    new THREE.Vector2(-halfWidth, -halfDepth),
-    new THREE.Vector2(halfWidth, -halfDepth),
-    new THREE.Vector2(halfWidth, halfDepth),
-    new THREE.Vector2(-halfWidth, halfDepth),
-  ]);
-  landlet.geometry = new THREE.ShapeGeometry(groundShape);
-  normalizeGroundShapeUVs(landlet.geometry);
-  curveGroundGeometry(landlet.geometry);
-  oldGeometry.dispose();
-
-  // Frame the camera on the ground plane's own size right away, before
-  // waiting on each instance's (network-dependent) model load below — a
-  // camera still parked wherever Build mode left it, while the toolbar and
-  // name already read as "loaded", would show the wrong part of the world
-  // for as long as the slowest model takes to fetch.
-  const dist = Math.max(ground.width, ground.depth);
-  camera.position.set(dist * 0.75, -dist * 0.95, dist * 0.65);
-  camera.lookAt(0, 0, 0);
-  controls.target.set(0, 0, 0);
-  // The free-fly dolly-to-truck conversion (see the controls 'change'
-  // listener above, near lastKnownDistance's own declaration) compares the
-  // camera's distance-to-target against that stale module-level value on
-  // the very next 'change' event to infer a scroll/pinch dolly amount —
-  // without resyncing it here, this mode's own one-time camera jump reads
-  // as a huge dolly nothing actually did, and immediately flings
-  // controls.target far from the origin this preview is centered on.
-  lastKnownDistance = camera.position.distanceTo(controls.target);
-
-  const meshes = await Promise.all(layout.instances.map((instance) => createMeshForInstance({
-    ...instance,
-    x: instance.x - ground.centerX,
-    y: instance.y - ground.centerY,
-    z: instance.z - ground.centerZ,
-  })));
-  for (const mesh of meshes) {
-    if (!mesh) continue;
-    scene.add(mesh);
-    layoutPreviewMeshes.push(mesh);
-  }
-  // mesh.userData.instanceId is already set (to the same source instance
-  // id) by createMeshForInstance itself — savedInstanceId is just a
-  // same-value alias so this mode's own selection code reads its own
-  // clearly-named field rather than reaching into a field named for a
-  // concept (a live, ownable placed instance) that doesn't really apply
-  // to this read-only preview.
-  for (let i = 0; i < meshes.length; i++) {
-    if (meshes[i]) meshes[i].userData.savedInstanceId = layout.instances[i].instanceId;
-  }
-}
+// #2561: the faux-layout preview mode (layoutPreviewMeshes/Instances,
+// selectedSavedInstanceIds, marquee selection, paste, enterLayoutPreviewMode)
+// now lives in src/build/layoutPreview.js — see that module's own comment
+// for its dependency notes, including why it in turn imports several
+// Build-internal pieces back from this module (a temporary circular
+// import, same shape as account/menu.js's own, until build/scene.js's own
+// future extraction gives them a real home outside main.js).
 
 // #539/#540: makes Sell a genuine currentMode (the mode-architecture
 // plumbing #539 itself was closed without ever landing — see #540's own
@@ -16654,7 +16401,7 @@ const modeNavButtons = [...document.querySelectorAll('.mode-nav-btn')];
 // #1503: same gap as updateSellerViewToggleUI's own fix -- the .active
 // class alone communicated "current mode" visually but not to a screen
 // reader.
-function updateModeNavUI() {
+export function updateModeNavUI() {
   for (const btn of modeNavButtons) {
     const isActive = btn.dataset.mode === currentMode;
     btn.classList.toggle('active', isActive);
