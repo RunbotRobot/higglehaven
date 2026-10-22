@@ -5,13 +5,9 @@
 // from #2647's product-management modal (the "Manage"/"List" views
 // behind it). Extracted verbatim, zero behavior change.
 //
-// myProducts isn't extracted yet (lives in #2647, not yet landed) --
-// temporarily imported from '../main.js', same shape src/catalog/
-// upload.js's own header comment already uses for its own not-yet-
-// extracted dependencies. Repoint to '../sell/mode.js' once #2647 lands.
-//
-// openSellerModal (the showcase's own "Manage" button target) is also not
-// extracted yet for the same reason -- same temporary import.
+// myProducts and openSellerModal (the showcase's own "Manage" button
+// target) now both live in #2647's src/sell/mode.js, which landed after
+// this leaf's own work started -- imported from there directly.
 import * as THREE from 'three';
 import { currentMode } from '../world/state.js';
 import { scene } from '../world/scene.js';
@@ -19,7 +15,7 @@ import {
   curveGroundGeometry, normalizeGroundShapeUVs, landlet, createMeshForInstance, disposeObject,
 } from '../world/models.js';
 import { computeSellerShowcasePages, layoutSellerShowcasePage } from '../sellerShowcase.js';
-import { myProducts, openSellerModal } from '../main.js';
+import { myProducts, openSellerModal } from '../sell/mode.js';
 
 // Separate array from productMeshes (a genuine builder-owned landlet's
 // content, driven by persistLayout/sync) since these are read-only,

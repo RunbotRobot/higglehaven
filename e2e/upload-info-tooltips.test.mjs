@@ -39,7 +39,14 @@ console.log('upload-hint-btn aria-expanded after click (should be "true"):', exp
 await page.fill('#upload-name', 'Info Tooltip Suite Crate');
 await page.setInputFiles('#upload-file-input', path.join(REPO_ROOT, 'public', 'models', 'crate.glb'));
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+// #2639 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeout itself is widened to 60000ms for real headroom under
+// CI load.
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 60000 });
 await page.waitForTimeout(300);
 
 const dimensionsHintStartsHidden = await page.isHidden('#upload-dimensions-hint');

@@ -173,7 +173,14 @@ await pageA.click('#shop-fly-btn'); // starts landing from A's current (bx, by)
 // (updateShopMovement's own comment) and a slow/sparse RAF loop can leave
 // simulated time lagging well behind real time. Poll the real flight state
 // instead of guessing a bigger number.
-await pageA.waitForFunction(() => window.__testShopFlightState() === 'grounded', { timeout: 15000 });
+// #2639 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeout itself is widened to 60000ms for real headroom under
+// CI load.
+await pageA.waitForFunction(() => window.__testShopFlightState() === 'grounded', null, { timeout: 60000 });
 
 const finalPosition = await pageA.evaluate(() => window.__testShopAvatarPosition());
 

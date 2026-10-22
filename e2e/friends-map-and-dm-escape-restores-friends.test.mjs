@@ -53,14 +53,22 @@ await alicePage.click('#friends-close-btn');
 await openAccountMenu(bobPage);
 await bobPage.click('#friends-btn');
 await bobPage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
-await bobPage.waitForFunction(() => document.querySelectorAll('#friends-incoming-list .friend-row').length > 0, { timeout: 5000 });
+// #2637 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeout itself is widened to 30000ms for real headroom under
+// CI load (this is a two-concurrent-page Alice/Bob test, same reasoning
+// #2636's own sibling leaf used for single-page admin panels).
+await bobPage.waitForFunction(() => document.querySelectorAll('#friends-incoming-list .friend-row').length > 0, null, { timeout: 30000 });
 await bobPage.locator('#friends-incoming-list .friend-row').filter({ hasText: ALICE }).locator('button', { hasText: 'Accept' }).click();
-await bobPage.waitForFunction(() => document.querySelectorAll('#friends-accepted-list .friend-row').length > 0, { timeout: 5000 });
+await bobPage.waitForFunction(() => document.querySelectorAll('#friends-accepted-list .friend-row').length > 0, null, { timeout: 30000 });
 await bobSession.browser.close();
 
 await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
-await alicePage.waitForFunction(() => document.querySelectorAll('#friends-accepted-list .friend-row').length > 0, { timeout: 5000 });
+await alicePage.waitForFunction(() => document.querySelectorAll('#friends-accepted-list .friend-row').length > 0, null, { timeout: 30000 });
 
 // --- Friends-map modal: Escape should restore the Friends modal, same as "X" ---
 await alicePage.click('#friends-map-btn');
@@ -73,7 +81,7 @@ console.log('Friends-map modal closed by Escape (should be true):', mapClosedByE
 console.log('Friends modal restored after Escape on the map (should be true):', friendsRestoredAfterMapEscape);
 
 // --- Direct-messages modal: same check ---
-await alicePage.waitForFunction(() => document.querySelectorAll('#friends-accepted-list .friend-row').length > 0, { timeout: 5000 });
+await alicePage.waitForFunction(() => document.querySelectorAll('#friends-accepted-list .friend-row').length > 0, null, { timeout: 30000 });
 const messageBtnCount = await alicePage.locator('#friends-accepted-list .friend-row').filter({ hasText: BOB }).locator('button', { hasText: 'Message' }).count();
 console.log('"Message" button visible for Alice (id_verified) on Bob\'s row (should be 1):', messageBtnCount);
 await alicePage.locator('#friends-accepted-list .friend-row').filter({ hasText: BOB }).locator('button', { hasText: 'Message' }).click();

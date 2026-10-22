@@ -108,13 +108,20 @@ await claimLandlet(page);
 await openAccountMenu(page);
 await page.click('#friends-btn');
 await page.waitForSelector('#friends-modal.visible', { timeout: 5000 });
-await page.waitForFunction(() => document.querySelectorAll('#friends-accepted-list .friend-row').length > 0, { timeout: 5000 });
+// #2637 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeouts themselves are widened for real headroom under CI
+// load, same margins #2636's own sibling leaf used.
+await page.waitForFunction(() => document.querySelectorAll('#friends-accepted-list .friend-row').length > 0, null, { timeout: 30000 });
 await page.locator('#friends-accepted-list .friend-row').filter({ hasText: FRIEND_LABEL }).locator('button', { hasText: 'Message' }).click();
 await page.waitForSelector('#dm-modal.visible', { timeout: 5000 });
 
 // First (mocked) page: 2 messages, chronologically ascending (Msg 2 above
 // Msg 3), Load More visible since the mock reported a next page.
-await page.waitForFunction(() => document.querySelectorAll('#dm-list .dm-row').length === 2, { timeout: 10000 });
+await page.waitForFunction(() => document.querySelectorAll('#dm-list .dm-row').length === 2, null, { timeout: 60000 });
 const rowTextsFirstPage = await page.locator('#dm-list .dm-row').allTextContents();
 const loadMoreVisibleFirstPage = await page.locator('#dm-load-more-btn').isVisible();
 console.log('row texts after first (mocked) page (should be ["Msg 2...", "Msg 3..."]):', rowTextsFirstPage);
@@ -126,7 +133,7 @@ requestedCursors.length = 0;
 // ones (prepended, not appended) in correct chronological order, and since
 // the mock's second page had no nextCursor, the button hides again.
 await page.click('#dm-load-more-btn');
-await page.waitForFunction(() => document.querySelectorAll('#dm-list .dm-row').length === 4, { timeout: 10000 });
+await page.waitForFunction(() => document.querySelectorAll('#dm-list .dm-row').length === 4, null, { timeout: 60000 });
 const rowTextsAfterLoadMore = await page.locator('#dm-list .dm-row').allTextContents();
 const loadMoreHiddenAfterLastPage = !(await page.locator('#dm-load-more-btn').isVisible());
 console.log('row texts after Load More (should read oldest-to-newest, "Msg 0..." through "Msg 3..."):', rowTextsAfterLoadMore);

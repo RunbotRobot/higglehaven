@@ -7,7 +7,7 @@
 // reason landing as a real, linked reply in the same request.
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { cleanupUnreferencedModels } from './index.js';
+import { cleanupUnreferencedModels } from './lib/models.js';
 import { api, glbFile, signupAdmin, signupBuilder } from './test-helpers.js';
 
 let adminSession;
