@@ -8761,7 +8761,11 @@ the built-in catalog:
   `model_url` **or** `image_url` (#774), so a live product thumbnail is
   never treated as unreferenced. Set boolean `dryRun` to `true` to return the same proposed
   targets and reclaimed-byte total without deleting anything (including that
-  same final re-check); the response echoes `dryRun`.
+  same final re-check); the response echoes `dryRun`. Rate-limited to 20 calls
+  per 15 minutes per admin (`model-cleanup:<adminUserId>`, see "Rate limiting"
+  above) — #2668, matching the convention every other admin mutation in this
+  file already follows (this endpoint and the raw `DELETE /uploads/:key`
+  below were the two exceptions until then).
 - `GET /uploads/:key` — serves a previously-uploaded model's bytes back out of
   R2 (not the `ASSETS` static bundle, since only the built-in models ship as
   build assets). Responses are cached indefinitely (`immutable`) since upload
@@ -8785,7 +8789,9 @@ the built-in catalog:
   #1696); any of these five matching also returns `409`, not just a
   catalog-template reference. `GET`/`HEAD` above
   stay unauthenticated — serving an
-  immutable, content-addressed model back out is not a mutation.
+  immutable, content-addressed model back out is not a mutation. Rate-limited
+  to 20 calls per 15 minutes per admin (`uploaded-asset-delete:<adminUserId>`,
+  see "Rate limiting" above) — #2668.
 
 Both require an R2 binding named `MODELS` (see `wrangler.jsonc`).
 
