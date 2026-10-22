@@ -31,10 +31,11 @@
 // persistCatalogThumbnail, formatPriceCents/parsePriceInputDollars/
 // formatDollarsForPriceInput, MAX_MONEY_CENTS, DIGITAL_GOOD_DISCLAIMER_TEXT,
 // catalogThumbnailCache/catalogThumbnailEmbeddingCache, renderCatalogThumbnail,
-// solidColorDataUrl, updateModeNavUI, and updateSelectionUI are all
-// genuinely shared well beyond Sell mode (Shop's own product display,
-// Build's selection UI, the generic catalog-thumbnail pipeline) -- stay in
-// main.js, imported back.
+// solidColorDataUrl, and updateModeNavUI are all genuinely shared well
+// beyond Sell mode (Shop's own product display, the generic
+// catalog-thumbnail pipeline) -- stay in main.js, imported back.
+// updateSelectionUI moved to src/build/scene.js (#2559, landed after this
+// leaf's own work started) -- imported from there directly.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
@@ -56,11 +57,12 @@ import {
 } from '../api.js';
 import { buildCatalogPickerButtons } from '../catalog/picker.js';
 import { dimensionsChanged } from '../catalog/upload.js';
+import { updateSelectionUI } from '../build/scene.js';
 import {
   bootstrapPromise, catalogThumbnailCache, catalogThumbnailEmbeddingCache,
   formatDollarsForPriceInput, formatPriceCents, parsePriceInputDollars,
   persistCatalogThumbnail, renderCatalogThumbnail, solidColorDataUrl,
-  updateModeNavUI, updateSelectionUI, DIGITAL_GOOD_DISCLAIMER_TEXT, MAX_MONEY_CENTS,
+  updateModeNavUI, DIGITAL_GOOD_DISCLAIMER_TEXT, MAX_MONEY_CENTS,
   loadSellerShowcasePage, refreshSellerShowcase, sellerShowcaseMeshesStale,
   setSellerShowcaseMeshesStale, sellerShowcasePageIndex,
 } from '../main.js';
