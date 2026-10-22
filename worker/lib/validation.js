@@ -135,6 +135,15 @@ export function decodeCursor(value) {
 // already does is this constant's only use.
 const D1_MAX_BOUND_PARAMETERS = 100;
 
+// #2529: used by the Control Room's sub-issue-tracking fields, same
+// domain-agnostic shape as the rest of this file -- extracted verbatim,
+// zero behavior change.
+export function positiveInteger(value, field) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) throw new HttpError(`${field} must be a positive integer`, 400);
+  return number;
+}
+
 export async function assertReferencesExist(db, table, column, values, field) {
   const uniqueValues = [...new Set(values)];
   const found = new Set();

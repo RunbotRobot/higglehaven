@@ -28,12 +28,12 @@
 // so it's left untouched rather than exported speculatively.
 import { json, HttpError, clientIp } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
-import { readJson, stringValue, labelValue } from './validation.js';
+import { readJson, stringValue, labelValue, positiveInteger } from './validation.js';
 import { requireVerifiedSession, sha256Hex } from './auth.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 import { fireNotification } from './notifications.js';
 import {
-  stripeConfigured, stripeRequest, positiveInteger, appBaseUrl, generateToken, sendEmail, escapeHtml, formatCents,
+  stripeConfigured, stripeRequest, appBaseUrl, generateToken, sendEmail, escapeHtml, formatCents,
 } from '../index.js';
 
 // #1978: workerd requires every named export of the main Worker entry
