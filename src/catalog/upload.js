@@ -794,7 +794,11 @@ async function handleUploadVideoStep() {
 // A seller-edited dimension only counts as a real change worth re-encoding
 // the model over — not just float noise from round-tripping through
 // display units and a fixed 2-decimal display precision.
-function dimensionsChanged(a, b) {
+// Exported: main.js's own Sell-mode "Save Size" handler (Seller modal's
+// extensibility axis panel) uses this exact same check on an
+// already-created product's resize, not just this modal's own
+// handleUploadDimensionsStep.
+export function dimensionsChanged(a, b) {
   return AXIS_LIST.some((axis) => {
     const key = AXIS_DIMENSION_KEY[axis];
     return Math.abs(a[key] - b[key]) > Math.max(0.001, a[key] * 0.005);

@@ -2383,8 +2383,10 @@ catalogPickerCloseBtn.addEventListener('click', closeCatalogPicker);
 // module's own comment for its dependency notes, including why it in turn
 // imports several Build/Sell-internal pieces back from this module (a
 // temporary circular import, same shape claim/flow.js's and account/auth.js's
-// own already use).
-import './catalog/upload.js';
+// own already use). dimensionsChanged is imported back from it here because
+// the Seller modal's own "Save Size" resize handler below needs this exact
+// same check, not just this modal's own handleUploadDimensionsStep.
+import { dimensionsChanged } from './catalog/upload.js';
 
 // #2330: mirrors worker/index.js's own MAX_MONEY_CENTS -- the ceiling
 // nonnegativeInteger()/optionalInteger() enforce on every dollar-amount
