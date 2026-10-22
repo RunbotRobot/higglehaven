@@ -8,16 +8,16 @@
 // import) and surfaces the open question again in this PR rather than
 // deciding it unilaterally.
 //
-// Sell mode (#2562) hasn't been extracted yet as of this leaf, so this
-// module temporarily imports several of its pieces straight from main.js
-// (sellerModalEl, closeSellerModal, refreshSellerShowcase,
-// renderActiveSellerView, hasDuplicateProductName, persistCatalogThumbnail,
-// formatPriceCents, parsePriceInputDollars, formatDollarsForPriceInput,
-// AXIS_ARROW_COLORS, MAX_MONEY_CENTS) — same temporary-import shape
-// account/auth.js's, account/menu.js's, and build/layoutPreview.js's own
-// comments already use for their own not-yet-extracted dependencies. Once
-// #2562 lands, the Seller-modal pieces should be repointed there the same
-// way #2555 repointed claim/flow.js's stale ui/modal.js import.
+// Sell mode's product-management leaf (#2647, sub-issue of #2562) has now
+// landed -- sellerModalEl/closeSellerModal/renderActiveSellerView/
+// hasDuplicateProductName/AXIS_ARROW_COLORS import from src/sell/mode.js
+// below, repointed the same way #2555 repointed claim/flow.js's stale
+// ui/modal.js import. refreshSellerShowcase/persistCatalogThumbnail/
+// formatPriceCents/parsePriceInputDollars/formatDollarsForPriceInput/
+// MAX_MONEY_CENTS still import from main.js -- refreshSellerShowcase
+// belongs to #2648 (Sell's showcase leaf, not yet landed); the rest are
+// genuinely shared beyond Sell mode and stay in main.js for good (see
+// below for MAX_MONEY_CENTS's own reasoning).
 // closeCatalogPicker/buildCatalogPickerButtons used to be on this same
 // temporary list but now import from catalog/picker.js (#2558), which
 // landed after this leaf.
@@ -43,10 +43,13 @@ import {
   createCatalogTemplate, fetchMyBuilder,
 } from '../api.js';
 import {
-  sellerModalEl, closeSellerModal, refreshSellerShowcase, renderActiveSellerView,
-  hasDuplicateProductName, persistCatalogThumbnail,
+  sellerModalEl, closeSellerModal, renderActiveSellerView,
+  hasDuplicateProductName, AXIS_ARROW_COLORS,
+} from '../sell/mode.js';
+import {
+  refreshSellerShowcase, persistCatalogThumbnail,
   formatPriceCents, parsePriceInputDollars, formatDollarsForPriceInput,
-  AXIS_ARROW_COLORS, MAX_MONEY_CENTS,
+  MAX_MONEY_CENTS,
 } from '../main.js';
 // #2558: closeCatalogPicker/buildCatalogPickerButtons now live in
 // src/catalog/picker.js (extracted after this module) rather than main.js.
