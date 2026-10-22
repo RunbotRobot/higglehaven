@@ -90,10 +90,6 @@ import {
   deleteCalendarEvent,
   editCalendarEvent,
   triggerCalendarEvent,
-  fetchInstanceBackups,
-  addInstanceBackup,
-  reorderInstanceBackups,
-  deleteInstanceBackup,
   fetchProductReviews,
   createProductReview,
   editProductReview,
@@ -220,6 +216,24 @@ import { refreshNotificationsBadge, refreshFriendsBadge, refreshDmBadge } from '
 // #2561: the faux-layout preview mode now lives in src/build/layoutPreview.js
 // — see that module's own comment for its dependency notes.
 import { enterLayoutPreviewMode } from './build/layoutPreview.js';
+// #2623 (leaf of #2563/#2504/#2500): the Shop avatar's own mesh/skeleton
+// creation, per-frame pose, and idle state machine now live in
+// src/shop/avatar.js — see that module's own comment for its dependency
+// notes, including why it in turn imports findShopIdleInteractionTarget/
+// shopAvatarPosition/shopAvatarFacing/disposeObject3D/
+// reportRendererMemoryDiagnostic back from this module (a temporary
+// circular import pending #2624's shop/flightMovement.js extraction, same
+// shape as claim/flow.js's own).
+import {
+  createShopAvatar, createCustomShopAvatar, shopAvatar, setShopAvatar,
+  shopAvatarCollisionHalfM, shopAvatarHeightM, shopCameraAnchorHeightM, refreshEquippedShopAvatar,
+  updateShopAvatarPose, setShopAvatarAnimationState, updateShopAvatarIdle,
+  shopIdleSwayYawOffset, addShopIdleSwayYawOffset, resetShopAvatarIdleState,
+  shopIdleInteractionTarget, shopSitBlend, shopSitYawOffset, shopSitHeightOffset,
+  shopSitSettleDelayS, shopSitSettleElapsedS,
+  shopLeanBlend, shopLeanYawOffset, shopLeanPositionOffset,
+  shopLeanSettleDelayS, shopLeanSettleElapsedS,
+} from './shop/avatar.js';
 // #2559: Build mode's core editor internals now live in src/build/scene.js
 // -- see that module's own comment for its dependency notes, including why
 // it in turn imports shapeForLandlet/BUILD_TARGET_LANDLET_ID_KEY/addItemBtn/
@@ -4996,12 +5010,8 @@ for (const el of trimUnitLabelEls) el.textContent = unitSuffix();
 // toggle — the same convention Blender/Unity use — avoids that outright.
 // #2559: see src/build/scene.js's own comment.
 const saveBundleBtn = document.getElementById('save-bundle-item');
-const communitySignBtn = document.getElementById('toggle-community-sign');
-const communityCalendarBtn = document.getElementById('toggle-community-calendar');
-const backupChainBtn = document.getElementById('toggle-backup-chain');
-// #2559: see src/build/scene.js's own comment.
-
-// #2559: see src/build/scene.js's own comment.
+// #2560: communitySignBtn/communityCalendarBtn/backupChainBtn and the
+// modals they open now live in src/build/metadataModals.js.
 
 // Save Bundle persists the current selection's relative arrangement to the
 // backend (see relativeItemsForMeshes) so it can be stamped down again
@@ -5049,522 +5059,9 @@ saveBundleBtn.addEventListener('click', async () => {
   }
 });
 
-// Community Sign (docs/SPEC.md §6, docs/API.md's "Community signs") — an
-// immediate-PATCH flag on the single selected instance the first time (the
-// same pattern the Seller modal's own Flooring button uses for a
-// per-instance/per-template boolean rather than a form with its own Save
-// step). Once already flagged, this same button instead opens the Manage
-// Posts panel (#sign-posts-modal, below) rather than un-flagging directly
-// — un-flagging lives inside that panel's own "Remove Community Sign"
-// button instead. A dedicated always-present "Manage Posts" toolbar button
-// was tried first and reverted: on a phone-width viewport it pushed
-// #gizmo-mode-controls' wrapped button row tall enough to physically
-// overlap and intercept taps meant for the 3D canvas beneath it (caught by
-// e2e/bundles.test.mjs — an unrelated test — suddenly failing to select a
-// placed tree). Folding both actions into one button removes that extra
-// row entirely.
-communitySignBtn.addEventListener('click', async () => {
-  if (selectedMeshes.size !== 1) return;
-  const [mesh] = selectedMeshes;
-  if (mesh.userData.isCommunitySign) {
-    openSignPostsModal(mesh);
-    return;
-  }
-  mesh.userData.isCommunitySign = true;
-  updateSelectionUI();
-  persistLayout();
-  await syncUpdate(mesh);
-});
-
-// A builder's moderation view onto one sign's posts (see docs/API.md's
-// "Community signs"), reusing the same modal shell #notifications-modal
-// already establishes. Build mode never renders a sign's post sprites
-// itself (those are Shop-mode-only, see registerShopSign), so this modal
-// is the only place a builder ever sees what's actually been posted.
-const signPostsModalEl = document.getElementById('sign-posts-modal');
-const signPostsCloseBtn = document.getElementById('sign-posts-close-btn');
-const signPostsListEl = document.getElementById('sign-posts-list');
-const signPostsEmptyEl = document.getElementById('sign-posts-empty');
-const signPostsTruncatedEl = document.getElementById('sign-posts-truncated');
-const signPostsUnflagBtn = document.getElementById('sign-posts-unflag-btn');
-let signPostsTargetMesh = null;
-// Guards against reopening this modal on a different mesh before an
-// earlier renderSignPosts()'s own await resolves — without it, the
-// earlier call's stale fetch can land after the target has switched and
-// append its rows (with the old instanceId baked into each delete
-// button) onto a list the user now believes belongs to the new mesh.
-// Same pattern as axisPreviewLoadToken/claimMapLoadToken elsewhere in
-// this file.
-let signPostsLoadToken = 0;
-
-function formatSignPostTime(isoString) {
-  const date = new Date(isoString);
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
-}
-
-async function renderSignPosts() {
-  signPostsListEl.innerHTML = '';
-  signPostsTruncatedEl.hidden = true;
-  if (!signPostsTargetMesh) return;
-  const myLoadToken = ++signPostsLoadToken;
-  const instanceId = signPostsTargetMesh.userData.instanceId;
-  let posts;
-  let totalCount;
-  try {
-    ({ posts, totalCount } = await fetchSignPosts(instanceId));
-  } catch (err) {
-    if (myLoadToken !== signPostsLoadToken) return; // superseded while fetching
-    signPostsEmptyEl.textContent = err.message || 'Could not load posts.';
-    signPostsEmptyEl.hidden = false;
-    return;
-  }
-  if (myLoadToken !== signPostsLoadToken) return; // superseded — a newer call owns the list now
-  // #1128: same reset-on-success fix as reviewEmptyEl in the Seller
-  // modal — without it a past fetch failure leaves this stuck on its
-  // error message forever, even once a later load succeeds with zero posts.
-  signPostsEmptyEl.textContent = 'No posts on this sign yet.';
-  signPostsEmptyEl.hidden = posts.length > 0;
-  // #1274: posts is windowed to the newest 200 (worker/index.js's
-  // handleSignPosts); totalCount is the real, uncapped count, so this is
-  // the only way to tell a builder older posts exist but aren't shown.
-  signPostsTruncatedEl.hidden = totalCount <= posts.length;
-  signPostsTruncatedEl.textContent = `Showing newest ${posts.length} of ${totalCount} posts.`;
-  for (const post of posts) {
-    const row = document.createElement('div');
-    row.className = 'sign-post-row';
-    const body = document.createElement('div');
-    body.className = 'sign-post-row-body';
-    const author = document.createElement('div');
-    author.className = 'sign-post-row-author';
-    author.textContent = post.authorLabel;
-    body.appendChild(author);
-    const text = document.createElement('div');
-    text.textContent = post.text;
-    body.appendChild(text);
-    const time = document.createElement('div');
-    time.className = 'sign-post-row-time';
-    time.textContent = formatSignPostTime(post.createdAt);
-    body.appendChild(time);
-    row.appendChild(body);
-    const deleteRowBtn = document.createElement('button');
-    deleteRowBtn.className = 'sign-post-row-delete';
-    deleteRowBtn.type = 'button';
-    deleteRowBtn.textContent = '×';
-    deleteRowBtn.setAttribute('aria-label', 'Delete post');
-    deleteRowBtn.addEventListener('click', async () => {
-      if (!confirm('Delete this post? This can\'t be undone.')) return;
-      deleteRowBtn.disabled = true;
-      try {
-        await deleteSignPost(instanceId, post.postId);
-        await renderSignPosts();
-      } catch (err) {
-        alert(err.message || 'Could not delete this post.');
-        deleteRowBtn.disabled = false;
-      }
-    });
-    row.appendChild(deleteRowBtn);
-    signPostsListEl.appendChild(row);
-  }
-}
-
-function openSignPostsModal(mesh) {
-  signPostsTargetMesh = mesh;
-  signPostsModalEl.classList.add('visible');
-  openModalA11y(signPostsModalEl, closeSignPostsModal);
-  renderSignPosts();
-}
-function closeSignPostsModal() {
-  signPostsModalEl.classList.remove('visible');
-  signPostsTargetMesh = null;
-  closeModalA11y(signPostsModalEl);
-}
-signPostsCloseBtn.addEventListener('click', closeSignPostsModal);
-signPostsUnflagBtn.addEventListener('click', async () => {
-  if (!signPostsTargetMesh) return;
-  const mesh = signPostsTargetMesh;
-  mesh.userData.isCommunitySign = false;
-  signPostsModalEl.classList.remove('visible');
-  signPostsTargetMesh = null;
-  closeModalA11y(signPostsModalEl);
-  updateSelectionUI();
-  persistLayout();
-  await syncUpdate(mesh);
-});
-
-// Community Calendar (docs/SPEC.md §6, docs/API.md's "Community
-// calendar") — structurally identical to Community Sign just above (same
-// toggle-then-manage button design, same reasoning), deliberately kept as
-// its own independent flag/table rather than merged with signs — see
-// migrations/0042's own comment.
-communityCalendarBtn.addEventListener('click', async () => {
-  if (selectedMeshes.size !== 1) return;
-  const [mesh] = selectedMeshes;
-  if (mesh.userData.isCommunityCalendar) {
-    openCalendarEventsModal(mesh);
-    return;
-  }
-  mesh.userData.isCommunityCalendar = true;
-  updateSelectionUI();
-  persistLayout();
-  await syncUpdate(mesh);
-});
-
-// A builder's moderation view onto one calendar's events — same shell/
-// pattern as the sign posts modal just above.
-const calendarEventsModalEl = document.getElementById('calendar-events-modal');
-const calendarEventsCloseBtn = document.getElementById('calendar-events-close-btn');
-const calendarEventsListEl = document.getElementById('calendar-events-list');
-const calendarEventsEmptyEl = document.getElementById('calendar-events-empty');
-const calendarEventsTruncatedEl = document.getElementById('calendar-events-truncated');
-const calendarEventsUnflagBtn = document.getElementById('calendar-events-unflag-btn');
-let calendarEventsTargetMesh = null;
-// See signPostsLoadToken above — same reopen-on-a-different-mesh race,
-// same fix.
-let calendarEventsLoadToken = 0;
-
-function formatCalendarEventTime(isoString) {
-  const date = new Date(isoString);
-  return Number.isNaN(date.getTime()) ? '' : date.toLocaleString();
-}
-
-async function renderCalendarEvents() {
-  calendarEventsListEl.innerHTML = '';
-  calendarEventsTruncatedEl.hidden = true;
-  if (!calendarEventsTargetMesh) return;
-  const myLoadToken = ++calendarEventsLoadToken;
-  const instanceId = calendarEventsTargetMesh.userData.instanceId;
-  let events;
-  let totalCount;
-  try {
-    ({ events, totalCount } = await fetchCalendarEvents(instanceId));
-  } catch (err) {
-    if (myLoadToken !== calendarEventsLoadToken) return; // superseded while fetching
-    calendarEventsEmptyEl.textContent = err.message || 'Could not load events.';
-    calendarEventsEmptyEl.hidden = false;
-    return;
-  }
-  if (myLoadToken !== calendarEventsLoadToken) return; // superseded — a newer call owns the list now
-  // #1128: same reset-on-success fix as reviewEmptyEl in the Seller
-  // modal — without it a past fetch failure leaves this stuck on its
-  // error message forever, even once a later load succeeds with zero events.
-  calendarEventsEmptyEl.textContent = 'No events on this calendar yet.';
-  calendarEventsEmptyEl.hidden = events.length > 0;
-  // #1274: same truncation signal as sign posts above (handleCalendarEvents
-  // windows to the newest 200 but returns the real, uncapped totalCount).
-  calendarEventsTruncatedEl.hidden = totalCount <= events.length;
-  calendarEventsTruncatedEl.textContent = `Showing newest ${events.length} of ${totalCount} events.`;
-  for (const event of events) {
-    const row = document.createElement('div');
-    row.className = 'calendar-event-row';
-    const body = document.createElement('div');
-    body.className = 'calendar-event-row-body';
-    const author = document.createElement('div');
-    author.className = 'calendar-event-row-author';
-    author.textContent = event.authorLabel;
-    body.appendChild(author);
-    const text = document.createElement('div');
-    text.textContent = event.text;
-    body.appendChild(text);
-    const time = document.createElement('div');
-    time.className = 'calendar-event-row-time';
-    time.textContent = formatCalendarEventTime(event.createdAt);
-    body.appendChild(time);
-    if (event.scheduledAt) {
-      const schedule = document.createElement('div');
-      schedule.className = 'calendar-event-row-time';
-      schedule.textContent = event.triggeredAt
-        ? `🎉 Fired at ${formatCalendarEventTime(event.triggeredAt)}`
-        : `⏳ Scheduled for ${formatCalendarEventTime(event.scheduledAt)}`;
-      body.appendChild(schedule);
-    }
-    row.appendChild(body);
-    const actions = document.createElement('div');
-    actions.className = 'calendar-event-row-actions';
-    // #1975: editing is author-only (handleCalendarEvents' own PATCH
-    // branch 403s "Not your event" for anyone else) — this modal lists
-    // every event on the calendar, not just this viewer's own, so the
-    // edit button only renders for rows this session's own account
-    // authored, same userId-match idiom as the sign-post/product-review
-    // "myPost"/"myReview" checks use elsewhere.
-    if (event.userId && currentAuthUser && event.userId === currentAuthUser.userId) {
-      const editRowBtn = document.createElement('button');
-      editRowBtn.className = 'calendar-event-row-edit';
-      editRowBtn.type = 'button';
-      editRowBtn.textContent = '✎';
-      editRowBtn.setAttribute('aria-label', 'Edit event');
-      editRowBtn.addEventListener('click', async () => {
-        const newText = prompt('Edit this event (up to 280 characters):', event.text);
-        if (newText === null) return;
-        if (!newText.trim()) {
-          alert('Event text cannot be empty.');
-          return;
-        }
-        if (newText.trim().length > 280) {
-          alert('Keep it to 280 characters or fewer.');
-          return;
-        }
-        editRowBtn.disabled = true;
-        try {
-          await editCalendarEvent(instanceId, event.eventId, { text: newText.trim() });
-          await renderCalendarEvents();
-        } catch (err) {
-          alert(err.message || 'Could not update this event.');
-          editRowBtn.disabled = false;
-        }
-      });
-      actions.appendChild(editRowBtn);
-    }
-    const deleteRowBtn = document.createElement('button');
-    deleteRowBtn.className = 'calendar-event-row-delete';
-    deleteRowBtn.type = 'button';
-    deleteRowBtn.textContent = '×';
-    deleteRowBtn.setAttribute('aria-label', 'Delete event');
-    deleteRowBtn.addEventListener('click', async () => {
-      if (!confirm('Delete this event? This can\'t be undone.')) return;
-      deleteRowBtn.disabled = true;
-      try {
-        await deleteCalendarEvent(instanceId, event.eventId);
-        await renderCalendarEvents();
-      } catch (err) {
-        alert(err.message || 'Could not delete this event.');
-        deleteRowBtn.disabled = false;
-      }
-    });
-    actions.appendChild(deleteRowBtn);
-    row.appendChild(actions);
-    calendarEventsListEl.appendChild(row);
-  }
-}
-
-function openCalendarEventsModal(mesh) {
-  calendarEventsTargetMesh = mesh;
-  calendarEventsModalEl.classList.add('visible');
-  openModalA11y(calendarEventsModalEl, closeCalendarEventsModal);
-  renderCalendarEvents();
-}
-function closeCalendarEventsModal() {
-  calendarEventsModalEl.classList.remove('visible');
-  calendarEventsTargetMesh = null;
-  closeModalA11y(calendarEventsModalEl);
-}
-calendarEventsCloseBtn.addEventListener('click', closeCalendarEventsModal);
-calendarEventsUnflagBtn.addEventListener('click', async () => {
-  if (!calendarEventsTargetMesh) return;
-  const mesh = calendarEventsTargetMesh;
-  mesh.userData.isCommunityCalendar = false;
-  calendarEventsModalEl.classList.remove('visible');
-  calendarEventsTargetMesh = null;
-  closeModalA11y(calendarEventsModalEl);
-  updateSelectionUI();
-  persistLayout();
-  await syncUpdate(mesh);
-});
-
-// Backup Chain (#2050/#2051, docs/API.md's "Placed instance backup
-// chains") — an ordered, per-instance list of replacement products,
-// auto-activated server-side the moment the active one sells out. Unlike
-// Community Sign/Calendar above, every placed instance can have one (it's
-// not gated behind some other flag), so this button always opens the same
-// manage panel directly rather than toggling a flag first — see
-// backupChainBtn's own disabled-only (no active state) line in
-// updateSelectionUI.
-const backupChainModalEl = document.getElementById('backup-chain-modal');
-const backupChainCloseBtn = document.getElementById('backup-chain-close-btn');
-const backupChainListEl = document.getElementById('backup-chain-list');
-const backupChainEmptyEl = document.getElementById('backup-chain-empty');
-const backupChainAddBtn = document.getElementById('backup-chain-add-btn');
-let backupChainTargetMesh = null;
-// Same stale-fetch guard idiom as signPostsLoadToken/calendarEventsLoadToken
-// above.
-let backupChainLoadToken = 0;
-
-// #2051: the low-opacity placement/alignment reference the owner
-// explicitly asked for ("when placing a backup product, the existing
-// product should be visible in low opacity") — a second, independent
-// rebuild of the currently-selected instance's own mesh at its own
-// position, shown only while the catalog picker is open for a backup
-// pick. Never added to productMeshes, so it's automatically never a
-// raycast target for selection or the placement-click handler (both only
-// ever check that array) — no separate "non-interactive" flag needed,
-// same reasoning addBuildModeNeighborOutlines' own low-opacity overlay
-// already relies on.
-const BACKUP_REFERENCE_OPACITY = 0.35;
-let backupReferenceMesh = null;
-
-async function showBackupReferenceMesh(mesh) {
-  hideBackupReferenceMesh();
-  const reference = await createMeshForInstance({
-    templateId: mesh.userData.template.templateId,
-    x: mesh.position.x,
-    y: mesh.position.y,
-    z: mesh.position.z,
-    rotationX: mesh.rotation.x,
-    rotationY: mesh.rotation.y,
-    rotationZ: mesh.rotation.z,
-    crop: mesh.userData.crop,
-    scale: mesh.userData.scale,
-    label: mesh.userData.label,
-  });
-  if (!reference) return;
-  // Same "traverse every part's material(s), including a multi-mesh
-  // loaded GLTF" idiom as setShopAvatarOpacity — a product mesh can have
-  // arbitrarily many parts, unlike a simple procedural box.
-  reference.traverse((object) => {
-    if (!object.material) return;
-    const materials = Array.isArray(object.material) ? object.material : [object.material];
-    for (const material of materials) {
-      material.transparent = true;
-      material.opacity = BACKUP_REFERENCE_OPACITY;
-    }
-  });
-  scene.add(reference);
-  backupReferenceMesh = reference;
-}
-
-// Exported for src/catalog/picker.js (#2558) -- its own closeCatalogPicker
-// needs this same cleanup when a Backup Chain pick session ends.
-export function hideBackupReferenceMesh() {
-  if (!backupReferenceMesh) return;
-  scene.remove(backupReferenceMesh);
-  disposeObject(backupReferenceMesh);
-  backupReferenceMesh = null;
-}
-// #2051: e2e-only hook (same window.__test* convention as
-// window.__testShopAvatarHasTransparentMaterial above) -- lets a test
-// confirm the low-opacity placement reference actually appears while the
-// catalog picker is open for a backup pick, and is gone again once it
-// closes, without needing to read raw WebGL pixels. Always inert unless a
-// test calls it.
-window.__testBackupReferenceMeshVisible = () => backupReferenceMesh !== null;
-
-function formatInstanceBackupTemplateName(templateId) {
-  return findTemplate(templateId)?.name ?? templateId;
-}
-
-async function renderBackupChain() {
-  backupChainListEl.innerHTML = '';
-  if (!backupChainTargetMesh) return;
-  const myLoadToken = ++backupChainLoadToken;
-  const instanceId = backupChainTargetMesh.userData.instanceId;
-  let backups;
-  try {
-    ({ backups } = await fetchInstanceBackups(instanceId));
-  } catch (err) {
-    if (myLoadToken !== backupChainLoadToken) return; // superseded while fetching
-    backupChainEmptyEl.textContent = err.message || 'Could not load the backup chain.';
-    backupChainEmptyEl.hidden = false;
-    return;
-  }
-  if (myLoadToken !== backupChainLoadToken) return; // superseded — a newer call owns the list now
-  // #1128-style reset-on-success: without this, a past fetch failure
-  // leaves this stuck on its error message forever, even once a later
-  // load succeeds with an empty (but genuinely empty) chain.
-  backupChainEmptyEl.textContent = 'No backups configured yet.';
-  backupChainEmptyEl.hidden = backups.length > 0;
-  backups.forEach((backup, index) => {
-    const row = document.createElement('div');
-    row.className = 'backup-chain-row';
-    const name = document.createElement('span');
-    name.className = 'backup-chain-row-name';
-    name.textContent = `${index + 1}. ${formatInstanceBackupTemplateName(backup.templateId)}`;
-    row.appendChild(name);
-    const upBtn = document.createElement('button');
-    upBtn.type = 'button';
-    upBtn.className = 'backup-chain-row-up';
-    upBtn.textContent = '▲';
-    upBtn.setAttribute('aria-label', 'Move up in the chain');
-    upBtn.disabled = index === 0;
-    upBtn.addEventListener('click', () => reorderBackupChainRow(backups, index, index - 1));
-    row.appendChild(upBtn);
-    const downBtn = document.createElement('button');
-    downBtn.type = 'button';
-    downBtn.className = 'backup-chain-row-down';
-    downBtn.textContent = '▼';
-    downBtn.setAttribute('aria-label', 'Move down in the chain');
-    downBtn.disabled = index === backups.length - 1;
-    downBtn.addEventListener('click', () => reorderBackupChainRow(backups, index, index + 1));
-    row.appendChild(downBtn);
-    const removeBtn = document.createElement('button');
-    removeBtn.type = 'button';
-    removeBtn.className = 'backup-chain-row-remove';
-    removeBtn.textContent = '×';
-    removeBtn.setAttribute('aria-label', 'Remove backup');
-    removeBtn.addEventListener('click', async () => {
-      if (!confirm('Remove this backup? This can\'t be undone.')) return;
-      removeBtn.disabled = true;
-      try {
-        await deleteInstanceBackup(instanceId, backup.backupId);
-        await renderBackupChain();
-      } catch (err) {
-        alert(err.message || 'Could not remove this backup.');
-        removeBtn.disabled = false;
-      }
-    });
-    row.appendChild(removeBtn);
-    backupChainListEl.appendChild(row);
-  });
-}
-
-async function reorderBackupChainRow(backups, fromIndex, toIndex) {
-  const reordered = [...backups];
-  const [moved] = reordered.splice(fromIndex, 1);
-  reordered.splice(toIndex, 0, moved);
-  const instanceId = backupChainTargetMesh.userData.instanceId;
-  // Every row's Up/Down button closes over this same `backups` snapshot, so
-  // a second reorder click anywhere in the list (same row or a different
-  // one) before this request resolves would compute its own move against
-  // the same now-stale ordering -- reorderInstanceBackups is a full-replace
-  // PUT, so whichever response lands last would silently discard the other.
-  // Disabling every currently-enabled button for the duration (restoring
-  // only those, not a row's own boundary-disabled Up/Down) closes that
-  // window the same way removeBtn's own disable-during-await already does.
-  const buttonsToRestore = [...backupChainListEl.querySelectorAll('button:not(:disabled)')];
-  buttonsToRestore.forEach((btn) => { btn.disabled = true; });
-  try {
-    await reorderInstanceBackups(instanceId, reordered.map((backup) => backup.backupId));
-    await renderBackupChain();
-  } catch (err) {
-    alert(err.message || 'Could not reorder the backup chain.');
-    buttonsToRestore.forEach((btn) => { btn.disabled = false; });
-  }
-}
-
-function openBackupChainModal(mesh) {
-  backupChainTargetMesh = mesh;
-  backupChainModalEl.classList.add('visible');
-  openModalA11y(backupChainModalEl, closeBackupChainModal);
-  renderBackupChain();
-}
-function closeBackupChainModal() {
-  backupChainModalEl.classList.remove('visible');
-  backupChainTargetMesh = null;
-  hideBackupReferenceMesh();
-  closeModalA11y(backupChainModalEl);
-}
-backupChainCloseBtn.addEventListener('click', closeBackupChainModal);
-backupChainBtn.addEventListener('click', () => {
-  if (selectedMeshes.size !== 1) return;
-  const [mesh] = selectedMeshes;
-  openBackupChainModal(mesh);
-});
-backupChainAddBtn.addEventListener('click', async () => {
-  if (!backupChainTargetMesh) return;
-  const mesh = backupChainTargetMesh;
-  const instanceId = mesh.userData.instanceId;
-  closeBackupChainModal();
-  await showBackupReferenceMesh(mesh);
-  openCatalogPickerForPick(
-    async (template) => {
-      try {
-        await addInstanceBackup(instanceId, { templateId: template.templateId });
-        await renderBackupChain();
-      } catch (err) {
-        alert(err.message || 'Could not add this backup.');
-      }
-    },
-    () => openBackupChainModal(mesh),
-  );
-});
+// #2560: the sign-post/calendar-event/backup-chain metadata modals
+// now live in src/build/metadataModals.js -- see that module's own
+// comment for its dependency notes.
 
 // #2559: see src/build/scene.js's own comment.
 renderer.domElement.addEventListener('click', (event) => {
@@ -5860,15 +5357,15 @@ const SHOP_MAX_PITCH = Math.PI * 0.35;
 // The avatar's own body proportions (docs/SPEC.md §2's default avatar —
 // see createShopAvatar), all in meters, hip-up from the ground the avatar
 // group's own origin sits on:
-const SHOP_AVATAR_LEG_LENGTH_M = 0.86;
-const SHOP_AVATAR_LEG_RADIUS_M = 0.075;
-const SHOP_AVATAR_HIP_WIDTH_M = 0.12;
-const SHOP_AVATAR_TORSO_LENGTH_M = 0.5;
-const SHOP_AVATAR_TORSO_RADIUS_M = 0.17;
-const SHOP_AVATAR_ARM_LENGTH_M = 0.6;
-const SHOP_AVATAR_ARM_RADIUS_M = 0.055;
-const SHOP_AVATAR_SHOULDER_WIDTH_M = 0.23;
-const SHOP_AVATAR_HEAD_RADIUS_M = 0.14;
+export const SHOP_AVATAR_LEG_LENGTH_M = 0.86;
+export const SHOP_AVATAR_LEG_RADIUS_M = 0.075;
+export const SHOP_AVATAR_HIP_WIDTH_M = 0.12;
+export const SHOP_AVATAR_TORSO_LENGTH_M = 0.5;
+export const SHOP_AVATAR_TORSO_RADIUS_M = 0.17;
+export const SHOP_AVATAR_ARM_LENGTH_M = 0.6;
+export const SHOP_AVATAR_ARM_RADIUS_M = 0.055;
+export const SHOP_AVATAR_SHOULDER_WIDTH_M = 0.23;
+export const SHOP_AVATAR_HEAD_RADIUS_M = 0.14;
 // docs/SPEC.md §2's collision numbers ("a 2-foot-diameter hard barrier"),
 // reused here for shopper-vs-placed-item collision (the item-collision half
 // of "Shopper collision still prevents walking through items" — Build
@@ -5877,8 +5374,8 @@ const SHOP_AVATAR_HEAD_RADIUS_M = 0.14;
 // Approximated as a small square rather than a true circle so the existing
 // footprintCorners/footprintsOverlap SAT helpers (built for box-vs-box) can
 // be reused as-is instead of writing separate circle-vs-polygon math.
-const SHOP_AVATAR_COLLISION_HALF_M = 0.3;
-const SHOP_AVATAR_HEIGHT_M = SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_HEAD_RADIUS_M * 2;
+export const SHOP_AVATAR_COLLISION_HALF_M = 0.3;
+export const SHOP_AVATAR_HEIGHT_M = SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_HEAD_RADIUS_M * 2;
 // How fast the avatar's body turns to face its own movement direction
 // (see updateShopMovement) — high enough to read as responsive, not
 // instant, similar to every other "ease toward a target per second"
@@ -5904,7 +5401,7 @@ function setShopCameraLockToFacing(enabled) {
 // Where the third-person camera orbits around — roughly head height, not
 // the very top of the head, so looking straight ahead frames the avatar
 // low in frame rather than staring at the back of its skull.
-const SHOP_CAMERA_ANCHOR_HEIGHT_M =
+export const SHOP_CAMERA_ANCHOR_HEIGHT_M =
   SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_HEAD_RADIUS_M * 0.6;
 // #1091: a custom equipped avatar (createCustomShopAvatar) can be any real
 // size, not the default body's own fixed proportions — this ratio (anchor
@@ -5913,7 +5410,7 @@ const SHOP_CAMERA_ANCHOR_HEIGHT_M =
 // avatar's measured height instead of just reusing the default's absolute
 // SHOP_CAMERA_ANCHOR_HEIGHT_M, while staying exactly equivalent to today's
 // behavior for the default avatar itself.
-const SHOP_CAMERA_ANCHOR_HEIGHT_RATIO = SHOP_CAMERA_ANCHOR_HEIGHT_M / SHOP_AVATAR_HEIGHT_M;
+export const SHOP_CAMERA_ANCHOR_HEIGHT_RATIO = SHOP_CAMERA_ANCHOR_HEIGHT_M / SHOP_AVATAR_HEIGHT_M;
 // A fixed-radius orbit around that anchor (`positionShopCamera` below) — the
 // classic over-the-shoulder third-person rig: subtracting the look
 // direction from the anchor means looking down swings the camera up and
@@ -5925,14 +5422,14 @@ const SHOP_CAMERA_FOLLOW_DISTANCE_M = 4.2;
 // A full walk-cycle swing (hip/shoulder pivot, radians) at a full run;
 // scales down toward 0 as the joystick's own deflection (and thus speed)
 // drops toward a stand-still — see updateShopAvatarPose.
-const SHOP_AVATAR_SWING_AMPLITUDE_RAD = 0.55;
+export const SHOP_AVATAR_SWING_AMPLITUDE_RAD = 0.55;
 // Radians/second the walk-cycle phase advances at a full run; scales down
 // with speed the same way the swing amplitude does, so a slow walk cycles
 // its legs slower as well as with a smaller swing, not just a smaller one.
-const SHOP_AVATAR_CYCLE_SPEED_RAD_S = 7;
+export const SHOP_AVATAR_CYCLE_SPEED_RAD_S = 7;
 // How fast the avatar's swing amplitude eases toward its current target
 // (moving vs. stopped) each frame — see updateShopAvatarPose.
-const SHOP_AVATAR_SWING_EASE_PER_S = 8;
+export const SHOP_AVATAR_SWING_EASE_PER_S = 8;
 // Owner (Control Room, N46): flying should tip the avatar into a
 // Superman-style posture instead of staying upright — nose (head) forward
 // and down. Composed as a quaternion in the main per-frame update — yaw
@@ -5987,41 +5484,41 @@ const SHOP_AVATAR_FLIGHT_PITCH_EASE_PER_S = 5;
 // clip-switching purposes even though the procedural walk-cycle itself
 // (SHOP_AVATAR_SWING_AMPLITUDE_RAD) already scales continuously to zero.
 const SHOP_AVATAR_ANIM_WALK_THRESHOLD = 0.05;
-const SHOP_AVATAR_ANIM_CROSSFADE_S = 0.25;
+export const SHOP_AVATAR_ANIM_CROSSFADE_S = 0.25;
 // docs/SPEC.md §2's "context-aware idle state machine ... after inactivity,
 // with randomization" — see updateShopAvatarIdle. This pass only covers
 // "stand" (a subtle randomized weight-shift sway + occasional head turn);
 // "sit"/"lean" need a real interaction-target system (e.g. a chair prop
 // with an occupancy slot) that doesn't exist yet.
-const SHOP_IDLE_DELAY_S = 3; // no movement input for this long before idle sway starts easing in
-const SHOP_IDLE_BLEND_PER_S = 0.6; // how fast idle sway eases in/out (in on stillness, out the instant movement resumes)
+export const SHOP_IDLE_DELAY_S = 3; // no movement input for this long before idle sway starts easing in
+export const SHOP_IDLE_BLEND_PER_S = 0.6; // how fast idle sway eases in/out (in on stillness, out the instant movement resumes)
 // docs/SPEC.md §2's "stationary-too-long triggers an AFK indicator" — a
 // floating label above the avatar's own head (see makeSignPostSprite),
 // visible on the player's own third-person avatar in Shop mode so it's
 // directly self-testable. Deliberately much longer than SHOP_IDLE_DELAY_S:
 // idle sway should read as "still paying attention," AFK should only show
 // once that stops being a believable read — a minute-plus of true stillness.
-const SHOP_AFK_DELAY_S = 90; // no movement input for this long before the AFK label starts fading in
-const SHOP_AFK_BLEND_PER_S = 0.6; // matches SHOP_IDLE_BLEND_PER_S's own feel — in on stillness, out instantly on movement
-const SHOP_IDLE_SWAY_AMPLITUDE_RAD = 0.035; // whole-body weight-shift, small enough to read as idle fidget, not a stagger
-const SHOP_IDLE_SWAY_PERIOD_MIN_S = 3.5;
-const SHOP_IDLE_SWAY_PERIOD_MAX_S = 6;
-const SHOP_IDLE_ARM_SWAY_AMPLITUDE_RAD = 0.05;
-const SHOP_IDLE_HEAD_TURN_MAX_RAD = 0.4; // a natural glance range, not a full look-behind
-const SHOP_IDLE_HEAD_TURN_INTERVAL_MIN_S = 2.5;
-const SHOP_IDLE_HEAD_TURN_INTERVAL_MAX_S = 5;
+export const SHOP_AFK_DELAY_S = 90; // no movement input for this long before the AFK label starts fading in
+export const SHOP_AFK_BLEND_PER_S = 0.6; // matches SHOP_IDLE_BLEND_PER_S's own feel — in on stillness, out instantly on movement
+export const SHOP_IDLE_SWAY_AMPLITUDE_RAD = 0.035; // whole-body weight-shift, small enough to read as idle fidget, not a stagger
+export const SHOP_IDLE_SWAY_PERIOD_MIN_S = 3.5;
+export const SHOP_IDLE_SWAY_PERIOD_MAX_S = 6;
+export const SHOP_IDLE_ARM_SWAY_AMPLITUDE_RAD = 0.05;
+export const SHOP_IDLE_HEAD_TURN_MAX_RAD = 0.4; // a natural glance range, not a full look-behind
+export const SHOP_IDLE_HEAD_TURN_INTERVAL_MIN_S = 2.5;
+export const SHOP_IDLE_HEAD_TURN_INTERVAL_MAX_S = 5;
 // #2478 (sub-issue of #2475): the seated pose. No knee joint on this
 // primitive rig (createShopAvatar's own comment -- each leg is one rigid
 // hip-to-foot cylinder), so "sitting" is approximated as the whole leg
 // swinging forward from the hip toward horizontal, same single-joint
 // simplification the walk cycle already uses -- not a full right angle, so
 // the silhouette doesn't read as the legs sticking straight out stiff.
-const SHOP_SIT_LEG_ROTATION_RAD = (Math.PI / 2) * 0.88;
+export const SHOP_SIT_LEG_ROTATION_RAD = (Math.PI / 2) * 0.88;
 // Forearms resting toward the lap rather than hanging straight down —
 // gentler than the legs' own rotation since there's no elbow to bend
 // either and a full 90 degrees would plant the hands on the floor instead.
-const SHOP_SIT_ARM_ROTATION_RAD = (Math.PI / 2) * 0.55;
-const SHOP_IDLE_HEAD_TURN_EASE_PER_S = 1.5;
+export const SHOP_SIT_ARM_ROTATION_RAD = (Math.PI / 2) * 0.55;
+export const SHOP_IDLE_HEAD_TURN_EASE_PER_S = 1.5;
 // #2479 (sub-issue of #2475): lean pose -- how far the whole body tilts
 // back against a leanTarget's surface at full idle blend. Same local-X
 // axis/eased-toward-a-target idiom as SHOP_AVATAR_FLIGHT_PITCH_RAD just
@@ -6607,7 +6104,7 @@ let shopPitch = -0.12;
 // right stick free-looks independently, the standard third-person control
 // scheme. Only updated while moving (see updateShopMovement) — standing
 // still and looking around doesn't spin the avatar in place.
-let shopAvatarFacing = 0;
+export let shopAvatarFacing = 0;
 // Current eased flight-pose pitch (0 = upright, SHOP_AVATAR_FLIGHT_PITCH_RAD
 // = full tilt) — see SHOP_AVATAR_FLIGHT_PITCH_RAD's own comment and the
 // per-frame ease in updateShopMovement.
@@ -6981,375 +6478,13 @@ const shopViewDirection = new THREE.Vector3();
 const shopMoveDir = new THREE.Vector3();
 const shopCameraAnchor = new THREE.Vector3();
 
-// #1587 (owner feedback): the original "AFK" label was a full-size
-// makeSignPostSprite — the same dark nameplate treatment used for
-// community sign posts, floating well above the avatar's head on its own
-// sign-post. Too garish, and the wrong shape for what's meant to be a
-// small shoulder badge, not a sign. Rebuilt as a small on-brand pill:
-// same rounded-rect-on-canvas technique makeDimensionLabelSprite already
-// established in this file, using this app's actual pill colors
-// (index.html's --pill-rgb/--ink-rgb) rather than inventing new ones, and
-// lowercase "afk" to match the lowercase higglehaven wordmark convention.
-function makeAfkBadgeSprite() {
-  const canvas = document.createElement('canvas');
-  canvas.width = 104;
-  canvas.height = 44;
-  const ctx = canvas.getContext('2d');
-  ctx.fillStyle = 'rgba(214, 232, 190, 0.92)'; // --pill-rgb
-  ctx.beginPath();
-  ctx.roundRect(2, 2, canvas.width - 4, canvas.height - 4, (canvas.height - 4) / 2);
-  ctx.fill();
-  ctx.fillStyle = '#16240a'; // --ink-rgb
-  ctx.font = 'bold 22px sans-serif';
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText('afk', canvas.width / 2, canvas.height / 2);
-  const texture = new THREE.CanvasTexture(canvas);
-  const material = new THREE.SpriteMaterial({ map: texture, transparent: true, depthTest: false });
-  const sprite = new THREE.Sprite(material);
-  // Much smaller than makeSignPostSprite's own 0.012 world-units-per-px —
-  // a shoulder badge, not a sign meant to read from across a landlet.
-  const WORLD_UNITS_PER_PX = 0.0022;
-  sprite.scale.set(canvas.width * WORLD_UNITS_PER_PX, canvas.height * WORLD_UNITS_PER_PX, 1);
-  return sprite;
-}
+// #2623: makeAfkBadgeSprite/createShopAvatar/createCustomShopAvatar/
+// shopAvatar(/setShopAvatar)/shopAvatarCollisionHalfM/shopAvatarHeightM/
+// shopCameraAnchorHeightM/refreshEquippedShopAvatar now live in
+// src/shop/avatar.js — see that module's own header comment for its
+// dependency notes.
 
-// The default avatar (docs/SPEC.md §2: "a single, standard, deliberately
-// non-gendered avatar assigned instantly at registration"). No character
-// asset/rig exists yet, so this is a plain, neutral placeholder built from
-// primitives — a real modeled-and-rigged replacement is future work, not
-// this pass's job. Limbs are each their own pivot Group (hip/shoulder
-// height, empty at the pivot's own local origin) with the limb mesh hung
-// below it (`mesh.position.z = -length / 2`), so a walk cycle can just
-// rotate the pivot about local X — swinging the limb through the
-// forward/back-and-up/down sagittal plane exactly like a real hip/shoulder
-// joint — rather than needing a skeleton for one swinging joint per limb.
-function createShopAvatar() {
-  const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x5b8dc9 });
-  const headMaterial = new THREE.MeshStandardMaterial({ color: 0xe8c9a0 });
-
-  function limb(radius, length, material) {
-    const pivot = new THREE.Group();
-    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, length, 8), material);
-    mesh.rotation.x = Math.PI / 2; // stand the cylinder's local-Y axis up along world Z
-    mesh.position.z = -length / 2; // hang it below the pivot rather than centered on it
-    pivot.add(mesh);
-    return pivot;
-  }
-
-  const group = new THREE.Group();
-
-  const legPivotL = limb(SHOP_AVATAR_LEG_RADIUS_M, SHOP_AVATAR_LEG_LENGTH_M, bodyMaterial);
-  legPivotL.position.set(-SHOP_AVATAR_HIP_WIDTH_M, 0, SHOP_AVATAR_LEG_LENGTH_M);
-  group.add(legPivotL);
-  const legPivotR = limb(SHOP_AVATAR_LEG_RADIUS_M, SHOP_AVATAR_LEG_LENGTH_M, bodyMaterial);
-  legPivotR.position.set(SHOP_AVATAR_HIP_WIDTH_M, 0, SHOP_AVATAR_LEG_LENGTH_M);
-  group.add(legPivotR);
-
-  const torso = new THREE.Mesh(
-    new THREE.CapsuleGeometry(SHOP_AVATAR_TORSO_RADIUS_M, SHOP_AVATAR_TORSO_LENGTH_M, 4, 8),
-    bodyMaterial,
-  );
-  torso.rotation.x = Math.PI / 2;
-  torso.position.z = SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M / 2 + SHOP_AVATAR_TORSO_RADIUS_M;
-  group.add(torso);
-
-  const shoulderZ = SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_TORSO_RADIUS_M * 0.6;
-  const armPivotL = limb(SHOP_AVATAR_ARM_RADIUS_M, SHOP_AVATAR_ARM_LENGTH_M, bodyMaterial);
-  armPivotL.position.set(-SHOP_AVATAR_SHOULDER_WIDTH_M, 0, shoulderZ);
-  group.add(armPivotL);
-  const armPivotR = limb(SHOP_AVATAR_ARM_RADIUS_M, SHOP_AVATAR_ARM_LENGTH_M, bodyMaterial);
-  armPivotR.position.set(SHOP_AVATAR_SHOULDER_WIDTH_M, 0, shoulderZ);
-  group.add(armPivotR);
-
-  // Its own pivot (rather than a bare mesh straight on `group`, like the
-  // torso) purely so the idle "look around" behavior (updateShopAvatarIdle)
-  // can turn just the head about local Z without touching the rest of the
-  // body.
-  const headPivot = new THREE.Group();
-  headPivot.position.z =
-    SHOP_AVATAR_LEG_LENGTH_M + SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_TORSO_RADIUS_M * 2 + SHOP_AVATAR_HEAD_RADIUS_M;
-  const head = new THREE.Mesh(new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M, 16, 12), headMaterial);
-  headPivot.add(head);
-
-  // Face + hair (owner Control Room feedback: "give him a face and hair so
-  // we can tell which is his front and which is his back") — the body was
-  // otherwise fully symmetric front-to-back, so neither the walk cycle nor
-  // the idle look-around ever needed to define which local axis was
-  // "front" (see the sagittal-plane comment on `limb` above: rotating a
-  // pivot about local X swings it through the Y-Z plane, so Y is the
-  // forward/back axis — arbitrarily picking +Y as front here, since
-  // nothing else in this file depended on a convention existing yet).
-  // Both are simple offset/scaled spheres, matching this placeholder
-  // avatar's existing "primitives only" style rather than needing any new
-  // geometry.
-  const eyeMaterial = new THREE.MeshStandardMaterial({ color: 0x1a1a1a });
-  const eyeRadius = SHOP_AVATAR_HEAD_RADIUS_M * 0.12;
-  const eyeY = SHOP_AVATAR_HEAD_RADIUS_M * 0.85;
-  const eyeZ = SHOP_AVATAR_HEAD_RADIUS_M * 0.1;
-  const eyeSpacingX = SHOP_AVATAR_HEAD_RADIUS_M * 0.4;
-  for (const sign of [-1, 1]) {
-    const eye = new THREE.Mesh(new THREE.SphereGeometry(eyeRadius, 8, 6), eyeMaterial);
-    eye.position.set(sign * eyeSpacingX, eyeY, eyeZ);
-    head.add(eye);
-  }
-  // Owner (Control Room feedback): "more stylish hair... I don't want him
-  // to be balding!" The original cap sat too far back and too flat (scale
-  // 0.85/0.65, offset -0.25R/+0.3R) to reach the crown/hairline at all —
-  // its own front edge stopped well short of the eyes (at y=+0.85R),
-  // leaving the whole forehead-to-crown area bare skin-colored sphere from
-  // straight on, which read as a receding hairline/bald spot rather than a
-  // flat-cap silhouette. Pulled forward and enlarged so it now reaches
-  // right up to the eye line at the front, still tapers off before the
-  // back of the neck, and pokes very slightly above the head's own crown
-  // (z max ~1.03R vs the head's 1R) for a bit of volume instead of a
-  // shrink-wrapped skullcap.
-  const hairMaterial = new THREE.MeshStandardMaterial({ color: 0x4a3626 });
-  const hair = new THREE.Mesh(new THREE.SphereGeometry(SHOP_AVATAR_HEAD_RADIUS_M * 0.95, 12, 8), hairMaterial);
-  hair.scale.set(1, 0.95, 0.75);
-  hair.position.set(0, -SHOP_AVATAR_HEAD_RADIUS_M * 0.05, SHOP_AVATAR_HEAD_RADIUS_M * 0.32);
-  head.add(hair);
-
-  group.add(headPivot);
-
-  // On `group` rather than `headPivot` so idle's own head-turn sway
-  // (updateShopAvatarIdle) doesn't drag the badge along with it — a sprite
-  // always faces the camera regardless of parent rotation anyway, but its
-  // *position* still would inherit headPivot's yaw if parented there.
-  // Starts invisible; updateShopAvatarIdle fades it in/out with SHOP_AFK_BLEND_PER_S.
-  // #1587: shoulder-mounted (the right shoulder joint's own x/z, reused
-  // from armPivotR's position just above) rather than floating above the
-  // head on a sign-post.
-  const afkSprite = makeAfkBadgeSprite();
-  afkSprite.position.set(SHOP_AVATAR_SHOULDER_WIDTH_M * 1.15, 0, shoulderZ + SHOP_AVATAR_TORSO_RADIUS_M * 0.5);
-  afkSprite.material.opacity = 0;
-  group.add(afkSprite);
-
-  // #1091: no real geometry to measure for the procedural default body —
-  // collision/camera code falls back to the SHOP_AVATAR_* constants above
-  // whenever these are null, exactly today's behavior.
-  return { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, modelUrl: null, measuredHeightM: null, measuredCollisionHalfM: null };
-}
-
-// #681 (sub-issue of #679/#680): the account's own equipped custom avatar
-// model, loaded via the same loadModelInstance pipeline every placed
-// product's real model already goes through (Y-up correction, recenter on
-// bounding-box center). Returns the exact same shape createShopAvatar does
-// so every existing walk/idle/pitch/position call site below keeps working
-// completely unchanged — legPivotL/legPivotR/armPivotL/armPivotR/headPivot
-// are real THREE.Group instances, just never attached to the visible scene
-// graph, so rotating them for limb/head animation is a harmless no-op. That
-// matches this issue's own scope: a custom avatar moves correctly as a
-// rigid whole (root position/rotation on `group`), but per-bone limb
-// animation on its own skeleton is #682's job, not this one's.
-async function createCustomShopAvatar(modelUrl, appliedAnimation = null) {
-  // #982: lets an e2e test simulate a slow model load (a real network fetch
-  // + GLTF parse can take a while) deterministically, without depending on
-  // how long an actual fetch takes or on Playwright's own route-
-  // interception timing (which was found to hold up unrelated same-origin
-  // requests for as long as a route handler delays a response, making a
-  // network-level delay here an unreliable way to construct this race in a
-  // test). Always undefined outside of that one test.
-  if (window.__testAvatarLoadDelayMs) {
-    await new Promise((resolve) => setTimeout(resolve, window.__testAvatarLoadDelayMs));
-  }
-  const container = await loadModelInstance(modelUrl);
-  // loadModelInstance recenters the model on its own bounding-box center,
-  // so (unlike the procedural avatar, whose local z=0 is already its feet)
-  // this container's local origin sits at its vertical mid-point. Shifting
-  // it up by half its own measured height puts its feet at z=0 instead,
-  // matching shopAvatarPosition's own "feet position" contract — the same
-  // ground-rest convention createMeshForInstance applies to every other
-  // placed model, just measured from the real geometry here rather than a
-  // catalog template's declared height (this endpoint doesn't return one).
-  const box = new THREE.Box3().setFromObject(container);
-  const height = Math.max(box.max.z - box.min.z, 0);
-  container.position.z = height / 2;
-  // #1091: real horizontal footprint (approximated as a square, same
-  // SHOP_AVATAR_COLLISION_HALF_M convention as the default body) so
-  // collision/camera code can scale to this specific model's own measured
-  // size instead of always assuming the default body's proportions.
-  const horizontalHalfM = Math.max(box.max.x - box.min.x, box.max.y - box.min.y) / 2;
-
-  const group = new THREE.Group();
-  group.add(container);
-
-  // #1587: shoulder-mounted rather than floating above the head. A custom
-  // model has no known shoulder joint to anchor to (unlike the procedural
-  // body above), so this approximates one from its measured bounding box:
-  // roughly shoulder-height up the model's own height, offset to one side
-  // by a fraction of its own horizontal footprint.
-  const afkSprite = makeAfkBadgeSprite();
-  afkSprite.position.set(horizontalHalfM * 0.6, 0, height * 0.82);
-  afkSprite.material.opacity = 0;
-  group.add(afkSprite);
-
-  const legPivotL = new THREE.Group();
-  const legPivotR = new THREE.Group();
-  const armPivotL = new THREE.Group();
-  const armPivotR = new THREE.Group();
-  const headPivot = new THREE.Group();
-
-  // #682: named idle/walk/fly clips, if the model carries any (see
-  // docs/SPEC.md's "Avatar rig/animation clip convention"). mixer/actions
-  // stay null when the model has none — setShopAvatarAnimationState below
-  // already no-ops on a null actions map, so an avatar with no matching
-  // clips still moves correctly as a rigid whole (today's #681 behavior),
-  // it just never plays anything. Bound to container.userData.model (the
-  // actual loaded node), not container itself, which is only a wrapper
-  // this function added and was never part of the clip-authored hierarchy.
-  //
-  // #1165 (sub-issue of #1161, last piece): a purchased standalone
-  // animation (#1163/#1164) *replaces* this set when one is applied and
-  // compatible — appliedAnimation's own idle/walk/fly clips (loaded from
-  // its own, separately-uploaded file) bind against this exact same
-  // mixer/root, which works precisely because #1162's compatibility
-  // signature guarantees the two files share the exact same bone names/
-  // hierarchy: THREE.AnimationMixer resolves a clip's tracks by bone name
-  // against whatever root it was constructed with, never by which file
-  // originally parsed the clip. Falls back to this avatar's own clips —
-  // the exact behavior above, unchanged — for an incompatible or absent
-  // applied animation, which is this issue's own "sane fallback, don't
-  // just break silently" requirement: switching to an avatar the
-  // currently-applied animation no longer matches just quietly reverts to
-  // that avatar's own clips (or none) rather than erroring, leaving the
-  // animation's own `owned_animations`/equipped-choice untouched for next
-  // time a compatible avatar is equipped again.
-  const avatarSignature = await computeSkeletonSignature(modelUrl);
-  const animationIsCompatible = !!appliedAnimation && !!avatarSignature && appliedAnimation.skeletonSignature === avatarSignature;
-  const animations = animationIsCompatible
-    ? await loadModelAnimations(appliedAnimation.modelUrl)
-    : await loadModelAnimations(modelUrl);
-  let mixer = null;
-  let actions = null;
-  if (animations.length > 0) {
-    mixer = new THREE.AnimationMixer(container.userData.model);
-    actions = {};
-    for (const state of ['idle', 'walk', 'fly']) {
-      const clip = THREE.AnimationClip.findByName(animations, state);
-      if (clip) actions[state] = mixer.clipAction(clip);
-    }
-    if (Object.keys(actions).length === 0) { mixer = null; actions = null; }
-  }
-
-  return {
-    group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, mixer, actions, animState: null, modelUrl,
-    measuredHeightM: height, measuredCollisionHalfM: horizontalHalfM,
-    // #1165: which file `actions` above was actually bound from, for the
-    // same "nothing in the DOM reflects this" e2e-diagnostic reasoning
-    // __shopAvatarModelUrl/__shopAvatarMetrics already use — null when
-    // `actions` itself is null (no clips from either source).
-    animationSource: !actions ? null : (animationIsCompatible ? 'applied' : 'own'),
-  };
-}
-
-let shopAvatar = null; // { group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, mixer, actions, animState, modelUrl, measuredHeightM, measuredCollisionHalfM } — see createShopAvatar/createCustomShopAvatar
-
-// #1091: the currently-equipped avatar's own measured size when it's a
-// custom model (measuredHeightM/measuredCollisionHalfM are null for the
-// default procedural body, which has no real geometry to measure) — these
-// fall back to the default body's own fixed SHOP_AVATAR_* constants
-// whenever no avatar is loaded yet or the equipped one is the default.
-function shopAvatarCollisionHalfM() {
-  return shopAvatar?.measuredCollisionHalfM ?? SHOP_AVATAR_COLLISION_HALF_M;
-}
-function shopAvatarHeightM() {
-  return shopAvatar?.measuredHeightM ?? SHOP_AVATAR_HEIGHT_M;
-}
-function shopCameraAnchorHeightM() {
-  return shopAvatar?.measuredHeightM != null
-    ? shopAvatar.measuredHeightM * SHOP_CAMERA_ANCHOR_HEIGHT_RATIO
-    : SHOP_CAMERA_ANCHOR_HEIGHT_M;
-}
-
-// #713 (sub-issue of #710): swaps the live Shop-mode avatar the instant the
-// "My Avatars" settings picker equips a different one, so a builder standing
-// in the world sees the change immediately rather than needing to leave and
-// re-enter Shop mode. enterShopMode's own equipped-avatar fetch already
-// covers every other entry path (a fresh Shop-mode entry always asks the
-// server itself), so this only matters while currentMode is already 'shop'
-// with a shopAvatar already built — a no-op otherwise, the same as equipping
-// from Build/Sell just quietly taking effect next time Shop is entered.
-// updateShopMovement drives group.position/rotation from shopAvatarPosition/
-// shopAvatarFacing/shopAvatarPitch every frame regardless of which avatar
-// instance is in the scene, so the swap itself needs no position handoff.
-// #982: same out-of-order-resolution hazard as sellerShowcaseLoadToken/
-// syncCreate/etc elsewhere in this file — a custom model's load (the
-// `modelUrl` branch below) is a real network fetch + GLTF parse that can
-// take a while, so an earlier Equip click can still be mid-flight when a
-// later Equip click (e.g. the synchronous default-avatar branch) has
-// already resolved and swapped shopAvatar. Without this guard, the earlier
-// call would resume and silently overwrite the newer, correct equip.
-let shopAvatarEquipToken = 0;
-// #1165: called both when the "My Avatars" picker equips a different
-// avatar (modelUrl changes, the applied animation doesn't) and when the
-// new "My Animations" picker applies/clears an animation (modelUrl stays
-// the same, re-fetched fresh here either way) — either trigger needs the
-// exact same rebuild, since compatibility depends on both together.
-async function refreshEquippedShopAvatar(modelUrl) {
-  if (currentMode !== 'shop' || !shopAvatar) return;
-  const myToken = ++shopAvatarEquipToken;
-  let appliedAnimation = null;
-  try {
-    const animation = await fetchMyEquippedAnimation();
-    if (animation.equippedTemplateId) appliedAnimation = animation;
-  } catch (err) {
-    console.warn('Could not fetch applied animation, falling back to this avatar\'s own clips:', err);
-  }
-  if (myToken !== shopAvatarEquipToken) return; // a newer equip superseded this one while fetching
-  let nextAvatar;
-  if (modelUrl) {
-    try {
-      nextAvatar = await createCustomShopAvatar(modelUrl, appliedAnimation);
-    } catch (err) {
-      console.warn(`Failed to load newly-equipped avatar model (${modelUrl}), falling back to the default avatar:`, err);
-      nextAvatar = createShopAvatar();
-    }
-  } else {
-    nextAvatar = createShopAvatar();
-  }
-  if (myToken !== shopAvatarEquipToken) {
-    // #1426: nextAvatar was already fully built (a real GLTF load, for the
-    // custom-model branch) before this guard ever runs -- without disposing
-    // it here, the superseded-but-already-built avatar's geometry/materials/
-    // textures leak for the rest of the tab's lifetime, since nothing else
-    // ever references it once this function returns.
-    disposeObject3D(nextAvatar.group);
-    // Nothing else observes this branch (nextAvatar is never added to the
-    // scene, so it's never drawn and therefore never counted by
-    // reportRendererMemoryDiagnostic's renderer.info.memory snapshot either)
-    // -- exposed purely so an e2e test can confirm the dispose above actually
-    // ran, the same reasoning as every other window.__test*-style hook in
-    // this file.
-    window.__supersededAvatarDisposals = (window.__supersededAvatarDisposals ?? 0) + 1;
-    return;
-  }
-  scene.remove(shopAvatar.group);
-  // #1358: the outgoing avatar's own meshes/materials are being discarded
-  // either way (every call site that swaps or removes a group elsewhere in
-  // this file disposes it the same way) — without this, every re-equip
-  // leaks the previous avatar's geometry/material (and, for a custom GLTF
-  // avatar, its textures) for the lifetime of the tab.
-  disposeObject3D(shopAvatar.group);
-  shopAvatar = nextAvatar;
-  scene.add(shopAvatar.group);
-  // Nothing in the DOM reflects which avatar is actually live-rendered
-  // (the Settings picker only ever shows server truth) -- exposed here so
-  // this exact race (#982) is observable from an e2e test.
-  window.__shopAvatarModelUrl = shopAvatar.modelUrl;
-  // #1091: same reasoning as __shopAvatarModelUrl above — nothing in the DOM
-  // reflects the collision/camera sizing actually in effect for whichever
-  // avatar just got equipped, so an e2e test can't otherwise tell a custom
-  // model's real measured size got threaded through instead of the default
-  // body's fixed constants.
-  window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() };
-  // #1165: same reasoning again — see createCustomShopAvatar's own
-  // animationSource comment.
-  window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null;
-  await reportRendererMemoryDiagnostic();
-}
-
-const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
+export const shopAvatarPosition = new THREE.Vector3(); // feet position, ground truth for both the mesh and the camera
 // #1445: e2e-only hook for forcing a deterministic cross of
 // SHOP_LOAD_RADIUS_M/SHOP_UNLOAD_RADIUS_M without racing real joystick/
 // flight movement choreography against a tight artificial network delay.
@@ -7503,80 +6638,12 @@ window.__rescaleModelFileForTests = rescaleModelFile;
 // and inspect trianglesAfter/the re-exported geometry on their own. Always
 // inert unless a test calls it.
 window.__optimizeModelFileForTests = optimizeModelFile;
-let shopAvatarSwing = 0; // current eased swing amplitude (0 = standing still, see SHOP_AVATAR_SWING_AMPLITUDE_RAD)
-let shopAvatarWalkPhase = 0;
-
-// Idle sway state (docs/SPEC.md §2) — see updateShopAvatarIdle.
-let shopIdleElapsedS = 0; // seconds since the last real movement input
-let shopIdleBlend = 0; // 0..1 eased "how much idle sway is showing"
-let shopAfkBlend = 0; // 0..1 eased "how visible the AFK label is" — see SHOP_AFK_DELAY_S
-let shopIdleSwayPhase = 0;
-let shopIdleSwayPeriodS = THREE.MathUtils.randFloat(SHOP_IDLE_SWAY_PERIOD_MIN_S, SHOP_IDLE_SWAY_PERIOD_MAX_S);
-let shopIdleSwayYawOffset = 0; // read by updateShopMovement to offset the avatar's own facing
-let shopIdleHeadCurrentRad = 0;
-let shopIdleHeadTargetRad = 0;
-let shopIdleHeadTimerS = 0;
-let shopIdleHeadIntervalS = THREE.MathUtils.randFloat(SHOP_IDLE_HEAD_TURN_INTERVAL_MIN_S, SHOP_IDLE_HEAD_TURN_INTERVAL_MAX_S);
-// #2477 (sub-issue of #2475): the sit/lean target selected once per idle
-// episode, the instant idle sway begins -- null until then, and reset to
-// null the moment real movement resumes (re-armed for the next idle
-// episode). Consumed by the (not yet built) sit/lean pose sub-issues;
-// today's existing stand sway below runs unconditionally regardless of
-// this value, matching #2477's own "fall back to stand sway unchanged"
-// scope -- this sub-issue is selection only, not the pose itself.
-let shopIdleInteractionTarget = null;
-// #2478 (sub-issue of #2475): how much of the seated pose is currently
-// showing -- 0 whenever the selected interaction target (just above) isn't
-// a 'sit' one (ordinary stand sway runs instead), eased toward 1 at the
-// same SHOP_IDLE_BLEND_PER_S rate the stand sway above already uses, and
-// hard-cut back to 0 the instant real input resumes — same ease-in-on-
-// stillness/instant-ease-out-on-movement discipline as shopIdleBlend
-// itself (a separate blend, not a reuse of shopIdleBlend, since idle sway
-// still runs underneath a seated pose too — see updateShopAvatarIdle).
-let shopSitBlend = 0;
-// Visual-only offsets layered on top of the avatar's own authoritative
-// shopAvatarFacing/shopAvatarPosition at the point they're actually
-// rendered (same additive convention shopIdleSwayYawOffset above already
-// uses for yaw) -- so sitting never touches movement, collision,
-// curvature, or camera-follow code, all of which key off the real
-// shopAvatarFacing/shopAvatarPosition directly. Both are pure functions of
-// shopSitBlend and the current idle target recomputed fresh each frame
-// (see updateShopAvatarIdle), not independently-eased state of their own —
-// the avatar doesn't move at all while idle, so there's nothing chasing a
-// moving target to smooth out.
-let shopSitYawOffset = 0;
-let shopSitHeightOffset = 0;
-// #2480 (sub-issue of #2475): randomized once per sit episode, the instant
-// a 'sit' target is selected (same moment shopIdleInteractionTarget itself
-// gets set) -- shopSitBlend stays suppressed at 0 until this many seconds
-// of that same episode have elapsed, so the avatar doesn't always commit
-// to sitting at the exact same instant idle sway begins; sometimes it
-// lingers standing a bit first. Timing-side counterpart to the random
-// target selection in findShopIdleInteractionTarget above. Lean (just
-// below) gets the identical pattern applied to its own blend, per #2480's
-// own "across repeated idle cycles" scope covering both poses equally.
-const SHOP_SIT_SETTLE_DELAY_MIN_S = 0;
-const SHOP_SIT_SETTLE_DELAY_MAX_S = 2;
-let shopSitSettleDelayS = 0;
-let shopSitSettleElapsedS = 0; // seconds of real idle time with a 'sit' target selected, this episode
-// #2479 (sub-issue of #2475): same shape as #2478's own shopSitBlend/
-// shopSitYawOffset/shopSitHeightOffset just above, for a 'lean' target
-// instead of 'sit' -- a dedicated ease (not a reuse of shopIdleBlend) so
-// ordinary idle sway keeps running underneath a lean too, and the same
-// visual-only-offset discipline (never touches shopAvatarPosition/
-// shopAvatarFacing/camera-follow/collision) for the same reason sit's own
-// declaration gives. Unlike sit's height-only offset, leaning against a
-// surface needs horizontal displacement too, so this carries a full x/y/z
-// offset rather than just height.
-let shopLeanBlend = 0;
-let shopLeanYawOffset = 0;
-let shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
-// #2480: lean's own settle-delay counterpart to shopSitSettleDelayS/
-// shopSitSettleElapsedS above -- identical pattern, separate state, since
-// a sit episode and a lean episode are never the same episode (sit always
-// outranks lean within one idle episode per findShopIdleInteractionTarget).
-let shopLeanSettleDelayS = 0;
-let shopLeanSettleElapsedS = 0; // seconds of real idle time with a 'lean' target selected, this episode
+// #2623: shopAvatarSwing/WalkPhase and the idle/AFK/sway/head-turn/sit/
+// lean state block that used to live here now live in src/shop/avatar.js
+// (SHOP_SIT_SETTLE_DELAY_MIN_S/MAX_S included) — the exported bindings
+// this file still needs (shopIdleSwayYawOffset/shopIdleInteractionTarget/
+// shopSitBlend/shopSitYawOffset/shopSitHeightOffset/shopLeanBlend/
+// shopLeanYawOffset/shopLeanPositionOffset) are imported from there.
 
 // Flight state (docs/SPEC.md §2) — see updateShopFlight/toggleShopFlight.
 // 'grounded' | 'takingOff' | 'flying' | 'landing'. Toggling mid-transition
@@ -7614,215 +6681,8 @@ let shopLastLocationHideTimerS = null;
 let shopGoToLastLocationPhase = null; // null | 'fadingOut' | 'fadingIn'
 let shopGoToLastLocationElapsedS = 0;
 
-// Swing amplitude eases toward its target (moving vs. standing still)
-// rather than snapping, so stopping doesn't visibly freeze the legs
-// mid-stride — and phase only advances while actually moving, so a full
-// stop always eases back toward a neutral standing pose rather than
-// leaving a limb stuck part-swung. moveMagnitude (0..1, the move
-// joystick's own deflection) scales both the eased-toward amplitude and
-// how fast the cycle advances, the same walk-slower/run-faster feel
-// SHOP_WALK_SPEED_M_S..SHOP_RUN_SPEED_M_S already gives actual ground speed.
-function updateShopAvatarPose(moveMagnitude, dt) {
-  const targetSwing = SHOP_AVATAR_SWING_AMPLITUDE_RAD * moveMagnitude;
-  shopAvatarSwing += (targetSwing - shopAvatarSwing) * Math.min(1, SHOP_AVATAR_SWING_EASE_PER_S * dt);
-  shopAvatarWalkPhase += SHOP_AVATAR_CYCLE_SPEED_RAD_S * moveMagnitude * dt;
-
-  const swing = Math.sin(shopAvatarWalkPhase) * shopAvatarSwing;
-  shopAvatar.legPivotL.rotation.x = swing;
-  shopAvatar.legPivotR.rotation.x = -swing;
-  // Arms swing opposite their same-side leg (left arm forward with right
-  // leg forward) — a real walk's natural counter-swing — at a gentler
-  // amplitude than the legs.
-  shopAvatar.armPivotL.rotation.x = -swing * 0.7;
-  shopAvatar.armPivotR.rotation.x = swing * 0.7;
-}
-
-// #682: crossfades a custom avatar's AnimationMixer from whichever named
-// clip (idle/walk/fly) was playing to `state`'s own, driven by the exact
-// same airborne/moveMagnitude locomotion state updateShopAvatarPose's own
-// root-motion pose already reflects — so a model with matching clips
-// plays them in sync with its procedural root movement, not just
-// alongside it. No-ops entirely for the default procedural avatar (no
-// `actions` at all) and for a custom avatar missing every one of the
-// three clips (`actions` null, per createCustomShopAvatar's own comment)
-// — either way it just keeps moving as a rigid whole via root motion,
-// same as before this clip convention existed. Missing only SOME clips
-// (e.g. idle+walk but no fly) is handled per-transition below: fading out
-// whatever was playing still happens, but fading in only happens if the
-// new state actually has a clip, so at worst a still frame holds where a
-// missing clip's action would have taken over — deliberately not falling
-// back to a different state's own clip in that gap, since a fly-less
-// avatar suddenly still doing its walk-cycle mid-air would read as more
-// broken, not less.
-function setShopAvatarAnimationState(shopAvatar, state) {
-  if (!shopAvatar.actions || shopAvatar.animState === state) return;
-  const previousAction = shopAvatar.actions[shopAvatar.animState];
-  if (previousAction) previousAction.fadeOut(SHOP_AVATAR_ANIM_CROSSFADE_S);
-  const nextAction = shopAvatar.actions[state];
-  if (nextAction) nextAction.reset().fadeIn(SHOP_AVATAR_ANIM_CROSSFADE_S).play();
-  shopAvatar.animState = state;
-}
-
-// docs/SPEC.md §2: "context-aware idle state machine ... after inactivity,
-// with randomization." This pass only covers "stand" — a subtle whole-body
-// weight-shift sway plus an occasional head turn, both re-randomized on
-// their own cycle so idle never visibly repeats the same motion twice in a
-// row. "Sit"/"lean" need a real interaction-target system (e.g. a chair
-// prop with an occupancy slot) that doesn't exist yet — future work.
-//
-// Called every frame right after updateShopAvatarPose, whose walk-cycle
-// arm rotations it adds on top of (already ~0 by the time idle sway is
-// actually visible, since walking and idling are mutually exclusive in
-// practice — see hasActiveInput below). Ends the instant real input
-// resumes (a hard cut, not an ease-out) — a lingering idle sway would read
-// as the avatar fighting the player's own input.
-//
-// #1586: hasActiveInput is "any real input," not just movement — an
-// active look-only joystick/mouse-drag used to be invisible here (this
-// used to take moveMagnitude alone), so a shopper who was only looking
-// around still got timed out to AFK despite being clearly at the
-// controls. moveMagnitude itself is no longer needed by this function;
-// the walk-cycle pose that actually depends on it lives in
-// updateShopAvatarPose instead.
-function updateShopAvatarIdle(hasActiveInput, dt) {
-  if (hasActiveInput) {
-    shopIdleElapsedS = 0;
-    shopIdleBlend = 0;
-    shopAfkBlend = 0;
-    shopIdleInteractionTarget = null; // re-arm (#2477) for the next idle episode
-    shopSitBlend = 0; // #2478: instant ease-out, same as shopIdleBlend/shopAfkBlend just above
-    shopSitYawOffset = 0;
-    shopSitHeightOffset = 0;
-    shopSitSettleElapsedS = 0; // #2480: re-armed for the next sit episode's own randomized delay
-    shopLeanBlend = 0; // #2479: same instant ease-out, mirroring sit's own just above
-    shopLeanYawOffset = 0;
-    shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
-    shopLeanSettleElapsedS = 0; // #2480: re-armed for the next lean episode's own randomized delay
-  } else {
-    // #2477: fires exactly once per idle episode, the instant elapsed time
-    // first crosses SHOP_IDLE_DELAY_S -- not every frame afterward, since
-    // shopIdleElapsedS keeps growing past that threshold for as long as
-    // the avatar stays idle.
-    const wasIdle = shopIdleElapsedS >= SHOP_IDLE_DELAY_S;
-    shopIdleElapsedS += dt;
-    const idleTarget = shopIdleElapsedS >= SHOP_IDLE_DELAY_S ? 1 : 0;
-    if (!wasIdle && idleTarget === 1) {
-      shopIdleInteractionTarget = findShopIdleInteractionTarget(shopAvatarPosition.x, shopAvatarPosition.y);
-      // #2480: re-randomized every time a fresh episode selects a new sit
-      // or lean target (including re-selecting the same one next time
-      // around) — see shopSitSettleDelayS's own declaration for why. Both
-      // get randomized here regardless of which kind was actually
-      // selected (the unused one's delay just sits idle until its own
-      // kind is picked in some future episode) — simpler than branching
-      // on kind here, and harmless since each only ever gates its own
-      // blend below.
-      shopSitSettleDelayS = THREE.MathUtils.randFloat(SHOP_SIT_SETTLE_DELAY_MIN_S, SHOP_SIT_SETTLE_DELAY_MAX_S);
-      shopSitSettleElapsedS = 0;
-      shopLeanSettleDelayS = THREE.MathUtils.randFloat(SHOP_SIT_SETTLE_DELAY_MIN_S, SHOP_SIT_SETTLE_DELAY_MAX_S);
-      shopLeanSettleElapsedS = 0;
-    }
-    shopIdleBlend += (idleTarget - shopIdleBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
-    const afkTarget = shopIdleElapsedS >= SHOP_AFK_DELAY_S ? 1 : 0;
-    shopAfkBlend += (afkTarget - shopAfkBlend) * Math.min(1, SHOP_AFK_BLEND_PER_S * dt);
-
-    // #2478/#2480: eases in only once this idle episode's own selected
-    // target (above) is a sit one *and* its own randomized settle delay
-    // has elapsed — stays at 0, same as always, for a lean target, no
-    // target, or a sit target still within its settle delay (ordinary
-    // stand sway keeps running regardless, same "fall back to stand sway
-    // unchanged" scope #2477 already cut).
-    if (shopIdleInteractionTarget?.kind === 'sit') shopSitSettleElapsedS += dt;
-    const sitTarget =
-      shopIdleInteractionTarget?.kind === 'sit' && shopSitSettleElapsedS >= shopSitSettleDelayS ? 1 : 0;
-    shopSitBlend += (sitTarget - shopSitBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
-    if (shopIdleInteractionTarget?.kind === 'sit') {
-      // Hip height (local z = SHOP_AVATAR_LEG_LENGTH_M above the group's
-      // own origin, same convention createShopAvatar's own comment
-      // documents) needs to land exactly on the target's own worldZ (the
-      // seat surface, already the right height for *hips*, not feet — see
-      // findShopIdleInteractionTarget's own heightM comment) once fully
-      // blended in; solving that backwards for the group-position offset
-      // this adds on top of the real (unmoved) shopAvatarPosition.z gives
-      // this term, same shape regardless of whether the seat sits above or
-      // below standing hip height.
-      shopSitHeightOffset =
-        (shopIdleInteractionTarget.worldZ - SHOP_AVATAR_LEG_LENGTH_M - shopAvatarPosition.z) * shopSitBlend;
-      // Shortest-angle delta so turning to face a target behind the
-      // avatar doesn't spin the long way around — same atan2-of-sin/cos
-      // idiom the real facing turn above (shopAvatarFacing) already uses.
-      const yawDelta = Math.atan2(
-        Math.sin(shopIdleInteractionTarget.worldFacingRad - shopAvatarFacing),
-        Math.cos(shopIdleInteractionTarget.worldFacingRad - shopAvatarFacing),
-      );
-      shopSitYawOffset = yawDelta * shopSitBlend;
-    } else {
-      shopSitHeightOffset = 0;
-      shopSitYawOffset = 0;
-    }
-
-    // #2479/#2480: same shape as #2478's sit block just above, for a
-    // 'lean' target -- eases in only once this idle episode's own
-    // selected target is a lean one *and* its own randomized settle
-    // delay has elapsed (sit always outranks lean within the same
-    // episode per findShopIdleInteractionTarget, so these two blends are
-    // never both nonzero at once). Visual-only offset recomputed fresh
-    // each frame as a pure function of shopLeanBlend and the current
-    // target, same reasoning shopSitYawOffset/shopSitHeightOffset's own
-    // declaration gives -- never touches shopAvatarPosition/
-    // shopAvatarFacing, so leaning never affects movement, collision,
-    // curvature, or camera-follow code either.
-    if (shopIdleInteractionTarget?.kind === 'lean') shopLeanSettleElapsedS += dt;
-    const leanTarget =
-      shopIdleInteractionTarget?.kind === 'lean' && shopLeanSettleElapsedS >= shopLeanSettleDelayS ? 1 : 0;
-    shopLeanBlend += (leanTarget - shopLeanBlend) * Math.min(1, SHOP_IDLE_BLEND_PER_S * dt);
-    if (shopIdleInteractionTarget?.kind === 'lean') {
-      shopLeanPositionOffset = {
-        x: (shopIdleInteractionTarget.worldX - shopAvatarPosition.x) * shopLeanBlend,
-        y: (shopIdleInteractionTarget.worldY - shopAvatarPosition.y) * shopLeanBlend,
-        z: (shopIdleInteractionTarget.worldZ - shopAvatarPosition.z) * shopLeanBlend,
-      };
-      const leanYawDelta = Math.atan2(
-        Math.sin(shopIdleInteractionTarget.worldFacingRad - shopAvatarFacing),
-        Math.cos(shopIdleInteractionTarget.worldFacingRad - shopAvatarFacing),
-      );
-      shopLeanYawOffset = leanYawDelta * shopLeanBlend;
-    } else {
-      shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
-      shopLeanYawOffset = 0;
-    }
-  }
-  shopAvatar.afkSprite.material.opacity = shopAfkBlend;
-
-  shopIdleSwayPhase += (dt / shopIdleSwayPeriodS) * Math.PI * 2;
-  if (shopIdleSwayPhase >= Math.PI * 2) {
-    shopIdleSwayPhase -= Math.PI * 2;
-    shopIdleSwayPeriodS = THREE.MathUtils.randFloat(SHOP_IDLE_SWAY_PERIOD_MIN_S, SHOP_IDLE_SWAY_PERIOD_MAX_S);
-  }
-  shopIdleHeadTimerS += dt;
-  if (shopIdleHeadTimerS >= shopIdleHeadIntervalS) {
-    shopIdleHeadTimerS = 0;
-    shopIdleHeadIntervalS = THREE.MathUtils.randFloat(SHOP_IDLE_HEAD_TURN_INTERVAL_MIN_S, SHOP_IDLE_HEAD_TURN_INTERVAL_MAX_S);
-    shopIdleHeadTargetRad = THREE.MathUtils.randFloatSpread(SHOP_IDLE_HEAD_TURN_MAX_RAD * 2);
-  }
-  shopIdleHeadCurrentRad +=
-    (shopIdleHeadTargetRad * shopIdleBlend - shopIdleHeadCurrentRad) * Math.min(1, SHOP_IDLE_HEAD_TURN_EASE_PER_S * dt);
-
-  shopIdleSwayYawOffset = Math.sin(shopIdleSwayPhase) * SHOP_IDLE_SWAY_AMPLITUDE_RAD * shopIdleBlend;
-  const armIdleSway = Math.sin(shopIdleSwayPhase * 0.5) * SHOP_IDLE_ARM_SWAY_AMPLITUDE_RAD * shopIdleBlend;
-  shopAvatar.armPivotL.rotation.x += armIdleSway;
-  shopAvatar.armPivotR.rotation.x -= armIdleSway;
-  shopAvatar.headPivot.rotation.z = shopIdleHeadCurrentRad;
-
-  // #2478: layered on top of the counter-swing arm sway and the (always
-  // ~0 while idle) walk-cycle leg rotation just above/in updateShopAvatarPose
-  // — both pivots turn the same direction (unlike the arms' own idle
-  // counter-sway) since a seated silhouette has both legs/arms forward
-  // together, not alternating.
-  shopAvatar.legPivotL.rotation.x += SHOP_SIT_LEG_ROTATION_RAD * shopSitBlend;
-  shopAvatar.legPivotR.rotation.x += SHOP_SIT_LEG_ROTATION_RAD * shopSitBlend;
-  shopAvatar.armPivotL.rotation.x += SHOP_SIT_ARM_ROTATION_RAD * shopSitBlend;
-  shopAvatar.armPivotR.rotation.x += SHOP_SIT_ARM_ROTATION_RAD * shopSitBlend;
-}
+// #2623: updateShopAvatarPose/setShopAvatarAnimationState/updateShopAvatarIdle
+// now live in src/shop/avatar.js.
 
 // Shared by walking's own floor clamp and the camera-follow height — keeps
 // the camera between the ground and comfortably below the dome's current
@@ -8436,7 +7296,7 @@ function shopLandingObstructionTopZ(x, y) {
 // Still no pathfinding, matching #2044's own "keep it simple" precedent
 // for the sibling landing-spot search above.
 const SHOP_IDLE_INTERACTION_SEARCH_RADIUS_M = 3;
-function findShopIdleInteractionTarget(x, y) {
+export function findShopIdleInteractionTarget(x, y) {
   const sitCandidates = [];
   const leanCandidates = [];
   for (const entry of shopLandlets.values()) {
@@ -8917,14 +7777,14 @@ function updateShopItemHandling(dt, moveMagnitude, airborne) {
     const raise = SHOP_HANDLING_ARM_RAISE_RAD * shopHandlingBlend;
     shopAvatar.armPivotL.rotation.x -= raise;
     shopAvatar.armPivotR.rotation.x -= raise;
-    shopIdleSwayYawOffset += Math.sin(shopHandlingPhase) * SHOP_HANDLING_TURN_AMPLITUDE_RAD * shopHandlingBlend;
+    addShopIdleSwayYawOffset(Math.sin(shopHandlingPhase) * SHOP_HANDLING_TURN_AMPLITUDE_RAD * shopHandlingBlend);
   } else {
     // walk-around: a continuous one-direction spin (phase used directly as
     // a yaw angle, not run through sin like the back-and-forth sway
     // above) — reads as circling the item to view every side, purely
     // through body rotation. No arm raise: nothing's being held.
     shopHandlingPhase = nextPhase(shopHandlingPhase, SHOP_HANDLING_SPIN_PERIOD_S, dt);
-    shopIdleSwayYawOffset += shopHandlingPhase * shopHandlingBlend;
+    addShopIdleSwayYawOffset(shopHandlingPhase * shopHandlingBlend);
   }
 }
 
@@ -10690,7 +9550,7 @@ shopProductPreviewBuyBtn.addEventListener('click', handleShopProductBuyClick);
 // reading window.__rendererMemory) before the deferred write above ever
 // lands, trading the original undercount race for an equally real stale-read
 // one.
-function reportRendererMemoryDiagnostic() {
+export function reportRendererMemoryDiagnostic() {
   return new Promise((resolve) => {
     requestAnimationFrame(() => requestAnimationFrame(() => {
       window.__rendererMemory = { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures };
@@ -10708,7 +9568,7 @@ function reportRendererMemoryDiagnostic() {
 // in between.
 window.__currentRendererMemory = () => ({ geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures });
 
-function disposeObject3D(object) {
+export function disposeObject3D(object) {
   object.traverse((child) => {
     // #1370: same Sprite gap disposeObject's own fix just closed — e.g. the
     // shop avatar's afkSprite is a THREE.Sprite, not a Mesh, so it (and its
@@ -11194,40 +10054,21 @@ async function enterShopMode() {
     scene.remove(shopAvatar.group);
     disposeObject3D(shopAvatar.group);
   }
-  shopAvatar = null;
+  setShopAvatar(null);
   if (equippedAvatarModelUrl) {
     try {
-      shopAvatar = await createCustomShopAvatar(equippedAvatarModelUrl, equippedAnimation);
+      setShopAvatar(await createCustomShopAvatar(equippedAvatarModelUrl, equippedAnimation));
     } catch (err) {
       console.warn(`Failed to load equipped avatar model (${equippedAvatarModelUrl}), falling back to the default avatar:`, err);
     }
   }
-  if (!shopAvatar) shopAvatar = createShopAvatar();
+  if (!shopAvatar) setShopAvatar(createShopAvatar());
   scene.add(shopAvatar.group);
   window.__shopAvatarModelUrl = shopAvatar.modelUrl; // see refreshEquippedShopAvatar's own comment on this (#982)
   window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() }; // see refreshEquippedShopAvatar's own comment on this (#1091)
   window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null; // see createCustomShopAvatar's own comment on this (#1165)
   await reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
-  shopAvatarSwing = 0;
-  shopAvatarWalkPhase = 0;
-  shopIdleElapsedS = 0;
-  shopIdleBlend = 0;
-  shopAfkBlend = 0;
-  shopIdleSwayYawOffset = 0;
-  shopIdleHeadCurrentRad = 0;
-  shopIdleHeadTargetRad = 0;
-  shopIdleHeadTimerS = 0;
-  shopIdleInteractionTarget = null;
-  shopSitBlend = 0;
-  shopSitYawOffset = 0;
-  shopSitHeightOffset = 0;
-  shopSitSettleDelayS = 0;
-  shopSitSettleElapsedS = 0;
-  shopLeanBlend = 0;
-  shopLeanYawOffset = 0;
-  shopLeanPositionOffset = { x: 0, y: 0, z: 0 };
-  shopLeanSettleDelayS = 0;
-  shopLeanSettleElapsedS = 0;
+  resetShopAvatarIdleState(); // src/shop/avatar.js (#2623) — zeroes every idle/sway/sit/lean field it owns
   // #1175 (docs/SPEC.md §1/§2): every spawn — not just a first-ever visit —
   // starts already flying, above a random world location, facing the
   // world center, and slowly orbiting it clockwise until the shopper gives
