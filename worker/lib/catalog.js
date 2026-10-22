@@ -1577,4 +1577,3 @@ export async function handleCatalog(request, db, route, url, models, env) {
 
   return json({ error: 'Not found' }, 404);
 }
-
