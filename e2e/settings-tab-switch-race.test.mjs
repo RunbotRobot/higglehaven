@@ -7,7 +7,7 @@
 // Higgles, Start Auction) used to land on whatever tab was showing by the
 // time the await resolved. Same "delay one endpoint, act during the gap"
 // technique as seller-modal-reopen-race.test.mjs.
-import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAccountMenu, waitForText, finish } from './helpers.mjs';
 
 const LABEL = 'Settings Tab Race Tester';
 
@@ -63,33 +63,30 @@ await page.unroute('**/api/builders/me');
 
 // Switching back to Build afterward should still work normally — the fix
 // only skips a superseded render, not a fresh, current one.
-await page.click('.settings-tab-btn[data-section="build"]');
-// #2135: waitForFunction's signature is (pageFunction, arg, options) -- the
-// 2-argument call this used to be (fn, { timeout: 10000 })) put the options
-// object in the `arg` slot instead, so `options` stayed undefined and the
-// *real* applied timeout was always Playwright's actual default (30000ms),
-// not the 10000ms written here -- confirmed directly against the CI
-// failure this issue was filed from ("Timeout 30000ms exceeded" at this
-// exact line). That default still wasn't enough margin under CI load, so
-// fixing the arg/options mix-up alone would make it worse (an *honored*
-// 10000ms is less generous than the *dishonored* 30000ms it was actually
-// getting) -- the explicit `null` arg reaches the options slot, and the
-// timeout itself is widened well past the old effective default for real
-// headroom, same as this suite's own account-menu-modal wait (60000ms,
-// e2e/helpers.mjs) for a comparable post-signup/identity-flow margin.
-// #2570: 60000ms stopped being enough under further CI-load growth (timed
-// out again on an entirely unrelated PR) -- widened again, same mitigation
-// shape as #2135/#2136's own margin bumps for this fleet's well-established
-// #978-class runner-load-margin flakes. The job itself has no step/job-level
-// timeout (`.github/workflows/ci.yml` sets none, so GitHub's 6-hour default
-// applies), so there's ample headroom to widen this well past what any
-// observed failure has actually needed.
-await page.waitForFunction(
-  () => document.getElementById('settings-section').textContent.includes('Land Cap'),
-  null,
+//
+// #2135/#2136/#2570 each widened this wait's margin again (10000ms ->
+// dishonored-as-30000ms -> honored 10000ms -> 60000ms -> 120000ms) as a
+// single polling waitForFunction(textContent.includes('Land Cap')) budget,
+// and #2631 timed out again anyway at 120000ms. That one combined budget
+// was covering two different things at once: the real GET /api/builders/me
+// round trip (the actual CI-load-variable part #1388-class flakes are
+// about) *and* the DOM update after it resolves (synchronous, effectively
+// instant once the response is in hand) — so every bump widened a budget
+// most of which was never the actual bottleneck. Splitting them, same
+// waitForResponse-paired-with-the-triggering-click shape as e2e/auth.test.mjs's
+// firstSellerFetch/secondSellerFetch: the network wait gets the generous,
+// CI-load-tolerant margin (set up before the click so there's no risk of
+// missing a response that lands fast); the render-confirmation wait stays
+// short, since a real regression in the render path should fail fast and
+// distinctly rather than hiding inside one more escalation of the same
+// combined timeout.
+const builderMeFetchLanded = page.waitForResponse(
+  (r) => r.url().includes('/api/builders/me') && r.request().method() === 'GET',
   { timeout: 120000 },
 );
-const buildTabWorksNormally = (await page.textContent('#settings-section')).includes('Land Cap');
+await page.click('.settings-tab-btn[data-section="build"]');
+await builderMeFetchLanded;
+const buildTabWorksNormally = (await waitForText(page, '#settings-section', 'Land Cap')).includes('Land Cap');
 console.log('Build tab still renders Land Cap normally on a fresh, non-superseded switch (should be true):', buildTabWorksNormally);
 
 const pass = !/Land Cap|Redeem Higgles|Active Auctions/.test(generalTabHtmlRightAfterSwitch) &&
