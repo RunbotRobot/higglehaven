@@ -68,9 +68,17 @@ await page.route('**/api/land-candidate-rings*', async (route) => {
 await page.goto(`${BASE_URL}/admin/dashboard`, { waitUntil: 'networkidle' });
 await page.click('button[data-panel="world"]');
 
+// #2636 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeout itself is widened to 60000ms for real headroom under
+// CI load, same as this suite's other admin-dashboard-panel waits.
 await page.waitForFunction(
   () => !document.getElementById('ringsLoadMoreBtn').hidden,
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 const rowsAfterFirstPage = await page.locator('#ringsTableWrap tbody tr').count();
 console.log('rows shown after the first (limit=1) page loads (should be 1):', rowsAfterFirstPage);
