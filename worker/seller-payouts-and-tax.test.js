@@ -4,7 +4,7 @@ import {
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
   claimPurchasesForPayout, sellerPayoutIdempotencyKey, claimOrResumeSellerPayout, selectPurchasesForPayout,
-} from './index.js';
+} from './lib/seller-payouts-tax.js';
 import {
   api, grantAdminTo, signupBuilder, signupSeller, signupAdmin,
 } from './test-helpers.js';
