@@ -88,7 +88,12 @@ console.log(`first row mentions author+text (should mention "${LABEL}" and "Bonf
 // Both rows share the same author now, so this test distinguishes them by
 // event text instead (the thing that's actually still unique per event).
 await page.locator('.calendar-event-row').filter({ hasText: 'Market day' }).locator('.calendar-event-row-delete').click();
-await page.waitForFunction(() => document.querySelectorAll('.calendar-event-row').length === 1, { timeout: 5000 });
+// #2635 (sub-issue of #2635, 2nd waitForFunction sweep): the 2-arg call
+// bound { timeout } to the unused `arg` slot, so the real applied timeout
+// was always Playwright's dishonored 30000ms default, never 5000 -- the
+// explicit null arg reaches the options slot for real; 30000ms matches
+// that previously-dishonored default so this can't regress into a flake.
+await page.waitForFunction(() => document.querySelectorAll('.calendar-event-row').length === 1, null, { timeout: 30000 });
 const rowCountAfterDelete = await page.locator('.calendar-event-row').count();
 console.log('rows shown after deleting one via the panel (should be 1):', rowCountAfterDelete);
 
@@ -105,10 +110,11 @@ console.log('events persisted server-side after the panel delete (should be 1, t
 // (and that the button renders for an own-authored row at all), not
 // testing a specific submitted string.
 await page.locator('.calendar-event-row').filter({ hasText: 'Bonfire night' }).locator('.calendar-event-row-edit').click();
+// #2635: same arg/options mix-up as above.
 await page.waitForFunction(() => {
   const row = document.querySelector('.calendar-event-row');
   return row && !row.textContent.includes('Bonfire night');
-}, { timeout: 5000 });
+}, null, { timeout: 30000 });
 const editedRowText = await page.locator('.calendar-event-row').first().textContent();
 console.log('row text after editing via the panel\'s own edit button (should no longer mention "Bonfire night"):', editedRowText);
 
