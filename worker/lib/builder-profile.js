@@ -318,9 +318,22 @@ export async function handleMyOwnedAnimations(request, db) {
 // understand that it's going to be very unpredictable" -- it always gets an
 // explicit "unpredictable" state rather than a fabricated day count,
 // regardless of any sales data.
+//
+// #2660: every other repeatable endpoint in this file already rate-limits
+// itself (AVATAR_EQUIP_RATE_LIMIT_MAX #1057, NOTIFICATION_PREFERENCES_
+// RATE_LIMIT_MAX #2103, ANIMATION_EQUIP_RATE_LIMIT_MAX) -- this one was
+// missed despite firing one extra categorySalesVelocityPerDay query per
+// distinct category needing the cross-builder fallback below, the same
+// non-O(1)-read shape worker/lib/catalog.js's own similarity-search
+// endpoint already rate-limits for. Generous limit since this is
+// read-only informational data a builder's Settings/Build panel may poll
+// somewhat often, not a rare deliberate action.
+const BUILDER_LOW_STOCK_RATE_LIMIT_MAX = 60;
+
 export async function handleBuilderLowStock(request, db) {
   const user = await requireCurrentUser(request, db);
   const builder = await getOrCreateBuilderForUser(db, user);
+  await checkRateLimit(db, `builder-low-stock:${builder.builder_id}`, BUILDER_LOW_STOCK_RATE_LIMIT_MAX);
   const { results: templates } = await db.prepare(`
     SELECT ct.template_id AS templateId, ct.name AS name, ct.category AS category,
            ct.stock_quantity AS stockQuantity, COUNT(*) AS placedInstanceCount
