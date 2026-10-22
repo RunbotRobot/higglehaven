@@ -1,6 +1,6 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { cleanupUnreferencedModels } from './index.js';
+import { cleanupUnreferencedModels } from './lib/models.js';
 import { reserveVideoGenerationJob, videoGenerationReservationStillUsable } from './lib/video-generation.js';
 import { api, signupBuilder } from './test-helpers.js';
 

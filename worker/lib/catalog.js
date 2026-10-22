@@ -17,11 +17,15 @@
 // -animation listings, instance crop/XY-bounds validation); sellerExists,
 // requireSessionSeller, assertReferenceExists, optionalLabelValue,
 // positiveNumber -- each used by several other not-yet-extracted domains'
-// own handlers/validators too; getStorageUsage/reserveStorageBudget/
-// formatBytes -- the shared model-upload infrastructure handleModelUpload
-// also depends on; handleProductReviews/handleProductFlags -- their own
-// domain, extracted separately into worker/lib/reputation.js (#2532),
-// just dispatched to from here.
+// own handlers/validators too; handleProductReviews/handleProductFlags --
+// their own domain, extracted separately into worker/lib/reputation.js
+// (#2532), just dispatched to from here.
+// getStorageUsage/reserveStorageBudget/formatBytes are the shared R2
+// storage-budget machinery (#2530) -- genuinely cross-domain (concept-image
+// generation, catalog thumbnails, model uploads, and video-to-3D generation
+// all write into the same MODELS bucket under the same cap), so they live
+// in worker/lib/storage.js, not worker/index.js -- imported from there
+// directly rather than duplicated or routed back through worker/index.js.
 // MAX_MODEL_BYTES/MAX_MONEY_CENTS/PNG_SIGNATURE/
 // EXTENSIBLE_DIMENSION_KEY_BY_AXIS are likewise genuinely shared constants
 // -- duplicated below rather than exported, since (per #1978, confirmed
@@ -37,8 +41,9 @@ import { bytesToHex } from './crypto.js';
 import { fireNotifications } from './notifications.js';
 import {
   templateFromRow, sellerExists, requireSessionSeller, assertReferenceExists,
-  optionalLabelValue, positiveNumber, getStorageUsage, reserveStorageBudget, formatBytes,
+  optionalLabelValue, positiveNumber,
 } from '../index.js';
+import { getStorageUsage, reserveStorageBudget, formatBytes } from './storage.js';
 import { handleProductReviews, handleProductFlags } from './reputation.js';
 
 // #1978: see this file's own header comment above for why these are
