@@ -54,9 +54,17 @@ await bobPage.route('**/api/notifications/*', async (route) => {
 await openAccountMenu(bobPage);
 await bobPage.click('#notifications-btn');
 await bobPage.waitForSelector('#notifications-modal.visible', { timeout: 5000 });
+// #2637 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeout itself is widened to 60000ms for real headroom under
+// CI load, same margin #2636's own sibling leaf used for its own 10000ms cases.
 await bobPage.waitForFunction(
   () => document.querySelectorAll('#notifications-list .notification-row.unread').length > 0,
-  { timeout: 10000 },
+  null,
+  { timeout: 60000 },
 );
 const notificationRow = () => bobPage.locator('#notifications-list .notification-row').filter({ hasText: ALICE });
 const unreadCountBefore = await notificationRow().count();
