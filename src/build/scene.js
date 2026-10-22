@@ -28,16 +28,16 @@
 // selectOnly back to main.js for that one listener to keep calling into,
 // unchanged in behavior.
 //
-// Several pieces still physically live in main.js and get imported back
+// shapeForLandlet still physically lives in main.js and gets imported back
 // here — same temporary circular-import pattern account/auth.js, identity.js,
 // menu.js and build/layoutPreview.js already use for their own
-// not-yet-extracted dependencies: shapeForLandlet (pending claim/flow.js's
-// own future extraction of it), addItemBtn/closeCatalogPicker (catalog
-// picker, #2558's own territory — not yet extracted, and still gated on
-// the owner's answer on #2557's shared-Build/Sell-upload-modal question).
-// Safe since every cross-reference on both sides is inside a function
-// body, never evaluated at module-top-level — confirmed by a clean
-// `vite build`.
+// not-yet-extracted dependencies (pending claim/flow.js's own future
+// extraction of it). addItemBtn/closeCatalogPicker, by contrast, landed in
+// src/catalog/picker.js (#2558, merged after this leaf's own implementation
+// was done) — imported from there directly rather than through main.js's
+// own now-stale re-export. Safe since every cross-reference is inside a
+// function body, never evaluated at module-top-level — confirmed by a
+// clean `vite build`.
 //
 // src/build/layoutPreview.js (#2561) previously imported several of these
 // exports (controls/rotateControls/translateControls/clearSelection/
@@ -77,7 +77,8 @@ import {
 import { builderId, currentLandletId, LANDLET_AREA_M2, LANDLET_SIDE_M, LANDLET_HEIGHT_M } from '../world/state.js';
 import { scene, camera, renderer, canvas, registerModeFrameUpdate } from '../world/scene.js';
 import { runClaimFlow } from '../claim/flow.js';
-import { shapeForLandlet, BUILD_TARGET_LANDLET_ID_KEY, addItemBtn, closeCatalogPicker } from '../main.js';
+import { shapeForLandlet, BUILD_TARGET_LANDLET_ID_KEY } from '../main.js';
+import { addItemBtn, closeCatalogPicker } from '../catalog/picker.js';
 
 // Vertical construction (issue #167/#168/#169): the current lándlet's own
 // ground-level area (needed to preview a level's cap cost client-side

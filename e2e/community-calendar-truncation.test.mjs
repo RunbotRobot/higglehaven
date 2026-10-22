@@ -56,7 +56,10 @@ await page.route(`**/api/instances/${calendarInstance.instanceId}/events*`, asyn
 // Manage Events instead of un-flagging.
 await communityCalendarBtn().click();
 await page.waitForSelector('#calendar-events-modal.visible', { timeout: 5000 });
-await page.waitForFunction(() => document.querySelectorAll('.calendar-event-row').length === 2, { timeout: 5000 });
+// #2635 (2nd waitForFunction arg/options sweep): the real applied timeout
+// was always Playwright's dishonored 30000ms default, never 5000 -- 30000ms
+// here matches that previously-dishonored default so this can't regress.
+await page.waitForFunction(() => document.querySelectorAll('.calendar-event-row').length === 2, null, { timeout: 30000 });
 
 const rowCount = await page.locator('.calendar-event-row').count();
 const truncatedHidden = await page.locator('#calendar-events-truncated').evaluate((el) => el.hidden);
