@@ -45,19 +45,27 @@ alicePage.removeAllListeners('dialog');
 alicePage.on('dialog', (dialog) => dialog.accept(BOB));
 await alicePage.click('#friends-add-btn');
 await waitForText(alicePage, '#friends-status', BOB);
-await alicePage.waitForFunction(() => document.querySelectorAll('#friends-outgoing-list .friend-row').length === 1, { timeout: 5000 });
+// #2637 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeout itself is widened to 30000ms for real headroom under
+// CI load (this is a two-concurrent-page Alice/Bob test, same reasoning
+// #2636's own sibling leaf used for single-page admin panels).
+await alicePage.waitForFunction(() => document.querySelectorAll('#friends-outgoing-list .friend-row').length === 1, null, { timeout: 30000 });
 await alicePage.click('#friends-close-btn');
 
 await openAccountMenu(bobPage);
 await bobPage.click('#friends-btn');
-await bobPage.waitForFunction(() => document.querySelectorAll('#friends-incoming-list .friend-row').length > 0, { timeout: 5000 });
+await bobPage.waitForFunction(() => document.querySelectorAll('#friends-incoming-list .friend-row').length > 0, null, { timeout: 30000 });
 await bobPage.locator('#friends-incoming-list .friend-row').filter({ hasText: ALICE }).locator('button', { hasText: 'Accept' }).click();
-await bobPage.waitForFunction(() => document.querySelectorAll('#friends-accepted-list .friend-row').length > 0, { timeout: 5000 });
+await bobPage.waitForFunction(() => document.querySelectorAll('#friends-accepted-list .friend-row').length > 0, null, { timeout: 30000 });
 await bobPage.click('#friends-close-btn');
 
 await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
-await alicePage.waitForFunction(() => document.querySelectorAll('#friends-accepted-list .friend-row').length > 0, { timeout: 5000 });
+await alicePage.waitForFunction(() => document.querySelectorAll('#friends-accepted-list .friend-row').length > 0, null, { timeout: 30000 });
 
 // Delay only the FIRST GET /api/world response's delivery -- it still gets
 // sent (and genuinely answered by the server) right away, so it captures
@@ -95,7 +103,7 @@ await alicePage.click('#friends-map-close-btn');
 await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
 await alicePage.click('#friends-map-btn');
 await alicePage.waitForSelector('#friends-map-modal.visible', { timeout: 5000 });
-await alicePage.waitForFunction(() => Array.isArray(window.__friendsMapPoints) && window.__friendsMapPoints.length === 0, { timeout: 5000 });
+await alicePage.waitForFunction(() => Array.isArray(window.__friendsMapPoints) && window.__friendsMapPoints.length === 0, null, { timeout: 30000 });
 const emptyShownRightAfterOpenTwo = await alicePage.locator('#friends-map-empty').isVisible();
 console.log('map #2 correctly shows "no friends located" right after opening (should be true):', emptyShownRightAfterOpenTwo);
 
