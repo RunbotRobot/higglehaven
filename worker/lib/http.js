@@ -30,3 +30,10 @@ export class HttpError extends Error {
 export function clientIp(request) {
   return request.headers.get('cf-connecting-ip') || 'unknown';
 }
+
+// #2529: same shared-response-helper shape as json above, for the handful
+// of plain-HTML routes (Control Room/admin pages, their sign-in gate) --
+// extracted verbatim, zero behavior change.
+export function htmlResponse(body, status = 200) {
+  return new Response(body, { status, headers: { 'content-type': 'text/html; charset=utf-8' } });
+}

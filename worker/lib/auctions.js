@@ -23,13 +23,14 @@ import { json, HttpError, clientIp } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import {
   readJson, stringValue, labelValue, decodeCursor, encodeCursor, queryLimit, assertReferencesExist, finiteNumber,
+  positiveInteger,
 } from './validation.js';
 import { fireNotifications } from './notifications.js';
 import { requireSessionBuilder, assertOwner } from './auth.js';
 import { LANDLET_RELEASED_VIA_AUCTION_SQL, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 } from './land-cap.js';
 import {
   requireLandlet, recomputeLandCap, resolveAuctionIfDue, resolveDueAuctions,
-  nonnegativeInteger, positiveInteger, validateCropShape, validateScale, formatCents,
+  nonnegativeInteger, validateCropShape, validateScale, formatCents,
 } from '../index.js';
 
 // Saved groups a builder can stamp down together in one tap (see
