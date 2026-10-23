@@ -2269,9 +2269,13 @@ export async function getOrCreateSellerForUser(db, user) {
 
 // Same reasoning as requireSessionBuilder (worker/lib/auth.js), for
 // seller-owned mutations -- stays here since getOrCreateSellerForUser is
-// seller-domain logic, not yet extracted to its own #2502 leaf. Exported
-// for worker/lib/reputation.js (#2532) -- handleProductReviews' own
-// seller-moderation DELETE branch needs this same auth-chain gate.
+// seller-domain logic with its own cross-cutting import sites
+// (worker/lib/seller-profile.js, reputation.js, catalog.js,
+// purchase-lifecycle.js, seller-payouts-tax.js, auctions.js, land-cap.js),
+// same shared-helper shape worker/lib/auth.js's own assertVerified comment
+// already documents neutrally. Exported for worker/lib/reputation.js
+// (#2532) -- handleProductReviews' own seller-moderation DELETE branch
+// needs this same auth-chain gate.
 export async function requireSessionSeller(request, db) {
   const user = await requireCurrentUser(request, db);
   assertVerified(user);
