@@ -22,7 +22,7 @@
 // with a second, unrelated one.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { clawBackPurchaseCommission } from './index.js';
+import { clawBackPurchaseCommission } from './lib/purchase-lifecycle.js';
 import { writePurchaseRow } from './lib/purchase-creation.js';
 import { fireNotification } from './lib/notifications.js';
 import { api, createGreenbeltLandletAs, signupAdmin, signupBuilder } from './test-helpers.js';
