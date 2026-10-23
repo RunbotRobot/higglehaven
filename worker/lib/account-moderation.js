@@ -244,10 +244,16 @@ export async function handleSuspendAccount(request, db) {
   await checkRateLimit(db, `suspend-account:${admin.user_id}`, ACCOUNT_SUSPENSION_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const email = normalizeEmail(input.email);
+  // #2708: reason/evidenceNote are otherwise unbounded, unlike every other
+  // moderation free-text field (e.g. worker/lib/reputation.js's product-flag
+  // reason) -- both are stored permanently and reason is replayed verbatim
+  // into a user-facing notification, so this reuses that same 280-char cap.
   const reason = typeof input.reason === 'string' ? input.reason.trim() : '';
   if (!reason) throw new HttpError('reason is required', 400);
+  if (reason.length > 280) throw new HttpError('reason must be 280 characters or fewer', 400);
   const evidenceNote = typeof input.evidenceNote === 'string' && input.evidenceNote.trim()
     ? input.evidenceNote.trim() : null;
+  if (evidenceNote && evidenceNote.length > 280) throw new HttpError('evidenceNote must be 280 characters or fewer', 400);
   // #2032: opt-in, not the default -- see removeSuspendedUserPostedContent's
   // own comment for why this isn't unconditional.
   const removeContent = input.removeContent === true;
