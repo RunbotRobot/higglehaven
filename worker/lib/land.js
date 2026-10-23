@@ -135,6 +135,19 @@ const LANDLET_UNOWNED_PATCH_RATE_LIMIT_MAX = 20;
 // #1794: the DELETE branch below is the third anonymous, unowned-only
 // landlet mutation in this handler and never got the same guard.
 const LANDLET_DELETE_RATE_LIMIT_MAX = 20;
+// #2669: this admin-only generation-complete endpoint had no rate limit at
+// all, unlike every other admin-gated mutation in this file -- requireAdmin
+// always yields a real admin.user_id to bucket on, same shape as this
+// file's other admin buckets. 40, not 20, since an admin working through
+// a backlog of individually-completed landlets (this is the manual/
+// troubleshooting path -- the automatic world-growth sweep completes rings
+// via its own internal call, bypassing this HTTP endpoint entirely) can
+// legitimately fire it many times in one sitting; same headroom
+// LANDLET_LEVEL_RATE_LIMIT_MAX above already uses for comparable bulk use.
+const LANDLET_GENERATION_COMPLETE_RATE_LIMIT_MAX = 40;
+// #2669: same gap as LANDLET_GENERATION_COMPLETE_RATE_LIMIT_MAX above, on
+// the admin-only reassign-owner endpoint.
+const LANDLET_REASSIGN_OWNER_RATE_LIMIT_MAX = 20;
 
 // #1721: same #473 pattern as purchaseIdempotencyKey -- the version-number
 // computation below is a fresh MAX+1 read inside the batch itself, so a
@@ -733,6 +746,7 @@ export async function handleLandlets(request, db, route, url) {
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'generation-complete') {
     const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `landlet-generation-complete:${admin.user_id}`, LANDLET_GENERATION_COMPLETE_RATE_LIMIT_MAX);
     const existing = await requireLandlet(db, route[1]);
     if (existing.generated_at) return json({ landlet: landletFromRow(existing) });
     if (existing.status !== 'generating') {
@@ -902,6 +916,7 @@ export async function handleLandlets(request, db, route, url) {
   // typed into a request is no heavier an operation than those.
   if (request.method === 'POST' && route.length === 3 && route[2] === 'reassign-owner') {
     const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `landlet-reassign-owner:${admin.user_id}`, LANDLET_REASSIGN_OWNER_RATE_LIMIT_MAX);
     const existing = await requireLandlet(db, route[1]);
     if (existing.status !== 'claimed' || existing.owner_builder_id === null) {
       throw new HttpError('Landlet is not currently claimed -- use POST .../claim instead', 409);
