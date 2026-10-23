@@ -25,8 +25,12 @@ import {
   assertReferenceExists, assertCropWithinTemplateBounds, assertInstanceZWithinLevels,
   assertInstanceXYWithinLandlet, assertInstanceScaleWithinBounds, cropsEqual, instanceParams, instanceFromRow,
   getInstancesById, validateInstance, recordContentEditHistory,
-  isoDateString, handleInstancePurchase,
+  isoDateString,
 } from '../index.js';
+// #2614: handleInstancePurchase itself moved out of worker/index.js into
+// worker/lib/purchase-creation.js -- import it from there directly instead
+// of via the '../index.js' circular-import path above.
+import { handleInstancePurchase } from './purchase-creation.js';
 
 // #827: unlike almost every other authenticated write in this file
 // (landlet-version, bundle-create, saved-layout-create, friend-request,

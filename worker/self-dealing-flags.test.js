@@ -9,7 +9,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import {
   api, grantAdminTo, signupAdmin, signupBuilder, signupSeller,
 } from './test-helpers.js';
-import { writeOrphanedPurchaseRow } from './index.js';
+import { writeOrphanedPurchaseRow } from './lib/purchase-creation.js';
 
 let adminSession;
 
