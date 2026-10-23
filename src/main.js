@@ -3462,18 +3462,19 @@ export const SHOP_SIT_ARM_ROTATION_RAD = (Math.PI / 2) * 0.55;
 export const SHOP_IDLE_HEAD_TURN_EASE_PER_S = 1.5;
 // docs/SPEC.md §1's "vertical chunk-loading uses the same near/middle/far
 // LOD banding as horizontal distance" (#171, sub-issue of #167's vertical-
-// construction tracking) has nothing to hang a per-band decision on yet,
-// same reasoning as the horizontal case just above: the horizontal scheme
-// it's meant to mirror doesn't itself have real near/middle-LOD/far-
-// backdrop banding built (just this one binary load/unload distance), and
-// separately, there's no frontend rendering of a lándlet's own levels at
-// all yet — worker/index.js's landlet_levels (#168) is a real data model
-// with real cap accounting, but #169 (the Build-mode UI to actually add/
-// remove/view a level) hasn't landed, so no level ever has geometry to
-// apply a LOD band to in the first place. Revisit once both exist: #169
-// gives levels something to render, and a real horizontal LOD system
-// gives this a banding scheme to reuse a vertical distance metric in,
-// rather than inventing one from scratch here.
+// construction tracking) still has nothing built for it, but the two
+// blockers this was waiting on have each landed since: #169 (the Build-
+// mode UI to add/remove/view a level) shipped — levels do render real
+// geometry today (src/build/scene.js's renderLevelControls/addLevel/
+// navigateToLevel) — and the horizontal case now has a real near/middle
+// LOD band too (#2378: world/models.js's buildInstanceLodProxy/
+// setInstanceLodState swap a placed instance to a simplified proxy mid-
+// distance rather than the old binary load/unload). Only the horizontal
+// far-band panoramic-backdrop piece is still missing (#2377's remaining
+// sub-issues) — the near/middle scheme this comment wanted to reuse for a
+// vertical distance metric already exists, so vertical LOD banding itself
+// is simply unclaimed work at this point, not blocked on either
+// prerequisite.
 // #2627: the SIGN_FADE_NEAR_M/SIGN_FADE_FAR_M/SIGN_INTERACT_RADIUS_M/
 // SIGN_MAX_VISIBLE_POSTS constants (community signs/calendar/reviews, docs/
 // SPEC.md §6) now live in src/shop/worldSprites.js.
