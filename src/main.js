@@ -307,6 +307,7 @@ import {
   openShopProductPreviewModal, closeShopProductPreviewModal,
   handleShopProductReviewClick, handleShopReturnPolicyClick, closeRefundPolicyModal,
   handleShopProductBuyClick,
+  confettiBursts, disposeConfettiBurst,
 } from './shop/productCheckout.js';
 // #2559: Build mode's core editor internals now live in src/build/scene.js
 // -- see that module's own comment for its dependency notes, including why

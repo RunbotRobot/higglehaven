@@ -175,7 +175,7 @@ const CONFETTI_COLORS = [0xff6b6b, 0xffd93d, 0x6bcb77, 0x4d96ff, 0xff922b, 0xda7
 const CONFETTI_PARTICLE_COUNT = 24;
 const CONFETTI_GRAVITY_M_S2 = 4;
 const CONFETTI_LIFESPAN_S = 2.5;
-const confettiBursts = [];
+export const confettiBursts = [];
 
 export function spawnConfettiBurst(localPosition, group) {
   const particles = [];
@@ -198,7 +198,7 @@ export function spawnConfettiBurst(localPosition, group) {
   confettiBursts.push({ particles, group, elapsed: 0 });
 }
 
-function disposeConfettiBurst(burst) {
+export function disposeConfettiBurst(burst) {
   for (const particle of burst.particles) {
     burst.group.remove(particle.mesh);
     particle.mesh.geometry.dispose();
