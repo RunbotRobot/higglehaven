@@ -24,12 +24,11 @@
 // moving it here would mean importing all of that back just to dispose it.
 // This module calls it as a forward import instead, the same shape
 // shop/avatar.js's own header comment documents for its own not-yet-
-// extracted dependents. Likewise growShopDomeIfNeeded (shop/sky.js's own
-// territory, #2625) is called here but defined in main.js still -- a
-// forward import, not a move. registerShopSign/registerShopCalendar/
-// registerShopReview are called here too, but now import from
-// shop/worldSprites.js directly (#2627) rather than forwarding through
-// main.js, since that's their real new home.
+// extracted dependents. growShopDomeIfNeeded (shop/sky.js's own territory,
+// #2625) and registerShopSign/registerShopCalendar/registerShopReview
+// (shop/worldSprites.js, #2627) are each called here but defined in their
+// own leaf modules, not main.js -- imported directly from there below,
+// not forwarded through main.js.
 //
 // shopAvatarPosition/shopAvatarFacing (the avatar's own real, authoritative
 // ground-truth position/facing) stay in main.js, same reasoning
@@ -65,9 +64,10 @@ import {
 } from '../api.js';
 import { createShopAvatar } from './avatar.js';
 import { shopMaxRadiusM, shopFlightState, shopFlightAltitudeM } from './flightMovement.js';
+import { growShopDomeIfNeeded } from './sky.js';
 import {
   shopAvatarPosition, shopAvatarFacing, disposeObject3D, pointInPolygonXY,
-  growShopDomeIfNeeded, unloadShopLandletInstances,
+  unloadShopLandletInstances,
 } from '../main.js';
 import { registerShopSign, registerShopCalendar, registerShopReview } from './worldSprites.js';
 
