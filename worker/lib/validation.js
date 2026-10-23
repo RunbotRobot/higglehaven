@@ -129,7 +129,7 @@ export function decodeCursor(value) {
     const bytes = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
     const decoded = JSON.parse(new TextDecoder().decode(bytes));
     // #1470: same empty-string guard decodeCatalogCursor/decodeCatalogPriceCursor
-    // (still in worker/index.js) already have -- without it, a cursor
+    // (in worker/lib/catalog.js) already have -- without it, a cursor
     // encoding ["",""] (never produced by encodeCursor itself) silently
     // matches every row on a descending-sort endpoint's
     // `created_at < '' OR (... id < '')` check, returning an empty page
