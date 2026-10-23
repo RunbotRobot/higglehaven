@@ -513,9 +513,10 @@ export async function handleProductFlags(request, db, route) {
 // "Permanent" reuses #1201's own suspension tool at its maximum graceDays
 // (365) rather than a separate hard-delete mechanism -- #1201's own
 // resolution ruled out admin-initiated hard deletion outright, and #2033's
-// own auto-escalation (once it lands) is what actually turns an unlifted
-// suspension into a real deletion; this rung's job is only to start that
-// clock and make sure a later, lesser violation never pulls it backward.
+// own auto-escalation (worker/index.js's escalateExpiredSuspensions, run
+// from scheduled()) is what actually turns an unlifted suspension into a
+// real deletion; this rung's job is only to start that clock and make sure
+// a later, lesser violation never pulls it backward.
 const STRIKE_LADDER_TEMPORARY_GRACE_DAYS = 7;
 const STRIKE_LADDER_PERMANENT_GRACE_DAYS = 365;
 
