@@ -8,10 +8,11 @@
 //   reset their own builderIdentityFlowPromise/sellerIdentityFlowPromise
 //   guards in turn, hence the resetIdentityFlowPromises() import from
 //   account/identity.js.
-// - hasVerifiedSession (Shop-mode presence-reporting guard, still in
-//   src/main.js) reads both currentAuthUser (exported below) and its own
-//   accountSessionEnding flag, which the delete-account flow below needs
-//   to set — hence the setAccountSessionEnding() import from src/main.js.
+// - hasVerifiedSession (Shop-mode presence-reporting guard, now in
+//   src/shop/presenceAndContent.js, #2626) reads both currentAuthUser
+//   (exported below) and its own accountSessionEnding flag, which the
+//   delete-account flow below needs to set — hence the
+//   setAccountSessionEnding() import from shop/presenceAndContent.js.
 // Zero behavior change otherwise.
 import {
   signUp, logIn, logOut, deleteAccount, exportMyData, changePassword,
@@ -21,7 +22,8 @@ import {
 } from '../api.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { currentMode, setBuilderId, setSellerId } from '../world/state.js';
-import { loadStripeJs, START_MODE_KEY, setAccountSessionEnding } from '../main.js';
+import { loadStripeJs, START_MODE_KEY } from '../main.js';
+import { setAccountSessionEnding } from '../shop/presenceAndContent.js';
 import { resetIdentityFlowPromises } from './identity.js';
 
 export async function requireLogin(view = 'signup', hint) {
