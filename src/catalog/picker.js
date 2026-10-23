@@ -25,8 +25,8 @@
 // account/auth.js's, account/menu.js's, build/layoutPreview.js's, and
 // catalog/upload.js's own comments already use for their own
 // not-yet-extracted dependencies. addItemBtn is exported the same way:
-// main.js's own enterPlacementMode/cancelPlacementMode (armed from
-// anywhere a placement can start -- a tile pick here, Upload Model,
+// src/build/scene.js's own enterPlacementMode/cancelPlacementMode (armed
+// from anywhere a placement can start -- a tile pick here, Upload Model,
 // Paste) write its button label directly.
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { generateConceptImage, searchCatalogBySimilarity, fetchBundles, fetchSharedBundles, updateBundle, deleteBundle } from '../api.js';
