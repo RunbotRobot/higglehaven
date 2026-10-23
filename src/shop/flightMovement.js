@@ -71,8 +71,9 @@ import {
   SHOP_AVATAR_COLLISION_HALF_M, SHOP_AVATAR_HEAD_RADIUS_M, SHOP_AVATAR_TORSO_LENGTH_M,
   shopFlyBtn, shopFlyBtnIcon, shopLastLocationBtn, shopVerticalControlsEl,
   shopUpBtn, shopDownBtn, shopMoveJoystickEl, shopMoveKnobEl, shopLookJoystickEl, shopLookKnobEl,
-  updateConfettiBursts,
 } from '../main.js';
+// #2628: updateConfettiBursts now lives in src/shop/productCheckout.js.
+import { updateConfettiBursts } from './productCheckout.js';
 // #2626: Shop mode's proximity-driven landlet loading, multiplayer
 // presence, and credit orbs now live in src/shop/presenceAndContent.js --
 // see that module's own comment for its dependency notes.
