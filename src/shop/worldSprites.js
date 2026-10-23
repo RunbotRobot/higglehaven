@@ -14,17 +14,16 @@
 // (#2624) only indirectly, via the shared camera this module reads for
 // distance-based fade -- no direct import from either.
 //
-// Deliberately NOT included here, even though it's declared and called
-// right alongside this module's own functions in main.js -- a genuinely
-// different concern that happens to be interleaved there, not sprite
-// rendering: the product-preview modal, checkout/Stripe flow, confetti,
-// and the buy/review-button click handlers (shop/productCheckout.js's own
-// not-yet-extracted territory, #2628) all stay in main.js, including the
-// single tap-to-inspect click listener that sets shopTappedProduct and
-// opens/closes the preview modal -- this module calls findTappedShopProduct
-// forward from there but doesn't own the listener itself. spawnConfettiBurst
-// (also #2628's territory) is called forward from checkScheduledCalendarEvents
-// below the same way, a plain forward import from main.js.
+// Deliberately NOT included here, even though it was declared and called
+// right alongside this module's own functions in main.js before -- a
+// genuinely different concern: the product-preview modal, checkout/Stripe
+// flow, confetti, and the buy/review-button click handlers now live in
+// src/shop/productCheckout.js (#2628). The single tap-to-inspect click
+// listener that sets shopTappedProduct and opens/closes the preview modal
+// stays in main.js, which calls findTappedShopProduct forward from here --
+// this module doesn't own that listener. spawnConfettiBurst (productCheckout.js's
+// own territory) is called forward from checkScheduledCalendarEvents below
+// the same way, now imported from there instead of main.js.
 //
 // shopTappedProduct/shopReviewHintsVisible/shopReviewHintsProduct/
 // shopHighlightedProduct move here (updateReviewFade's own primary state --
@@ -60,8 +59,10 @@ import {
 } from '../api.js';
 import {
   shopEquippedAvatarSkeletonSignature, formatPriceCents, DIGITAL_GOOD_DISCLAIMER_TEXT,
-  animationCompatibility, animationCompatibilityLabel, spawnConfettiBurst,
+  animationCompatibility, animationCompatibilityLabel,
 } from '../main.js';
+// #2628: spawnConfettiBurst now lives in src/shop/productCheckout.js.
+import { spawnConfettiBurst } from './productCheckout.js';
 
 const shopSignHintEl = document.getElementById('shop-sign-hint');
 const shopCalendarHintEl = document.getElementById('shop-calendar-hint');
