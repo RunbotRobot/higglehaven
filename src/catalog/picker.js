@@ -14,12 +14,14 @@
 // call), same reasoning MAX_MONEY_CENTS's own comment in main.js gives for
 // staying put. Imported back from main.js below.
 //
-// Build mode's own Backup Chain panel (openCatalogPickerForPick's own
-// caller) and Save Bundle flow (bundlePickerLoadToken's own external
-// bumps) haven't been extracted yet, so this module exports several
-// pieces main.js still needs to call back (openCatalogPickerForPick,
-// renderBundlePicker, bumpBundlePickerLoadToken, buildCatalogPickerButtons,
-// closeCatalogPicker) -- same temporary-circular-import shape
+// Build mode's own Backup Chain panel now lives in
+// src/build/metadataModals.js (#2560), which calls openCatalogPickerForPick
+// directly. Save Bundle flow (bundlePickerLoadToken's own external bumps)
+// hasn't been extracted yet, so this module still exports several pieces
+// main.js needs to call back (renderBundlePicker, bumpBundlePickerLoadToken,
+// buildCatalogPickerButtons, closeCatalogPicker -- the last of these for its
+// own world-click-away handler, see that function's own comment) -- same
+// temporary-circular-import shape
 // account/auth.js's, account/menu.js's, build/layoutPreview.js's, and
 // catalog/upload.js's own comments already use for their own
 // not-yet-extracted dependencies. addItemBtn is exported the same way:
@@ -214,8 +216,8 @@ function buildCatalogTemplateTile(template) {
 
 // Exported for src/catalog/upload.js (#2557) -- its own
 // handleUploadDimensionsStep needs this same catalog-picker refresh after
-// a new product is created. Also still used directly here, and by Build/
-// Sell-mode call sites in main.js not yet extracted.
+// a new product is created. Also still used directly here, and by
+// Build-mode call sites in main.js not yet extracted.
 export function buildCatalogPickerButtons() {
   catalogPickerGridEl.replaceChildren();
   for (const template of activeCatalog) {
@@ -561,7 +563,10 @@ let catalogPickerPickDoneCallback = null;
 // Exported for src/catalog/upload.js (#2557) -- its own openUploadModal
 // needs this same close call (Upload Model is reachable from the catalog
 // picker, which must close before the Upload modal opens on top of it).
-// Also exported for main.js's own Backup Chain panel (not yet extracted).
+// Also exported for main.js's own world-click-away handler, which closes
+// the picker (and so ends whatever pick session is active -- today, only
+// src/build/metadataModals.js's Backup Chain panel, via
+// openCatalogPickerForPick below) on any tap outside it.
 export function closeCatalogPicker() {
   catalogPickerEl.classList.remove('visible');
   closeModalA11y(catalogPickerEl);
@@ -580,7 +585,7 @@ export function closeCatalogPicker() {
 // tile calls its own multi-item placement flow, never this callback).
 // Reuses the exact same picker UI/search/thumbnails as the ordinary
 // "+ Add Item" flow below rather than building a second one.
-// Exported for main.js's own Backup Chain panel (not yet extracted).
+// Exported for src/build/metadataModals.js's own Backup Chain panel (#2560).
 export function openCatalogPickerForPick(onPick, onDone) {
   catalogPickerPickCallback = onPick;
   catalogPickerPickDoneCallback = onDone;
