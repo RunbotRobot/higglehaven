@@ -9,21 +9,27 @@
 // warnInactiveLandletOwners (the scheduled() cron's other two calls,
 // previously defined in between generateAutoMosaicIfFreshWorld and
 // generateRingAtWorldBoundary here) -- those are the auctions/inactivity
-// domain (#2538's own territory, still blocked), not world-generation; they
-// share nothing from this file beyond being called from the same cron tick,
-// and stay in worker/index.js for that sub-issue to pick up.
+// domain, not world-generation, but they stay in worker/index.js
+// permanently, not as a hand-off to some future sub-issue: #2538 (which
+// produced worker/lib/auctions.js) never actually covered them -- that
+// module's own header comment excludes resolveAuctionIfDue/
+// resolveDueAuctions (the auction *resolution* subsystem) for staying with
+// the scheduled() cron handler that calls them directly, and
+// autoAuctionInactiveLandlets/warnInactiveLandletOwners are that same
+// cron handler's other two direct calls, for the same reason. They share
+// nothing from this file beyond being called from the same cron tick.
 //
-// handleLandlets itself (the /api/landlets CRUD dispatcher) also stays in
-// worker/index.js -- it's the landlet-core domain (#2533, not yet started),
-// not world-generation -- but it shares candidateRowFromLandlet (both
-// domains build the same landlet_candidates row shape) with the handlers
-// here, so worker/index.js imports that one back from this module rather
-// than duplicating it. worldFromRow (staying in worker/index.js) similarly
-// imports computeGreenbeltRatio back. Both are one-directional
-// (worker/index.js -> this file), not circular -- this module never needs
-// anything back from worker/index.js at module-evaluation time, following
-// the same safe-cycle precedent #2501/#2528/#2535 already established where
-// the dependency genuinely does run the other way.
+// handleLandlets itself (the /api/landlets CRUD dispatcher) now lives in
+// worker/lib/land.js (#2533) -- it's the landlet-core domain, not
+// world-generation -- but it shares candidateRowFromLandlet (both domains
+// build the same landlet_candidates row shape) with the handlers here, so
+// land.js imports that one back from this module rather than duplicating
+// it. worldFromRow (staying in worker/index.js) similarly imports
+// computeGreenbeltRatio back. Both are one-directional (the importing
+// module -> this file), not circular -- this module never needs anything
+// back from either at module-evaluation time, following the same
+// safe-cycle precedent #2501/#2528/#2535 already established where the
+// dependency genuinely does run the other way.
 import {
   landletMaxWorldRadius, landletMinWorldRadius, landletWorldPolygon, pointInPolygon, pointToSegmentDistance,
   polygonsOverlap, sameAreaRadius,

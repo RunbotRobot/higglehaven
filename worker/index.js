@@ -51,8 +51,10 @@ import {
   builderFromRow, publicBuilderFromRow, requireBuilder,
 } from './lib/builder-profile.js';
 // #2534: the land-candidates/world-generation domain -- see that module's
-// own comment for why handleLandlets/worldFromRow stay here and import
-// candidateRowFromLandlet/computeGreenbeltRatio back from it.
+// own comment for why worldFromRow stays here and imports
+// computeGreenbeltRatio back from it (handleLandlets itself has since
+// moved to worker/lib/land.js, which imports candidateRowFromLandlet back
+// from this module instead -- see land.js's own comment).
 import {
   handleLandCandidates, handleLandCandidateRings, handleWorld, autoGrowWorldIfNeeded,
   candidateRowFromLandlet, computeGreenbeltRatio,
