@@ -66,9 +66,14 @@ import { createShopAvatar } from './avatar.js';
 import { shopMaxRadiusM, shopFlightState, shopFlightAltitudeM } from './flightMovement.js';
 import { growShopDomeIfNeeded } from './sky.js';
 import {
-  shopAvatarPosition, shopAvatarFacing, disposeObject3D, pointInPolygonXY,
-  unloadShopLandletInstances,
+  shopAvatarPosition, shopAvatarFacing, pointInPolygonXY,
 } from '../main.js';
+// #2629: disposeObject3D/unloadShopLandletInstances now live in
+// src/shop/mode.js (a sibling-module, not reverse-, import) -- mode.js's
+// own enterShopMode in turn imports shopLandlets/pickShopSpawnLocation/etc.
+// from this module, same mutually-dependent shape flightMovement.js's own
+// header comment already documents for shop/avatar.js and itself.
+import { disposeObject3D, unloadShopLandletInstances } from './mode.js';
 import { registerShopSign, registerShopCalendar, registerShopReview } from './worldSprites.js';
 
 const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
