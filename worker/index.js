@@ -1542,30 +1542,42 @@ export async function sellerDeletionStatements(db, sellerId) {
 // index.js), a GDPR export aggregator that reaches into nearly every
 // domain's own helpers and deliberately stays put (see worker/lib/
 // auth-routes.js's own comment on why handleExportData itself isn't moved).
+// #2703: exportSocialSection (below) calls both of these with every
+// distinct other-builder-id across a builder's entire friendship history,
+// with no cap -- unlike handleFriendships' own page-bounded callers (capped
+// at exactly D1_MAX_BOUND_PARAMETERS). Chunked the same way
+// requireOwnedLandlets/getInstancesById were fixed for the identical bug
+// class in #2233/#2216.
 export async function labelsByBuilderId(db, builderIds) {
   const uniqueIds = [...new Set(builderIds)];
-  if (uniqueIds.length === 0) return new Map();
-  const placeholders = uniqueIds.map(() => '?').join(', ');
-  const { results } = await db.prepare(
-    `SELECT builder_id, label FROM builders WHERE builder_id IN (${placeholders})`,
-  ).bind(...uniqueIds).all();
-  return new Map(results.map((row) => [row.builder_id, row.label]));
+  const byId = new Map();
+  for (let i = 0; i < uniqueIds.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = uniqueIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(
+      `SELECT builder_id, label FROM builders WHERE builder_id IN (${placeholders})`,
+    ).bind(...chunk).all();
+    for (const row of results) byId.set(row.builder_id, row.label);
+  }
+  return byId;
 }
 
 export async function ownedLandletsByBuilderId(db, builderIds) {
   const uniqueIds = [...new Set(builderIds)];
-  if (uniqueIds.length === 0) return new Map();
-  const placeholders = uniqueIds.map(() => '?').join(', ');
-  const { results } = await db.prepare(
-    `SELECT * FROM landlets WHERE owner_builder_id IN (${placeholders})`,
-  ).bind(...uniqueIds).all();
   const byOwner = new Map();
-  for (const row of results) {
-    // A builder can own more than one lándlet (auctions can transfer extra
-    // ones in) — the first one found is good enough for this feature's
-    // "where do my friends live" purpose, not a definitive "their one true
-    // home."
-    if (!byOwner.has(row.owner_builder_id)) byOwner.set(row.owner_builder_id, landletFromRow(row));
+  for (let i = 0; i < uniqueIds.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = uniqueIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(
+      `SELECT * FROM landlets WHERE owner_builder_id IN (${placeholders})`,
+    ).bind(...chunk).all();
+    for (const row of results) {
+      // A builder can own more than one lándlet (auctions can transfer extra
+      // ones in) — the first one found is good enough for this feature's
+      // "where do my friends live" purpose, not a definitive "their one true
+      // home."
+      if (!byOwner.has(row.owner_builder_id)) byOwner.set(row.owner_builder_id, landletFromRow(row));
+    }
   }
   return byOwner;
 }
