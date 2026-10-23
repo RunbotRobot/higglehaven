@@ -10,20 +10,21 @@
 // setShopAvatarAnimationState/updateShopAvatarIdle, and several functions
 // here read shopAvatarCollisionHalfM/shopAvatarHeightM.
 //
-// Not contiguous in main.js -- interleaved with the shop/sky.js leaf's own
-// not-yet-extracted functions (e.g. clampShopCameraHeight sits right after
-// growShopDomeIfNeeded there) and with several other not-yet-extracted
-// concerns (world-content/shopLandlets, presence/shopOtherAvatars, signs/
-// calendars/credit-orbs/reviews, the sky dome/wall itself). Each function
+// Not contiguous in main.js -- was interleaved with the shop/sky.js leaf's
+// own functions (e.g. clampShopCameraHeight sat right after
+// growShopDomeIfNeeded there, before #2625 moved it out) and with several
+// other not-yet-extracted concerns (world-content/shopLandlets, presence/
+// shopOtherAvatars, signs/calendars/credit-orbs/reviews). Each function
 // below was traced individually against main.js's full usage, not assumed
 // contiguous.
 //
-// shopWorldRadiusM/shopDomeRiseM/shopDomeMesh (owned by the not-yet-
-// extracted shop/sky.js leaf) are read directly by clampShopCameraHeight/
-// shopMaxRadiusAtWorldZM/shopMaxFlightAltitudeM/positionShopCamera -- per
-// #2563's own design-comment finding, this cross-coupling is preserved
-// exactly as it exists today via a reverse-import, not copied. Likewise
-// shopLandlets (world-content), shopOtherAvatars (presence), shopActive
+// shopDomeRiseM (owned by the shop/sky.js leaf, #2625) is read directly by
+// clampShopCameraHeight/shopMaxRadiusAtWorldZM/shopMaxFlightAltitudeM/
+// positionShopCamera -- per #2563's own design-comment finding, this
+// cross-coupling is preserved exactly as it exists today via a (now
+// sibling-module, not reverse-) import, not copied. shopWorldRadiusM/
+// shopDomeMesh stay owned by main.js (reverse-imported, same as before).
+// Likewise shopLandlets (world-content), shopOtherAvatars (presence), shopActive
 // (general Shop-mode-active flag), and shopLastLocation (presence-fetched,
 // written only by enterShopMode's own async fetch) all stay in main.js,
 // reverse-imported read-only -- none of this leaf's functions ever write
@@ -66,7 +67,7 @@ import {
 import {
   shopAvatarPosition, shopAvatarFacing, setShopAvatarFacing,
   shopActive, shopLastLocation,
-  shopWorldRadiusM, shopDomeRiseM, shopDomeMesh, SHOP_MAX_PITCH,
+  shopWorldRadiusM, shopDomeMesh, SHOP_MAX_PITCH,
   SHOP_WALL_HEIGHT_M, SHOP_DOME_CLEARANCE_MARGIN_M,
   SHOP_AVATAR_COLLISION_HALF_M, SHOP_AVATAR_HEAD_RADIUS_M, SHOP_AVATAR_TORSO_LENGTH_M,
   shopFlyBtn, shopFlyBtnIcon, shopLastLocationBtn, shopVerticalControlsEl,
@@ -74,6 +75,11 @@ import {
 } from '../main.js';
 // #2628: updateConfettiBursts now lives in src/shop/productCheckout.js.
 import { updateConfettiBursts } from './productCheckout.js';
+// #2625: shopDomeRiseM now lives in ./sky.js (this leaf's own
+// clampShopCameraHeight/updateShopFlight/shopAvatarFootprintCorners read
+// it directly — a plain exported `let` binding is a live reference, so a
+// read-only consumer needs nothing more than importing it by name).
+import { shopDomeRiseM } from './sky.js';
 // #2626: Shop mode's proximity-driven landlet loading, multiplayer
 // presence, and credit orbs now live in src/shop/presenceAndContent.js --
 // see that module's own comment for its dependency notes.
