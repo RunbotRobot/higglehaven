@@ -3473,9 +3473,11 @@ Returns the newly claimed landlet. Errors are:
 ### `POST /api/landlets/:landletId/reassign-owner`
 
 Admin-only (`403` without an admin session — see "Admin role" under
-"Authorization model" above). Moves a **currently claimed** landlet
-directly to a different builder, bypassing the normal claim/auction flow
-(#1177) — e.g. to correct a mistaken claim or handle a support request.
+"Authorization model" above). Rate-limited to 20 attempts per 15-minute
+window, bucketed by the calling admin's own user id (#2669). Moves a
+**currently claimed** landlet directly to a different builder, bypassing
+the normal claim/auction flow (#1177) — e.g. to correct a mistaken claim
+or handle a support request.
 Request body: `{ "ownerBuilderId": "<target builder id>", "cancelActiveAuction"?: boolean }`.
 
 An **active auction on the landlet blocks the reassignment** by default
@@ -3550,9 +3552,11 @@ Errors are:
 ### `POST /api/landlets/:landletId/generation-complete`
 
 Admin-only (`401`/`403` otherwise) — same as its ring-level sibling,
-`POST /api/land-candidate-rings/:ringId/generation-complete`. Records that
-asynchronous generation work has completed. The endpoint is idempotent:
-retries return the existing landlet once `generatedAt` is set.
+`POST /api/land-candidate-rings/:ringId/generation-complete`. Rate-limited
+to 20 attempts per 15-minute window, bucketed by the calling admin's own
+user id (#2669). Records that asynchronous generation work has completed.
+The endpoint is idempotent: retries return the existing landlet once
+`generatedAt` is set.
 
 Generation completion and geometric enclosure are independent requirements. If
 the world circle already fully encloses the landlet, completion immediately
