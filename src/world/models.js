@@ -10,11 +10,11 @@ import { activeCatalog, LANDLET_SIDE_M } from './state.js';
 // pipeline and the ground plane -- model loading/caching, the box-fallback
 // and crop/extensibility handling, LOD proxies, and dispose helpers, plus
 // the one ground-plane Mesh every mode's own scene renders into. Depends
-// only on world/state.js (activeCatalog, LANDLET_SIDE_M); `scene` itself
-// hasn't been extracted yet (#2552, still in main.js), so this module
-// exports `landlet` without adding it to any scene -- main.js does
-// `scene.add(landlet)` itself, immediately after this import, preserving
-// the exact original initialization order.
+// only on world/state.js (activeCatalog, LANDLET_SIDE_M); this module
+// exports `landlet` without adding it to any scene -- main.js forward-
+// imports `scene` from world/scene.js (#2552) and does `scene.add(landlet)`
+// itself, immediately after this import, preserving the exact original
+// initialization order.
 
 // docs/SPEC.md §1's Earth-curvature coordinate system (issue #135): bends
 // a flat ground geometry's vertices onto the sphere via worker/
