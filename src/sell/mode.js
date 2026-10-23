@@ -5,14 +5,14 @@
 // shipping/returns/digital-good/extensibility/price/flooring save panels
 // -- extracted wholesale from src/main.js. The sibling "showcase" half
 // (sellerShowcaseMeshes, loadSellerShowcasePage, and the in-world
-// paginated display) is #2648, a separate leaf not yet landed as of this
-// one -- this module temporarily imports several of its pieces straight
-// from main.js (bootstrapPromise, loadSellerShowcasePage,
-// refreshSellerShowcase, sellerShowcaseMeshesStale,
-// setSellerShowcaseMeshesStale), same temporary-import shape
-// account/auth.js's, account/menu.js's, and catalog/upload.js's own
-// comments already use for their own not-yet-extracted dependencies. Once
-// #2648 lands, those should be repointed there.
+// paginated display) is #2648 (#2562's other leaf) -- now landed too,
+// so loadSellerShowcasePage/refreshSellerShowcase/sellerShowcasePageIndex
+// import from ../sell/showcase.js below, repointed the same way #2555
+// repointed claim/flow.js's stale ui/modal.js import. The old raw
+// sellerShowcaseMeshesStale boolean became private to that module with
+// the same extraction -- isSellerShowcaseMeshesStale()/
+// clearSellerShowcaseMeshesStale() read/clear it instead. bootstrapPromise
+// still imports from main.js, genuinely unrelated to either leaf.
 //
 // enterSellMode/SELL_HIDDEN_BUILDER_UI_IDS stay in main.js for now -- same
 // role as enterShopMode, not yet extracted anywhere -- and import back
@@ -63,9 +63,11 @@ import {
   formatDollarsForPriceInput, formatPriceCents, parsePriceInputDollars,
   persistCatalogThumbnail, renderCatalogThumbnail, solidColorDataUrl,
   updateModeNavUI, DIGITAL_GOOD_DISCLAIMER_TEXT, MAX_MONEY_CENTS,
-  loadSellerShowcasePage, refreshSellerShowcase, sellerShowcaseMeshesStale,
-  setSellerShowcaseMeshesStale, sellerShowcasePageIndex,
 } from '../main.js';
+import {
+  loadSellerShowcasePage, refreshSellerShowcase, sellerShowcasePageIndex,
+  isSellerShowcaseMeshesStale, clearSellerShowcaseMeshesStale,
+} from '../sell/showcase.js';
 
 export const sellerModalEl = document.getElementById('seller-modal');
 const sellerFeedbackSummaryEl = document.getElementById('seller-feedback-summary');
@@ -2070,8 +2072,8 @@ export function closeSellerModal() {
   // while the modal was open (refreshSellerShowcase only updated the pager
   // label at the time, deferring this heavier fetch-and-load work so it
   // doesn't compete with whatever save was still in flight).
-  if (currentMode === 'sell' && sellerShowcaseMeshesStale) {
-    setSellerShowcaseMeshesStale(false);
+  if (currentMode === 'sell' && isSellerShowcaseMeshesStale()) {
+    clearSellerShowcaseMeshesStale();
     loadSellerShowcasePage(sellerShowcasePageIndex);
   }
   updateModeNavUI();
