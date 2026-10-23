@@ -318,16 +318,21 @@
   function waitingBadge(task) {
     if (task.status === 'done') return '';
     if (task.waitingOn === 'owner') {
-      // #2254: AGENTS.md documents this exact failure mode -- a queued card
-      // whose owner already spoke last (the real reply thread, not the
-      // note, which is history -- see this file's own note on why `note`
-      // is never a signal to act on by itself) with no session reply
+      // #2254: AGENTS.md documents this exact failure mode -- a card whose
+      // owner already spoke last (the real reply thread, not the note,
+      // which is history -- see this file's own note on why `note` is
+      // never a signal to act on by itself) with no session reply
       // following still sitting at waitingOn: 'owner'. Ordinarily
       // unreachable through the real API as of this fix (a reply from the
       // owner while waitingOn is already 'owner' auto-clears it in the same
       // request, same as a direct-D1 write bypassing that logic), so this
-      // is a safety-net signal for exactly that bypass, not the common case.
-      if (task.status === 'queued' && task.lastReplyFrom === 'owner') {
+      // is a safety-net signal for exactly that bypass, not the common
+      // case -- and that bypass is just as reachable on an in_progress
+      // card as a queued one (#2700), so this doesn't gate on status the
+      // way the outer waitingOn === 'owner' check above doesn't either
+      // (status is already guaranteed non-done by the function's own
+      // first line).
+      if (task.lastReplyFrom === 'owner') {
         return '<span class="pill pill-waiting-owner-unexplained">Waiting on: Owner (unexplained)</span>';
       }
       return '<span class="pill pill-waiting-owner">Waiting on: Owner</span>';
