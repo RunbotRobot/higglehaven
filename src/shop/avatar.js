@@ -11,13 +11,14 @@
 // the middle of this same contiguous block in main.js -- genuinely
 // different concerns that happen to be interleaved with the avatar code
 // there, not avatar state: Shop flight (shopFlightState/Altitude/etc.),
-// spawn-orbit (shopSpawnRotating/OrbitRadiusM), "Go to Last Location"
-// (shopLastLocation/etc.), and several window.__test* hooks that read
-// flight/instance-LOD/upload-wizard state (__testTeleportShopAvatar,
-// __testShopFlightState, __testForceShopProximityCheck,
-// __testShopInstanceLodBand/HitSource, __rescaleModelFileForTests,
-// __optimizeModelFileForTests) -- all of those stay in main.js, each
-// leaf's own future extraction (or none) to claim.
+// spawn-orbit (shopSpawnRotating/OrbitRadiusM), and "Go to Last Location"
+// (shopLastLocationHideTimerS/etc.) now live in shop/flightMovement.js
+// (#2624), along with window.__testTeleportShopAvatar/__testShopFlightState
+// (both read/write that leaf's own state). window.__testForceShopProximityCheck/
+// __testShopInstanceLodBand/HitSource/__rescaleModelFileForTests/
+// __optimizeModelFileForTests stay in main.js, each either reading only
+// main.js's own state or needing just a forward import -- each leaf's own
+// future extraction (or none) to claim.
 //
 // shopAvatarPosition/shopAvatarFacing (the avatar's own real, authoritative
 // ground-truth position/facing) also stay in main.js -- read here (never
@@ -25,19 +26,24 @@
 // movement code, so main.js keeps owning them and this module reverse-
 // imports a read-only live binding.
 //
-// findShopIdleInteractionTarget is a temporary reverse import from
-// '../main.js', pending #2624 (shop/flightMovement.js) -- same shape
+// The SHOP_AVATAR_*/SHOP_IDLE_*/SHOP_AFK_*/SHOP_CAMERA_ANCHOR_HEIGHT_*
+// constants stay declared in main.js rather than moving here too, since
+// several of them (SHOP_AVATAR_COLLISION_HALF_M particularly) are also
+// read directly by shop/flightMovement.js's own movement/collision code --
+// a reverse-import precedent, just for consts.
+//
+// findShopIdleInteractionTarget is a forward import from
+// './flightMovement.js' (#2624) -- that module's own updateShopMovement
+// calls back into this one (updateShopAvatarPose/setShopAvatarAnimationState/
+// updateShopAvatarIdle), so the two are mutually dependent, same shape
 // claim/flow.js's own header comment already documents for an analogous
-// not-yet-landed sibling leaf. The SHOP_AVATAR_*/SHOP_IDLE_*/SHOP_AFK_*/
-// SHOP_CAMERA_ANCHOR_HEIGHT_* constants stay declared in main.js rather
-// than moving here too, since several of them (SHOP_AVATAR_COLLISION_HALF_M
-// particularly) are also read directly by not-yet-extracted movement/
-// collision code -- same reverse-import precedent, just for consts.
+// pair of modules.
 import * as THREE from 'three';
 import { loadModelInstance, computeSkeletonSignature, loadModelAnimations } from '../world/models.js';
 import { scene } from '../world/scene.js';
 import { currentMode } from '../world/state.js';
 import { fetchMyEquippedAnimation } from '../api.js';
+import { findShopIdleInteractionTarget } from './flightMovement.js';
 import {
   SHOP_AFK_BLEND_PER_S, SHOP_AFK_DELAY_S, SHOP_AVATAR_ANIM_CROSSFADE_S,
   SHOP_AVATAR_ARM_LENGTH_M, SHOP_AVATAR_ARM_RADIUS_M, SHOP_AVATAR_COLLISION_HALF_M,
@@ -52,7 +58,6 @@ import {
   SHOP_SIT_LEG_ROTATION_RAD,
   shopAvatarPosition, shopAvatarFacing,
   disposeObject3D, reportRendererMemoryDiagnostic,
-  findShopIdleInteractionTarget,
 } from '../main.js';
 
 // #1587 (owner feedback): the original "AFK" label was a full-size

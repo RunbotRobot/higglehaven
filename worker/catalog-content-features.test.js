@@ -2153,4 +2153,20 @@ describe('Low-stock / days-remaining list (#1949)', () => {
     expect(listed.body.templates).toHaveLength(101);
     expect(listed.body.templates.every((t) => t.predictability === 'notEnoughData')).toBe(true);
   });
+
+  // Found via backlog audit (#2660): unlike every other repeatable
+  // endpoint in worker/lib/builder-profile.js (AVATAR_EQUIP_RATE_LIMIT_MAX
+  // #1057, NOTIFICATION_PREFERENCES_RATE_LIMIT_MAX #2103,
+  // ANIMATION_EQUIP_RATE_LIMIT_MAX), handleBuilderLowStock had no
+  // checkRateLimit call at all, despite firing one extra D1 query per
+  // distinct category needing the cross-builder sales-velocity fallback.
+  it('rate-limits repeated calls to GET /builders/me/low-stock from the same builder', async () => {
+    const builder = await signupBuilder('low-stock-rate-limit-builder');
+    for (let i = 0; i < 60; i++) {
+      const attempt = await api('/builders/me/low-stock', builder.session());
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const limited = await api('/builders/me/low-stock', builder.session());
+    expect(limited.response.status).toBe(429);
+  });
 });
