@@ -171,7 +171,12 @@ for (let i = 0; i < EPISODE_SAMPLES; i++) {
   // CI load, same well-established timing-margin flake class -- widened
   // further to 120000ms, matching #2589/#2632's own settled value for the
   // same recurring flake shape.
-  await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'sit', null, { timeout: 120000 });
+  // #2704: 120000ms timed out again under a later night's heavier CI load
+  // -- widened further to 240000ms, matching #2643's own settled value for
+  // this same recurring flake shape (e2e/saved-layout-preview.test.mjs). No
+  // step/job-level timeout configured on this CI job, so there's ample
+  // headroom.
+  await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'sit', null, { timeout: 240000 });
   const rightAfterSelection = await page.evaluate(() => window.__testShopSitPose());
   settleDelays.add(Math.round(rightAfterSelection.settleDelayS * 1000)); // ms, so float noise doesn't fracture the set
   if (rightAfterSelection.settleElapsedS < rightAfterSelection.settleDelayS && rightAfterSelection.blend === 0) {
