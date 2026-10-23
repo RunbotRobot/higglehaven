@@ -12,12 +12,12 @@
 // landed -- sellerModalEl/closeSellerModal/renderActiveSellerView/
 // hasDuplicateProductName/AXIS_ARROW_COLORS import from src/sell/mode.js
 // below, repointed the same way #2555 repointed claim/flow.js's stale
-// ui/modal.js import. refreshSellerShowcase/persistCatalogThumbnail/
-// formatPriceCents/parsePriceInputDollars/formatDollarsForPriceInput/
-// MAX_MONEY_CENTS still import from main.js -- refreshSellerShowcase
-// belongs to #2648 (Sell's showcase leaf, not yet landed); the rest are
-// genuinely shared beyond Sell mode and stay in main.js for good (see
-// below for MAX_MONEY_CENTS's own reasoning).
+// ui/modal.js import. refreshSellerShowcase moved similarly, to
+// ../sell/showcase.js, once #2562's other leaf (#2648) landed.
+// persistCatalogThumbnail/formatPriceCents/parsePriceInputDollars/
+// formatDollarsForPriceInput/MAX_MONEY_CENTS are genuinely shared beyond
+// Sell mode and stay in main.js for good (see below for MAX_MONEY_CENTS's
+// own reasoning).
 // closeCatalogPicker/buildCatalogPickerButtons used to be on this same
 // temporary list but now import from catalog/picker.js (#2558), which
 // landed after this leaf.
@@ -47,10 +47,11 @@ import {
   hasDuplicateProductName, AXIS_ARROW_COLORS,
 } from '../sell/mode.js';
 import {
-  refreshSellerShowcase, persistCatalogThumbnail,
+  persistCatalogThumbnail,
   formatPriceCents, parsePriceInputDollars, formatDollarsForPriceInput,
   MAX_MONEY_CENTS,
 } from '../main.js';
+import { refreshSellerShowcase } from '../sell/showcase.js';
 // #2558: closeCatalogPicker/buildCatalogPickerButtons now live in
 // src/catalog/picker.js (extracted after this module) rather than main.js.
 import { closeCatalogPicker, buildCatalogPickerButtons } from './picker.js';

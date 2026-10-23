@@ -66,22 +66,29 @@ import {
 } from './avatar.js';
 import {
   shopAvatarPosition, shopAvatarFacing, setShopAvatarFacing,
-  shopActive, shopLandlets, shopOtherAvatars, shopLastLocation,
+  shopActive, shopLastLocation,
   shopWorldRadiusM, shopDomeMesh, SHOP_MAX_PITCH,
   SHOP_WALL_HEIGHT_M, SHOP_DOME_CLEARANCE_MARGIN_M,
   SHOP_AVATAR_COLLISION_HALF_M, SHOP_AVATAR_HEAD_RADIUS_M, SHOP_AVATAR_TORSO_LENGTH_M,
   shopFlyBtn, shopFlyBtnIcon, shopLastLocationBtn, shopVerticalControlsEl,
   shopUpBtn, shopDownBtn, shopMoveJoystickEl, shopMoveKnobEl, shopLookJoystickEl, shopLookKnobEl,
-  reportOwnPresenceIfNeeded, pollNearbyPresenceIfNeeded, updateOtherShopAvatars,
   updateSignFade, updateCalendarFade, updateReviewFade,
-  updateCreditOrbs, updateCreditOrbPopEffects, updateConfettiBursts,
-  checkScheduledCalendarEvents, updateShopProximity, updateShopLandletInfo,
+  updateConfettiBursts, checkScheduledCalendarEvents,
 } from '../main.js';
 // #2625: shopDomeRiseM now lives in ./sky.js (this leaf's own
 // clampShopCameraHeight/updateShopFlight/shopAvatarFootprintCorners read
 // it directly — a plain exported `let` binding is a live reference, so a
 // read-only consumer needs nothing more than importing it by name).
 import { shopDomeRiseM } from './sky.js';
+// #2626: Shop mode's proximity-driven landlet loading, multiplayer
+// presence, and credit orbs now live in src/shop/presenceAndContent.js --
+// see that module's own comment for its dependency notes.
+import {
+  shopLandlets, shopOtherAvatars,
+  reportOwnPresenceIfNeeded, pollNearbyPresenceIfNeeded, updateOtherShopAvatars,
+  updateCreditOrbs, updateCreditOrbPopEffects,
+  updateShopProximity, updateShopLandletInfo,
+} from './presenceAndContent.js';
 
 // docs/SPEC.md §2's confirmed ground speeds: 1.8 m/s walking, 4.4704 m/s
 // (10 mph, v17 — raised from 2.7 m/s/~6 mph, which the owner found still
