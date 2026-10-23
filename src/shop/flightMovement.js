@@ -72,8 +72,7 @@ import {
   SHOP_AVATAR_COLLISION_HALF_M, SHOP_AVATAR_HEAD_RADIUS_M, SHOP_AVATAR_TORSO_LENGTH_M,
   shopFlyBtn, shopFlyBtnIcon, shopLastLocationBtn, shopVerticalControlsEl,
   shopUpBtn, shopDownBtn, shopMoveJoystickEl, shopMoveKnobEl, shopLookJoystickEl, shopLookKnobEl,
-  updateSignFade, updateCalendarFade, updateReviewFade,
-  updateConfettiBursts, checkScheduledCalendarEvents,
+  updateConfettiBursts,
 } from '../main.js';
 // #2625: shopDomeRiseM now lives in ./sky.js (this leaf's own
 // clampShopCameraHeight/updateShopFlight/shopAvatarFootprintCorners read
@@ -89,6 +88,9 @@ import {
   updateCreditOrbs, updateCreditOrbPopEffects,
   updateShopProximity, updateShopLandletInfo,
 } from './presenceAndContent.js';
+// #2627: the sign/calendar/review sprite fade loops and the scheduled-
+// calendar-event trigger check now live in src/shop/worldSprites.js.
+import { updateSignFade, updateCalendarFade, updateReviewFade, checkScheduledCalendarEvents } from './worldSprites.js';
 
 // docs/SPEC.md §2's confirmed ground speeds: 1.8 m/s walking, 4.4704 m/s
 // (10 mph, v17 — raised from 2.7 m/s/~6 mph, which the owner found still

@@ -19,16 +19,16 @@
 // different concern that happens to be interleaved there, not
 // presence/content: unloadShopLandletInstances (the claimed-landlet
 // counterpart to loadShopLandletInstances above) stays in main.js -- it
-// tears down signs/calendars/reviews (worldSprites.js's own not-yet-
-// extracted territory, #2627) alongside a landlet's placed instances, so
+// tears down signs/calendars/reviews (now shop/worldSprites.js's own
+// territory, #2627, landed) alongside a landlet's placed instances, so
 // moving it here would mean importing all of that back just to dispose it.
 // This module calls it as a forward import instead, the same shape
 // shop/avatar.js's own header comment documents for its own not-yet-
-// extracted dependents. registerShopSign/registerShopCalendar/
-// registerShopReview (worldSprites.js, #2627) are each called here but
-// defined in main.js still -- forward imports, not moves. growShopDomeIfNeeded
-// landed in shop/sky.js (#2625, in the same window as this leaf) -- imported
-// from there directly below, not via main.js.
+// extracted dependents. growShopDomeIfNeeded (shop/sky.js's own territory,
+// #2625) and registerShopSign/registerShopCalendar/registerShopReview
+// (shop/worldSprites.js, #2627) are each called here but defined in their
+// own leaf modules, not main.js -- imported directly from there below,
+// not forwarded through main.js.
 //
 // shopAvatarPosition/shopAvatarFacing (the avatar's own real, authoritative
 // ground-truth position/facing) stay in main.js, same reasoning
@@ -67,9 +67,9 @@ import { shopMaxRadiusM, shopFlightState, shopFlightAltitudeM } from './flightMo
 import { growShopDomeIfNeeded } from './sky.js';
 import {
   shopAvatarPosition, shopAvatarFacing, disposeObject3D, pointInPolygonXY,
-  registerShopSign, registerShopCalendar, registerShopReview,
   unloadShopLandletInstances,
 } from '../main.js';
+import { registerShopSign, registerShopCalendar, registerShopReview } from './worldSprites.js';
 
 const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
 const shopCreditOrbOfflineNoticeEl = document.getElementById('shop-credit-orb-offline-notice');
