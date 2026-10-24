@@ -3600,15 +3600,22 @@ export function cropsEqual(a, b) {
 // dimension for that axis] range. Runs after the FK checks that already
 // guarantee templateId exists, so a missing template here would only
 // happen for an instance with no crop at all (skipped) or a genuine race.
+// #2707: chunked at D1_MAX_BOUND_PARAMETERS -- same gap getInstancesById
+// had for the same PUT /landlets/:id/draft caller, fixed by #2216.
 export async function assertCropWithinTemplateBounds(db, instances) {
   const withCrop = instances.filter((instance) => Object.keys(instance.crop).length > 0);
   if (withCrop.length === 0) return;
   const templateIds = [...new Set(withCrop.map((instance) => instance.templateId))];
-  const placeholders = templateIds.map(() => '?').join(', ');
-  const { results } = await db.prepare(
-    `SELECT * FROM catalog_templates WHERE template_id IN (${placeholders})`,
-  ).bind(...templateIds).all();
-  const templatesById = new Map(results.map((row) => [row.template_id, templateFromRow(row)]));
+  const rows = [];
+  for (let i = 0; i < templateIds.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = templateIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(
+      `SELECT * FROM catalog_templates WHERE template_id IN (${placeholders})`,
+    ).bind(...chunk).all();
+    rows.push(...results);
+  }
+  const templatesById = new Map(rows.map((row) => [row.template_id, templateFromRow(row)]));
   const dimensionKeyByAxis = EXTENSIBLE_DIMENSION_KEY_BY_AXIS;
   for (const instance of withCrop) {
     const template = templatesById.get(instance.templateId);
@@ -3637,15 +3644,22 @@ export async function assertCropWithinTemplateBounds(db, instances) {
 // rows at all (the common case — most landlets never go vertical) still
 // has an implicit ground level at index 0, matching the Math.min/max(0, ...)
 // pattern handleLandletLevels itself uses to find the current extent.
+// #2707: chunked at D1_MAX_BOUND_PARAMETERS -- same gap getInstancesById
+// had for the same PUT /landlets/:id/draft caller, fixed by #2216.
 export async function assertInstanceZWithinLevels(db, instances) {
   const landletIds = [...new Set(instances.map((instance) => instance.landletId))];
   if (landletIds.length === 0) return;
-  const placeholders = landletIds.map(() => '?').join(', ');
-  const { results } = await db.prepare(
-    `SELECT landlet_id, level_index FROM landlet_levels WHERE landlet_id IN (${placeholders})`,
-  ).bind(...landletIds).all();
+  const rows = [];
+  for (let i = 0; i < landletIds.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = landletIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(
+      `SELECT landlet_id, level_index FROM landlet_levels WHERE landlet_id IN (${placeholders})`,
+    ).bind(...chunk).all();
+    rows.push(...results);
+  }
   const levelIndicesByLandlet = new Map(landletIds.map((landletId) => [landletId, []]));
-  for (const row of results) levelIndicesByLandlet.get(row.landlet_id).push(row.level_index);
+  for (const row of rows) levelIndicesByLandlet.get(row.landlet_id).push(row.level_index);
   for (const instance of instances) {
     const levelIndices = levelIndicesByLandlet.get(instance.landletId) || [];
     const minZ = Math.min(0, ...levelIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M;
@@ -3689,14 +3703,21 @@ export async function assertInstanceZWithinLevels(db, instances) {
 // can't be found (deleted after being referenced) is treated the same as
 // before this fix — a center-point-only check — rather than blocking the
 // write on a lookup that predates this validation.
+// #2707: chunked at D1_MAX_BOUND_PARAMETERS -- same gap getInstancesById
+// had for the same PUT /landlets/:id/draft caller, fixed by #2216.
 export async function assertInstanceXYWithinLandlet(db, instances) {
   if (instances.length === 0) return;
   const templateIds = [...new Set(instances.map((instance) => instance.templateId))];
-  const placeholders = templateIds.map(() => '?').join(', ');
-  const { results } = await db.prepare(
-    `SELECT * FROM catalog_templates WHERE template_id IN (${placeholders})`,
-  ).bind(...templateIds).all();
-  const templatesById = new Map(results.map((row) => [row.template_id, templateFromRow(row)]));
+  const rows = [];
+  for (let i = 0; i < templateIds.length; i += D1_MAX_BOUND_PARAMETERS) {
+    const chunk = templateIds.slice(i, i + D1_MAX_BOUND_PARAMETERS);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(
+      `SELECT * FROM catalog_templates WHERE template_id IN (${placeholders})`,
+    ).bind(...chunk).all();
+    rows.push(...results);
+  }
+  const templatesById = new Map(rows.map((row) => [row.template_id, templateFromRow(row)]));
   for (const instance of instances) {
     const halfSpan = (LANDLET_SIDE_M / 2) * footprintScaleAtHeight(instance.z);
     const template = templatesById.get(instance.templateId);
