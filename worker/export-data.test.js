@@ -77,12 +77,12 @@ describe('GET /auth/export-data (#1984)', () => {
 
 // #1985 (sub-issue of #1983): the commerce/economy section -- purchases
 // (as buyer), owned avatars/animations, video-generation jobs, higgles
-// redemptions/earnings, and authored bundles. Deliberately excludes
-// tax_1099_forms (the owner call on raw taxIdNumber/foreignTaxId inclusion,
-// flagged on #1983, is still open) and owned_avatar_purchases/
-// owned_animation_purchases (internal grant-bookkeeping tables with no
-// field not already present on the corresponding owned_avatars/
-// owned_animations row itself).
+// redemptions/earnings, authored bundles, and tax_1099_forms submission
+// metadata (owner decision 2026-10-24: form type/tax year/status/gross
+// income/timestamps, never the raw decrypted taxIdNumber/foreignTaxId).
+// Deliberately excludes owned_avatar_purchases/owned_animation_purchases
+// (internal grant-bookkeeping tables with no field not already present on
+// the corresponding owned_avatars/owned_animations row itself).
 describe('GET /auth/export-data commerce section (#1985)', () => {
   it('returns every commerce list empty for a fresh account with no builder profile at all', async () => {
     const email = `export-data-commerce-no-builder-${crypto.randomUUID()}@example.com`;
@@ -98,6 +98,7 @@ describe('GET /auth/export-data commerce section (#1985)', () => {
       higglesRedemptions: [],
       higglesEarningsEvents: [],
       bundles: [],
+      tax1099Forms: [],
     });
   });
 
@@ -113,6 +114,7 @@ describe('GET /auth/export-data commerce section (#1985)', () => {
       higglesRedemptions: [],
       higglesEarningsEvents: [],
       bundles: [],
+      tax1099Forms: [],
     });
   });
 
@@ -216,6 +218,62 @@ describe('GET /auth/export-data commerce section (#1985)', () => {
 
     const resultA = await api('/auth/export-data', builderA.session());
     expect(resultA.body.commerce.bundles).toEqual([]);
+  });
+
+  // Owner decision 2026-10-24 (resolving #1983's own "Real judgment calls"
+  // section): tax_1099_forms submission metadata is included, but the raw
+  // decrypted taxIdNumber/foreignTaxId (payee_tax_id_encrypted) never is.
+  it('includes tax_1099_forms submission metadata but never the raw encrypted tax id', async () => {
+    const builder = await signupBuilder('export-data-commerce-tax-forms');
+    const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builder.email).first()).user_id;
+    const formId = `form-${crypto.randomUUID()}`;
+    await env.DB.prepare(`
+      INSERT INTO tax_1099_forms (
+        form_id, user_id, tax_year, form_type, status, gross_income_cents, generated_at, approved_at,
+        filed_at, filing_reference, payee_email, payee_tax_id_encrypted, payee_tax_form_type
+      ) VALUES (?, ?, 2026, '1099-nec', 'filed', 50000, '2026-01-01T00:00:00.000Z', '2026-01-02T00:00:00.000Z',
+        '2026-01-03T00:00:00.000Z', 'filing-ref-123', ?, 'super-secret-encrypted-ssn', 'w9')
+    `).bind(formId, userId, builder.email).run();
+
+    const result = await api('/auth/export-data', builder.session());
+    expect(result.response.status).toBe(200);
+    expect(result.body.commerce.tax1099Forms).toEqual([{
+      formId, taxYear: 2026, formType: '1099-nec', status: 'filed', grossIncomeCents: 50000,
+      generatedAt: '2026-01-01T00:00:00.000Z', approvedAt: '2026-01-02T00:00:00.000Z',
+      filedAt: '2026-01-03T00:00:00.000Z', filingReference: 'filing-ref-123',
+    }]);
+    const serialized = JSON.stringify(result.body.commerce.tax1099Forms);
+    expect(serialized).not.toContain('super-secret-encrypted-ssn');
+    expect(serialized).not.toContain('payee_tax_id_encrypted');
+  });
+
+  it('includes tax_1099_forms for an account with no builder profile at all (keyed by user_id, not builder_id)', async () => {
+    const email = `export-data-tax-no-builder-${crypto.randomUUID()}@example.com`;
+    const signedUp = await signup(email, 'a fine long password here', { username: 'export-data-tax-no-builder' });
+    const sessionToken = extractSessionCookie(signedUp.response);
+    const userId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(email).first()).user_id;
+    const formId = `form-${crypto.randomUUID()}`;
+    await env.DB.prepare(`
+      INSERT INTO tax_1099_forms (form_id, user_id, tax_year, form_type, status, gross_income_cents, generated_at)
+      VALUES (?, ?, 2026, '1099-k', 'draft', 1000, '2026-01-01T00:00:00.000Z')
+    `).bind(formId, userId).run();
+
+    const result = await api('/auth/export-data', withSession(sessionToken));
+    expect(result.response.status).toBe(200);
+    expect(result.body.commerce.tax1099Forms).toEqual([expect.objectContaining({ formId, taxYear: 2026, formType: '1099-k' })]);
+  });
+
+  it('scopes tax_1099_forms to the requesting account only, never another user\'s own', async () => {
+    const builderA = await signupBuilder('export-data-tax-scope-a');
+    const builderB = await signupBuilder('export-data-tax-scope-b');
+    const userIdB = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(builderB.email).first()).user_id;
+    await env.DB.prepare(`
+      INSERT INTO tax_1099_forms (form_id, user_id, tax_year, form_type, status, gross_income_cents, generated_at)
+      VALUES (?, ?, 2026, '1099-nec', 'draft', 1000, '2026-01-01T00:00:00.000Z')
+    `).bind(`form-${crypto.randomUUID()}`, userIdB).run();
+
+    const resultA = await api('/auth/export-data', builderA.session());
+    expect(resultA.body.commerce.tax1099Forms).toEqual([]);
   });
 });
 

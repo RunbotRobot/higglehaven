@@ -3197,7 +3197,7 @@ async function handleExportData(request, db) {
         processedAt: row.processed_at,
       })),
     },
-    commerce: await exportCommerceData(db, builderRow),
+    commerce: await exportCommerceData(db, builderRow, user.user_id),
     social: builderRow ? await exportSocialSection(db, builderRow.builder_id, user.user_id) : null,
   });
 }
@@ -3207,17 +3207,42 @@ async function handleExportData(request, db) {
 // owned_avatars/owned_animations/video_generation_jobs/higgles_redemptions/
 // higgles_earnings_events have no seller_id FK at all, so a builder-less
 // account (never created a builder profile) has nothing to export here.
-// Deliberately excludes tax_1099_forms -- #1983's own "Real judgment calls"
-// section flags the raw taxIdNumber/foreignTaxId inclusion as the owner's
-// call, still open; this ships everything else in #1985's scope now and
-// leaves tax forms as a follow-up once that's answered, per #1985's own
-// explicit "build everything except the tax-forms piece now" allowance.
+// tax_1099_forms is the one exception -- it's keyed by user_id, not
+// builder_id (migrations/0081), so it's fetched independently below rather
+// than gated on builderRow existing.
+// Owner decision 2026-10-24 (#1985, resolving #1983's own "Real judgment
+// calls" section): include tax_1099_forms submission metadata (form type,
+// tax year, status, gross income, generated/approved/filed timestamps) but
+// exclude the raw decrypted taxIdNumber/foreignTaxId -- these fields are
+// AES-GCM-encrypted at rest specifically because they're sensitive, and a
+// general-purpose export endpoint isn't purpose-built for handling that one
+// field safely. tax1099Forms below therefore never reads payee_tax_id_encrypted
+// at all (not even to omit it after the fact), and payee_email/
+// payee_tax_form_type are left out too -- the former duplicates
+// profile.account.email, the latter duplicates profile.account.taxFormType
+// (userFromRow), neither is "form type/date/filing status."
 // Also deliberately excludes owned_avatar_purchases/owned_animation_purchases
 // -- internal bookkeeping tables (idempotency/cascade-delete plumbing for the
 // purchase-grants-ownership flow), not independent user-facing data: every
 // field either of them carries (purchase_id, template_id) is already present
 // on the corresponding owned_avatars/owned_animations row itself.
-async function exportCommerceData(db, builderRow) {
+async function exportCommerceData(db, builderRow, userId) {
+  const tax1099Forms = await db.prepare(`
+    SELECT form_id, tax_year, form_type, status, gross_income_cents, generated_at, approved_at, filed_at, filing_reference
+    FROM tax_1099_forms WHERE user_id = ? ORDER BY tax_year DESC, form_type ASC
+  `).bind(userId).all();
+  const tax1099FormsExport = tax1099Forms.results.map((row) => ({
+    formId: row.form_id,
+    taxYear: row.tax_year,
+    formType: row.form_type,
+    status: row.status,
+    grossIncomeCents: row.gross_income_cents,
+    generatedAt: row.generated_at,
+    approvedAt: row.approved_at,
+    filedAt: row.filed_at,
+    filingReference: row.filing_reference,
+  }));
+
   if (!builderRow) {
     return {
       purchasesAsBuyer: [],
@@ -3227,6 +3252,7 @@ async function exportCommerceData(db, builderRow) {
       higglesRedemptions: [],
       higglesEarningsEvents: [],
       bundles: [],
+      tax1099Forms: tax1099FormsExport,
     };
   }
   const builderId = builderRow.builder_id;
@@ -3293,6 +3319,7 @@ async function exportCommerceData(db, builderRow) {
       createdAt: row.created_at,
     })),
     bundles: bundles.results.map(bundleFromRow),
+    tax1099Forms: tax1099FormsExport,
   };
 }
 
