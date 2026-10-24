@@ -1647,6 +1647,83 @@ already safe to build standalone: the actual reinstatement *decision* flow
 (#1407) depends on this landing first, then calls this same admin-gated
 primitive once the rubric and audit-trail sub-issues are in place.
 
+### `POST /api/sellers/:sellerId/stripe-account-flag`
+### `POST /api/builders/:builderId/stripe-account-flag`
+
+Admin-gated (#1407, sub-issue of #1404). Records that this seller's/
+builder's Stripe account was flagged, with the rubric-relevant disposition
+— the premise the self-service reinstatement-request flow below evaluates
+against. Distinct from (and stored in a separate table from) the AI-made
+*decision* itself: this is a record of an incident, logged by an admin;
+`account_moderation_decisions` (below) is a record of the AI's own
+judgment call given that incident.
+
+Request body: `{ "disposition": "confirmed_fraud" | "suspected", "reason": "..." }`.
+`disposition` must be exactly one of those two strings — anything else
+`400`s. `reason` is required, trimmed, capped at 280 characters (same cap
+as `suspend-account`'s own `reason`/`evidenceNote`, #2708) — permanently
+stored, so unbounded free text isn't accepted. `404` if the seller/builder
+doesn't exist.
+
+Response: `{ "flagId": "...", "subjectType": "seller"|"builder", "subjectId": "...", "disposition": "...", "reason": "..." }`,
+`201` on success. Rate-limited per admin
+(`STRIPE_ACCOUNT_FLAG_RATE_LIMIT_MAX`, 20 — same bound as
+`stripe-account-reset`).
+
+### `POST /api/sellers/me/stripe-reinstatement-request`
+### `POST /api/builders/me/stripe-reinstatement-request`
+
+Self-service (#1407, sub-issue of #1404) — the actual AI-made
+reinstatement decision, applying the owner's own rubric (live voice
+conversation, 2026-10-07) deterministically:
+
+1. **Confirmed fraud ever on record** (any flag with
+   `disposition: "confirmed_fraud"`) → `outcome: "denied"`, permanent, no
+   reinstatement path at all, regardless of elapsed time or new evidence.
+2. **3rd-or-later flag of any kind** (confirmed or suspected) →
+   `outcome: "denied"`, permanent — repeated flagging is itself treated as
+   evidence of a pattern, which is also what structurally caps total
+   approvals at 2 across a subject's history (a subject can only ever be
+   approved while evaluating their 1st or 2nd flag).
+3. Otherwise (1st or 2nd flag, all `suspected`), gated on all of:
+   - **90-day cooling-off period** from the most recent flag's own
+     `flagged_at` — not yet elapsed → `outcome: "denied"`.
+   - **A fresh approved identity re-verification**: an approved
+     `didit_verification_sessions` row for this account, created *after*
+     the triggering flag (a session already on file before the flag
+     doesn't count). Missing → `outcome: "escalated"`, never `"denied"`
+     outright, since the subject may simply not have completed one yet —
+     per #1404's own design note, the two failure modes aren't symmetric
+     for a money/trust decision (a wrongful delay is recoverable, a
+     wrongful approval risks real fraud), so genuine ambiguity always
+     escalates rather than approves.
+   - **New bank account for payouts**: not independently checked — an
+     `outcome: "approved"` resets `stripe_account_id` to `null` via the
+     same mechanism as the admin `stripe-account-reset` endpoint above, and
+     the next onboarding submission necessarily creates a brand-new Stripe
+     Custom account (no carried-over payout details from the old, disabled
+     one), so completing onboarding again inherently requires fresh bank
+     details.
+
+Every call — `approved`, `denied`, or `escalated` alike — is logged to
+`account_moderation_decisions` (`decision_type: "stripe_reinstatement"`,
+`rubric_version: "1406-v1"`, `decided_by: "ai:stripe-reinstatement-flow"`)
+with the full reasoning behind which rubric branch fired. `409` if no flag
+is on record at all for this account (nothing to reinstate).
+
+Response: `{ "outcome": "approved"|"denied"|"escalated", "message": "..." }`
+— `message` is a short, generic, user-facing string; the detailed
+reasoning (which flag count, which rubric clause, exact dates) stays in
+the audit-trail row only, never the response body, so a bad actor can't
+use the response itself to tune a future attempt. On `"approved"` the
+response also includes `"stripeAccount": { ... }`, the same shape
+`GET .../stripe-account` returns, reflecting the now-cleared state.
+
+Resolves the caller's own subject from their session, never a
+client-supplied id — same discipline every other self-service route in
+this file follows. Rate-limited per subject
+(`STRIPE_REINSTATEMENT_REQUEST_RATE_LIMIT_MAX`, 10).
+
 ### `POST /api/auth/stripe-webhook`
 
 #766: `stripe_onboarding_status`/`stripe_requirements_due` on both the

@@ -38,6 +38,10 @@ import {
   deriveStripeOnboardingStatus, requireSessionSeller, integerValue, selectRowsByIdsChunked,
   sellerDeletionStatements,
 } from '../index.js';
+// #1407 (sub-issue of #1404): the AI-made Stripe-reinstatement decision
+// flow, shared verbatim between the builder and seller sides -- see that
+// module's own header comment for the full rubric and design decisions.
+import { handleStripeAccountFlag, handleStripeReinstatementRequest } from './stripe-reinstatement.js';
 
 const SELLER_CREATE_RATE_LIMIT_MAX = 20;
 const SELLER_RENAME_RATE_LIMIT_MAX = 20;
@@ -64,6 +68,14 @@ async function handleSellers(request, env, db, route, url) {
 
   if (route.length === 3 && route[1] === 'me' && route[2] === 'payouts') {
     return handleSellerPayouts(request, env, db);
+  }
+
+  // #1407: self-service AI-made Stripe-reinstatement decision, gated on a
+  // prior admin-recorded flag (stripe-account-flag above) and the
+  // owner-approved rubric -- see worker/lib/stripe-reinstatement.js's own
+  // header comment for the full rubric text and design decisions.
+  if (request.method === 'POST' && route.length === 3 && route[1] === 'me' && route[2] === 'stripe-reinstatement-request') {
+    return handleStripeReinstatementRequest(request, env, db, 'seller');
   }
 
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') {
@@ -247,6 +259,13 @@ async function handleSellers(request, env, db, route, url) {
     await adminActionLogStatement(db, admin.user_id, 'stripe_account_reset', 'seller', route[1], { previousAccountId }).run();
     const updated = await requireSeller(db, route[1]);
     return json(stripeAccountStatusJson(env, updated));
+  }
+
+  // #1407: admin-recorded premise for the self-service reinstatement-
+  // request flow below -- see worker/lib/stripe-reinstatement.js's own
+  // header comment for the full rubric this gates.
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'stripe-account-flag') {
+    return handleStripeAccountFlag(request, db, 'seller', route[1]);
   }
 
   return json({ error: 'Not found' }, 404);
