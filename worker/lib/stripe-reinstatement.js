@@ -251,7 +251,17 @@ export async function handleStripeReinstatementRequest(request, env, db, subject
   if (outcome === 'approved') {
     const current = await requireSubject(db, subjectType, subjectId);
     if (current.stripe_account_id) {
-      await performReinstatementReset(db, subjectType, subjectId, current.stripe_account_id);
+      // #2740: same concurrency guard (and the same obligation to check its
+      // result) as the sibling admin stripe-account-reset endpoint just
+      // above this file's own callers in worker/index.js (#1414) -- without
+      // checking this, a stripe_account_id that changed between the read
+      // above and this UPDATE (another request for the same double-click/
+      // multi-tab subject, an admin's own reset, etc.) leaves the reset a
+      // silent no-op while this handler still reports success below.
+      const reset = await performReinstatementReset(db, subjectType, subjectId, current.stripe_account_id);
+      if (!reset) {
+        throw new HttpError('This account\'s Stripe linkage changed concurrently -- refetch and retry', 409);
+      }
     }
     const updated = await requireSubject(db, subjectType, subjectId);
     return json({ outcome, message: OUTCOME_MESSAGES[outcome], stripeAccount: stripeAccountStatusJson(env, updated) }, 200);

@@ -228,6 +228,50 @@ describe('Stripe reinstatement request (#1407)', () => {
     expect(resubmit.response.status).toBe(503);
   });
 
+  // #2740: performReinstatementReset's own WHERE re-asserts stripe_account_id
+  // at UPDATE time, same concurrency guard as the sibling admin
+  // stripe-account-reset endpoint's own #1414 fix -- this used to never
+  // check that guard's result, so a stripe_account_id that changed between
+  // this handler's own read and its UPDATE silently no-op'd the reset while
+  // still reporting success. Same db.prepare monkey-patch idiom
+  // worker/stripe-connect.test.js's own #1414 race tests use.
+  it('rejects (409) rather than silently no-op-ing when stripe_account_id changed concurrently between the read and the reset', async () => {
+    const seller = await signupSeller('stripe-reinstate-race');
+    const userId = await userIdFor(seller.email);
+    await env.DB.prepare("UPDATE sellers SET stripe_account_id = 'acct_dead_reinstate_race', stripe_onboarding_status = 'action_needed' WHERE seller_id = ?")
+      .bind(seller.sellerId).run();
+    await insertFlag('seller', seller.sellerId, { disposition: 'suspected', flaggedAt: NINETY_ONE_DAYS_AGO });
+    await insertApprovedDiditSession(userId, THIRTY_DAYS_AGO);
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('UPDATE sellers') && sql.includes('stripe_account_id = NULL')) {
+        armed = false;
+        originalPrepare(`
+          UPDATE sellers SET stripe_account_id = 'acct_new_seller_reinstate_race', stripe_onboarding_status = 'complete' WHERE seller_id = ?
+        `).bind(seller.sellerId).run();
+      }
+      return originalPrepare(sql);
+    };
+    let rejected;
+    try {
+      rejected = await api('/sellers/me/stripe-reinstatement-request', seller.session({ method: 'POST' }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body.error).toMatch(/changed concurrently/);
+
+    // The race's winning write (the "already reconnected a real account in
+    // the meantime" simulation) must survive untouched -- not silently
+    // overwritten by the stale reset this handler must now refuse to apply.
+    const row = await env.DB.prepare('SELECT stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?')
+      .bind(seller.sellerId).first();
+    expect(row.stripe_account_id).toBe('acct_new_seller_reinstate_race');
+    expect(row.stripe_onboarding_status).toBe('complete');
+  });
+
   it('works identically for a builder subject, logging subject_builder_id', async () => {
     const builder = await signupBuilder('stripe-reinstate-builder-approved');
     const userId = await userIdFor(builder.email);
