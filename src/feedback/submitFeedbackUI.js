@@ -49,6 +49,19 @@ const feedbackStatusEl = document.getElementById('feedback-status');
 let feedbackScreenshotBlob = null;
 let feedbackScreenshotUrl = null;
 
+// #2731: captureShopScreenshotBlob's canvas.toBlob is real async work (PNG
+// encoding), so openFeedbackModal's own continuation can still be pending
+// when the user closes the modal (or reopens it, starting a second,
+// overlapping capture) -- same out-of-order-resolution hazard
+// shop/avatar.js's own shopAvatarEquipToken guards against. Without this,
+// a capture that resolves after close resurrects feedbackScreenshotBlob/Url
+// post-close and leaks the object URL forever (closeFeedbackModal already
+// ran and won't run again for it, and the next openFeedbackModal overwrites
+// feedbackScreenshotUrl without revoking the orphaned one). Incremented by
+// both openFeedbackModal and closeFeedbackModal so either one supersedes an
+// in-flight capture from the other.
+let feedbackModalToken = 0;
+
 // #2718's own body: "the actual GPU/driver string via
 // WEBGL_debug_renderer_info ... gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)
 // / UNMASKED_VENDOR_WEBGL" -- not every browser/context exposes this
@@ -84,20 +97,24 @@ function setFeedbackStatus(message, isError) {
 }
 
 async function openFeedbackModal() {
+  const myToken = ++feedbackModalToken;
   setFeedbackStatus('', false);
   feedbackDescriptionEl.value = '';
   feedbackScreenshotPreview.removeAttribute('src');
   feedbackModalEl.classList.add('visible');
   openModalA11y(feedbackModalEl, closeFeedbackModal);
+  let screenshotBlob;
   try {
-    feedbackScreenshotBlob = await captureShopScreenshotBlob();
+    screenshotBlob = await captureShopScreenshotBlob();
   } catch (err) {
     // A screenshot failing to capture (e.g. toBlob unsupported) shouldn't
     // block submitting a report at all -- the ring buffer + WebGL/browser
     // info below are still useful on their own.
     console.warn('Could not capture a feedback screenshot:', err);
-    feedbackScreenshotBlob = null;
+    screenshotBlob = null;
   }
+  if (myToken !== feedbackModalToken) return; // superseded by a close or a newer open while capturing
+  feedbackScreenshotBlob = screenshotBlob;
   if (feedbackScreenshotBlob) {
     feedbackScreenshotUrl = URL.createObjectURL(feedbackScreenshotBlob);
     feedbackScreenshotPreview.src = feedbackScreenshotUrl;
@@ -105,6 +122,7 @@ async function openFeedbackModal() {
 }
 
 function closeFeedbackModal() {
+  feedbackModalToken++;
   feedbackModalEl.classList.remove('visible');
   closeModalA11y(feedbackModalEl);
   if (feedbackScreenshotUrl) {

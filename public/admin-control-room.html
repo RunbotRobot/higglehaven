@@ -43,6 +43,7 @@
   .pill-in_progress { background: #dbe9fb; color: #1e4f8a; }
   .pill-done { background: #dcefd0; color: #386418; }
   .pill-tag { background: #f3e6cf; color: #7a5a12; }
+  .pill-bug-report { background: #f0d9e8; color: #7a1a52; font-weight: 700; }
   .pill-waiting-owner { background: #f6d4cb; color: #8a2a12; font-weight: 800; }
   .pill-waiting-owner-unexplained { background: #f6a48c; color: #5c1505; font-weight: 800; }
   .pill-waiting-claude { background: #dcefd0; color: #386418; }
@@ -384,10 +385,28 @@
   function threadEntries(task, replies) {
     const entries = [];
     if (task.note) {
-      entries.push({ from: task.noteAuthor || task.session || task.from || '', text: task.note, at: task.noteUpdatedAt || task.updatedAt });
+      // #2720: a bug-report card's own screenshot (task.imageUrl) otherwise
+      // only ever renders as the tiny 28x28 card-head thumbnail -- carrying
+      // it onto the note's own thread entry reuses the existing
+      // `<img class="msg-img">` treatment every reply's imageUrl already
+      // gets (see the threadHtml map below), giving the note a full-size
+      // preview once the card is expanded, with no new markup needed. Any
+      // other kind's card with both a note and an imageUrl benefits the
+      // same way -- not special-cased to kind === 'bug-report' alone.
+      entries.push({ from: task.noteAuthor || task.session || task.from || '', text: task.note, at: task.noteUpdatedAt || task.updatedAt, imageUrl: task.imageUrl });
     }
     (replies || []).forEach((r) => entries.push({ from: r.from, text: r.text, at: r.createdAt, imageUrl: r.imageUrl }));
     return entries.sort((a, b) => new Date(a.at) - new Date(b.at));
+  }
+
+  // #2720: the one visible place a task's `kind` wasn't already surfaced
+  // as its own badge (needsAnswerBadge covers 'question'; every
+  // GitHub-backed/feedback kind is implicit from its number/chip/url) --
+  // a bug report has none of those, so without this it's indistinguishable
+  // from an ordinary owner-posted feedback note at a glance.
+  function kindBadge(task) {
+    if (task.kind !== 'bug-report') return '';
+    return '<span class="pill pill-bug-report">Bug report</span>';
   }
 
   function renderCard(task) {
@@ -448,6 +467,7 @@
         '<span class="title">' + linkTitle + '</span>' +
         '<span class="pill pill-' + escapeHtml(task.status) + '">' + escapeHtml(statusLabel(task.status)) + '</span>' +
         (task.tag ? '<span class="pill pill-tag">' + escapeHtml(task.tag) + '</span>' : '') +
+        kindBadge(task) +
         needsAnswerBadge(task) +
         waitingBadge(task) +
         (task.session ? '<span class="meta">' + escapeHtml(task.session) + '</span>' : '') +

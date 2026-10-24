@@ -157,33 +157,54 @@ console.log(`random selection picked ${pickedInstanceIds.size} distinct chair(s)
 const EPISODE_SAMPLES = 6;
 const settleDelays = new Set();
 let sawBlendHeldAtZeroDuringSettle = false;
-for (let i = 0; i < EPISODE_SAMPLES; i++) {
-  await deflectMoveJoystick(page); // ends the previous episode, re-arms the idle timer
-  // Polls for the fresh episode's own target selection rather than a fixed
-  // wait, same #2423-established reasoning as the sibling targeting test.
-  // #2598: waitForFunction's signature is (pageFunction, arg, options) --
-  // this 2-arg call put { timeout: 15000 } in the arg slot instead, so the
-  // real applied timeout was always Playwright's own default (30000ms),
-  // not 15000ms -- and even the intended 15000ms wasn't enough margin
-  // under current CI load. The explicit `null` arg reaches the options
-  // slot, and the timeout is widened for real headroom.
-  // #2655: #2598's 60000ms margin timed out again under tonight's heavier
-  // CI load, same well-established timing-margin flake class -- widened
-  // further to 120000ms, matching #2589/#2632's own settled value for the
-  // same recurring flake shape.
-  // #2704: 120000ms timed out twice in a row under an even heavier CI
-  // load night -- widened further to 180000ms.
-  // #2724: 180000ms timed out again within hours -- the 4th escalation of
-  // the identical flake in under 36 hours. Repeated similar-sized bumps
-  // aren't converging, so this jumps straight to 300000ms (5 minutes),
-  // matching e2e/helpers.mjs's chooseIdentity wait (#2400), this suite's
-  // own established "generous ceiling" margin for the same reason.
-  await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'sit', null, { timeout: 300000 });
-  const rightAfterSelection = await page.evaluate(() => window.__testShopSitPose());
-  settleDelays.add(Math.round(rightAfterSelection.settleDelayS * 1000)); // ms, so float noise doesn't fracture the set
-  if (rightAfterSelection.settleElapsedS < rightAfterSelection.settleDelayS && rightAfterSelection.blend === 0) {
-    sawBlendHeldAtZeroDuringSettle = true;
+// #2728: this loop's own waitForFunction below is a known, repeatedly-
+// escalated flake under heavy CI load (#2598/#2655/#2704/#2724 -- see its
+// own comment) -- its real failure mode isn't a clean, bounded "this test
+// failed," it's an *uncaught* TimeoutError thrown before finish() (below)
+// ever runs. finish() is the only place that calls browser.close() +
+// process.exit(); skip it and the Playwright browser connection stays
+// open, which keeps Node's event loop alive and hangs run-all.mjs's own
+// untimed execSync call for the *entire shard* indefinitely, not just for
+// 300000ms -- the same mechanism #2719's own CI investigation found and
+// fixed in e2e/shop-submit-feedback.test.mjs. Catching it here and falling
+// through to finish({ pass: false, ... }) turns that indefinite shard hang
+// back into an ordinary, bounded test failure.
+try {
+  for (let i = 0; i < EPISODE_SAMPLES; i++) {
+    await deflectMoveJoystick(page); // ends the previous episode, re-arms the idle timer
+    // Polls for the fresh episode's own target selection rather than a fixed
+    // wait, same #2423-established reasoning as the sibling targeting test.
+    // #2598: waitForFunction's signature is (pageFunction, arg, options) --
+    // this 2-arg call put { timeout: 15000 } in the arg slot instead, so the
+    // real applied timeout was always Playwright's own default (30000ms),
+    // not 15000ms -- and even the intended 15000ms wasn't enough margin
+    // under current CI load. The explicit `null` arg reaches the options
+    // slot, and the timeout is widened for real headroom.
+    // #2655: #2598's 60000ms margin timed out again under tonight's heavier
+    // CI load, same well-established timing-margin flake class -- widened
+    // further to 120000ms, matching #2589/#2632's own settled value for the
+    // same recurring flake shape.
+    // #2704: 120000ms timed out twice in a row under an even heavier CI
+    // load night -- widened further to 180000ms.
+    // #2724: 180000ms timed out again within hours -- the 4th escalation of
+    // the identical flake in under 36 hours. Repeated similar-sized bumps
+    // aren't converging, so this jumps straight to 300000ms (5 minutes),
+    // matching e2e/helpers.mjs's chooseIdentity wait (#2400), this suite's
+    // own established "generous ceiling" margin for the same reason.
+    await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'sit', null, { timeout: 300000 });
+    const rightAfterSelection = await page.evaluate(() => window.__testShopSitPose());
+    settleDelays.add(Math.round(rightAfterSelection.settleDelayS * 1000)); // ms, so float noise doesn't fracture the set
+    if (rightAfterSelection.settleElapsedS < rightAfterSelection.settleDelayS && rightAfterSelection.blend === 0) {
+      sawBlendHeldAtZeroDuringSettle = true;
+    }
   }
+} catch (err) {
+  console.log('episode loop threw before completing all samples (see #2728):', err.message);
+  await finish(session.browser, {
+    pass: false,
+    label: '#2480: sit target selection and settle timing are both randomized across repeated idle episodes',
+    errors: [...errors, `episode loop error: ${err.message}`],
+  });
 }
 console.log(`settle delay took ${settleDelays.size} distinct value(s) across ${EPISODE_SAMPLES} episodes (should be > 1):`, [...settleDelays]);
 console.log('blend observed held at exactly 0 during at least one settle window (should be true):', sawBlendHeldAtZeroDuringSettle);

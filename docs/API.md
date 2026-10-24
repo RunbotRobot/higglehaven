@@ -10475,6 +10475,88 @@ the one source of truth for what an unchecked listing's category is. The
 buyer-facing "browse owned avatars and equip one" half is #713's own
 separate scope, not this one's.
 
+## Submit Feedback bug reports (#2715/#2719)
+
+Motivation (#2715's own body): diagnosing rendering bugs after the fact
+(e.g. the Shop-mode sky artifacts, PR #2606/#2617) repeatedly ran into the
+same wall — by the time a report reaches a session, the exact render state
+at the moment something looked wrong is long gone, and a from-scratch
+repro harness can only approximate it. This feature closes that gap with
+an in-app "Submit Feedback" tool: a client-side rolling render-state ring
+buffer (#2717, `src/feedback/renderStateBuffer.js`) feeds a "Submit
+Feedback" button/modal in Shop mode (#2718, `src/feedback/submitFeedbackUI.js`)
+that captures a canvas screenshot, `WEBGL_debug_renderer_info`, browser/OS
+info, and the ring buffer, then POSTs all of it here.
+
+**`POST /api/feedback/bug-report`** (`worker/lib/feedback.js`) — multipart
+`form-data`, not JSON: an optional `screenshot` file field (PNG, capped at
+10MB) and a required `metadata` field (a JSON string, capped at 256KB)
+shaped `{ description?, webglRenderer?, webglVendor?, userAgent?,
+platform?, renderStateBuffer?, submittedAt? }` (`description`/
+`webglRenderer`/`webglVendor`/`userAgent`/`platform` each capped at 280
+characters, same as every other free-text comment field in this API;
+`renderStateBuffer` is stored as-is if it's an array, else as `[]`).
+Deliberately unauthenticated — the submitting user is resolved from the
+session cookie if one exists (for display only; `metadata`'s own claimed
+`userId`, if the client sends one, is never trusted), but a login is never
+required, so a logged-out visitor can still report a problem. Rate-limited
+to 20 submissions per 15 minutes per IP (`checkRateLimit`), same shape as
+model uploads/signup. Returns `{ reportId }` (`201`). Writes one
+`bug_reports` row (`migrations/0151_bug_reports.sql`); a submitted
+screenshot goes to its own dedicated `FEEDBACK` R2 bucket
+(`higglehaven-feedback`) — not the shared `MODELS` bucket — because that
+bucket's own five-way reference-checking scheme
+(`cleanupUnreferencedModels`) has no notion of a bug report as a
+"reference," and reusing it would risk the periodic sweep silently
+deleting every feedback screenshot within minutes of submission. Requires
+a one-time `wrangler r2 bucket create higglehaven-feedback` (run once from
+`main`, same manual provisioning step `DB_BACKUPS`'s own bucket needed)
+before this binding resolves to anything live; the endpoint 500s with a
+clear message if `env.FEEDBACK` isn't configured, same as every other R2
+binding check in this codebase.
+
+**`GET /api/feedback/bug-reports/:reportId/screenshot`** — admin-gated
+(`requireAdmin`), not public. #2715's own body flags, as a still-open
+owner question, that these screenshots could incidentally capture other
+users' in-world content, so until a retention/moderation policy is
+decided, the conservative default is the same "operational data, not
+something an ordinary session has business reading" bar
+`GET /api/models/storage`/`GET /api/models` already hold admin tooling to.
+`404`s if the report has no stored screenshot or doesn't exist.
+
+**Still open** (per #2715's own body, flagged rather than silently
+decided): retention policy for stored screenshots/metadata, and whether a
+moderation/privacy pass is needed before storage.
+
+**Surfaced in the Control Room (#2720, the last of #2715's four
+sub-issues)**: `POST /api/feedback/bug-report` above also writes a
+`control_room_tasks` row (`kind: 'bug-report'`) in the same atomic
+`db.batch` as the `bug_reports` insert — not a round trip through the
+validating `/api/control-room/tasks` HTTP API (see "Control Room API
+(N31)" below); this endpoint is itself the trusted, same-process caller.
+`title` is the report's own `description`, or `'Bug report (no
+description)'` when none was given; `session` is `''` and `posted_by` is
+the literal string `'bug-report'`, distinguishing a widget-submitted
+report from a session's or the owner's own cards. `image_url` is the
+same admin-gated `screenshot_url` (`GET
+/api/feedback/bug-reports/:reportId/screenshot`) the `bug_reports` row
+itself carries — the Control Room admin page is already `requireAdmin`-
+gated same-origin, so the owner's existing session cookie serves it with
+no extra auth plumbing. The WebGL renderer/vendor string, user agent,
+platform, submission time, and the full `renderStateBuffer` (camera/avatar
+state + shader uniforms, ~1Hz samples) are formatted into the task's own
+`note` field — the board's existing free-text write-up field, rendered in
+the card's thread once expanded — so a session or the owner can triage a
+report (its screenshot, WebGL renderer string, and ring-buffer state) from
+the board alone, with no separate D1/R2 lookup. The card gets the same
+sequential `N<n>` display numbering (`note_number`) every other
+message-shaped card already gets, and a distinct "Bug report" pill
+(`public/admin-control-room.html`) so it reads differently from an
+ordinary feedback/question note at a glance. Status defaults to `queued`
+like any other new card — marking one `done`/`in_progress`/replying to it
+works exactly like any other Control Room task from here on, since it's
+a real row in the same table.
+
 ## Database backups (#1135)
 
 Owner-raised account-continuity risk: production D1 (users, builders,
