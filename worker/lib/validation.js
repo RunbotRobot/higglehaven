@@ -97,6 +97,19 @@ export function finiteNumber(value, field) {
   return number;
 }
 
+// #2530: a second-tier shared helper discovered while extracting
+// worker/lib/models.js (its own handleModelCleanup needs this), same
+// shape as #2528's own discovery of readJson/stringValue/etc. -- used far
+// beyond that one call site (bundles/auctions, offers, instances,
+// land-candidates, and more), so it belongs here alongside the other
+// generic validation primitives rather than only in the module that
+// happened to need it next. Extracted verbatim, zero behavior change.
+export function positiveInteger(value, field) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) throw new HttpError(`${field} must be a positive integer`, 400);
+  return number;
+}
+
 export function queryLimit(value, defaultValue) {
   if (value === null) return defaultValue;
   if (!/^\d+$/.test(value)) throw new HttpError('limit must be an integer between 1 and 100', 400);
@@ -116,7 +129,7 @@ export function decodeCursor(value) {
     const bytes = Uint8Array.from(atob(value), (character) => character.charCodeAt(0));
     const decoded = JSON.parse(new TextDecoder().decode(bytes));
     // #1470: same empty-string guard decodeCatalogCursor/decodeCatalogPriceCursor
-    // (still in worker/index.js) already have -- without it, a cursor
+    // (in worker/lib/catalog.js) already have -- without it, a cursor
     // encoding ["",""] (never produced by encodeCursor itself) silently
     // matches every row on a descending-sort endpoint's
     // `created_at < '' OR (... id < '')` check, returning an empty page
@@ -134,15 +147,6 @@ export function decodeCursor(value) {
 // `IN (...)` check against it the same way assertReferencesExist below
 // already does is this constant's only use.
 const D1_MAX_BOUND_PARAMETERS = 100;
-
-// #2529: used by the Control Room's sub-issue-tracking fields, same
-// domain-agnostic shape as the rest of this file -- extracted verbatim,
-// zero behavior change.
-export function positiveInteger(value, field) {
-  const number = Number(value);
-  if (!Number.isInteger(number) || number <= 0) throw new HttpError(`${field} must be a positive integer`, 400);
-  return number;
-}
 
 export async function assertReferencesExist(db, table, column, values, field) {
   const uniqueValues = [...new Set(values)];

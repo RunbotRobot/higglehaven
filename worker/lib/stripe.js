@@ -7,20 +7,24 @@
 //
 // Deliberately NOT included here: stripeConfigured/stripeRequest/
 // flattenStripeParams/STRIPE_RATE_LIMIT_MAX/deriveStripeOnboardingStatus/
-// userFromRow/clawBackPurchaseCommission -- each is genuinely shared well
-// beyond this file (Stripe Connect onboarding, payouts, purchase
-// checkout/refund, account/signup responses generally), not Stripe-
-// webhook/card-setup specific, so they stay in worker/index.js and are
-// imported back below -- same one-directional-except-for-genuinely-
-// shared-state shape worker/lib/builder-profile.js's own comment
-// documents for its own templateFromRow/recomputeLandCap imports (#2535).
+// userFromRow -- each is genuinely shared well beyond this file (Stripe
+// Connect onboarding, payouts, purchase checkout/refund, account/signup
+// responses generally), not Stripe-webhook/card-setup specific, so they
+// stay in worker/index.js and are imported back below -- same one-
+// directional-except-for-genuinely-shared-state shape
+// worker/lib/builder-profile.js's own comment documents for its own
+// templateFromRow/recomputeLandCap imports (#2535).
 import { json, HttpError } from './http.js';
 import { timingSafeEqual, bytesToHex } from './crypto.js';
 import { checkRateLimit } from './rate-limit.js';
 import { requireCurrentUser } from './auth.js';
 import { readJson, stringValue } from './validation.js';
+// #2615 moved clawBackPurchaseCommission out of worker/index.js into
+// worker/lib/purchase-lifecycle.js -- this webhook's own chargeback path
+// still needs it, just from its new home.
+import { clawBackPurchaseCommission } from './purchase-lifecycle.js';
 import {
-  stripeConfigured, stripeRequest, deriveStripeOnboardingStatus, userFromRow, clawBackPurchaseCommission,
+  stripeConfigured, stripeRequest, deriveStripeOnboardingStatus, userFromRow,
 } from '../index.js';
 
 // #1978: workerd requires every named export of the main Worker entry

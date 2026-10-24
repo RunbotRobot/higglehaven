@@ -91,10 +91,18 @@ const submitBtn = page.getByRole('button', { name: /tax paperwork/i });
 // Waiting directly on that response covers whatever CI-load contention
 // delayed it with one long margin, then a short margin for the now-
 // genuinely-synchronous DOM update that follows.
+// #2644: #2573's own 60000ms margin on this same direct-network wait
+// timed out again under heavier CI-runner contention -- since this is
+// already a waitForResponse on the real round trip (no synchronous-vs-
+// async gap left to split out, unlike the waitForFunction-based flakes
+// elsewhere in this suite), a further timeout bump is the only lever
+// left. Matching e2e/settings-tab-switch-race.test.mjs's own
+// waitForResponse margin (#2135/#2570/#2631's final settled value) for
+// the same reason -- same CI-load class of flake, same fix shape.
 const [submitResponse] = await Promise.all([
   page.waitForResponse(
     (response) => response.request().method() === 'POST' && response.url().includes('/api/tax/id-form'),
-    { timeout: 60000 },
+    { timeout: 120000 },
   ),
   submitBtn.click(),
 ]);

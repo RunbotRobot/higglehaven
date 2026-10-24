@@ -9,21 +9,27 @@
 // warnInactiveLandletOwners (the scheduled() cron's other two calls,
 // previously defined in between generateAutoMosaicIfFreshWorld and
 // generateRingAtWorldBoundary here) -- those are the auctions/inactivity
-// domain (#2538's own territory, still blocked), not world-generation; they
-// share nothing from this file beyond being called from the same cron tick,
-// and stay in worker/index.js for that sub-issue to pick up.
+// domain, not world-generation, but they stay in worker/index.js
+// permanently, not as a hand-off to some future sub-issue: #2538 (which
+// produced worker/lib/auctions.js) never actually covered them -- that
+// module's own header comment excludes resolveAuctionIfDue/
+// resolveDueAuctions (the auction *resolution* subsystem) for staying with
+// the scheduled() cron handler that calls them directly, and
+// autoAuctionInactiveLandlets/warnInactiveLandletOwners are that same
+// cron handler's other two direct calls, for the same reason. They share
+// nothing from this file beyond being called from the same cron tick.
 //
-// handleLandlets itself (the /api/landlets CRUD dispatcher) also stays in
-// worker/index.js -- it's the landlet-core domain (#2533, not yet started),
-// not world-generation -- but it shares candidateRowFromLandlet (both
-// domains build the same landlet_candidates row shape) with the handlers
-// here, so worker/index.js imports that one back from this module rather
-// than duplicating it. worldFromRow (staying in worker/index.js) similarly
-// imports computeGreenbeltRatio back. Both are one-directional
-// (worker/index.js -> this file), not circular -- this module never needs
-// anything back from worker/index.js at module-evaluation time, following
-// the same safe-cycle precedent #2501/#2528/#2535 already established where
-// the dependency genuinely does run the other way.
+// handleLandlets itself (the /api/landlets CRUD dispatcher) now lives in
+// worker/lib/land.js (#2533) -- it's the landlet-core domain, not
+// world-generation -- but it shares candidateRowFromLandlet (both domains
+// build the same landlet_candidates row shape) with the handlers here, so
+// land.js imports that one back from this module rather than duplicating
+// it. worldFromRow (staying in worker/index.js) similarly imports
+// computeGreenbeltRatio back. Both are one-directional (the importing
+// module -> this file), not circular -- this module never needs anything
+// back from either at module-evaluation time, following the same
+// safe-cycle precedent #2501/#2528/#2535 already established where the
+// dependency genuinely does run the other way.
 import {
   landletMaxWorldRadius, landletMinWorldRadius, landletWorldPolygon, pointInPolygon, pointToSegmentDistance,
   polygonsOverlap, sameAreaRadius,
@@ -36,6 +42,7 @@ import {
 } from './validation.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { requireAdmin } from './auth.js';
+import { checkRateLimit } from './rate-limit.js';
 import {
   candidateFromRow, landletFromRow, landCandidateRingFromRow, worldFromRow, validateLandlet, validateWorld,
   requireLandlet,
@@ -290,9 +297,30 @@ async function generateLandletMosaicCandidates(db, { prefix, count }, adminUserI
   };
 }
 
+// Generous-but-bounded bursts, matching the house convention elsewhere in
+// this codebase (e.g. purchases-admin.js's SELF_DEALING_FLAG_REVIEW_RATE_
+// LIMIT_MAX) for repeatable admin-authenticated mutating actions: these are
+// real operational tools used in bursts (growing the world by generating
+// several rings/mosaics/batches in a row), not single-shot actions, so the
+// limit bounds runaway/scripted abuse (a compromised credential, a buggy
+// admin-tooling script, a double-click bug) without interfering with normal
+// admin workflows. #2657.
+const LAND_CANDIDATE_GENERATE_MOSAIC_RATE_LIMIT_MAX = 20;
+const LAND_CANDIDATE_GENERATE_RING_RATE_LIMIT_MAX = 20;
+const LAND_CANDIDATE_DELETE_RATE_LIMIT_MAX = 20;
+const LAND_CANDIDATE_UPDATE_RATE_LIMIT_MAX = 20;
+const LAND_CANDIDATE_BATCH_CREATE_RATE_LIMIT_MAX = 20;
+// Higher than this file's other admin buckets: the manual single-candidate
+// creation endpoint is also the one worker/worker-api.test.js's own
+// land-candidate test suite (one shared admin session for the whole file,
+// per that file's own top-of-file comment) exercises most heavily on its
+// own, well past the 20 the other buckets here use.
+const LAND_CANDIDATE_CREATE_RATE_LIMIT_MAX = 30;
+
 async function handleLandCandidates(request, db, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-mosaic') {
     const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `land-candidates-generate-mosaic:${admin.user_id}`, LAND_CANDIDATE_GENERATE_MOSAIC_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const prefix = stringValue(input.prefix, 'prefix');
     if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(prefix)) {
@@ -306,6 +334,7 @@ async function handleLandCandidates(request, db, route, url) {
 
   if (request.method === 'POST' && route.length === 2 && route[1] === 'generate-ring') {
     const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `land-candidates-generate-ring:${admin.user_id}`, LAND_CANDIDATE_GENERATE_RING_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const prefix = stringValue(input.prefix, 'prefix');
     if (!/^[a-z0-9][a-z0-9-]{0,47}$/.test(prefix)) {
@@ -404,6 +433,7 @@ async function handleLandCandidates(request, db, route, url) {
 
   if (request.method === 'DELETE' && route.length === 2) {
     const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `land-candidates-delete:${admin.user_id}`, LAND_CANDIDATE_DELETE_RATE_LIMIT_MAX);
     const existing = await db.prepare(`
       SELECT materialized_at, ring_id FROM landlet_candidates WHERE landlet_id = ?
     `).bind(route[1]).first();
@@ -423,6 +453,7 @@ async function handleLandCandidates(request, db, route, url) {
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `land-candidates-update:${admin.user_id}`, LAND_CANDIDATE_UPDATE_RATE_LIMIT_MAX);
     const existing = await db.prepare(`
       SELECT * FROM landlet_candidates WHERE landlet_id = ?
     `).bind(route[1]).first();
@@ -474,6 +505,7 @@ async function handleLandCandidates(request, db, route, url) {
 
   if (request.method === 'POST' && route.length === 2 && route[1] === 'batch') {
     const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `land-candidates-batch-create:${admin.user_id}`, LAND_CANDIDATE_BATCH_CREATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (!Array.isArray(input.candidates)) throw new HttpError('candidates must be an array', 400);
     if (input.candidates.length === 0) throw new HttpError('candidates must contain at least one item', 400);
@@ -510,6 +542,7 @@ async function handleLandCandidates(request, db, route, url) {
 
   if (request.method === 'POST' && route.length === 1) {
     const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `land-candidates-create:${admin.user_id}`, LAND_CANDIDATE_CREATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const landlet = validateLandlet({ ...input, status: 'generating', ownerBuilderId: null }, crypto.randomUUID());
     const row = candidateRowFromLandlet(landlet);
@@ -527,6 +560,10 @@ async function handleLandCandidates(request, db, route, url) {
 
   return json({ error: 'Not found' }, 404);
 }
+
+// #2657: same generous-but-bounded-burst convention as the land-candidate
+// rate limits above.
+const LAND_CANDIDATE_RING_GENERATION_COMPLETE_RATE_LIMIT_MAX = 20;
 
 async function handleLandCandidateRings(request, db, route, url) {
   if (request.method === 'GET' && route.length === 1) {
@@ -568,6 +605,7 @@ async function handleLandCandidateRings(request, db, route, url) {
 
   if (request.method === 'POST' && route.length === 3 && route[2] === 'generation-complete') {
     const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `land-candidate-ring-generation-complete:${admin.user_id}`, LAND_CANDIDATE_RING_GENERATION_COMPLETE_RATE_LIMIT_MAX);
     const { changed, ...result } = await completeRingGenerationInternal(db, route[1]);
     // #829: unlike its landlet-level sibling (see that handler's own
     // adminActionLogStatement call), this endpoint never logged who
@@ -800,6 +838,11 @@ async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, 
 
 const WORLD_SETTINGS_CONCURRENT_RETRY_LIMIT = 5;
 
+// #2657: same generous-but-bounded-burst convention as the land-candidate
+// rate limits above.
+const WORLD_EXPAND_RATE_LIMIT_MAX = 20;
+const WORLD_SETTINGS_UPDATE_RATE_LIMIT_MAX = 20;
+
 async function handleWorld(request, db, route) {
   if (request.method === 'GET' && route.length === 1) {
     const settings = await getWorldSettings(db);
@@ -809,6 +852,7 @@ async function handleWorld(request, db, route) {
 
   if (request.method === 'POST' && route.length === 2 && route[1] === 'expand') {
     const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `world-expand:${admin.user_id}`, WORLD_EXPAND_RATE_LIMIT_MAX);
     const settings = await getWorldSettings(db);
     const countsBefore = await getLandletCounts(db);
     const greenbeltRatio = computeGreenbeltRatio(countsBefore);
@@ -821,6 +865,7 @@ async function handleWorld(request, db, route) {
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 1) {
     const admin = await requireAdmin(request, db);
+    await checkRateLimit(db, `world-settings-update:${admin.user_id}`, WORLD_SETTINGS_UPDATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     // #881: same TOCTOU shape #837 fixed in expandWorldOnce — the UPDATE
     // below used to have no WHERE guard tying it back to the `existing` row

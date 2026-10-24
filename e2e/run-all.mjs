@@ -28,7 +28,8 @@
 // detail last, in a run whose own total output this suite's current shard
 // sizes keep well under that ceiling, guarantees it survives instead.
 import { execSync, spawn } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -107,6 +108,54 @@ function killWranglerFamily() {
   } catch { /* no matching process — fine */ }
 }
 
+// #2673: when `wrangler dev` itself crashes mid-test (as opposed to the
+// Worker returning an ordinary error response), the real error text never
+// reaches the stdout/stderr tail captured below at all -- wrangler prints
+// only "✘ [ERROR]" plus a pointer to a log file on disk
+// (~/.config/.wrangler/logs/wrangler-<timestamp>.log) and writes the actual
+// message there instead. CI doesn't upload that file as an artifact, so a
+// server crash like this previously left nothing to diagnose from beyond
+// the ANSI-code remnants that survive in stdout. Snapshotting this
+// directory's contents before each test file's own `wrangler dev` starts,
+// then diffing after a failure, finds exactly the log file(s) that run's
+// own crash (if any) wrote, without needing to know wrangler's own naming
+// scheme or timestamp format up front.
+const WRANGLER_LOG_DIR = path.join(os.homedir(), '.config', '.wrangler', 'logs');
+const WRANGLER_CRASH_LOG_MAX_CHARS = 50_000;
+
+function listWranglerLogFiles() {
+  try {
+    return new Set(readdirSync(WRANGLER_LOG_DIR));
+  } catch {
+    // Directory doesn't exist yet (e.g. wrangler has never crashed/logged
+    // on this machine) -- same as "no new files", not an error.
+    return new Set();
+  }
+}
+
+// Reads whatever log file(s) appeared in WRANGLER_LOG_DIR since
+// `before` was snapshotted, tail-capped the same way the in-memory
+// stdout/stderr capture above already is. Best-effort: a file that's
+// gone, unreadable, or mid-write by the time this runs just gets skipped
+// rather than failing the whole diagnostic attempt.
+function readNewWranglerLogFiles(before) {
+  const after = listWranglerLogFiles();
+  const newFiles = [...after].filter((name) => !before.has(name)).sort();
+  const sections = [];
+  for (const name of newFiles) {
+    try {
+      let content = readFileSync(path.join(WRANGLER_LOG_DIR, name), 'utf8');
+      if (content.length > WRANGLER_CRASH_LOG_MAX_CHARS) {
+        content = content.slice(content.length - WRANGLER_CRASH_LOG_MAX_CHARS);
+      }
+      sections.push(`--- ${name} ---\n${content}`);
+    } catch {
+      // Skip unreadable/already-cleaned-up files -- nothing more to do.
+    }
+  }
+  return sections;
+}
+
 async function waitForServer(timeoutMs = 30000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
@@ -133,6 +182,7 @@ async function runOneTest(testFile) {
     return { passed: false, log };
   }
 
+  const wranglerLogFilesBefore = listWranglerLogFiles();
   const wrangler = spawn('npx', ['wrangler', 'dev', '--local', '--ip', '127.0.0.1', '--port', PORT], {
     cwd: repoRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -179,6 +229,12 @@ async function runOneTest(testFile) {
     log += `\n--- wrangler dev server output for ${testFile} (tail, may explain the failure above) ---\n`;
     log += wranglerLog || '(no server output captured)';
     log += `\n--- end wrangler dev server output for ${testFile} ---\n`;
+    const crashLogSections = readNewWranglerLogFiles(wranglerLogFilesBefore);
+    if (crashLogSections.length > 0) {
+      log += `\n--- wrangler dev crash log file(s) for ${testFile} (${WRANGLER_LOG_DIR}, written when wrangler itself errors out -- see this file's own #2673 comment) ---\n`;
+      log += crashLogSections.join('\n');
+      log += `\n--- end wrangler dev crash log file(s) for ${testFile} ---\n`;
+    }
   }
   try {
     // Negative pid signals the whole detached process group, not just

@@ -78,9 +78,20 @@ await pageB.waitForSelector('#shop-status:not(.visible)', { state: 'attached', t
 await pageB.click('#shop-fly-btn');
 await pageB.waitForTimeout(2500);
 
-// Give A's own poll loop (SHOP_PRESENCE_POLL_INTERVAL_MS = 1000) a couple of
-// cycles to pick B up before touching anything.
-await pageA.waitForTimeout(3000);
+// Give A's own poll loop (SHOP_PRESENCE_POLL_INTERVAL_MS = 1000) a chance to
+// pick B up before touching anything. A fixed margin here was the same
+// repeat-offender "too tight under CI load" shape #2567's own fix below
+// already converted for the post-despawn snapshot -- polling for the real
+// state instead of guessing at a margin, so a genuine failure to ever pick
+// B up still surfaces in the diagnostic below rather than this just being a
+// longer and longer fixed wait.
+await pageA
+  .waitForFunction(
+    (builderId) => (window.__shopOtherAvatars ?? []).some((a) => a.builderId === builderId),
+    builderB.builderId,
+    { timeout: 10000 },
+  )
+  .catch(() => {});
 
 const baseline = await pageA.evaluate(() => window.__shopOtherAvatars);
 const bEntryBaseline = baseline?.find((a) => a.builderId === builderB.builderId);

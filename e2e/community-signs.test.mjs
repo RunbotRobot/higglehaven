@@ -103,7 +103,10 @@ console.log(`first row mentions author+text (should mention "${myBuilder.label}"
 // share the same real authorLabel now (#1830), so the row is picked out
 // by its own text instead.
 await page.locator('.sign-post-row').filter({ hasText: 'Great selection.' }).locator('.sign-post-row-delete').click();
-await page.waitForFunction(() => document.querySelectorAll('.sign-post-row').length === 1, { timeout: 5000 });
+// #2635 (2nd waitForFunction arg/options sweep): the real applied timeout
+// was always Playwright's dishonored 30000ms default, never 5000 -- 30000ms
+// here matches that previously-dishonored default so this can't regress.
+await page.waitForFunction(() => document.querySelectorAll('.sign-post-row').length === 1, null, { timeout: 30000 });
 const rowCountAfterDelete = await page.locator('.sign-post-row').count();
 console.log('rows shown after deleting one via the panel (should be 1):', rowCountAfterDelete);
 

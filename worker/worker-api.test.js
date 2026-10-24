@@ -2,7 +2,8 @@ import {
   applyD1Migrations, env, SELF, createExecutionContext, createScheduledController, waitOnExecutionContext,
 } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import worker, { cleanupUnreferencedModels } from './index.js';
+import worker from './index.js';
+import { cleanupUnreferencedModels } from './lib/models.js';
 import {
   api, extractSessionCookie, withSession, signup, signupBuilder, signupSeller, glbFile, signupAdmin,
   createGreenbeltLandletAs,

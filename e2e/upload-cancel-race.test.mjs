@@ -25,7 +25,14 @@ await page.fill('#upload-name', PRODUCT_NAME);
 await page.fill('#upload-price', '5');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, { timeout: 20000 });
+// #2639 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
+// arg, options) -- a bare (fn, { timeout }) call puts the options object in
+// the `arg` slot instead, so `options` stayed undefined and the real applied
+// timeout was always Playwright's actual default (30000ms), never the
+// smaller number written here. The explicit `null` arg reaches the options
+// slot, and the timeout itself is widened to 60000ms for real headroom under
+// CI load, same as this suite's other admin-dashboard-panel waits.
+await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 60000 });
 await page.waitForTimeout(300);
 
 // Delay the actual product-creation request so there's a real window to

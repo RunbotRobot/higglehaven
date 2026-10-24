@@ -2865,6 +2865,10 @@ role" under "Authorization model" above). Updates world settings. The
 current implementation merges request fields with the existing world
 settings before validation.
 
+Rate-limited to 20 attempts per 15-minute window, bucketed by the calling
+admin's own user id (#2657) — same generous-but-bounded-burst convention as
+every other admin mutation in this section.
+
 Request body example:
 
 ```json
@@ -2891,7 +2895,9 @@ Validation notes:
 
 ### `POST /api/world/expand`
 
-Requires a session logged in as an admin (`403` otherwise). This is the
+Requires a session logged in as an admin (`403` otherwise). Rate-limited to
+20 attempts per 15-minute window, bucketed by the calling admin's own user
+id (#2657). This is the
 manual/troubleshooting path now — see "Automatic world growth" above for
 the mechanism that calls it (well, its internals) day to day. Expands the
 circular world boundary by exactly one configured
@@ -2942,6 +2948,12 @@ Every mutating endpoint below requires a session logged in as an admin
 `generate-ring` specifically is also called internally (bypassing HTTP
 entirely, so no session applies) by the automatic world-growth job — see
 "Automatic world growth" under "World settings" above.
+
+Every mutating endpoint below is also rate-limited, bucketed by the calling
+admin's own user id, 15-minute fixed window (#2657) — see each endpoint
+below for its specific limit. The internal `generate-ring` call path above
+bypasses this too, same as it bypasses the session check, since there's no
+admin user id to bucket on outside an HTTP request.
 
 ### `POST /api/land-candidates/generate-mosaic`
 
@@ -2996,6 +3008,9 @@ data in `geo_biome_cells` (migrations/0149) when its center falls near a
 classified cell — `near_water`, `lowland`, `upland`, or `alpine` — rather
 than staying `null`. Same forward-generation-only scope as `landType`
 above, and never overwrites a `biome` a cell was already generated with.
+
+Rate-limited to 20 attempts per 15-minute window, bucketed by the calling
+admin's own user id (#2657).
 
 ### `POST /api/land-candidates/generate-ring`
 
@@ -3056,6 +3071,10 @@ plot's `biome` is set from real ingested `geo_biome_cells` data when its
 center falls near a classified cell, unless the plot was already generated
 with an explicit `biome` (never overwritten).
 
+Rate-limited to 20 attempts per 15-minute window, bucketed by the calling
+admin's own user id (#2657) — not applied to the internal auto-growth call
+path above, which has no admin user id to bucket on.
+
 ## Land candidate rings
 
 ### `GET /api/land-candidate-rings`
@@ -3104,7 +3123,10 @@ prefix instead of editing or removing one member of a reserved band.
 
 Requires a session logged in as an admin (`403` otherwise) — also called
 internally, bypassing HTTP, by the automatic world-growth job (see
-"Automatic world growth" under "World settings" above). Marks every
+"Automatic world growth" under "World settings" above). Rate-limited to 20
+attempts per 15-minute window, bucketed by the calling admin's own user id
+(#2657) — like the session check, not applied to the internal call path,
+which has no admin user id to bucket on. Marks every
 materialized landlet in a generated ring complete with one bounded
 D1 update. All candidates in the ring must already be materialized; otherwise
 the endpoint returns `409` without changing any landlet. The operation is
@@ -3159,6 +3181,9 @@ correcting or replacing queued procedural-generation output before the world
 circle reaches it. Materialized candidates already have a corresponding
 generating landlet and return `409` instead of deleting either record.
 
+Rate-limited to 20 attempts per 15-minute window, bucketed by the calling
+admin's own user id (#2657).
+
 Response:
 
 ```json
@@ -3180,6 +3205,9 @@ landlet.
 As with candidate creation, moving or reshaping a pending candidate so it now
 overlaps the current world circle immediately materializes it. The response
 contains both `candidate` and `landlet`; `landlet` is null if it remains queued.
+
+Rate-limited to 20 attempts per 15-minute window, bucketed by the calling
+admin's own user id (#2657).
 
 ### `POST /api/land-candidates`
 
@@ -3212,6 +3240,11 @@ candidate with no explicit `polygon` is treated as a circle of radius
 (`landletMinWorldRadius`/`landletMaxWorldRadius`) already reads such a row —
 not an unchecked zero-area point.
 
+Rate-limited to 30 attempts per 15-minute window, bucketed by the calling
+admin's own user id (#2657) — higher than this section's other buckets
+since `worker/worker-api.test.js`'s own land-candidate test suite exercises
+this specific endpoint most heavily.
+
 ### `POST /api/land-candidates/batch`
 
 Atomically queues between 1 and 100 candidates for efficient world-generation
@@ -3243,6 +3276,9 @@ single-create endpoint above — checked against existing land *and* against
 the other candidates in the same batch request, since a manually-submitted
 batch (unlike `generate-mosaic`'s own output) isn't guaranteed internally
 non-overlapping.
+
+Rate-limited to 20 attempts per 15-minute window, bucketed by the calling
+admin's own user id (#2657).
 
 ## Landlets
 
@@ -3437,9 +3473,11 @@ Returns the newly claimed landlet. Errors are:
 ### `POST /api/landlets/:landletId/reassign-owner`
 
 Admin-only (`403` without an admin session — see "Admin role" under
-"Authorization model" above). Moves a **currently claimed** landlet
-directly to a different builder, bypassing the normal claim/auction flow
-(#1177) — e.g. to correct a mistaken claim or handle a support request.
+"Authorization model" above). Rate-limited to 20 attempts per 15-minute
+window, bucketed by the calling admin's own user id (#2669). Moves a
+**currently claimed** landlet directly to a different builder, bypassing
+the normal claim/auction flow (#1177) — e.g. to correct a mistaken claim
+or handle a support request.
 Request body: `{ "ownerBuilderId": "<target builder id>", "cancelActiveAuction"?: boolean }`.
 
 An **active auction on the landlet blocks the reassignment** by default
@@ -3514,9 +3552,11 @@ Errors are:
 ### `POST /api/landlets/:landletId/generation-complete`
 
 Admin-only (`401`/`403` otherwise) — same as its ring-level sibling,
-`POST /api/land-candidate-rings/:ringId/generation-complete`. Records that
-asynchronous generation work has completed. The endpoint is idempotent:
-retries return the existing landlet once `generatedAt` is set.
+`POST /api/land-candidate-rings/:ringId/generation-complete`. Rate-limited
+to 20 attempts per 15-minute window, bucketed by the calling admin's own
+user id (#2669). Records that asynchronous generation work has completed.
+The endpoint is idempotent: retries return the existing landlet once
+`generatedAt` is set.
 
 Generation completion and geometric enclosure are independent requirements. If
 the world circle already fully encloses the landlet, completion immediately
@@ -8725,7 +8765,11 @@ the built-in catalog:
   `model_url` **or** `image_url` (#774), so a live product thumbnail is
   never treated as unreferenced. Set boolean `dryRun` to `true` to return the same proposed
   targets and reclaimed-byte total without deleting anything (including that
-  same final re-check); the response echoes `dryRun`.
+  same final re-check); the response echoes `dryRun`. Rate-limited to 20 calls
+  per 15 minutes per admin (`model-cleanup:<adminUserId>`, see "Rate limiting"
+  above) — #2668, matching the convention every other admin mutation in this
+  file already follows (this endpoint and the raw `DELETE /uploads/:key`
+  below were the two exceptions until then).
 - `GET /uploads/:key` — serves a previously-uploaded model's bytes back out of
   R2 (not the `ASSETS` static bundle, since only the built-in models ship as
   build assets). Responses are cached indefinitely (`immutable`) since upload
@@ -8749,7 +8793,9 @@ the built-in catalog:
   #1696); any of these five matching also returns `409`, not just a
   catalog-template reference. `GET`/`HEAD` above
   stay unauthenticated — serving an
-  immutable, content-addressed model back out is not a mutation.
+  immutable, content-addressed model back out is not a mutation. Rate-limited
+  to 20 calls per 15 minutes per admin (`uploaded-asset-delete:<adminUserId>`,
+  see "Rate limiting" above) — #2668.
 
 Both require an R2 binding named `MODELS` (see `wrangler.jsonc`).
 
@@ -9907,6 +9953,54 @@ Same shape as `GET /admin/control-room` just above: `requireAdmin`-gated
 `public/admin-action-log.html`, a small dependency-free same-origin page
 with the four filter fields above and a refresh button. No polling —
 this is a browse-on-demand audit trail, not a live-updating board.
+
+## Admin Dashboard (#1817): `GET /admin/dashboard`
+
+Owner, Control Room (2026-10-13): "I want to create a UI so I don't have
+to rely on any APIs." Before this, every `requireAdmin`-gated capability
+other than the Control Room board and the action log was DevTools-console
+`fetch()`-only. `GET /admin/dashboard` (`worker/index.js`, `requireAdmin`-
+gated the same way as the two admin pages above — a plain `401`/`403`
+HTML page otherwise, same-origin so the owner's ordinary `hh_session`
+admin cookie is sent automatically, no `CONTROL_ROOM_API_KEY`-style secret
+ever needed in browser JS) serves `public/admin-dashboard.html`, a single
+dependency-free page with one nav button per panel. Each panel lazy-loads
+its own `<script>` block only on first activation (not on page load), so
+an unopened panel never fires a fetch for no reason.
+
+Every panel is a thin UI wrapper around endpoints already documented
+elsewhere in this file — this section exists only to record that the page
+itself exists and which already-documented API(s) each panel calls, not
+to introduce new request/response shapes:
+
+- **Admin roster & access** (#1819) — `GET /api/auth/admins`,
+  `POST /api/auth/grant-admin`, and revoke-admin (see "Authorization
+  model" above for all three).
+- **R2 model storage** (#1820) — `GET /api/models`,
+  `GET /api/models/storage`, `POST /api/models/cleanup` (see "Custom
+  model uploads" above).
+- **World & land candidates** (#1821) — world settings, land-candidate
+  generate-mosaic/generate-ring, candidate CRUD/batch, and land-candidate
+  ring lookups (see the `land-candidates`/`land-candidate-rings`/`world`
+  sections above).
+- **Landlet overrides** (#1822) — force-complete a stuck generating
+  landlet, and reassign a claimed landlet's owner by hand.
+- **Tax / 1099 e-filing** (#1823) — `GET /api/tax/admin-forms` and its
+  `approve`/`file`/`void` siblings, plus the e-filing connection test (see
+  that section above).
+- **Purchases (admin fallback)** (#1824) — refund/mark-shipped for a
+  purchase whose seller has since deleted their account; ordinary
+  seller-initiated refund/ship has its own seller-facing UI and isn't
+  reachable from here.
+- **Trust & Safety flags** (#2178) — the counterfeit/policy flag queue
+  (#2017) and the self-dealing flag queue (#2019); see "Product flags"
+  and "Self-dealing flags" above.
+- **Account suspension** (#2299, endpoints themselves per #1201/#2029) —
+  suspend, unsuspend, and look up an account's current suspension status
+  (see "Account suspension" above).
+- **Test/Ops Fixtures** (#1826) — `POST /api/builders/:id/land-cap-grants`
+  and `/higgles-grants`, visually set apart with a "Test/Ops only — not a
+  real transaction" badge so neither ever reads as a genuine income event.
 
 ## Avatar ownership + equip endpoint (#680, sub-issue of #679/N53)
 
