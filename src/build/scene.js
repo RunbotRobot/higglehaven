@@ -1445,9 +1445,9 @@ function trimInputEl(axis) {
 }
 const snapToggleBtn = document.getElementById('toggle-snap');
 const copyBtn = document.getElementById('copy-item');
-// Community Sign/Calendar/Backup Chain buttons belong to main.js's own
-// metadata-modals code (#2560's own future territory, not yet extracted)
-// -- updateSelectionUI below needs to reflect their enabled/active state
+// Community Sign/Calendar/Backup Chain buttons belong to #2560's own
+// src/build/metadataModals.js -- updateSelectionUI below needs to reflect
+// their enabled/active state
 // off the current selection the same way it does for this module's own
 // gizmo buttons, so these are the same element re-queried locally rather
 // than threaded through as an export, same precedent as #2550's

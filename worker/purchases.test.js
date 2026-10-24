@@ -2,10 +2,9 @@ import {
   applyD1Migrations, env, SELF,
 } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import {
-  refundIdempotencyKey, claimPurchasesForPayout,
-} from './index.js';
+import { claimPurchasesForPayout } from './index.js';
 import { resolveFinalizeBuilderId } from './lib/purchase-creation.js';
+import { refundIdempotencyKey } from './lib/purchase-lifecycle.js';
 import {
   api, signupBuilder, signupSeller, signupAdmin,
 } from './test-helpers.js';

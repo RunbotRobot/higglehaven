@@ -72,8 +72,9 @@ import {
   SHOP_AVATAR_COLLISION_HALF_M, SHOP_AVATAR_HEAD_RADIUS_M, SHOP_AVATAR_TORSO_LENGTH_M,
   shopFlyBtn, shopFlyBtnIcon, shopLastLocationBtn, shopVerticalControlsEl,
   shopUpBtn, shopDownBtn, shopMoveJoystickEl, shopMoveKnobEl, shopLookJoystickEl, shopLookKnobEl,
-  updateConfettiBursts,
 } from '../main.js';
+// #2628: updateConfettiBursts now lives in src/shop/productCheckout.js.
+import { updateConfettiBursts } from './productCheckout.js';
 // #2625: shopDomeRiseM now lives in ./sky.js (this leaf's own
 // clampShopCameraHeight/updateShopFlight/shopAvatarFootprintCorners read
 // it directly — a plain exported `let` binding is a live reference, so a

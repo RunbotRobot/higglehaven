@@ -57,8 +57,14 @@ import {
   SHOP_IDLE_SWAY_PERIOD_MAX_S, SHOP_IDLE_SWAY_PERIOD_MIN_S, SHOP_SIT_ARM_ROTATION_RAD,
   SHOP_SIT_LEG_ROTATION_RAD,
   shopAvatarPosition, shopAvatarFacing,
-  disposeObject3D, reportRendererMemoryDiagnostic,
 } from '../main.js';
+// #2629: disposeObject3D/reportRendererMemoryDiagnostic now live in
+// src/shop/mode.js (a sibling-module, not reverse-, import) -- mode.js's
+// own enterShopMode in turn imports createShopAvatar/createCustomShopAvatar/
+// etc. from this module, same mutually-dependent shape
+// flightMovement.js's own header comment already documents for this
+// module and that one.
+import { disposeObject3D, reportRendererMemoryDiagnostic } from './mode.js';
 
 // #1587 (owner feedback): the original "AFK" label was a full-size
 // makeSignPostSprite — the same dark nameplate treatment used for

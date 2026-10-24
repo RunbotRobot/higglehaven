@@ -2053,6 +2053,33 @@ describe('Authentication', () => {
       expect(alreadySuspended.response.status).toBe(409);
     });
 
+    // #2708: reason/evidenceNote were otherwise unbounded, unlike every
+    // other moderation free-text field (e.g. worker/lib/reputation.js's
+    // product-flag reason) -- this reuses that same 280-char cap.
+    it('rejects a reason or evidenceNote over 280 characters, but accepts one at the limit (#2708)', async () => {
+      const admin = await makeAdmin('suspend-account-length-admin');
+      const target = await signupBuilder('suspend-account-length-target');
+      const tooLong = 'x'.repeat(281);
+      const atLimit = 'x'.repeat(280);
+
+      const reasonTooLong = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: tooLong }),
+      }));
+      expect(reasonTooLong.response.status).toBe(400);
+
+      const evidenceTooLong = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: 'harassment', evidenceNote: tooLong }),
+      }));
+      expect(evidenceTooLong.response.status).toBe(400);
+
+      const atLimitOk = await api('/auth/suspend-account', admin.session({
+        method: 'POST', body: JSON.stringify({ email: target.email, reason: atLimit, evidenceNote: atLimit }),
+      }));
+      expect(atLimitOk.response.status).toBe(200);
+      expect(atLimitOk.body.suspension.reason).toBe(atLimit);
+      expect(atLimitOk.body.suspension.evidenceNote).toBe(atLimit);
+    });
+
     // #2268: the same "never end up with zero admins and no way back short
     // of direct D1 access" invariant handleRevokeAdmin's own last-admin
     // guard enforces (see that test above) -- suspending the last admin is
@@ -2625,8 +2652,8 @@ describe('Authentication', () => {
   });
 
   // #556 (docs/SPEC.md §6): registration requires age attestation, and a
-  // fresh account starts at trust_tier 'none' until a credit card (or,
-  // once #589 lands, government-ID verification) raises it.
+  // fresh account starts at trust_tier 'none' until a credit card or
+  // government-ID verification (via Didit, #589) raises it.
   it('rejects signup without age attestation, and records the default trust tier', async () => {
     const unattested = await api('/auth/signup', {
       method: 'POST',

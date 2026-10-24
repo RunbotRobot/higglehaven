@@ -293,6 +293,27 @@ describe('GET /auth/export-data -- social section (#1986)', () => {
     expect(bobExport.body.social.notifications.some((n) => n.message.includes('sent you a message'))).toBe(true);
   });
 
+  it('does not exceed D1\'s bound-parameter cap when a builder has more than 100 distinct friendships (#2703)', async () => {
+    const alice = await signupBuilder('export-social-many-friends-alice');
+    const otherIds = [];
+    for (let i = 0; i < 101; i++) {
+      const otherId = `export-social-many-friends-other-${i}`;
+      otherIds.push(otherId);
+      await env.DB.prepare(
+        'INSERT INTO builders (builder_id, label) VALUES (?, ?)',
+      ).bind(otherId, `export-social-many-friends-other-${i}`).run();
+      await env.DB.prepare(
+        "INSERT INTO friendships (friendship_id, requester_builder_id, recipient_builder_id, status) VALUES (?, ?, ?, 'accepted')",
+      ).bind(`export-social-many-friends-${i}`, alice.builderId, otherId).run();
+    }
+
+    const aliceExport = await api('/auth/export-data', alice.session());
+    expect(aliceExport.response.status).toBe(200);
+    expect(aliceExport.body.social.friendships).toHaveLength(101);
+    expect(new Set(aliceExport.body.social.friendships.map((f) => f.otherBuilderId))).toEqual(new Set(otherIds));
+    expect(aliceExport.body.social.friendships.every((f) => f.otherLabel !== null)).toBe(true);
+  });
+
   it('includes a product review and seller feedback authored as the buyer, via the real purchase_id link', async () => {
     const buyer = await signupBuilder('export-social-buyer');
     const templateId = await createTemplate('export-social-template');

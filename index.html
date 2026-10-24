@@ -907,6 +907,23 @@
         border-radius: 50%;
         background: rgb(var(--pill-rgb) / 0.65);
       }
+      /* #2718 (sub-issue of #2715): "Submit Feedback" trigger. Same
+         right-hand stacked-pill shape #mode-nav (top: 10)/#compass-panel
+         (top: 86, 48px tall) above already use -- this continues that
+         stack one slot down (86 + 48 + 8 gap = 142). Shop-only (class
+         shop-ui, like #shop-fly-btn), hidden until src/shop/mode.js's
+         enterShopMode reveals it. */
+      #shop-feedback-btn {
+        top: 142px;
+        right: 8px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 12px/1.4 sans-serif;
+        cursor: pointer;
+      }
       .compass-label {
         position: absolute;
         color: var(--pill-text-soft);
@@ -1943,6 +1960,90 @@
         font: 14px/1.4 sans-serif;
         background: var(--brand-green);
         color: #16240a;
+      }
+      /* #2718 (sub-issue of #2715): "Submit Feedback" modal -- same shell
+         shape as #checkout-modal just above (fixed, centered, dimming
+         backdrop; a scrollable max-height so a small phone viewport never
+         clips the actions row below a tall screenshot preview). */
+      #feedback-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #feedback-modal.visible {
+        display: flex;
+      }
+      #feedback-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 90vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        box-sizing: border-box;
+      }
+      #feedback-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #feedback-screenshot-preview {
+        display: block;
+        width: 100%;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+      }
+      #feedback-description {
+        width: 100%;
+        min-height: 70px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: inherit;
+        font: inherit;
+        padding: 8px;
+        resize: vertical;
+        box-sizing: border-box;
+      }
+      #feedback-status {
+        font-size: 13px;
+        min-height: 18px;
+      }
+      #feedback-status.error {
+        color: #b3402c;
+      }
+      #feedback-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #feedback-submit-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      #feedback-cancel-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: inherit;
+        font: 14px/1.4 sans-serif;
       }
       #checkout-pay-btn:disabled {
         opacity: 0.5;
@@ -4220,6 +4321,11 @@
       <button id="shop-up-btn" type="button" aria-label="Fly up">&#9650;</button>
       <button id="shop-down-btn" type="button" aria-label="Fly down">&#9660;</button>
     </div>
+    <!-- #2718 (sub-issue of #2715): opens src/feedback/submitFeedbackUI.js's
+         own modal. Shop-only for now -- see that module's own comment on
+         why. Revealed (.visible added) by src/shop/mode.js's enterShopMode,
+         same moment as #shop-fly-btn/#shop-vertical-controls above. -->
+    <button id="shop-feedback-btn" class="shop-ui" type="button">Feedback</button>
     <div id="topbar-left">
       <div id="wordmark-panel">
         <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
@@ -4671,6 +4777,24 @@
           <button id="shop-product-preview-review-btn" type="button">Rate this Product</button>
           <button id="shop-product-preview-buy-btn" type="button">Simulate Purchase</button>
           <button id="shop-product-preview-return-policy-btn" type="button">Return Policy</button>
+        </div>
+      </div>
+    </div>
+    <!-- #2718 (sub-issue of #2715): src/feedback/submitFeedbackUI.js owns
+         every element below -- open/close, the screenshot capture, and the
+         submit flow to POST /api/feedback/bug-report (#2719). -->
+    <div id="feedback-modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div id="feedback-modal-content">
+        <button id="feedback-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2>Submit Feedback</h2>
+        <img id="feedback-screenshot-preview" alt="Screenshot of the current view" />
+        <label>Describe what happened (optional)
+          <textarea id="feedback-description" maxlength="1000" placeholder="What went wrong? The more detail, the better."></textarea>
+        </label>
+        <div id="feedback-status" role="status" aria-live="polite"></div>
+        <div id="feedback-modal-actions">
+          <button id="feedback-cancel-btn" type="button">Cancel</button>
+          <button id="feedback-submit-btn" type="button">Submit</button>
         </div>
       </div>
     </div>
