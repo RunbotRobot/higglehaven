@@ -45,7 +45,7 @@
 // in main.js.
 import * as THREE from 'three';
 import { landlet, createGroundTexture, normalizeGroundShapeUVs, disposeObject, disposeMaterialTextures } from '../world/models.js';
-import { scene, renderer, registerModeFrameUpdate, registerFacingOverride } from '../world/scene.js';
+import { scene, camera, renderer, registerModeFrameUpdate, registerFacingOverride } from '../world/scene.js';
 import { activeCatalog, setActiveCatalog } from '../world/state.js';
 import { authInitPromise, accountRecoveryFlowActive, currentAuthUser } from '../account/auth.js';
 import { ensureShopperIdentity } from '../account/identity.js';
@@ -67,7 +67,7 @@ import {
   shopStatusEl, shopMoveJoystickEl, shopLookJoystickEl, shopFlyBtn, shopVerticalControlsEl,
   shopSignHintEl, shopCalendarHintEl,
   SHOP_WALL_HEIGHT_M, SHOP_PLOT_COLORS, plotColorKeyForLandlet, shapeForLandlet, pointInPolygonXY,
-  shopAvatarFacing,
+  shopAvatarPosition, shopAvatarFacing,
   setShopActive, setShopWorldRadiusM, setShopDomeMesh,
   setShopEquippedAvatarSkeletonSignature, setShopLastLocation,
 } from '../main.js';
@@ -80,6 +80,7 @@ import { beginShopSpawn, updateShopMovement } from './flightMovement.js';
 import {
   shopDomeRiseM, resetShopDomeRiseM, paintVerticalGradient,
   SHOP_SKY_VERTEX_SHADER, SHOP_SKY_FRAGMENT_SHADER, initShopSkyMaterial, updateShopSky,
+  currentShopSkyTimeS,
 } from './sky.js';
 import {
   shopLandlets, pickShopSpawnLocation, setShopBuilderLabels, updateShopLandletInfo,
@@ -94,6 +95,7 @@ import {
   disposeSignSprites, disposeCalendarSprites, disposeReviewSprites,
 } from './worldSprites.js';
 import { closeShopProductPreviewModal, confettiBursts, disposeConfettiBurst } from './productCheckout.js';
+import { recordRenderStateSample } from '../feedback/renderStateBuffer.js';
 
 // small ground/wall seam overlap only — see wildGround below (enterShopMode)
 const SHOP_WALL_MARGIN_M = 1.5;
@@ -743,6 +745,20 @@ export async function enterShopMode() {
   registerModeFrameUpdate((now) => {
     updateShopMovement(now);
     updateShopSky(now);
+    // #2717: feed the render-state ring buffer (src/feedback/
+    // renderStateBuffer.js) a fresh snapshot every frame -- it throttles
+    // itself to ~1Hz internally (see that module's own comment), so it's
+    // cheap to call unconditionally here rather than this callback needing
+    // its own timer. "shop id" isn't included -- see that module's own
+    // comment on why (GET /api/world is a singleton; there's no id to
+    // capture yet).
+    recordRenderStateSample(now, {
+      cameraPosition: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
+      avatarPosition: { x: shopAvatarPosition.x, y: shopAvatarPosition.y, z: shopAvatarPosition.z },
+      avatarFacingRad: shopAvatarFacing,
+      uTime: currentShopSkyTimeS(),
+      worldRadiusM: shopWorldRadiusM,
+    });
   });
   registerFacingOverride(() => shopAvatarFacing);
 }
