@@ -2652,8 +2652,8 @@ describe('Authentication', () => {
   });
 
   // #556 (docs/SPEC.md §6): registration requires age attestation, and a
-  // fresh account starts at trust_tier 'none' until a credit card (or,
-  // once #589 lands, government-ID verification) raises it.
+  // fresh account starts at trust_tier 'none' until a credit card or
+  // government-ID verification (via Didit, #589) raises it.
   it('rejects signup without age attestation, and records the default trust tier', async () => {
     const unattested = await api('/auth/signup', {
       method: 'POST',
