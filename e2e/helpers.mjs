@@ -5,6 +5,57 @@
 // actually being verified" rather than repeating this boilerplate each time.
 import { chromium } from 'playwright';
 
+// #2728: a test file that throws an uncaught error (most often a
+// page.waitForSelector/waitForFunction that genuinely times out, with
+// nothing catching it) before reaching its own finish() call below never
+// calls browser.close(), which can leave the Playwright-launched browser's
+// connection open and the process sitting there instead of exiting. Since
+// run-all.mjs's execCapture runs each test file via a plain, timeout-less
+// execSync, a file stuck like this hangs the *entire* CI shard (every other
+// file queued behind it, too), not just itself — confirmed twice already
+// (shop-submit-feedback.test.mjs, shop-idle-sit-randomization.test.mjs, both
+// patched locally for PR #2725) before this systemic fix. Every e2e test
+// file imports from this module, and both of the two ways a test file gets
+// a browser — launchPage() below, or a file that calls chromium.launch()
+// itself (see e.g. admin-action-log-page.test.mjs) — go through this same
+// chromium object, so patching its launch() here once, process-wide, tracks
+// every browser any test file opens without needing to touch all ~190
+// individual test files. A multi-browser test (e.g.
+// multiplayer-presence.test.mjs) closes its extra browsers itself before
+// calling finish() with the last one; wrapping close() too keeps the set
+// accurate as each one is closed, manually or by finish().
+const activeBrowsers = new Set();
+const originalChromiumLaunch = chromium.launch.bind(chromium);
+chromium.launch = async (...args) => {
+  const browser = await originalChromiumLaunch(...args);
+  activeBrowsers.add(browser);
+  const originalClose = browser.close.bind(browser);
+  browser.close = async (...closeArgs) => {
+    activeBrowsers.delete(browser);
+    return originalClose(...closeArgs);
+  };
+  return browser;
+};
+
+// Registering these listeners is itself what matters here, independent of
+// exactly why a given uncaught error previously left the process hanging
+// instead of crashing outright: Node only skips its own default
+// crash-and-exit behavior once something is listening, so leaving these
+// unregistered is never safer. closes whatever browsers this process still
+// has open, then force-exits — the same cleanup finish() below does on the
+// success/expected-failure path, just reached from an unexpected one.
+async function emergencyShutdown(err, source) {
+  console.error(`e2e: ${source} before finish() — closing ${activeBrowsers.size} open browser(s) and exiting`, err);
+  for (const browser of activeBrowsers) {
+    try {
+      await browser.close();
+    } catch { /* best effort */ }
+  }
+  process.exit(1);
+}
+process.on('uncaughtException', (err) => emergencyShutdown(err, 'uncaught exception'));
+process.on('unhandledRejection', (err) => emergencyShutdown(err, 'unhandled rejection'));
+
 // Only overridden when PLAYWRIGHT_CHROMIUM_PATH is explicitly set — e.g. a
 // sandbox with a pre-installed, version-pinned browser at a nonstandard
 // path (skipping `playwright install`'s own download). Left unset,
