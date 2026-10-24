@@ -254,7 +254,7 @@ import {
 import {
   shopDomeRiseM, resetShopDomeRiseM,
   paintVerticalGradient, SHOP_SKY_VERTEX_SHADER, SHOP_SKY_FRAGMENT_SHADER,
-  initShopSkyMaterial, updateShopSky,
+  initShopSkyMaterial, updateShopSky, setShopSkyElapsedSecondsForTest,
 } from './shop/sky.js';
 // #2626 (leaf of #2563/#2504/#2500, depends on #2623/#2624 above): Shop
 // mode's proximity-driven landlet instance loading/LOD, multiplayer
@@ -3576,6 +3576,11 @@ window.__testShopAvatarPosition = () => ({ x: shopAvatarPosition.x, y: shopAvata
 window.__testForceShopProximityCheck = () => {
   positionShopCamera();
   updateShopProximity();
+};
+// #2716: see setShopSkyElapsedSecondsForTest's own comment. Always inert
+// unless a test calls it, same convention as every other window.__test* hook.
+window.__testSetShopSkyElapsedSeconds = (seconds) => {
+  setShopSkyElapsedSecondsForTest(performance.now(), seconds);
 };
 // #2378: read-only test hook reporting an instance's actual rendered LOD
 // state, rather than just entry.lod's own intended-state tracking -- reads

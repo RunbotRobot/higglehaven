@@ -333,7 +333,25 @@ export const SHOP_SKY_FRAGMENT_SHADER = `
     // contrast for a softer worst case everywhere, same direction as
     // #2450's own change and with the same confirmed-safe-to-widen
     // precedent noted below for apexFade.
-    float cloudMask = smoothstep(-0.6, 1.6, clouds);
+    //
+    // #2716 (owner report, 2026-10-21/22): a dark, hard-edged diagonal band
+    // appearing 20-40s after page load at normal incidence (grazeFade below
+    // doesn't apply there -- facing is ~1). The swirl/drift envelope terms
+    // above are bounded but keep growing in magnitude for the first ~150s
+    // (a quarter of their 600s cycle), so the noise-space neighborhood they
+    // sweep through keeps changing during that window -- plausibly wandering
+    // into a locally steeper patch of the (otherwise still-bounded) field at
+    // some point in that stretch, same "steep spot crosses a hard value
+    // threshold" shape every fix in this block already targets. Not
+    // independently confirmed on this sandbox's software renderer, which
+    // this issue's own investigation already found under-reproduces this
+    // artifact class relative to real GPU hardware (see the issue for the
+    // repro-harness details) -- widening further here is the same
+    // zero-regression-risk mitigation #2450/round-2 already established for
+    // this exact failure mode, not a newly-confirmed fix. A future session
+    // with real GPU access should re-verify directly against the owner's
+    // reported timing/camera setup.
+    float cloudMask = smoothstep(-1.0, 2.0, clouds);
     // Kept from before (#1204/#1585) as a modest extra safety margin right
     // at the literal pole specifically — on its own this barely moves the
     // result (confirmed: widening or disabling it entirely, independent of
@@ -433,6 +451,21 @@ export function updateShopSky(now) {
   if (!shopSkyMaterial) return;
   if (shopSkyClockStart === null) shopSkyClockStart = now;
   shopSkyMaterial.uniforms.uTime.value = (now - shopSkyClockStart) / 1000;
+}
+
+// #2716: lets a test (or a future investigation session with real GPU
+// access) jump the shared sky clock straight to a specific elapsed time --
+// e.g. the owner-reported artifact's own 20-40s window -- instead of
+// waiting on real wall-clock time or dilating requestAnimationFrame to get
+// there. Sets both uTime directly (so the very next render already reflects
+// it) and shopSkyClockStart (so a subsequent real updateShopSky(now) tick
+// continues advancing smoothly from this point rather than snapping back).
+// Always inert unless a test calls it, same convention as every other
+// window.__test* hook.
+export function setShopSkyElapsedSecondsForTest(now, elapsedSeconds) {
+  if (!shopSkyMaterial) return;
+  shopSkyClockStart = now - elapsedSeconds * 1000;
+  shopSkyMaterial.uniforms.uTime.value = elapsedSeconds;
 }
 
 // #2717: a read-only accessor so the render-state ring buffer (src/
