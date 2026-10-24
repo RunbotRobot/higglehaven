@@ -173,7 +173,12 @@ for (let i = 0; i < EPISODE_SAMPLES; i++) {
   // same recurring flake shape.
   // #2704: 120000ms timed out twice in a row under an even heavier CI
   // load night -- widened further to 180000ms.
-  await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'sit', null, { timeout: 180000 });
+  // #2724: 180000ms timed out again within hours -- the 4th escalation of
+  // the identical flake in under 36 hours. Repeated similar-sized bumps
+  // aren't converging, so this jumps straight to 300000ms (5 minutes),
+  // matching e2e/helpers.mjs's chooseIdentity wait (#2400), this suite's
+  // own established "generous ceiling" margin for the same reason.
+  await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'sit', null, { timeout: 300000 });
   const rightAfterSelection = await page.evaluate(() => window.__testShopSitPose());
   settleDelays.add(Math.round(rightAfterSelection.settleDelayS * 1000)); // ms, so float noise doesn't fracture the set
   if (rightAfterSelection.settleElapsedS < rightAfterSelection.settleDelayS && rightAfterSelection.blend === 0) {
