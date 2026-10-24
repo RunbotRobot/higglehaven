@@ -39,6 +39,14 @@ import {
   handleAdminBootstrap, handleGrantAdmin, handleRevokeAdmin, handleListAdmins, handleSuspendAccount,
   handleUnsuspendAccount, handleSuspensionStatus,
 } from './lib/account-moderation.js';
+// #1407 (sub-issue of #1404): the AI-made Stripe-reinstatement decision
+// flow -- see that module's own header comment for the full rubric and the
+// design decisions interpreting it. Creates the same kind of intentional,
+// safe circular import with this file that worker/lib/world-objects.js's
+// own comment above documents (requireBuilder/stripeAccountStatusJson/
+// requireSessionSeller are request-time-only reverse imports back from
+// here, never touched at module-eval time).
+import { handleStripeAccountFlag, handleStripeReinstatementRequest } from './lib/stripe-reinstatement.js';
 // #2539: world-object handlers (placed instances, backups, sign posts,
 // calendar events) -- see that module's own comment for why this creates
 // an intentional, safe circular import with this file.
@@ -1145,6 +1153,14 @@ async function handleBuilders(request, env, db, route, url) {
     return handleBuilderLowStock(request, db);
   }
 
+  // #1407: self-service AI-made Stripe-reinstatement decision, gated on a
+  // prior admin-recorded flag (stripe-account-flag above) and the
+  // owner-approved rubric -- see worker/lib/stripe-reinstatement.js's own
+  // header comment for the full rubric text and design decisions.
+  if (request.method === 'POST' && route.length === 3 && route[1] === 'me' && route[2] === 'stripe-reinstatement-request') {
+    return handleStripeReinstatementRequest(request, env, db, 'builder');
+  }
+
   if (request.method === 'GET' && route.length === 1) {
     await checkRateLimit(db, `builder-list:${clientIp(request)}`, BUILDER_LIST_RATE_LIMIT_MAX);
     const idsParam = url.searchParams.get('ids');
@@ -1447,6 +1463,13 @@ async function handleBuilders(request, env, db, route, url) {
     await adminActionLogStatement(db, admin.user_id, 'stripe_account_reset', 'builder', route[1], { previousAccountId }).run();
     const updated = await requireBuilder(db, route[1]);
     return json(stripeAccountStatusJson(env, updated));
+  }
+
+  // #1407: admin-recorded premise for the self-service reinstatement-
+  // request flow below -- see worker/lib/stripe-reinstatement.js's own
+  // header comment for the full rubric this gates.
+  if (request.method === 'POST' && route.length === 3 && route[2] === 'stripe-account-flag') {
+    return handleStripeAccountFlag(request, db, 'builder', route[1]);
   }
 
   return json({ error: 'Not found' }, 404);

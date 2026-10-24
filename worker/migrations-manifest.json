@@ -148,5 +148,6 @@
   "0148_landlet_biome.sql",
   "0149_geo_biome_cells.sql",
   "0150_relax_earnings_events_zero_amount.sql",
-  "0151_bug_reports.sql"
+  "0151_bug_reports.sql",
+  "0152_stripe_account_flags.sql"
 ]
