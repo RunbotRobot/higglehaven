@@ -3,12 +3,11 @@
 // WebGL/browser info, and the #2717 ring buffer, submitted via
 // src/api.js's submitFeedbackBugReport to POST /api/feedback/bug-report.
 //
-// #2719 (the Worker endpoint) hasn't landed as of this test, so a real
-// submit 404s -- this exercises that the UI surfaces that as an inline
-// error (src/feedback/submitFeedbackUI.js's own setFeedbackStatus) rather
-// than crashing, plus the screenshot-capture and close flows. Once #2719
-// lands, a follow-up test can assert against a real stored bug_reports
-// row instead.
+// #2719 (the Worker endpoint) has now landed, so a real submit succeeds --
+// exercises the screenshot-capture, success-status, and auto-close flow
+// end to end. The backend's own behavior (bug_reports row shape, R2
+// storage, auth) is covered directly by worker/feedback.test.js; this
+// test's own scope is the UI flow only.
 import { launchPage, chooseIdentity, finish } from './helpers.mjs';
 
 const LABEL = 'Feedback Suite Tester';
@@ -42,21 +41,32 @@ console.log('screenshot preview actually loaded a non-empty image (should be tru
 await page.fill('#feedback-description', 'Something looked wrong with the sky.');
 await page.click('#feedback-submit-btn');
 
-// #2719 hasn't landed yet -- expect the UI's own inline error path, not an
-// unhandled rejection/crash. This deliberately triggers a real 404 --
-// Chromium logs any non-2xx fetch response as "Failed to load resource"
-// independent of whether the app handled it gracefully, same reason
-// e2e/admin-dashboard-page.test.mjs/e2e/redeem-higgles-settings.test.mjs
-// and others already filter this out of their own errors.length === 0
-// check rather than avoiding the real error response.
-await page.waitForSelector('#feedback-status.error', { timeout: 10000 });
+// #2719 has landed -- a real submit now succeeds (201), so the UI's own
+// success path runs: setFeedbackStatus('Thanks! ...', false), then
+// handleFeedbackSubmit's setTimeout(closeFeedbackModal, 1200) auto-closes
+// the modal shortly after. Polls for the specific success text rather
+// than "#feedback-status:not(.error)" -- that compound selector already
+// matches the modal's own empty initial state (openFeedbackModal's
+// setFeedbackStatus('', false)) before the real submit even resolves, so
+// it would resolve immediately instead of actually waiting for it.
+await page.waitForFunction(
+  () => document.getElementById('feedback-status').textContent.includes('Thanks'),
+  null,
+  { timeout: 10000 },
+);
 const statusText = (await page.textContent('#feedback-status')) || '';
-console.log('feedback-status after submit (should be a friendly, non-empty error; #2719 not landed yet):', statusText);
+console.log('feedback-status after a real successful submit (should be a friendly thank-you):', statusText);
 
-await page.click('#feedback-close-btn');
+// Waits for the modal's own auto-close rather than clicking Close -- a
+// successful submit already schedules that 1.2s after the status above
+// appears, so clicking the button too could race its own disabled state.
+await page.waitForFunction(
+  () => !document.getElementById('feedback-modal').classList.contains('visible'),
+  null,
+  { timeout: 5000 },
+);
 const modalStillVisible = await page.locator('#feedback-modal.visible').count();
-console.log('modal closed after clicking close (should be 0):', modalStillVisible);
+console.log('modal auto-closed after a successful submit (should be 0):', modalStillVisible);
 
-const unexpectedErrors = errors.filter((e) => !e.includes('Failed to load resource'));
-const pass = previewLoaded && statusText.length > 0 && modalStillVisible === 0 && unexpectedErrors.length === 0;
-await finish(browser, { pass, label: 'shop-submit-feedback', errors: unexpectedErrors });
+const pass = previewLoaded && statusText.length > 0 && modalStillVisible === 0 && errors.length === 0;
+await finish(browser, { pass, label: 'shop-submit-feedback', errors });
