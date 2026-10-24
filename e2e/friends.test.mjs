@@ -18,13 +18,23 @@ const BOB = 'Friends Suite Bob';
 const CAROL = 'Friends Suite Carol';
 
 const aliceSession = await launchPage({ promptAnswer: ALICE });
-const bobSession = await launchPage({ promptAnswer: BOB });
-
 const alicePage = aliceSession.page;
-const bobPage = bobSession.page;
 
 await chooseIdentity(alicePage, { mode: 'build', label: ALICE, isNew: true });
 await claimLandlet(alicePage);
+
+// #2596: bob's browser used to launch up front, alongside alice's, before
+// either page had done anything -- a second full Chromium instance sitting
+// alive (navigated, rendering) through alice's own signup wait (the single
+// most CI-load-sensitive step in this file, see #2400's own comment on
+// chooseIdentity) added local resource contention of its own on top of
+// whatever fleet-wide load was already driving that wait close to its
+// 300000ms margin. Deferring bob's launch until alice's own setup is done
+// removes that one avoidable, local source of concurrent load without
+// touching the margin itself.
+const bobSession = await launchPage({ promptAnswer: BOB });
+const bobPage = bobSession.page;
+
 await chooseIdentity(bobPage, { mode: 'build', label: BOB, isNew: true });
 await claimLandlet(bobPage);
 
