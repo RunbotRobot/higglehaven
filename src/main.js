@@ -4425,26 +4425,32 @@ shopProductPreviewBuyBtn.addEventListener('click', handleShopProductBuyClick);
 // calls just above. The incoming avatar's own geometries/textures, though,
 // only get counted once the renderer actually draws them for the first
 // time (see this function's own comment above) — which hasn't happened yet
-// at this exact point in the call stack, only on the *next* animate() frame.
-// Reading renderer.info.memory immediately here caught that gap: the
-// outgoing avatar's resources already gone, the incoming one's not yet
-// counted, undercounting by exactly the incoming avatar's own geometry/
-// texture count until that next frame renders. Deferring the actual read to
-// the frame after this one (double rAF: the first just waits for the next
-// paint to be scheduled, the second runs after it's actually happened) closes
-// that gap without changing what's being measured. Returns a promise so
-// both call sites can await it — otherwise the async swap function they're
-// each the last line of would resolve (and its own caller would move on to
-// reading window.__rendererMemory) before the deferred write above ever
-// lands, trading the original undercount race for an equally real stale-read
-// one.
+// at this exact point in the call stack. Reading renderer.info.memory
+// immediately here caught that gap: the outgoing avatar's resources already
+// gone, the incoming one's not yet counted, undercounting by exactly the
+// incoming avatar's own geometry/texture count until some future render.
+//
+// #2690: an earlier fix here deferred the read via a double
+// requestAnimationFrame, betting that the app's own animate() loop
+// (world/scene.js) would render the new avatar somewhere in that two-frame
+// gap. It usually does, but nothing actually guarantees the ordering: this
+// function's own first rAF callback and animate()'s next-frame callback
+// race each other to be *registered* first, and under enough CI load/jitter
+// that race can go either way, occasionally leaving the incoming avatar's
+// geometries/textures still one frame short of being drawn (and therefore
+// counted) by the time the second callback reads renderer.info.memory —
+// the "13 vs baseline 15" mismatch e2e/avatar-picker-settings.test.mjs
+// caught. Rendering synchronously right here sidesteps the race instead of
+// betting on it: the scene graph is already fully updated by this point in
+// every call site (right after scene.add()), so this render call counts
+// the incoming avatar's resources immediately and deterministically,
+// without waiting on — or racing — the next animate() frame at all. Still
+// returns a (resolved) promise so both call sites' existing `await` keeps
+// working unchanged.
 export function reportRendererMemoryDiagnostic() {
-  return new Promise((resolve) => {
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      window.__rendererMemory = { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures };
-      resolve();
-    }));
-  });
+  renderer.render(scene, camera);
+  window.__rendererMemory = { geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures };
+  return Promise.resolve();
 }
 // #1591: same counts as window.__rendererMemory above, but read on demand
 // rather than only at whichever moment refreshEquippedShopAvatar/
