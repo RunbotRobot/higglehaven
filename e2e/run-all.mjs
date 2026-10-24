@@ -57,17 +57,40 @@ function sh(cmd) {
 // stdout at the shell level, so the two interleave in their real
 // chronological order rather than arriving as two separately-ordered
 // buffers.
-function execCapture(cmd) {
+// #2728: defense-in-depth alongside helpers.mjs's own emergencyShutdown —
+// that fix makes a test file itself close its browser and exit on an
+// uncaught error, but this timeout is what bounds the damage if some other,
+// not-yet-seen way for a file to hang ever turns up: without it, a stuck
+// child here has hung the *entire* shard indefinitely (every other file
+// queued behind it too) rather than just failing the one file, since this
+// execSync previously had no timeout at all. 10 minutes comfortably clears
+// every real test file's actual runtime (including the slowest individual
+// waits this suite uses, e.g. the 300000ms signup-under-load margin in
+// chooseIdentity) while still bounding a genuine hang to a single-digit
+// number of minutes instead of CI's own multi-hour job ceiling.
+const TEST_FILE_TIMEOUT_MS = 10 * 60 * 1000;
+
+function execCapture(cmd, timeoutMs) {
   try {
     // Node's own default maxBuffer (1MB) is comfortably under a single
     // file's typical output but not a guaranteed ceiling (the migration
     // table alone is tens of KB) — raised well above anything one file is
     // expected to print, so a verbose file gets ERR_CHILD_PROCESS_STDIO_
     // MAXBUFFER instead of this capture silently losing the real failure.
-    const output = execSync(`${cmd} 2>&1`, { cwd: repoRoot, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024 });
+    const output = execSync(`${cmd} 2>&1`, {
+      cwd: repoRoot, encoding: 'utf8', maxBuffer: 20 * 1024 * 1024, ...(timeoutMs ? { timeout: timeoutMs } : {}),
+    });
     return { output, failed: false };
   } catch (err) {
-    return { output: typeof err.stdout === 'string' ? err.stdout : '', failed: true };
+    const output = typeof err.stdout === 'string' ? err.stdout : '';
+    // execSync's own timeout kills the child (SIGTERM, err.killed === true)
+    // rather than the child exiting on its own — flagged explicitly so this
+    // reads as "still hung after Nms" rather than an ordinary assertion
+    // failure when skimming a failing file's captured output.
+    const timeoutNote = err.killed && timeoutMs
+      ? `\n[run-all.mjs] killed after exceeding its ${timeoutMs}ms timeout — likely hung rather than failed normally\n`
+      : '';
+    return { output: output + timeoutNote, failed: true };
   }
 }
 
@@ -136,7 +159,7 @@ async function runOneTest(testFile) {
   let passed = false;
   try {
     await waitForServer();
-    const testResult = execCapture(`node ${JSON.stringify(path.join(__dirname, testFile))}`);
+    const testResult = execCapture(`node ${JSON.stringify(path.join(__dirname, testFile))}`, TEST_FILE_TIMEOUT_MS);
     log += testResult.output;
     passed = !testResult.failed;
     if (!passed) log += `\nFAILED: ${testFile}\n`;
