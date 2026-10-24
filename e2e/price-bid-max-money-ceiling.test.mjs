@@ -22,7 +22,6 @@ const PRODUCT_NAME = 'Ceiling Test Crate';
 
 const sellerSession = await launchPage({ promptAnswer: SELLER });
 const bidderSession = await launchPage({ promptAnswer: BIDDER });
-const errors = [...sellerSession.errors, ...bidderSession.errors];
 const sellerPage = sellerSession.page;
 const bidderPage = bidderSession.page;
 
@@ -135,6 +134,10 @@ const placeBidOverCapAlertOk = lastAlertMessage === 'Enter a bid of $1,000,000.0
 
 await bidderSession.browser.close();
 
+// Assembled here, after every interaction has happened, rather than at
+// launch time -- #2735: a spread copy taken right after launchPage() would
+// freeze on the still-empty source arrays and never see a real error.
+const errors = [...sellerSession.errors, ...bidderSession.errors];
 const pass = uploadOverCapStatus.includes('$1,000,000') && !uploadOverCapStatus.includes('must be a non-negative integer') &&
   uploadModalStillOpen === 1 &&
   editPriceOverCapStatus.includes('$1,000,000') &&

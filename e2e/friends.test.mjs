@@ -34,7 +34,6 @@ await claimLandlet(alicePage);
 // touching the margin itself.
 const bobSession = await launchPage({ promptAnswer: BOB });
 const bobPage = bobSession.page;
-const errors = [...aliceSession.errors, ...bobSession.errors];
 
 await chooseIdentity(bobPage, { mode: 'build', label: BOB, isNew: true });
 await claimLandlet(bobPage);
@@ -160,6 +159,10 @@ console.log('Alice has no friendship record with Carol after the cancel (should 
 // /builders by an exact, case-insensitive label match" tests, which seed
 // the duplicate directly via env.DB.
 
+// Assembled here, after every interaction has happened, rather than at
+// launch time -- #2735: a spread copy taken right after launchPage() would
+// freeze on the still-empty source arrays and never see a real error.
+const errors = [...aliceSession.errors, ...bobSession.errors];
 const pass = aliceOutgoingCount === 1 &&
   bobIncomingText.includes(ALICE) &&
   bobAcceptedText.includes(ALICE) &&

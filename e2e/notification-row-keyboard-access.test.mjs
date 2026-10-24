@@ -16,7 +16,6 @@ const BOB = 'Notification Keyboard Suite Bob';
 
 const aliceSession = await launchPage({ promptAnswer: ALICE });
 const bobSession = await launchPage({ promptAnswer: BOB });
-const errors = [...aliceSession.errors, ...bobSession.errors];
 
 const alicePage = aliceSession.page;
 const bobPage = bobSession.page;
@@ -87,6 +86,10 @@ const roleAfterAttrs = await notificationRow().evaluate((el) => ({
 }));
 console.log('role/tabindex removed once read, matching the click path\'s own listener cleanup:', roleAfterAttrs);
 
+// Assembled here, after every interaction has happened, rather than at
+// launch time -- #2735: a spread copy taken right after launchPage() would
+// freeze on the still-empty source arrays and never see a real error.
+const errors = [...aliceSession.errors, ...bobSession.errors];
 const unexpectedErrors = errors;
 const pass = roleBeforeAttrs.role === 'button' &&
   roleBeforeAttrs.tabindex === '0' &&

@@ -18,7 +18,6 @@ const BIDDER = 'Auction Bidder';
 
 const sellerSession = await launchPage({ promptAnswer: SELLER });
 const bidderSession = await launchPage({ promptAnswer: BIDDER });
-const errors = [...sellerSession.errors, ...bidderSession.errors];
 
 // --- Seller: claim a landlet, start an auction with a custom starting bid. ---
 const sellerPage = sellerSession.page;
@@ -287,6 +286,18 @@ await sellerPage.waitForSelector('.auction-start-form', { timeout: 10000 });
 const secondLandletFormVisible = await sellerPage.locator('.auction-start-form').count();
 console.log('second (unauctioned) landlet shows its own start form once selected (should be 1):', secondLandletFormVisible);
 
+// Assembled here, after every interaction has happened, rather than at
+// launch time -- #2735: a spread copy taken right after launchPage() would
+// freeze on the still-empty source arrays and never see a real error.
+// #2735 follow-up: the deliberate route.abort('failed') above (simulating a
+// genuine network failure on purpose, to exercise the bid-history toggle's
+// own error-note branch) makes Chromium log a real "Failed to load
+// resource: net::ERR_FAILED" console error independent of this page's own
+// handling -- the same established, expected side effect
+// admin-dashboard-landlet-panel-auction-conflict-cents.test.mjs and others
+// already filter for their own deliberate non-2xx responses.
+const errors = [...sellerSession.errors, ...bidderSession.errors]
+  .filter((e) => !e.includes('net::ERR_FAILED'));
 const pass = sellerOwnAuctionText.includes('Your auction is live') && sellerOwnAuctionText.includes('$10.00') &&
   startFormGoneAfterStarting === 0 &&
   bidderOwnStartFormVisible === 1 &&

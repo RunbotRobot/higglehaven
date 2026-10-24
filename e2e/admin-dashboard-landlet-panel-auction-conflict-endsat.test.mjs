@@ -27,7 +27,6 @@ await createGreenbeltLandletAsAdmin(LANDLET_ID);
 
 const sellerSession = await launchPage({ promptAnswer: 'Conflict EndsAt Seller' });
 const otherSession = await launchPage({ promptAnswer: 'Conflict EndsAt Other' });
-const errors = [...sellerSession.errors, ...otherSession.errors];
 
 const sellerPage = sellerSession.page;
 await chooseIdentity(sellerPage, { mode: 'build', label: 'Conflict EndsAt Seller', isNew: true });
@@ -64,8 +63,9 @@ const [, token] = sessionCookie.split('=');
 
 const browser = sellerSession.browser;
 const adminPage = await browser.newPage();
-adminPage.on('pageerror', (err) => errors.push(err.message));
-adminPage.on('console', (msg) => { if (msg.type() === 'error') errors.push(msg.text()); });
+const adminErrors = [];
+adminPage.on('pageerror', (err) => adminErrors.push(err.message));
+adminPage.on('console', (msg) => { if (msg.type() === 'error') adminErrors.push(msg.text()); });
 await adminPage.context().addCookies([{ name: 'hh_session', value: token, url: BASE_URL }]);
 
 await adminPage.goto(`${BASE_URL}/admin/dashboard`, { waitUntil: 'networkidle' });
@@ -92,7 +92,14 @@ console.log('auction conflict details text:', auctionDetailsText.trim());
 // Chromium log a "Failed to load resource: 409" console error independent
 // of this page's own handling -- the same established, expected side
 // effect admin-dashboard-accounts-panel.test.mjs and others already filter.
-errors.splice(0, errors.length, ...errors.filter((e) => !e.includes('Failed to load resource')));
+// Assembled here, after every interaction has happened, rather than at
+// launch time -- #2735: a spread copy taken right after launchPage() would
+// freeze on the still-empty source arrays and never see a real error.
+const errors = [
+  ...sellerSession.errors,
+  ...otherSession.errors,
+  ...adminErrors.filter((e) => !e.includes('Failed to load resource')),
+];
 
 // The admin page and this test script run in the same container, so
 // formatting the same raw instant the same way (`toLocaleString()`) in

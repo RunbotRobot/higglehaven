@@ -22,7 +22,6 @@ const BOB = 'DM Gating Suite Bob';
 
 const aliceSession = await launchPage({ promptAnswer: ALICE });
 const bobSession = await launchPage({ promptAnswer: BOB });
-const errors = [...aliceSession.errors, ...bobSession.errors];
 
 const alicePage = aliceSession.page;
 const bobPage = bobSession.page;
@@ -85,6 +84,16 @@ const directSendAttempt = await alicePage.evaluate(async () => {
 });
 console.log('Direct POST /api/direct-messages status for a credit-card-only (not id_verified) sender (should be 403):', directSendAttempt.status, directSendAttempt.body);
 
+// The deliberate 403 above (triggering the id_verified gate on purpose, via
+// a real fetch rather than the correctly-absent button) makes Chromium log
+// a "Failed to load resource: 403" console error independent of this page's
+// own handling -- the same established, expected side effect
+// admin-dashboard-landlet-panel-auction-conflict-cents.test.mjs and others
+// already filter. #2735's fix (assembling `errors` here, after every
+// interaction, instead of at launch time) is what first made this real but
+// previously-invisible noise show up at all.
+const errors = [...aliceSession.errors, ...bobSession.errors]
+  .filter((e) => !e.includes('Failed to load resource'));
 const pass =
   bobAcceptedRowText.includes(ALICE) &&
   bobMessageBtnCount === 0 &&

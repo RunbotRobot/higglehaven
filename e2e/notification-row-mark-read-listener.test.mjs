@@ -21,7 +21,6 @@ const BOB = 'Notification Listener Suite Bob';
 
 const aliceSession = await launchPage({ promptAnswer: ALICE });
 const bobSession = await launchPage({ promptAnswer: BOB });
-const errors = [...aliceSession.errors, ...bobSession.errors];
 
 const alicePage = aliceSession.page;
 const bobPage = bobSession.page;
@@ -89,6 +88,10 @@ await notificationRow().click();
 await bobPage.waitForTimeout(500);
 console.log('mark-read PATCH requests sent after a second click on the already-read row (should still be 1):', markReadRequestCount);
 
+// Assembled here, after every interaction has happened, rather than at
+// launch time -- #2735: a spread copy taken right after launchPage() would
+// freeze on the still-empty source arrays and never see a real error.
+const errors = [...aliceSession.errors, ...bobSession.errors];
 const pass = unreadCountBefore === 1 &&
   markReadRequestCount === 1 &&
   errors.length === 0;

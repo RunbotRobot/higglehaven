@@ -39,7 +39,6 @@ const LANDLET_ID = 'presence-suite-landlet';
 
 const sessionA = await launchPage({ promptAnswer: LABEL_A });
 const sessionB = await launchPage({ promptAnswer: LABEL_B });
-const errors = [...sessionA.errors, ...sessionB.errors];
 const pageA = sessionA.page;
 const pageB = sessionB.page;
 
@@ -185,6 +184,10 @@ const aEntryInB = aOthersSeenByB?.find((a) => a.builderId === builderA.builderId
 // hardcoded (0,0) — see this file's own header comment for why.
 const near = (a, b) => typeof a === 'number' && typeof b === 'number' && Math.abs(a - b) < 0.5;
 
+// Assembled here, after every interaction has happened, rather than at
+// launch time -- #2735: a spread copy taken right after launchPage() would
+// freeze on the still-empty source arrays and never see a real error.
+const errors = [...sessionA.errors, ...sessionB.errors];
 const pass =
   landletCreated.status === 201 &&
   !!aRowSeenByB && !!bRowSeenByA &&

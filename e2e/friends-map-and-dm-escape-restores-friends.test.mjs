@@ -21,7 +21,6 @@ const BOB = 'Escape Restore Suite Bob';
 
 const aliceSession = await launchPage({ promptAnswer: ALICE });
 const bobSession = await launchPage({ promptAnswer: BOB });
-const errors = [...aliceSession.errors, ...bobSession.errors];
 
 const alicePage = aliceSession.page;
 const bobPage = bobSession.page;
@@ -95,6 +94,19 @@ console.log('Friends modal restored after Escape on the DM thread (should be tru
 
 await alicePage.unroute('**/api/auth/me');
 
+// Assembled here, after every interaction has happened, rather than at
+// launch time -- #2735: a spread copy taken right after launchPage() would
+// freeze on the still-empty source arrays and never see a real error.
+// #2735 follow-up: the /api/auth/me mock above only fakes id_verified on
+// the client, same as dm-badge.test.mjs's own comment explains -- the real
+// backend never learns Alice is id_verified, so every DM API call her page
+// makes (opening the thread, polling, etc.) gets a real 403, which Chromium
+// logs as "Failed to load resource" independent of the app's own handling.
+// Same established, expected side effect the admin-dashboard-landlet-
+// panel-auction-conflict-* files already filter for their own deliberate
+// non-2xx responses.
+const errors = [...aliceSession.errors, ...bobSession.errors]
+  .filter((e) => !e.includes('Failed to load resource'));
 const pass =
   mapClosedByEscape &&
   friendsRestoredAfterMapEscape &&
