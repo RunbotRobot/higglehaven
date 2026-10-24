@@ -84,10 +84,16 @@ const directSendAttempt = await alicePage.evaluate(async () => {
 });
 console.log('Direct POST /api/direct-messages status for a credit-card-only (not id_verified) sender (should be 403):', directSendAttempt.status, directSendAttempt.body);
 
-// Assembled here, after every interaction has happened, rather than at
-// launch time -- #2735: a spread copy taken right after launchPage() would
-// freeze on the still-empty source arrays and never see a real error.
-const errors = [...aliceSession.errors, ...bobSession.errors];
+// The deliberate 403 above (triggering the id_verified gate on purpose, via
+// a real fetch rather than the correctly-absent button) makes Chromium log
+// a "Failed to load resource: 403" console error independent of this page's
+// own handling -- the same established, expected side effect
+// admin-dashboard-landlet-panel-auction-conflict-cents.test.mjs and others
+// already filter. #2735's fix (assembling `errors` here, after every
+// interaction, instead of at launch time) is what first made this real but
+// previously-invisible noise show up at all.
+const errors = [...aliceSession.errors, ...bobSession.errors]
+  .filter((e) => !e.includes('Failed to load resource'));
 const pass =
   bobAcceptedRowText.includes(ALICE) &&
   bobMessageBtnCount === 0 &&
