@@ -140,6 +140,67 @@ describe('POST /api/feedback/bug-report', () => {
   });
 });
 
+describe('POST /api/feedback/bug-report surfaces a Control Room card (#2720)', () => {
+  async function controlRoomTaskFor(reportId) {
+    const uuid = reportId.slice('report-'.length);
+    return env.DB.prepare('SELECT * FROM control_room_tasks WHERE task_id = ?').bind(`bug-report-${uuid}`).first();
+  }
+
+  it('writes a kind: bug-report control_room_tasks row in the same request', async () => {
+    const response = await postBugReport();
+    const body = await response.json();
+    expect(response.status).toBe(201);
+
+    const task = await controlRoomTaskFor(body.reportId);
+    expect(task).toBeTruthy();
+    expect(task.kind).toBe('bug-report');
+    expect(task.title).toBe('Something looked wrong');
+    expect(task.status).toBe('queued');
+    expect(task.session).toBe('');
+    expect(task.posted_by).toBe('bug-report');
+    expect(task.image_url).toBe(`/api/feedback/bug-reports/${body.reportId}/screenshot`);
+    expect(task.note).toContain('ANGLE (NVIDIA, NVIDIA GeForce RTX)');
+    expect(task.note).toContain('Google Inc.');
+    expect(task.note).toContain('test-agent/1.0');
+    expect(task.note).toContain('TestOS');
+    expect(task.note).toContain('"t": 0');
+    expect(task.note_updated_at).toBeTruthy();
+    expect(task.note_author).toBe('bug-report');
+    expect(task.note_number).toBeGreaterThan(0);
+  });
+
+  it('defaults the card title when no description was given', async () => {
+    const response = await postBugReport({ metadata: metadataFor({ description: undefined }) });
+    const body = await response.json();
+    const task = await controlRoomTaskFor(body.reportId);
+    expect(task.title).toBe('Bug report (no description)');
+  });
+
+  it('leaves the card image_url null when no screenshot was submitted', async () => {
+    const response = await postBugReport({ screenshot: null });
+    const body = await response.json();
+    const task = await controlRoomTaskFor(body.reportId);
+    expect(task.image_url).toBeNull();
+  });
+
+  it('assigns each bug-report card the next sequential note_number', async () => {
+    const first = await (await postBugReport()).json();
+    const second = await (await postBugReport()).json();
+    const firstTask = await controlRoomTaskFor(first.reportId);
+    const secondTask = await controlRoomTaskFor(second.reportId);
+    expect(secondTask.note_number).toBe(firstTask.note_number + 1);
+  });
+
+  it('is retrievable through the Control Room API like any other task', async () => {
+    const posted = await (await postBugReport()).json();
+    const uuid = posted.reportId.slice('report-'.length);
+    const { response, body } = await api(`/control-room/tasks/bug-report-${uuid}`, adminSession());
+    expect(response.status).toBe(200);
+    expect(body.task.kind).toBe('bug-report');
+    expect(body.task.status).toBe('queued');
+  });
+});
+
 describe('GET /api/feedback/bug-reports/:reportId/screenshot', () => {
   it('serves the stored screenshot to an admin', async () => {
     const created = await (await postBugReport({ screenshot: screenshotFile(32) })).json();

@@ -12,6 +12,55 @@ import { currentUser, requireAdmin } from './auth.js';
 import { checkRateLimit } from './rate-limit.js';
 import { formatBytes } from './storage.js';
 
+// #2720 (sub-issue of #2715, the last of the four -- #2717/#2718/#2719 all
+// already merged): "surface submitted bug reports in the Control Room as a
+// new task kind." A `bug_reports` row by itself was invisible to the
+// fleet's existing triage flow (docs/API.md's own "Not yet built" note on
+// this) -- every other source of Control Room work (a GitHub issue/PR, an
+// owner note, a session's own feedback/question) lands as a
+// `control_room_tasks` row the instant it exists, so a bug report should
+// too, rather than requiring a separate D1 query nobody's going to
+// remember to run. This is a direct `control_room_tasks` write (same
+// `db.batch` transaction as the `bug_reports` insert below), not a round
+// trip through the validating `/api/control-room/tasks` HTTP API -- that
+// API's own required fields (`from`, `title`) exist to stop an external
+// caller from posting a malformed card; this endpoint is itself the
+// trusted, same-process caller writing on a submitter's behalf, the same
+// trust boundary every other direct `db.prepare`/`db.batch` call in this
+// file already uses for `bug_reports` itself.
+const CONTROL_ROOM_BUG_REPORT_POSTED_BY = 'bug-report';
+
+// #2720's own card needs the ring-buffer/WebGL context inline (so a
+// session triaging the board can act on a report "without needing
+// separate D1/R2 lookups" per the issue's own wording) -- `note` is the
+// board's existing free-text write-up field (rendered in the card's own
+// thread once expanded, same as a session's own progress note), so this
+// formats the informational fields #2718 already captures into one
+// readable block rather than inventing new control_room_tasks columns for
+// a single kind. Bounded to the same 20,000-character cap
+// controlRoomTextValue enforces for every other `note` write (this one
+// bypasses that validation, being a direct write, but a renderStateBuffer
+// of unbounded size from a malformed/malicious client shouldn't be able to
+// blow up this row the same way MAX_METADATA_JSON_BYTES above already
+// guards the request itself).
+const CONTROL_ROOM_NOTE_MAX_LENGTH = 20000;
+function bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platform, submittedAt, renderStateBuffer }) {
+  const lines = [];
+  if (webglRenderer || webglVendor) {
+    lines.push(`WebGL renderer: ${webglRenderer || '(unknown)'}${webglVendor ? ` (${webglVendor})` : ''}`);
+  }
+  if (userAgent) lines.push(`User agent: ${userAgent}`);
+  if (platform) lines.push(`Platform: ${platform}`);
+  if (submittedAt) lines.push(`Submitted: ${submittedAt}`);
+  lines.push(`Render-state buffer (${renderStateBuffer.length} sample${renderStateBuffer.length === 1 ? '' : 's'}, ~1Hz, camera/avatar state + shader uniforms):`);
+  lines.push(JSON.stringify(renderStateBuffer, null, 2));
+  let note = lines.join('\n');
+  if (note.length > CONTROL_ROOM_NOTE_MAX_LENGTH) {
+    note = `${note.slice(0, CONTROL_ROOM_NOTE_MAX_LENGTH - 1)}…`;
+  }
+  return note;
+}
+
 // Generous ceiling above a typical canvas.toBlob('image/png') capture of a
 // single browser viewport (well under 1MB for most window sizes) -- same
 // "reject an accidentally-huge upload before it reaches R2" reasoning as
@@ -134,15 +183,42 @@ export async function handleFeedbackBugReportCreate(request, env, db) {
     screenshotUrl = `/api/feedback/bug-reports/${reportId}/screenshot`;
   }
 
-  await db.prepare(`
-    INSERT INTO bug_reports (
-      report_id, user_id, screenshot_url, description, webgl_renderer, webgl_vendor,
-      user_agent, platform, render_state_buffer_json, submitted_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).bind(
-    reportId, user?.user_id ?? null, screenshotUrl, description, webglRenderer, webglVendor,
-    userAgent, platform, JSON.stringify(renderStateBuffer), submittedAt,
-  ).run();
+  // #2720: the Control Room card this report also becomes, in the SAME
+  // atomic write as the bug_reports row below -- no window where a report
+  // exists in one table but not the other. `bug-report-<uuid>` (not
+  // `report-<uuid>`, this row's own reportId) keeps the two ids visually
+  // distinct while still pairing them 1:1 via the shared uuid, matching
+  // this board's existing id-prefix convention (issue-N/pr-N/feedback-id).
+  const controlRoomTaskId = `bug-report-${reportId.slice('report-'.length)}`;
+  const now = new Date().toISOString();
+  const controlRoomTitle = description || 'Bug report (no description)';
+  const controlRoomNote = bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platform, submittedAt, renderStateBuffer });
+
+  await db.batch([
+    db.prepare(`
+      INSERT INTO bug_reports (
+        report_id, user_id, screenshot_url, description, webgl_renderer, webgl_vendor,
+        user_agent, platform, render_state_buffer_json, submitted_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      reportId, user?.user_id ?? null, screenshotUrl, description, webglRenderer, webglVendor,
+      userAgent, platform, JSON.stringify(renderStateBuffer), submittedAt,
+    ),
+    // Same sequential "N<n>" display numbering every other message-shaped
+    // (no GitHub issue/PR behind it) Control Room card already gets --
+    // see handleControlRoomTaskCreate's own autoAssignNoteNumber comment
+    // (worker/lib/control-room.js) for why a stable, referenceable id
+    // matters here, not just for feedback/question cards.
+    db.prepare(`
+      INSERT INTO control_room_tasks (
+        task_id, kind, note_number, title, status, session, posted_by,
+        note, note_updated_at, note_author, image_url, created_at, updated_at
+      ) VALUES (?, 'bug-report', (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      controlRoomTaskId, controlRoomTitle, CONTROL_ROOM_BUG_REPORT_POSTED_BY,
+      controlRoomNote, now, CONTROL_ROOM_BUG_REPORT_POSTED_BY, screenshotUrl, now, now,
+    ),
+  ]);
 
   return json({ reportId }, 201);
 }
