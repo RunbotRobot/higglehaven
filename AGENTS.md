@@ -14,6 +14,36 @@
 - Run `npm test`, `npm run build`, and `git diff --check`.
 - Commit each completed change.
 
+## Bug-report feedback capture: extend deliberately, prune deliberately
+
+The in-app "Submit Feedback" bug-report tool (#2715) captures a
+diagnostic payload alongside a screenshot — currently a rolling ring
+buffer of render state (camera/avatar position, shader uniforms, WebGL
+renderer string, etc.), since rendering bugs were its first real use
+case, but nothing limits it to that: any data that would help diagnose
+a bug (recent user actions, network/API error history, account/session
+context, feature flags, etc.) is fair game to add. Treat the whole
+payload as a working diagnostic set, not a fixed schema — but extend
+and prune it deliberately, not silently, so one session's addition
+doesn't get removed by another before it's proven its worth:
+
+- **Adding a field**: give it an inline comment at its definition
+  citing the issue/bug it was added to diagnose and why (e.g. `// added
+  for #2740 -- orb-collection bug; need X to tell Y from Z`). This is
+  the only record a later session has of why the field exists —
+  without it, a pruning pass has no way to know it's still earning its
+  place.
+- **Removing a field**: only prune a field whose cited bug is confirmed
+  closed/fixed, and only after checking the bug class isn't likely to
+  recur — an intermittent or environment-dependent bug is exactly the
+  kind where it's worth keeping the field around a while after the fix
+  ships, to confirm the fix actually holds. Say so explicitly in the
+  PR/commit removing it, citing the same issue the field's own comment
+  references.
+- Don't let the capture accumulate single-purpose fields forever, but a
+  field earns removal through this explicit check, not through
+  staleness or "looks unused" alone.
+
 ## Branch: always your own Claude Code session's name
 
 Multiple Claude Code sessions work on this repo at once, each with a
