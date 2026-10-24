@@ -682,6 +682,29 @@ export async function uploadModelFile(file) {
   return response.json(); // { modelUrl, sourceName, sizeBytes }
 }
 
+// #2718 (sub-issue of #2715, "[Tracking] In-app 'Submit Feedback' bug
+// reports..."): submits a bug report -- form holds an optional `screenshot`
+// image blob plus a `metadata` JSON string field (WebGL renderer/vendor,
+// browser info, the render-state ring buffer from src/feedback/
+// renderStateBuffer.js, optional free-text, submittedAt) -- built by
+// src/feedback/submitFeedbackUI.js. Same raw-multipart shape as
+// uploadModelFile/createVideoGenerationJob above (a real image blob, not
+// something JSON.stringify can carry).
+//
+// Posts to the Worker endpoint #2719 adds (POST /api/feedback/bug-report).
+// Built ahead of that landing, per #2715's own "can be built against a
+// stubbed/mocked... endpoint in the meantime if landing out of order" --
+// until #2719 merges, this 404s, and the caller surfaces that as an
+// ordinary error same as any other failed request here.
+export async function submitFeedbackBugReport(form) {
+  const response = await fetch(`${API_BASE}/feedback/bug-report`, { method: 'POST', body: form });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.error || "Couldn't submit that feedback — higglehaven ran into a problem on its end. Please try again in a moment.");
+  }
+  return response.json();
+}
+
 // #1620 (sub-issue of #1616): kicks off an async video-to-3D generation
 // job -- framesForm holds up to four view images (fields named 'front',
 // 'left', 'back', 'right') extracted client-side from the seller's video,
