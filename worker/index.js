@@ -33,6 +33,8 @@ import {
   handleControlRoomAdminPage, handleAdminActionLogPage, handleAdminDashboardPage,
   handleControlRoom, handleAdminActionLogList,
 } from './lib/control-room.js';
+// #2719 (sub-issue of #2715): Submit Feedback bug-report storage.
+import { handleFeedback } from './lib/feedback.js';
 import {
   handleAdminBootstrap, handleGrantAdmin, handleRevokeAdmin, handleListAdmins, handleSuspendAccount,
   handleUnsuspendAccount, handleSuspensionStatus,
@@ -671,6 +673,10 @@ async function handleApi(request, env, url, ctx) {
   }
   if (request.method === 'POST' && route[0] === 'models' && route.length === 2 && route[1] === 'cleanup') {
     return handleModelCleanup(request, env);
+  }
+
+  if (route[0] === 'feedback') {
+    return handleFeedback(request, env, env.DB, route);
   }
 
   if (request.method === 'POST' && route[0] === 'video-generation-jobs' && route.length === 1) {
