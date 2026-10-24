@@ -16,7 +16,6 @@ const LANDLET_ID = 'missed-poll-debounce-landlet';
 
 const sessionA = await launchPage({ promptAnswer: LABEL_A });
 const sessionB = await launchPage({ promptAnswer: LABEL_B });
-const errors = [...sessionA.errors, ...sessionB.errors];
 const pageA = sessionA.page;
 const pageB = sessionB.page;
 
@@ -153,6 +152,10 @@ const afterTwoMisses = await pageA.evaluate(() => window.__shopOtherAvatars);
 const bEntryAfterTwoMisses = afterTwoMisses?.find((a) => a.builderId === builderB.builderId);
 console.log('B as seen by A after TWO CONSECUTIVE missed polls (should now be despawned):', bEntryAfterTwoMisses);
 
+// Assembled here, after every interaction has happened, rather than at
+// launch time -- #2735: a spread copy taken right after launchPage() would
+// freeze on the still-empty source arrays and never see a real error.
+const errors = [...sessionA.errors, ...sessionB.errors];
 const pass =
   landletCreated.status === 201 &&
   !!bEntryBaseline &&

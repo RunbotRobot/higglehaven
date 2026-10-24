@@ -21,7 +21,6 @@ const BOB = 'Escape Restore Suite Bob';
 
 const aliceSession = await launchPage({ promptAnswer: ALICE });
 const bobSession = await launchPage({ promptAnswer: BOB });
-const errors = [...aliceSession.errors, ...bobSession.errors];
 
 const alicePage = aliceSession.page;
 const bobPage = bobSession.page;
@@ -95,6 +94,10 @@ console.log('Friends modal restored after Escape on the DM thread (should be tru
 
 await alicePage.unroute('**/api/auth/me');
 
+// Assembled here, after every interaction has happened, rather than at
+// launch time -- #2735: a spread copy taken right after launchPage() would
+// freeze on the still-empty source arrays and never see a real error.
+const errors = [...aliceSession.errors, ...bobSession.errors];
 const pass =
   mapClosedByEscape &&
   friendsRestoredAfterMapEscape &&

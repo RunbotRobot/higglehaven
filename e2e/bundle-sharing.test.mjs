@@ -15,7 +15,6 @@ const BUNDLE_NAME = SHARER; // launchPage's dialog handler answers every prompt(
 
 const sharerSession = await launchPage({ promptAnswer: SHARER });
 const viewerSession = await launchPage({ promptAnswer: VIEWER });
-const errors = [...sharerSession.errors, ...viewerSession.errors];
 
 // --- Sharer: place one item, save it as a SHARED bundle. ---
 const sharerPage = sharerSession.page;
@@ -102,6 +101,10 @@ await viewerPage.waitForTimeout(1000);
 const viewerPlacedInfo = await viewerPage.textContent('#product-info');
 console.log('info after viewer places the shared bundle (should mention the placed template):', viewerPlacedInfo);
 
+// Assembled here, after every interaction has happened, rather than at
+// launch time -- #2735: a spread copy taken right after launchPage() would
+// freeze on the still-empty source arrays and never see a real error.
+const errors = [...sharerSession.errors, ...viewerSession.errors];
 const pass = savedStatus.includes('Saved') &&
   sharerSeesOwnInCommunity === 1 &&
   myBundlesEmptyForViewer &&

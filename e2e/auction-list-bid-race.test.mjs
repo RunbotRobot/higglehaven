@@ -66,7 +66,6 @@ const BIDDER = 'Auction List Race Bidder';
 const sellerASession = await launchPage({ promptAnswer: SELLER_A });
 const sellerBSession = await launchPage({ promptAnswer: SELLER_B });
 const bidderSession = await launchPage({ promptAnswer: BIDDER });
-const errors = [...sellerASession.errors, ...sellerBSession.errors, ...bidderSession.errors];
 
 async function startAuction(session, label, startingBidDollars) {
   const page = session.page;
@@ -197,6 +196,10 @@ const finalText = await bidderPage.locator('.auction-list').textContent();
 console.log('bids still show high bid $15.00 and $25.00 after A\'s stale reload lands (should be true, not reverted to "no bids yet"):', finalText.includes('high bid $15.00') && finalText.includes('high bid $25.00'));
 console.log('no stale "no bids yet, starts at $20.00" (B\'s pre-bid snapshot) resurfaced:', !finalText.includes('no bids yet, starts at $20.00'));
 
+// Assembled here, after every interaction has happened, rather than at
+// launch time -- #2735: a spread copy taken right after launchPage() would
+// freeze on the still-empty source arrays and never see a real error.
+const errors = [...sellerASession.errors, ...sellerBSession.errors, ...bidderSession.errors];
 const pass = finalText.includes('high bid $15.00') &&
   finalText.includes('high bid $25.00') &&
   !finalText.includes('no bids yet, starts at $20.00') &&

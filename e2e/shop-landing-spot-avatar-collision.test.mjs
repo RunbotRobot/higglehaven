@@ -23,7 +23,6 @@ const LANDLET_ID = 'landing-spot-collision-landlet';
 
 const sessionA = await launchPage({ promptAnswer: LABEL_A });
 const sessionB = await launchPage({ promptAnswer: LABEL_B });
-const errors = [...sessionA.errors, ...sessionB.errors];
 const pageA = sessionA.page;
 const pageB = sessionB.page;
 
@@ -107,6 +106,10 @@ const farY = bEntryInA.y;
 const spotFarFromB = await pageA.evaluate(([x, y]) => window.__testNearestOpenLandingSpot(x, y), [farX, farY]);
 console.log('nearest open spot starting far from B (should be unchanged):', spotFarFromB, 'expected:', { x: farX, y: farY });
 
+// Assembled here, after every interaction has happened, rather than at
+// launch time -- #2735: a spread copy taken right after launchPage() would
+// freeze on the still-empty source arrays and never see a real error.
+const errors = [...sessionA.errors, ...sessionB.errors];
 const pass =
   landletCreated.status === 201 &&
   !!bEntryInA &&

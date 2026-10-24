@@ -26,7 +26,6 @@ const LANDLET_ID = 'landing-boundary-clamp-landlet';
 
 const sessionA = await launchPage({ promptAnswer: LABEL_A });
 const sessionB = await launchPage({ promptAnswer: LABEL_B });
-const errors = [...sessionA.errors, ...sessionB.errors];
 const pageA = sessionA.page;
 const pageB = sessionB.page;
 
@@ -120,6 +119,10 @@ const finalRadiusM = Math.hypot(finalPosition.x, finalPosition.y);
 console.log('A\'s own final landed position (should be nudged away from B, never past the world wall):', finalPosition);
 console.log('A\'s own final distance from world center vs. its boundary radius (should be <= boundary, with a small float-rounding allowance):', finalRadiusM, 'vs', maxRadiusM);
 
+// Assembled here, after every interaction has happened, rather than at
+// launch time -- #2735: a spread copy taken right after launchPage() would
+// freeze on the still-empty source arrays and never see a real error.
+const errors = [...sessionA.errors, ...sessionB.errors];
 const pass =
   landletCreated.status === 201 &&
   presencePosted.status === 200 &&
