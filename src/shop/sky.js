@@ -214,6 +214,55 @@ export const SHOP_SKY_FRAGMENT_SHADER = `
       // horizon), while a full straight-up apex view and an ordinary
       // moderate-pitch view both still render as a smooth gradient with
       // no streaking, same as #1585's own fix already established.
+      // #2716 investigation (higglehaven12, 2026-10-24): a DIFFERENT, GPU-
+      // independent mechanism than the clouds-value-steepness one discussed
+      // on cloudMask below, worth checking before assuming the owner's
+      // 20-40s hard edge is just "a steep patch of fbm wandered into view."
+      // "footprint" above is fwidth(p.x) + fwidth(p.y) -- an L1
+      // (axis-aligned) combination of two screen-space derivatives. That
+      // combination is NOT rotation-invariant: for a static camera and a
+      // perfectly smooth underlying field, rotating only the *sampling*
+      // coordinate frame (exactly what swirlAngle does every frame, via the
+      // mat2(c,-s,s,c) applied to normalizedXY before this loop runs) still
+      // changes footprint's computed value, by a factor ranging from 1x to
+      // sqrt(2) (~41%) depending purely on swirlAngle's alignment to the
+      // screen's x/y axes -- confirmed both analytically (the Frobenius norm
+      // of a rotated Jacobian is invariant, but the L1 row-sum fwidth()
+      // actually computes is not) and numerically (a standalone JS
+      // reimplementation of this exact footprint/fbm math, with the camera
+      // held perfectly static, reproduces the 1x-to-1.41x swing exactly,
+      // for every camera-Jacobian shape tried, isotropic or degenerate).
+      // Since swirlAngle(t) = uTime*0.02 + (bounded shear term) grows
+      // monotonically from 0 at page load, it first reaches the worst-case
+      // 45-degree misalignment at t = (pi/4)/0.02 ~= 39.3s for
+      // heightFrac=0.5 (23.1s for heightFrac=0.3) -- squarely inside the
+      // owner's reported 20-40s window, using only the shearOmega/0.02
+      // constants already shipped above, no curve-fitting. If an octave's
+      // true (rotation-corrected) footprint sits within ~41% of the
+      // 0.0005/0.03 thresholds just below, this oscillation alone can flip
+      // that octave's fade in and out purely from elapsed time, with a
+      // static camera and no grazing/apex involved -- i.e. exactly the
+      // normal-incidence, avatar-standing-still symptom #2716 describes.
+      // Unlike the GPU-quad fwidth()-blockiness explanation used elsewhere
+      // in this file, this part needs no hardware-specific derivative
+      // quantization to manifest -- it's exact, continuous math, so in
+      // principle it should be reproducible even on this sandbox's software
+      // renderer, unlike the grazing-incidence case.
+      // NOT fixed here: the only mathematically clean correction (an
+      // actually rotation-invariant footprint, e.g. a Frobenius-norm
+      // combination of dFdx(p.x)/dFdy(p.x)/dFdx(p.y)/dFdy(p.y) instead of
+      // this L1 form) changes footprint's absolute scale too, which risks
+      // silently un-tuning the 0.0005/0.03 thresholds #1585/#1799/#2606
+      // each calibrated against this exact L1 formula via direct screenshot
+      // comparison -- and this sandbox still can't screenshot-verify either
+      // the fix or the non-regression, same gap every session on #2716 has
+      // hit. See the full writeup (simulation script + numbers) on issue
+      // #2716 for a concrete, falsifiable test a real-GPU session can run:
+      // scrub to t~6-10s and t~40s via
+      // window.__testSetShopSkyElapsedSeconds while looking at a point
+      // giving heightFrac roughly 0.3-0.5, and check whether the band's
+      // onset/strength tracks this rotation-alignment prediction rather
+      // than just "sometime in 20-40s."
       float fade = 1.0 - smoothstep(0.0005, 0.03, footprint);
       value += amplitude * fade * noise(p);
       totalWeight += amplitude * fade;
@@ -351,6 +400,20 @@ export const SHOP_SKY_FRAGMENT_SHADER = `
     // this exact failure mode, not a newly-confirmed fix. A future session
     // with real GPU access should re-verify directly against the owner's
     // reported timing/camera setup.
+    //
+    // higglehaven12, 2026-10-24: a from-scratch numeric simulation of this
+    // issue (see fbm()'s own footprint/fade loop above for the fuller
+    // writeup, and the issue thread for the script+numbers) found this
+    // threshold-widening mechanism's worst-case per-pixel step, under
+    // realistic camera parameters, too small (~0.0002-0.0004 out of a 0-1
+    // visibility range) to plausibly read as a "hard" edge, and its worst
+    // timing scattered essentially randomly across 0-90s rather than
+    // clustering at 20-40s -- i.e. this mechanism likely isn't the actual
+    // cause, though widening it further remains harmless. A different,
+    // rotation-alignment-driven mechanism in the footprint/fade code above
+    // matches the reported 20-40s timing far more precisely and needs no
+    // GPU-specific derivative quantization to manifest -- see there before
+    // assuming this file's investigation is exhausted.
     float cloudMask = smoothstep(-1.0, 2.0, clouds);
     // Kept from before (#1204/#1585) as a modest extra safety margin right
     // at the literal pole specifically — on its own this barely moves the
