@@ -468,6 +468,17 @@ export function setShopSkyElapsedSecondsForTest(now, elapsedSeconds) {
   shopSkyMaterial.uniforms.uTime.value = elapsedSeconds;
 }
 
+// #2717: a read-only accessor so the render-state ring buffer (src/
+// feedback/renderStateBuffer.js) can sample uTime's current value without
+// reaching into this module's own private shopSkyMaterial state directly —
+// same "export a getter instead of exposing the private field" shape this
+// module already uses for shopDomeRiseM (see setShopDomeRiseM/
+// resetShopDomeRiseM above). Returns null before initShopSkyMaterial has
+// ever run (no active Shop session yet).
+export function currentShopSkyTimeS() {
+  return shopSkyMaterial ? shopSkyMaterial.uniforms.uTime.value : null;
+}
+
 // Called as each Shop-mode landlet's instances load in (see
 // loadShopLandletInstances) — if anything anywhere in the world turns out
 // to be tall enough to threaten poking through the dome, grow the dome to
