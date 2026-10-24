@@ -10449,9 +10449,36 @@ something an ordinary session has business reading" bar
 
 **Still open** (per #2715's own body, flagged rather than silently
 decided): retention policy for stored screenshots/metadata, and whether a
-moderation/privacy pass is needed before storage. **Not yet built**: #2720
-("Surface in the Control Room... as a new task kind") — `bug_reports` rows
-exist but aren't yet rendered anywhere in the Control Room board.
+moderation/privacy pass is needed before storage.
+
+**Surfaced in the Control Room (#2720, the last of #2715's four
+sub-issues)**: `POST /api/feedback/bug-report` above also writes a
+`control_room_tasks` row (`kind: 'bug-report'`) in the same atomic
+`db.batch` as the `bug_reports` insert — not a round trip through the
+validating `/api/control-room/tasks` HTTP API (see "Control Room API
+(N31)" below); this endpoint is itself the trusted, same-process caller.
+`title` is the report's own `description`, or `'Bug report (no
+description)'` when none was given; `session` is `''` and `posted_by` is
+the literal string `'bug-report'`, distinguishing a widget-submitted
+report from a session's or the owner's own cards. `image_url` is the
+same admin-gated `screenshot_url` (`GET
+/api/feedback/bug-reports/:reportId/screenshot`) the `bug_reports` row
+itself carries — the Control Room admin page is already `requireAdmin`-
+gated same-origin, so the owner's existing session cookie serves it with
+no extra auth plumbing. The WebGL renderer/vendor string, user agent,
+platform, submission time, and the full `renderStateBuffer` (camera/avatar
+state + shader uniforms, ~1Hz samples) are formatted into the task's own
+`note` field — the board's existing free-text write-up field, rendered in
+the card's thread once expanded — so a session or the owner can triage a
+report (its screenshot, WebGL renderer string, and ring-buffer state) from
+the board alone, with no separate D1/R2 lookup. The card gets the same
+sequential `N<n>` display numbering (`note_number`) every other
+message-shaped card already gets, and a distinct "Bug report" pill
+(`public/admin-control-room.html`) so it reads differently from an
+ordinary feedback/question note at a glance. Status defaults to `queued`
+like any other new card — marking one `done`/`in_progress`/replying to it
+works exactly like any other Control Room task from here on, since it's
+a real row in the same table.
 
 ## Database backups (#1135)
 
