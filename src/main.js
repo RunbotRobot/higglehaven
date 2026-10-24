@@ -3971,7 +3971,11 @@ shopProductPreviewBuyBtn.addEventListener('click', handleShopProductBuyClick);
 //
 // #2629: moved to src/shop/mode.js, alongside disposeObject3D/
 // unloadShopLandletInstances/enterShopMode -- see that module's own header
-// comment.
+// comment. #2690's own fix (replacing the double rAF below with a
+// synchronous render call, since nothing actually guaranteed the rAF
+// ordering this comment describes) landed on that copy instead, since this
+// one moved out from under it mid-flight -- see that module's own version
+// of this comment for the real story.
 // #1591: same counts as window.__rendererMemory above, but read on demand
 // rather than only at whichever moment refreshEquippedShopAvatar/
 // enterShopMode last happened to call reportRendererMemoryDiagnostic —
