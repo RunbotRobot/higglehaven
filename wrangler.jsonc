@@ -25,6 +25,18 @@
     {
       "binding": "DB_BACKUPS",
       "bucket_name": "higglehaven-db-backups"
+    },
+    // #2719: a dedicated bucket for Submit Feedback (#2715) bug-report
+    // screenshots — see migrations/0151_bug_reports.sql's own comment for
+    // why this doesn't reuse the MODELS bucket above. Requires a one-time
+    // `wrangler r2 bucket create higglehaven-feedback` from main after this
+    // merges, before this binding resolves to anything live (same manual
+    // step DB_BACKUPS's own bucket presumably needed) — handleFeedbackBugReportCreate
+    // guards for `!env.FEEDBACK` in the meantime, same as every other R2
+    // binding check in this codebase.
+    {
+      "binding": "FEEDBACK",
+      "bucket_name": "higglehaven-feedback"
     }
   ],
   "routes": [

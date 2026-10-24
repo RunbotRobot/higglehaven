@@ -10398,6 +10398,61 @@ the one source of truth for what an unchecked listing's category is. The
 buyer-facing "browse owned avatars and equip one" half is #713's own
 separate scope, not this one's.
 
+## Submit Feedback bug reports (#2715/#2719)
+
+Motivation (#2715's own body): diagnosing rendering bugs after the fact
+(e.g. the Shop-mode sky artifacts, PR #2606/#2617) repeatedly ran into the
+same wall — by the time a report reaches a session, the exact render state
+at the moment something looked wrong is long gone, and a from-scratch
+repro harness can only approximate it. This feature closes that gap with
+an in-app "Submit Feedback" tool: a client-side rolling render-state ring
+buffer (#2717, `src/feedback/renderStateBuffer.js`) feeds a "Submit
+Feedback" button/modal in Shop mode (#2718, `src/feedback/submitFeedbackUI.js`)
+that captures a canvas screenshot, `WEBGL_debug_renderer_info`, browser/OS
+info, and the ring buffer, then POSTs all of it here.
+
+**`POST /api/feedback/bug-report`** (`worker/lib/feedback.js`) — multipart
+`form-data`, not JSON: an optional `screenshot` file field (PNG, capped at
+10MB) and a required `metadata` field (a JSON string, capped at 256KB)
+shaped `{ description?, webglRenderer?, webglVendor?, userAgent?,
+platform?, renderStateBuffer?, submittedAt? }` (`description`/
+`webglRenderer`/`webglVendor`/`userAgent`/`platform` each capped at 280
+characters, same as every other free-text comment field in this API;
+`renderStateBuffer` is stored as-is if it's an array, else as `[]`).
+Deliberately unauthenticated — the submitting user is resolved from the
+session cookie if one exists (for display only; `metadata`'s own claimed
+`userId`, if the client sends one, is never trusted), but a login is never
+required, so a logged-out visitor can still report a problem. Rate-limited
+to 20 submissions per 15 minutes per IP (`checkRateLimit`), same shape as
+model uploads/signup. Returns `{ reportId }` (`201`). Writes one
+`bug_reports` row (`migrations/0151_bug_reports.sql`); a submitted
+screenshot goes to its own dedicated `FEEDBACK` R2 bucket
+(`higglehaven-feedback`) — not the shared `MODELS` bucket — because that
+bucket's own five-way reference-checking scheme
+(`cleanupUnreferencedModels`) has no notion of a bug report as a
+"reference," and reusing it would risk the periodic sweep silently
+deleting every feedback screenshot within minutes of submission. Requires
+a one-time `wrangler r2 bucket create higglehaven-feedback` (run once from
+`main`, same manual provisioning step `DB_BACKUPS`'s own bucket needed)
+before this binding resolves to anything live; the endpoint 500s with a
+clear message if `env.FEEDBACK` isn't configured, same as every other R2
+binding check in this codebase.
+
+**`GET /api/feedback/bug-reports/:reportId/screenshot`** — admin-gated
+(`requireAdmin`), not public. #2715's own body flags, as a still-open
+owner question, that these screenshots could incidentally capture other
+users' in-world content, so until a retention/moderation policy is
+decided, the conservative default is the same "operational data, not
+something an ordinary session has business reading" bar
+`GET /api/models/storage`/`GET /api/models` already hold admin tooling to.
+`404`s if the report has no stored screenshot or doesn't exist.
+
+**Still open** (per #2715's own body, flagged rather than silently
+decided): retention policy for stored screenshots/metadata, and whether a
+moderation/privacy pass is needed before storage. **Not yet built**: #2720
+("Surface in the Control Room... as a new task kind") — `bug_reports` rows
+exist but aren't yet rendered anywhere in the Control Room board.
+
 ## Database backups (#1135)
 
 Owner-raised account-continuity risk: production D1 (users, builders,
