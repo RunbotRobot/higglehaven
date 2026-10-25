@@ -853,9 +853,26 @@ const SHOP_FLY_BTN_ICON_STANDING = '/bird-standing.png';
 // corner. Tuned directly against screenshots of the real rendered button,
 // not derived analytically — a quick visual check after any future artwork
 // swap is cheap insurance that these still land right.
-const SHOP_FLY_BTN_ICON_ZOOM = 1.6;
+//
+// #2750: one shared zoom for both icons assumed they had similar margin
+// around the bird within their own 512x559 canvas -- they don't.
+// bird-standing.png has generous empty margin around a small bird, so a
+// 1.6x zoom comfortably crops its own baked-in ring out while leaving the
+// bird itself fully framed. bird-flying.png's wings already spread nearly
+// to the canvas edges with almost no margin at all, so that same 1.6x zoom
+// (tuned against the standing bird, never separately verified against this
+// one) pushed its wingtips well past the button's own circular clip --
+// exactly the "images are too large to fit in their circle" the owner
+// reported. Screenshotting the real rendered button at a range of zoom
+// values (not derived analytically, same methodology as the original
+// tuning) showed bird-flying.png needs no extra zoom at all: plain
+// object-fit: cover already frames it fully and cleanly, with no visible
+// ring artifact left over (its own margin is thin enough that the square
+// crop alone removes it).
+const SHOP_FLY_BTN_ICON_STANDING_ZOOM = 1.6;
+const SHOP_FLY_BTN_ICON_FLYING_ZOOM = 1.0;
 const SHOP_FLY_BTN_ICON_STANDING_ORIGIN = '38% 62%'; // standing bird: shift right + up
-const SHOP_FLY_BTN_ICON_FLYING_ORIGIN = '60% 40%'; // in-flight bird: shift down + left
+const SHOP_FLY_BTN_ICON_FLYING_ORIGIN = '50% 50%'; // in-flight bird: no zoom applied, so no offset needed
 export function setShopFlyBtnFlying(flying) {
   document.body.classList.toggle('shop-flying', flying);
   shopFlyBtn.classList.toggle('active', flying);
@@ -865,7 +882,7 @@ export function setShopFlyBtnFlying(flying) {
   // bird (press to land) while flying, i.e. the inverse of `flying`.
   shopFlyBtnIcon.src = flying ? SHOP_FLY_BTN_ICON_STANDING : SHOP_FLY_BTN_ICON_FLYING;
   shopFlyBtnIcon.style.transformOrigin = flying ? SHOP_FLY_BTN_ICON_STANDING_ORIGIN : SHOP_FLY_BTN_ICON_FLYING_ORIGIN;
-  shopFlyBtnIcon.style.transform = `scale(${SHOP_FLY_BTN_ICON_ZOOM})`;
+  shopFlyBtnIcon.style.transform = `scale(${flying ? SHOP_FLY_BTN_ICON_STANDING_ZOOM : SHOP_FLY_BTN_ICON_FLYING_ZOOM})`;
 }
 
 // Toggling mid-takeoff is ignored — let it finish, then the next press
