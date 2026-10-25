@@ -924,6 +924,82 @@
         font: 12px/1.4 sans-serif;
         cursor: pointer;
       }
+      /* #2779: a small collapsed toggle, same shape/position column as
+         #compass-panel (top: 86px) and #shop-feedback-btn (top: 142px)
+         above -- next free slot in that right-edge stack. */
+      #shop-nearby-chat-btn {
+        top: 182px;
+        right: 8px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 12px/1.4 sans-serif;
+        cursor: pointer;
+      }
+      /* Deliberately its own open/closed state (not .shop-ui's own
+         .visible) -- #shop-nearby-chat-btn's visibility already tracks
+         trust-tier eligibility; this tracks "did the shopper tap it open,"
+         a fully independent axis. See src/shop/nearbyChat.js. */
+      #shop-nearby-chat-panel {
+        display: none;
+        position: fixed;
+        z-index: 16;
+        top: 218px;
+        right: 8px;
+        width: 220px;
+        background: rgb(var(--pill-rgb) / 0.85);
+        border-radius: 8px;
+        padding: 8px;
+        flex-direction: column;
+        gap: 6px;
+      }
+      #shop-nearby-chat-panel.open {
+        display: flex;
+      }
+      #shop-nearby-chat-log {
+        max-height: 160px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font: 12px/1.4 sans-serif;
+        color: var(--pill-text);
+      }
+      .shop-nearby-chat-message {
+        word-break: break-word;
+      }
+      /* Right-aligned/dimmed for the sender's own sent messages -- same
+         "which side is mine" convention a chat UI almost always uses,
+         cheap here since src/shop/nearbyChat.js already knows a message's
+         id the instant it sends it, well before the next poll would
+         otherwise tell it apart from anyone else's. */
+      .shop-nearby-chat-message.own {
+        opacity: 0.75;
+        text-align: right;
+      }
+      #shop-nearby-chat-form {
+        display: flex;
+        gap: 4px;
+      }
+      #shop-nearby-chat-input {
+        flex: 1;
+        min-width: 0;
+        padding: 4px 6px;
+        border-radius: 6px;
+        border: none;
+        font: 12px/1.4 sans-serif;
+      }
+      #shop-nearby-chat-form button {
+        padding: 4px 10px;
+        border-radius: 6px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        font: 12px/1.4 sans-serif;
+        cursor: pointer;
+      }
       .compass-label {
         position: absolute;
         color: var(--pill-text-soft);
@@ -4326,6 +4402,24 @@
          why. Revealed (.visible added) by src/shop/mode.js's enterShopMode,
          same moment as #shop-fly-btn/#shop-vertical-controls above. -->
     <button id="shop-feedback-btn" class="shop-ui" type="button">Feedback</button>
+    <!-- #2779 (sub-issue of #2777, docs/SPEC.md §2's "Text chat available
+         as an alternative [to voice]"): visibility is driven entirely by
+         src/shop/nearbyChat.js's own per-tick trustTier check (same
+         id_verified-specific gate direct messages already require, §6),
+         not a one-time reveal from src/shop/mode.js like the fly button/
+         feedback button above -- this toggles live if a shopper verifies
+         mid-session. The panel itself is a separate open/closed state
+         (its own .open class, not .shop-ui's .visible) so the button stays
+         a small collapsed pill until actually tapped, per §1's "leave
+         plenty of screen space open". -->
+    <button id="shop-nearby-chat-btn" class="shop-ui" type="button">Chat</button>
+    <div id="shop-nearby-chat-panel">
+      <div id="shop-nearby-chat-log" role="log" aria-live="polite"></div>
+      <form id="shop-nearby-chat-form">
+        <input id="shop-nearby-chat-input" type="text" maxlength="280" placeholder="Say something nearby…" autocomplete="off" />
+        <button type="submit">Send</button>
+      </form>
+    </div>
     <div id="topbar-left">
       <div id="wordmark-panel">
         <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
