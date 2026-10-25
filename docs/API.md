@@ -2358,6 +2358,54 @@ an unvalidated arbitrary external URL here let any seller turn every
 visitor's browser into an unwitting requester of a URL of their choosing.
 Omit the field entirely (or pass `null`) for a plain colored-box template.
 
+### `POST /api/catalog/listings`
+
+Shared-products (#2745, #2747): lets a seller attach their own listing
+(price, stock) to a product someone *else* originally uploaded, without a
+model-upload step — the counterpart to `POST /api/catalog` above, which
+always creates a brand-new product plus its first listing in one row.
+Requires a session logged in as a seller (`403` otherwise) — unlike the
+sibling endpoint above, there's no unauthenticated/system-template branch
+here, since attaching to someone else's product is never a seed action.
+
+Request body:
+
+```json
+{
+  "productId": "template-c0ffee00-...",
+  "priceCents": 1500,
+  "stockQuantity": null
+}
+```
+
+Required fields:
+
+- `productId` — must reference an existing row in the `products` table
+  (`migrations/0153_shared_products.sql`; every pre-existing catalog
+  template already has a 1:1 backing row there, keyed by its own
+  `templateId`, so any template id visible today is also a valid
+  `productId`). `404` if it doesn't.
+- `priceCents` — same non-negative-integer-up-to-100,000,000 validation and
+  same #1601 "required, not just non-negative" rule as `POST /api/catalog`
+  — a free digital listing is an explicit `priceCents: 0`, not an omitted
+  field.
+
+`stockQuantity`, when present, follows the same validation as `POST
+/api/catalog` above. `400` ("This product is temporarily unavailable
+pending review") if the referenced product's own shared moderation state
+(`products.flaggedHiddenAt`) is set — an admin-hidden product can't gain a
+fresh listing from a new seller.
+
+The response shape is identical to `POST /api/catalog`'s own 201 response
+— a full catalog template object, with `name`/`category`/`subcategory`/
+`color`/`dimensions`/`modelUrl`/`modelSizeBytes`/`skeletonSignature`/
+`imageUrl`/`imageEmbedding`/`isTestModel`/`metadata` all copied from the
+referenced product, and `sellerId`/`priceCents`/`stockQuantity` set to this
+call's own seller/price/stock. The new row's `templateId` is always freshly
+generated — there's no idempotency-key dedup here the way the sibling
+model-upload create path has, since this call carries no file upload that
+a lost response could leave stranded.
+
 ### `PUT /api/catalog/:templateId`
 ### `PATCH /api/catalog/:templateId`
 

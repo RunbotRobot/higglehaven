@@ -1414,6 +1414,58 @@ export async function handleCatalog(request, db, route, url, models, env) {
     return json({ template: templateFromRow(stored) }, 201);
   }
 
+  // #2747 (sub-issue of #2745's shared-products redesign): lets a seller
+  // attach their own listing (price, stock) to a product someone else
+  // originally uploaded, instead of going through the model-upload-
+  // required single-item POST above. Reuses the exact same seller-
+  // identity/auth bar (requireSessionSeller) every other catalog mutation
+  // already uses -- always required here, unlike that sibling's
+  // unauthenticated system/placeholder-template branch, since attaching a
+  // listing to someone else's product is never a system/seed action.
+  // Denormalizes every shared field from the referenced `products` row
+  // into the new catalog_templates row at creation time -- the same
+  // direction #2746's own backfill migration copied them, just forward
+  // instead of backfilling the past -- so every existing reader of
+  // catalog_templates (templateFromRow, browse/picker, admin dashboard,
+  // purchase-creation, etc.) keeps working unchanged for a cross-seller
+  // listing too, with no JOIN against `products` needed anywhere yet.
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'listings') {
+    const sessionSeller = await requireSessionSeller(request, db);
+    const input = await readJson(request);
+    const productId = stringValue(input.productId, 'productId');
+    // Same #1601 requirement the sibling single-item create enforces for
+    // any real seller listing -- a free digital product is an explicit
+    // $0, not an omitted field.
+    const priceCents = optionalInteger(input.priceCents, 'priceCents');
+    if (priceCents == null) throw new HttpError('priceCents is required', 400);
+    const stockQuantity = optionalStockQuantity(input.stockQuantity);
+    const product = await db.prepare('SELECT * FROM products WHERE product_id = ?').bind(productId).first();
+    if (!product) throw new HttpError('productId must reference an existing product', 404);
+    // Same guard/message purchase-creation.js's own handleInstancePurchase
+    // already uses for a *listing's* flagged_hidden_at -- here it's the
+    // shared product-level moderation state instead, blocking a brand new
+    // listing from attaching to a product an admin has already hidden,
+    // rather than letting one quietly reappear through a fresh listing.
+    if (product.flagged_hidden_at) {
+      throw new HttpError('This product is temporarily unavailable pending review', 400);
+    }
+    const templateId = `template-${crypto.randomUUID()}`;
+    await db.prepare(`
+      INSERT INTO catalog_templates
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m,
+         price_cents, seller_id, model_url, model_size_bytes, skeleton_signature,
+         image_url, image_embedding, is_test_model, metadata_json, stock_quantity, product_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      templateId, product.name, product.category, product.subcategory, product.color,
+      product.width_m, product.depth_m, product.height_m,
+      priceCents, sessionSeller.seller_id, product.model_url, product.model_size_bytes, product.skeleton_signature,
+      product.image_url, product.image_embedding, product.is_test_model, product.metadata_json, stockQuantity, productId,
+    ).run();
+    const stored = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    return json({ template: templateFromRow(stored) }, 201);
+  }
+
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Catalog template not found' }, 404);
