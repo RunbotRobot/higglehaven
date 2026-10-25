@@ -37,7 +37,7 @@ import {
 import { handleFeedback } from './lib/feedback.js';
 import {
   handleAdminBootstrap, handleGrantAdmin, handleRevokeAdmin, handleListAdmins, handleSuspendAccount,
-  handleUnsuspendAccount, handleSuspensionStatus,
+  handleUnsuspendAccount, handleSuspensionStatus, handleAdminUserSearch, handleAdminUserDetail,
 } from './lib/account-moderation.js';
 // #1407 (sub-issue of #1404): the AI-made Stripe-reinstatement decision
 // flow -- see that module's own header comment for the full rubric and the
@@ -2807,6 +2807,16 @@ async function handleAuth(request, env, db, route, url, ctx) {
   }
   if (request.method === 'GET' && route.length === 2 && route[1] === 'suspension-status') {
     return handleSuspensionStatus(request, db, url);
+  }
+  // #2757: backs the Admin Dashboard's "Find user" search-then-detail flow
+  // feeding suspend-account above, so an admin confirms the right account
+  // from its own page before suspending it, rather than suspending by a
+  // bare, unconfirmed email.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-user-search') {
+    return handleAdminUserSearch(request, db, url);
+  }
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'admin-user-detail') {
+    return handleAdminUserDetail(request, db, url);
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'card-setup-intent') {
     return handleCardSetupIntent(request, env, db);
