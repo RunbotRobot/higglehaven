@@ -268,6 +268,24 @@ for unresolved owner direction (`kind: "feedback"`/`"question"`,
 `status` not `"done"`) first, then the GitHub Issues backlog per
 "Claiming a task" below.
 
+**This check must also include `kind: "bug-report"` cards with `status
+!= "done"`, not just `feedback`/`question`.** Found via a real case
+(2026-10-25): a bug-report card the owner deliberately left as a test
+case for the fleet's own Submit-Feedback pipeline sat `status: "queued"`,
+`session: ""` for ~18 hours untouched — not because every session chose
+to pass it over, but because this section's own wording, and every
+individual fleet session's own stored hourly-check-in trigger prompt
+copied from it, only ever named `feedback`/`question` as the kinds to
+check. A `bug-report` card falls through the GitHub-issues net too: it
+isn't one until a session files it as one, so it never shows up in an
+issue-backlog scan either. If you notice your own stored trigger prompt
+still only names `feedback`/`question` (or still points at the
+decommissioned Claude Artifact URL instead of the real D1-backed board —
+also found stale on several fleet triggers the same day), fix it
+yourself via `update_trigger` the next time you're running under it; you
+can self-edit your own trigger's prompt even though editing another
+session's is blocked.
+
 To make that automatic rather than something you have to be re-prompted
 into: set up your own recurring Routine
 (`mcp__Claude_Code_Remote__create_trigger`, self-bound — omit
