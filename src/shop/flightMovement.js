@@ -1630,6 +1630,11 @@ export function updateShopMovement(now) {
   // lean pose is actually easing in/out rather than just checking the
   // position/facing ended up in the right place.
   window.__shopAvatarOrientation = { facingRad: shopAvatarFacing, pitchRad: shopAvatarPitch, quaternion: shopAvatar.group.quaternion.toArray(), leanBlend: shopLeanBlend };
+  // #2744: same reasoning as window.__shopAvatarOrientation above — a
+  // custom avatar's own idle/walk/fly crossfade (setShopAvatarAnimationState)
+  // has no other way for a test to confirm it's actually transitioning
+  // states as movement starts/stops, not just that an action exists.
+  window.__shopAvatarAnimState = shopAvatar.animState;
   // #1588: same reasoning as window.__shopAvatarOrientation above — shopYaw
   // (the free-look camera's own heading) has no other way for a test to
   // read it, and the camera-lock-to-facing setting needs to confirm it

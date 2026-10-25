@@ -50,6 +50,25 @@ const MAX_TEXTURE_SIZE = 1024;
 // trying, so this is surfaced as a warning rather than a refusal.
 const LARGE_MESH_VERTEX_WARNING_THRESHOLD = 150000;
 
+// #2744: SimplifyModifier's edge-collapse algorithm (both the stock one and
+// this file's own vendored copy) has no topology-preserving guarantee -- it
+// can and does tear real holes (new boundary edges in a previously closed
+// mesh) into the result once a single pass removes too large a fraction of
+// a mesh's vertices at once. Confirmed empirically (not theoretically) with
+// a standalone probe against several unrelated closed shapes (TorusKnot,
+// Sphere, Cylinder): all stayed hole-free up through a 60% single-pass
+// removal, and all but Sphere (the least topologically complex of the
+// three) had started tearing by 65-70%. A single mesh that's drastically
+// larger than TARGET_TRIANGLES_PER_MESH -- e.g. a dense, non-skinned
+// character/prop mesh -- would otherwise need exactly this kind of
+// extreme single-pass ratio to hit the target in one modify() call. Same
+// "optimization is a nice-to-have, not a requirement" tradeoff this file
+// already makes for a skinned mesh (#1552) and a thrown simplifier error
+// (see this function's own caller in main.js): capping how much a single
+// pass may remove means an extremely dense mesh comes out larger than
+// TARGET_TRIANGLES_PER_MESH rather than risking visible holes to hit it.
+const MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION = 0.6;
+
 const gltfLoader = new GLTFLoader();
 const gltfExporter = new GLTFExporter();
 const fbxLoader = new FBXLoader();
@@ -86,7 +105,12 @@ export async function convertFbxToGlb(file, onProgress) {
   const group = fbxLoader.parse(arrayBuffer, '');
 
   onProgress?.('Re-encoding as glTF…');
-  const resultBuffer = await gltfExporter.parseAsync(group, { binary: true });
+  // #2744: GLTFExporter only writes the animation clips it's explicitly
+  // handed via options.animations -- it never reads them off the source
+  // object itself, so omitting this silently drops every clip FBXLoader
+  // attached to `group.animations` (Mixamo and similar rigs always carry
+  // theirs this way), even though the skeleton/geometry convert over fine.
+  const resultBuffer = await gltfExporter.parseAsync(group, { binary: true, animations: group.animations });
   return new Blob([resultBuffer], { type: 'model/gltf-binary' });
 }
 
@@ -156,11 +180,15 @@ export async function optimizeModelFile(file, onProgress) {
     const vertexCount = mergedForCount.attributes.position.count;
     mergedForCount.dispose();
     const targetVertexCount = Math.max(3, Math.round(vertexCount * (TARGET_TRIANGLES_PER_MESH / triangleCount)));
-    const removeCount = vertexCount - targetVertexCount;
-    if (removeCount <= 0) {
+    const uncappedRemoveCount = vertexCount - targetVertexCount;
+    if (uncappedRemoveCount <= 0) {
       trianglesAfter += triangleCount;
       return;
     }
+    // #2744: see MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION's own comment --
+    // don't let one mesh's removeCount exceed the empirically-safe
+    // single-pass ratio just to hit TARGET_TRIANGLES_PER_MESH exactly.
+    const removeCount = Math.min(uncappedRemoveCount, Math.floor(vertexCount * MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION));
 
     const simplified = simplifier.modify(geometry, removeCount);
     geometry.dispose();
@@ -169,7 +197,17 @@ export async function optimizeModelFile(file, onProgress) {
   });
 
   onProgress?.('Re-encoding model…');
-  const resultBuffer = await gltfExporter.parseAsync(scene, { binary: true, maxTextureSize: MAX_TEXTURE_SIZE });
+  // #2744: same reasoning as convertFbxToGlb's own comment above --
+  // GLTFExporter never pulls animation clips off the source scene on its
+  // own, so leaving options.animations unset here silently discarded every
+  // clip gltfLoader.parseAsync just handed back as `gltf.animations`
+  // (docs/SPEC.md's "Avatar rig/animation clip convention" idle/walk/fly
+  // clips among them) on every single upload, regardless of model size --
+  // the skeleton/geometry itself survives re-export fine, so nothing else
+  // here ever surfaced this as a failure. An equipped custom avatar with
+  // real clips therefore always rendered correctly but never animated,
+  // moving only as a rigid whole via root motion.
+  const resultBuffer = await gltfExporter.parseAsync(scene, { binary: true, maxTextureSize: MAX_TEXTURE_SIZE, animations: gltf.animations });
 
   return {
     blob: new Blob([resultBuffer], { type: 'model/gltf-binary' }),
@@ -212,6 +250,9 @@ export async function rescaleModelFile(file, scaleFactor) {
     child.position.multiplyScalar(scaleFactor);
     child.scale.multiplyScalar(scaleFactor);
   }
-  const resultBuffer = await gltfExporter.parseAsync(gltf.scene, { binary: true });
+  // #2744: same reasoning as optimizeModelFile's own comment above --
+  // GLTFExporter needs animation clips passed explicitly, or re-exporting
+  // the scene (as this rescale step always does) silently drops them.
+  const resultBuffer = await gltfExporter.parseAsync(gltf.scene, { binary: true, animations: gltf.animations });
   return new Blob([resultBuffer], { type: 'model/gltf-binary' });
 }
