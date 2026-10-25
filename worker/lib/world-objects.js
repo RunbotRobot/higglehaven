@@ -102,6 +102,104 @@ export async function handleInstances(request, env, route, url) {
     return json({ deletedInstanceIds, rejectedInstanceIds });
   }
 
+  // #2764: core Group/Ungroup actions. A group is just a shared, opaque
+  // `group_id` (migrations/0154_placed_instance_groups.sql) -- there's no
+  // separate "group" resource to create first, so grouping an existing
+  // group's members together with other instances (or with another
+  // group's members) simply overwrites every one of them with one freshly
+  // minted id, merging whichever prior groups happened to be selected
+  // rather than requiring them to be ungrouped first. The frontend's own
+  // selection logic (src/build/scene.js's selectOnly/toggleInSelection)
+  // always expands a selection to whole groups before this is ever called,
+  // so in practice a request here never asks to split a group -- but the
+  // server doesn't assume that itself, same "never trust the client already
+  // did its own validation" posture as every other write in this file.
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'group') {
+    const input = await readJson(request);
+    if (!Array.isArray(input.instanceIds)) throw new HttpError('instanceIds must be an array', 400);
+    if (input.instanceIds.length < 2) throw new HttpError('instanceIds must contain at least 2 items', 400);
+    if (input.instanceIds.length > 100) throw new HttpError('instanceIds must contain at most 100 items', 400);
+    const instanceIds = input.instanceIds.map((id) => stringValue(id, 'instanceIds item'));
+    if (new Set(instanceIds).size !== instanceIds.length) throw new HttpError('instanceIds must be unique', 400);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
+    const placeholders = instanceIds.map(() => '?').join(', ');
+    const { results } = await db.prepare(`
+      SELECT instance_id, landlet_id FROM placed_instances WHERE instance_id IN (${placeholders})
+    `).bind(...instanceIds).all();
+    if (results.length !== instanceIds.length) {
+      throw new HttpError('Every instanceId must reference an existing placed instance', 404);
+    }
+    await requireOwnedLandlets(db, results.map((row) => row.landlet_id), sessionBuilder.builder_id);
+    const landletIdByInstanceId = new Map(results.map((row) => [row.instance_id, row.landlet_id]));
+    const groupId = crypto.randomUUID();
+    // #929 idiom: fold the ownership re-check into each write, same as the
+    // DELETE/POST/PUT batch endpoints above -- requireOwnedLandlets is a
+    // point-in-time check.
+    const batchResults = await db.batch(instanceIds.map((instanceId) => db.prepare(`
+      UPDATE placed_instances SET group_id = ?
+      WHERE instance_id = ?
+        AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
+    `).bind(groupId, instanceId, landletIdByInstanceId.get(instanceId), sessionBuilder.builder_id)));
+    const rejectedInstanceIds = instanceIds.filter((_, i) => batchResults[i].meta.changes === 0);
+    if (rejectedInstanceIds.length > 0) {
+      // Unlike the DELETE/POST/PUT batch endpoints above (#1772/#1773,
+      // which report a partial success since they're writing rows that
+      // already independently existed), this call mints one brand new
+      // shared group_id -- "most members report the new id, a few don't"
+      // is an actively broken, half-formed group, not a partially-applied
+      // write. Rolls back whichever members did land rather than leaving
+      // that behind.
+      const succeededInstanceIds = instanceIds.filter((_, i) => batchResults[i].meta.changes > 0);
+      if (succeededInstanceIds.length > 0) {
+        const succeededPlaceholders = succeededInstanceIds.map(() => '?').join(', ');
+        await db.prepare(`
+          UPDATE placed_instances SET group_id = NULL WHERE instance_id IN (${succeededPlaceholders}) AND group_id = ?
+        `).bind(...succeededInstanceIds, groupId).run();
+      }
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
+    const stored = await getInstancesById(db, instanceIds);
+    return json({ groupId, instances: instanceIds.map((instanceId) => stored.get(instanceId)) }, 201);
+  }
+
+  // #2764: Ungroup fully dissolves a group back to independent items (no
+  // partial/nested ungroup -- see #2763's own "Owner-judgment items" for why
+  // that stays out of scope here). Targets a `groupId` directly (every
+  // member the frontend has selected already carries the same one, via
+  // mesh.userData.groupId) rather than an instanceIds list, since there's no
+  // partial form of this action to express.
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'ungroup') {
+    const input = await readJson(request);
+    const groupId = stringValue(input.groupId, 'groupId');
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
+    const { results } = await db.prepare(`
+      SELECT instance_id, landlet_id FROM placed_instances WHERE group_id = ?
+    `).bind(groupId).all();
+    if (results.length === 0) throw new HttpError('Group not found', 404);
+    await requireOwnedLandlets(db, results.map((row) => row.landlet_id), sessionBuilder.builder_id);
+    const instanceIds = results.map((row) => row.instance_id);
+    const landletIdByInstanceId = new Map(results.map((row) => [row.instance_id, row.landlet_id]));
+    // #929 idiom, same as every other write in this file — requireOwnedLandlets
+    // above is a point-in-time check.
+    const batchResults = await db.batch(instanceIds.map((instanceId) => db.prepare(`
+      UPDATE placed_instances SET group_id = NULL
+      WHERE instance_id = ? AND group_id = ?
+        AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
+    `).bind(instanceId, groupId, landletIdByInstanceId.get(instanceId), sessionBuilder.builder_id)));
+    // #1772/#1773 idiom: dissolving is independent per member (unlike Group
+    // above, a member left behind mid-dissolve is just "still grouped," not
+    // a broken state), so only a total failure is a clean, retryable 409.
+    const rejectedInstanceIds = instanceIds.filter((_, i) => batchResults[i].meta.changes === 0);
+    if (rejectedInstanceIds.length === instanceIds.length) {
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+    }
+    const rejectedSet = new Set(rejectedInstanceIds);
+    const ungroupedInstanceIds = instanceIds.filter((instanceId) => !rejectedSet.has(instanceId));
+    return json({ ungroupedInstanceIds, rejectedInstanceIds });
+  }
+
   if ((request.method === 'POST' || request.method === 'PUT') && route.length === 2 && route[1] === 'batch') {
     const input = await readJson(request);
     if (!Array.isArray(input.instances)) throw new HttpError('instances must be an array', 400);

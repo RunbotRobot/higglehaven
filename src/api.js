@@ -668,6 +668,30 @@ export async function deleteInstancesRemote(instanceIds) {
   }
 }
 
+// #2764: groups 2+ placed instances under one freshly minted, persistent
+// groupId. Unlike the batch endpoints above, this isn't chunked — Group is
+// only ever called with the current Build-mode selection (already capped
+// well under the worker's own 100-item request limit by what a builder can
+// realistically select at once), not an arbitrary bulk list.
+export async function groupInstancesRemote(instanceIds) {
+  const { groupId, instances } = await requestJson('/instances/group', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ instanceIds }),
+  });
+  return { groupId, instances };
+}
+
+// #2764: dissolves a group back to independent items.
+export async function ungroupInstancesRemote(groupId) {
+  const { ungroupedInstanceIds, rejectedInstanceIds } = await requestJson('/instances/ungroup', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ groupId }),
+  });
+  return { ungroupedInstanceIds, rejectedInstanceIds };
+}
+
 // Uploads a .glb file directly. Distinct from requestJson above since this
 // needs a raw multipart body, not a JSON one.
 export async function uploadModelFile(file) {

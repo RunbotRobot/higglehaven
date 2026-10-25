@@ -4033,6 +4033,13 @@ export function instanceFromRow(row) {
     scale: row.scale,
     isCommunitySign: Boolean(row.is_community_sign),
     isCommunityCalendar: Boolean(row.is_community_calendar),
+    // #2764: never settable through POST/PATCH's own generic field merge
+    // (validateInstance/instanceParams deliberately don't read or write
+    // this column) -- same "not ordinary-self-service-settable" treatment
+    // as isTestModel/flaggedHiddenAt (templateFromRow's own comments). Only
+    // POST /api/instances/group and POST /api/instances/ungroup
+    // (worker/lib/world-objects.js) ever change it.
+    groupId: row.group_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

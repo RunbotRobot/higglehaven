@@ -4050,6 +4050,7 @@ migration.
   "scale": 1,
   "isCommunitySign": false,
   "isCommunityCalendar": false,
+  "groupId": null,
   "createdAt": "2026-07-29T07:30:06.519Z",
   "updatedAt": "2026-07-29T07:30:06.519Z"
 }
@@ -4088,6 +4089,16 @@ now-removed Resize gizmo ever did, bounded then to `[0.001, 1000]`.
 Shop-mode rendering it drives. `isCommunityCalendar` is the same idea for
 a "community calendar" (see "Community calendar" below) — the two flags
 are independent, and an instance can be both at once.
+
+`groupId` (#2764) is `null` for an ordinary, independent instance, or a
+shared opaque string for every instance that was grouped together via
+`POST /api/instances/group` — see that endpoint below. It's read-only from
+every ordinary write: `POST`/`PUT`/`PATCH .../batch`, `POST /api/instances`,
+and `PUT`/`PATCH /api/instances/:instanceId` all ignore a `groupId` in the
+request body, the same "not ordinary-self-service-settable" treatment
+catalog templates' own `isTestModel`/`flaggedHiddenAt` get — only
+`POST /api/instances/group` and `POST /api/instances/ungroup` ever change
+it.
 
 ### `GET /api/instances`
 
@@ -4234,6 +4245,87 @@ Response:
   "deleted": true
 }
 ```
+
+### `POST /api/instances/group`
+
+#2764 (sub-issue of #2763, owner-requested). Requires a session; every
+referenced instance's `landletId` must belong to the calling session's
+builder (`403` otherwise). Groups 2–100 placed instances together under a
+freshly minted, shared `groupId` — persists across save/reload, unlike the
+transient multi-select group-move (`groupMovePivot`, `src/build/scene.js`)
+that only ever lives for the duration of one drag.
+
+There's no separate "create a group first" step — grouping a selection
+that already includes members of one or more existing groups simply
+overwrites every referenced instance's `groupId` with the one freshly
+minted here, merging whatever prior groups happened to be in the
+selection. The frontend's own selection logic always expands a selection
+to whole groups before this is ever called (see "Group/Ungroup (#2764)"
+below), so in ordinary use this never splits a group — but the server
+doesn't rely on that itself.
+
+Request body:
+
+```json
+{ "instanceIds": ["2ddc1202-...", "91fa0cc3-..."] }
+```
+
+`instanceIds` must have 2–100 unique entries, each an existing instance.
+A missing id returns `404` and leaves nothing changed.
+
+Response (`201`):
+
+```json
+{
+  "groupId": "c9f6e9b2-...",
+  "instances": [ /* placed instance objects, each now carrying groupId */ ]
+}
+```
+
+**All-or-nothing, unlike the batch endpoints' own partial-success
+convention above.** A since-changed landlet ownership racing this request
+(same point-in-time-check gap `#929`'s idiom guards everywhere else in
+this file) could in principle let some referenced instances' writes land
+and others' not — but since this call mints one brand-new shared id,
+"most members report it, a few don't" is an actively broken, half-formed
+group, not a partially-applied write the way the `batch` endpoints'
+own pre-existing-row updates are. If any referenced instance's write is
+rejected this way, the ones that did land are rolled back (`groupId` reset
+to `null`) and the whole request fails with `409` — safe to refetch and
+retry, same as a `batch` endpoint's own full-rejection case.
+
+### `POST /api/instances/ungroup`
+
+#2764. Requires a session; every instance currently in the target group
+must belong to a landlet the calling session's builder owns (`403`
+otherwise). Fully dissolves a group back to independent items — there is
+no partial/nested ungroup (splitting a group into two smaller groups, or
+peeling off just one member while the rest stay grouped); every member's
+`groupId` is cleared to `null`.
+
+Request body:
+
+```json
+{ "groupId": "c9f6e9b2-..." }
+```
+
+A `groupId` naming no current members returns `404`.
+
+Response:
+
+```json
+{
+  "ungroupedInstanceIds": ["2ddc1202-...", "91fa0cc3-..."],
+  "rejectedInstanceIds": []
+}
+```
+
+Unlike `POST /api/instances/group` above, this follows the ordinary
+`#1772`/`#1773` partial-success convention: dissolving is independent per
+member (a member left behind mid-dissolve is just "still grouped," not a
+broken shared-id state), so only a total failure (every member's write
+rejected) returns a clean `409`; a partial success still returns `200`
+with both halves reported.
 
 ## Notifications
 
@@ -6906,6 +6998,39 @@ use) until it's removed from every chain that references it.
 See "Sold-out templates" above for how `sweepSoldOutTemplateInstances`
 consults this chain the moment a template it's placed against hits zero
 stock.
+
+### Group/Ungroup (#2764)
+
+The base layer of #2763 (owner-requested, tracking issue for the full
+"Group"/"Ungroup" feature — defaulting a saved/placed bundle to grouped is
+separate, later sub-issue scope, not covered here). See "`POST
+/api/instances/group`"/"`POST /api/instances/ungroup`" above for the
+backend; this section is the Build-mode (`src/build/scene.js`, `#group-item`/
+`#ungroup-item` toolbar buttons) behavior those endpoints are wired to.
+
+- **Selection always expands to whole groups.** Tapping any one placed
+  item (`selectOnly`) or adding one to a multi-select (`toggleInSelection`)
+  looks up every other currently-loaded instance sharing its `groupId`
+  (via `mesh.userData.groupId`, set from the instance's own `groupId` field
+  whenever a mesh is built — `createMeshForInstance`, `src/world/models.js`)
+  and selects/deselects the whole set together, not just the tapped item.
+  An ungrouped item (`groupId: null`) is unaffected — it behaves as a
+  "group of one" for this purpose.
+- **Group** (toolbar button, enabled whenever 2+ items are selected) calls
+  `POST /api/instances/group` with the current selection's instance ids.
+- **Ungroup** (enabled whenever the selection includes any grouped item)
+  calls `POST /api/instances/ungroup` with that group's `groupId`.
+- **Moving any member moves the whole group** — this needed no new
+  movement code: Move mode already attaches the shared `groupMovePivot`
+  (rather than a single item's own gizmo) whenever `selectedMeshes.size >
+  1`, regardless of how that multi-item selection came to exist. Once
+  selection expansion makes a grouped tap always produce a 2+-item
+  selection, the existing group-move math takes over unchanged.
+- Selection-expansion and the toolbar buttons are this sub-issue's whole
+  scope. What clicking one grouped member while *not* wanting the whole
+  group selected looks like, how Group interacts with Save Bundle, and
+  whether Ungroup should ever be partial are #2763's own open "owner-
+  judgment items" — deliberately not decided here.
 
 #### Stock indicator in the catalog picker (#1951)
 

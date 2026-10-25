@@ -109,6 +109,8 @@ import {
   fetchSavedLayouts,
   fetchSavedLayout,
   deleteSavedLayout,
+  groupInstancesRemote,
+  ungroupInstancesRemote,
 } from './api.js';
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from './modelOptimizer.js';
 import { getUnits, setUnits, unitSuffix, toDisplayLength, fromDisplayLength, formatLength, formatArea } from './settings.js';

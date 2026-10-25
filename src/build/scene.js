@@ -63,6 +63,7 @@ import {
   createInstanceRemote, updateInstanceRemote, deleteInstanceRemote,
   createInstancesRemote, upsertInstancesRemote, deleteInstancesRemote,
   fetchLandlets, fetchLandletLevels, addLandletLevel, deleteLandletLevel,
+  groupInstancesRemote, ungroupInstancesRemote,
 } from '../api.js';
 import { toDisplayLength, fromDisplayLength, formatLength, formatArea } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
@@ -1455,6 +1456,9 @@ const copyBtn = document.getElementById('copy-item');
 const communitySignBtn = document.getElementById('toggle-community-sign');
 const communityCalendarBtn = document.getElementById('toggle-community-calendar');
 const backupChainBtn = document.getElementById('toggle-backup-chain');
+// #2764
+const groupBtn = document.getElementById('group-item');
+const ungroupBtn = document.getElementById('ungroup-item');
 
 const deleteBtn = document.getElementById('delete-item');
 const multiSelectBtn = document.getElementById('toggle-multiselect');
@@ -2609,6 +2613,12 @@ export function updateSelectionUI() {
   // same single-selection-only gating as Trim/Community Sign/Calendar
   // above, but no toggle/active state of its own to reflect.
   backupChainBtn.disabled = !singleMesh;
+  // #2764: Group needs 2+ items to form anything; Ungroup needs the
+  // selection to include at least one already-grouped item (every member
+  // of that group is in the selection too, per selectOnly/toggleInSelection's
+  // own expansion above, so this always targets a whole group).
+  groupBtn.disabled = count < 2;
+  ungroupBtn.disabled = ![...selectedMeshes].some((mesh) => mesh.userData.groupId);
   if (multiSelectMode) {
     // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
     // — the gizmo stays hidden the whole time multi-select is on, so it
@@ -2643,29 +2653,55 @@ export function clearSelection() {
   selectedMeshes.clear();
 }
 
+// #2764: every other currently-loaded mesh sharing `mesh`'s own groupId
+// (itself, included) — a plain [mesh] for an ungrouped item (groupId
+// null), which lets selectOnly/toggleInSelection below call this
+// unconditionally rather than branching on whether mesh is grouped at all.
+// Looked up fresh on every call (not cached) since productMeshes/each
+// mesh's own userData.groupId can change between selections (a Group/
+// Ungroup action, or a different landlet's instances loading in).
+function groupMembers(mesh) {
+  if (!mesh.userData.groupId) return [mesh];
+  return productMeshes.filter((other) => other.userData.groupId === mesh.userData.groupId);
+}
+
 // Single-select: replaces the whole selection with just this one item (or
 // clears it, for `mesh === null`) — the ordinary tap-a-product behavior,
 // used whether or not multi-select mode happens to be on (e.g. right after
-// a fresh placement).
+// a fresh placement). #2764: when the tapped item is part of a persisted
+// group, the whole group is selected together, not just the tapped item —
+// selecting any one member selects/moves the whole group.
 export function selectOnly(mesh) {
-  if (selectedMeshes.size === 1 && selectedMeshes.has(mesh)) return;
+  const targetMeshes = mesh ? groupMembers(mesh) : [];
+  if (selectedMeshes.size === targetMeshes.length && targetMeshes.every((m) => selectedMeshes.has(m))) return;
   clearSelection();
-  if (mesh) {
-    selectedMeshes.add(mesh);
-    addSelectionOutline(mesh);
+  for (const target of targetMeshes) {
+    selectedMeshes.add(target);
+    addSelectionOutline(target);
   }
   updateSelectionUI();
 }
 
-// Multi-select: adds or removes just this one item, leaving the rest of
-// the selection alone.
+// Multi-select: adds or removes just this one item (and, #2764, every other
+// member of its group, if it has one), leaving the rest of the selection
+// alone. Expanding here too (not just in selectOnly above) keeps the
+// invariant that the active selection is always a union of whole groups —
+// without it, a builder could use multi-select to pick out a strict subset
+// of an existing group, which Group (see its own worker-side comment)
+// isn't designed to split cleanly.
 export function toggleInSelection(mesh) {
-  if (selectedMeshes.has(mesh)) {
-    selectedMeshes.delete(mesh);
-    removeSelectionOutline(mesh);
-  } else {
-    selectedMeshes.add(mesh);
-    addSelectionOutline(mesh);
+  const members = groupMembers(mesh);
+  const nowSelected = !selectedMeshes.has(mesh);
+  for (const member of members) {
+    if (nowSelected) {
+      if (!selectedMeshes.has(member)) {
+        selectedMeshes.add(member);
+        addSelectionOutline(member);
+      }
+    } else if (selectedMeshes.has(member)) {
+      selectedMeshes.delete(member);
+      removeSelectionOutline(member);
+    }
   }
   updateSelectionUI();
 }
@@ -2734,6 +2770,60 @@ deleteBtn.addEventListener('click', () => {
   updateSelectionUI();
   for (const mesh of meshes) deleteInstance(mesh, { sync: false });
   syncBatchDelete(instanceIds);
+});
+
+// #2764: Group/Ungroup aren't wired into Undo/Redo (unlike Delete above) —
+// captureSnapshot/restoreSnapshot round-trip position/rotation/crop/scale,
+// not arbitrary userData, and teaching them to also carry groupId is more
+// than this leaf's own scope ("core schema + actions") asks for. Left as a
+// follow-up for whoever revisits this, same as #2763's other explicitly
+// open owner-judgment items.
+// Feedback is the same brief press-flash copyBtn's own handler uses (see
+// its comment), not a delayed setProductInfo message like Save Bundle's —
+// unlike Copy, forming/dissolving a group is a real persisted state change
+// that Ungroup/Group's own enabled state needs to reflect the instant it
+// lands, so updateSelectionUI() runs synchronously right after, not behind
+// a setTimeout that would leave the toolbar briefly out of sync with what
+// just happened.
+groupBtn.addEventListener('click', async () => {
+  if (selectedMeshes.size < 2 || sceneMutationBusy) return;
+  const meshes = [...selectedMeshes];
+  const instanceIds = meshes.map((mesh) => mesh.userData.instanceId);
+  groupBtn.disabled = true;
+  try {
+    const { groupId } = await groupInstancesRemote(instanceIds);
+    for (const mesh of meshes) mesh.userData.groupId = groupId;
+    groupBtn.classList.add('pressed');
+    setTimeout(() => groupBtn.classList.remove('pressed'), 150);
+  } catch (err) {
+    console.error('Could not group selection:', err);
+    setProductInfo(err.message || 'Could not group selection.');
+  } finally {
+    updateSelectionUI();
+  }
+});
+
+ungroupBtn.addEventListener('click', async () => {
+  const groupedMesh = [...selectedMeshes].find((mesh) => mesh.userData.groupId);
+  if (!groupedMesh || sceneMutationBusy) return;
+  const groupId = groupedMesh.userData.groupId;
+  ungroupBtn.disabled = true;
+  try {
+    const { ungroupedInstanceIds } = await ungroupInstancesRemote(groupId);
+    const ungroupedSet = new Set(ungroupedInstanceIds);
+    for (const mesh of productMeshes) {
+      if (mesh.userData.groupId === groupId && ungroupedSet.has(mesh.userData.instanceId)) {
+        mesh.userData.groupId = null;
+      }
+    }
+    ungroupBtn.classList.add('pressed');
+    setTimeout(() => ungroupBtn.classList.remove('pressed'), 150);
+  } catch (err) {
+    console.error('Could not ungroup selection:', err);
+    setProductInfo(err.message || 'Could not ungroup selection.');
+  } finally {
+    updateSelectionUI();
+  }
 });
 
 // Each selected item's position/rotation *relative* to the group — offset
