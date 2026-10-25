@@ -50,6 +50,25 @@ const MAX_TEXTURE_SIZE = 1024;
 // trying, so this is surfaced as a warning rather than a refusal.
 const LARGE_MESH_VERTEX_WARNING_THRESHOLD = 150000;
 
+// #2744: SimplifyModifier's edge-collapse algorithm (both the stock one and
+// this file's own vendored copy) has no topology-preserving guarantee -- it
+// can and does tear real holes (new boundary edges in a previously closed
+// mesh) into the result once a single pass removes too large a fraction of
+// a mesh's vertices at once. Confirmed empirically (not theoretically) with
+// a standalone probe against several unrelated closed shapes (TorusKnot,
+// Sphere, Cylinder): all stayed hole-free up through a 60% single-pass
+// removal, and all but Sphere (the least topologically complex of the
+// three) had started tearing by 65-70%. A single mesh that's drastically
+// larger than TARGET_TRIANGLES_PER_MESH -- e.g. a dense, non-skinned
+// character/prop mesh -- would otherwise need exactly this kind of
+// extreme single-pass ratio to hit the target in one modify() call. Same
+// "optimization is a nice-to-have, not a requirement" tradeoff this file
+// already makes for a skinned mesh (#1552) and a thrown simplifier error
+// (see this function's own caller in main.js): capping how much a single
+// pass may remove means an extremely dense mesh comes out larger than
+// TARGET_TRIANGLES_PER_MESH rather than risking visible holes to hit it.
+const MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION = 0.6;
+
 const gltfLoader = new GLTFLoader();
 const gltfExporter = new GLTFExporter();
 const fbxLoader = new FBXLoader();
@@ -161,11 +180,15 @@ export async function optimizeModelFile(file, onProgress) {
     const vertexCount = mergedForCount.attributes.position.count;
     mergedForCount.dispose();
     const targetVertexCount = Math.max(3, Math.round(vertexCount * (TARGET_TRIANGLES_PER_MESH / triangleCount)));
-    const removeCount = vertexCount - targetVertexCount;
-    if (removeCount <= 0) {
+    const uncappedRemoveCount = vertexCount - targetVertexCount;
+    if (uncappedRemoveCount <= 0) {
       trianglesAfter += triangleCount;
       return;
     }
+    // #2744: see MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION's own comment --
+    // don't let one mesh's removeCount exceed the empirically-safe
+    // single-pass ratio just to hit TARGET_TRIANGLES_PER_MESH exactly.
+    const removeCount = Math.min(uncappedRemoveCount, Math.floor(vertexCount * MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION));
 
     const simplified = simplifier.modify(geometry, removeCount);
     geometry.dispose();
