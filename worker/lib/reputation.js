@@ -437,7 +437,7 @@ export async function handleProductFlags(request, db, route) {
     // fraud, minor-safety), regardless of the seller's prior strike count --
     // only meaningful on approve, silently ignored otherwise.
     const severe = input.severe === true;
-    const template = await db.prepare('SELECT template_id, seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    const template = await db.prepare('SELECT template_id, seller_id, product_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     if (!template) return json({ error: 'Catalog template not found' }, 404);
     // Resolves every still-pending flag on this listing at once -- a flag is
     // a report against the *listing*, not an individually-adjudicated claim,
@@ -462,6 +462,45 @@ export async function handleProductFlags(request, db, route) {
         UPDATE catalog_templates SET flagged_hidden_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE template_id = ? AND flagged_hidden_at IS NULL
       `).bind(templateId).run();
+      // #2749: migrations/0153 lets more than one seller's own listing
+      // (catalog_templates row) share the same underlying `products` row.
+      // An admin-confirmed counterfeit/policy removal is a decision about
+      // the product itself, not just the one listing the flags happened to
+      // land on -- so it cascades to every sibling listing of the same
+      // product, and to every already-placed instance of any of them,
+      // across every landlet. Gated on product_id being set at all: a
+      // listing created before #2746's backfill ran, or otherwise never
+      // backfilled, has no sibling to cascade to.
+      if (template.product_id) {
+        await db.prepare(`
+          UPDATE products SET flagged_hidden_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE product_id = ? AND flagged_hidden_at IS NULL
+        `).bind(template.product_id).run();
+        await db.prepare(`
+          UPDATE catalog_templates SET flagged_hidden_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE product_id = ? AND flagged_hidden_at IS NULL
+        `).bind(template.product_id).run();
+        await db.prepare(`
+          DELETE FROM placed_instances WHERE template_id IN (
+            SELECT template_id FROM catalog_templates WHERE product_id = ?
+          )
+        `).bind(template.product_id).run();
+        // Best-effort notification to every *other* seller whose own
+        // listing of the same product just got cascade-hidden -- unlike
+        // the flagged listing's own seller below, they get no strike (the
+        // flag was never against their listing), just a heads-up.
+        const siblingSellers = await db.prepare(`
+          SELECT DISTINCT b.builder_id AS builder_id
+          FROM catalog_templates ct
+          JOIN sellers s ON s.seller_id = ct.seller_id
+          JOIN builders b ON b.user_id = s.user_id
+          WHERE ct.product_id = ? AND ct.seller_id IS NOT NULL AND ct.seller_id != ?
+        `).bind(template.product_id, template.seller_id ?? '').all();
+        for (const sibling of siblingSellers.results) {
+          await fireNotification(db, sibling.builder_id,
+            'A product you sell was removed from the catalog after an admin-confirmed counterfeit/policy-violation flag against another seller\'s listing of the same shared product. No action was taken against your own account.');
+        }
+      }
       if (template.seller_id) {
         await db.prepare('UPDATE sellers SET strike_count = strike_count + 1 WHERE seller_id = ?').bind(template.seller_id).run();
         // Best-effort notification, same seller-resolved-via-shared-user_id
