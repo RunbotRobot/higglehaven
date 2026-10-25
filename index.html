@@ -1622,6 +1622,7 @@
         line-height: 1;
       }
       #upload-model-btn,
+      #sell-this-too-btn,
       #toggle-multiselect,
       #toggle-measure,
       #paste-btn {
@@ -1702,6 +1703,51 @@
       #upload-modal-content h2 {
         margin: 0;
         font-size: 17px;
+      }
+      /* #2748: same centered-overlay-stacked-above-the-Seller-modal shape
+         as #upload-modal above, just its own id so both can independently
+         toggle .visible. */
+      #sell-this-too-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #sell-this-too-modal.visible {
+        display: flex;
+      }
+      #sell-this-too-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 420px;
+        max-height: 90vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #sell-this-too-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      /* Same grid idiom as #seller-list-view's own tiles (reuses that
+         view's .seller-card/-thumb/-name/-price classes directly, see
+         src/sell/mode.js's renderSellThisTooGrid). */
+      #sell-this-too-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        gap: 10px;
+        max-height: 55vh;
+        overflow-y: auto;
       }
       #upload-modal-content label {
         display: flex;
@@ -4569,6 +4615,23 @@
         </div>
       </div>
     </div>
+    <!-- #2748 (leaf of #2745's shared-products redesign): "Sell This Too"
+         -- browse every product in the catalog (any seller's, not just
+         this one's own) and attach a fresh listing to whichever one is
+         picked, instead of uploading a new model. Its own modal, stacked
+         above the Seller modal exactly like #upload-modal above (not
+         reachable from the Build-mode catalog picker's #add-item-panel --
+         see src/sell/mode.js's own comment on this button's click
+         handler for why). -->
+    <div id="sell-this-too-modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div id="sell-this-too-modal-content">
+        <button id="sell-this-too-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2>Sell This Too</h2>
+        <input type="text" id="sell-this-too-search-input" class="seller-filter-control" placeholder="Search products…" autocomplete="off" aria-label="Search products">
+        <div id="sell-this-too-grid"></div>
+        <div id="sell-this-too-empty" hidden>No products match your search.</div>
+      </div>
+    </div>
     <!-- #659 (owner, Control Room, 2026-09-11): the plain-language refund
          policy explanation — deliberately NOT the fine-print ToS wording,
          per the owner's own ask. Draft copy pending the owner's sign-off
@@ -4659,6 +4722,15 @@
         <div id="seller-feedback-summary" hidden></div>
         <div id="seller-feedback-list" class="seller-review-list"></div>
         <button id="upload-model-btn" type="button">+ Upload Model</button>
+        <!-- #2748 (leaf of #2745's shared-products redesign): attaches the
+             seller's own listing (price/stock) to a product someone else
+             already uploaded, instead of uploading a new model -- "Sell
+             This Too" rather than "Duplicate" deliberately: see #2218's
+             own discussion (that button copies a product within ONE
+             seller's own catalog for safe editing; this attaches a SECOND
+             seller's own listing to the SAME shared product, never
+             implying a copy is made). -->
+        <button id="sell-this-too-btn" type="button">Sell This Too</button>
         <div id="seller-view-toggle">
           <button type="button" class="seller-view-btn" data-view="manage">Manage</button>
           <button type="button" class="seller-view-btn" data-view="list">List view</button>

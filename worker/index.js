@@ -4011,6 +4011,16 @@ export function templateFromRow(row) {
     // #1948: NULL = unlimited (the default); a set value is remaining
     // stock, decremented atomically at purchase-finalize time.
     stockQuantity: row.stock_quantity,
+    // #2748 (leaf of #2745's shared-products redesign): the shared product
+    // this listing is backed by -- null only for a pre-#2748 row that
+    // predates both #2746's historical backfill and #2748's own go-forward
+    // wiring (neither of which this build should still have any of, but
+    // the column itself stays nullable per migrations/0153's own comment,
+    // so this is never assumed non-null). Exposed so the client can tell
+    // which product a listing belongs to -- needed by src/sell/mode.js's
+    // "Sell This Too" flow (#2748) to attach a second seller's own listing
+    // to the same product via POST /api/catalog/listings.
+    productId: row.product_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
