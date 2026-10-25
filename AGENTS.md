@@ -44,7 +44,32 @@ doesn't get removed by another before it's proven its worth:
   field earns removal through this explicit check, not through
   staleness or "looks unused" alone.
 
-## Branch: always your own Claude Code session's name
+## Surfacing items waiting on the owner: in direct conversation, not email, no age gate
+
+The owner has said directly (2026-10-25) that they don't check the
+Control Room admin page on their own — they rely on whichever session
+they're talking to live to tell them what's waiting on their judgment.
+A `control_room_tasks` card showing `waitingOn: "owner"` is real,
+correctly-tracked fleet state (see "The control room" above) — the gap
+isn't tracking it, it's that nothing pushes it back to the owner's
+attention. A real card sat `waitingOn: "owner"` for over a month (#836)
+before coming up at all, simply because nobody was looking at the page.
+
+So: whichever session is in live conversation with the owner (as of
+writing, the session kept available for this per the owner's 2026-10-06
+instruction) should proactively check for unresolved `waitingOn:
+"owner"` Control Room cards and open owner-judgment-gated GitHub issues
+(`[owner judgment needed]`/`[owner action needed]` in the title, or an
+explicit "not self-assigning, owner call" in the body) whenever the
+owner opens a conversation — lead with them as the next thing to work
+through, the same way you'd already lead with the single most important
+urgent item. Present them **one at a time** (quick back-and-forth beats
+a wall of text) rather than dumping the whole backlog at once. Don't
+wait for the owner to ask what to work on, and don't gate this on any
+age threshold — surface an item the first time it's genuinely next up,
+not after it's been sitting for a while. This is conversational
+surfacing, not a new notification channel — the owner explicitly asked
+for this instead of an emailed digest, so don't build one.
 
 Multiple Claude Code sessions work on this repo at once, each with a
 fixed session name assigned by the project owner — `higglehaven1`
@@ -242,6 +267,24 @@ the same way you would if freshly prompted: check `control_room_tasks`
 for unresolved owner direction (`kind: "feedback"`/`"question"`,
 `status` not `"done"`) first, then the GitHub Issues backlog per
 "Claiming a task" below.
+
+**This check must also include `kind: "bug-report"` cards with `status
+!= "done"`, not just `feedback`/`question`.** Found via a real case
+(2026-10-25): a bug-report card the owner deliberately left as a test
+case for the fleet's own Submit-Feedback pipeline sat `status: "queued"`,
+`session: ""` for ~18 hours untouched — not because every session chose
+to pass it over, but because this section's own wording, and every
+individual fleet session's own stored hourly-check-in trigger prompt
+copied from it, only ever named `feedback`/`question` as the kinds to
+check. A `bug-report` card falls through the GitHub-issues net too: it
+isn't one until a session files it as one, so it never shows up in an
+issue-backlog scan either. If you notice your own stored trigger prompt
+still only names `feedback`/`question` (or still points at the
+decommissioned Claude Artifact URL instead of the real D1-backed board —
+also found stale on several fleet triggers the same day), fix it
+yourself via `update_trigger` the next time you're running under it; you
+can self-edit your own trigger's prompt even though editing another
+session's is blocked.
 
 To make that automatic rather than something you have to be re-prompted
 into: set up your own recurring Routine
