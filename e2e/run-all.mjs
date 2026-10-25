@@ -133,22 +133,63 @@ function listWranglerLogFiles() {
   }
 }
 
+// #2673 follow-up: a plain tail-cap (the original #2682 fix) turned out not
+// to work in practice -- wrangler's on-disk debug log is always written at
+// full debug verbosity regardless of console log level, and routine entries
+// (isolate-heartbeat polling every ~10s, a full bundled-source/migration-
+// manifest JSON dump on startup) are each individually far larger than the
+// 50k-char cap. On every real crash sampled from CI since #2682 shipped, the
+// tail was either still mid-heartbeat-polling or mid-dump, with the actual
+// crash reason (if logged at all) already pushed out of the window. Search
+// for lines that look like an actual error first, with surrounding context,
+// and only fall back to a plain tail when nothing matches -- that way a
+// crash that genuinely logs nothing recognizable still shows *something*,
+// but a crash that does log a real message no longer has it drowned out.
+const WRANGLER_LOG_ERROR_LINE_PATTERN = /error|exception|panic|crash(ed)?|fatal|uncaught/i;
+const WRANGLER_LOG_ERROR_CONTEXT_LINES = 20;
+
+function extractWranglerLogExcerpt(content) {
+  const lines = content.split('\n');
+  const matchedLineIndexes = [];
+  lines.forEach((line, index) => {
+    if (WRANGLER_LOG_ERROR_LINE_PATTERN.test(line)) matchedLineIndexes.push(index);
+  });
+  if (matchedLineIndexes.length === 0) {
+    return content.length > WRANGLER_CRASH_LOG_MAX_CHARS
+      ? content.slice(content.length - WRANGLER_CRASH_LOG_MAX_CHARS)
+      : content;
+  }
+  const ranges = matchedLineIndexes
+    .map((index) => [Math.max(0, index - WRANGLER_LOG_ERROR_CONTEXT_LINES), Math.min(lines.length - 1, index + WRANGLER_LOG_ERROR_CONTEXT_LINES)])
+    .sort((a, b) => a[0] - b[0]);
+  const mergedRanges = [];
+  for (const [start, end] of ranges) {
+    const last = mergedRanges[mergedRanges.length - 1];
+    if (last && start <= last[1] + 1) {
+      last[1] = Math.max(last[1], end);
+    } else {
+      mergedRanges.push([start, end]);
+    }
+  }
+  let excerpt = mergedRanges.map(([start, end]) => lines.slice(start, end + 1).join('\n')).join('\n...\n');
+  if (excerpt.length > WRANGLER_CRASH_LOG_MAX_CHARS) {
+    excerpt = `${excerpt.slice(0, WRANGLER_CRASH_LOG_MAX_CHARS)}\n... [truncated]`;
+  }
+  return excerpt;
+}
+
 // Reads whatever log file(s) appeared in WRANGLER_LOG_DIR since
-// `before` was snapshotted, tail-capped the same way the in-memory
-// stdout/stderr capture above already is. Best-effort: a file that's
-// gone, unreadable, or mid-write by the time this runs just gets skipped
-// rather than failing the whole diagnostic attempt.
+// `before` was snapshotted. Best-effort: a file that's gone, unreadable, or
+// mid-write by the time this runs just gets skipped rather than failing the
+// whole diagnostic attempt.
 function readNewWranglerLogFiles(before) {
   const after = listWranglerLogFiles();
   const newFiles = [...after].filter((name) => !before.has(name)).sort();
   const sections = [];
   for (const name of newFiles) {
     try {
-      let content = readFileSync(path.join(WRANGLER_LOG_DIR, name), 'utf8');
-      if (content.length > WRANGLER_CRASH_LOG_MAX_CHARS) {
-        content = content.slice(content.length - WRANGLER_CRASH_LOG_MAX_CHARS);
-      }
-      sections.push(`--- ${name} ---\n${content}`);
+      const content = readFileSync(path.join(WRANGLER_LOG_DIR, name), 'utf8');
+      sections.push(`--- ${name} ---\n${extractWranglerLogExcerpt(content)}`);
     } catch {
       // Skip unreadable/already-cleaned-up files -- nothing more to do.
     }
