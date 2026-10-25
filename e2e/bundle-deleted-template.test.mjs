@@ -15,7 +15,7 @@
 // the test can authenticate as.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, saveBundleAs } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -96,7 +96,7 @@ await page.waitForTimeout(300);
 const selectionText = await page.textContent('#product-info');
 console.log('selection status before saving (should say 2 items selected):', selectionText);
 
-await page.click('#save-bundle-item');
+await saveBundleAs(page, LABEL);
 await page.waitForFunction(
   () => document.getElementById('product-info').textContent.includes('Saved'),
   null,

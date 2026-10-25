@@ -5,7 +5,7 @@
 // refetch of its own), a builder who creates a bundle before that deferred
 // fetch resolves could have it silently wiped from the picker once the
 // fetch's own stale (pre-creation) snapshot landed and overwrote it.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, saveBundleAs } from './helpers.mjs';
 
 const LABEL = 'Deferred Bundles Race Tester';
 const BUNDLE_NAME = 'Race Bundle';
@@ -50,8 +50,7 @@ await page.mouse.click(210, 400);
 await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Tree'), null, { timeout: 60000 });
 await page.click('#toggle-multiselect');
 await page.waitForTimeout(300);
-await page.evaluate((n) => { window.prompt = () => n; }, BUNDLE_NAME);
-await page.click('#save-bundle-item');
+await saveBundleAs(page, BUNDLE_NAME);
 await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Saved'), null, { timeout: 60000 });
 
 // Reopen the picker right away -- the bundle should already show, from

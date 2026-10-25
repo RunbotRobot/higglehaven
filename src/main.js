@@ -634,6 +634,7 @@ export async function persistCatalogThumbnail(template) {
 // the Seller modal's own "Save Size" resize handler below needs this exact
 // same check, not just this modal's own handleUploadDimensionsStep.
 import { dimensionsChanged } from './catalog/upload.js';
+import { promptBundleName } from './ui/bundleNameModal.js';
 
 // #2558: the catalog/bundle picker modal (Build's add-item flow, "prompt
 // mode" concept-image search, and the bundle picker's own tabs/rename/
@@ -3114,20 +3115,17 @@ const saveBundleBtn = document.getElementById('save-bundle-item');
 saveBundleBtn.addEventListener('click', async () => {
   if (selectedMeshes.size === 0) return;
   const meshes = [...selectedMeshes];
-  const name = prompt('Name this bundle', '');
-  if (!name || !name.trim()) return;
-  if (name.trim().length > 100) {
-    alert('Keep it to 100 characters or fewer.');
-    return;
-  }
-  // Private by default (docs/SPEC.md's Bundles section) — sharing is an
-  // explicit extra step, not the default, so a plain confirm() dialog
-  // (declined by default on most platforms) rather than folding it into
-  // the name prompt itself.
-  const shared = confirm('Share this bundle to the Community tab so any builder can use it too?');
+  // #2761: one themed modal now covers both the name prompt and the
+  // "share to Community" choice (private by default, per docs/SPEC.md's
+  // Bundles section, so the checkbox starts unchecked) — replacing what
+  // used to be a native prompt() immediately followed by a native
+  // confirm().
+  const result = await promptBundleName({ title: 'Name this bundle', showShare: true });
+  if (!result) return;
+  const { name, shared } = result;
   saveBundleBtn.disabled = true;
   try {
-    const bundle = await createBundle({ name: name.trim(), items: relativeItemsForMeshes(meshes), shared });
+    const bundle = await createBundle({ name, items: relativeItemsForMeshes(meshes), shared });
     // #1831: bumps bundlePickerLoadToken so this local, already-up-to-date
     // mutation can't later be clobbered by a slower, now-stale concurrent
     // fetch (e.g. Build mode's own deferred initial bundles load) landing
