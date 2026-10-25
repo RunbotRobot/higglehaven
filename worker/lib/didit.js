@@ -26,7 +26,7 @@ import { appBaseUrl } from '../index.js';
 // diditConfigured(env) is false and the route handlers below return a real
 // 503 rather than attempting a live network call.
 function diditConfigured(env) {
-  return !!env.DIDIT_API_KEY;
+  return !!env.DIDIT_API_KEY && !!env.DIDIT_WORKFLOW_ID;
 }
 
 // Didit's Verification Session API (https://docs.didit.me/) — a plain
@@ -195,6 +195,7 @@ export async function handleDiditVerificationSession(request, env, db) {
   let billedSessionId = null;
   try {
     const session = await diditRequest(env, 'POST', 'v3/session/', {
+      workflow_id: env.DIDIT_WORKFLOW_ID,
       vendor_data: user.user_id,
       callback: `${appBaseUrl(env)}/?diditReturn=1`,
     });
