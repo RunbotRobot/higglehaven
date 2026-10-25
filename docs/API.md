@@ -561,7 +561,8 @@ here, `commerce` and `social` below. A "Download my data" Settings UI
     "videoGenerationJobs": [{ "jobId": "...", "status": "completed", "modelUrl": "...", "...": "..." }],
     "higglesRedemptions": [{ "redemptionId": "...", "amountCents": 1000, "...": "..." }],
     "higglesEarningsEvents": [{ "eventId": "...", "amountCents": 50, "createdAt": "..." }],
-    "bundles": [{ "bundleId": "...", "name": "...", "...": "..." }]
+    "bundles": [{ "bundleId": "...", "name": "...", "...": "..." }],
+    "tax1099Forms": [{ "formId": "...", "taxYear": 2026, "formType": "1099-nec", "status": "filed", "grossIncomeCents": 50000, "generatedAt": "...", "approvedAt": "...", "filedAt": "...", "filingReference": "..." }]
   }
 }
 ```
@@ -569,15 +570,28 @@ here, `commerce` and `social` below. A "Download my data" Settings UI
 Unlike `social` below, always an object, never `null` — empty arrays
 throughout when the account has no builder profile, since none of these
 tables have a `user_id` column of their own to fall back to (every one
-scopes by `builder_id`). Every field is a straightforward `builder_id`
-filter against the requesting account's own builder row. Deliberately
-excludes `tax_1099_forms` — still an open owner judgment call on whether
-the raw `taxIdNumber`/`foreignTaxId` it carries belongs in an export at
-all, and in what form; #1985 itself stays open for just that piece. Also
-excludes `owned_avatar_purchases`/`owned_animation_purchases` — internal
-idempotency/cascade-delete bookkeeping, not independent user-facing data,
-since every field either carries (`purchaseId`, `templateId`) is already
-on the corresponding `ownedAvatars`/`ownedAnimations` row itself.
+scopes by `builder_id`) *except* `tax1099Forms`, which is keyed by
+`user_id` directly (`tax_1099_forms.user_id`, migrations/0081) and so is
+always fetched regardless of whether a builder profile exists. Every
+other field is a straightforward `builder_id` filter against the
+requesting account's own builder row.
+
+`tax1099Forms` resolves the one owner judgment call #1985 originally
+stayed open for: owner decision (2026-10-24) was to include submission
+metadata (form type, tax year, status, gross income, generated/approved/
+filed timestamps, filing reference) but **never** the raw decrypted
+`taxIdNumber`/`foreignTaxId` (`tax_1099_forms.payee_tax_id_encrypted`) —
+that field is AES-GCM-encrypted at rest specifically because it's
+sensitive, and this general-purpose export endpoint isn't purpose-built
+for handling it safely. `payee_email`/`payee_tax_form_type` are also left
+out (they duplicate `profile.account.email`/`profile.account.taxFormType`
+respectively, neither is "form type/date/filing status").
+
+Also excludes `owned_avatar_purchases`/`owned_animation_purchases` —
+internal idempotency/cascade-delete bookkeeping, not independent
+user-facing data, since every field either carries (`purchaseId`,
+`templateId`) is already on the corresponding `ownedAvatars`/
+`ownedAnimations` row itself.
 
 #### `social` (#1986)
 
