@@ -46,6 +46,16 @@ const isFlyBtnActive = () => page.evaluate(() => document.getElementById('shop-f
 // — a standing bird (press to take off) while grounded, a flying bird
 // (press to land) while flying.
 const flyBtnIconFile = () => page.evaluate(() => document.getElementById('shop-fly-btn-icon').src.split('/').pop());
+// #2750: bird-standing.png has generous margin around the bird (its own
+// 1.6x zoom, unchanged), but bird-flying.png's wings already spread nearly
+// to its canvas edges -- that same 1.6x zoom pushed its wingtips past the
+// button's own circular clip. Confirms each icon keeps its own correct,
+// independently-tuned zoom rather than drifting back to a single shared
+// constant that only happens to suit one of the two images.
+const flyBtnIconScale = () => page.evaluate(() => {
+  const match = getComputedStyle(document.getElementById('shop-fly-btn-icon')).transform.match(/matrix\(([^,]+),/);
+  return match ? Number(match[1]) : null;
+});
 
 // #1175: every spawn (not just a first-ever visit) now spawns already
 // flying, above a random world location — no tap needed at all.
@@ -69,6 +79,7 @@ await page.click('#shop-fly-btn');
 const flyingClassRightAfterTakeoffTap = await isFlyingClassSet();
 const flyBtnActiveRightAfterTakeoffTap = await isFlyBtnActive();
 const flyBtnIconRightAfterTakeoffTap = await flyBtnIconFile();
+const flyBtnIconScaleRightAfterTakeoffTap = await flyBtnIconScale();
 const verticalControlsVisibleDuringTakeoff = await page.isVisible('#shop-vertical-controls');
 
 // Wait past SHOP_FLIGHT_TAKEOFF_DURATION_S (1s) so the internal state
@@ -112,6 +123,7 @@ await page.click('#shop-fly-btn');
 const flyingClassRightAfterLandingTap = await isFlyingClassSet();
 const flyBtnActiveRightAfterLandingTap = await isFlyBtnActive();
 const flyBtnIconRightAfterLandingTap = await flyBtnIconFile();
+const flyBtnIconScaleRightAfterLandingTap = await flyBtnIconScale();
 
 // Wait past SHOP_FLIGHT_LANDING_DURATION_S (2s) so the internal state
 // machine has actually settled back to 'grounded' before the page closes.
@@ -125,6 +137,7 @@ console.log('grounded before any takeoff (should be true):', groundedBeforeTakeo
 console.log('shop-flying set immediately after the takeoff tap (should be true):', flyingClassRightAfterTakeoffTap);
 console.log('#shop-fly-btn.active immediately after the takeoff tap (should be true):', flyBtnActiveRightAfterTakeoffTap);
 console.log('#shop-fly-btn-icon right after the takeoff tap (should be bird-standing.png, i.e. "press to land"):', flyBtnIconRightAfterTakeoffTap);
+console.log('#shop-fly-btn-icon scale right after the takeoff tap, showing bird-standing.png (should be 1.6 -- #1815\'s own zoom, unchanged):', flyBtnIconScaleRightAfterTakeoffTap);
 console.log('#shop-vertical-controls visible during takeoff (should be true):', verticalControlsVisibleDuringTakeoff);
 console.log('#shop-up-btn.active while held (should be true):', upBtnActiveWhileHeld);
 console.log('#shop-up-btn.active after drifting off the button while still held (should still be true — #2361):', upBtnActiveAfterDriftOff);
@@ -132,6 +145,7 @@ console.log('#shop-up-btn.active after release (should be false):', upBtnActiveA
 console.log('shop-flying cleared immediately after the landing tap (should be false):', flyingClassRightAfterLandingTap);
 console.log('#shop-fly-btn.active cleared immediately after the landing tap (should be false):', flyBtnActiveRightAfterLandingTap);
 console.log('#shop-fly-btn-icon right after the landing tap (should be bird-flying.png, i.e. "press to take off"):', flyBtnIconRightAfterLandingTap);
+console.log('#shop-fly-btn-icon scale right after the landing tap, showing bird-flying.png (should be 1 -- #2750: no extra zoom, its own wings already fill the frame):', flyBtnIconScaleRightAfterLandingTap);
 console.log('grounded again after the landing duration elapses (should be true):', groundedAfterLanding);
 
 const pass =
@@ -142,6 +156,7 @@ const pass =
   flyingClassRightAfterTakeoffTap &&
   flyBtnActiveRightAfterTakeoffTap &&
   flyBtnIconRightAfterTakeoffTap === 'bird-standing.png' &&
+  flyBtnIconScaleRightAfterTakeoffTap === 1.6 &&
   verticalControlsVisibleDuringTakeoff &&
   upBtnActiveWhileHeld &&
   upBtnActiveAfterDriftOff &&
@@ -149,6 +164,7 @@ const pass =
   !flyingClassRightAfterLandingTap &&
   !flyBtnActiveRightAfterLandingTap &&
   flyBtnIconRightAfterLandingTap === 'bird-flying.png' &&
+  flyBtnIconScaleRightAfterLandingTap === 1 &&
   groundedAfterLanding &&
   errors.length === 0;
 await finish(browser, { pass, label: 'shop-mode flight takeoff/ascend/landing', errors });
