@@ -86,7 +86,12 @@ export async function convertFbxToGlb(file, onProgress) {
   const group = fbxLoader.parse(arrayBuffer, '');
 
   onProgress?.('Re-encoding as glTF…');
-  const resultBuffer = await gltfExporter.parseAsync(group, { binary: true });
+  // #2744: GLTFExporter only writes the animation clips it's explicitly
+  // handed via options.animations -- it never reads them off the source
+  // object itself, so omitting this silently drops every clip FBXLoader
+  // attached to `group.animations` (Mixamo and similar rigs always carry
+  // theirs this way), even though the skeleton/geometry convert over fine.
+  const resultBuffer = await gltfExporter.parseAsync(group, { binary: true, animations: group.animations });
   return new Blob([resultBuffer], { type: 'model/gltf-binary' });
 }
 
@@ -169,7 +174,17 @@ export async function optimizeModelFile(file, onProgress) {
   });
 
   onProgress?.('Re-encoding model…');
-  const resultBuffer = await gltfExporter.parseAsync(scene, { binary: true, maxTextureSize: MAX_TEXTURE_SIZE });
+  // #2744: same reasoning as convertFbxToGlb's own comment above --
+  // GLTFExporter never pulls animation clips off the source scene on its
+  // own, so leaving options.animations unset here silently discarded every
+  // clip gltfLoader.parseAsync just handed back as `gltf.animations`
+  // (docs/SPEC.md's "Avatar rig/animation clip convention" idle/walk/fly
+  // clips among them) on every single upload, regardless of model size --
+  // the skeleton/geometry itself survives re-export fine, so nothing else
+  // here ever surfaced this as a failure. An equipped custom avatar with
+  // real clips therefore always rendered correctly but never animated,
+  // moving only as a rigid whole via root motion.
+  const resultBuffer = await gltfExporter.parseAsync(scene, { binary: true, maxTextureSize: MAX_TEXTURE_SIZE, animations: gltf.animations });
 
   return {
     blob: new Blob([resultBuffer], { type: 'model/gltf-binary' }),
@@ -212,6 +227,9 @@ export async function rescaleModelFile(file, scaleFactor) {
     child.position.multiplyScalar(scaleFactor);
     child.scale.multiplyScalar(scaleFactor);
   }
-  const resultBuffer = await gltfExporter.parseAsync(gltf.scene, { binary: true });
+  // #2744: same reasoning as optimizeModelFile's own comment above --
+  // GLTFExporter needs animation clips passed explicitly, or re-exporting
+  // the scene (as this rescale step always does) silently drops them.
+  const resultBuffer = await gltfExporter.parseAsync(gltf.scene, { binary: true, animations: gltf.animations });
   return new Blob([resultBuffer], { type: 'model/gltf-binary' });
 }
