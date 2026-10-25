@@ -112,6 +112,21 @@ await page.waitForTimeout(1000);
 const infoAfterBundlePlacement = await page.textContent('#product-info');
 console.log('selection after placing the bundle (should say 2 items selected):', infoAfterBundlePlacement);
 
+// #2766: the bundle's newly-placed instances should default to grouped
+// (Ungroup enabled right away, and both instances share one non-null
+// persisted groupId), unlike an ordinary multi-item paste -- same
+// verification shape e2e/group-ungroup.test.mjs's own #2764 coverage uses.
+const ungroupEnabledAfterBundlePlacement = await page.locator('#ungroup-item').isEnabled();
+console.log('Ungroup enabled right after placing the bundle (should be true):', ungroupEnabledAfterBundlePlacement);
+const placedPositions = await page.evaluate(() => window.__testProductScreenPositions());
+const placedBundleIds = placedPositions.slice(-2).map((p) => p.instanceId);
+const bundleGroupFetch = await page.evaluate(async (ids) => {
+  const [resA, resB] = await Promise.all(ids.map((id) => fetch(`/api/instances/${id}`)));
+  const [bodyA, bodyB] = await Promise.all([resA.json(), resB.json()]);
+  return { groupIdA: bodyA.instance?.groupId, groupIdB: bodyB.instance?.groupId };
+}, placedBundleIds);
+console.log('placed bundle instances\' persisted groupId (should be equal, non-null):', bundleGroupFetch);
+
 // Delete it — confirm() is auto-accepted by launchPage's dialog handler —
 // and the section goes back to hidden once nothing's left.
 await page.click('#add-item-btn');
@@ -125,6 +140,8 @@ const pass = bundleSectionHiddenInitially &&
   selectionText.includes('2 items selected') &&
   savedStatus.includes('Saved') && savedStatus.includes('2 item') &&
   bundleSectionVisible && bundleTileText.includes(LABEL) && bundleTileText.includes('2 items') &&
+  ungroupEnabledAfterBundlePlacement &&
+  !!bundleGroupFetch.groupIdA && bundleGroupFetch.groupIdA === bundleGroupFetch.groupIdB &&
   bundleTileTextAfterRename.includes('Renamed Bundle') &&
   infoAfterBundlePlacement.includes('2 items selected') &&
   bundleSectionHiddenAfterDelete &&

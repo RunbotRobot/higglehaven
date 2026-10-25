@@ -402,7 +402,11 @@ export function renderBundlePicker() {
     placeBtn.append(name, count);
     placeBtn.addEventListener('click', () => {
       closeCatalogPicker();
-      enterPlacementMode({ type: 'clipboard', items: bundle.items }, `Tap a spot to place "${bundle.name}"`);
+      // #2766: group: true -- a bundle's own newly-placed instances default
+      // to grouped (placeClipboardItems' own new option, see its comment),
+      // unlike an ordinary clipboard paste through pasteBtn elsewhere in
+      // src/build/scene.js, which leaves this unset.
+      enterPlacementMode({ type: 'clipboard', items: bundle.items, group: true }, `Tap a spot to place "${bundle.name}"`);
     });
     tile.appendChild(placeBtn);
 
