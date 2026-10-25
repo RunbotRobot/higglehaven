@@ -535,5 +535,36 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
       const sellerRow = await env.DB.prepare('SELECT strike_count FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
       expect(sellerRow.strike_count).toBe(1);
     });
+
+    // #2783: auto-hide (unlike approve, just above) used to never cascade to
+    // products.flagged_hidden_at, so POST /api/catalog/listings -- which
+    // only checks that column -- let a seller attach a brand-new listing to
+    // a product that was already auto-hidden pending review, bypassing it
+    // entirely with no admin involvement.
+    it('auto-hiding one listing of a shared product also blocks a brand-new listing attach via POST /catalog/listings', async () => {
+      const sellerA = await signupSeller('auto-hide-cascade-seller-a');
+      const sellerB = await signupSeller('auto-hide-cascade-seller-b');
+      await createTemplate('auto-hide-cascade-listing-a', sellerA);
+      await createProduct('auto-hide-cascade-product-1');
+      await linkToProduct('auto-hide-cascade-listing-a', 'auto-hide-cascade-product-1');
+
+      const flaggers = await Promise.all([1, 2, 3].map((n) => signupBuilder(`auto-hide-cascade-flagger-${n}`)));
+      let lastResult;
+      for (const flagger of flaggers) {
+        lastResult = await api('/catalog/auto-hide-cascade-listing-a/flags', flagger.session({ method: 'POST', body: JSON.stringify({}) }));
+      }
+      expect(lastResult.body.autoHidden).toBe(true);
+
+      const product = await env.DB.prepare('SELECT flagged_hidden_at FROM products WHERE product_id = ?')
+        .bind('auto-hide-cascade-product-1').first();
+      expect(product.flagged_hidden_at).toBeTruthy();
+
+      const attach = await api('/catalog/listings', sellerB.session({
+        method: 'POST',
+        body: JSON.stringify({ productId: 'auto-hide-cascade-product-1', priceCents: 500 }),
+      }));
+      expect(attach.response.status).toBe(400);
+      expect(attach.body.error).toMatch(/temporarily unavailable pending review/);
+    });
   });
 });

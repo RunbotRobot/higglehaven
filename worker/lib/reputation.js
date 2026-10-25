@@ -371,7 +371,7 @@ export async function handleProductFlags(request, db, route) {
   const templateId = route[1];
 
   if (request.method === 'POST' && route.length === 3) {
-    const template = await db.prepare('SELECT template_id, flagged_hidden_at, seller_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    const template = await db.prepare('SELECT template_id, flagged_hidden_at, seller_id, product_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     if (!template) return json({ error: 'Catalog template not found' }, 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
     await checkRateLimit(db, `product-flag-create:${sessionBuilder.builder_id}`, PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX);
@@ -404,6 +404,21 @@ export async function handleProductFlags(request, db, route) {
         WHERE template_id = ? AND flagged_hidden_at IS NULL
       `).bind(templateId).run();
       autoHidden = hideResult.meta.changes === 1;
+      // #2783: without this, a shared product (#2749's products table)
+      // auto-hidden here stays purchasable through a brand-new sibling
+      // listing -- POST /api/catalog/listings only checks products.
+      // flagged_hidden_at, which auto-hide never used to touch. Narrower
+      // than the approve branch below on purpose: no sibling-listing
+      // cascade, no placed_instances deletion, no strike -- those stay
+      // admin-approve-only, matching this file's existing "provisional
+      // (auto-hide) vs. confirmed (approve)" distinction. Just enough to
+      // close the new-listing bypass for the product under review.
+      if (autoHidden && template.product_id) {
+        await db.prepare(`
+          UPDATE products SET flagged_hidden_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+          WHERE product_id = ? AND flagged_hidden_at IS NULL
+        `).bind(template.product_id).run();
+      }
       // #2056: auto-hide blocks every future purchase of this listing
       // immediately, well before any admin reviews the flags -- the same
       // practical effect on the seller as the admin-confirmed `approve`
