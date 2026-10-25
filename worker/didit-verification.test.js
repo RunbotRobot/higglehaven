@@ -463,11 +463,13 @@ describe('Didit verification webhook (#589)', () => {
       expect(latest.session_id.startsWith('pending-')).toBe(true);
 
       env.DIDIT_API_KEY = 'test-didit-api-key';
+      env.DIDIT_WORKFLOW_ID = 'test-didit-workflow-id';
       try {
         const status = await reconcileDiditSession(env, env.DB, latest, userId);
         expect(status).toBe('pending');
       } finally {
         env.DIDIT_API_KEY = undefined;
+        env.DIDIT_WORKFLOW_ID = undefined;
       }
 
       const session = await env.DB.prepare('SELECT status, processed_at FROM didit_verification_sessions WHERE session_id = ?').bind(reservation.reservationId).first();

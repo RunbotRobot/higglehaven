@@ -344,6 +344,16 @@
   <section class="panel" id="panel-accounts">
     <p class="sub">Suspend/unsuspend an account, or check its current suspension status. Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/2299" target="_blank" rel="noopener">#2299</a> — the endpoints themselves landed with <a href="https://github.com/RunbotRobot/higglehaven/issues/1201" target="_blank" rel="noopener">#1201</a>.</p>
 
+    <h2>Find user</h2>
+    <p class="sub">Search by username or email before suspending, so you can confirm the right account from its own detail view first. Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/2757" target="_blank" rel="noopener">#2757</a>.</p>
+    <p class="err" id="userSearchErr" hidden></p>
+    <div class="toolbar">
+      <input id="userSearchInput" placeholder="Username or email (partial match)" aria-label="Search by username or email" />
+      <button id="userSearchBtn">Search</button>
+    </div>
+    <div id="userSearchResultsWrap"></div>
+    <div id="userDetailWrap"></div>
+
     <h2>Suspend account</h2>
     <p class="err" id="suspendErr" hidden></p>
     <p class="ok" id="suspendOk" hidden></p>
@@ -1631,6 +1641,11 @@
     const statusBtn = document.getElementById('suspensionStatusBtn');
     const statusErr = document.getElementById('suspensionStatusErr');
     const statusResult = document.getElementById('suspensionStatusResult');
+    const userSearchInput = document.getElementById('userSearchInput');
+    const userSearchBtn = document.getElementById('userSearchBtn');
+    const userSearchErr = document.getElementById('userSearchErr');
+    const userSearchResultsWrap = document.getElementById('userSearchResultsWrap');
+    const userDetailWrap = document.getElementById('userDetailWrap');
 
     function clearMsg(errEl, okEl) {
       errEl.hidden = true; errEl.textContent = '';
@@ -1638,6 +1653,116 @@
     }
     function showErr(errEl, message) { errEl.hidden = false; errEl.textContent = message; }
     function showOk(okEl, message) { okEl.hidden = false; okEl.textContent = message; }
+
+    // #2757: picking a result (or landing on exactly one match) fills and
+    // reveals the existing suspend form's email field, rather than making
+    // an admin retype it -- the whole point of searching first is to
+    // avoid a hand-typed, unconfirmed email reaching suspend-account.
+    function useAccountForSuspend(email) {
+      suspendForm.elements.email.value = email;
+      suspendForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      suspendForm.elements.reason.focus();
+    }
+
+    function renderUserDetail(detail) {
+      const user = detail.user;
+      const suspensions = detail.suspensions || [];
+      const suspensionRows = suspensions.length
+        ? suspensions.map((s) => `
+          <tr>
+            <td>${escapeHtml(s.suspendedAt)}</td>
+            <td>${escapeHtml(s.reason)}</td>
+            <td>${escapeHtml(s.gracePeriodEndsAt)}</td>
+            <td>${s.escalatedAt ? 'Escalated ' + escapeHtml(s.escalatedAt) : (s.liftedAt ? 'Lifted ' + escapeHtml(s.liftedAt) : 'Active')}</td>
+          </tr>
+        `).join('')
+        : '<tr><td colspan="4"><p class="empty">No suspension history.</p></td></tr>';
+      userDetailWrap.innerHTML = `
+        <div class="stat-grid">
+          <div class="stat"><div class="n">${escapeHtml(user.username)}</div><div class="l">Username</div></div>
+          <div class="stat"><div class="n">${escapeHtml(user.email)}</div><div class="l">Email</div></div>
+          <div class="stat"><div class="n">${escapeHtml(user.trustTier)}</div><div class="l">Trust tier</div></div>
+          <div class="stat"><div class="n">${escapeHtml(user.createdAt)}</div><div class="l">Account created</div></div>
+          <div class="stat"><div class="n">${user.builderId ? escapeHtml(user.builderLabel) : '—'}</div><div class="l">Builder profile</div></div>
+          <div class="stat"><div class="n">${user.sellerId ? escapeHtml(user.sellerLabel) : '—'}</div><div class="l">Seller profile</div></div>
+        </div>
+        <button class="secondary use-for-suspend-btn" type="button">Suspend this account</button>
+        <h3>Suspension history</h3>
+        <table>
+          <thead><tr><th>Suspended at</th><th>Reason</th><th>Grace period ends</th><th>Status</th></tr></thead>
+          <tbody>${suspensionRows}</tbody>
+        </table>
+      `;
+      userDetailWrap.querySelector('.use-for-suspend-btn').addEventListener('click', () => useAccountForSuspend(user.email));
+    }
+
+    async function loadUserDetail(userId) {
+      clearMsg(userSearchErr);
+      userDetailWrap.innerHTML = '<p class="empty">Loading…</p>';
+      try {
+        const body = await fetchJson('/api/auth/admin-user-detail?userId=' + encodeURIComponent(userId));
+        renderUserDetail(body);
+      } catch (error) {
+        showErr(userSearchErr, error.message);
+        userDetailWrap.innerHTML = '';
+      }
+    }
+
+    function renderUserSearchResults(users) {
+      if (!users.length) {
+        userSearchResultsWrap.innerHTML = '<p class="empty">No matching accounts.</p>';
+        return;
+      }
+      // Exactly one unambiguous match -- skip straight to its detail view
+      // instead of making the admin click through a one-row table.
+      if (users.length === 1) {
+        userSearchResultsWrap.innerHTML = '';
+        loadUserDetail(users[0].userId);
+        return;
+      }
+      const rows = users.map((u) => `
+        <tr>
+          <td>${escapeHtml(u.username)}</td>
+          <td>${escapeHtml(u.email)}</td>
+          <td>${escapeHtml(u.trustTier)}</td>
+          <td>${u.hasBuilderProfile ? 'Builder' : ''}${u.hasBuilderProfile && u.hasSellerProfile ? ', ' : ''}${u.hasSellerProfile ? 'Seller' : ''}${(!u.hasBuilderProfile && !u.hasSellerProfile) ? '—' : ''}</td>
+          <td>${u.hasActiveSuspension ? 'Suspended' : ''}</td>
+          <td><button class="secondary view-user-btn" data-user-id="${escapeHtml(u.userId)}">View</button></td>
+        </tr>
+      `).join('');
+      userSearchResultsWrap.innerHTML = `
+        <table>
+          <thead><tr><th>Username</th><th>Email</th><th>Trust tier</th><th>Profiles</th><th>Status</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      `;
+      userSearchResultsWrap.querySelectorAll('.view-user-btn').forEach((btn) => {
+        btn.addEventListener('click', () => loadUserDetail(btn.dataset.userId));
+      });
+    }
+
+    async function searchUsers() {
+      clearMsg(userSearchErr);
+      const q = userSearchInput.value.trim();
+      if (!q) { showErr(userSearchErr, 'Enter a username or email to search for.'); return; }
+      userDetailWrap.innerHTML = '';
+      userSearchBtn.disabled = true;
+      userSearchResultsWrap.innerHTML = '<p class="empty">Searching…</p>';
+      try {
+        const body = await fetchJson('/api/auth/admin-user-search?q=' + encodeURIComponent(q));
+        renderUserSearchResults(body.users || []);
+      } catch (error) {
+        showErr(userSearchErr, error.message);
+        userSearchResultsWrap.innerHTML = '';
+      } finally {
+        userSearchBtn.disabled = false;
+      }
+    }
+
+    userSearchBtn.addEventListener('click', searchUsers);
+    userSearchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); searchUsers(); }
+    });
 
     suspendForm.addEventListener('submit', async (e) => {
       e.preventDefault();

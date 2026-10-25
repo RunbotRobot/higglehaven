@@ -433,3 +433,118 @@ export async function handleSuspensionStatus(request, db, url) {
     } : null,
   });
 }
+
+// #2757: suspend-account above takes only an exact email with no
+// confirmation step -- the owner's own framing: "The 'Suspend account'
+// feature should be from a page displaying information about a given
+// user, so that we're sure we're suspending the right one." These two
+// read-only lookups back that page: search finds candidates by partial,
+// case-insensitive username/email match, and detail shows one account's
+// full picture (including its past suspend/lift/escalate history, not
+// just whether it's currently suspended) before an admin commits to
+// suspend-account's own exact-email call. Deliberately unrated-limited,
+// same as handleSuspensionStatus/handleListAdmins just above -- this
+// codebase's established convention is that a read-only requireAdmin GET
+// doesn't get its own checkRateLimit bucket the way a repeatable mutation
+// does (suspend-account, grant-admin, etc.).
+//
+// Bounded (ADMIN_USER_SEARCH_RESULT_LIMIT) so a short/common query (e.g.
+// "a") can't return the entire users table -- the results table this
+// feeds is meant for picking one specific account out of a few
+// candidates, not for browsing the whole roster.
+const ADMIN_USER_SEARCH_RESULT_LIMIT = 25;
+
+export async function handleAdminUserSearch(request, db, url) {
+  await requireAdmin(request, db);
+  const q = (url.searchParams.get('q') || '').trim();
+  if (!q) throw new HttpError('q query parameter is required', 400);
+  // Substring search via instr(), not LIKE -- confirmed directly against a
+  // real D1 instance that a `col LIKE ?` comparison (with or without
+  // ESCAPE/COLLATE NOCASE, with or without wrapping either side in
+  // lower()) can outright reject an entirely unremarkable query string
+  // (e.g. a plain hyphenated alphanumeric name, no wildcards at all) with
+  // "LIKE or GLOB pattern too complex" -- some property of D1's own LIKE
+  // pattern-complexity accounting, triggered by ordinary admin input this
+  // feature can't predict or restrict. instr() needs no pattern syntax at
+  // all (no wildcards to interpret, so no escaping needed either), and
+  // the same probe confirmed it never hits this rejection. Case-
+  // insensitivity comes from lower()-wrapping both sides directly, since
+  // instr() has no COLLATE-based equivalent.
+  const needle = q.toLowerCase();
+  const { results } = await db.prepare(`
+    SELECT
+      users.user_id, users.username, users.email, users.trust_tier, users.created_at,
+      builders.builder_id AS builder_id,
+      sellers.seller_id AS seller_id,
+      EXISTS (
+        SELECT 1 FROM account_suspensions
+        WHERE account_suspensions.user_id = users.user_id
+          AND lifted_at IS NULL AND escalated_at IS NULL
+      ) AS has_active_suspension
+    FROM users
+    LEFT JOIN builders ON builders.user_id = users.user_id
+    LEFT JOIN sellers ON sellers.user_id = users.user_id
+    WHERE instr(lower(users.username), ?) > 0
+       OR instr(lower(users.email), ?) > 0
+    ORDER BY users.username COLLATE NOCASE ASC
+    LIMIT ?
+  `).bind(needle, needle, ADMIN_USER_SEARCH_RESULT_LIMIT).all();
+  return json({
+    users: results.map((row) => ({
+      userId: row.user_id,
+      username: row.username,
+      email: row.email,
+      trustTier: row.trust_tier,
+      createdAt: row.created_at,
+      hasBuilderProfile: row.builder_id !== null,
+      hasSellerProfile: row.seller_id !== null,
+      hasActiveSuspension: row.has_active_suspension === 1,
+    })),
+  });
+}
+
+export async function handleAdminUserDetail(request, db, url) {
+  await requireAdmin(request, db);
+  const userId = (url.searchParams.get('userId') || '').trim();
+  if (!userId) throw new HttpError('userId query parameter is required', 400);
+  const row = await db.prepare(
+    'SELECT user_id, username, email, trust_tier, created_at, email_verified_at FROM users WHERE user_id = ?',
+  ).bind(userId).first();
+  if (!row) throw new HttpError('No account with that userId', 404);
+  const builder = await db.prepare('SELECT builder_id, label FROM builders WHERE user_id = ?').bind(userId).first();
+  const seller = await db.prepare('SELECT seller_id, label FROM sellers WHERE user_id = ?').bind(userId).first();
+  // Every past suspend/lift/escalate cycle for this account, not just
+  // whether one is currently active (handleSuspensionStatus's own job) --
+  // the whole point of this detail view is to let an admin see the full
+  // history before deciding to suspend again.
+  const { results: suspensionRows } = await db.prepare(`
+    SELECT suspension_id, admin_user_id, reason, evidence_note, suspended_at,
+      grace_period_ends_at, lifted_at, lifted_by_admin_user_id, escalated_at
+    FROM account_suspensions WHERE user_id = ? ORDER BY suspended_at DESC
+  `).bind(userId).all();
+  return json({
+    user: {
+      userId: row.user_id,
+      username: row.username,
+      email: row.email,
+      trustTier: row.trust_tier,
+      createdAt: row.created_at,
+      emailVerifiedAt: row.email_verified_at,
+      builderId: builder ? builder.builder_id : null,
+      builderLabel: builder ? builder.label : null,
+      sellerId: seller ? seller.seller_id : null,
+      sellerLabel: seller ? seller.label : null,
+    },
+    suspensions: suspensionRows.map((s) => ({
+      suspensionId: s.suspension_id,
+      adminUserId: s.admin_user_id,
+      reason: s.reason,
+      evidenceNote: s.evidence_note,
+      suspendedAt: s.suspended_at,
+      gracePeriodEndsAt: s.grace_period_ends_at,
+      liftedAt: s.lifted_at,
+      liftedByAdminUserId: s.lifted_by_admin_user_id,
+      escalatedAt: s.escalated_at,
+    })),
+  });
+}
