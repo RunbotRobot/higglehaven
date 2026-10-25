@@ -117,12 +117,33 @@ const btnLabelAfterLogout = await waitForText(page, '#account-auth-btn', 'Log In
 console.log('account button after logout (should be "Log In / Sign Up"):', btnLabelAfterLogout);
 
 // --- Log back in with the real password ---
+// #2754: logging out while in Shop mode now reloads (same as Build/Sell/
+// layoutPreview already did) rather than leaving the previous session's
+// scene rendered under the next account -- so this modal is the *fresh*
+// one Shop's own ensureShopperIdentity gate just auto-opened on page load,
+// not the one openAuthModal's account-menu route would have opened itself.
+// That gate calls requireLogin('signup', ...) explicitly, so it defaults
+// to the Sign Up tab regardless of which view this modal last showed
+// before the reload -- switch to Log In before filling its fields.
 await openAuthModal(page);
+await page.click('.auth-tab-btn[data-auth-view="login"]');
 await page.fill('#auth-login-email', email);
 await page.fill('#auth-login-password', password);
 await page.click('#auth-login-form button[type="submit"]');
 const btnLabelAfterLogin = await waitForText(page, '#account-auth-btn', 'Ada Suite');
 console.log('account button after logging back in (should be "Ada Suite"):', btnLabelAfterLogin);
+// #2754: this re-login is also what resolves the fresh page's own
+// concurrent ensureShopperIdentity gate's requireLogin() call -- which
+// immediately continues into requireVerification() right after,
+// re-opening #verify-modal for real (this account's trust_tier was never
+// actually advanced past 'none' earlier in this file -- the one time
+// #verify-modal genuinely opened, right after the original signup, the
+// very next step navigated away via the verify-email link before this
+// file ever interacted with it, and accountRecoveryFlowActive suppressed
+// the gate for the rest of that page's lifetime, so clearVerifyModalIfShown
+// at the top of this file was clearing nothing). Blocks #account-menu-
+// toggle underneath it otherwise.
+await clearVerifyModalIfShown(page);
 // Login success closes the modal (see the login form's own submit
 // handler), so it needs reopening before the logout button is reachable.
 await openAuthModal(page);
@@ -130,7 +151,10 @@ await page.click('#auth-logout-btn');
 await waitForText(page, '#account-auth-btn', 'Log In / Sign Up');
 
 // --- Forgot password -> reset link -> new password works, old one doesn't ---
+// #2754: same post-reload Sign-Up-tab default as the re-login above --
+// this logout also happened while still in Shop mode.
 await openAuthModal(page);
+await page.click('.auth-tab-btn[data-auth-view="login"]');
 await page.click('#auth-forgot-btn');
 await page.fill('#auth-forgot-email', email);
 await page.click('#auth-forgot-form button[type="submit"]');
