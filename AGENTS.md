@@ -3,11 +3,25 @@
 - Read `docs/SPEC.md` before making product-level decisions.
 - Read `docs/API.md` before changing backend API behavior.
 - Real account auth (signup/login) is built and live — see docs/API.md's
-  "Authentication". Real payments and multiplayer are still not built —
-  that's a real gap against docs/SPEC.md, not a standing instruction to
-  leave it alone. See "Proposing big feature work" below: build toward it
+  "Authentication". **Correction (2026-10-25, higglehaven8):** this line
+  used to also say "real payments and multiplayer are still not built" —
+  that had already gone stale and was actively misleading every session
+  that read it. Both are substantially built: buyer checkout charges real
+  money via a real Stripe PaymentIntent (`createPurchaseCheckout`/
+  `handlePurchaseFinalize` in `worker/lib/purchase-creation.js`), seller
+  payouts and builder higgle-to-cash redemption go through Stripe Connect
+  (`worker/lib/seller-payouts-tax.js`, `worker/lib/stripe-reinstatement.js`),
+  and real-time other-avatar presence is rendered client-side
+  (`worker/lib/social.js`'s `handlePresence`,
+  `src/shop/presenceAndContent.js`'s `pollNearbyPresenceIfNeeded`/
+  `shopOtherAvatars`), plus friends, DMs, and sign-posts. The one genuine
+  gap against docs/SPEC.md still standing: proximity voice chat and
+  general (non-DM) text chat (§2) aren't built at all (zero `WebRTC`/
+  `getUserMedia` anywhere in the repo) — see #2777 (tracking) and its
+  sub-issues. See "Proposing big feature work" below: build toward *that*
   the same way you'd pick up any other backlog item, broken into small
-  pieces.
+  pieces — don't re-derive a "payments/multiplayer missing" scope from
+  this line's old wording.
 - Use plain `a` in internal code, database, file, and API names. Use accented
   spellings only in customer-facing display strings.
 - Use Cloudflare free-tier-compatible designs.
