@@ -7444,6 +7444,20 @@ applies to it) and increments `sellers.strike_count`; `reject` un-hides it
 if auto-hide had already fired. Either way, writes one `admin_action_log`
 entry (`action_type: "approved_product_flags"`/`"rejected_product_flags"`).
 
+**`#2749`'s shared-product cascade** fires only on `approve`, and only
+when the flagged listing has a `product_id` (`migrations/0153` — a
+listing created before that migration's backfill, or otherwise never
+linked to a shared product, has none and nothing below applies). An
+admin-confirmed removal is a decision about the *product*, not just the
+one listing the flags happened to land on: it also hides the shared
+`products` row itself, hides every *other* `catalog_templates` listing of
+that same `product_id` (any seller), and deletes every `placed_instances`
+row referencing any of those listings, across every landlet. Strikes and
+the `#2018` ladder above stay scoped to the originally-flagged listing's
+own seller only — a sibling seller whose listing gets cascade-hidden gets
+no strike, just a best-effort notification that their listing was removed
+because of another seller's listing of the same product.
+
 **`#2018`'s strike ladder** fires only on `approve`, reading the seller's
 own just-incremented `strike_count` fresh (so it always acts on the real
 post-increment total, not a stale pre-read): 1st confirmed violation is a
