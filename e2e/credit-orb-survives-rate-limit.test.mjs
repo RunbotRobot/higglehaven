@@ -10,6 +10,14 @@
 // walks onto a real orb and confirms it survives the resulting 429 instead
 // of vanishing -- using window.__testActiveCreditOrbIds (#2264) since
 // shopCreditOrbs isn't otherwise observable from a test.
+//
+// bug-report-1516ad40 ("It won't let me collect more orbs!", reported
+// directly by a player): the orb surviving wasn't the whole story -- the
+// 429 branch also gave no explanation at all, and updateCreditOrbs' own
+// unthrottled per-frame loop retried (and re-429'd) continuously for as
+// long as the shopper stood in range. Extended this same repro to also
+// confirm the rate-limit notice shows and the retry storm actually stops
+// for a cooldown.
 import { launchPage, chooseIdentity, createGreenbeltLandletAsAdmin, seedCreditOrbAsAdmin, finish } from './helpers.mjs';
 
 const LABEL = 'Credit Orb Rate Limit Tester';
@@ -63,10 +71,21 @@ await page.waitForTimeout(100);
 await page.mouse.up();
 await page.waitForTimeout(100);
 
-await page.evaluate(([x, y]) => {
-  window.__testTeleportShopAvatar(x, y);
+// #2443: explicit z=0 (rather than omitting z, which leaves whatever
+// altitude the avatar last had) genuinely grounds the avatar -- breaking
+// the hands-off spawn orbit above only frees shopAvatarPosition's x/y for
+// this hook to drive, it doesn't land the avatar, which stays mid-air at
+// SHOP_SPAWN_START_ALTITUDE_M (80m) until a real landing sequence runs.
+// Without this, updateCreditOrbs' own altitude check (added for #2443)
+// silently skips every collect attempt below -- confirmed this test was
+// doing exactly that (shopFlightState stuck at "flying", zero real collect
+// requests ever fired) while debugging bug-report-1516ad40's own fix,
+// same gap e2e/credit-orb-collect.test.mjs's own comment already
+// documents avoiding.
+await page.evaluate(([x, y, z]) => {
+  window.__testTeleportShopAvatar(x, y, z);
   window.__testForceShopProximityCheck();
-}, [myLandlet.center.x, myLandlet.center.y]);
+}, [myLandlet.center.x, myLandlet.center.y, 0]);
 await page.waitForTimeout(500);
 
 const activeBeforeWalkingOver = await page.evaluate(() => window.__testActiveCreditOrbIds());
@@ -81,13 +100,39 @@ await page.evaluate(([x, y]) => {
   window.__testTeleportShopAvatar(x, y);
   window.__testForceShopProximityCheck();
 }, [orbWorldX, orbWorldY]);
-await page.waitForTimeout(1000);
+
+// Reported directly by a player ("It won't let me collect more orbs!"):
+// the 429 branch used to leave the shopper with zero explanation, and
+// (worse) retried every single frame while still in range -- see
+// CREDIT_ORB_RATE_LIMIT_RETRY_COOLDOWN_MS's own comment. Polled for
+// directly (not a fixed wait then a one-shot check) since the real
+// in-game attempt's own 429 can legitimately take a couple of RAF frames
+// to land, same "poll for the real end state" idiom as waitForText.
+const rateLimitNoticeVisible = await page.waitForSelector('#shop-credit-orb-rate-limit-notice.visible', { timeout: 5000 })
+  .then(() => true).catch(() => false);
+console.log('rate-limit notice shown after the 429 (should be true):', rateLimitNoticeVisible);
 
 const toastVisible = await page.isVisible('#shop-credit-orb-toast.visible');
 console.log('no collect-confirmation toast shown (should be true, the 429 never succeeded):', !toastVisible);
 
 const activeAfterFailedCollect = await page.evaluate(() => window.__testActiveCreditOrbIds());
 console.log('orb still present in the scene after the 429 (should be true, was the #2264 bug -- used to vanish):', activeAfterFailedCollect.includes(orbId));
+
+// During the cooldown, staying in range must not keep re-attempting
+// collection (and re-hitting the already-exhausted bucket) every single
+// animation frame -- confirmed by counting real network requests to the
+// collect endpoint over a real stretch of frames (the live RAF loop is
+// what drives updateCreditOrbs, same as it already did for the attempt
+// above -- no test hook forces this one), rather than inspecting
+// orb.collecting, which isn't exposed to this test.
+let collectRequestsDuringCooldown = 0;
+await page.route('**/api/credit-orbs/*/collect', (route) => {
+  collectRequestsDuringCooldown += 1;
+  route.continue();
+});
+await page.waitForTimeout(1000);
+await page.unroute('**/api/credit-orbs/*/collect');
+console.log('no further collect requests fired while cooling down (should be 0):', collectRequestsDuringCooldown);
 
 const listedOnServer = await fetchJson(`/api/credit-orbs?landletId=${encodeURIComponent(LANDLET_ID)}`);
 console.log('orb still active server-side (should be true, the 429 never actually collected it):', listedOnServer.body.orbs.some((o) => o.orbId === orbId));
@@ -102,11 +147,13 @@ const pass = !!myLandlet &&
   confirmLimited.status === 429 &&
   activeBeforeWalkingOver.includes(orbId) &&
   !toastVisible &&
+  rateLimitNoticeVisible &&
   activeAfterFailedCollect.includes(orbId) &&
+  collectRequestsDuringCooldown === 0 &&
   listedOnServer.body.orbs.some((o) => o.orbId === orbId) &&
   unexpectedErrors.length === 0;
 await finish(browser, {
   pass,
-  label: 'Credit orb survives a rate-limited (429) collect attempt instead of vanishing from the scene (#2264)',
+  label: 'Credit orb survives a rate-limited (429) collect attempt, shows a clear notice, and stops retrying during the cooldown (#2264, bug-report-1516ad40)',
   errors,
 });

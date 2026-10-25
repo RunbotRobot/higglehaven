@@ -78,6 +78,7 @@ import { registerShopSign, registerShopCalendar, registerShopReview } from './wo
 
 const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
 const shopCreditOrbOfflineNoticeEl = document.getElementById('shop-credit-orb-offline-notice');
+const shopCreditOrbRateLimitNoticeEl = document.getElementById('shop-credit-orb-rate-limit-notice');
 export const accountMenuLandletInfoEl = document.getElementById('account-menu-landlet-info');
 
 // #1630: how many times pickShopSpawnLocation will reroll a candidate that
@@ -188,6 +189,15 @@ const CREDIT_ORB_TOAST_VISIBLE_MS = 3000;
 // 404/429/500) proves the server is reachable and resets this streak --
 // only true network errors count toward it.
 const CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS = 3000;
+// Reported directly by a player ("It won't let me collect more orbs!"):
+// a 429 from CREDIT_ORB_COLLECT_RATE_LIMIT_MAX (worker/lib/credit-orbs.js)
+// used to fall into the generic "leave it in place, retry next frame"
+// branch below with no message at all -- and since updateCreditOrbs runs
+// unthrottled every frame, standing near any orb past the limit retried
+// (and got 429'd) up to 60 times a second for as long as the shopper stood
+// there, not just once. This both surfaces a clear reason and stops that
+// retry storm for a cooldown once the limit is actually hit.
+const CREDIT_ORB_RATE_LIMIT_RETRY_COOLDOWN_MS = 30000;
 
 export const shopLandlets = new Map(); // landletId -> { record, group, loaded, loadToken, objects }
 export let shopBuilderLabels = new Map(); // builderId -> label, fetched once in enterShopMode, patched on an in-session rename (#741) — see updateShopLandletInfo
@@ -752,6 +762,11 @@ export function updateCreditOrbPopEffects(dt) {
 
 let creditOrbShimmerElapsedS = 0;
 const scratchCreditOrbWorldPos = new THREE.Vector3();
+// Set to the timestamp collection attempts may resume at, once a 429 is
+// actually hit — null otherwise. A single shared cooldown, not per-orb:
+// CREDIT_ORB_COLLECT_RATE_LIMIT_MAX is keyed by builder id, so hitting it
+// near one orb means every other orb in range would 429 too if retried.
+let creditOrbRateLimitedUntilMs = null;
 
 // Called every Shop-mode frame, unthrottled like updateSignFade/
 // updateCalendarFade — the shimmer needs to read as continuous, and
@@ -760,6 +775,7 @@ export function updateCreditOrbs(dt) {
   creditOrbShimmerElapsedS += dt;
   const shimmer = CREDIT_ORB_SHIMMER_MIN + (CREDIT_ORB_SHIMMER_MAX - CREDIT_ORB_SHIMMER_MIN)
     * (0.5 + 0.5 * Math.sin(creditOrbShimmerElapsedS * CREDIT_ORB_SHIMMER_SPEED_RAD_S));
+  const rateLimited = creditOrbRateLimitedUntilMs !== null && performance.now() < creditOrbRateLimitedUntilMs;
   for (const orb of shopCreditOrbs) {
     orb.mesh.rotation.y += CREDIT_ORB_ROTATION_SPEED_RAD_S * dt;
     orb.mesh.material.emissiveIntensity = shimmer;
@@ -767,6 +783,10 @@ export function updateCreditOrbs(dt) {
     // while the first is still in flight (walking stays within the radius
     // for several frames, not just one).
     if (orb.collecting) continue;
+    // Cooling down after a 429 — see creditOrbRateLimitedUntilMs's own
+    // comment. The shimmer/rotation above still runs so the scene doesn't
+    // look frozen; only the collect attempt itself is skipped.
+    if (rateLimited) continue;
     // Deliberately the avatar's own position, not camera.position (unlike
     // updateSignFade/updateCalendarFade's fade distance) -- positionShopCamera
     // holds the third-person camera SHOP_CAMERA_FOLLOW_DISTANCE_M (4.2m)
@@ -817,13 +837,25 @@ export function updateCreditOrbs(dt) {
         removeCreditOrb(orb);
         return;
       }
-      // #2264: everything else (a 429 from CREDIT_ORB_COLLECT_RATE_LIMIT_MAX,
-      // a 500, a plain network blip) used to fall through to the 404
-      // branch above and remove the orb as if it had genuinely been
-      // collected by someone else -- loadCreditOrbsForLandlet only ever
-      // fetches a landlet's orbs once, so a wrongly-removed orb was gone
-      // from this session's view for good. Transient, same as 403: leave
-      // the orb in place and let the next frame retry.
+      // A 429 from CREDIT_ORB_COLLECT_RATE_LIMIT_MAX -- see
+      // creditOrbRateLimitedUntilMs's own comment on why this needs its
+      // own branch rather than falling into the generic one just below:
+      // without a cooldown, the very next frame retries (and 429s again)
+      // for as long as the shopper stands in range, up to 60 times a
+      // second, with nothing ever telling them why.
+      if (error.status === 429) {
+        markCreditOrbCollectReachedServer();
+        creditOrbRateLimitedUntilMs = performance.now() + CREDIT_ORB_RATE_LIMIT_RETRY_COOLDOWN_MS;
+        showCreditOrbRateLimitNotice();
+        orb.collecting = false;
+        return;
+      }
+      // #2264: everything else (a 500, a plain network blip) used to fall
+      // through to the 404 branch above and remove the orb as if it had
+      // genuinely been collected by someone else -- loadCreditOrbsForLandlet
+      // only ever fetches a landlet's orbs once, so a wrongly-removed orb
+      // was gone from this session's view for good. Transient, same as
+      // 403: leave the orb in place and let the next frame retry.
       // #2447: a 429/500 is still a real HTTP response (error.status is
       // set), proving the server was reachable -- only a genuine network
       // failure (isNetworkError, fetch() itself rejecting with no response
@@ -890,3 +922,15 @@ function showCreditOrbToast() {
   }, CREDIT_ORB_TOAST_VISIBLE_MS);
 }
 let creditOrbToastHideTimer = null;
+
+// Same auto-hide shape as showCreditOrbToast just above, timed to
+// CREDIT_ORB_RATE_LIMIT_RETRY_COOLDOWN_MS so it clears right as collection
+// attempts actually resume, rather than on its own unrelated schedule.
+function showCreditOrbRateLimitNotice() {
+  shopCreditOrbRateLimitNoticeEl.classList.add('visible');
+  clearTimeout(creditOrbRateLimitNoticeHideTimer);
+  creditOrbRateLimitNoticeHideTimer = setTimeout(() => {
+    shopCreditOrbRateLimitNoticeEl.classList.remove('visible');
+  }, CREDIT_ORB_RATE_LIMIT_RETRY_COOLDOWN_MS);
+}
+let creditOrbRateLimitNoticeHideTimer = null;

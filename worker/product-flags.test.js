@@ -423,4 +423,117 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
       expect(sellerRow.strike_count).toBe(1);
     });
   });
+
+  // #2749 (leaf of #2745): migrations/0153 lets more than one seller's own
+  // listing share one `products` row, but #2747 (the listing-creation
+  // endpoint that would actually write product_id) hasn't shipped yet --
+  // same direct-D1-linking approach worker/shared-products-schema.test.js's
+  // own fixtures already use to test #2746 in isolation.
+  describe('Shared-product moderation cascade (#2749)', () => {
+    async function createProduct(productId, overrides = {}) {
+      await env.DB.prepare(`
+        INSERT INTO products (product_id, name, category, color, width_m, depth_m, height_m)
+        VALUES (?, ?, ?, ?, 1, 1, 1)
+      `).bind(
+        productId,
+        overrides.name ?? `Shared product ${productId}`,
+        overrides.category ?? 'furniture',
+        overrides.color ?? '#123456',
+      ).run();
+    }
+
+    async function linkToProduct(templateId, productId) {
+      await env.DB.prepare('UPDATE catalog_templates SET product_id = ? WHERE template_id = ?')
+        .bind(productId, templateId).run();
+    }
+
+    it('approving a flag on one listing of a shared product hides every sibling listing and the product, and removes every placed instance across every landlet -- without striking sibling sellers', async () => {
+      const sellerA = await signupSeller('cascade-seller-a');
+      const sellerB = await signupSeller('cascade-seller-b');
+      // Two different builders -- #799/#952's one-claimed-landlet-per-
+      // builder invariant means a single builder can't claim both landlets
+      // this test needs to prove the cascade deletes placed instances
+      // across different landlets, not just within one.
+      const builderA = await signupBuilder('cascade-builder-a');
+      const builderB = await signupBuilder('cascade-builder-b');
+
+      await createTemplate('cascade-listing-a', sellerA);
+      await createTemplate('cascade-listing-b', sellerB);
+      await createProduct('cascade-product-1');
+      await linkToProduct('cascade-listing-a', 'cascade-product-1');
+      await linkToProduct('cascade-listing-b', 'cascade-product-1');
+
+      await api('/landlets', adminSession({
+        method: 'POST',
+        body: JSON.stringify({ landletId: 'cascade-landlet-a', name: 'Cascade landlet A', areaM2: 1000, status: 'greenbelt' }),
+      }));
+      await api('/landlets', adminSession({
+        method: 'POST',
+        body: JSON.stringify({ landletId: 'cascade-landlet-b', name: 'Cascade landlet B', areaM2: 1000, status: 'greenbelt' }),
+      }));
+      await api('/landlets/cascade-landlet-a/claim', builderA.session({ method: 'POST' }));
+      await api('/landlets/cascade-landlet-b/claim', builderB.session({ method: 'POST' }));
+      const placedA = await api('/instances', builderA.session({
+        method: 'POST',
+        body: JSON.stringify({ instanceId: 'cascade-instance-a', landletId: 'cascade-landlet-a', templateId: 'cascade-listing-a', x: 0, y: 0 }),
+      }));
+      const placedB = await api('/instances', builderB.session({
+        method: 'POST',
+        body: JSON.stringify({ instanceId: 'cascade-instance-b', landletId: 'cascade-landlet-b', templateId: 'cascade-listing-b', x: 0, y: 0 }),
+      }));
+      expect(placedA.response.status).toBe(201);
+      expect(placedB.response.status).toBe(201);
+
+      const flagger = await signupBuilder('cascade-flagger');
+      await api('/catalog/cascade-listing-a/flags', flagger.session({ method: 'POST', body: JSON.stringify({}) }));
+
+      const resolved = await api('/catalog/cascade-listing-a/flags/resolve', adminSession({
+        method: 'POST',
+        body: JSON.stringify({ action: 'approve' }),
+      }));
+      expect(resolved.response.status).toBe(200);
+
+      const listingA = await api('/catalog/cascade-listing-a');
+      const listingB = await api('/catalog/cascade-listing-b');
+      expect(listingA.body.template.flaggedHiddenAt).toBeTruthy();
+      expect(listingB.body.template.flaggedHiddenAt).toBeTruthy();
+
+      const product = await env.DB.prepare('SELECT flagged_hidden_at FROM products WHERE product_id = ?')
+        .bind('cascade-product-1').first();
+      expect(product.flagged_hidden_at).toBeTruthy();
+
+      const { results: instances } = await env.DB.prepare(
+        'SELECT instance_id FROM placed_instances WHERE instance_id IN (?, ?)',
+      ).bind('cascade-instance-a', 'cascade-instance-b').all();
+      expect(instances.length).toBe(0);
+
+      // Only the listing the flags actually landed on strikes its own
+      // seller -- the sibling seller's listing is cascade-hidden, but that
+      // seller did nothing wrong, so no strike for them.
+      const sellerARow = await env.DB.prepare('SELECT strike_count FROM sellers WHERE seller_id = ?').bind(sellerA.sellerId).first();
+      expect(sellerARow.strike_count).toBe(1);
+      const sellerBRow = await env.DB.prepare('SELECT strike_count FROM sellers WHERE seller_id = ?').bind(sellerB.sellerId).first();
+      expect(sellerBRow.strike_count).toBe(0);
+
+      const ownerBuilderB = await api('/builders/me', sellerB.session());
+      const { results: notificationsB } = await env.DB.prepare('SELECT message FROM notifications WHERE builder_id = ?')
+        .bind(ownerBuilderB.body.builder.builderId).all();
+      expect(notificationsB.some((n) => /removed from the catalog/i.test(n.message))).toBe(true);
+      expect(notificationsB.some((n) => /strike/i.test(n.message))).toBe(false);
+    });
+
+    it('does not cascade anything when the flagged listing has no product_id (not a shared product) -- same behavior as before #2749', async () => {
+      const seller = await signupSeller('cascade-none-seller');
+      await createTemplate('cascade-none-template', seller);
+      const flagger = await signupBuilder('cascade-none-flagger');
+      await api('/catalog/cascade-none-template/flags', flagger.session({ method: 'POST', body: JSON.stringify({}) }));
+      const resolved = await api('/catalog/cascade-none-template/flags/resolve', adminSession({
+        method: 'POST',
+        body: JSON.stringify({ action: 'approve' }),
+      }));
+      expect(resolved.response.status).toBe(200);
+      const sellerRow = await env.DB.prepare('SELECT strike_count FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
+      expect(sellerRow.strike_count).toBe(1);
+    });
+  });
 });

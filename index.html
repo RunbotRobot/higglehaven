@@ -558,6 +558,32 @@
       #shop-credit-orb-offline-notice.visible {
         opacity: 1;
       }
+      /* Reported directly by a player ("It won't let me collect more
+         orbs!") -- a 429 from CREDIT_ORB_COLLECT_RATE_LIMIT_MAX used to
+         leave the orb in place with no explanation at all. Auto-hides on
+         its own timer (presenceAndContent.js's showCreditOrbRateLimitNotice)
+         rather than the offline-notice's shown/hidden-directly shape, since
+         the cooldown it's timed to is a known, fixed duration rather than
+         "until a request finally succeeds." Stacked one slot above the
+         offline notice per its own stacking idiom. */
+      #shop-credit-orb-rate-limit-notice {
+        position: fixed;
+        z-index: 16;
+        bottom: 380px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgb(var(--pill-rgb) / 0.9);
+        padding: 8px 16px;
+        border-radius: 8px;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.4s;
+      }
+      #shop-credit-orb-rate-limit-notice.visible {
+        opacity: 1;
+      }
       /* Same treatment as #shop-sign-hint just above (see its own comment),
          stacked one slot higher so both can show at once near an
          overlapping sign+calendar without colliding. */
@@ -4380,6 +4406,7 @@
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <div id="shop-credit-orb-toast" role="status" aria-live="polite">You collected a free model-generation credit!</div>
     <div id="shop-credit-orb-offline-notice" role="status" aria-live="polite">Can't collect orbs right now — you appear to be offline.</div>
+    <div id="shop-credit-orb-rate-limit-notice" role="status" aria-live="polite">You've collected the max orbs for now — try again in a bit.</div>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <!-- #506/N45 history (see this button's own CSS comment below for the
