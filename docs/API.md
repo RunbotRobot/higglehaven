@@ -1080,6 +1080,76 @@ otherwise — the same shape `suspend-account`'s own response returns, so a
 caller can check status first without needing two different response
 shapes.
 
+### `GET /api/auth/admin-user-search?q=...` and `GET /api/auth/admin-user-detail?userId=...` (#2757)
+
+Back the Admin Dashboard's "Find user" workflow: `suspend-account` above
+takes only an exact email with no confirmation step, so these two
+read-only lookups let an admin search for the right account by partial
+name/email and review its full picture before suspending it, rather than
+suspending a bare, unconfirmed email. Both `requireAdmin`-gated. Neither is
+rate-limited — same established convention as `suspension-status`/`admins`
+above: a read-only `requireAdmin` `GET` doesn't get its own
+`checkRateLimit` bucket the way a repeatable mutation (`suspend-account`,
+`grant-admin`, etc.) does.
+
+`admin-user-search` takes `q` (required, `400` if empty/missing) and
+matches it as a case-insensitive substring against both `username` and
+`email`, bounded to 25 results (ordered by username) so a short, common
+query can't return the entire `users` table. Returns:
+
+```json
+{
+  "users": [{
+    "userId", "username", "email", "trustTier", "createdAt",
+    "hasBuilderProfile": true, "hasSellerProfile": false,
+    "hasActiveSuspension": false
+  }]
+}
+```
+
+a deliberately narrow shape (no `cardFunding`/`taxFormType`/etc. — same
+"don't leak more than this view needs" discipline `admins` above already
+follows for a peer-admin roster) meant for a results table, not the full
+account record.
+
+Matching uses `instr(lower(col), lower(q)) > 0`, not `LIKE`/`GLOB` —
+confirmed directly against a real D1 instance that an ordinary, wildcard-
+free `LIKE` comparison (with or without `ESCAPE`/`COLLATE NOCASE`, with or
+without `lower()`-wrapping either side) can outright reject a completely
+unremarkable query string with `LIKE or GLOB pattern too complex`, for
+reasons this investigation couldn't fully pin down beyond "some property
+of D1's own pattern-complexity accounting" — triggered by ordinary admin
+search input this endpoint can't predict or restrict in advance. `instr()`
+has no pattern syntax to misinterpret (so no wildcard-escaping is needed
+either), and the same probe confirmed it never hits this rejection.
+
+`admin-user-detail` takes `userId` (required, `400` if empty/missing,
+`404` if no account has it) and returns the one account's full picture:
+
+```json
+{
+  "user": {
+    "userId", "username", "email", "trustTier", "createdAt", "emailVerifiedAt",
+    "builderId", "builderLabel", "sellerId", "sellerLabel"
+  },
+  "suspensions": [{
+    "suspensionId", "adminUserId", "reason", "evidenceNote", "suspendedAt",
+    "gracePeriodEndsAt", "liftedAt", "liftedByAdminUserId", "escalatedAt"
+  }]
+}
+```
+
+`builderId`/`sellerId` (and their `label`) are `null` when the account has
+no linked profile of that kind — note a `builders` row is always
+auto-provisioned at signup (`handleSignup`), so `builderId` is `null` only
+for pre-real-accounts legacy data, never for an ordinary account; `sellers`
+rows are created lazily (first `GET /sellers/me`), so `sellerId` is
+routinely `null`. `suspensions` is every past `account_suspensions` row
+for this account, newest first (`ORDER BY suspended_at DESC`) — not just
+whichever one is currently active (`suspension-status`'s own job above) —
+so an admin reviewing the account can see its whole suspend/lift/escalate
+history, not only its present state.
+
 ### 30-day grace-period auto-escalation (#2033, sub-issue of #1201)
 
 `escalateExpiredSuspensions` runs on the same Cloudflare Cron Trigger as
