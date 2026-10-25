@@ -169,7 +169,6 @@ export const SHOP_SKY_FRAGMENT_SHADER = `
     float amplitude = 0.5;
     float totalWeight = 0.0;
     for (int i = 0; i < 4; i++) {
-      float footprint = fwidth(p.x) + fwidth(p.y);
       // #1585: #1190's original thresholds (0.005, 0.05) still left a
       // visible band of sharp-edged, hard-banded streaks (not the soft
       // "slightly hazier blend" this comment promises) wherever footprint
@@ -214,55 +213,92 @@ export const SHOP_SKY_FRAGMENT_SHADER = `
       // horizon), while a full straight-up apex view and an ordinary
       // moderate-pitch view both still render as a smooth gradient with
       // no streaking, same as #1585's own fix already established.
-      // #2716 investigation (higglehaven12, 2026-10-24): a DIFFERENT, GPU-
-      // independent mechanism than the clouds-value-steepness one discussed
-      // on cloudMask below, worth checking before assuming the owner's
-      // 20-40s hard edge is just "a steep patch of fbm wandered into view."
-      // "footprint" above is fwidth(p.x) + fwidth(p.y) -- an L1
-      // (axis-aligned) combination of two screen-space derivatives. That
-      // combination is NOT rotation-invariant: for a static camera and a
-      // perfectly smooth underlying field, rotating only the *sampling*
-      // coordinate frame (exactly what swirlAngle does every frame, via the
-      // mat2(c,-s,s,c) applied to normalizedXY before this loop runs) still
-      // changes footprint's computed value, by a factor ranging from 1x to
-      // sqrt(2) (~41%) depending purely on swirlAngle's alignment to the
-      // screen's x/y axes -- confirmed both analytically (the Frobenius norm
-      // of a rotated Jacobian is invariant, but the L1 row-sum fwidth()
-      // actually computes is not) and numerically (a standalone JS
-      // reimplementation of this exact footprint/fbm math, with the camera
-      // held perfectly static, reproduces the 1x-to-1.41x swing exactly,
-      // for every camera-Jacobian shape tried, isotropic or degenerate).
-      // Since swirlAngle(t) = uTime*0.02 + (bounded shear term) grows
-      // monotonically from 0 at page load, it first reaches the worst-case
-      // 45-degree misalignment at t = (pi/4)/0.02 ~= 39.3s for
-      // heightFrac=0.5 (23.1s for heightFrac=0.3) -- squarely inside the
-      // owner's reported 20-40s window, using only the shearOmega/0.02
-      // constants already shipped above, no curve-fitting. If an octave's
-      // true (rotation-corrected) footprint sits within ~41% of the
-      // 0.0005/0.03 thresholds just below, this oscillation alone can flip
-      // that octave's fade in and out purely from elapsed time, with a
-      // static camera and no grazing/apex involved -- i.e. exactly the
-      // normal-incidence, avatar-standing-still symptom #2716 describes.
-      // Unlike the GPU-quad fwidth()-blockiness explanation used elsewhere
-      // in this file, this part needs no hardware-specific derivative
-      // quantization to manifest -- it's exact, continuous math, so in
-      // principle it should be reproducible even on this sandbox's software
-      // renderer, unlike the grazing-incidence case.
-      // NOT fixed here: the only mathematically clean correction (an
-      // actually rotation-invariant footprint, e.g. a Frobenius-norm
-      // combination of dFdx(p.x)/dFdy(p.x)/dFdx(p.y)/dFdy(p.y) instead of
-      // this L1 form) changes footprint's absolute scale too, which risks
-      // silently un-tuning the 0.0005/0.03 thresholds #1585/#1799/#2606
-      // each calibrated against this exact L1 formula via direct screenshot
-      // comparison -- and this sandbox still can't screenshot-verify either
-      // the fix or the non-regression, same gap every session on #2716 has
-      // hit. See the full writeup (simulation script + numbers) on issue
-      // #2716 for a concrete, falsifiable test a real-GPU session can run:
-      // scrub to t~6-10s and t~40s via
-      // window.__testSetShopSkyElapsedSeconds while looking at a point
-      // giving heightFrac roughly 0.3-0.5, and check whether the band's
-      // onset/strength tracks this rotation-alignment prediction rather
-      // than just "sometime in 20-40s."
+      // #2716 (fixed, higglehaven3, 2026-10-25): footprint used to be
+      // fwidth(p.x) + fwidth(p.y) -- an L1 (axis-aligned) combination of two
+      // screen-space derivatives. That combination is NOT rotation-
+      // invariant: for a static camera and a perfectly smooth underlying
+      // field, rotating only the *sampling* coordinate frame (exactly what
+      // swirlAngle does every frame, via the mat2(c,-s,s,c) applied to
+      // normalizedXY before this loop runs) still changed the old
+      // footprint's value by a factor ranging from 1x to sqrt(2) (~41%)
+      // depending purely on swirlAngle's alignment to the screen's x/y axes
+      // (higglehaven12's #2716 investigation, confirmed both analytically
+      // and via a standalone JS reimplementation with the camera held
+      // perfectly static). Since swirlAngle(t) = uTime*0.02 + (bounded
+      // shear term) grows monotonically from 0 at page load, it first
+      // reached the worst-case 45-degree misalignment at
+      // t = (pi/4)/0.02 ~= 39.3s for heightFrac=0.5 (23.1s for
+      // heightFrac=0.3) -- squarely inside the owner's reported 20-40s
+      // window. Whenever an octave's true (rotation-corrected) footprint
+      // sat within ~41% of the 0.0005/0.03 thresholds below, this spurious
+      // oscillation alone could flip that octave's fade in and out purely
+      // from elapsed time, with a static camera and no grazing/apex
+      // involved -- exactly the normal-incidence, avatar-standing-still
+      // symptom #2716 reported, and distinct from the GPU-quad fwidth()-
+      // blockiness mechanism used elsewhere in this file (this one needs no
+      // hardware-specific derivative quantization to manifest, so it was
+      // reproducible even on this sandbox's software renderer).
+      //
+      // Fixed by computing the actually rotation-invariant Frobenius norm
+      // of (p.x, p.y)'s own 2x2 screen-space Jacobian directly via dFdx/
+      // dFdy, instead of summing two already-rotation-variant fwidth()
+      // calls. Rotating a matrix by an orthogonal matrix (any pure rotation
+      // like swirlAngle's mat2) never changes its Frobenius norm, for any
+      // underlying camera Jacobian whatsoever (isotropic or not) -- so this
+      // value no longer oscillates with elapsed time at all for a static
+      // camera, eliminating the mechanism outright rather than widening a
+      // threshold around it.
+      //
+      // Scale factor (sqrt(2)): if the camera's own (swirl-independent)
+      // screen-space Jacobian has no shear -- its two singular values s1,
+      // s2 line up with the screen's own x/y axes, i.e. it's a pure
+      // (possibly anisotropic) stretch -- the old L1 entrywise norm of that
+      // Jacobian rotated by swirlAngle's own phi reduces exactly to
+      // (s1+s2)*(|cos phi|+|sin phi|): a swing of exactly sqrt(2) between
+      // its own minimum (s1+s2) at phi=0 mod 90 degrees and its own maximum
+      // sqrt(2)*(s1+s2) at phi=45 mod 90, for any s1/s2 ratio (confirmed
+      // algebraically here and numerically, per higglehaven12's #2716
+      // investigation). sqrt(2) times the (always rotation-invariant)
+      // Frobenius norm sqrt(s1^2+s2^2) lands exactly at that old minimum
+      // when s1=s2 (locally isotropic -- a reasonable approximation for a
+      // dome's own screen-space derivatives, given its fairly uniform
+      // curvature) and drifts toward the old maximum as s1/s2 diverge, but
+      // either way stays inside that no-shear case's own already-tested
+      // [minimum, maximum] span.
+      // A *sheared* Jacobian (its singular vectors not axis-aligned with
+      // the screen) breaks that clean reduction -- confirmed numerically
+      // (see src/shop/sky.test.js) that sqrt(2)*Frobenius can then land
+      // slightly outside the old formula's own rotation-swept [min, max]
+      // for that specific sheared case (observed up to roughly 13% below
+      // the old minimum for one deliberately-skewed test matrix), not an
+      // exact match. The weaker, always-true bound for *any* Jacobian
+      // shape, sheared or not, is the standard entrywise-vs-Frobenius norm
+      // inequality: Frobenius <= old L1 <= 2*Frobenius always, so
+      // sqrt(2)*Frobenius (strictly between those two bounds) can never
+      // differ from the old formula's own true scale by more than a factor
+      // of roughly sqrt(2) in either direction even in the worst case --
+      // nowhere near enough to reintroduce the original undersampling
+      // streaks (#1585/#1799) or bring back a meaningfully different
+      // fade-threshold crossing than before. Either way, the actual bug
+      // this fixes -- the value oscillating with *elapsed time* for a
+      // *static* camera, purely from swirlAngle's own rotation -- is gone
+      // unconditionally, regardless of whether the real camera Jacobian
+      // happens to be sheared; only the fine calibration against the old
+      // formula's exact historical scale is an approximation in that case,
+      // not the core fix.
+      // A future session with real GPU access should still re-verify
+      // directly against the owner's reported timing/camera setup, same as
+      // any shader change in this file, but this removes the one mechanism
+      // #2716's own analysis found that needs no GPU-specific behavior to
+      // reproduce, so it's expected to be the actual fix rather than
+      // another unconfirmed mitigation. See src/shop/sky.test.js for a
+      // pure-JS mirror of this derivation (kept in sync with the formula
+      // below by hand, since GLSL isn't executable there).
+      float dpxdX = dFdx(p.x);
+      float dpxdY = dFdy(p.x);
+      float dpydX = dFdx(p.y);
+      float dpydY = dFdy(p.y);
+      float footprint = sqrt(2.0) * sqrt(dpxdX * dpxdX + dpxdY * dpxdY + dpydX * dpydX + dpydY * dpydY);
       float fade = 1.0 - smoothstep(0.0005, 0.03, footprint);
       value += amplitude * fade * noise(p);
       totalWeight += amplitude * fade;
@@ -402,18 +438,19 @@ export const SHOP_SKY_FRAGMENT_SHADER = `
     // reported timing/camera setup.
     //
     // higglehaven12, 2026-10-24: a from-scratch numeric simulation of this
-    // issue (see fbm()'s own footprint/fade loop above for the fuller
-    // writeup, and the issue thread for the script+numbers) found this
-    // threshold-widening mechanism's worst-case per-pixel step, under
-    // realistic camera parameters, too small (~0.0002-0.0004 out of a 0-1
-    // visibility range) to plausibly read as a "hard" edge, and its worst
-    // timing scattered essentially randomly across 0-90s rather than
-    // clustering at 20-40s -- i.e. this mechanism likely isn't the actual
-    // cause, though widening it further remains harmless. A different,
-    // rotation-alignment-driven mechanism in the footprint/fade code above
-    // matches the reported 20-40s timing far more precisely and needs no
-    // GPU-specific derivative quantization to manifest -- see there before
-    // assuming this file's investigation is exhausted.
+    // issue found this threshold-widening mechanism's worst-case per-pixel
+    // step, under realistic camera parameters, too small (~0.0002-0.0004
+    // out of a 0-1 visibility range) to plausibly read as a "hard" edge,
+    // and its worst timing scattered essentially randomly across 0-90s
+    // rather than clustering at 20-40s -- i.e. this mechanism likely wasn't
+    // the actual cause. A different, rotation-alignment-driven mechanism in
+    // fbm()'s own footprint/fade loop above matched the reported 20-40s
+    // timing far more precisely and needed no GPU-specific derivative
+    // quantization to manifest -- see that loop's own #2716 comment for the
+    // fix actually shipped (higglehaven3, 2026-10-25): a rotation-invariant
+    // Frobenius-norm footprint in place of the old rotation-variant
+    // fwidth()-sum one. This cloudMask widening remains in place as a
+    // harmless pre-existing margin, not the fix.
     float cloudMask = smoothstep(-1.0, 2.0, clouds);
     // Kept from before (#1204/#1585) as a modest extra safety margin right
     // at the literal pole specifically — on its own this barely moves the
