@@ -636,17 +636,40 @@ function resetLocalSessionState() {
   resetIdentityFlowPromises();
 }
 
+// #2754: every account-scoped mode below always reloads on logout/
+// deletion now (Shop included), so a status message set just before that
+// reload would otherwise never be seen — the reload replaces the page
+// before anything could render it. Carried across via sessionStorage (the
+// same "survive one reload, consumed once" shape START_MODE_KEY already
+// uses) and shown once authInitPromise's own default branch below settles
+// on the fresh page.
+const PENDING_AUTH_STATUS_KEY = 'higglehaven.pendingAuthStatus';
+
 // Build, Sell, and layout-preview all require a real, logged-in account
 // (ensureBuilderIdentity/ensureSellerIdentity's own login walls) — staying
 // on any of them once that account is gone would just immediately reprompt
 // the login modal over whatever was on screen (or, for Sell/layout-preview,
 // strand the now-stale showcase/modal with no identity behind it). A reload
-// into Shop instead is the same clean-slate escape hatch #mode-nav's own
-// mode switching already uses (see its own comment), and Shop needs no
-// account at all, so it's always a safe place to land. Returns whether it
-// reloaded (the caller's own post-logout/-deletion UI update is moot if so).
+// is the same clean-slate escape hatch #mode-nav's own mode switching
+// already uses (see its own comment).
+//
+// #2754: Shop used to be excluded here on the theory that it "needs no
+// account at all, so it's always a safe place to land" — true before N44,
+// false since: enterShopMode() (src/shop/mode.js) now gates its own entry
+// on ensureShopperIdentity() the same as Build/Sell, and is explicitly
+// re-enterable without a reload (its own opening comment) specifically so
+// Identity -> Shop doesn't need one. That re-entrancy is exactly what bit
+// here — nothing ever re-runs it on logout/account-switch, so the previous
+// account's avatar mesh, camera position, and loaded landlet content were
+// left rendered under the next, possibly-unverified account. Reloading
+// Shop too, same as the other three, forces a completely fresh
+// enterShopMode() run (and the real login/verification gate with it) for
+// whoever's on screen next, with no path left where a mode is "always
+// safe to land on without reinitializing" — Shop included.
+// Returns whether it reloaded (the caller's own post-logout/-deletion UI
+// update is moot if so).
 function leaveAccountScopedModeIfNeeded() {
-  if (currentMode === 'build' || currentMode === 'sell' || currentMode === 'layoutPreview') {
+  if (currentMode === 'build' || currentMode === 'sell' || currentMode === 'layoutPreview' || currentMode === 'shop') {
     sessionStorage.setItem(START_MODE_KEY, 'shop');
     location.reload();
     return true;
@@ -818,12 +841,23 @@ authDeleteAccountForm.addEventListener('submit', async (event) => {
   stopDiditPoll();
   closeDeleteAccountForm();
   resetLocalSessionState();
+  // #2754: every currentMode this handler can run from now reloads (Shop
+  // included) — set this *before* the reload, not after, so it survives
+  // it; see PENDING_AUTH_STATUS_KEY's own comment.
+  const deletedMessage = 'Your account has been deleted. You have been signed out.';
+  sessionStorage.setItem(PENDING_AUTH_STATUS_KEY, JSON.stringify({ message: deletedMessage, type: 'success' }));
   if (leaveAccountScopedModeIfNeeded()) return;
-  // Deliberately left open (unlike logout's own closeAuthModal()) so this
-  // confirmation is actually seen — refreshAccountAuthUI already flips the
-  // panel back to the logged-out login/signup view underneath it.
+  // No mode above actually needed the reload (shouldn't happen given the
+  // four currentMode values above are the only ones this app ever sets,
+  // but kept as a fallback rather than assuming it) — nothing will ever
+  // consume the stored message now, so show it directly instead, same as
+  // before #2754. Deliberately left open (unlike logout's own
+  // closeAuthModal()) so this confirmation is actually seen —
+  // refreshAccountAuthUI already flips the panel back to the logged-out
+  // login/signup view underneath it.
+  sessionStorage.removeItem(PENDING_AUTH_STATUS_KEY);
   refreshAccountAuthUI();
-  setAuthStatus('Your account has been deleted. You have been signed out.', 'success');
+  setAuthStatus(deletedMessage, 'success');
 });
 
 const authChangePasswordBtn = document.getElementById('auth-change-password-btn');
@@ -913,7 +947,16 @@ export const authInitPromise = (async () => {
   // #589: the return leg of the Didit-hosted verification flow — Didit
   // redirects back here once a builder finishes (or abandons) it there.
   const diditReturn = params.get('diditReturn');
-  if (!verifyToken && !resetToken && !diditReturn) {
+  // #2754: a message set by leaveAccountScopedModeIfNeeded's own reload
+  // (right now, only the delete-account handler ever sets one) — treated
+  // as one more reason this load needs the accountRecoveryFlowActive
+  // treatment below, same as verifyToken/resetToken/diditReturn: without
+  // it, Shop mode's own ensureShopperIdentity gate (which runs right after
+  // this promise settles, since the reload that carried this message here
+  // always lands back on Shop) would open its own modal on top of this
+  // one and clear the very message this is about to show.
+  const pendingStatusRaw = sessionStorage.getItem(PENDING_AUTH_STATUS_KEY);
+  if (!verifyToken && !resetToken && !diditReturn && !pendingStatusRaw) {
     await refreshCurrentUser();
     return;
   }
@@ -922,7 +965,12 @@ export const authInitPromise = (async () => {
   history.replaceState(null, '', location.pathname);
   await refreshCurrentUser();
 
-  if (verifyToken) {
+  if (pendingStatusRaw) {
+    sessionStorage.removeItem(PENDING_AUTH_STATUS_KEY);
+    const { message, type } = JSON.parse(pendingStatusRaw);
+    openAuthModal('login');
+    setAuthStatus(message, type);
+  } else if (verifyToken) {
     try {
       await verifyEmail(verifyToken);
       await refreshCurrentUser();
