@@ -150,5 +150,6 @@
   "0150_relax_earnings_events_zero_amount.sql",
   "0151_bug_reports.sql",
   "0152_stripe_account_flags.sql",
-  "0153_shared_products.sql"
+  "0153_shared_products.sql",
+  "0154_placed_instance_groups.sql"
 ]

@@ -607,6 +607,12 @@ export async function createMeshForInstance(instance) {
     object.userData.crop = {};
     object.userData.scale = 1;
     object.userData.label = instance.label ?? null;
+    // #2764: carried through purely so a grouping already set on the row
+    // (via POST /api/instances/group) survives being rebuilt into a mesh —
+    // same reasoning as label/crop/scale just above. Read by
+    // selectOnly/toggleInSelection (src/build/scene.js) to expand a
+    // selection to every mesh sharing the same groupId.
+    object.userData.groupId = instance.groupId ?? null;
     return object;
   }
   const width = effectiveLength(template, instance, 'x', 'width');
@@ -652,6 +658,9 @@ export async function createMeshForInstance(instance) {
   // per-instance-flag reasoning as isCommunitySign just above, and
   // independent of it.
   object.userData.isCommunityCalendar = instance.isCommunityCalendar ?? false;
+  // #2764: same reasoning as the flooring branch's own groupId comment
+  // above.
+  object.userData.groupId = instance.groupId ?? null;
   // Not editable anywhere in Build mode yet (#1294) — carried through
   // purely so a value already on the row (set directly via the API)
   // survives being rebuilt into a mesh and round-tripped back out again,
