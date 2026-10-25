@@ -1318,7 +1318,15 @@
         max-height: 50vh;
       }
       #catalog-picker.visible {
-        display: block;
+        /* #2762: flex column so #catalog-manual-mode (the single
+           scrolling region now -- see its own rule below) can use
+           flex: 1 + min-height: 0 to fill whatever's left of this panel's
+           own max-height budget after #catalog-mode-tabs, rather than
+           everything just stacking as blocks with nothing to actually
+           clip or scroll the overflow. */
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
       }
       /* Client-side only — filters the already-built tiles by name rather
          than re-querying or re-rendering thumbnails, since a template's
@@ -1379,6 +1387,18 @@
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
         gap: 8px;
+      }
+      /* #2762: #catalog-picker-grid used to cap and scroll itself against
+         the viewport here, independently of #bundle-picker-grid below
+         doing the same against its own separate budget -- the two
+         combined routinely exceeded #catalog-picker's own max-height,
+         since nothing clipped the overflow. #catalog-manual-mode (see its
+         own rule below) is the single scrolling region now, so this grid
+         goes back to a plain auto-height block. #prompt-mode-grid is a
+         sibling living directly under #catalog-picker, not inside that
+         scrolling wrapper, so it still needs its own budget-against-the-
+         viewport cap exactly as before. */
+      #prompt-mode-grid {
         max-height: calc(50vh - 88px);
         overflow-y: auto;
       }
@@ -1398,6 +1418,10 @@
         display: flex;
         gap: 6px;
         margin-bottom: 8px;
+        /* #2762: keep this row at its own natural height under the
+           flex-column #catalog-picker.visible above -- it isn't the
+           scrolling region, #catalog-manual-mode below is. */
+        flex-shrink: 0;
       }
       .catalog-mode-tab-btn {
         padding: 5px 12px;
@@ -1411,6 +1435,26 @@
         background: var(--brand-green);
         border-color: transparent;
         color: #16240a;
+      }
+      /* #2762: the single scrolling region inside #catalog-picker's
+         flex column -- flex: 1 claims whatever's left of the panel's own
+         max-height after #catalog-mode-tabs above, and min-height: 0
+         overrides a flex item's default auto min-height (which would
+         otherwise let this grow past that budget instead of actually
+         scrolling internally). display stays block (not flex) for its
+         own children -- a flex child defaults to flex-shrink: 1, so if
+         this were a flex column too, the search bar/grid/bundle section
+         below would get squeezed smaller than their own content instead
+         of actually overflowing into this wrapper's scrollbar, since
+         overflow: auto resets a flex item's automatic minimum size to 0
+         and lets that shrinking happen. Plain block children just
+         overflow their parent's box when too tall, which is exactly what
+         overflow-y: auto here is for. */
+      #catalog-manual-mode {
+        display: block;
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
       }
       #catalog-prompt-mode[hidden],
       #catalog-manual-mode[hidden] {
@@ -1543,12 +1587,15 @@
       #bundle-picker-empty[hidden] {
         display: none;
       }
+      /* #2762: used to cap and scroll itself against the viewport
+         (max-height: 30vh), independently of #catalog-picker-grid above
+         doing the same against its own separate budget -- see
+         #catalog-manual-mode's own comment for why neither one still
+         does that; it's the single scrolling region for both now. */
       #bundle-picker-grid {
         display: flex;
         flex-direction: column;
         gap: 6px;
-        max-height: 30vh;
-        overflow-y: auto;
       }
       .bundle-tile {
         display: flex;
