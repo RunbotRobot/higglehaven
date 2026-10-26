@@ -176,6 +176,47 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     expect(logEntries.length).toBe(1);
   });
 
+  // #2793: #2748/#2776 made every ordinary POST /catalog create back its
+  // template with its own 1:1 products row, so template.product_id is now
+  // set on practically every listing -- including this one, with no other
+  // listing sharing it. The sibling-cascade's own DELETE FROM
+  // placed_instances used to fire only for a genuinely shared product
+  // (product_id used to be a reliable "has a sibling" proxy); approving a
+  // flag on an ordinary, unshared listing must still only block future
+  // purchases and leave an already-placed instance alone, exactly like
+  // before #2749 ever existed.
+  it('approve on an ordinary (unshared) listing blocks future purchases but does not delete its already-placed instance', async () => {
+    const seller = await signupSeller('flag-approve-solo-seller');
+    const builder = await signupBuilder('flag-approve-solo-owner');
+    await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ landletId: 'flag-approve-solo-landlet', name: 'Flag approve solo landlet', areaM2: 1000, status: 'greenbelt' }),
+    }));
+    await api('/landlets/flag-approve-solo-landlet/claim', builder.session({ method: 'POST' }));
+    await createTemplate('flag-approve-solo-template', seller);
+    const placed = await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId: 'flag-approve-solo-instance', landletId: 'flag-approve-solo-landlet', templateId: 'flag-approve-solo-template', x: 0, y: 0 }),
+    }));
+    expect(placed.response.status).toBe(201);
+
+    const flagger = await signupBuilder('flag-approve-solo-flagger');
+    await api('/catalog/flag-approve-solo-template/flags', flagger.session({ method: 'POST', body: JSON.stringify({}) }));
+    const resolved = await api('/catalog/flag-approve-solo-template/flags/resolve', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ action: 'approve' }),
+    }));
+    expect(resolved.response.status).toBe(200);
+
+    const blockedPurchase = await api('/instances/flag-approve-solo-instance/purchase', builder.session({ method: 'POST' }));
+    expect(blockedPurchase.response.status).toBe(400);
+    expect(blockedPurchase.body.error).toMatch(/temporarily unavailable pending review/);
+
+    const { results: stillPlaced } = await env.DB.prepare('SELECT instance_id FROM placed_instances WHERE instance_id = ?')
+      .bind('flag-approve-solo-instance').all();
+    expect(stillPlaced.length).toBe(1);
+  });
+
   it('reject: resolves all pending flags, restores purchasability, does not strike the seller', async () => {
     const seller = await signupSeller('flag-reject-seller');
     const builder = await signupAdmin('flag-reject-owner');
@@ -543,6 +584,37 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
       expect(resolved.response.status).toBe(200);
       const sellerRow = await env.DB.prepare('SELECT strike_count FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
       expect(sellerRow.strike_count).toBe(1);
+    });
+
+    // #2783: auto-hide (unlike approve, just above) used to never cascade to
+    // products.flagged_hidden_at, so POST /api/catalog/listings -- which
+    // only checks that column -- let a seller attach a brand-new listing to
+    // a product that was already auto-hidden pending review, bypassing it
+    // entirely with no admin involvement.
+    it('auto-hiding one listing of a shared product also blocks a brand-new listing attach via POST /catalog/listings', async () => {
+      const sellerA = await signupSeller('auto-hide-cascade-seller-a');
+      const sellerB = await signupSeller('auto-hide-cascade-seller-b');
+      await createTemplate('auto-hide-cascade-listing-a', sellerA);
+      await createProduct('auto-hide-cascade-product-1');
+      await linkToProduct('auto-hide-cascade-listing-a', 'auto-hide-cascade-product-1');
+
+      const flaggers = await Promise.all([1, 2, 3].map((n) => signupBuilder(`auto-hide-cascade-flagger-${n}`)));
+      let lastResult;
+      for (const flagger of flaggers) {
+        lastResult = await api('/catalog/auto-hide-cascade-listing-a/flags', flagger.session({ method: 'POST', body: JSON.stringify({}) }));
+      }
+      expect(lastResult.body.autoHidden).toBe(true);
+
+      const product = await env.DB.prepare('SELECT flagged_hidden_at FROM products WHERE product_id = ?')
+        .bind('auto-hide-cascade-product-1').first();
+      expect(product.flagged_hidden_at).toBeTruthy();
+
+      const attach = await api('/catalog/listings', sellerB.session({
+        method: 'POST',
+        body: JSON.stringify({ productId: 'auto-hide-cascade-product-1', priceCents: 500 }),
+      }));
+      expect(attach.response.status).toBe(400);
+      expect(attach.body.error).toMatch(/temporarily unavailable pending review/);
     });
   });
 });
