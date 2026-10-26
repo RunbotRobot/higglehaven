@@ -1394,11 +1394,38 @@ export async function handleCatalog(request, db, route, url, models, env) {
       }
     }
     await assertUploadedModelExists(models, template.modelUrl);
+    // #2748 (leaf of #2745's shared-products redesign): migrations/0153_
+    // shared_products.sql's own comment explicitly leaves "every listing
+    // has a product_id" unenforced by the database, to be wired up by
+    // "whichever of #2747/#2748 starts actually writing it" -- #2747
+    // (merged) only ever reads an existing product_id (the attach-a-
+    // listing-to-an-existing-product endpoint below), so without this a
+    // template created through this, the ordinary create path, would stay
+    // permanently product_id-less and could never be "sell this too"-ed by
+    // another seller going forward, unlike the backfilled historical rows.
+    // Mirrors that backfill's own unconditional 1:1 product_id=template_id
+    // shape exactly (every row gets a backing product, regardless of
+    // seller_id -- a system/placeholder template is just as valid a thing
+    // for a future seller to attach their own listing to as a real
+    // seller-uploaded one), and must insert before catalog_templates'
+    // own INSERT just below since its product_id is a real FK against
+    // this table.
+    await db.prepare(`
+      INSERT INTO products
+        (product_id, name, category, subcategory, color, width_m, depth_m, height_m,
+         model_url, metadata_json, model_size_bytes, skeleton_signature, original_seller_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      template.templateId, template.name, template.category, template.subcategory, template.color,
+      template.dimensions.width, template.dimensions.depth, template.dimensions.height,
+      template.modelUrl, JSON.stringify(template.metadata), template.modelSizeBytes, template.skeletonSignature,
+      template.sellerId,
+    ).run();
     await db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(...templateParams(template)).run();
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity, product_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(...templateParams(template), template.templateId).run();
     // #976: re-select and map through templateFromRow rather than handing
     // back the locally-constructed `template` object -- validateTemplate's
     // own return literal never carries imageUrl/imageEmbedding/createdAt/

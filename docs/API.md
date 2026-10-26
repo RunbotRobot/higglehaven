@@ -2198,10 +2198,18 @@ landlet. They are not production commerce listings yet.
   },
   "isTestModel": false,
   "stockQuantity": null,
+  "productId": "placeholder-chair",
   "createdAt": "2026-07-29T07:30:06.519Z",
   "updatedAt": "2026-07-29T07:30:06.519Z"
 }
 ```
+
+`productId` (#2745/#2746/#2748) identifies the shared `products` row this
+listing is backed by — usable as `POST /api/catalog/listings`'s own
+`productId` field to attach a second seller's own listing to the same
+product. See that endpoint's own "`productId` on every catalog template
+response" note below for why it's non-null for every template from here
+on.
 
 `imageUrl` and `imageEmbedding` are `null` until set via `POST
 /api/catalog/:templateId/thumbnail` below — every other endpoint on this
@@ -2434,9 +2442,11 @@ Shared-products (#2745, #2747): lets a seller attach their own listing
 (price, stock) to a product someone *else* originally uploaded, without a
 model-upload step — the counterpart to `POST /api/catalog` above, which
 always creates a brand-new product plus its first listing in one row.
-Requires a session logged in as a seller (`403` otherwise) — unlike the
-sibling endpoint above, there's no unauthenticated/system-template branch
-here, since attaching to someone else's product is never a seed action.
+Requires a session logged in as a seller (`requireSessionSeller` —
+`401` if not logged in at all, `403` if logged in but not yet age/
+payment-verified) — unlike the sibling endpoint above, there's no
+unauthenticated/system-template branch here, since attaching to someone
+else's product is never a seed action.
 
 Request body:
 
@@ -2474,7 +2484,28 @@ referenced product, and `sellerId`/`priceCents`/`stockQuantity` set to this
 call's own seller/price/stock. The new row's `templateId` is always freshly
 generated — there's no idempotency-key dedup here the way the sibling
 model-upload create path has, since this call carries no file upload that
-a lost response could leave stranded.
+a lost response could leave stranded. Its `productId` is always the same
+`productId` this call was given.
+
+#### `productId` on every catalog template response (#2748)
+
+Every catalog template response (not just this endpoint's own) now
+includes `productId` — the shared `products` row this listing is backed
+by, usable as this endpoint's own `productId` request field to attach a
+*second* listing to the same product. `POST /api/catalog` (the plain
+model-upload create path above) backs every new template with a fresh,
+1:1 `products` row of its own at creation time, the same
+`productId = templateId` convention `migrations/0153_shared_products.sql`'s
+own historical backfill already used for every row that existed before
+this split — so a template created going forward is just as attachable-to
+as a backfilled historical one, not a dead end. `productId` is `null`
+only for a row from the narrow window between that migration landing
+(#2746) and this fix (#2748) actually deploying; nothing in this codebase
+produces a `null` `productId` on a newly created template by this point.
+The seller-facing "Sell This Too" button (`src/sell/mode.js`, Seller
+modal) is this endpoint's own UI entry point — browses every product in
+the catalog and calls this endpoint to attach the browsing seller's own
+listing to whichever one is picked.
 
 ### `PUT /api/catalog/:templateId`
 ### `PATCH /api/catalog/:templateId`
