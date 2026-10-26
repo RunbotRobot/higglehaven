@@ -199,4 +199,63 @@ describe('Group/Ungroup (#2764)', () => {
     expect(attemptClear.response.status).toBe(200);
     expect(attemptClear.body.instance.groupId).toBe(grouped.body.groupId);
   });
+
+  // #2788: a partial-failure rollback must restore each succeeded member to
+  // its own PRIOR group_id (here, group-i-1 and group-i-2's existing group),
+  // not blanket-null it -- blanket-null would silently dissolve that
+  // pre-existing group as a side effect of a request reported as a total
+  // 409 failure. Same race idiom as worker-api.test.js's own #1772/#1773
+  // multi-landlet-batch test: a second landlet's ownership changes in the
+  // exact window between the upfront requireOwnedLandlets check and the
+  // db.batch() write that follows it.
+  it('restores a succeeded member to its own prior group, not null, on a partial-failure rollback', async () => {
+    const otherLandletId = 'instance-groups-landlet-2788';
+    await createGreenbeltLandlet(otherLandletId);
+    // Self-claim only ever grants one landlet at a time (same invariant
+    // worker-api.test.js's own #1772/#1773 multi-landlet-batch race test
+    // works around) -- builder already claimed landletId above, so grant
+    // this second landlet directly instead.
+    await env.DB.prepare("UPDATE landlets SET owner_builder_id = ?, status = 'claimed' WHERE landlet_id = ?")
+      .bind(builder.builderId, otherLandletId).run();
+    const placeOnOtherLandlet = instancePlacer();
+
+    await placeInstance(builder.session, { instanceId: 'group-i-1', landletId });
+    await placeInstance(builder.session, { instanceId: 'group-i-2', landletId });
+    await placeOnOtherLandlet(builder.session, { instanceId: 'group-i-3', landletId: otherLandletId });
+
+    const preGrouped = await api('/instances/group', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceIds: ['group-i-1', 'group-i-2'] }),
+    }));
+    expect(preGrouped.response.status).toBe(201);
+    const priorGroupId = preGrouped.body.groupId;
+
+    const otherBuilder = await signupBuilder('groups-rollback-other-builder');
+    const originalBatch = env.DB.batch.bind(env.DB);
+    env.DB.batch = async (statements) => {
+      await env.DB.prepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
+        .bind(otherBuilder.builderId, otherLandletId).run();
+      return originalBatch(statements);
+    };
+    let result;
+    try {
+      // group-i-1 is already grouped (above); re-grouping it with group-i-3
+      // is allowed per this handler's own documented merge design. Only
+      // group-i-3's write is rejected by the race above.
+      result = await api('/instances/group', builder.session({
+        method: 'POST',
+        body: JSON.stringify({ instanceIds: ['group-i-1', 'group-i-3'] }),
+      }));
+    } finally {
+      env.DB.batch = originalBatch;
+    }
+    expect(result.response.status).toBe(409);
+
+    const first = await api('/instances/group-i-1');
+    const second = await api('/instances/group-i-2');
+    const third = await api('/instances/group-i-3');
+    expect(first.body.instance.groupId).toBe(priorGroupId);
+    expect(second.body.instance.groupId).toBe(priorGroupId);
+    expect(third.body.instance.groupId).toBe(null);
+  });
 });
