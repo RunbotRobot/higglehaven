@@ -811,6 +811,23 @@ export async function deleteCatalogTemplate(templateId) {
   await requestJson(`/catalog/${encodeURIComponent(templateId)}`, { method: 'DELETE' });
 }
 
+// #2748 (leaf of #2745's shared-products redesign): "Sell This Too" --
+// attaches the caller's own listing (price/stock) to a product someone
+// else originally uploaded, via the POST /api/catalog/listings endpoint
+// #2747 shipped. No idempotency key here unlike createCatalogTemplate
+// above -- that one exists specifically for a model-upload retry (the
+// upload itself is the slow, droppable step a lost response could repeat);
+// this call has no comparably slow prerequisite step worth protecting the
+// same way.
+export async function createCatalogListing({ productId, priceCents, stockQuantity }) {
+  const { template: created } = await requestJson('/catalog/listings', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ productId, priceCents, stockQuantity }),
+  });
+  return created;
+}
+
 // #327: persists the flat thumbnail (a PNG data URL) rendered client-side
 // from this template's own 3D model, plus a cheap client-computed
 // embedding for it — see src/main.js's persistCatalogThumbnail. Best-
