@@ -26,6 +26,6 @@
     "playwright": "^1.56.1",
     "vite": "^8.1.5",
     "vitest": "^4.1.10",
-    "wrangler": "^4.114.0"
+    "wrangler": "^4.152.0"
   }
 }
