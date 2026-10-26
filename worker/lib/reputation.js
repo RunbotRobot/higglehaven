@@ -483,10 +483,29 @@ export async function handleProductFlags(request, db, route) {
       // the product itself, not just the one listing the flags happened to
       // land on -- so it cascades to every sibling listing of the same
       // product, and to every already-placed instance of any of them,
-      // across every landlet. Gated on product_id being set at all: a
-      // listing created before #2746's backfill ran, or otherwise never
-      // backfilled, has no sibling to cascade to.
-      if (template.product_id) {
+      // across every landlet.
+      // Gated on an actual sibling existing, not just product_id being set
+      // (#2793): #2748/#2776 made the ordinary POST /catalog create path
+      // back every new template with its own 1:1 products row at creation
+      // time, so product_id is now set on nearly every listing, including
+      // an entirely unshared one with no sibling at all. Before that
+      // change, product_id being set was a reliable proxy for "this is a
+      // genuinely shared product" (only true for a backfilled/explicitly-
+      // attached listing) -- treating it as that same proxy today means
+      // this cascade's own DELETE FROM placed_instances now fires on every
+      // single approved flag, destructively removing the flagged listing's
+      // already-placed instances everywhere even when there is no sibling
+      // listing to clean up after -- a real behavior change nobody decided
+      // (the primary hide statement just above this comment exists
+      // specifically to avoid that: "does not hard-delete catalog_templates
+      // itself... a real, if rare, edge case not worth forcing through
+      // here"). Re-checking for a genuine sibling restores that original
+      // intent for the common, unshared case.
+      const siblingCount = template.product_id
+        ? (await db.prepare('SELECT COUNT(*) AS siblingCount FROM catalog_templates WHERE product_id = ?')
+          .bind(template.product_id).first()).siblingCount
+        : 0;
+      if (template.product_id && siblingCount > 1) {
         await db.prepare(`
           UPDATE products SET flagged_hidden_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
           WHERE product_id = ? AND flagged_hidden_at IS NULL
