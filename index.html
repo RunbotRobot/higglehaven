@@ -1420,7 +1420,15 @@
         max-height: 50vh;
       }
       #catalog-picker.visible {
-        display: block;
+        /* #2762: flex column so #catalog-manual-mode (the single
+           scrolling region now -- see its own rule below) can use
+           flex: 1 + min-height: 0 to fill whatever's left of this panel's
+           own max-height budget after #catalog-mode-tabs, rather than
+           everything just stacking as blocks with nothing to actually
+           clip or scroll the overflow. */
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
       }
       /* Client-side only — filters the already-built tiles by name rather
          than re-querying or re-rendering thumbnails, since a template's
@@ -1481,6 +1489,18 @@
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
         gap: 8px;
+      }
+      /* #2762: #catalog-picker-grid used to cap and scroll itself against
+         the viewport here, independently of #bundle-picker-grid below
+         doing the same against its own separate budget -- the two
+         combined routinely exceeded #catalog-picker's own max-height,
+         since nothing clipped the overflow. #catalog-manual-mode (see its
+         own rule below) is the single scrolling region now, so this grid
+         goes back to a plain auto-height block. #prompt-mode-grid is a
+         sibling living directly under #catalog-picker, not inside that
+         scrolling wrapper, so it still needs its own budget-against-the-
+         viewport cap exactly as before. */
+      #prompt-mode-grid {
         max-height: calc(50vh - 88px);
         overflow-y: auto;
       }
@@ -1500,6 +1520,10 @@
         display: flex;
         gap: 6px;
         margin-bottom: 8px;
+        /* #2762: keep this row at its own natural height under the
+           flex-column #catalog-picker.visible above -- it isn't the
+           scrolling region, #catalog-manual-mode below is. */
+        flex-shrink: 0;
       }
       .catalog-mode-tab-btn {
         padding: 5px 12px;
@@ -1513,6 +1537,26 @@
         background: var(--brand-green);
         border-color: transparent;
         color: #16240a;
+      }
+      /* #2762: the single scrolling region inside #catalog-picker's
+         flex column -- flex: 1 claims whatever's left of the panel's own
+         max-height after #catalog-mode-tabs above, and min-height: 0
+         overrides a flex item's default auto min-height (which would
+         otherwise let this grow past that budget instead of actually
+         scrolling internally). display stays block (not flex) for its
+         own children -- a flex child defaults to flex-shrink: 1, so if
+         this were a flex column too, the search bar/grid/bundle section
+         below would get squeezed smaller than their own content instead
+         of actually overflowing into this wrapper's scrollbar, since
+         overflow: auto resets a flex item's automatic minimum size to 0
+         and lets that shrinking happen. Plain block children just
+         overflow their parent's box when too tall, which is exactly what
+         overflow-y: auto here is for. */
+      #catalog-manual-mode {
+        display: block;
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
       }
       #catalog-prompt-mode[hidden],
       #catalog-manual-mode[hidden] {
@@ -1645,12 +1689,15 @@
       #bundle-picker-empty[hidden] {
         display: none;
       }
+      /* #2762: used to cap and scroll itself against the viewport
+         (max-height: 30vh), independently of #catalog-picker-grid above
+         doing the same against its own separate budget -- see
+         #catalog-manual-mode's own comment for why neither one still
+         does that; it's the single scrolling region for both now. */
       #bundle-picker-grid {
         display: flex;
         flex-direction: column;
         gap: 6px;
-        max-height: 30vh;
-        overflow-y: auto;
       }
       .bundle-tile {
         display: flex;
@@ -1959,6 +2006,81 @@
       }
       #upload-submit-btn:disabled {
         opacity: 0.5;
+      }
+      /* #2761: same modal shell as #upload-modal — the reusable name-input
+         modal src/ui/bundleNameModal.js opens for both Save Bundle (with
+         the share checkbox) and the bundle-tile rename prompt (without
+         it), replacing the native prompt()/confirm() pair this app's
+         bundle flow was the last holdout still using. */
+      #bundle-name-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #bundle-name-modal.visible {
+        display: flex;
+      }
+      #bundle-name-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #bundle-name-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #bundle-name-modal-content label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      /* Same [hidden]-vs-equal-specificity-author-rule fix #upload-modal-
+         content label[hidden] already needs — an ID selector's specificity
+         beats [hidden] just as much as a class selector does. */
+      #bundle-name-modal-content label[hidden] {
+        display: none;
+      }
+      #bundle-name-input {
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      /* Row-layout checkbox, same pattern #upload-digital-good-label uses. */
+      #bundle-name-share-label {
+        flex-direction: row !important;
+        align-items: center;
+        gap: 8px !important;
+      }
+      #bundle-name-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #bundle-name-save-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: var(--brand-green);
+        color: #16240a;
       }
       /* #453: real-money checkout — same modal shell as #upload-modal,
          stacked above the world (no other modal opens over Shop mode's
@@ -4590,6 +4712,28 @@
           <div id="prompt-mode-status" hidden role="status" aria-live="polite"></div>
           <div id="prompt-mode-grid"></div>
           <div id="prompt-mode-empty" hidden>No similar products found yet — try generating a concept image above.</div>
+        </div>
+      </div>
+    </div>
+    <!-- #2761: replaces the native prompt()/confirm() pair this app's
+         bundle flow was the last holdout still using (Save Bundle's name
+         prompt + its own follow-up share confirm, and the bundle-tile
+         rename prompt in src/catalog/picker.js) — see
+         src/ui/bundleNameModal.js, shared by both call sites. -->
+    <div id="bundle-name-modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div id="bundle-name-modal-content">
+        <button id="bundle-name-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2 id="bundle-name-modal-title">Name this bundle</h2>
+        <label>
+          Name
+          <input id="bundle-name-input" type="text" maxlength="100" />
+        </label>
+        <label id="bundle-name-share-label" hidden>
+          <input id="bundle-name-share-checkbox" type="checkbox" />
+          Share this bundle to the Community tab so any builder can use it too
+        </label>
+        <div id="bundle-name-modal-actions">
+          <button id="bundle-name-save-btn" type="button">Save</button>
         </div>
       </div>
     </div>

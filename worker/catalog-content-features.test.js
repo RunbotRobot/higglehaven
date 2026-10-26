@@ -2168,5 +2168,9 @@ describe('Low-stock / days-remaining list (#1949)', () => {
     }
     const limited = await api('/builders/me/low-stock', builder.session());
     expect(limited.response.status).toBe(429);
-  });
+  }, 90000); // #2772: same cumulative-D1-state-under-CI-load shape as
+  // #978/#1224/#1469/#2199 -- 60 real HTTP round trips, reliably finishing
+  // in well under 1s in isolation but occasionally pushed past the
+  // 20000ms default under CI load, matching land-levels.test.js's own
+  // 90000ms bump (#978/#2157) for a comparable ~40-request loop.
 });

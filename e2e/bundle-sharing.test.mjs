@@ -7,11 +7,11 @@
 // builder should never even be offered a button that would 403.
 // Two independent browser pages stand in for two different real users,
 // rather than juggling a mid-test identity switch on one page.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, saveBundleAs } from './helpers.mjs';
 
 const SHARER = 'Bundle Sharer';
 const VIEWER = 'Bundle Viewer';
-const BUNDLE_NAME = SHARER; // launchPage's dialog handler answers every prompt() with promptAnswer
+const BUNDLE_NAME = SHARER;
 
 const sharerSession = await launchPage({ promptAnswer: SHARER });
 const viewerSession = await launchPage({ promptAnswer: VIEWER });
@@ -55,10 +55,8 @@ await sharerPage.waitForFunction(() => document.getElementById('product-info').t
 // being cleared"), nothing more to tap.
 await sharerPage.click('#toggle-multiselect');
 await sharerPage.waitForTimeout(300);
-await sharerPage.click('#save-bundle-item');
-// launchPage's dialog handler auto-accepts confirm() too, which is exactly
-// the "share it" path this test wants (the Save Bundle handler's confirm()
-// asks whether to share).
+// Shared, which is exactly the "share it" path this test wants.
+await saveBundleAs(sharerPage, BUNDLE_NAME, { shared: true });
 await sharerPage.waitForFunction(() => document.getElementById('product-info').textContent.includes('Saved'), null, { timeout: 60000 });
 const savedStatus = await sharerPage.textContent('#product-info');
 console.log('save status (should mention Saved):', savedStatus);

@@ -4,7 +4,7 @@
 // could resolve after a delete and overwrite myBundles/communityBundles
 // with a stale refetched snapshot that still contains the already-deleted
 // bundle, resurrecting it in the UI.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, saveBundleAs, fillBundleNameModal } from './helpers.mjs';
 
 const LABEL = 'Bundle Delete Race Tester';
 const BUNDLE_A = 'Delete Race Bundle A';
@@ -33,8 +33,7 @@ async function placeAndSaveBundle(name, x, y) {
   await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Tree'), null, { timeout: 60000 });
   await page.click('#toggle-multiselect');
   await page.waitForTimeout(300);
-  await page.evaluate((n) => { window.prompt = () => n; }, name);
-  await page.click('#save-bundle-item');
+  await saveBundleAs(page, name);
   await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Saved'), null, { timeout: 60000 });
   await page.click('#toggle-multiselect');
   await page.waitForTimeout(300);
@@ -68,8 +67,8 @@ await page.route('**/api/bundles?*', async (route) => {
 
 const tile = (name) => page.locator('.bundle-tile').filter({ hasText: name });
 
-await page.evaluate((n) => { window.prompt = () => n; }, BUNDLE_A_RENAMED);
 await tile(BUNDLE_A).locator('.bundle-tile-rename').click();
+await fillBundleNameModal(page, BUNDLE_A_RENAMED);
 // Don't wait for A's rename to settle -- fire B's delete right away, while
 // A's own (delayed) refetch is still in flight. launchPage's own dialog
 // handler already auto-accepts the delete confirm().

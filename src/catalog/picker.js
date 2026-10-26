@@ -29,6 +29,7 @@
 // from anywhere a placement can start -- a tile pick here, Upload Model,
 // Paste) write its button label directly.
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
+import { promptBundleName } from '../ui/bundleNameModal.js';
 import { generateConceptImage, searchCatalogBySimilarity, fetchBundles, fetchSharedBundles, updateBundle, deleteBundle } from '../api.js';
 import {
   activeCatalog, myBundles, setMyBundles, communityBundles, setCommunityBundles, builderId,
@@ -414,16 +415,15 @@ export function renderBundlePicker() {
       renameBtn.setAttribute('aria-label', `Rename bundle "${bundle.name}"`);
       renameBtn.addEventListener('click', async (event) => {
         event.stopPropagation();
-        const next = prompt('Rename this bundle', bundle.name);
-        if (!next || !next.trim() || next.trim() === bundle.name) return;
-        if (next.trim().length > 100) {
-          alert('Keep it to 100 characters or fewer.');
-          return;
-        }
+        // #2761: themed modal replaces the native prompt() this rename
+        // button used to open directly.
+        const result = await promptBundleName({ title: 'Rename this bundle', initialName: bundle.name });
+        if (!result || result.name === bundle.name) return;
+        const { name: next } = result;
         renameBtn.disabled = true;
         const myLoadToken = ++bundlePickerLoadToken;
         try {
-          const updated = await updateBundle(bundle.bundleId, { name: next.trim() });
+          const updated = await updateBundle(bundle.bundleId, { name: next });
           Object.assign(bundle, updated);
           // #435: a shared bundle intentionally exists as two separate JS
           // objects, one per tab's own fetch (myBundles/communityBundles)
