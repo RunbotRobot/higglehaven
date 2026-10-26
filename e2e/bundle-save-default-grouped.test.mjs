@@ -7,7 +7,7 @@
 // action does (e2e/group-ungroup.test.mjs's own #2764 test covers that
 // persistence shape for the Group button itself; this test is the Save
 // Bundle trigger path specifically, not a retest of #2764's own mechanism).
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, saveBundleAs } from './helpers.mjs';
 
 const LABEL = 'Bundle Save Grouping Tester';
 
@@ -51,7 +51,12 @@ await page.waitForTimeout(300);
 const multiSelectInfo = await page.textContent('#product-info');
 console.log('status after multi-selecting both trees (should be "2 items selected"):', multiSelectInfo);
 
-await page.click('#save-bundle-item');
+// #2761: Save Bundle now opens a themed name-prompt modal instead of
+// resolving immediately (replacing the native prompt()/confirm() this test
+// originally wrote against) -- saveBundleAs covers the click plus filling
+// and confirming that modal, same helper e2e/bundles.test.mjs's own Save
+// Bundle flow uses.
+await saveBundleAs(page, LABEL);
 // #2639 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
 // arg, options) -- a bare (fn, { timeout }) call puts the options object in
 // the `arg` slot instead, so `options` stayed undefined and the real applied
