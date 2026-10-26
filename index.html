@@ -1005,6 +1005,16 @@
         opacity: 0.75;
         text-align: right;
       }
+      /* #2796: same minimal text+error-class shape #dm-status already
+         uses for the structurally identical DM-send failure case. */
+      #shop-nearby-chat-status {
+        font-size: 11px;
+        color: rgb(var(--ink-rgb) / 0.75);
+        min-height: 14px;
+      }
+      #shop-nearby-chat-status.error {
+        color: #ff8a80;
+      }
       #shop-nearby-chat-form {
         display: flex;
         gap: 4px;
@@ -4610,6 +4620,7 @@
     <button id="shop-nearby-chat-btn" class="shop-ui" type="button">Chat</button>
     <div id="shop-nearby-chat-panel">
       <div id="shop-nearby-chat-log" role="log" aria-live="polite"></div>
+      <div id="shop-nearby-chat-status" role="status" aria-live="polite"></div>
       <form id="shop-nearby-chat-form">
         <input id="shop-nearby-chat-input" type="text" maxlength="280" placeholder="Say something nearby…" autocomplete="off" />
         <button type="submit">Send</button>

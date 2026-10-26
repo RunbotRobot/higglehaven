@@ -20,6 +20,7 @@ const NEARBY_CHAT_POLL_INTERVAL_MS = 2000;
 const chatBtnEl = document.getElementById('shop-nearby-chat-btn');
 const chatPanelEl = document.getElementById('shop-nearby-chat-panel');
 const chatLogEl = document.getElementById('shop-nearby-chat-log');
+const chatStatusEl = document.getElementById('shop-nearby-chat-status');
 const chatFormEl = document.getElementById('shop-nearby-chat-form');
 const chatInputEl = document.getElementById('shop-nearby-chat-input');
 
@@ -63,11 +64,23 @@ if (chatBtnEl) {
     event.preventDefault();
     const text = chatInputEl.value.trim();
     if (!text) return;
-    chatInputEl.value = '';
+    chatStatusEl.textContent = '';
+    chatStatusEl.classList.remove('error');
+    // #2796: the input is no longer cleared until the send actually
+    // resolves -- previously cleared optimistically, so a rejection (rate
+    // limit, stale presence, network) silently dropped the typed message
+    // with no trace and no way to retry it, same failure shape the
+    // credit-orb rate-limit bug (#2774) had. Mirrors dmComposeForm's own
+    // submit handler (src/account/menu.js), the structurally identical
+    // DM-send case, which already gets this right.
     sendNearbyChatMessage(text).then((message) => {
+      chatInputEl.value = '';
       ownMessageIds.add(message.messageId);
       appendMessage(message);
-    }).catch(() => {});
+    }).catch((err) => {
+      chatStatusEl.textContent = err.message || 'Could not send this message.';
+      chatStatusEl.classList.add('error');
+    });
   });
 }
 
