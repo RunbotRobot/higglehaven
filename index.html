@@ -1931,6 +1931,81 @@
       #upload-submit-btn:disabled {
         opacity: 0.5;
       }
+      /* #2761: same modal shell as #upload-modal — the reusable name-input
+         modal src/ui/bundleNameModal.js opens for both Save Bundle (with
+         the share checkbox) and the bundle-tile rename prompt (without
+         it), replacing the native prompt()/confirm() pair this app's
+         bundle flow was the last holdout still using. */
+      #bundle-name-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #bundle-name-modal.visible {
+        display: flex;
+      }
+      #bundle-name-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #bundle-name-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #bundle-name-modal-content label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      /* Same [hidden]-vs-equal-specificity-author-rule fix #upload-modal-
+         content label[hidden] already needs — an ID selector's specificity
+         beats [hidden] just as much as a class selector does. */
+      #bundle-name-modal-content label[hidden] {
+        display: none;
+      }
+      #bundle-name-input {
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      /* Row-layout checkbox, same pattern #upload-digital-good-label uses. */
+      #bundle-name-share-label {
+        flex-direction: row !important;
+        align-items: center;
+        gap: 8px !important;
+      }
+      #bundle-name-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #bundle-name-save-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: var(--brand-green);
+        color: #16240a;
+      }
       /* #453: real-money checkout — same modal shell as #upload-modal,
          stacked above the world (no other modal opens over Shop mode's
          world view), holding a Stripe Elements card field. */
@@ -4543,6 +4618,28 @@
           <div id="prompt-mode-status" hidden role="status" aria-live="polite"></div>
           <div id="prompt-mode-grid"></div>
           <div id="prompt-mode-empty" hidden>No similar products found yet — try generating a concept image above.</div>
+        </div>
+      </div>
+    </div>
+    <!-- #2761: replaces the native prompt()/confirm() pair this app's
+         bundle flow was the last holdout still using (Save Bundle's name
+         prompt + its own follow-up share confirm, and the bundle-tile
+         rename prompt in src/catalog/picker.js) — see
+         src/ui/bundleNameModal.js, shared by both call sites. -->
+    <div id="bundle-name-modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div id="bundle-name-modal-content">
+        <button id="bundle-name-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2 id="bundle-name-modal-title">Name this bundle</h2>
+        <label>
+          Name
+          <input id="bundle-name-input" type="text" maxlength="100" />
+        </label>
+        <label id="bundle-name-share-label" hidden>
+          <input id="bundle-name-share-checkbox" type="checkbox" />
+          Share this bundle to the Community tab so any builder can use it too
+        </label>
+        <div id="bundle-name-modal-actions">
+          <button id="bundle-name-save-btn" type="button">Save</button>
         </div>
       </div>
     </div>

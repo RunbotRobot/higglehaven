@@ -669,6 +669,30 @@ export async function waitForText(page, selector, expectedSubstring, { timeout =
   return text;
 }
 
+// #2761: Save Bundle and the bundle-tile rename (✎) button used to be the
+// app's last native prompt()/confirm() holdouts — both now open the real
+// #bundle-name-modal (src/ui/bundleNameModal.js) instead, so driving them
+// from a test means filling that modal's own fields directly rather than
+// going through launchPage's dialog handler or monkey-patching
+// window.prompt the way every bundle test used to.
+export async function fillBundleNameModal(page, name) {
+  await page.waitForSelector('#bundle-name-modal.visible', { timeout: 10000 });
+  await page.fill('#bundle-name-input', name);
+  await page.click('#bundle-name-save-btn');
+}
+
+// Covers the common case — click Save Bundle, then fill the modal it
+// opens. A rename (opened from a specific bundle tile's own ✎ button
+// instead) has too many different ways callers locate that tile to cover
+// here too; those call fillBundleNameModal directly after their own click.
+export async function saveBundleAs(page, name, { shared = false } = {}) {
+  await page.click('#save-bundle-item');
+  await page.waitForSelector('#bundle-name-modal.visible', { timeout: 10000 });
+  if (shared) await page.check('#bundle-name-share-checkbox');
+  await page.fill('#bundle-name-input', name);
+  await page.click('#bundle-name-save-btn');
+}
+
 // Standard end-of-test report + exit, matched by run-all.mjs (which reads
 // the child process's exit code) and by running a single file directly with
 // `node e2e/whatever.test.mjs`.

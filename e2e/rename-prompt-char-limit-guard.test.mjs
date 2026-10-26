@@ -11,9 +11,17 @@
 // over-100-char value triggers the client-side alert with no mutation
 // reaching the server, then a valid value still works normally (not a
 // regression to "nothing can ever be renamed").
+//
+// #2761: the bundle create/rename flows (3 and 4 below) moved off native
+// prompt() onto a themed modal (src/ui/bundleNameModal.js) with its own
+// input's maxlength="100" -- a stronger guard than the other three flows'
+// "submit, then alert and reject" pattern, since the browser itself now
+// refuses to let the field ever hold more than 100 characters. Those two
+// flows assert truncation instead of an alert; the other three are
+// unaffected and keep the original pattern.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, saveBundleAs, fillBundleNameModal } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -109,16 +117,19 @@ await page.waitForTimeout(800);
 await page.click('#toggle-multiselect');
 await page.waitForTimeout(300);
 
-dialogScript = [OVERLONG];
 await page.click('#save-bundle-item');
+await page.waitForSelector('#bundle-name-modal.visible', { timeout: 10000 });
+await page.fill('#bundle-name-input', OVERLONG);
+const bundleCreateInputTruncated = (await page.inputValue('#bundle-name-input')).length === 100;
+console.log('bundle name input truncates at 100 chars via maxlength, same cap as the other guards (should be true):', bundleCreateInputTruncated);
+await page.click('#bundle-name-cancel-btn');
 await page.waitForTimeout(300);
 const noBundleSavedAfterOverlong = await page.evaluate(() =>
   !document.getElementById('product-info')?.textContent.includes('Saved'));
-console.log('no "Saved" confirmation after an over-100-char bundle name (should be true -- no confirm() even reached):', noBundleSavedAfterOverlong);
+console.log('no "Saved" confirmation after cancelling out of the overlong attempt (should be true):', noBundleSavedAfterOverlong);
 
 const NEW_BUNDLE_NAME = 'Valid Bundle Name';
-dialogScript = [NEW_BUNDLE_NAME, true]; // name prompt, then the share confirm()
-await page.click('#save-bundle-item');
+await saveBundleAs(page, NEW_BUNDLE_NAME, { shared: true });
 await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Saved'), null, { timeout: 60000 });
 console.log('bundle saved normally with a valid name (should reach here without timing out)');
 
@@ -129,15 +140,19 @@ await page.click('.bundle-tab-btn[data-bundle-tab="mine"]');
 await page.waitForTimeout(300);
 const bundleTileRenameBtn = page.locator('.bundle-tile', { hasText: NEW_BUNDLE_NAME }).locator('.bundle-tile-rename');
 
-dialogScript = [OVERLONG];
 await bundleTileRenameBtn.click();
+await page.waitForSelector('#bundle-name-modal.visible', { timeout: 10000 });
+await page.fill('#bundle-name-input', OVERLONG);
+const bundleRenameInputTruncated = (await page.inputValue('#bundle-name-input')).length === 100;
+console.log('bundle rename input also truncates at 100 chars (should be true):', bundleRenameInputTruncated);
+await page.click('#bundle-name-cancel-btn');
 await page.waitForTimeout(300);
 const bundleNameAfterOverlong = await page.locator('.bundle-tile').first().textContent();
-console.log('bundle tile name unchanged after an over-100-char rename attempt (should be true):', bundleNameAfterOverlong.includes(NEW_BUNDLE_NAME));
+console.log('bundle tile name unchanged after cancelling the overlong rename attempt (should be true):', bundleNameAfterOverlong.includes(NEW_BUNDLE_NAME));
 
 const RENAMED_BUNDLE_NAME = 'Renamed Valid Bundle';
-dialogScript = [RENAMED_BUNDLE_NAME];
 await bundleTileRenameBtn.click();
+await fillBundleNameModal(page, RENAMED_BUNDLE_NAME);
 await page.waitForFunction(
   (name) => document.querySelector('.bundle-tile')?.textContent.includes(name),
   RENAMED_BUNDLE_NAME,
@@ -188,19 +203,24 @@ await page.waitForFunction(
 const productRowAfterValidRename = await page.locator('.seller-row').filter({ hasText: NEW_PRODUCT_NAME }).count();
 console.log('product renamed normally with a valid value (should be 1):', productRowAfterValidRename);
 
+// Only 3 of the 5 flows still go through a native alert() guard -- bundle
+// create/rename (above) moved to the themed modal's own maxlength="100"
+// instead, which never produces a dialog at all.
 const guardAlerts = dialogLog.filter((msg) => /100 characters/.test(msg));
-console.log('total over-100-char guard alerts seen across all 5 flows (should be 5):', guardAlerts.length);
+console.log('total over-100-char guard alerts seen across the 3 still-native flows (should be 3):', guardAlerts.length);
 
 const pass = builderLabelAfterOverlong.trim() === LABEL &&
   builderLabelAfterValidRename.trim() === NEW_BUILDER_LABEL &&
   landNameAfterOverlong.trim() === ORIGINAL_LAND_NAME &&
   landNameAfterValidRename.trim() === NEW_LAND_NAME &&
+  bundleCreateInputTruncated &&
   noBundleSavedAfterOverlong &&
+  bundleRenameInputTruncated &&
   bundleNameAfterOverlong.includes(NEW_BUNDLE_NAME) &&
   bundleNameAfterValidRename.includes(RENAMED_BUNDLE_NAME) &&
   productNameAfterOverlong.includes(PRODUCT_NAME) &&
   productRowAfterValidRename === 1 &&
-  guardAlerts.length === 5 &&
+  guardAlerts.length === 3 &&
   errors.length === 0;
 await finish(browser, {
   pass,
