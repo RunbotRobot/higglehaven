@@ -3,10 +3,10 @@
 // bundle exists as two separate JS objects (one per tab's own fetch), so
 // the other tab's tile kept showing the stale name until some unrelated
 // action happened to refetch both lists.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, saveBundleAs, fillBundleNameModal } from './helpers.mjs';
 
 const LABEL = 'Bundle Rename Sync Tester';
-const ORIGINAL_NAME = LABEL; // launchPage's dialog handler answers every prompt() with promptAnswer
+const ORIGINAL_NAME = LABEL;
 const NEW_NAME = 'Renamed Shared Bundle';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
@@ -23,11 +23,9 @@ await page.waitForTimeout(800);
 
 await page.click('#toggle-multiselect');
 await page.waitForTimeout(300);
-await page.click('#save-bundle-item');
-// launchPage's dialog handler auto-accepts confirm() too — the Save Bundle
-// handler's own confirm() asks whether to share, so this bundle lands in
-// both My Bundles and Community from the start.
-//
+// Shared from the start, so this bundle lands in both My Bundles and
+// Community.
+await saveBundleAs(page, ORIGINAL_NAME, { shared: true });
 // #2142 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
 // arg, options) -- a bare (fn, { timeout }) call puts the options object in
 // the `arg` slot instead, so `options` stayed undefined and the real
@@ -67,8 +65,8 @@ console.log('bundle visible in Community before rename (should be 1):', beforeRe
 // Rename it from the My Bundles tab.
 await page.click('.bundle-tab-btn[data-bundle-tab="mine"]');
 await page.waitForTimeout(300);
-await page.evaluate((name) => { window.prompt = () => name; }, NEW_NAME);
 await page.click('.bundle-tile-rename');
+await fillBundleNameModal(page, NEW_NAME);
 await page.waitForFunction(
   (name) => document.querySelector('.bundle-tile')?.textContent.includes(name),
   NEW_NAME,

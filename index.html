@@ -950,6 +950,82 @@
         font: 12px/1.4 sans-serif;
         cursor: pointer;
       }
+      /* #2779: a small collapsed toggle, same shape/position column as
+         #compass-panel (top: 86px) and #shop-feedback-btn (top: 142px)
+         above -- next free slot in that right-edge stack. */
+      #shop-nearby-chat-btn {
+        top: 182px;
+        right: 8px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 12px/1.4 sans-serif;
+        cursor: pointer;
+      }
+      /* Deliberately its own open/closed state (not .shop-ui's own
+         .visible) -- #shop-nearby-chat-btn's visibility already tracks
+         trust-tier eligibility; this tracks "did the shopper tap it open,"
+         a fully independent axis. See src/shop/nearbyChat.js. */
+      #shop-nearby-chat-panel {
+        display: none;
+        position: fixed;
+        z-index: 16;
+        top: 218px;
+        right: 8px;
+        width: 220px;
+        background: rgb(var(--pill-rgb) / 0.85);
+        border-radius: 8px;
+        padding: 8px;
+        flex-direction: column;
+        gap: 6px;
+      }
+      #shop-nearby-chat-panel.open {
+        display: flex;
+      }
+      #shop-nearby-chat-log {
+        max-height: 160px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font: 12px/1.4 sans-serif;
+        color: var(--pill-text);
+      }
+      .shop-nearby-chat-message {
+        word-break: break-word;
+      }
+      /* Right-aligned/dimmed for the sender's own sent messages -- same
+         "which side is mine" convention a chat UI almost always uses,
+         cheap here since src/shop/nearbyChat.js already knows a message's
+         id the instant it sends it, well before the next poll would
+         otherwise tell it apart from anyone else's. */
+      .shop-nearby-chat-message.own {
+        opacity: 0.75;
+        text-align: right;
+      }
+      #shop-nearby-chat-form {
+        display: flex;
+        gap: 4px;
+      }
+      #shop-nearby-chat-input {
+        flex: 1;
+        min-width: 0;
+        padding: 4px 6px;
+        border-radius: 6px;
+        border: none;
+        font: 12px/1.4 sans-serif;
+      }
+      #shop-nearby-chat-form button {
+        padding: 4px 10px;
+        border-radius: 6px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        font: 12px/1.4 sans-serif;
+        cursor: pointer;
+      }
       .compass-label {
         position: absolute;
         color: var(--pill-text-soft);
@@ -1344,7 +1420,15 @@
         max-height: 50vh;
       }
       #catalog-picker.visible {
-        display: block;
+        /* #2762: flex column so #catalog-manual-mode (the single
+           scrolling region now -- see its own rule below) can use
+           flex: 1 + min-height: 0 to fill whatever's left of this panel's
+           own max-height budget after #catalog-mode-tabs, rather than
+           everything just stacking as blocks with nothing to actually
+           clip or scroll the overflow. */
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
       }
       /* Client-side only — filters the already-built tiles by name rather
          than re-querying or re-rendering thumbnails, since a template's
@@ -1405,6 +1489,18 @@
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
         gap: 8px;
+      }
+      /* #2762: #catalog-picker-grid used to cap and scroll itself against
+         the viewport here, independently of #bundle-picker-grid below
+         doing the same against its own separate budget -- the two
+         combined routinely exceeded #catalog-picker's own max-height,
+         since nothing clipped the overflow. #catalog-manual-mode (see its
+         own rule below) is the single scrolling region now, so this grid
+         goes back to a plain auto-height block. #prompt-mode-grid is a
+         sibling living directly under #catalog-picker, not inside that
+         scrolling wrapper, so it still needs its own budget-against-the-
+         viewport cap exactly as before. */
+      #prompt-mode-grid {
         max-height: calc(50vh - 88px);
         overflow-y: auto;
       }
@@ -1424,6 +1520,10 @@
         display: flex;
         gap: 6px;
         margin-bottom: 8px;
+        /* #2762: keep this row at its own natural height under the
+           flex-column #catalog-picker.visible above -- it isn't the
+           scrolling region, #catalog-manual-mode below is. */
+        flex-shrink: 0;
       }
       .catalog-mode-tab-btn {
         padding: 5px 12px;
@@ -1437,6 +1537,26 @@
         background: var(--brand-green);
         border-color: transparent;
         color: #16240a;
+      }
+      /* #2762: the single scrolling region inside #catalog-picker's
+         flex column -- flex: 1 claims whatever's left of the panel's own
+         max-height after #catalog-mode-tabs above, and min-height: 0
+         overrides a flex item's default auto min-height (which would
+         otherwise let this grow past that budget instead of actually
+         scrolling internally). display stays block (not flex) for its
+         own children -- a flex child defaults to flex-shrink: 1, so if
+         this were a flex column too, the search bar/grid/bundle section
+         below would get squeezed smaller than their own content instead
+         of actually overflowing into this wrapper's scrollbar, since
+         overflow: auto resets a flex item's automatic minimum size to 0
+         and lets that shrinking happen. Plain block children just
+         overflow their parent's box when too tall, which is exactly what
+         overflow-y: auto here is for. */
+      #catalog-manual-mode {
+        display: block;
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
       }
       #catalog-prompt-mode[hidden],
       #catalog-manual-mode[hidden] {
@@ -1569,12 +1689,15 @@
       #bundle-picker-empty[hidden] {
         display: none;
       }
+      /* #2762: used to cap and scroll itself against the viewport
+         (max-height: 30vh), independently of #catalog-picker-grid above
+         doing the same against its own separate budget -- see
+         #catalog-manual-mode's own comment for why neither one still
+         does that; it's the single scrolling region for both now. */
       #bundle-picker-grid {
         display: flex;
         flex-direction: column;
         gap: 6px;
-        max-height: 30vh;
-        overflow-y: auto;
       }
       .bundle-tile {
         display: flex;
@@ -1648,6 +1771,7 @@
         line-height: 1;
       }
       #upload-model-btn,
+      #sell-this-too-btn,
       #toggle-multiselect,
       #toggle-measure,
       #paste-btn {
@@ -1728,6 +1852,51 @@
       #upload-modal-content h2 {
         margin: 0;
         font-size: 17px;
+      }
+      /* #2748: same centered-overlay-stacked-above-the-Seller-modal shape
+         as #upload-modal above, just its own id so both can independently
+         toggle .visible. */
+      #sell-this-too-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #sell-this-too-modal.visible {
+        display: flex;
+      }
+      #sell-this-too-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 420px;
+        max-height: 90vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #sell-this-too-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      /* Same grid idiom as #seller-list-view's own tiles (reuses that
+         view's .seller-card/-thumb/-name/-price classes directly, see
+         src/sell/mode.js's renderSellThisTooGrid). */
+      #sell-this-too-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        gap: 10px;
+        max-height: 55vh;
+        overflow-y: auto;
       }
       #upload-modal-content label {
         display: flex;
@@ -1883,6 +2052,81 @@
       }
       #upload-submit-btn:disabled {
         opacity: 0.5;
+      }
+      /* #2761: same modal shell as #upload-modal — the reusable name-input
+         modal src/ui/bundleNameModal.js opens for both Save Bundle (with
+         the share checkbox) and the bundle-tile rename prompt (without
+         it), replacing the native prompt()/confirm() pair this app's
+         bundle flow was the last holdout still using. */
+      #bundle-name-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #bundle-name-modal.visible {
+        display: flex;
+      }
+      #bundle-name-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #bundle-name-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #bundle-name-modal-content label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      /* Same [hidden]-vs-equal-specificity-author-rule fix #upload-modal-
+         content label[hidden] already needs — an ID selector's specificity
+         beats [hidden] just as much as a class selector does. */
+      #bundle-name-modal-content label[hidden] {
+        display: none;
+      }
+      #bundle-name-input {
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      /* Row-layout checkbox, same pattern #upload-digital-good-label uses. */
+      #bundle-name-share-label {
+        flex-direction: row !important;
+        align-items: center;
+        gap: 8px !important;
+      }
+      #bundle-name-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #bundle-name-save-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: var(--brand-green);
+        color: #16240a;
       }
       /* #453: real-money checkout — same modal shell as #upload-modal,
          stacked above the world (no other modal opens over Shop mode's
@@ -4353,6 +4597,24 @@
          why. Revealed (.visible added) by src/shop/mode.js's enterShopMode,
          same moment as #shop-fly-btn/#shop-vertical-controls above. -->
     <button id="shop-feedback-btn" class="shop-ui" type="button">Feedback</button>
+    <!-- #2779 (sub-issue of #2777, docs/SPEC.md §2's "Text chat available
+         as an alternative [to voice]"): visibility is driven entirely by
+         src/shop/nearbyChat.js's own per-tick trustTier check (same
+         id_verified-specific gate direct messages already require, §6),
+         not a one-time reveal from src/shop/mode.js like the fly button/
+         feedback button above -- this toggles live if a shopper verifies
+         mid-session. The panel itself is a separate open/closed state
+         (its own .open class, not .shop-ui's .visible) so the button stays
+         a small collapsed pill until actually tapped, per §1's "leave
+         plenty of screen space open". -->
+    <button id="shop-nearby-chat-btn" class="shop-ui" type="button">Chat</button>
+    <div id="shop-nearby-chat-panel">
+      <div id="shop-nearby-chat-log" role="log" aria-live="polite"></div>
+      <form id="shop-nearby-chat-form">
+        <input id="shop-nearby-chat-input" type="text" maxlength="280" placeholder="Say something nearby…" autocomplete="off" />
+        <button type="submit">Send</button>
+      </form>
+    </div>
     <div id="topbar-left">
       <div id="wordmark-panel">
         <img id="wordmark" src="/wordmark.png" alt="higglehaven" />
@@ -4499,6 +4761,28 @@
         </div>
       </div>
     </div>
+    <!-- #2761: replaces the native prompt()/confirm() pair this app's
+         bundle flow was the last holdout still using (Save Bundle's name
+         prompt + its own follow-up share confirm, and the bundle-tile
+         rename prompt in src/catalog/picker.js) — see
+         src/ui/bundleNameModal.js, shared by both call sites. -->
+    <div id="bundle-name-modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div id="bundle-name-modal-content">
+        <button id="bundle-name-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2 id="bundle-name-modal-title">Name this bundle</h2>
+        <label>
+          Name
+          <input id="bundle-name-input" type="text" maxlength="100" />
+        </label>
+        <label id="bundle-name-share-label" hidden>
+          <input id="bundle-name-share-checkbox" type="checkbox" />
+          Share this bundle to the Community tab so any builder can use it too
+        </label>
+        <div id="bundle-name-modal-actions">
+          <button id="bundle-name-save-btn" type="button">Save</button>
+        </div>
+      </div>
+    </div>
     <div id="upload-modal" role="dialog" aria-modal="true" tabindex="-1">
       <div id="upload-modal-content">
         <button id="upload-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
@@ -4598,6 +4882,23 @@
         </div>
       </div>
     </div>
+    <!-- #2748 (leaf of #2745's shared-products redesign): "Sell This Too"
+         -- browse every product in the catalog (any seller's, not just
+         this one's own) and attach a fresh listing to whichever one is
+         picked, instead of uploading a new model. Its own modal, stacked
+         above the Seller modal exactly like #upload-modal above (not
+         reachable from the Build-mode catalog picker's #add-item-panel --
+         see src/sell/mode.js's own comment on this button's click
+         handler for why). -->
+    <div id="sell-this-too-modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div id="sell-this-too-modal-content">
+        <button id="sell-this-too-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2>Sell This Too</h2>
+        <input type="text" id="sell-this-too-search-input" class="seller-filter-control" placeholder="Search products…" autocomplete="off" aria-label="Search products">
+        <div id="sell-this-too-grid"></div>
+        <div id="sell-this-too-empty" hidden>No products match your search.</div>
+      </div>
+    </div>
     <!-- #659 (owner, Control Room, 2026-09-11): the plain-language refund
          policy explanation — deliberately NOT the fine-print ToS wording,
          per the owner's own ask. Draft copy pending the owner's sign-off
@@ -4688,6 +4989,15 @@
         <div id="seller-feedback-summary" hidden></div>
         <div id="seller-feedback-list" class="seller-review-list"></div>
         <button id="upload-model-btn" type="button">+ Upload Model</button>
+        <!-- #2748 (leaf of #2745's shared-products redesign): attaches the
+             seller's own listing (price/stock) to a product someone else
+             already uploaded, instead of uploading a new model -- "Sell
+             This Too" rather than "Duplicate" deliberately: see #2218's
+             own discussion (that button copies a product within ONE
+             seller's own catalog for safe editing; this attaches a SECOND
+             seller's own listing to the SAME shared product, never
+             implying a copy is made). -->
+        <button id="sell-this-too-btn" type="button">Sell This Too</button>
         <div id="seller-view-toggle">
           <button type="button" class="seller-view-btn" data-view="manage">Manage</button>
           <button type="button" class="seller-view-btn" data-view="list">List view</button>

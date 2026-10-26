@@ -69,7 +69,16 @@ describe('products table + catalog_templates.product_id schema (#2746)', () => {
     ).rejects.toThrow(/FOREIGN KEY constraint/i);
   });
 
-  it('a newly created catalog template (through the ordinary POST /catalog path) has no product_id yet -- #2747/#2748 still need to wire that up', async () => {
+  // #2748: this used to assert the opposite (no product_id yet, "#2747/
+  // #2748 still need to wire that up" per this test's own original name) --
+  // #2748's own worker/lib/catalog.js change now backs every new template
+  // created through this path with a 1:1 products row at creation time,
+  // the same unconditional product_id=template_id convention the real
+  // migrations/0153 backfill already used for every pre-existing row, so a
+  // template created going forward is just as "sell this too"-able as a
+  // backfilled historical one. See worker/shared-products-listings.test.js
+  // for the actual attach-a-listing endpoint's own tests.
+  it('a newly created catalog template (through the ordinary POST /catalog path) is backed by its own 1:1 products row', async () => {
     const create = await api('/catalog', {
       method: 'POST',
       body: JSON.stringify({
@@ -83,7 +92,16 @@ describe('products table + catalog_templates.product_id schema (#2746)', () => {
     expect(create.response.status).toBe(201);
     const stored = await env.DB.prepare('SELECT product_id FROM catalog_templates WHERE template_id = ?')
       .bind('shared-products-new-template-check').first();
-    expect(stored.product_id).toBeNull();
+    expect(stored.product_id).toBe('shared-products-new-template-check');
+    const product = await env.DB.prepare('SELECT * FROM products WHERE product_id = ?')
+      .bind('shared-products-new-template-check').first();
+    expect(product).toMatchObject({
+      product_id: 'shared-products-new-template-check',
+      name: 'Brand New Lamp',
+      category: 'lighting',
+      color: '#ffffff',
+      width_m: 0.3, depth_m: 0.3, height_m: 1.2,
+    });
   });
 
   // Mirrors the backfill statements in migrations/0153_shared_products.sql

@@ -2991,7 +2991,13 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
 // Caller is responsible for pushUndoSnapshot() beforehand, since the
 // tap-a-spot flow shares that snapshot with the template-placement branch
 // alongside it.
-async function placeClipboardItems(items, x, y, supportZ) {
+// #2766: `group` defaults newly-placed items to a persisted group (#2764)
+// right after they land -- only passed true from the catalog picker's bundle
+// "place" button (via enterPlacementMode's own `group` field, threaded
+// through handlePlacementClick below), never from pasteBtn's ordinary
+// clipboard paste, which should keep placing an ad-hoc copied selection as
+// independent items like it always has.
+async function placeClipboardItems(items, x, y, supportZ, { group = false } = {}) {
   const placed = [];
   // #469: a saved bundle can outlive the catalog templates its items point
   // at (deleting a template only checks for currently-*placed* instances,
@@ -3062,6 +3068,26 @@ async function placeClipboardItems(items, x, y, supportZ) {
   // fire-and-forget request per pasted item — pasting a wall-sized group
   // is exactly the size of paste that used to risk losing a few silently.
   await syncBatchCreate(placed);
+  // Only after syncBatchCreate resolves -- POST /instances/group 404s unless
+  // every instanceId already exists in placed_instances server-side, and
+  // grouping a single surviving item (e.g. the rest were skippedCount above)
+  // isn't meaningful either. A failure here (syncBatchCreate's own partial
+  // failure left some member unsaved, or a landlet-ownership race) is a
+  // "didn't get the default grouping" miss, not a reason to break placement
+  // itself or pile a second alert on top of syncBatchCreate's own.
+  if (group && placed.length >= 2) {
+    try {
+      const { groupId } = await groupInstancesRemote(placed.map((mesh) => mesh.userData.instanceId));
+      for (const mesh of placed) mesh.userData.groupId = groupId;
+      // The toolbar's Ungroup-enabled state was already computed by the
+      // updateSelectionUI() call above, before groupId existed on any of
+      // these meshes -- recompute now that it does, same as groupBtn's own
+      // click handler calling this again right after setting userData.groupId.
+      updateSelectionUI();
+    } catch (err) {
+      console.warn('Could not default the placed bundle to grouped:', err);
+    }
+  }
   if (skippedCount > 0) {
     alert(`${skippedCount} item${skippedCount === 1 ? '' : 's'} couldn't be placed — the product ${skippedCount === 1 ? 'it references' : 'they reference'} no longer exists in the catalog.`);
   }
@@ -3109,7 +3135,7 @@ export async function handlePlacementClick() {
       const mesh = await spawnInstanceAt(pending.template, point.x, point.y, supportZ + pending.template.dimensions.height / 2);
       selectOnly(mesh);
     } else {
-      await placeClipboardItems(pending.items, point.x, point.y, supportZ);
+      await placeClipboardItems(pending.items, point.x, point.y, supportZ, { group: pending.group });
     }
   } finally {
     endSceneMutation();

@@ -145,4 +145,27 @@ describe('POST /api/catalog/listings (#2747)', () => {
     expect(rows.results).toHaveLength(2);
     expect(rows.results.every((row) => row.product_id === productId)).toBe(true);
   });
+
+  // #2789: this endpoint is always session-seller-authenticated, unlike the
+  // sibling single-item POST /api/catalog's deliberately-unlimited
+  // unauthenticated-fixture path -- so it had no excuse to go without the
+  // same per-seller checkRateLimit every other authenticated mutation in
+  // this file already has (catalog-patch/catalog-delete/catalog-thumbnail).
+  it('rate-limits repeated listing attachments from the same seller', async () => {
+    const seller = await signupSeller('listings-rate-limit');
+    for (let i = 0; i < 20; i++) {
+      const productId = await createProduct({ name: `Rate Limit Product ${i}` });
+      const attempt = await api('/catalog/listings', seller.session({
+        method: 'POST',
+        body: JSON.stringify({ productId, priceCents: 500 }),
+      }));
+      expect(attempt.response.status).not.toBe(429);
+    }
+    const extraProductId = await createProduct({ name: 'One Too Many' });
+    const limited = await api('/catalog/listings', seller.session({
+      method: 'POST',
+      body: JSON.stringify({ productId: extraProductId, priceCents: 500 }),
+    }));
+    expect(limited.response.status).toBe(429);
+  });
 });

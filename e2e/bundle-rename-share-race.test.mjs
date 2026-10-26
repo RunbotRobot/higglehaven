@@ -6,7 +6,7 @@
 // slower refetch land last and redraw from a stale snapshot, undoing the
 // other bundle's already-applied change in the UI (self-correcting on the
 // next unrelated reload, but visibly wrong until then).
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, saveBundleAs, fillBundleNameModal } from './helpers.mjs';
 
 const LABEL = 'Bundle Race Tester';
 const BUNDLE_A = 'Race Bundle A';
@@ -35,11 +35,10 @@ async function placeAndSaveBundle(name, x, y) {
   await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Tree'), null, { timeout: 60000 });
   await page.click('#toggle-multiselect');
   await page.waitForTimeout(300);
-  // launchPage's dialog handler would otherwise answer every prompt() with
-  // the same fixed LABEL -- override it per call so A and B get distinct
-  // names. confirm() stays auto-accepted (both bundles start shared).
-  await page.evaluate((n) => { window.prompt = () => n; }, name);
-  await page.click('#save-bundle-item');
+  // Both bundles start shared -- the rest of this test exercises a
+  // share-toggle race, which needs a real "currently shared" starting
+  // point for Bundle B.
+  await saveBundleAs(page, name, { shared: true });
   await page.waitForFunction(() => document.getElementById('product-info').textContent.includes('Saved'), null, { timeout: 60000 });
   await page.click('#toggle-multiselect'); // back out before the next placement
   await page.waitForTimeout(300);
@@ -80,8 +79,8 @@ await page.route('**/api/bundles?*', async (route) => {
 
 const tile = (name) => page.locator('.bundle-tile').filter({ hasText: name });
 
-await page.evaluate((n) => { window.prompt = () => n; }, BUNDLE_A_RENAMED);
 await tile(BUNDLE_A).locator('.bundle-tile-rename').click();
+await fillBundleNameModal(page, BUNDLE_A_RENAMED);
 // Don't wait for A's rename to settle -- fire B's share-toggle right away,
 // while A's own (delayed) refetch is still in flight.
 await page.waitForTimeout(200);

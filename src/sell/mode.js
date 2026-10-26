@@ -51,7 +51,7 @@ import { refreshNotificationsBadge } from '../account/menu.js';
 import { formatLength, fromDisplayLength, toDisplayLength, unitSuffix } from '../settings.js';
 import { rescaleModelFile } from '../modelOptimizer.js';
 import {
-  createCatalogTemplate, deleteCatalogTemplate, deleteProductReview,
+  createCatalogListing, createCatalogTemplate, deleteCatalogTemplate, deleteProductReview,
   fetchProductReviews, fetchPurchases, fetchSellerFeedback,
   markPurchaseShipped, refundPurchase, updateCatalogTemplate, uploadModelFile,
 } from '../api.js';
@@ -77,6 +77,7 @@ const sellerListViewEl = document.getElementById('seller-list-view');
 const sellerViewToggleEl = document.getElementById('seller-view-toggle');
 const sellerStatusEl = document.getElementById('seller-status');
 const sellerCloseBtn = document.getElementById('seller-close-btn');
+const sellThisTooBtn = document.getElementById('sell-this-too-btn');
 const sellerFilterControlsEl = document.getElementById('seller-filter-controls');
 const sellerSearchInput = document.getElementById('seller-search-input');
 const sellerCategoryFilterSelect = document.getElementById('seller-category-filter');
@@ -2079,3 +2080,162 @@ export function closeSellerModal() {
   updateModeNavUI();
 }
 sellerCloseBtn.addEventListener('click', closeSellerModal);
+
+// #2748 (leaf of #2745's shared-products redesign): "Sell This Too" --
+// browse every product in the catalog (not just this seller's own) and
+// attach a fresh listing (this seller's own price/stock) to whichever one
+// is picked -- POST /api/catalog/listings (#2747). Deliberately not named
+// or worded like Duplicate (see this button's own HTML comment, and
+// #2218's discussion) -- no copy is ever made here; every shared field
+// (model, name, dimensions, ...) is read live off the already-existing
+// product by the server, never re-entered or re-uploaded by this seller.
+//
+// Its own dedicated modal (#sell-this-too-modal) rather than reusing the
+// Build-mode catalog picker (openCatalogPickerForPick, reused by the
+// Backup Chain panel for an analogous "pick one existing catalog item"
+// need) -- that picker's DOM lives inside #add-item-panel, one of the
+// Build-only panels SELL_HIDDEN_BUILDER_UI_IDS (src/main.js) sets
+// style.display='none' on for the whole time Sell mode is active, which a
+// descendant's own .visible class can never override. Same stack-on-top-
+// without-closing-the-Seller-modal shape as the Upload modal's own
+// openUploadModal/closeUploadModal (src/catalog/upload.js) instead.
+const sellThisTooModalEl = document.getElementById('sell-this-too-modal');
+const sellThisTooGridEl = document.getElementById('sell-this-too-grid');
+const sellThisTooEmptyEl = document.getElementById('sell-this-too-empty');
+const sellThisTooSearchInput = document.getElementById('sell-this-too-search-input');
+const sellThisTooCloseBtn = document.getElementById('sell-this-too-close-btn');
+
+// One tile per distinct *product*, not per existing listing -- a product
+// several sellers already list would otherwise show up once per seller,
+// which is both visual noise and not what "browse products to sell" means.
+// minPriceCents is purely informational (what it's currently going for
+// elsewhere) -- this seller sets their own price next regardless of it.
+function distinctSellableProducts() {
+  const byProductId = new Map();
+  for (const template of activeCatalog) {
+    // #2748's own worker/lib/catalog.js fix backs every new template with
+    // a product_id at creation time, same as #2746's historical backfill
+    // already did for every pre-existing row -- null only for a row from
+    // before either of those landed, which can't be attached to here.
+    if (!template.productId) continue;
+    const entry = byProductId.get(template.productId);
+    if (!entry) {
+      byProductId.set(template.productId, { template, minPriceCents: template.priceCents });
+    } else if (template.priceCents != null && (entry.minPriceCents == null || template.priceCents < entry.minPriceCents)) {
+      entry.minPriceCents = template.priceCents;
+    }
+  }
+  return [...byProductId.values()];
+}
+
+// Shared by both prompts below -- #2748's own two-prompt flow mirrors the
+// Edit Price panel's exact validation (parsePriceInputDollars/
+// MAX_MONEY_CENTS) since priceCents is required here the same way it's
+// required on this seller's own new listing (#1601's own catalog-create
+// requirement, which POST /api/catalog/listings shares).
+async function attachListingTo(template) {
+  const alreadyMine = myProducts().some((p) => p.productId === template.productId);
+  if (alreadyMine && !confirm(`You already have a listing for "${template.name}". Add another one anyway?`)) {
+    return;
+  }
+  const priceInput = prompt(`Your price for "${template.name}" (e.g. 19.99)`, '');
+  if (priceInput === null) return; // cancelled
+  const dollars = parsePriceInputDollars(priceInput);
+  if (!Number.isFinite(dollars) || dollars < 0) {
+    alert('Price must be a non-negative number.');
+    return;
+  }
+  if (Math.round(dollars * 100) > MAX_MONEY_CENTS) {
+    alert(`Price must be ${formatPriceCents(MAX_MONEY_CENTS)} or less.`);
+    return;
+  }
+  const priceCents = Math.round(dollars * 100);
+  const stockInput = prompt('Stock quantity (leave blank for unlimited)', '');
+  if (stockInput === null) return; // cancelled
+  const trimmedStock = stockInput.trim();
+  let stockQuantity;
+  if (trimmedStock) {
+    stockQuantity = Number(trimmedStock);
+    if (!Number.isInteger(stockQuantity) || stockQuantity < 0) {
+      alert('Stock quantity must be a non-negative whole number, or left blank.');
+      return;
+    }
+  }
+  try {
+    const listing = await createCatalogListing({ productId: template.productId, priceCents, stockQuantity });
+    activeCatalog.push(listing);
+    // #327: same fire-and-forget reasoning as Duplicate's own call to this
+    // above -- without it, this listing's imageUrl/imageEmbedding stay
+    // permanently null.
+    persistCatalogThumbnail(listing);
+    buildCatalogPickerButtons();
+    refreshSellerShowcase();
+    closeSellThisTooModal();
+    renderActiveSellerView();
+  } catch (err) {
+    alert(err.message || 'Could not attach this listing.');
+  }
+}
+
+// Same thumbnail-tile look as List view's own .seller-card (renderSellerListView
+// above) -- these classes are plain, unscoped CSS, not tied to #seller-list-view,
+// so reusing them here keeps every "browse products" surface in this file
+// looking consistent rather than inventing a second tile style.
+function renderSellThisTooGrid() {
+  sellThisTooGridEl.replaceChildren();
+  const query = sellThisTooSearchInput.value.trim().toLowerCase();
+  const entries = distinctSellableProducts()
+    .filter(({ template }) => !query || template.name.toLowerCase().includes(query));
+  sellThisTooEmptyEl.hidden = entries.length > 0;
+  for (const { template, minPriceCents } of entries) {
+    const card = document.createElement('button');
+    card.type = 'button';
+    card.className = 'seller-card';
+
+    const thumb = document.createElement('img');
+    thumb.className = 'seller-card-thumb';
+    thumb.alt = '';
+    thumb.src = catalogThumbnailCache.get(template.templateId) ?? template.imageUrl ?? solidColorDataUrl(template.color);
+    thumb.onerror = () => {
+      thumb.onerror = null;
+      thumb.src = solidColorDataUrl(template.color);
+    };
+    card.appendChild(thumb);
+    if (!catalogThumbnailCache.has(template.templateId) && !template.imageUrl) {
+      renderCatalogThumbnail(template).then((dataUrl) => {
+        if (dataUrl) thumb.src = dataUrl;
+      });
+    }
+
+    const name = document.createElement('span');
+    name.className = 'seller-card-name';
+    name.textContent = template.name;
+    card.appendChild(name);
+
+    const price = document.createElement('span');
+    price.className = 'seller-card-price';
+    price.textContent = minPriceCents == null ? 'Not priced yet' : `From ${formatPriceCents(minPriceCents)}`;
+    card.appendChild(price);
+
+    card.addEventListener('click', () => attachListingTo(template));
+    sellThisTooGridEl.appendChild(card);
+  }
+}
+
+function openSellThisTooModal() {
+  sellThisTooSearchInput.value = '';
+  renderSellThisTooGrid();
+  sellThisTooModalEl.classList.add('visible');
+  openModalA11y(sellThisTooModalEl, closeSellThisTooModal);
+}
+function closeSellThisTooModal() {
+  sellThisTooModalEl.classList.remove('visible');
+  closeModalA11y(sellThisTooModalEl);
+  // Same "this modal only ever opens stacked on top of the still-visible
+  // Seller modal" re-arming as closeUploadModal's own comment explains.
+  sellerModalEl.classList.add('visible');
+  openModalA11y(sellerModalEl, closeSellerModal);
+}
+sellThisTooBtn.addEventListener('click', openSellThisTooModal);
+sellThisTooCloseBtn.addEventListener('click', closeSellThisTooModal);
+sellThisTooSearchInput.addEventListener('input', renderSellThisTooGrid);

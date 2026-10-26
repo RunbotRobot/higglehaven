@@ -811,6 +811,23 @@ export async function deleteCatalogTemplate(templateId) {
   await requestJson(`/catalog/${encodeURIComponent(templateId)}`, { method: 'DELETE' });
 }
 
+// #2748 (leaf of #2745's shared-products redesign): "Sell This Too" --
+// attaches the caller's own listing (price/stock) to a product someone
+// else originally uploaded, via the POST /api/catalog/listings endpoint
+// #2747 shipped. No idempotency key here unlike createCatalogTemplate
+// above -- that one exists specifically for a model-upload retry (the
+// upload itself is the slow, droppable step a lost response could repeat);
+// this call has no comparably slow prerequisite step worth protecting the
+// same way.
+export async function createCatalogListing({ productId, priceCents, stockQuantity }) {
+  const { template: created } = await requestJson('/catalog/listings', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ productId, priceCents, stockQuantity }),
+  });
+  return created;
+}
+
 // #327: persists the flat thumbnail (a PNG data URL) rendered client-side
 // from this template's own 3D model, plus a cheap client-computed
 // embedding for it — see src/main.js's persistCatalogThumbnail. Best-
@@ -1764,6 +1781,28 @@ export async function fetchNearbyPresence() {
 export async function fetchOwnLastPresence() {
   const { presence } = await requestJson('/presence/me');
   return presence;
+}
+
+// #2779 (sub-issue of #2777): a nearby-avatars-only text message. Same
+// server-side landlet derivation as presence above (#2269) — this takes no
+// landletId of its own.
+export async function sendNearbyChatMessage(text) {
+  const { message } = await requestJson('/nearby-chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  return message;
+}
+
+// #2779: poll forward from a cursor — src/shop/nearbyChat.js is the only
+// caller, and always passes back whatever nextCursor its previous call
+// returned (see that cursor's own "poll forward, not paginate backward"
+// shape in worker/lib/social.js's handleNearbyChat).
+export async function fetchNearbyChatMessages({ cursor = null } = {}) {
+  const query = new URLSearchParams();
+  if (cursor) query.set('cursor', cursor);
+  return requestJson(`/nearby-chat?${query.toString()}`);
 }
 
 // #1995 (sub-issue of #1976): every currently-active credit orb, optionally

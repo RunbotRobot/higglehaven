@@ -3,7 +3,7 @@
 // again elsewhere (all items land together, preserving their relative
 // layout — see relativeItemsForMeshes/placeClipboardItems), and can delete
 // it.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, saveBundleAs, fillBundleNameModal } from './helpers.mjs';
 
 const LABEL = 'Bundle Suite Tester';
 
@@ -69,7 +69,7 @@ selectionText = await selectByScanningY(160, 320, 400, 10, selectionText);
 selectionText = await selectByScanningY(260, 320, 400, 10, selectionText);
 console.log('selection status before saving (should say 2 items selected):', selectionText);
 
-await page.click('#save-bundle-item');
+await saveBundleAs(page, LABEL);
 // #2142 (sub-issue of #2138): waitForFunction's signature is (pageFunction,
 // arg, options) -- a bare (fn, { timeout }) call puts the options object in
 // the `arg` slot instead, so `options` stayed undefined and the real
@@ -94,12 +94,9 @@ const bundleTileText = await page.locator('.bundle-tile').first().textContent();
 console.log('bundle section visible after saving (should be true):', bundleSectionVisible);
 console.log('bundle tile text (should mention the name and 2 items):', bundleTileText);
 
-// Rename it. launchPage's dialog handler always answers prompt() with the
-// same fixed LABEL, which is useless for a rename check (the "new" name
-// would equal the old one) — monkey-patch window.prompt directly instead
-// of fighting Playwright's dialog-event handler for just this one call.
-await page.evaluate(() => { window.prompt = () => 'Renamed Bundle'; });
+// Rename it.
 await page.click('.bundle-tile-rename');
+await fillBundleNameModal(page, 'Renamed Bundle');
 await page.waitForTimeout(500);
 const bundleTileTextAfterRename = await page.locator('.bundle-tile').first().textContent();
 console.log('bundle tile text after rename (should say Renamed Bundle):', bundleTileTextAfterRename);
@@ -111,6 +108,21 @@ await page.mouse.click(210, 550);
 await page.waitForTimeout(1000);
 const infoAfterBundlePlacement = await page.textContent('#product-info');
 console.log('selection after placing the bundle (should say 2 items selected):', infoAfterBundlePlacement);
+
+// #2766: the bundle's newly-placed instances should default to grouped
+// (Ungroup enabled right away, and both instances share one non-null
+// persisted groupId), unlike an ordinary multi-item paste -- same
+// verification shape e2e/group-ungroup.test.mjs's own #2764 coverage uses.
+const ungroupEnabledAfterBundlePlacement = await page.locator('#ungroup-item').isEnabled();
+console.log('Ungroup enabled right after placing the bundle (should be true):', ungroupEnabledAfterBundlePlacement);
+const placedPositions = await page.evaluate(() => window.__testProductScreenPositions());
+const placedBundleIds = placedPositions.slice(-2).map((p) => p.instanceId);
+const bundleGroupFetch = await page.evaluate(async (ids) => {
+  const [resA, resB] = await Promise.all(ids.map((id) => fetch(`/api/instances/${id}`)));
+  const [bodyA, bodyB] = await Promise.all([resA.json(), resB.json()]);
+  return { groupIdA: bodyA.instance?.groupId, groupIdB: bodyB.instance?.groupId };
+}, placedBundleIds);
+console.log('placed bundle instances\' persisted groupId (should be equal, non-null):', bundleGroupFetch);
 
 // Delete it — confirm() is auto-accepted by launchPage's dialog handler —
 // and the section goes back to hidden once nothing's left.
@@ -125,6 +137,8 @@ const pass = bundleSectionHiddenInitially &&
   selectionText.includes('2 items selected') &&
   savedStatus.includes('Saved') && savedStatus.includes('2 item') &&
   bundleSectionVisible && bundleTileText.includes(LABEL) && bundleTileText.includes('2 items') &&
+  ungroupEnabledAfterBundlePlacement &&
+  !!bundleGroupFetch.groupIdA && bundleGroupFetch.groupIdA === bundleGroupFetch.groupIdB &&
   bundleTileTextAfterRename.includes('Renamed Bundle') &&
   infoAfterBundlePlacement.includes('2 items selected') &&
   bundleSectionHiddenAfterDelete &&
