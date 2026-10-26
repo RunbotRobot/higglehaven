@@ -205,6 +205,21 @@ const PRESENCE_REPORT_RATE_LIMIT_MAX = 600;
 // ~120/window peers, which poll a much less frequent async job status.
 const PRESENCE_NEARBY_RATE_LIMIT_MAX = PRESENCE_REPORT_RATE_LIMIT_MAX;
 
+// #2779 (sub-issue of #2777): extracted out of the GET branch below so the
+// new nearby-chat endpoint further down this file can reuse the exact same
+// "what landlet is the caller actually in right now" derivation -- #2269's
+// own anti-spoof reasoning (never trust a client-supplied landletId; always
+// derive it from the caller's own last-reported, not-yet-stale
+// avatar_presence row) applies just as much to scoping a chat message as it
+// does to scoping a presence read. null means "nowhere recent enough" —
+// no nearby anything, presence or chat alike.
+async function callersCurrentLandletId(db, builderId) {
+  const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
+  const ownPresence = await db.prepare('SELECT landlet_id, updated_at FROM avatar_presence WHERE builder_id = ?')
+    .bind(builderId).first();
+  return ownPresence && ownPresence.updated_at >= staleBefore ? ownPresence.landlet_id : null;
+}
+
 export async function handlePresence(request, db, route, url) {
   // #1176 (sub-issue of #1174, spawn flow's "Go to Last Location" button):
   // the caller's own last-reported row, unfiltered by staleness or
@@ -233,9 +248,7 @@ export async function handlePresence(request, db, route, url) {
     // trust a client-supplied location claim" fix already applied to the
     // credit-orb collect endpoint (#2222) -- so a caller can only ever see
     // who's nearby wherever they themselves actually, recently were.
-    const ownPresence = await db.prepare('SELECT landlet_id, updated_at FROM avatar_presence WHERE builder_id = ?')
-      .bind(sessionBuilder.builder_id).first();
-    const landletId = ownPresence && ownPresence.updated_at >= staleBefore ? ownPresence.landlet_id : null;
+    const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
     if (landletId === null) {
       return json({ avatars: [] });
     }
@@ -310,6 +323,88 @@ export async function handlePresence(request, db, route, url) {
         updatedAt: row.updated_at,
       },
     });
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
+// #2779 (sub-issue of #2777, proximity voice chat + general text chat):
+// docs/SPEC.md §2's "Text chat available as an alternative [to voice]" --
+// a nearby-avatars-only (not friend-only, not DM) text channel. Sized the
+// same as DIRECT_MESSAGE_SEND_RATE_LIMIT_MAX's own window but higher, since
+// an active nearby conversation between several people plausibly sends far
+// more than DMs' own "occasional message to one specific friend" pattern.
+const NEARBY_CHAT_SEND_RATE_LIMIT_MAX = 60;
+// Same reasoning as PRESENCE_NEARBY_RATE_LIMIT_MAX above -- the client
+// polls this at a comparable cadence while the chat panel is open (see
+// src/shop/nearbyChat.js's own NEARBY_CHAT_POLL_INTERVAL_MS).
+const NEARBY_CHAT_POLL_RATE_LIMIT_MAX = PRESENCE_REPORT_RATE_LIMIT_MAX;
+const NEARBY_CHAT_POLL_LIMIT = 50;
+
+function nearbyChatMessageFromRow(row) {
+  return {
+    messageId: row.message_id,
+    builderId: row.builder_id,
+    text: row.text,
+    createdAt: row.created_at,
+  };
+}
+
+export async function handleNearbyChat(request, db, route, url) {
+  // docs/SPEC.md §6: "Full social features (voice, messaging, direct
+  // communication) require government-ID verification specifically" --
+  // the same id_verified-specific bar direct messages enforce above, not
+  // presence/avatar-visibility's own looser "any non-'none' tier" gate.
+  if (request.method === 'GET' && route.length === 1) {
+    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+    await checkRateLimit(db, `nearby-chat-poll:${sessionBuilder.builder_id}`, NEARBY_CHAT_POLL_RATE_LIMIT_MAX);
+    const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
+    if (landletId === null) {
+      return json({ messages: [], nextCursor: null });
+    }
+    const limit = queryLimit(url.searchParams.get('limit'), NEARBY_CHAT_POLL_LIMIT);
+    const cursor = decodeCursor(url.searchParams.get('cursor'));
+    const conditions = ['landlet_id = ?'];
+    const bindings = [landletId];
+    if (cursor) {
+      // Ascending/"poll forward from here" ordering, unlike direct_messages'
+      // own descending/"most recent page" cursor above -- this is a live feed
+      // a client tails forward in time, not a history a client pages
+      // backward through.
+      conditions.push('(created_at > ? OR (created_at = ? AND message_id > ?))');
+      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
+    const { results } = await db.prepare(`
+      SELECT * FROM nearby_chat_messages WHERE ${conditions.join(' AND ')}
+      ORDER BY created_at ASC, message_id ASC LIMIT ?
+    `).bind(...bindings, limit).all();
+    const last = results.at(-1);
+    return json({
+      messages: results.map(nearbyChatMessageFromRow),
+      // No new rows this poll -- echo the caller's own cursor back rather
+      // than null, so a quiet stretch doesn't make the client forget its
+      // place and silently re-fetch the same history it already has.
+      nextCursor: last ? encodeCursor(last.created_at, last.message_id) : url.searchParams.get('cursor'),
+    });
+  }
+
+  if (request.method === 'POST' && route.length === 1) {
+    const input = await readJson(request);
+    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+    await checkRateLimit(db, `nearby-chat-send:${sessionBuilder.builder_id}`, NEARBY_CHAT_SEND_RATE_LIMIT_MAX);
+    const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
+    if (landletId === null) {
+      throw new HttpError('A recent position report is required before sending a nearby chat message', 400);
+    }
+    const text = stringValue(input.text, 'text');
+    if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
+    const messageId = `nearby-chat-${crypto.randomUUID()}`;
+    await db.prepare(`
+      INSERT INTO nearby_chat_messages (message_id, builder_id, landlet_id, text)
+      VALUES (?, ?, ?, ?)
+    `).bind(messageId, sessionBuilder.builder_id, landletId, text).run();
+    const row = await db.prepare('SELECT * FROM nearby_chat_messages WHERE message_id = ?').bind(messageId).first();
+    return json({ message: nearbyChatMessageFromRow(row) }, 201);
   }
 
   return json({ error: 'Not found' }, 404);

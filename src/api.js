@@ -1783,6 +1783,28 @@ export async function fetchOwnLastPresence() {
   return presence;
 }
 
+// #2779 (sub-issue of #2777): a nearby-avatars-only text message. Same
+// server-side landlet derivation as presence above (#2269) — this takes no
+// landletId of its own.
+export async function sendNearbyChatMessage(text) {
+  const { message } = await requestJson('/nearby-chat', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  return message;
+}
+
+// #2779: poll forward from a cursor — src/shop/nearbyChat.js is the only
+// caller, and always passes back whatever nextCursor its previous call
+// returned (see that cursor's own "poll forward, not paginate backward"
+// shape in worker/lib/social.js's handleNearbyChat).
+export async function fetchNearbyChatMessages({ cursor = null } = {}) {
+  const query = new URLSearchParams();
+  if (cursor) query.set('cursor', cursor);
+  return requestJson(`/nearby-chat?${query.toString()}`);
+}
+
 // #1995 (sub-issue of #1976): every currently-active credit orb, optionally
 // scoped to one landlet — see docs/API.md's "Credit orbs" for the shape.
 // Unauthenticated, same as GET /api/instances.
