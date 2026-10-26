@@ -2128,52 +2128,72 @@ function distinctSellableProducts() {
   return [...byProductId.values()];
 }
 
+// #2795: alreadyMine below reads activeCatalog, which only gets this
+// listing pushed into it *after* createCatalogListing's await resolves --
+// without this guard, a second click on the same (or any) tile while that
+// request is still in flight runs its own alreadyMine check against the
+// same stale, not-yet-updated array, so the "Add another one anyway?"
+// confirmation never catches the duplicate. Module-level (not per-template)
+// since a seller could otherwise race two DIFFERENT tiles' requests against
+// each other too, both still safe individually but not worth the added
+// complexity to allow concurrently. Checked first and wraps the whole
+// function (same disable-before-await/re-enable-in-finally idiom used
+// throughout this file, e.g. setMetadataSaveBusy above) so every early
+// `return` below (a cancelled prompt, a validation failure) still clears it.
+let attachListingInFlight = false;
+
 // Shared by both prompts below -- #2748's own two-prompt flow mirrors the
 // Edit Price panel's exact validation (parsePriceInputDollars/
 // MAX_MONEY_CENTS) since priceCents is required here the same way it's
 // required on this seller's own new listing (#1601's own catalog-create
 // requirement, which POST /api/catalog/listings shares).
 async function attachListingTo(template) {
-  const alreadyMine = myProducts().some((p) => p.productId === template.productId);
-  if (alreadyMine && !confirm(`You already have a listing for "${template.name}". Add another one anyway?`)) {
-    return;
-  }
-  const priceInput = prompt(`Your price for "${template.name}" (e.g. 19.99)`, '');
-  if (priceInput === null) return; // cancelled
-  const dollars = parsePriceInputDollars(priceInput);
-  if (!Number.isFinite(dollars) || dollars < 0) {
-    alert('Price must be a non-negative number.');
-    return;
-  }
-  if (Math.round(dollars * 100) > MAX_MONEY_CENTS) {
-    alert(`Price must be ${formatPriceCents(MAX_MONEY_CENTS)} or less.`);
-    return;
-  }
-  const priceCents = Math.round(dollars * 100);
-  const stockInput = prompt('Stock quantity (leave blank for unlimited)', '');
-  if (stockInput === null) return; // cancelled
-  const trimmedStock = stockInput.trim();
-  let stockQuantity;
-  if (trimmedStock) {
-    stockQuantity = Number(trimmedStock);
-    if (!Number.isInteger(stockQuantity) || stockQuantity < 0) {
-      alert('Stock quantity must be a non-negative whole number, or left blank.');
+  if (attachListingInFlight) return;
+  attachListingInFlight = true;
+  try {
+    const alreadyMine = myProducts().some((p) => p.productId === template.productId);
+    if (alreadyMine && !confirm(`You already have a listing for "${template.name}". Add another one anyway?`)) {
       return;
     }
-  }
-  try {
-    const listing = await createCatalogListing({ productId: template.productId, priceCents, stockQuantity });
-    activeCatalog.push(listing);
-    // #327: same fire-and-forget reasoning as Duplicate's own call to this
-    // above -- without it, this listing's imageUrl/imageEmbedding stay
-    // permanently null.
-    persistCatalogThumbnail(listing);
-    buildCatalogPickerButtons();
-    refreshSellerShowcase();
-    closeSellThisTooModal();
-    renderActiveSellerView();
-  } catch (err) {
-    alert(err.message || 'Could not attach this listing.');
+    const priceInput = prompt(`Your price for "${template.name}" (e.g. 19.99)`, '');
+    if (priceInput === null) return; // cancelled
+    const dollars = parsePriceInputDollars(priceInput);
+    if (!Number.isFinite(dollars) || dollars < 0) {
+      alert('Price must be a non-negative number.');
+      return;
+    }
+    if (Math.round(dollars * 100) > MAX_MONEY_CENTS) {
+      alert(`Price must be ${formatPriceCents(MAX_MONEY_CENTS)} or less.`);
+      return;
+    }
+    const priceCents = Math.round(dollars * 100);
+    const stockInput = prompt('Stock quantity (leave blank for unlimited)', '');
+    if (stockInput === null) return; // cancelled
+    const trimmedStock = stockInput.trim();
+    let stockQuantity;
+    if (trimmedStock) {
+      stockQuantity = Number(trimmedStock);
+      if (!Number.isInteger(stockQuantity) || stockQuantity < 0) {
+        alert('Stock quantity must be a non-negative whole number, or left blank.');
+        return;
+      }
+    }
+    try {
+      const listing = await createCatalogListing({ productId: template.productId, priceCents, stockQuantity });
+      activeCatalog.push(listing);
+      // #327: same fire-and-forget reasoning as Duplicate's own call to this
+      // above -- without it, this listing's imageUrl/imageEmbedding stay
+      // permanently null.
+      persistCatalogThumbnail(listing);
+      buildCatalogPickerButtons();
+      refreshSellerShowcase();
+      closeSellThisTooModal();
+      renderActiveSellerView();
+    } catch (err) {
+      alert(err.message || 'Could not attach this listing.');
+    }
+  } finally {
+    attachListingInFlight = false;
   }
 }
 
