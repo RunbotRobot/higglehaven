@@ -284,15 +284,18 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     expect(approved.response.status).toBe(200);
     expect(approved.body.resolvedStatus).toBe('approved');
 
-    // #2748: every template created through the ordinary create path now
-    // gets its own backing products row (previously only a backfilled/
-    // shared-products listing had a non-null product_id), so the cascade
-    // branch's `if (template.product_id)` gate above now always fires --
-    // including the placed-instance DELETE, not just the flaggedHiddenAt
-    // flip. The instance is gone outright, so this 404s (not found) rather
-    // than 400 (found but blocked).
+    // #2793/#2798: this listing has no real sibling, so the approve
+    // cascade's placed_instances DELETE (gated on an actual sibling
+    // existing, not just product_id being non-null -- #2748 made the
+    // latter true for nearly every listing) never fires here. The
+    // instance stays placed, purchase is blocked going forward -- 400
+    // (found but blocked), not 404 (gone). A second session independently
+    // hit this same area and briefly changed these two assertions to 404,
+    // treating the now-fixed #2793 bug as intended; reverted back by
+    // #2798 once that collision surfaced. Don't flip this to 404 again
+    // without re-reading #2793's own reasoning first.
     const hiddenAfterApprove = await api('/instances/flag-reapprove-instance/purchase', builder.session({ method: 'POST' }));
-    expect(hiddenAfterApprove.response.status).toBe(404);
+    expect(hiddenAfterApprove.response.status).toBe(400);
 
     // A new, unrelated flag reaches the queue after the listing is already
     // permanently hidden -- the POST branch has no already-hidden guard, so
@@ -314,10 +317,8 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     const fetched = await api('/catalog/flag-reapprove-template');
     expect(fetched.body.template.flaggedHiddenAt).toBeTruthy();
 
-    // Same reasoning as hiddenAfterApprove above -- the instance was
-    // cascade-deleted on approve and the later reject doesn't resurrect it.
     const stillBlockedPurchase = await api('/instances/flag-reapprove-instance/purchase', builder.session({ method: 'POST' }));
-    expect(stillBlockedPurchase.response.status).toBe(404);
+    expect(stillBlockedPurchase.response.status).toBe(400);
   });
 
   it('lists pending-flag listings for an admin, grouped per template, 403s a non-admin', async () => {
