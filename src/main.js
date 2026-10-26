@@ -3142,7 +3142,29 @@ saveBundleBtn.addEventListener('click', async () => {
     if (bundle.shared) communityBundles.unshift(bundle);
     renderBundlePicker();
     const count = meshes.length;
-    setProductInfo(`Saved "${bundle.name}" (${count} item${count === 1 ? '' : 's'})`);
+    let statusMessage = `Saved "${bundle.name}" (${count} item${count === 1 ? '' : 's'})`;
+    // #2765: saving a bundle also groups the selected items in place, not
+    // just the bundle *definition* createBundle persisted above — same
+    // groupInstancesRemote mechanism #2764's own Group button
+    // (src/build/scene.js) uses. Skipped when there's nothing to group (a
+    // lone item) or the selection is already one single group, same as
+    // groupBtn's own min-size guard and ungroupBtn's own "already grouped"
+    // read of mesh.userData.groupId.
+    const alreadyOneGroup = meshes.length >= 2 && meshes[0].userData.groupId
+      && meshes.every((mesh) => mesh.userData.groupId === meshes[0].userData.groupId);
+    if (meshes.length >= 2 && !alreadyOneGroup) {
+      try {
+        const { groupId } = await groupInstancesRemote(meshes.map((mesh) => mesh.userData.instanceId));
+        for (const mesh of meshes) mesh.userData.groupId = groupId;
+      } catch (groupErr) {
+        // The bundle itself already saved successfully above — that's the
+        // primary, already-expected action, so a grouping failure doesn't
+        // roll it back or block the success message, only appends to it.
+        console.error('Bundle saved, but could not group its items:', groupErr);
+        statusMessage += ' (could not group the items in place)';
+      }
+    }
+    setProductInfo(statusMessage);
     setTimeout(updateSelectionUI, 1200);
   } catch (err) {
     console.error('Could not save bundle:', err);
