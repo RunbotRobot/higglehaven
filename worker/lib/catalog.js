@@ -839,6 +839,14 @@ const CATALOG_DELETE_RATE_LIMIT_MAX = 20;
 // above since a real session always backs this call.
 const THUMBNAIL_UPLOAD_RATE_LIMIT_MAX = 20;
 
+// #2789: POST .../listings (attach a new listing to an existing shared
+// product, #2747) is always session-seller-authenticated, unlike the
+// sibling single-item create's deliberately-unlimited unauthenticated path
+// (CATALOG_PATCH_RATE_LIMIT_MAX's own comment above) — so that rationale
+// doesn't carry over here. Matches CATALOG_PATCH_RATE_LIMIT_MAX/
+// CATALOG_DELETE_RATE_LIMIT_MAX's existing per-seller ceiling.
+const CATALOG_LISTINGS_RATE_LIMIT_MAX = 20;
+
 // Backlog audit: POST .../similarity-search (#329) is unauthenticated
 // (deliberately — a read over already-public catalog data, see
 // searchCatalogBySimilarity's own comment in src/api.js) AND does real,
@@ -1431,6 +1439,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
   // listing too, with no JOIN against `products` needed anywhere yet.
   if (request.method === 'POST' && route.length === 2 && route[1] === 'listings') {
     const sessionSeller = await requireSessionSeller(request, db);
+    await checkRateLimit(db, `catalog-listings:${sessionSeller.seller_id}`, CATALOG_LISTINGS_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const productId = stringValue(input.productId, 'productId');
     // Same #1601 requirement the sibling single-item create enforces for

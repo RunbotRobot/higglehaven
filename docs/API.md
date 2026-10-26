@@ -2437,6 +2437,10 @@ always creates a brand-new product plus its first listing in one row.
 Requires a session logged in as a seller (`403` otherwise) — unlike the
 sibling endpoint above, there's no unauthenticated/system-template branch
 here, since attaching to someone else's product is never a seed action.
+Rate-limited per seller (20 per 15-minute window, `429` past that, #2789) —
+same ceiling `PATCH`/`DELETE` below use, since this endpoint is always
+authenticated and so has no unauthenticated-fixture-seeding reason to stay
+ungated the way the sibling single-item `POST /api/catalog` above does.
 
 Request body:
 
