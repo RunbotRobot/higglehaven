@@ -125,13 +125,14 @@ export async function handleInstances(request, env, route, url) {
     await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
     const placeholders = instanceIds.map(() => '?').join(', ');
     const { results } = await db.prepare(`
-      SELECT instance_id, landlet_id FROM placed_instances WHERE instance_id IN (${placeholders})
+      SELECT instance_id, landlet_id, group_id FROM placed_instances WHERE instance_id IN (${placeholders})
     `).bind(...instanceIds).all();
     if (results.length !== instanceIds.length) {
       throw new HttpError('Every instanceId must reference an existing placed instance', 404);
     }
     await requireOwnedLandlets(db, results.map((row) => row.landlet_id), sessionBuilder.builder_id);
     const landletIdByInstanceId = new Map(results.map((row) => [row.instance_id, row.landlet_id]));
+    const priorGroupIdByInstanceId = new Map(results.map((row) => [row.instance_id, row.group_id]));
     const groupId = crypto.randomUUID();
     // #929 idiom: fold the ownership re-check into each write, same as the
     // DELETE/POST/PUT batch endpoints above -- requireOwnedLandlets is a
@@ -149,13 +150,16 @@ export async function handleInstances(request, env, route, url) {
       // shared group_id -- "most members report the new id, a few don't"
       // is an actively broken, half-formed group, not a partially-applied
       // write. Rolls back whichever members did land rather than leaving
-      // that behind.
+      // that behind -- restoring each one's own PRIOR group_id (NULL, or
+      // another group's id if it was already grouped before this request;
+      // see #2788) rather than blanket-nulling it, since blanket-null would
+      // silently dissolve a pre-existing group the caller never asked to
+      // touch, as a side effect of a request reported as a total failure.
       const succeededInstanceIds = instanceIds.filter((_, i) => batchResults[i].meta.changes > 0);
       if (succeededInstanceIds.length > 0) {
-        const succeededPlaceholders = succeededInstanceIds.map(() => '?').join(', ');
-        await db.prepare(`
-          UPDATE placed_instances SET group_id = NULL WHERE instance_id IN (${succeededPlaceholders}) AND group_id = ?
-        `).bind(...succeededInstanceIds, groupId).run();
+        await db.batch(succeededInstanceIds.map((instanceId) => db.prepare(`
+          UPDATE placed_instances SET group_id = ? WHERE instance_id = ? AND group_id = ?
+        `).bind(priorGroupIdByInstanceId.get(instanceId), instanceId, groupId)));
       }
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
