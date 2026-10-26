@@ -4822,19 +4822,24 @@ an undefined or global scope.
 
 Requires an ID-verified session. Returns every message in the caller's
 current landlet, polled *forward* from a cursor — `{ "messages": [...],
-"nextCursor": "..." }`, ordered `created_at ASC, message_id ASC` (unlike
-direct messages' own descending "most recent page" cursor, this is a live
-feed a client tails forward in time, not a history paged backward
-through). `limit` (default and max 100 — see `queryLimit`'s own shared
-cap). When there are no new messages since the given cursor, `nextCursor`
-echoes the same cursor back rather than returning `null`, so a quiet
-stretch doesn't make the client lose its place and re-fetch history it
-already has. Returns `{ "messages": [], "nextCursor": null }` when the
-caller has no recent-enough presence row — nowhere to scope the read to.
-`429` after 600 requests per 15 minutes from the same calling builder
-(the same cadence/budget `GET /api/presence`'s own nearby-avatars poll
-shares, since the client polls both at a comparable rate while the chat
-panel is open).
+"nextCursor": "...", "landletId": "..." }`, ordered `created_at ASC,
+message_id ASC` (unlike direct messages' own descending "most recent page"
+cursor, this is a live feed a client tails forward in time, not a history
+paged backward through). `limit` (default and max 100 — see `queryLimit`'s
+own shared cap). When there are no new messages since the given cursor,
+`nextCursor` echoes the same cursor back rather than returning `null`, so a
+quiet stretch doesn't make the client lose its place and re-fetch history
+it already has. Returns `{ "messages": [], "nextCursor": null, "landletId":
+null }` when the caller has no recent-enough presence row — nowhere to
+scope the read to. `landletId` (#2802) is the landlet this response was
+actually computed for — a client whose own cursor/log state is scoped to
+whichever landlet it last polled must compare this against what it saw
+last time and reset (cursor, dedup set, and the rendered log) on a change,
+since a cursor computed against one landlet is meaningless applied to
+another's messages. `429` after 600 requests per 15 minutes from the same
+calling builder (the same cadence/budget `GET /api/presence`'s own
+nearby-avatars poll shares, since the client polls both at a comparable
+rate while the chat panel is open).
 
 ### `POST /api/nearby-chat`
 

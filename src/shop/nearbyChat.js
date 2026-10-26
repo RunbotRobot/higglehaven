@@ -27,6 +27,10 @@ const chatInputEl = document.getElementById('shop-nearby-chat-input');
 let chatOpen = false;
 let chatLastPollAt = 0;
 let chatCursor = null;
+// #2802: undefined (not null) so the very first poll's response -- whose
+// landletId may legitimately already be null ("no nearby landlet") -- is
+// never mistaken for a landlet change against this placeholder.
+let chatLastKnownLandletId;
 // Same monotonic-guard idiom presencePollToken (presenceAndContent.js)/
 // friendsLoadToken/dmLoadToken (src/account/menu.js) already use elsewhere
 // in this codebase -- discards a slower, earlier poll's response landing
@@ -108,6 +112,21 @@ export function pollNearbyChatIfNeeded(now) {
   const myToken = ++chatPollToken;
   fetchNearbyChatMessages({ cursor: chatCursor }).then((result) => {
     if (myToken !== chatPollToken) return;
+    // #2802: the cursor/seen-message/log state above is only ever
+    // meaningful scoped to one landlet -- the server's own cursor query is
+    // bound to whichever landlet it computed the response for (worker/lib/
+    // social.js's handleNearbyChat), so applying a cursor left over from a
+    // landlet the shopper has since left against a new one silently skips
+    // that new landlet's own already-older messages and mixes both
+    // conversations into one unlabeled log. Reset everything the moment
+    // the reported landlet changes, including from/to null (no nearby
+    // landlet), before appending this response's own messages.
+    if (result.landletId !== chatLastKnownLandletId) {
+      chatLastKnownLandletId = result.landletId;
+      chatCursor = null;
+      seenMessageIds.clear();
+      chatLogEl.replaceChildren();
+    }
     if (result.nextCursor) chatCursor = result.nextCursor;
     result.messages.forEach(appendMessage);
   }).catch(() => {});

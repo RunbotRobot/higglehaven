@@ -98,11 +98,11 @@ describe('Nearby chat (#2779)', () => {
       expect(rejected.response.status).toBe(403);
     });
 
-    it('returns an empty list with a null cursor when the caller has no recent presence row', async () => {
+    it('returns an empty list with a null cursor and null landletId when the caller has no recent presence row', async () => {
       const alice = await signupIdVerifiedBuilder('nearby-chat-poll-no-presence-alice');
       const got = await api('/nearby-chat', alice.session());
       expect(got.response.status).toBe(200);
-      expect(got.body).toEqual({ messages: [], nextCursor: null });
+      expect(got.body).toEqual({ messages: [], nextCursor: null, landletId: null });
     });
 
     it('only returns messages from the caller\'s own landlet, not another one', async () => {
@@ -159,6 +159,22 @@ describe('Nearby chat (#2779)', () => {
       await setPresence(alice.builderId, { landletId: 'nearby-chat-landlet-bad-cursor' });
       const rejected = await api('/nearby-chat?cursor=not-valid-base64!!', alice.session());
       expect(rejected.response.status).toBe(400);
+    });
+
+    // #2802: the response's own landletId is how the client detects a
+    // landlet change and resets its cursor/log -- without this field, a
+    // cursor computed against the landlet the caller just left gets
+    // applied against the new landlet's messages, silently skipping any
+    // of the new landlet's own already-older messages.
+    it('reports the landlet the response was computed for, which changes when the caller\'s presence does', async () => {
+      const alice = await signupIdVerifiedBuilder('nearby-chat-landlet-field-alice');
+      await setPresence(alice.builderId, { landletId: 'nearby-chat-landlet-field-a' });
+      const inLandletA = await api('/nearby-chat', alice.session());
+      expect(inLandletA.body.landletId).toBe('nearby-chat-landlet-field-a');
+
+      await setPresence(alice.builderId, { landletId: 'nearby-chat-landlet-field-b' });
+      const inLandletB = await api('/nearby-chat', alice.session());
+      expect(inLandletB.body.landletId).toBe('nearby-chat-landlet-field-b');
     });
   });
 

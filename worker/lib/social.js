@@ -360,7 +360,10 @@ export async function handleNearbyChat(request, db, route, url) {
     await checkRateLimit(db, `nearby-chat-poll:${sessionBuilder.builder_id}`, NEARBY_CHAT_POLL_RATE_LIMIT_MAX);
     const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
     if (landletId === null) {
-      return json({ messages: [], nextCursor: null });
+      // #2802: landletId still reported (null here) so the client can tell
+      // "no nearby landlet" apart from an actual landlet id change -- see
+      // this function's own comment on the main branch's landletId below.
+      return json({ messages: [], nextCursor: null, landletId: null });
     }
     const limit = queryLimit(url.searchParams.get('limit'), NEARBY_CHAT_POLL_LIMIT);
     const cursor = decodeCursor(url.searchParams.get('cursor'));
@@ -385,6 +388,13 @@ export async function handleNearbyChat(request, db, route, url) {
       // than null, so a quiet stretch doesn't make the client forget its
       // place and silently re-fetch the same history it already has.
       nextCursor: last ? encodeCursor(last.created_at, last.message_id) : url.searchParams.get('cursor'),
+      // #2802: the cursor above is only ever meaningful scoped to this one
+      // landlet (the WHERE clause binds to it directly) -- without this, a
+      // shopper who crosses into a different landlet has no way to tell,
+      // so the client kept polling with a cursor computed against the
+      // landlet they just left, silently skipping that landlet's own
+      // already-older messages and mixing both conversations into one log.
+      landletId,
     });
   }
 
