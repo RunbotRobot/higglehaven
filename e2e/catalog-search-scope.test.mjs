@@ -2,7 +2,7 @@
 // the product grid and the bundle section below it, with a three-way
 // scope toggle (All / Products / Bundles) picking which section(s) the
 // query — and each section's own visibility — applies to.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, saveBundleAs } from './helpers.mjs';
 
 const LABEL = 'Search Scope Tester';
 const BUNDLE_NAME = 'Forest Set';
@@ -26,8 +26,7 @@ await page.waitForTimeout(800);
 // Name it something that shares no substring with any stock product name
 // (notably "Tree"), so the two searches below can tell products and
 // bundles apart unambiguously.
-await page.evaluate((name) => { window.prompt = () => name; }, BUNDLE_NAME);
-await page.click('#save-bundle-item');
+await saveBundleAs(page, BUNDLE_NAME);
 // #2143: waitForFunction's signature is (pageFunction, arg, options) --
 // the explicit null reaches the options slot; without it the timeout
 // below silently fell back to Playwright's actual default (30000ms).

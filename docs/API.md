@@ -2198,10 +2198,18 @@ landlet. They are not production commerce listings yet.
   },
   "isTestModel": false,
   "stockQuantity": null,
+  "productId": "placeholder-chair",
   "createdAt": "2026-07-29T07:30:06.519Z",
   "updatedAt": "2026-07-29T07:30:06.519Z"
 }
 ```
+
+`productId` (#2745/#2746/#2748) identifies the shared `products` row this
+listing is backed by — usable as `POST /api/catalog/listings`'s own
+`productId` field to attach a second seller's own listing to the same
+product. See that endpoint's own "`productId` on every catalog template
+response" note below for why it's non-null for every template from here
+on.
 
 `imageUrl` and `imageEmbedding` are `null` until set via `POST
 /api/catalog/:templateId/thumbnail` below — every other endpoint on this
@@ -2434,9 +2442,11 @@ Shared-products (#2745, #2747): lets a seller attach their own listing
 (price, stock) to a product someone *else* originally uploaded, without a
 model-upload step — the counterpart to `POST /api/catalog` above, which
 always creates a brand-new product plus its first listing in one row.
-Requires a session logged in as a seller (`403` otherwise) — unlike the
-sibling endpoint above, there's no unauthenticated/system-template branch
-here, since attaching to someone else's product is never a seed action.
+Requires a session logged in as a seller (`requireSessionSeller` —
+`401` if not logged in at all, `403` if logged in but not yet age/
+payment-verified) — unlike the sibling endpoint above, there's no
+unauthenticated/system-template branch here, since attaching to someone
+else's product is never a seed action.
 
 Request body:
 
@@ -2474,7 +2484,28 @@ referenced product, and `sellerId`/`priceCents`/`stockQuantity` set to this
 call's own seller/price/stock. The new row's `templateId` is always freshly
 generated — there's no idempotency-key dedup here the way the sibling
 model-upload create path has, since this call carries no file upload that
-a lost response could leave stranded.
+a lost response could leave stranded. Its `productId` is always the same
+`productId` this call was given.
+
+#### `productId` on every catalog template response (#2748)
+
+Every catalog template response (not just this endpoint's own) now
+includes `productId` — the shared `products` row this listing is backed
+by, usable as this endpoint's own `productId` request field to attach a
+*second* listing to the same product. `POST /api/catalog` (the plain
+model-upload create path above) backs every new template with a fresh,
+1:1 `products` row of its own at creation time, the same
+`productId = templateId` convention `migrations/0153_shared_products.sql`'s
+own historical backfill already used for every row that existed before
+this split — so a template created going forward is just as attachable-to
+as a backfilled historical one, not a dead end. `productId` is `null`
+only for a row from the narrow window between that migration landing
+(#2746) and this fix (#2748) actually deploying; nothing in this codebase
+produces a `null` `productId` on a newly created template by this point.
+The seller-facing "Sell This Too" button (`src/sell/mode.js`, Seller
+modal) is this endpoint's own UI entry point — browses every product in
+the catalog and calls this endpoint to attach the browsing seller's own
+listing to whichever one is picked.
 
 ### `PUT /api/catalog/:templateId`
 ### `PATCH /api/catalog/:templateId`
@@ -4745,6 +4776,104 @@ documents for itself), no e2e session can actually reach
 (not id-verified) friends, and that a direct `POST
 /api/direct-messages` against the real dev server still gets rejected
 even bypassing that button entirely.
+
+## Nearby chat
+
+Tracking issue #2777 (docs/SPEC.md §2's "Text chat available as an
+alternative [to voice]"). A nearby-avatars-only text channel — not
+friend-only, not DM — scoped to whichever landlet/region the caller is
+currently standing in. `nearby_chat_messages`
+(`migrations/0155_nearby_chat_messages.sql`) is deliberately ephemeral
+live state, same shape as `avatar_presence` above, not a persistent chat
+log: pruned by its own cron sweep (`pruneStaleNearbyChatMessages`, a
+30-minute window — longer than presence's own 5-minute cleanup, since a
+chat message someone's still reading needs to survive longer than a
+position report's own much shorter "are they even still online" check).
+
+**Gating**: requires `trust_tier === 'id_verified'` specifically
+(`requireIdVerifiedSessionBuilder`), the same higher bar direct messages
+require per SPEC §6 — not presence/avatar-visibility's own looser
+`trust_tier !== 'none'` bar.
+
+**Landlet scoping**: never a client-supplied parameter — derived from the
+caller's own last-reported, not-yet-stale `avatar_presence` row
+(`callersCurrentLandletId`), the exact same anti-spoof reasoning #2269
+already established for `GET /api/presence`. A caller with no recent
+presence row at all gets an empty read (`GET`) or a `400` (`POST`, since
+there's nowhere to scope the message to) rather than a message landing in
+an undefined or global scope.
+
+### Message object
+
+```json
+{
+  "messageId": "nearby-chat-3f1a9c20-9e44-4b7a-8c3d-1a2b3c4d5e6f",
+  "builderId": "builder-alice",
+  "text": "hi!",
+  "createdAt": "2026-10-25T00:00:00.000Z"
+}
+```
+
+### `GET /api/nearby-chat`
+
+Requires an ID-verified session. Returns every message in the caller's
+current landlet, polled *forward* from a cursor — `{ "messages": [...],
+"nextCursor": "..." }`, ordered `created_at ASC, message_id ASC` (unlike
+direct messages' own descending "most recent page" cursor, this is a live
+feed a client tails forward in time, not a history paged backward
+through). `limit` (default and max 100 — see `queryLimit`'s own shared
+cap). When there are no new messages since the given cursor, `nextCursor`
+echoes the same cursor back rather than returning `null`, so a quiet
+stretch doesn't make the client lose its place and re-fetch history it
+already has. Returns `{ "messages": [], "nextCursor": null }` when the
+caller has no recent-enough presence row — nowhere to scope the read to.
+`429` after 600 requests per 15 minutes from the same calling builder
+(the same cadence/budget `GET /api/presence`'s own nearby-avatars poll
+shares, since the client polls both at a comparable rate while the chat
+panel is open).
+
+### `POST /api/nearby-chat`
+
+Requires an ID-verified session.
+
+```json
+{ "text": "..." }
+```
+
+`400` if the caller has no recent-enough presence row to scope the
+message to, or if `text` is missing or over 280 characters. `429` after
+60 requests per 15 minutes from the same calling builder — a higher
+ceiling than direct messages' own 20/15min, since an active nearby
+conversation between several people plausibly sends far more than DMs'
+own "occasional message to one specific friend" pattern. Returns `201`
+with the new message.
+
+### Frontend wiring
+
+`src/shop/nearbyChat.js` — a fully self-contained Shop-mode leaf (no
+`main.js`/`presenceAndContent.js` legacy to respect, same shape
+`src/feedback/submitFeedbackUI.js` already established). A small
+collapsed `#shop-nearby-chat-btn` toggle pill (visibility driven live off
+`currentAuthUser.trustTier`, not a one-time reveal) expands
+`#shop-nearby-chat-panel`'s log + input only once tapped, per docs/SPEC.md
+§1's "leave plenty of screen space open." Polled every 2 seconds
+(`NEARBY_CHAT_POLL_INTERVAL_MS`) from `pollNearbyChatIfNeeded`, called
+every Shop-mode render tick from `src/shop/flightMovement.js`'s movement
+loop alongside `pollNearbyPresenceIfNeeded` — never awaited by its caller,
+same "don't stall the render loop on a slow/failed request" shape that
+function already uses.
+
+### Testing note
+
+`worker/nearby-chat.test.js` owns the backend contract: the id_verified
+gate, the no-presence/stale-presence `400`s on send, the 280-character
+cap, landlet scoping (two builders in different landlets each only see
+their own), seeing another builder's message when sharing the same
+landlet, forward-cursor polling (including the same-cursor-echoed-back-
+when-quiet behavior and a malformed cursor's `400`), and the covering
+index. `worker/nearby-chat-cleanup.test.js` covers
+`pruneStaleNearbyChatMessages` directly, the same shape
+`avatar-presence-cleanup.test.js` already established for its own sweep.
 
 ## Avatar presence
 

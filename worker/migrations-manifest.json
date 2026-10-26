@@ -151,5 +151,6 @@
   "0151_bug_reports.sql",
   "0152_stripe_account_flags.sql",
   "0153_shared_products.sql",
-  "0154_placed_instance_groups.sql"
+  "0154_placed_instance_groups.sql",
+  "0155_nearby_chat_messages.sql"
 ]

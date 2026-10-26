@@ -136,7 +136,7 @@ import {
 // imported back the same way builder-profile.js/auth-routes.js already do).
 import {
   handleNotifications, notificationFromRow, handlePresence, handleFriendships, friendshipFromRow,
-  handleDirectMessages, directMessageFromRow,
+  handleDirectMessages, directMessageFromRow, handleNearbyChat,
 } from './lib/social.js';
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
@@ -455,6 +455,11 @@ export default {
     ctx.waitUntil(pruneStaleAvatarPresence(env.DB).catch((error) => {
       console.error('pruneStaleAvatarPresence failed', error);
     }));
+    // #2779 (sub-issue of #2777): without this, a nearby-chat message sits
+    // in nearby_chat_messages forever -- nothing else ever deletes one.
+    ctx.waitUntil(pruneStaleNearbyChatMessages(env.DB).catch((error) => {
+      console.error('pruneStaleNearbyChatMessages failed', error);
+    }));
     // #1619: without this, a video-to-3D job stuck in 'processing' (no
     // webhook ever arrived, polling stopped once the frontend gave up)
     // sits there forever with no automatic timeout/expiry.
@@ -626,6 +631,11 @@ async function handleApi(request, env, url, ctx) {
 
   if (route[0] === 'direct-messages') {
     return handleDirectMessages(request, env.DB, route, url);
+  }
+
+  // #2779 (sub-issue of #2777): proximity text chat.
+  if (route[0] === 'nearby-chat') {
+    return handleNearbyChat(request, env.DB, route, url);
   }
 
   if (route[0] === 'purchases') {
@@ -2370,6 +2380,20 @@ export async function pruneStaleAvatarPresence(db) {
   await db.prepare('DELETE FROM avatar_presence WHERE updated_at < ?').bind(cutoff).run();
 }
 
+// #2779 (sub-issue of #2777): nearby_chat_messages (migrations/0155) is
+// deliberately ephemeral, same "no persistence requirement beyond what's
+// needed for the polling window" reasoning as avatar_presence above --
+// mirrors that table's own cleanup shape exactly, just a longer window
+// since a chat message someone's still reading needs to survive longer
+// than a position report's own much shorter "are they even still online"
+// check (#1099) does.
+const NEARBY_CHAT_MESSAGE_STALE_CLEANUP_MS = 30 * 60 * 1000;
+
+export async function pruneStaleNearbyChatMessages(db) {
+  const cutoff = new Date(Date.now() - NEARBY_CHAT_MESSAGE_STALE_CLEANUP_MS).toISOString();
+  await db.prepare('DELETE FROM nearby_chat_messages WHERE created_at < ?').bind(cutoff).run();
+}
+
 // #1135: production D1 (users, builders, purchases, balances, ...) has no
 // backup anywhere outside Cloudflare's own copy -- if the account were
 // ever suspended or lost, that data would be gone with no recovery path.
@@ -4011,6 +4035,16 @@ export function templateFromRow(row) {
     // #1948: NULL = unlimited (the default); a set value is remaining
     // stock, decremented atomically at purchase-finalize time.
     stockQuantity: row.stock_quantity,
+    // #2748 (leaf of #2745's shared-products redesign): the shared product
+    // this listing is backed by -- null only for a pre-#2748 row that
+    // predates both #2746's historical backfill and #2748's own go-forward
+    // wiring (neither of which this build should still have any of, but
+    // the column itself stays nullable per migrations/0153's own comment,
+    // so this is never assumed non-null). Exposed so the client can tell
+    // which product a listing belongs to -- needed by src/sell/mode.js's
+    // "Sell This Too" flow (#2748) to attach a second seller's own listing
+    // to the same product via POST /api/catalog/listings.
+    productId: row.product_id,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
