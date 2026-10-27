@@ -972,7 +972,7 @@
         display: none;
         position: fixed;
         z-index: 16;
-        top: 218px;
+        top: 262px;
         right: 8px;
         width: 220px;
         background: rgb(var(--pill-rgb) / 0.85);
@@ -1035,6 +1035,43 @@
         color: var(--pill-text);
         font: 12px/1.4 sans-serif;
         cursor: pointer;
+      }
+      /* #2818: next free slot in the same right-edge stack as
+         #shop-feedback-btn/#shop-nearby-chat-btn above -- a small round
+         icon button (no text pill) rather than matching their shape, since
+         its state is carried entirely by the icon/background color, not a
+         label. */
+      #shop-voice-btn {
+        top: 222px;
+        right: 8px;
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        border-radius: 50%;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font-size: 16px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+      /* Current-state convention (#2778's resolution) -- background color
+         always reflects what the mic is doing right now. */
+      #shop-voice-btn.unmuted {
+        background: rgb(var(--spring-green-rgb) / 0.65);
+      }
+      #shop-voice-btn.speaking {
+        box-shadow: 0 0 0 3px rgb(var(--spring-green-rgb) / 0.6);
+      }
+      #shop-voice-btn.denied {
+        background: rgb(255 92 92 / 0.55);
+      }
+      #shop-voice-btn.requesting {
+        opacity: 0.6;
+        cursor: wait;
       }
       .compass-label {
         position: absolute;
@@ -4626,6 +4663,14 @@
         <button type="submit">Send</button>
       </form>
     </div>
+    <!-- #2818 (sub-issue of #2780, itself sub-issue of #2777): proximity
+         voice chat's mic toggle. Same live trustTier-driven visibility as
+         #shop-nearby-chat-btn above (src/shop/voiceChat.js's own
+         updateShopVoiceChatIfNeeded), not a one-time reveal. Current-state
+         convention (#2778's resolution), not #1589's action-convention --
+         the icon/class always shows what the mic is doing right now
+         (muted/unmuted/speaking/denied), and a click toggles it. -->
+    <button id="shop-voice-btn" class="shop-ui muted" type="button" aria-label="Unmute microphone"><span id="shop-voice-btn-icon" aria-hidden="true">🎤</span></button>
     <div id="topbar-left">
       <div id="wordmark-panel">
         <img id="wordmark" src="/wordmark.png" alt="higglehaven" />

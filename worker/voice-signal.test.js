@@ -6,7 +6,7 @@
 // the key difference under test here is that this relay is point-to-point
 // (addressed to one specific toBuilderId), not a landlet-wide broadcast.
 import { applyD1Migrations, env } from 'cloudflare:test';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { api, signupBuilder } from './test-helpers.js';
 
 beforeAll(async () => {
@@ -233,5 +233,46 @@ describe('Voice signaling relay (#2817)', () => {
   it('indexes voice_signaling_messages on (to_builder_id, landlet_id), covering the poll query\'s own sort', async () => {
     const indexes = (await env.DB.prepare('PRAGMA index_list(voice_signaling_messages)').all()).results;
     expect(indexes.some((idx) => idx.name === 'idx_voice_signaling_messages_recipient')).toBe(true);
+  });
+
+  // #2818: ICE server config -- STUN always, TURN only once the owner's
+  // self-hosted relay secret is actually configured.
+  describe('GET /voice/ice-config', () => {
+    afterEach(() => {
+      env.TURN_SERVER_URL = undefined;
+      env.TURN_SERVER_USERNAME = undefined;
+      env.TURN_SERVER_CREDENTIAL = undefined;
+    });
+
+    it('requires a session', async () => {
+      const anon = await api('/voice/ice-config');
+      expect(anon.response.status).toBe(401);
+    });
+
+    it('rejects a caller who is not id_verified', async () => {
+      const alice = await signupBuilder('voice-ice-config-unverified-alice');
+      const rejected = await api('/voice/ice-config', alice.session());
+      expect(rejected.response.status).toBe(403);
+    });
+
+    it('returns STUN only when no TURN secret is configured', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-ice-config-stun-only-alice');
+      const got = await api('/voice/ice-config', alice.session());
+      expect(got.response.status).toBe(200);
+      expect(got.body.iceServers).toEqual([{ urls: 'stun:stun.l.google.com:19302' }]);
+    });
+
+    it('includes the TURN server once its secret is configured', async () => {
+      env.TURN_SERVER_URL = 'turn:turn.example.com:3478';
+      env.TURN_SERVER_USERNAME = 'test-turn-user';
+      env.TURN_SERVER_CREDENTIAL = 'test-turn-credential';
+      const alice = await signupIdVerifiedBuilder('voice-ice-config-turn-alice');
+      const got = await api('/voice/ice-config', alice.session());
+      expect(got.response.status).toBe(200);
+      expect(got.body.iceServers).toEqual([
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'turn:turn.example.com:3478', username: 'test-turn-user', credential: 'test-turn-credential' },
+      ]);
+    });
   });
 });

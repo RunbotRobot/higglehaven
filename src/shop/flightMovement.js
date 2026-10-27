@@ -93,6 +93,7 @@ import {
 // self-contained leaf with no main.js/presenceAndContent.js legacy to
 // respect -- see that module's own header comment.
 import { pollNearbyChatIfNeeded } from './nearbyChat.js';
+import { updateShopVoiceChatIfNeeded } from './voiceChat.js';
 // #2627: the sign/calendar/review sprite fade loops and the scheduled-
 // calendar-event trigger check now live in src/shop/worldSprites.js.
 import { updateSignFade, updateCalendarFade, updateReviewFade, checkScheduledCalendarEvents } from './worldSprites.js';
@@ -1690,6 +1691,10 @@ export function updateShopMovement(now) {
   pollNearbyPresenceIfNeeded(now);
   pollNearbyChatIfNeeded(now);
   updateOtherShopAvatars(now);
+  // #2818: after updateOtherShopAvatars above, so this frame's distance
+  // checks read this tick's own smoothed/interpolated positions, not last
+  // frame's stale ones.
+  updateShopVoiceChatIfNeeded(now);
   updateSignFade();
   updateCalendarFade();
   updateReviewFade();
