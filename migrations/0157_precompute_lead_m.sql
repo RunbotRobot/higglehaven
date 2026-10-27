@@ -1,0 +1,20 @@
+-- #2807 (sub-issue of #2804, water-first/variable-size landlet generation):
+-- the maintained lead distance the precompute buffer (worker/lib/
+-- world-generation.js's maintainPrecomputeBuffer) always tries to keep
+-- staged ahead of the live world radius -- a policy value, not something
+-- derivable from current landlet_candidate_rings state (which only tells
+-- you how far the buffer currently *is* staged, not how far it's
+-- *supposed* to stay staged). Auto-widens itself (persisted here) the
+-- first time the buffer is ever found to have been fully consumed --
+-- the live radius catching up to or past the buffer's own outer edge --
+-- per #2807's own "widen the buffer radius going forward so it doesn't
+-- happen again" ask.
+--
+-- Default of 30 (three times world_settings' own expansion_increment_m
+-- default of 10) is a reasonable initial few-growth-steps-of-headroom
+-- guess, not a value this column tracks dynamically against whatever
+-- expansion_increment_m is actually configured -- SQLite's ADD COLUMN
+-- DEFAULT must be a constant. A world whose expansion_increment_m is set
+-- far larger than this default will simply trigger the auto-widening
+-- behavior sooner, which is the intended self-correction, not a bug.
+ALTER TABLE world_settings ADD COLUMN precompute_lead_m REAL NOT NULL DEFAULT 30 CHECK (precompute_lead_m > 0);

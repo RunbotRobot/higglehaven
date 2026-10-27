@@ -153,5 +153,6 @@
   "0153_shared_products.sql",
   "0154_placed_instance_groups.sql",
   "0155_nearby_chat_messages.sql",
-  "0156_geo_water_cells_fine.sql"
+  "0156_geo_water_cells_fine.sql",
+  "0157_precompute_lead_m.sql"
 ]

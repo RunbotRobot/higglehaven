@@ -3,7 +3,7 @@ import {
 } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import worker from './index.js';
-import { cleanupUnreferencedModels } from './lib/models.js';
+import { cleanupUnreferencedModels, scheduledModelCleanup } from './lib/models.js';
 import {
   api, extractSessionCookie, withSession, signup, signupBuilder, signupSeller, glbFile, signupAdmin,
   createGreenbeltLandletAs,
@@ -354,6 +354,24 @@ describe('Worker API', () => {
   // uploaded moments ago (as every upload in this test file necessarily
   // is) is always younger than MODEL_UPLOAD_RESERVATION_TIMEOUT_MS, so it
   // must survive scheduled(), not get swept the instant the cron fires.
+  //
+  // #2807: calls scheduledModelCleanup directly (the exact function
+  // scheduled() itself calls for this sweep, with the same real grace-
+  // period value) rather than the full worker.scheduled() dispatch. This
+  // is the very first test in this giant shared-D1 file to reach for any
+  // cron behavior at all, and scheduled() now also runs
+  // maintainPrecomputeBuffer unconditionally every tick (#2807) — a ring
+  // it generates is permanent by design (landlet_candidates rows with a
+  // ring_id are immutable, not even deletable, once created; see
+  // migrations/0018_protect_ring_candidate_geometry.sql), so if it ran
+  // here it would permanently occupy the origin-centered area several
+  // much-later tests (the dedicated mosaic/ring generation tests further
+  // down this same file) still expect to find completely untouched.
+  // scheduledModelCleanup's own wiring into worker.scheduled() is a
+  // one-line pass-through already exercised by the many other
+  // worker.scheduled() calls elsewhere in this file; what this test
+  // actually cares about -- the grace period itself -- doesn't need the
+  // full dispatch to verify.
   it('scheduled() does not clean up an upload still within its registration grace period', async () => {
     const freshForm = new FormData();
     freshForm.set('file', glbFile({ json: '{"scheduledCleanupFresh":true}' }));
@@ -361,10 +379,7 @@ describe('Worker API', () => {
     const fresh = await freshUpload.json();
     expect((await SELF.fetch(`https://higglehaven.test${fresh.modelUrl}`)).status).toBe(200);
 
-    const controller = createScheduledController();
-    const ctx = createExecutionContext();
-    await worker.scheduled(controller, env, ctx);
-    await waitOnExecutionContext(ctx);
+    await scheduledModelCleanup(env);
 
     expect((await SELF.fetch(`https://higglehaven.test${fresh.modelUrl}`)).status).toBe(200);
 
@@ -3603,8 +3618,14 @@ describe('Worker API', () => {
     }));
     expect(missingAdjacent.response.status).toBe(404);
 
+    // #2807: excludes auto-ring-% rows -- any earlier test's scheduled()
+    // call can leave maintainPrecomputeBuffer's own precompute-buffer ring
+    // behind (it runs unconditionally, independent of this test's own
+    // manually-created rings), which this exact-list assertion has no
+    // interest in.
     const rings = await env.DB.prepare(`
-      SELECT ring_id, candidate_count FROM landlet_candidate_rings ORDER BY inner_radius_m
+      SELECT ring_id, candidate_count FROM landlet_candidate_rings
+      WHERE ring_id NOT LIKE 'auto-ring-%' ORDER BY inner_radius_m
     `).all();
     expect(rings.results).toEqual([
       { ring_id: 'generated-ring', candidate_count: 6 },

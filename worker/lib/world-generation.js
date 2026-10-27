@@ -900,7 +900,7 @@ function candidateMaterializationSweepStatements(db, landletIds) {
 // handler above — omitted by autoGrowWorldIfNeeded's own call below, so an
 // auto-generated ring never gets misattributed to whichever admin happens
 // to be logged in (there isn't one; it's the trusted server itself).
-async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, startAngleRad, distribution, plots, adjacentToRingId }, adminUserId) {
+async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, startAngleRad, distribution, plots, adjacentToRingId, skipMaterializationSweep }, adminUserId) {
   const settings = await getWorldSettings(db);
   if (innerRadiusM < settings.radius_m) {
     throw new HttpError('innerRadiusM cannot be inside the current world radius', 400);
@@ -931,7 +931,21 @@ async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, 
       generated.boundarySignature, adjacentToRingId,
     ),
     ...rows.map((row) => candidateInsertStatement(db, row)),
-    ...candidateMaterializationSweepStatements(db, rows.map((row) => row.landlet_id)),
+    // #2807: a precompute-buffer ring's own nominal innerRadiusM is chosen
+    // to sit right at the live world radius (no gap left ungenerated), but
+    // its actual candidate polygons -- straight-edged wedges approximating
+    // that circular boundary -- bow slightly inward of it, so a handful of
+    // cells right at the inner edge can end up with a true
+    // min_world_radius_m a little *less* than the live radius despite never
+    // being meant to. Left to the ordinary #849 sweep below, that would
+    // materialize them immediately -- exactly the "generated ahead of time,
+    // sitting staged" buffer this issue asks for would instead surface as
+    // real 'generating' landlets the moment they're created. The reactive
+    // path (generateRingAtWorldBoundary) wants that immediate
+    // materialization -- it's generating *because* growth needs room right
+    // now -- so this only ever skips the sweep when the caller explicitly
+    // asks for buffer semantics.
+    ...(skipMaterializationSweep ? [] : candidateMaterializationSweepStatements(db, rows.map((row) => row.landlet_id))),
     ...(adminUserId ? [adminActionLogStatement(db, adminUserId, 'generate_ring', 'landlet_candidate_ring', prefix, { count })] : []),
   ]);
   const storedCandidates = await db.prepare(`
@@ -1253,11 +1267,18 @@ async function generateAutoMosaicIfFreshWorld(db) {
   }
 }
 
-async function generateRingAtWorldBoundary(db) {
-  let settings = await getWorldSettings(db);
-  let innerRadiusM = settings.radius_m;
-  let ring = null;
-  for (let attempt = 0; attempt < WORLD_GROWTH_MAX_STEPS && !ring; attempt++) {
+// #2807 (sub-issue of #2804): the "find a non-conflicting ring starting
+// at or beyond startingInnerRadiusM, generate it" loop -- extracted
+// verbatim from generateRingAtWorldBoundary's own original body so
+// maintainPrecomputeBuffer below can reuse the exact same generation
+// logic (prefix convention, interrupted-run recovery, conflict-driven
+// radius bump) starting from the *buffer's* current outer edge instead
+// of the live world radius. Returns `{ ringId, outerRadiusM }`, or null
+// if no clear room was found within WORLD_GROWTH_MAX_STEPS attempts.
+async function generateNextAutoRing(db, startingInnerRadiusM, { skipMaterializationSweep } = {}) {
+  const settings = await getWorldSettings(db);
+  let innerRadiusM = startingInnerRadiusM;
+  for (let attempt = 0; attempt < WORLD_GROWTH_MAX_STEPS; attempt++) {
     // Radius-derived, not random/sequential — naturally unique per call
     // (radius only ever grows) the same way the old frontend flow's own
     // `dev-ring-${Math.round(innerRadiusM)}` prefix was.
@@ -1280,16 +1301,15 @@ async function generateRingAtWorldBoundary(db) {
       'SELECT outer_radius_m FROM landlet_candidate_rings WHERE ring_id = ?',
     ).bind(prefix).first();
     if (existing) {
-      ring = { ringId: prefix, outerRadiusM: existing.outer_radius_m };
-      break;
+      return { ringId: prefix, outerRadiusM: existing.outer_radius_m };
     }
 
     try {
       const result = await generateLandletRingCandidates(db, {
         prefix, count: AUTO_RING_CANDIDATE_COUNT, innerRadiusM, startAngleRad: 0, distribution: null,
-        adjacentToRingId: null,
+        adjacentToRingId: null, skipMaterializationSweep,
       });
-      ring = { ringId: prefix, outerRadiusM: result.outerRadiusM };
+      return { ringId: prefix, outerRadiusM: result.outerRadiusM };
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
       if (err.message === 'Generated ring would overlap existing land candidates') {
@@ -1299,6 +1319,12 @@ async function generateRingAtWorldBoundary(db) {
       }
     }
   }
+  return null; // no clear room found this pass — the next scheduled run tries again
+}
+
+async function generateRingAtWorldBoundary(db) {
+  let settings = await getWorldSettings(db);
+  const ring = await generateNextAutoRing(db, settings.radius_m);
   if (!ring) return; // no clear room found this pass — the next scheduled run tries again
 
   try {
@@ -1318,6 +1344,104 @@ async function generateRingAtWorldBoundary(db) {
     settings = await getWorldSettings(db);
     if (settings.radius_m >= ring.outerRadiusM) break;
     await expandWorldOnce(db);
+  }
+}
+
+// #2807 (sub-issue of #2804): how far the precompute buffer is already
+// staged -- the furthest outer_radius_m of any auto-growth ring ever
+// generated (materialized or not; a still-staged ring counts just as much
+// as an already-enclosed one, since both represent real, already-done
+// generation work), UNIONed with the furthest max_world_radius_m across
+// *all* landlet_candidates/landlets, not just auto-ring-% rows -- a
+// successful one-time mosaic (generateAutoMosaicIfFreshWorld) or its
+// origin cell merged into starter-landlet already covers real territory
+// out to its own outer edge, and ignoring that would make this function
+// report "buffer never built" right after a mosaic has already staked
+// out tens of meters of radius, causing the buffer job below to
+// redundantly start a ring from the live radius -- *inside* the mosaic's
+// own disc. Returns null only when nothing at all has been generated yet
+// -- the buffer hasn't started building ahead at all, which
+// maintainPrecomputeBuffer below must treat differently from "built up,
+// then genuinely caught up to and consumed by live growth": the former
+// just needs its first-ever top-up, the latter is the real "did catch
+// up" widening signal.
+async function currentPrecomputeBufferOuterRadiusM(db) {
+  const row = await db.prepare(`
+    SELECT MAX(outer_radius_m) AS outer_radius_m FROM (
+      SELECT outer_radius_m FROM landlet_candidate_rings
+      UNION ALL
+      SELECT max_world_radius_m AS outer_radius_m FROM landlet_candidates WHERE max_world_radius_m IS NOT NULL
+      UNION ALL
+      SELECT max_world_radius_m AS outer_radius_m FROM landlets WHERE max_world_radius_m IS NOT NULL
+    )
+  `).first();
+  return row?.outer_radius_m ?? null;
+}
+
+// The widening factor applied to precompute_lead_m the first time the
+// buffer is ever found to have been fully consumed (the live radius
+// caught up to or past its own outer edge) -- #2807's own concrete
+// "did catch up" signal. Deliberately multiplicative, not additive: a
+// buffer that's been consumed once is a sign the *current* lead distance
+// itself is simply too thin for how fast this world is actually growing,
+// so the correction should scale with it, the same way a saturating
+// retry backoff would, rather than always adding the same fixed amount
+// regardless of how large the lead already is.
+const PRECOMPUTE_LEAD_WIDENING_FACTOR = 1.5;
+
+// #2807 (sub-issue of #2804): keeps a buffer of pre-generated land
+// candidates staged `precompute_lead_m` ahead of the live world radius at
+// all times, rather than only ever generating reactively right when
+// expandWorldOnce needs more room (autoGrowWorldIfNeeded's own existing
+// Phase 2, unchanged). Reuses the exact same ring-generation primitive
+// (generateNextAutoRing) that reactive path already calls -- the only
+// difference is *where* it starts from (the buffer's own current outer
+// edge, not the live radius) and that it never force-completes/encloses
+// what it generates; a precomputed ring is meant to sit staged until
+// ordinary world growth naturally reaches it later.
+//
+// Water-aware content: not yet -- #2821 tracks making this (and the
+// reactive ring path it shares generateNextAutoRing with) water-aware;
+// this issue's own text only asks for the buffer bookkeeping/widening
+// policy, which is generator-agnostic.
+async function maintainPrecomputeBuffer(db) {
+  const settings = await getWorldSettings(db);
+  const bufferOuterRadiusM = await currentPrecomputeBufferOuterRadiusM(db);
+
+  // Only a buffer that has actually been built up before (a real
+  // auto-ring exists) and found caught up to live growth counts as
+  // "consumed" -- null (never built at all) just needs its first-ever
+  // top-up below, not a premature widening on the very first run.
+  //
+  // The epsilon below matters here specifically: bufferOuterRadiusM comes
+  // from a UNION of the ring's own analytically-computed outer_radius_m
+  // and each candidate's independently re-derived (from its actual
+  // polygon vertices) max_world_radius_m -- two different computations of
+  // the same real-world quantity that can disagree by ~1e-14 in the last
+  // float digit. A caller that set radius_m directly from one of those
+  // values (as this function's own tests do, simulating "live growth
+  // caught all the way up to the buffer's edge") can land a hair below
+  // the other, making a strict `<=` miss a catch-up that's real in every
+  // sense that matters at landlet scale.
+  if (bufferOuterRadiusM !== null && bufferOuterRadiusM <= settings.radius_m + 0.0000001) {
+    // Widen the lead *before* topping back up below, so this same tick's
+    // own catch-up generation already aims for the newly-widened target
+    // instead of the stale, apparently-insufficient one.
+    await db.prepare(`
+      UPDATE world_settings SET precompute_lead_m = precompute_lead_m * ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE world_id = 'default-world'
+    `).bind(PRECOMPUTE_LEAD_WIDENING_FACTOR).run();
+  }
+
+  const refreshedSettings = await getWorldSettings(db);
+  const targetOuterRadiusM = refreshedSettings.radius_m + refreshedSettings.precompute_lead_m;
+  let outerRadiusM = bufferOuterRadiusM ?? refreshedSettings.radius_m;
+  for (let step = 0; step < WORLD_GROWTH_MAX_STEPS && outerRadiusM < targetOuterRadiusM; step += 1) {
+    const ring = await generateNextAutoRing(db, Math.max(outerRadiusM, refreshedSettings.radius_m), {
+      skipMaterializationSweep: true,
+    });
+    if (!ring) break; // no clear room found this pass — the next scheduled run tries again
+    outerRadiusM = ring.outerRadiusM;
   }
 }
 
@@ -1341,5 +1465,5 @@ function candidateMaterializationStatements(db, candidates) {
 
 export {
   handleLandCandidates, handleLandCandidateRings, handleWorld, autoGrowWorldIfNeeded,
-  candidateRowFromLandlet, computeGreenbeltRatio,
+  candidateRowFromLandlet, computeGreenbeltRatio, maintainPrecomputeBuffer,
 };
