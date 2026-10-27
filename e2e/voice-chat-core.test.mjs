@@ -81,6 +81,7 @@ function installVoiceRelay(page, { myBuilderId, mailboxes }) {
         payload: input.payload,
         createdAt: new Date().toISOString(),
       };
+      console.log('DEBUG relay POST', myBuilderId, '->', input.toBuilderId, input.kind);
       mailboxes[input.toBuilderId] ??= [];
       mailboxes[input.toBuilderId].push(message);
       await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ message }) });
@@ -88,6 +89,7 @@ function installVoiceRelay(page, { myBuilderId, mailboxes }) {
     }
     // GET -- drain this page's own inbox.
     const inbox = mailboxes[myBuilderId] ?? [];
+    if (inbox.length) console.log('DEBUG relay GET', myBuilderId, 'draining', inbox.length, 'message(s)');
     mailboxes[myBuilderId] = [];
     await route.fulfill({
       status: 200,

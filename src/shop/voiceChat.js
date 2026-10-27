@@ -336,7 +336,8 @@ async function handleIncomingSignal(fromBuilderId, kind, payload) {
     if (entry.ignoreOffer) return;
     try {
       await entry.pc.setRemoteDescription(description);
-    } catch {
+    } catch (err) {
+      console.error('DEBUG setRemoteDescription failed for', fromBuilderId, description?.type, 'collision=', offerCollision, 'polite=', entry.polite, 'signalingState=', entry.pc.signalingState, err);
       return; // best-effort
     }
     if (description.type === 'offer') {
