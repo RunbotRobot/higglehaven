@@ -182,12 +182,12 @@ await pageB.waitForSelector('#shop-voice-btn.visible', { timeout: 10000 });
 const aMutedByDefault = await pageA.evaluate(() => document.getElementById('shop-voice-btn').classList.contains('muted'));
 const bMutedByDefault = await pageB.evaluate(() => document.getElementById('shop-voice-btn').classList.contains('muted'));
 
-// Unmute both -- exercises the real getUserMedia prompt (fake device,
-// auto-granted) and the recvonly-to-sendrecv transceiver upgrade.
-await pageA.click('#shop-voice-btn');
-await pageB.click('#shop-voice-btn');
-await pageA.waitForSelector('#shop-voice-btn.unmuted', { timeout: 10000 });
-await pageB.waitForSelector('#shop-voice-btn.unmuted', { timeout: 10000 });
+// DEBUG TEMP: unmute disabled to isolate whether the initial
+// recvonly<->recvonly negotiation alone can reach 'connected'.
+// await pageA.click('#shop-voice-btn');
+// await pageB.click('#shop-voice-btn');
+// await pageA.waitForSelector('#shop-voice-btn.unmuted', { timeout: 10000 });
+// await pageB.waitForSelector('#shop-voice-btn.unmuted', { timeout: 10000 });
 
 // Give both sides' poll loops (VOICE_POLL_INTERVAL_MS = 1200) and the
 // real WebRTC stack several cycles to actually negotiate a connection.
