@@ -176,6 +176,11 @@ function refreshVoicePeersDiagnostic() {
     // test (or this module's own future debugging) tell one apart from an
     // ordinary proximity peer without reaching into internals.
     channelOwnerBuilderId: entry.channelOwnerBuilderId || null,
+    // #2834: the actual applied gain -- null until attachRemoteStream has
+    // run (no remote track received yet). Lets an e2e test confirm a
+    // friend-channel peer really does get full volume immediately with no
+    // distance-based ramp, same as channelOwnerBuilderId's own reasoning.
+    gainValue: entry.gainNode ? entry.gainNode.gain.value : null,
   }));
 }
 
@@ -371,6 +376,11 @@ async function createPeer(builderId, channelOwnerBuilderId = null) {
   };
   pc.ontrack = (event) => {
     if (event.streams[0]) attachRemoteStream(entry, event.streams[0]);
+    // #2834: attachRemoteStream sets entry.gainNode, which window.__shopVoicePeers'
+    // own gainValue field reads -- refresh here so that diagnostic reflects
+    // it right away, rather than staying stale (null) until some other
+    // state-change event happens to fire afterward.
+    refreshVoicePeersDiagnostic();
   };
   pc.onnegotiationneeded = async () => {
     try {
