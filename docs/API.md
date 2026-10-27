@@ -3266,7 +3266,13 @@ Procedurally creates one gap-free band of class-1, 1,000 m² land candidates.
 The generated wedge-shaped polygons use shared sampled edges, are centered on
 their polygon centroids, and are deterministic for the same inputs. This is a
 bounded dev-only generation primitive rather than a background job: `count`
-must be between 3 and 100, and the complete ring is inserted atomically.
+must be between 3 and 100, and the complete ring is inserted atomically. Real
+water along the ring's own circumference (#2821, below) can narrow a plot's
+own polygon or split it into fragments around a water arc — each candidate's
+own `areaM2` is always the shape's real computed area, so it's only ever
+very close to the requested target, not bit-exact, once that happens (today,
+with `geo_water_cells_fine` still empty in production, this never actually
+triggers, so areas stay exact in practice).
 
 ```json
 {
@@ -3337,12 +3343,10 @@ table's own sampling spacing — `worker/geoData.js`'s
 `fractionOfRegionWater(db, polygon)` (what fraction of a candidate
 landlet polygon's own sampled area is water — the primitive a
 "predominantly water" decision needs). `generate-mosaic` above now uses
-both, via the water-aware generator described next. `generate-ring`'s
-own real water classification still comes entirely from the coarse
-`isNearWaterCell`/`applyRealWaterClassification` path described above —
-a water-aware *algorithm* for the ring shape now exists (#2821, see
-below), but it isn't wired into this endpoint or the automatic growth
-path yet; that's a tracked follow-up, not done here.
+both, via the water-aware generator described next — as does `generate-ring`
+below, via the water-aware *ring* generator described further down
+(#2821). Both still also run the coarse `isNearWaterCell`/
+`applyRealWaterClassification` path as a safety net on top.
 
 #### Water-aware, variable-size mosaic generator (#2806/#2810/#2811/#2812)
 
@@ -3379,7 +3383,7 @@ production pending #2805's own NHD-service-outage follow-up, so in
 practice every real `generate-mosaic` call today still only gets its
 water awareness from the coarse safety-net pass, until that lands.
 
-#### Water-aware ring generator (#2821, not yet wired into `generate-ring`)
+#### Water-aware ring generator (#2821)
 
 The disc-tiling approach above (`generateWeightedVoronoiTiling`) can't be
 reused directly for a ring: it clips a boundary by half-plane bisectors,
@@ -3417,11 +3421,19 @@ target-area match, an accepted approximation mirroring the mosaic
 path's own "cell polygon never reshaped to the real shoreline" scope
 decision) — the ring stays gap-free and non-overlapping regardless,
 since every unit of angle around the full circle is always accounted
-for by exactly one placed shape. Not yet called from `generate-ring` or
-the automatic growth path above (`generateLandletRingCandidates`/
-`generateRingAtWorldBoundary`, `worker/lib/world-generation.js`) — same
-algorithm-then-wiring split the mosaic path itself used (#2810/#2811
-before #2812's own wiring leaf).
+for by exactly one placed shape.
+
+`generateLandletRingCandidates` (`worker/lib/world-generation.js`) is the
+call site — the same function both `generate-ring` above and the
+automatic growth path (`generateRingAtWorldBoundary`/
+`maintainPrecomputeBuffer`, both via the shared `generateNextAutoRing`)
+funnel through, so this one call-site swap covers all three at once. It
+only takes this path for a *fresh* ring (`adjacentToRingId` unset) — the
+`adjacentToRingId` reuse feature still calls the plain `generateLandletRing`
+with the earlier ring's own exact per-plot areas/landTypes, since that
+feature's whole point is reproducing another ring's own sequence
+verbatim (for matching angular seams), which `generateWaterAwareLandletRing`'s
+independent water-arc placement isn't built to preserve.
 
 ## Land candidate rings
 

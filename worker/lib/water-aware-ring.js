@@ -297,12 +297,24 @@ export async function generateWaterAwareLandletRing(db, {
         continue;
       }
       const take = Math.min(remaining, gapToWater);
+      // A plot that never met a water arc keeps reporting its own exact
+      // target area (targetAreaM2 below), the same convention
+      // generateLandletRing's own plots always use -- needed so the
+      // adjacentToRingId reuse feature (worker/lib/world-generation.js),
+      // which reads a stored candidate's own area_m2 straight back into
+      // the uniform area-to-angle formula to reproduce the same width, gets
+      // *exactly* the same width back, not one perturbed by this shape's
+      // own real discretized-polygon area. A fragment split off by a water
+      // arc has no single clean target any more, so it falls back to the
+      // real computed polygon area instead (set in the landlets map below).
+      const isFragment = fragmentIndex > 0 || take < angles[plotIndex] - 1e-9;
       shapes.push({
         startAngle: cursor, endAngle: cursor + take,
         landClass: definitions[plotIndex].landClass, landType: definitions[plotIndex].landType || 'buildable',
+        targetAreaM2: isFragment ? null : definitions[plotIndex].areaM2,
         metadata: {
           generated: true, generator: 'water-aware-ring-v1', ringIndex: plotIndex,
-          ...(fragmentIndex > 0 || take < angles[plotIndex] - 1e-9 ? { waterSplitFragment: true, fragmentIndex } : {}),
+          ...(isFragment ? { waterSplitFragment: true, fragmentIndex } : {}),
           ...definitions[plotIndex].metadata,
         },
       });
@@ -329,7 +341,7 @@ export async function generateWaterAwareLandletRing(db, {
     return {
       landletId: `${prefix}-${String(index + 1).padStart(3, '0')}`,
       name: `${prefix} ${index + 1}`,
-      areaM2: polygonArea(polygon),
+      areaM2: shape.targetAreaM2 ?? polygonArea(polygon),
       center,
       landClass: shape.landClass,
       landType: shape.landType,
@@ -338,15 +350,22 @@ export async function generateWaterAwareLandletRing(db, {
     };
   });
 
-  // Mirrors generateLandletRing's own boundarySignature shape (landGenerator.js)
-  // closely enough to serve the same purpose (detecting a mismatched
-  // adjacent ring's own seam) -- includes each shape's own landType too,
-  // since two rings with the same angular seam positions but different
-  // water placement along them still wouldn't actually tile correctly.
+  // Exactly generateLandletRing's own boundarySignature shape
+  // (landGenerator.js) -- normalized start angle + each shape's own
+  // angular width, nothing else. The adjacent-ring DB trigger
+  // (migrations/0019) that reads this only ever cares about geometric
+  // gap-freeness at the shared seam (do the two rings' angular widths
+  // line up), never content -- a buildable plot on one side of a seam
+  // bordering a water plot on the other is a perfectly valid seam, not a
+  // mismatch. Including landType here would make a *correctly* adjacent
+  // ring built via the old generateLandletRing (the adjacentToRingId
+  // reuse path, which never carries landType into its own signature)
+  // spuriously fail this check the moment any plot along the seam is
+  // water -- confirmed by worker-api.test.js's own adjacent-ring
+  // coverage, which exercises exactly that case.
   const boundarySignature = JSON.stringify([
     Number((((startAngleRad % TAU) + TAU) % TAU).toPrecision(15)),
     ...shapes.map((shape) => Number((shape.endAngle - shape.startAngle).toPrecision(15))),
-    ...shapes.map((shape) => shape.landType),
   ]);
 
   return { landlets, outerRadiusM, boundarySignature, waterArcCount: waterArcs.length };
