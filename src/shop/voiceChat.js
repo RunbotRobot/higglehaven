@@ -165,20 +165,20 @@ function readMicRms() {
 // instead, which already does the right thing over an established
 // connection with no renegotiation needed). Each existing peer's own
 // connection started out recvonly (getOrCreatePeer, before any mic was
-// granted) — replaceTrack alone doesn't make a recvonly transceiver start
-// sending; its direction has to move to sendrecv too, which is what
-// actually schedules the renegotiation (onnegotiationneeded) that tells
-// the other side a track showed up.
+// granted) -- addTrack (not a manual replaceTrack + direction flip) is
+// what correctly reuses that same transceiver: per spec it looks for a
+// transceiver whose sender has no track and was never used to send
+// before (exactly our recvonly one), flips its direction to sendrecv,
+// *and* associates the given stream with it for signaling -- a bare
+// replaceTrack() only swaps the track, leaving the receiving side's own
+// ontrack event with an empty `streams` array since no stream was ever
+// associated at transceiver-creation time. Still schedules
+// onnegotiationneeded either way, same as a manual direction flip would.
 async function addLocalTrackToAllPeers() {
   const track = localStream.getAudioTracks()[0];
   for (const entry of peers.values()) {
-    const [transceiver] = entry.pc.getTransceivers();
-    if (!transceiver) {
-      entry.pc.addTrack(track, localStream);
-      continue;
-    }
-    await transceiver.sender.replaceTrack(track).catch(() => {});
-    transceiver.direction = 'sendrecv';
+    if (entry.pc.getSenders().some((s) => s.track === track)) continue; // already added
+    entry.pc.addTrack(track, localStream);
   }
 }
 
@@ -252,12 +252,19 @@ async function getOrCreatePeer(builderId) {
     if (!event.candidate) return;
     sendVoiceSignal({ toBuilderId: builderId, kind: 'ice-candidate', payload: event.candidate.toJSON() }).catch(() => {});
   };
-  pc.ontrack = (event) => attachRemoteStream(entry, event.streams[0]);
+  pc.ontrack = (event) => {
+    if (event.streams[0]) attachRemoteStream(entry, event.streams[0]);
+  };
   pc.onnegotiationneeded = async () => {
     try {
       entry.makingOffer = true;
       await pc.setLocalDescription();
-      await sendVoiceSignal({ toBuilderId: builderId, kind: 'offer', payload: pc.localDescription }).catch(() => {});
+      // RTCSessionDescription's type/sdp are getters inherited from the
+      // prototype, not own enumerable properties -- JSON.stringify (inside
+      // sendVoiceSignal) silently drops them unless explicitly copied into
+      // a plain object first, the same reason RTCIceCandidate's own
+      // .toJSON() is called explicitly above rather than passed as-is.
+      await sendVoiceSignal({ toBuilderId: builderId, kind: 'offer', payload: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } }).catch(() => {});
     } catch {
       // best-effort — onnegotiationneeded fires again if something still
       // needs renegotiating
@@ -303,7 +310,12 @@ async function handleIncomingSignal(fromBuilderId, kind, payload) {
     }
     if (description.type === 'offer') {
       await entry.pc.setLocalDescription();
-      await sendVoiceSignal({ toBuilderId: fromBuilderId, kind: 'answer', payload: entry.pc.localDescription }).catch(() => {});
+      // Same explicit-copy reasoning as the offer send in onnegotiationneeded
+      // above.
+      await sendVoiceSignal({
+        toBuilderId: fromBuilderId, kind: 'answer',
+        payload: { type: entry.pc.localDescription.type, sdp: entry.pc.localDescription.sdp },
+      }).catch(() => {});
     }
   } else if (kind === 'ice-candidate') {
     try {

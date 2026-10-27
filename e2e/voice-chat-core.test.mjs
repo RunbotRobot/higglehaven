@@ -44,8 +44,19 @@ async function fetchJson(page, path, options) {
   }, [path, options]);
 }
 
-// Patches trustTier to 'id_verified' on both the signup response and every
-// later GET /api/auth/me — see this file's own header comment on why.
+// Patches trustTier to 'id_verified' on every later GET /api/auth/me — see
+// this file's own header comment on why. Deliberately NOT installed until
+// after chooseIdentity's own real signup+verify flow (clearVerifyModalIfShown)
+// has already completed for real: that flow itself reads the live
+// currentAuthUser.trustTier to decide whether to show the verify-modal at
+// all, so patching it to 'id_verified' too early would make the app think
+// verification is already done and skip the real age-attest/card-setup-
+// intent calls entirely -- leaving the REAL account's trust_tier at 'none'
+// server-side (still high enough to fail POST /api/presence/POST
+// /api/landlets, which only need non-'none', not id_verified). Installed
+// only once the real flow has already pushed the account to 'credit_card'
+// for real; a page.reload() right after re-fetches /auth/me and is what
+// actually lands the patched 'id_verified' value into currentAuthUser.
 async function patchTrustTierToIdVerified(route) {
   const response = await route.fetch();
   const body = await response.json();
@@ -102,8 +113,6 @@ async function launchVoicePage(label) {
     if (dialog.type() === 'prompt') await dialog.accept(label);
     else await dialog.accept();
   });
-  await page.route('**/api/auth/me', patchTrustTierToIdVerified);
-  await page.route('**/api/auth/signup', patchTrustTierToIdVerified);
   // ICE: host candidates alone are enough for two pages on the same
   // machine -- no real STUN/TURN network dependency needed in this suite.
   await page.route('**/api/voice/ice-config', (route) => route.fulfill({
@@ -121,6 +130,7 @@ const pageA = sessionA.page;
 const pageB = sessionB.page;
 
 await chooseIdentity(pageA, { mode: 'build', label: LABEL_A, isNew: true });
+await pageA.route('**/api/auth/me', patchTrustTierToIdVerified);
 const builderA = (await fetchJson(pageA, '/api/builders/me')).body.builder;
 await installVoiceRelay(pageA, { myBuilderId: builderA.builderId, mailboxes });
 
@@ -150,6 +160,7 @@ await pageA.waitForSelector('#shop-status:not(.visible)', { state: 'attached', t
 await pageA.evaluate(() => window.__testTeleportShopAvatar(0, 0, 0));
 
 await chooseIdentity(pageB, { mode: 'build', label: LABEL_B, isNew: true });
+await pageB.route('**/api/auth/me', patchTrustTierToIdVerified);
 const builderB = (await fetchJson(pageB, '/api/builders/me')).body.builder;
 await installVoiceRelay(pageB, { myBuilderId: builderB.builderId, mailboxes });
 
