@@ -34,6 +34,7 @@ import {
   landletMaxWorldRadius, landletMinWorldRadius, landletWorldPolygon, pointInPolygon, pointToSegmentDistance,
   polygonsOverlap, sameAreaRadius,
 } from '../geometry.js';
+import { GEO_WATER_FINE_GRID_SPACING_M } from '../geoData.js';
 import { generateLandletRing, powerLawPlots } from '../landGenerator.js';
 import { generateOrganicMosaic } from '../organicLandGenerator.js';
 import { json, HttpError } from './http.js';
@@ -140,6 +141,68 @@ export async function isNearWaterCell(db, x, y) {
     LIMIT 1
   `).bind(x, x, y, y).first();
   return !!row;
+}
+
+// #2805 (sub-issue of #2804): the same "near a sampled cell" test as
+// isNearWaterCell just above, against geo_water_cells_fine (migrations/0156)
+// instead of geo_water_cells -- lakes at higher granularity plus rivers,
+// not just lakes at the coarse 25m spacing. A deliberately separate
+// function rather than a shared helper parameterized by table name: this
+// one is for a future shape-respecting generator (#2806) to call at
+// per-point precision, isNearWaterCell above stays the one
+// applyRealWaterClassification calls, and keeping them syntactically
+// distinct means a future change to either query never risks silently
+// changing the other's behavior too.
+export async function isWaterAtFinePoint(db, x, y) {
+  const row = await db.prepare(`
+    SELECT 1 FROM geo_water_cells_fine
+    WHERE (x_m - ?) * (x_m - ?) + (y_m - ?) * (y_m - ?) <= spacing_m * spacing_m
+    LIMIT 1
+  `).bind(x, x, y, y).first();
+  return !!row;
+}
+
+// #2805: "is this candidate landlet shape predominantly water" (#2805's own
+// scope text's exact phrase) needs more than a single center-point test --
+// it needs what fraction of the shape's real area is water. geo_water_cells_fine
+// only ever stores water points (sparse, same as geo_water_cells), so there's
+// no stored row to count non-water points from; instead this enumerates every
+// point of the same deterministic fixed-origin lattice
+// scripts/ingest-geo-data.mjs's own fine pass sampled (world (0,0), stepping
+// by GEO_WATER_FINE_GRID_SPACING_M) that falls inside the given polygon, then
+// checks which of those exact points the table actually has a row for.
+// Rounding each lattice coordinate before comparing guards against float
+// drift between this loop's own arithmetic and the stored REAL columns --
+// both are built from the same small multiples of a 5m step, so in practice
+// they already land on bit-identical doubles, but this costs nothing and
+// removes the risk entirely. Returns 0 for a polygon with no lattice point
+// inside it at all (degenerate/sub-cell-size candidate) rather than NaN.
+export async function fractionOfRegionWater(db, polygon) {
+  const spacing = GEO_WATER_FINE_GRID_SPACING_M;
+  const xs = polygon.map((point) => point.x);
+  const ys = polygon.map((point) => point.y);
+  const minX = Math.floor(Math.min(...xs) / spacing) * spacing;
+  const maxX = Math.ceil(Math.max(...xs) / spacing) * spacing;
+  const minY = Math.floor(Math.min(...ys) / spacing) * spacing;
+  const maxY = Math.ceil(Math.max(...ys) / spacing) * spacing;
+
+  const latticeKey = (x, y) => `${Math.round(x / spacing)},${Math.round(y / spacing)}`;
+  const insideKeys = [];
+  for (let x = minX; x <= maxX; x += spacing) {
+    for (let y = minY; y <= maxY; y += spacing) {
+      if (pointInPolygon({ x, y }, polygon)) insideKeys.push(latticeKey(x, y));
+    }
+  }
+  if (insideKeys.length === 0) return 0;
+
+  const rows = await db.prepare(`
+    SELECT x_m, y_m FROM geo_water_cells_fine
+    WHERE x_m >= ? AND x_m <= ? AND y_m >= ? AND y_m <= ?
+  `).bind(minX, maxX, minY, maxY).all();
+  const waterKeys = new Set((rows.results || []).map((row) => latticeKey(row.x_m, row.y_m)));
+
+  const waterCount = insideKeys.filter((key) => waterKeys.has(key)).length;
+  return waterCount / insideKeys.length;
 }
 
 // #2370 (sub-issue of #2368): the real biome classification at a point,
