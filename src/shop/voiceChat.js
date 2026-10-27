@@ -264,11 +264,10 @@ async function getOrCreatePeer(builderId) {
       // sendVoiceSignal) silently drops them unless explicitly copied into
       // a plain object first, the same reason RTCIceCandidate's own
       // .toJSON() is called explicitly above rather than passed as-is.
-      await sendVoiceSignal({ toBuilderId: builderId, kind: 'offer', payload: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } }).catch((err) => console.error('DEBUG sendVoiceSignal offer failed', err));
-    } catch (err) {
+      await sendVoiceSignal({ toBuilderId: builderId, kind: 'offer', payload: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } }).catch(() => {});
+    } catch {
       // best-effort — onnegotiationneeded fires again if something still
       // needs renegotiating
-      console.error('DEBUG onnegotiationneeded failed', err);
     } finally {
       entry.makingOffer = false;
     }
@@ -306,8 +305,7 @@ async function handleIncomingSignal(fromBuilderId, kind, payload) {
     if (entry.ignoreOffer) return;
     try {
       await entry.pc.setRemoteDescription(description);
-    } catch (err) {
-      console.error('DEBUG setRemoteDescription failed', description?.type, err);
+    } catch {
       return; // best-effort
     }
     if (description.type === 'offer') {
@@ -317,18 +315,15 @@ async function handleIncomingSignal(fromBuilderId, kind, payload) {
       await sendVoiceSignal({
         toBuilderId: fromBuilderId, kind: 'answer',
         payload: { type: entry.pc.localDescription.type, sdp: entry.pc.localDescription.sdp },
-      }).catch((err) => console.error('DEBUG sendVoiceSignal answer failed', err));
+      }).catch(() => {});
     }
   } else if (kind === 'ice-candidate') {
     try {
       await entry.pc.addIceCandidate(payload);
-    } catch (err) {
-      if (!entry.ignoreOffer) {
-        console.error('DEBUG addIceCandidate failed', err);
-        // A genuine failure, not the expected glare-collision drop above —
-        // nothing more to do about one bad candidate; ICE keeps trying
-        // with whatever other candidates still arrive.
-      }
+    } catch {
+      // A genuine failure, not the expected glare-collision drop above —
+      // nothing more to do about one bad candidate; ICE keeps trying with
+      // whatever other candidates still arrive.
     }
   }
 }
@@ -345,10 +340,9 @@ function pollVoiceSignalsIfNeeded(now) {
     if (result.nextCursor) voiceSignalCursor = result.nextCursor;
     for (const message of result.messages) {
       if (myToken !== voicePollToken) return; // a newer poll superseded this one mid-batch
-      console.error('DEBUG received signal', message.kind, 'from', message.fromBuilderId);
       await handleIncomingSignal(message.fromBuilderId, message.kind, message.payload);
     }
-  }).catch((err) => console.error('DEBUG pollVoiceSignalsIfNeeded failed', err));
+  }).catch(() => {});
 }
 
 // Opens/closes peer connections based on live distance to each nearby
