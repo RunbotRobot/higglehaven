@@ -540,12 +540,34 @@ async function handleFriendVoiceChannels(request, db, route) {
     // "active" (sharedActiveFriendVoiceChannelExists above), so the very
     // first join by ANY accepted friend is what opens the owner's channel,
     // with no separate explicit "start" action required of the owner.
+    //
+    // #2833 (split out of #2781): the owner has no way to know their
+    // channel just went active unless they happen to have their Friends
+    // panel open -- the "notification-only, not permission-gating" default
+    // that issue's own text suggests, since any accepted friend opening it
+    // is already the intended, unchanged join model. Checked before the
+    // insert (not via its own row count after) so this reads as "was it
+    // already active", not "did this exact INSERT do anything" -- an
+    // ON CONFLICT DO NOTHING no-op looks identical to a real insert from
+    // the statement's own result.
+    const alreadyActive = ownerBuilderId !== sessionBuilder.builder_id && !!(await db.prepare(
+      'SELECT 1 FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?',
+    ).bind(ownerBuilderId, ownerBuilderId).first());
     await db.batch([
       db.prepare('INSERT INTO friend_voice_channel_members (owner_builder_id, member_builder_id) VALUES (?, ?) ON CONFLICT (owner_builder_id, member_builder_id) DO NOTHING')
         .bind(ownerBuilderId, ownerBuilderId),
       db.prepare('INSERT INTO friend_voice_channel_members (owner_builder_id, member_builder_id) VALUES (?, ?) ON CONFLICT (owner_builder_id, member_builder_id) DO NOTHING')
         .bind(ownerBuilderId, sessionBuilder.builder_id),
     ]);
+    // Only the activation itself notifies the owner -- a later friend
+    // joining an already-active channel doesn't re-notify them, same as a
+    // group call's other guests arriving doesn't re-ring the host's phone.
+    // Outside the batch above, same reasoning notificationStatement's own
+    // comment gives for every other fireNotification call site (a
+    // best-effort FYI, never allowed to roll back the real mutation).
+    if (ownerBuilderId !== sessionBuilder.builder_id && !alreadyActive) {
+      await fireNotification(db, ownerBuilderId, `${sessionBuilder.label} is waiting in your voice channel.`);
+    }
     return json({ ok: true }, 201);
   }
 
