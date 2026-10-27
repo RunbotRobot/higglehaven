@@ -287,7 +287,12 @@ async function main() {
 
       if (elevationM !== null) {
         const biome = classifyBiome({ elevationM, distanceToShorelineM });
-        biomeCells.push({ x, y, biome });
+        // #2850 (leaf of #2373, Option C real terrain): elevationM was
+        // already being fetched here for biome classification and then
+        // discarded -- carried through to the output now so a future
+        // terrain-geometry consumer (#2851) has real elevation to build
+        // against, not just the derived biome bucket.
+        biomeCells.push({ x, y, biome, elevationM });
       }
     }
     console.log(`  ...row x=${x}: ${elevationFetches} elevation lookup(s) so far, ${cells.length} water cell(s), ${biomeCells.length} biome cell(s) so far`);
@@ -328,6 +333,10 @@ async function main() {
     // way "not a water cell" obviously means buildable) -- #2369's own
     // nullable biome column leaves a landlet with no nearby cell data
     // simply unclassified (null), not defaulted to one of these bands.
+    // Each cell also carries its own real elevationM (#2850) -- the one
+    // piece of real terrain data a future displacement-mapped-geometry
+    // consumer (#2851) needs, already fetched here as a side effect of
+    // biome classification.
     cells: biomeCells,
   };
   const biomeOutPath = path.isAbsolute(BIOME_OUT_PATH) ? BIOME_OUT_PATH : path.join(repoRoot, BIOME_OUT_PATH);
