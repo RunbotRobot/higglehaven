@@ -94,6 +94,11 @@ import { handleInstancePurchase, handlePurchaseFinalize, purchaseFromRow } from 
 // for what deliberately stayed here instead (the sibling "purchase
 // creation" leaf's own functions, #2614).
 import { handlePurchases } from './lib/purchase-lifecycle.js';
+// #1109: velocity-based commission-cash-out caps -- see
+// migrations/0160_commission_holds.sql's own comment for the full
+// mechanism. releaseDueCommissionHolds is this module's own cron sweep,
+// wired into scheduled() below the same way every other job there is.
+import { releaseDueCommissionHolds } from './lib/commission-caps.js';
 // #2531: catalog-template CRUD/batch/search/thumbnail/concept-image route
 // handler, extracted into worker/lib/ -- see that module's own comment for
 // what deliberately stayed here instead (and why).
@@ -493,6 +498,12 @@ export default {
     // -- nothing else ever acts on it.
     ctx.waitUntil(escalateExpiredSuspensions(env.DB).catch((error) => {
       console.error('escalateExpiredSuspensions failed', error);
+    }));
+    // #1109: without this, an escrowed commission (a sale capped by the
+    // velocity-limit mechanism) sits held forever -- nothing else ever
+    // releases or revokes one.
+    ctx.waitUntil(releaseDueCommissionHolds(env.DB).catch((error) => {
+      console.error('releaseDueCommissionHolds failed', error);
     }));
     // #1994: without this, no credit orb ever spawns at all -- this is
     // the only mechanism that creates one.
