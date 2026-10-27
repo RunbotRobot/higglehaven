@@ -420,6 +420,113 @@ export async function handleNearbyChat(request, db, route, url) {
   return json({ error: 'Not found' }, 404);
 }
 
+// #2817 (sub-issue of #2780, itself sub-issue of #2777, proximity voice
+// chat): point-to-point WebRTC signaling relay (SDP offer/answer, ICE
+// candidates) between two nearby avatars. Mirrors handleNearbyChat's own
+// id_verified gate and callersCurrentLandletId anti-spoof landlet
+// derivation (#2269), but unlike that landlet-wide broadcast, each row
+// here is addressed to one specific `toBuilderId` -- the GET poll below
+// only ever returns messages where the caller is the recipient, never a
+// landlet's whole traffic.
+const VOICE_SIGNAL_SEND_RATE_LIMIT_MAX = NEARBY_CHAT_SEND_RATE_LIMIT_MAX;
+const VOICE_SIGNAL_POLL_RATE_LIMIT_MAX = PRESENCE_REPORT_RATE_LIMIT_MAX;
+const VOICE_SIGNAL_POLL_LIMIT = 50;
+const VOICE_SIGNAL_KINDS = new Set(['offer', 'answer', 'ice-candidate']);
+// SDP offers/answers run a few KB with many codecs listed; ICE candidates
+// are tiny. This is a generous cap against abuse (an oversized payload
+// spamming the table), not a tight validation of real SDP/ICE shape --
+// the client-side WebRTC stack is the actual producer/consumer here.
+const VOICE_SIGNAL_PAYLOAD_MAX_CHARS = 20000;
+
+function voiceSignalMessageFromRow(row) {
+  return {
+    messageId: row.message_id,
+    fromBuilderId: row.from_builder_id,
+    kind: row.kind,
+    payload: JSON.parse(row.payload),
+    createdAt: row.created_at,
+  };
+}
+
+export async function handleVoiceSignal(request, db, route, url) {
+  if (route.length !== 2 || route[1] !== 'signal') {
+    return json({ error: 'Not found' }, 404);
+  }
+  if (request.method === 'GET') {
+    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+    await checkRateLimit(db, `voice-signal-poll:${sessionBuilder.builder_id}`, VOICE_SIGNAL_POLL_RATE_LIMIT_MAX);
+    const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
+    if (landletId === null) {
+      return json({ messages: [], nextCursor: null, landletId: null });
+    }
+    const limit = queryLimit(url.searchParams.get('limit'), VOICE_SIGNAL_POLL_LIMIT);
+    const cursor = decodeCursor(url.searchParams.get('cursor'));
+    const conditions = ['to_builder_id = ?', 'landlet_id = ?'];
+    const bindings = [sessionBuilder.builder_id, landletId];
+    if (cursor) {
+      // Same ascending/"poll forward from here" ordering as
+      // handleNearbyChat's own cursor above.
+      conditions.push('(created_at > ? OR (created_at = ? AND message_id > ?))');
+      bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+    }
+    const { results } = await db.prepare(`
+      SELECT * FROM voice_signaling_messages WHERE ${conditions.join(' AND ')}
+      ORDER BY created_at ASC, message_id ASC LIMIT ?
+    `).bind(...bindings, limit).all();
+    const last = results.at(-1);
+    return json({
+      messages: results.map(voiceSignalMessageFromRow),
+      // Echo the caller's own cursor back on a quiet poll rather than
+      // null, same reasoning as handleNearbyChat's own nextCursor above.
+      nextCursor: last ? encodeCursor(last.created_at, last.message_id) : url.searchParams.get('cursor'),
+      landletId,
+    });
+  }
+
+  if (request.method === 'POST') {
+    const input = await readJson(request);
+    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+    await checkRateLimit(db, `voice-signal-send:${sessionBuilder.builder_id}`, VOICE_SIGNAL_SEND_RATE_LIMIT_MAX);
+    const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
+    if (landletId === null) {
+      throw new HttpError('A recent position report is required before sending a voice signal', 400);
+    }
+    const toBuilderId = stringValue(input.toBuilderId, 'toBuilderId');
+    if (toBuilderId === sessionBuilder.builder_id) {
+      throw new HttpError('toBuilderId cannot be the caller themselves', 400);
+    }
+    const kind = stringValue(input.kind, 'kind');
+    if (!VOICE_SIGNAL_KINDS.has(kind)) {
+      throw new HttpError(`kind must be one of: ${[...VOICE_SIGNAL_KINDS].join(', ')}`, 400);
+    }
+    if (input.payload === undefined || input.payload === null) {
+      throw new HttpError('payload is required', 400);
+    }
+    const serializedPayload = JSON.stringify(input.payload);
+    if (serializedPayload.length > VOICE_SIGNAL_PAYLOAD_MAX_CHARS) {
+      throw new HttpError(`payload must be ${VOICE_SIGNAL_PAYLOAD_MAX_CHARS} characters or fewer once serialized`, 400);
+    }
+    // #2269-shaped server-side enforcement: this is what makes the 100ft
+    // voice range a real boundary on who a connection can be set up with,
+    // not just a client-side rendering choice -- a caller can only signal
+    // a recipient who is themselves, right now, reporting presence in the
+    // caller's own current landlet.
+    const recipientLandletId = await callersCurrentLandletId(db, toBuilderId);
+    if (recipientLandletId === null || recipientLandletId !== landletId) {
+      throw new HttpError('toBuilderId is not currently in your landlet', 400);
+    }
+    const messageId = `voice-signal-${crypto.randomUUID()}`;
+    await db.prepare(`
+      INSERT INTO voice_signaling_messages (message_id, from_builder_id, to_builder_id, landlet_id, kind, payload)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(messageId, sessionBuilder.builder_id, toBuilderId, landletId, kind, serializedPayload).run();
+    const row = await db.prepare('SELECT * FROM voice_signaling_messages WHERE message_id = ?').bind(messageId).first();
+    return json({ message: voiceSignalMessageFromRow(row) }, 201);
+  }
+
+  return json({ error: 'Not found' }, 404);
+}
+
 function avatarPresenceFromRow(row) {
   return {
     builderId: row.builder_id,

@@ -33,7 +33,7 @@ async function autoRingOuterRadii() {
 describe('maintainPrecomputeBuffer (#2807)', () => {
   it('builds a fresh buffer out to radius_m + precompute_lead_m on the first run, without widening the lead', async () => {
     const before = await worldSettings();
-    expect(before.precompute_lead_m).toBe(30); // migrations/0157's own default
+    expect(before.precompute_lead_m).toBe(30); // migrations/0158's own default
 
     await maintainPrecomputeBuffer(env.DB);
 
