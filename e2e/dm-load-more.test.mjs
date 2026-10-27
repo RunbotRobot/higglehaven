@@ -38,6 +38,22 @@ await page.route('**/api/auth/me', async (route) => {
   await route.fulfill({ response, contentType: 'application/json', body: JSON.stringify(body) });
 });
 
+// #2781: src/shop/voiceChat.js's own setInterval polls GET
+// /api/voice/signal and GET /api/voice/friend-channels unconditionally
+// once hasIdVerifiedSession() reads true -- which the trustTier patch
+// above makes true client-side even though the real backend never learns
+// this account is id_verified, so the real (requireIdVerifiedSessionBuilder
+// -gated) endpoints would 403 on every poll and fail this test's own
+// errors.length === 0 assertion. Nothing here exercises real voice
+// signaling or friend channels, so empty/no-op responses are enough to
+// keep these polls from ever reaching the real backend.
+await page.route('**/api/voice/signal*', async (route) => {
+  await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ messages: [], nextCursor: null, landletId: null }) });
+});
+await page.route('**/api/voice/friend-channels*', async (route) => {
+  await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ channels: [] }) });
+});
+
 // A fake already-accepted friendship, so the Friends panel renders a real
 // row with a real "Message" button -- avoids needing a second full builder
 // signup+friend-request round trip just to reach openDmModal.
