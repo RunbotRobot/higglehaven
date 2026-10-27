@@ -456,7 +456,116 @@ function voiceSignalMessageFromRow(row) {
     kind: row.kind,
     payload: JSON.parse(row.payload),
     createdAt: row.created_at,
+    // #2781: set only for a signal relayed under a friend voice channel's
+    // membership (see handleFriendVoiceChannels below) rather than #2817's
+    // own landlet-proximity match -- src/shop/voiceChat.js uses this to
+    // skip the distance-based gain ramp for that connection, per SPEC's
+    // "regardless of proximity" (no distance-based volume ramp here).
+    channelOwnerBuilderId: row.channel_owner_builder_id || null,
   };
+}
+
+// #2781 (sub-issue of #2777, part of the proximity voice chat work):
+// "Group voice channels for friends regardless of proximity" -- docs/
+// SPEC.md §2. A channel is keyed by its owner's own builder_id (no
+// separate id -- see migrations/0159_friend_voice_channel_members.sql's
+// own comment for why), and a channel counts as "active" once the
+// owner's own row (member_builder_id === owner_builder_id) exists --
+// handleFriendVoiceChannels' join branch always inserts it, so there's
+// no separate "start" step. Two builders are cleared to signal each
+// other under a given channel once both have a row under that same
+// owner_builder_id and the owner's own row is present; they don't need
+// to be mutual friends with EACH OTHER, only (per the join-time check)
+// with the owner -- same "anyone the host added, talks to everyone else
+// the host added" shape an ordinary group call uses.
+async function sharedActiveFriendVoiceChannelExists(db, builderIdA, builderIdB, ownerBuilderId) {
+  const row = await db.prepare(`
+    SELECT 1 FROM friend_voice_channel_members a
+    JOIN friend_voice_channel_members b ON b.owner_builder_id = a.owner_builder_id
+    JOIN friend_voice_channel_members o
+      ON o.owner_builder_id = a.owner_builder_id AND o.member_builder_id = o.owner_builder_id
+    WHERE a.owner_builder_id = ? AND a.member_builder_id = ? AND b.member_builder_id = ?
+  `).bind(ownerBuilderId, builderIdA, builderIdB).first();
+  return !!row;
+}
+
+// Sized like FRIENDSHIP_MUTATE_RATE_LIMIT_MAX below -- join/leave is an
+// ordinary low-frequency user click, nothing like VOICE_SIGNAL_SEND_RATE_LIMIT_MAX's
+// own WebRTC-negotiation-burst budget.
+const FRIEND_VOICE_CHANNEL_MUTATE_RATE_LIMIT_MAX = 40;
+// src/shop/voiceChat.js polls GET /voice/friend-channels on its own
+// independent interval (not gated on the Shop-mode render tick, since a
+// friend group call should keep working even while not actively moving
+// around Shop mode) at the same cadence as its signal poll -- same
+// polling budget as VOICE_SIGNAL_POLL_RATE_LIMIT_MAX/
+// PRESENCE_REPORT_RATE_LIMIT_MAX above.
+const FRIEND_VOICE_CHANNEL_POLL_RATE_LIMIT_MAX = PRESENCE_REPORT_RATE_LIMIT_MAX;
+
+// GET lists the channels the caller is currently a member of (including
+// one they themselves own); POST .../join and .../leave are the only
+// mutations -- see each branch's own comment.
+async function handleFriendVoiceChannels(request, db, route) {
+  const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+
+  if (request.method === 'GET' && route.length === 2) {
+    await checkRateLimit(db, `friend-voice-channel-poll:${sessionBuilder.builder_id}`, FRIEND_VOICE_CHANNEL_POLL_RATE_LIMIT_MAX);
+    const { results } = await db.prepare(`
+      SELECT owner_builder_id, member_builder_id FROM friend_voice_channel_members
+      WHERE owner_builder_id IN (
+        SELECT owner_builder_id FROM friend_voice_channel_members WHERE member_builder_id = ?
+      )
+    `).bind(sessionBuilder.builder_id).all();
+    const membersByOwner = new Map();
+    for (const row of results) {
+      if (!membersByOwner.has(row.owner_builder_id)) membersByOwner.set(row.owner_builder_id, []);
+      membersByOwner.get(row.owner_builder_id).push(row.member_builder_id);
+    }
+    return json({
+      channels: [...membersByOwner.entries()].map(([ownerBuilderId, members]) => ({ ownerBuilderId, members })),
+    });
+  }
+
+  if (request.method === 'POST' && route.length === 4 && route[3] === 'join') {
+    const ownerBuilderId = route[2];
+    await checkRateLimit(db, `friend-voice-channel-mutate:${sessionBuilder.builder_id}`, FRIEND_VOICE_CHANNEL_MUTATE_RATE_LIMIT_MAX);
+    // Joining your own channel (starting it) needs no friendship check --
+    // everyone else does, the same bar the owner's own friend list already
+    // gates adding a member through in the first place.
+    if (ownerBuilderId !== sessionBuilder.builder_id) {
+      await assertAcceptedFriendship(db, sessionBuilder.builder_id, ownerBuilderId,
+        'Joining a friend voice channel requires an existing accepted friendship with its owner');
+    }
+    // Always ensures the owner's own row exists too, even when the owner
+    // isn't the one calling this -- that row is what marks the channel
+    // "active" (sharedActiveFriendVoiceChannelExists above), so the very
+    // first join by ANY accepted friend is what opens the owner's channel,
+    // with no separate explicit "start" action required of the owner.
+    await db.batch([
+      db.prepare('INSERT INTO friend_voice_channel_members (owner_builder_id, member_builder_id) VALUES (?, ?) ON CONFLICT (owner_builder_id, member_builder_id) DO NOTHING')
+        .bind(ownerBuilderId, ownerBuilderId),
+      db.prepare('INSERT INTO friend_voice_channel_members (owner_builder_id, member_builder_id) VALUES (?, ?) ON CONFLICT (owner_builder_id, member_builder_id) DO NOTHING')
+        .bind(ownerBuilderId, sessionBuilder.builder_id),
+    ]);
+    return json({ ok: true }, 201);
+  }
+
+  if (request.method === 'POST' && route.length === 4 && route[3] === 'leave') {
+    const ownerBuilderId = route[2];
+    await checkRateLimit(db, `friend-voice-channel-mutate:${sessionBuilder.builder_id}`, FRIEND_VOICE_CHANNEL_MUTATE_RATE_LIMIT_MAX);
+    if (ownerBuilderId === sessionBuilder.builder_id) {
+      // The owner leaving ends the channel for everyone, not just
+      // themselves -- "hanging up" a group call closes it, rather than
+      // silently leaving every other member still trying to reach a host
+      // who's no longer there.
+      await db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_builder_id = ?').bind(ownerBuilderId).run();
+    } else {
+      await db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?')
+        .bind(ownerBuilderId, sessionBuilder.builder_id).run();
+    }
+    return json({ ok: true });
+  }
+
+  return json({ error: 'Not found' }, 404);
 }
 
 // #2818 (sub-issue of #2780): the owner is self-hosting a TURN relay (GCP
@@ -488,6 +597,13 @@ export async function handleVoiceSignal(request, db, route, url, env) {
   if (route.length === 2 && route[1] === 'ice-config' && request.method === 'GET') {
     return handleVoiceIceConfig(request, db, env);
   }
+  // #2781: friend group voice channels -- membership management lives in
+  // its own handler (several sub-routes under here), separate from the
+  // point-to-point signal relay below that it extends the authorization
+  // of.
+  if (route[1] === 'friend-channels') {
+    return handleFriendVoiceChannels(request, db, route);
+  }
   if (route.length !== 2 || route[1] !== 'signal') {
     return json({ error: 'Not found' }, 404);
   }
@@ -500,7 +616,13 @@ export async function handleVoiceSignal(request, db, route, url, env) {
     }
     const limit = queryLimit(url.searchParams.get('limit'), VOICE_SIGNAL_POLL_LIMIT);
     const cursor = decodeCursor(url.searchParams.get('cursor'));
-    const conditions = ['to_builder_id = ?', 'landlet_id = ?'];
+    // #2781: a friend-channel-tagged row (channel_owner_builder_id set) is
+    // returned regardless of landlet match -- it was authorized by shared
+    // channel membership at send time, not by the sender/recipient sharing
+    // a landlet, so the recipient's own current landlet_id (bound below,
+    // still required to reach this far at all -- see the no-presence-row
+    // early return above) has no bearing on whether they should see it.
+    const conditions = ['to_builder_id = ?', '(landlet_id = ? OR channel_owner_builder_id IS NOT NULL)'];
     const bindings = [sessionBuilder.builder_id, landletId];
     if (cursor) {
       // Same ascending/"poll forward from here" ordering as
@@ -545,20 +667,39 @@ export async function handleVoiceSignal(request, db, route, url, env) {
     if (serializedPayload.length > VOICE_SIGNAL_PAYLOAD_MAX_CHARS) {
       throw new HttpError(`payload must be ${VOICE_SIGNAL_PAYLOAD_MAX_CHARS} characters or fewer once serialized`, 400);
     }
-    // #2269-shaped server-side enforcement: this is what makes the 100ft
-    // voice range a real boundary on who a connection can be set up with,
-    // not just a client-side rendering choice -- a caller can only signal
-    // a recipient who is themselves, right now, reporting presence in the
-    // caller's own current landlet.
-    const recipientLandletId = await callersCurrentLandletId(db, toBuilderId);
-    if (recipientLandletId === null || recipientLandletId !== landletId) {
-      throw new HttpError('toBuilderId is not currently in your landlet', 400);
+    // #2781: an optional channelOwnerBuilderId names a friend voice
+    // channel instead of relying on the landlet-proximity match just
+    // below -- "Group voice channels for friends regardless of
+    // proximity" (docs/SPEC.md §2). The sender still needs a recent
+    // presence row (landletId above, stored on this row the same as any
+    // other signal) -- unchanged, since every other requirement of this
+    // endpoint still assumes the sender exists in the world somewhere --
+    // this only skips the *match* against the recipient's own current
+    // landlet.
+    const channelOwnerBuilderId = (input.channelOwnerBuilderId !== undefined && input.channelOwnerBuilderId !== null)
+      ? stringValue(input.channelOwnerBuilderId, 'channelOwnerBuilderId')
+      : null;
+    if (channelOwnerBuilderId) {
+      const sharedChannel = await sharedActiveFriendVoiceChannelExists(db, sessionBuilder.builder_id, toBuilderId, channelOwnerBuilderId);
+      if (!sharedChannel) {
+        throw new HttpError('toBuilderId is not a current member of that friend voice channel', 400);
+      }
+    } else {
+      // #2269-shaped server-side enforcement: this is what makes the 100ft
+      // voice range a real boundary on who a connection can be set up with,
+      // not just a client-side rendering choice -- a caller can only signal
+      // a recipient who is themselves, right now, reporting presence in the
+      // caller's own current landlet.
+      const recipientLandletId = await callersCurrentLandletId(db, toBuilderId);
+      if (recipientLandletId === null || recipientLandletId !== landletId) {
+        throw new HttpError('toBuilderId is not currently in your landlet', 400);
+      }
     }
     const messageId = `voice-signal-${crypto.randomUUID()}`;
     await db.prepare(`
-      INSERT INTO voice_signaling_messages (message_id, from_builder_id, to_builder_id, landlet_id, kind, payload)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(messageId, sessionBuilder.builder_id, toBuilderId, landletId, kind, serializedPayload).run();
+      INSERT INTO voice_signaling_messages (message_id, from_builder_id, to_builder_id, landlet_id, kind, payload, channel_owner_builder_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `).bind(messageId, sessionBuilder.builder_id, toBuilderId, landletId, kind, serializedPayload, channelOwnerBuilderId).run();
     const row = await db.prepare('SELECT * FROM voice_signaling_messages WHERE message_id = ?').bind(messageId).first();
     return json({ message: voiceSignalMessageFromRow(row) }, 201);
   }
@@ -878,15 +1019,23 @@ function directMessageIdempotencyKey(senderBuilderId, recipientBuilderId, rawKey
 // check — every other friendship need in this file is answered by the
 // generic list endpoint. Mirrors the exact unordered-pair shape
 // POST /api/friendships' own duplicate-check WHERE NOT EXISTS already uses.
-async function assertAcceptedFriendship(db, builderIdA, builderIdB) {
+// #2781 (friend voice channel join, below) reuses this same unordered-pair
+// shape, hence the optional `message` -- its own gate isn't about direct
+// messages at all, so the hardcoded default below (unchanged, matches
+// every pre-#2781 call site's expectation) doesn't apply there.
+async function acceptedFriendshipExists(db, builderIdA, builderIdB) {
   const row = await db.prepare(`
     SELECT 1 FROM friendships
     WHERE status = 'accepted'
       AND ((requester_builder_id = ? AND recipient_builder_id = ?)
         OR (requester_builder_id = ? AND recipient_builder_id = ?))
   `).bind(builderIdA, builderIdB, builderIdB, builderIdA).first();
-  if (!row) {
-    throw new HttpError('Direct messages require an existing accepted friendship between these builders', 403);
+  return !!row;
+}
+
+async function assertAcceptedFriendship(db, builderIdA, builderIdB, message = 'Direct messages require an existing accepted friendship between these builders') {
+  if (!(await acceptedFriendshipExists(db, builderIdA, builderIdB))) {
+    throw new HttpError(message, 403);
   }
 }
 

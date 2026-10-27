@@ -18,6 +18,14 @@ import { formatArea } from '../settings.js';
 // temporary-circular-import way account/auth.js and account/identity.js
 // already do for their own not-yet-extracted dependencies.
 import { formatHiggles, START_MODE_KEY, BUILD_TARGET_LANDLET_ID_KEY } from '../main.js';
+// #2781 (sub-issue of #2777): join/leave a friend voice channel also has
+// to open/close this module's own RTCPeerConnection, not just write the
+// membership row -- src/shop/voiceChat.js owns that (and keeps running
+// its own reconciliation regardless of Shop mode, see that module's own
+// comment), so this panel calls into it rather than hitting the API
+// directly the way fetchFriendVoiceChannels (read-only, used for
+// rendering only) does.
+import { joinFriendVoiceChannel, leaveFriendVoiceChannel } from '../shop/voiceChat.js';
 import {
   fetchMyBuilder,
   fetchTaxSummary,
@@ -38,6 +46,7 @@ import {
   fetchUnreadDirectMessageCount,
   fetchAllLandlets,
   renameLandlet,
+  fetchFriendVoiceChannels,
 } from '../api.js';
 
 // Builder-facing notifications (see migrations/0038_notifications.sql) —
@@ -298,6 +307,10 @@ const friendsOutgoingListEl = document.getElementById('friends-outgoing-list');
 const friendsOutgoingEmptyEl = document.getElementById('friends-outgoing-empty');
 const friendsAcceptedListEl = document.getElementById('friends-accepted-list');
 const friendsAcceptedEmptyEl = document.getElementById('friends-accepted-empty');
+// #2781: the caller's own current friend-voice-channel membership status
+// line, rendered above the Requests/Friends sections -- see index.html's
+// own comment on this element.
+const friendsVoiceChannelStatusEl = document.getElementById('friends-voice-channel-status');
 const friendsMapBtn = document.getElementById('friends-map-btn');
 const friendsMapModalEl = document.getElementById('friends-map-modal');
 const friendsMapCloseBtn = document.getElementById('friends-map-close-btn');
@@ -501,6 +514,66 @@ function friendLocationText(friendship) {
   return `${name} (${center.x.toFixed(0)}, ${center.y.toFixed(0)})`;
 }
 
+function friendLabelByBuilderId(otherBuilderId, accepted) {
+  return accepted.find((f) => f.otherBuilderId === otherBuilderId)?.otherLabel ?? otherBuilderId;
+}
+
+// #2781 (sub-issue of #2777): renders the caller's own current friend-
+// voice-channel membership (at most one meaningfully distinct status this
+// simple panel shows -- own channel takes priority if, unusually, the
+// caller is somehow a member of more than one at once) above the ordinary
+// friend-request sections. `channels` is whatever GET /voice/friend-
+// channels just returned -- every channel the caller is currently a
+// member of, including one they themselves own. Stays empty (CSS hides
+// the element via :empty) when that list is empty.
+function renderFriendVoiceChannelStatus(channels, accepted) {
+  friendsVoiceChannelStatusEl.innerHTML = '';
+  if (channels.length === 0) return;
+  const active = channels.find((c) => c.ownerBuilderId === builderId) ?? channels[0];
+  const isOwner = active.ownerBuilderId === builderId;
+  const otherMembers = active.members.filter((memberBuilderId) => memberBuilderId !== builderId);
+
+  const row = document.createElement('div');
+  row.className = 'friend-row';
+  const body = document.createElement('div');
+  body.className = 'friend-row-body';
+  const label = document.createElement('div');
+  label.className = 'friend-row-label';
+  if (isOwner) {
+    label.textContent = otherMembers.length > 0
+      ? `Your voice channel — ${otherMembers.map((m) => friendLabelByBuilderId(m, accepted)).join(', ')}`
+      : 'Your voice channel (no one has joined yet)';
+  } else {
+    label.textContent = `In ${friendLabelByBuilderId(active.ownerBuilderId, accepted)}'s voice channel`;
+  }
+  body.appendChild(label);
+  row.appendChild(body);
+
+  const actions = document.createElement('div');
+  actions.className = 'friend-row-actions';
+  const leaveBtn = document.createElement('button');
+  leaveBtn.type = 'button';
+  leaveBtn.className = 'danger';
+  // The owner leaving ends the channel for everyone -- see
+  // worker/lib/social.js's handleFriendVoiceChannels for why, same reason
+  // this says "End" rather than "Leave" for that case.
+  leaveBtn.textContent = isOwner ? 'End' : 'Leave';
+  leaveBtn.addEventListener('click', async () => {
+    leaveBtn.disabled = true;
+    try {
+      await leaveFriendVoiceChannel(active.ownerBuilderId);
+      await renderFriends();
+    } catch (err) {
+      friendsStatusEl.textContent = err.message || 'Could not leave the voice channel.';
+      friendsStatusEl.classList.add('error');
+      leaveBtn.disabled = false;
+    }
+  });
+  actions.appendChild(leaveBtn);
+  row.appendChild(actions);
+  friendsVoiceChannelStatusEl.appendChild(row);
+}
+
 // #257: same missing-re-entrancy-guard shape as #244/#245 —
 // renderFriends() is called from many places in quick succession (opening
 // the panel, accepting/declining/cancelling a request, closing/reopening
@@ -530,6 +603,22 @@ async function renderFriends() {
   const incoming = friendships.filter((f) => f.direction === 'incoming' && f.status === 'pending');
   const outgoing = friendships.filter((f) => f.direction === 'outgoing' && f.status === 'pending');
   const accepted = friendships.filter((f) => f.status === 'accepted');
+
+  // #2781: voice-channel membership requires the same id_verified bar as
+  // the signaling relay itself (worker/lib/social.js's
+  // requireIdVerifiedSessionBuilder) -- skip the fetch entirely rather
+  // than let it 403 for a caller who could never use this anyway.
+  let friendVoiceChannels = [];
+  if (currentAuthUser?.trustTier === 'id_verified') {
+    try {
+      friendVoiceChannels = await fetchFriendVoiceChannels();
+    } catch {
+      // Best-effort -- a failed fetch here only means no voice-channel
+      // status/buttons this render, not a reason to fail the whole panel.
+    }
+  }
+  if (myLoadToken !== friendsLoadToken) return; // superseded while loading — a newer call owns the panel now
+  renderFriendVoiceChannelStatus(friendVoiceChannels, accepted);
 
   friendsIncomingEmptyEl.hidden = incoming.length > 0;
   for (const friendship of incoming) {
@@ -641,6 +730,51 @@ async function renderFriends() {
       messageBtn.textContent = 'Message';
       messageBtn.addEventListener('click', () => openDmModal(friendship.otherBuilderId, friendship.otherLabel));
       actions.appendChild(messageBtn);
+
+      // #2781: same id_verified gate as Message just above (voice signaling
+      // requires it too, worker/lib/social.js's requireIdVerifiedSessionBuilder).
+      // Only one of the two buttons below ever shows for a given friend:
+      // "Leave Voice" once already a member of THIS friend's channel
+      // (friendsVoiceChannelStatusEl above already covers ending/leaving
+      // whichever channel is active in general -- this is just the
+      // same action, reachable from this friend's own row too), or
+      // "Join Voice" only while the caller isn't a member of ANY channel
+      // yet -- this simple one-row-per-friend UI doesn't attempt to show
+      // "switch channels" or multi-channel membership at once.
+      const myChannelWithThisFriend = friendVoiceChannels.find((c) => c.ownerBuilderId === friendship.otherBuilderId);
+      if (myChannelWithThisFriend) {
+        const leaveVoiceBtn = document.createElement('button');
+        leaveVoiceBtn.type = 'button';
+        leaveVoiceBtn.textContent = 'Leave Voice';
+        leaveVoiceBtn.addEventListener('click', async () => {
+          leaveVoiceBtn.disabled = true;
+          try {
+            await leaveFriendVoiceChannel(friendship.otherBuilderId);
+            await renderFriends();
+          } catch (err) {
+            friendsStatusEl.textContent = err.message || 'Could not leave this voice channel.';
+            friendsStatusEl.classList.add('error');
+            leaveVoiceBtn.disabled = false;
+          }
+        });
+        actions.appendChild(leaveVoiceBtn);
+      } else if (friendVoiceChannels.length === 0) {
+        const joinVoiceBtn = document.createElement('button');
+        joinVoiceBtn.type = 'button';
+        joinVoiceBtn.textContent = 'Join Voice';
+        joinVoiceBtn.addEventListener('click', async () => {
+          joinVoiceBtn.disabled = true;
+          try {
+            await joinFriendVoiceChannel(friendship.otherBuilderId);
+            await renderFriends();
+          } catch (err) {
+            friendsStatusEl.textContent = err.message || 'Could not join this voice channel.';
+            friendsStatusEl.classList.add('error');
+            joinVoiceBtn.disabled = false;
+          }
+        });
+        actions.appendChild(joinVoiceBtn);
+      }
     }
     const removeBtn = document.createElement('button');
     removeBtn.type = 'button';
