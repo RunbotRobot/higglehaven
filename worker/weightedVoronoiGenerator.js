@@ -9,8 +9,14 @@
 // target area.
 //
 // Deliberately pure and network/DB-free, matching worker/landGenerator.js's
-// own generators -- no water-awareness (that's #2811, built on top of this)
-// and no wiring into real candidate rows (that's #2812).
+// own generators -- no real DB-backed water data read here (that's #2811's
+// own DB-aware wrapper, worker/lib/water-aware-mosaic.js, built on top of
+// this module) and no wiring into real candidate rows (that's #2812).
+// This module does carry the generic mechanism #2811's wrapper needs
+// (`fixedSites`/`avoidRegions` below) -- a real water obstacle becomes
+// just another site in the same tessellation, with no change to the core
+// algorithm itself, so the wrapper never needs to duplicate this file's
+// own iteration loop.
 //
 // Approach: a power diagram (weighted Voronoi tessellation). Site i has a
 // position p_i and a weight w_i (units: squared length, i.e. "radius^2" of
@@ -116,7 +122,13 @@ export function powerCellPolygon(boundary, sites, index) {
   return cell;
 }
 
-function randomPointInBoundary(boundary, random, maxAttempts = 2000) {
+// #2811 (sub-issue of #2806): `avoidRegions` lets a caller keep a randomly-
+// placed site's *initial* position out of a known obstacle (water) --
+// each region is a circle {x, y, radius}, an approximation good enough for
+// this purpose (the real carving-around-water effect comes from
+// `fixedSites` below competing for the same territory during relaxation,
+// not from this initial-placement nudge alone).
+function randomPointInBoundary(boundary, random, avoidRegions = [], maxAttempts = 2000) {
   const xs = boundary.map((point) => point.x);
   const ys = boundary.map((point) => point.y);
   const minX = Math.min(...xs);
@@ -125,17 +137,33 @@ function randomPointInBoundary(boundary, random, maxAttempts = 2000) {
   const maxY = Math.max(...ys);
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     const candidate = { x: minX + random() * (maxX - minX), y: minY + random() * (maxY - minY) };
-    if (pointInPolygon(candidate, boundary)) return candidate;
+    if (!pointInPolygon(candidate, boundary)) continue;
+    if (avoidRegions.some((region) => Math.hypot(candidate.x - region.x, candidate.y - region.y) < region.radius)) continue;
+    return candidate;
   }
   throw new Error('randomPointInBoundary: could not place a point inside the boundary after max attempts');
 }
 
 // Main entry point. `areas` is a list of target areas (m^2, one per
-// output cell -- e.g. from powerLawPlots). Returns
-// { cells: [{ center, polygon, areaM2, targetAreaM2 }], convergedWithinTolerance, iterations }.
+// randomly-placed output cell -- e.g. from powerLawPlots). Returns
+// { cells: [{ center, polygon, areaM2, targetAreaM2, fixed }], convergedWithinTolerance, iterations }.
 // `polygon` is in the same absolute coordinate space as `boundary` (callers
 // that need plot-local offsets, like every other generator in this
-// codebase, subtract `center` themselves).
+// codebase, subtract `center` themselves). `cells` lists the `areas` sites
+// first, then any `fixedSites` (same order as passed in), so a caller that
+// built `fixedSites` itself always knows which output cells they became.
+//
+// `fixedSites` (#2811, sub-issue of #2806): sites placed at an exact given
+// position rather than randomly, and never re-centered during relaxation
+// -- for a real-world obstacle (a water body) whose position is dictated
+// by actual geography, not something to optimize. Its weight still relaxes
+// normally like any other site, so its own cell area still converges
+// toward its target -- a contiguous water body competing for the same
+// territory as its land-site neighbors is what makes them genuinely relax
+// *around* it (their mutual power bisector), not just get classified after
+// the fact. Each entry is `{ x, y, areaM2 }`; `avoidRegions` (above) is a
+// separate, optional nudge so a *land* site's own random initial placement
+// doesn't start inside a known obstacle either.
 export function generateWeightedVoronoiTiling({
   boundary,
   areas,
@@ -144,15 +172,23 @@ export function generateWeightedVoronoiTiling({
   tolerance = 0.02,
   dampingFactor = 0.2,
   recenterFactor = 0.2,
+  fixedSites = [],
+  avoidRegions = [],
 }) {
-  if (areas.length === 0) return { cells: [], convergedWithinTolerance: true, iterations: 0 };
+  if (areas.length === 0 && fixedSites.length === 0) {
+    return { cells: [], convergedWithinTolerance: true, iterations: 0 };
+  }
   const boundaryAreaM2 = polygonArea(boundary);
   const random = seededRandom(seed);
 
-  const sites = areas.map((targetAreaM2) => {
-    const position = randomPointInBoundary(boundary, random);
-    return { ...position, weight: targetAreaM2 / Math.PI, targetAreaM2 };
+  const randomSites = areas.map((targetAreaM2) => {
+    const position = randomPointInBoundary(boundary, random, avoidRegions);
+    return { ...position, weight: targetAreaM2 / Math.PI, targetAreaM2, fixed: false };
   });
+  const pinnedSites = fixedSites.map((site) => ({
+    x: site.x, y: site.y, weight: site.areaM2 / Math.PI, targetAreaM2: site.areaM2, fixed: true,
+  }));
+  const sites = [...randomSites, ...pinnedSites];
 
   let bestCells = null;
   let bestMaxRelativeError = Infinity;
@@ -174,7 +210,7 @@ export function generateWeightedVoronoiTiling({
 
     for (let index = 0; index < sites.length; index += 1) {
       sites[index].weight += dampingFactor * (sites[index].targetAreaM2 - cellAreas[index]);
-      if (cells[index].length >= 3 && recenterFactor > 0) {
+      if (!sites[index].fixed && cells[index].length >= 3 && recenterFactor > 0) {
         const centroid = polygonCentroid(cells[index]);
         sites[index].x += recenterFactor * (centroid.x - sites[index].x);
         sites[index].y += recenterFactor * (centroid.y - sites[index].y);
@@ -188,6 +224,7 @@ export function generateWeightedVoronoiTiling({
       polygon: bestCells[index],
       areaM2: polygonArea(bestCells[index]),
       targetAreaM2: site.targetAreaM2,
+      fixed: site.fixed,
     })),
     convergedWithinTolerance: bestMaxRelativeError <= tolerance,
     iterations,
