@@ -143,4 +143,49 @@ describe('generateWeightedVoronoiTiling', () => {
     const third = generateWeightedVoronoiTiling({ boundary, areas, seed: 'determinism-b' });
     expect(third.cells.map((cell) => cell.center)).not.toEqual(first.cells.map((cell) => cell.center));
   });
+
+  // #2811 (sub-issue of #2806): the generic mechanism its own DB-aware
+  // water wrapper (worker/lib/water-aware-mosaic.js) builds on, tested
+  // here in isolation from any real water data.
+  describe('fixedSites / avoidRegions (#2811)', () => {
+    it('places a fixed site at its exact given position and never re-centers it', () => {
+      const boundary = discBoundary(200);
+      const areas = Array(6).fill(1000);
+      const fixedSites = [{ x: 50, y: -30, areaM2: 2000 }];
+
+      const result = generateWeightedVoronoiTiling({ boundary, areas, seed: 'fixed-site', fixedSites });
+      expect(result.cells).toHaveLength(areas.length + fixedSites.length);
+      const fixedCell = result.cells[result.cells.length - 1];
+      expect(fixedCell.fixed).toBe(true);
+      expect(fixedCell.center).toEqual({ x: 50, y: -30 });
+      expect(result.cells.slice(0, areas.length).every((cell) => cell.fixed === false)).toBe(true);
+    });
+
+    it('still converges every cell (fixed and random) within tolerance, and the whole tiling still covers the boundary', () => {
+      const boundary = discBoundary(300);
+      const boundaryAreaM2 = polygonArea(boundary);
+      const fixedSites = [{ x: -80, y: 60, areaM2: boundaryAreaM2 * 0.1 }];
+      const areas = Array(10).fill((boundaryAreaM2 * 0.9) / 10);
+
+      const result = generateWeightedVoronoiTiling({ boundary, areas, seed: 'fixed-plus-random', fixedSites });
+      expect(result.convergedWithinTolerance).toBe(true);
+      const sumAreas = result.cells.reduce((sum, cell) => sum + cell.areaM2, 0);
+      expect(Math.abs(sumAreas - boundaryAreaM2) / boundaryAreaM2).toBeLessThanOrEqual(0.02);
+    });
+
+    it('keeps a randomly-placed site\'s initial position outside every avoidRegions circle', () => {
+      const boundary = discBoundary(100);
+      const areas = Array(20).fill(polygonArea(boundary) / 20);
+      const avoidRegions = [{ x: 0, y: 0, radius: 60 }];
+
+      // recenterFactor: 0 disables relaxation moving sites afterward, so this
+      // checks placement itself, not where recentering later moved them.
+      const result = generateWeightedVoronoiTiling({
+        boundary, areas, seed: 'avoid-regions', avoidRegions, recenterFactor: 0,
+      });
+      for (const cell of result.cells) {
+        expect(Math.hypot(cell.center.x, cell.center.y)).toBeGreaterThanOrEqual(60);
+      }
+    });
+  });
 });

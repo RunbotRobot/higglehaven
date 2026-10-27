@@ -3341,6 +3341,31 @@ this finer data is `#2806`'s scope, a separate sub-issue of the same
 `#2804` water-first/variable-size landlet generation tracking issue this
 one belongs to.
 
+#### Water-aware, variable-size mosaic generator (#2806/#2810/#2811, not yet wired into generate-mosaic)
+
+Two new modules build the actual replacement for `generateOrganicMosaic`'s
+fixed equal-area template, still not called by `generate-mosaic` above
+(that wiring is `#2812`'s own scope). `worker/weightedVoronoiGenerator.js`
+(`generateWeightedVoronoiTiling`, #2810) is a pure, network/DB-free power
+diagram (weighted Voronoi) that tiles a boundary into polygons converging
+on a list of target areas — e.g. from `powerLawPlots` (`worker/
+landGenerator.js`), which already implements #2806's own power-law size
+tiers. `worker/lib/water-aware-mosaic.js` (`generateWaterAwareMosaic`,
+#2811) wraps it with real water data: it clusters `geo_water_cells_fine`
+sample points within a boundary into contiguous blobs
+(`fetchWaterBlobs`), feeds each blob in as its own fixed, non-relaxing
+site in the same tessellation as the ordinary land sites (so land cells
+genuinely relax away from real water through the same power-bisector math
+that already keeps land cells from overlapping each other, not just a
+classification pass after the fact), then flags each finished cell
+`water` or `buildable` via `fractionOfRegionWater` (a fixed water-blob
+cell is always `water`). A cell's stored polygon is never reshaped against
+the real water boundary — only its `landType` changes, the same
+coarse-path binary classification `applyRealWaterClassification` already
+uses; genuine shoreline-following polygon edges would need real water
+*polygon* geometry, not just the sample-point grid this data is, and
+isn't attempted here.
+
 ## Land candidate rings
 
 ### `GET /api/land-candidate-rings`
