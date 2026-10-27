@@ -136,6 +136,36 @@ describe('Voice signaling relay (#2817)', () => {
       expect(sent.body.message.messageId).toBeTruthy();
       expect(sent.body.message.createdAt).toBeTruthy();
     });
+
+    // #2824: VOICE_SIGNAL_SEND_RATE_LIMIT_MAX used to just reuse
+    // NEARBY_CHAT_SEND_RATE_LIMIT_MAX (60) -- far too tight for real
+    // WebRTC negotiation's bursty offer+answer+many-ICE-candidates shape.
+    // Pre-seeding rate_limit_events directly rather than looping real
+    // requests up to the new, much higher limit keeps this test fast --
+    // same approach land-community-signs.test.js's own instance-write
+    // rate-limit test (#827) uses for the same reason.
+    it('rate-limits repeated sends from the same builder', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-signal-rate-limit-alice');
+      const bob = await signupIdVerifiedBuilder('voice-signal-rate-limit-bob');
+      await setPresence(alice.builderId, { landletId: 'voice-signal-landlet-rate-limit' });
+      await setPresence(bob.builderId, { landletId: 'voice-signal-landlet-rate-limit' });
+
+      const bucketKey = `voice-signal-send:${alice.builderId}`;
+      const now = Date.now();
+      await env.DB.batch(Array.from({ length: 299 }, () => env.DB.prepare(
+        'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+      ).bind(bucketKey, now)));
+
+      const atLimit = await api('/voice/signal', alice.session({
+        method: 'POST', body: JSON.stringify({ toBuilderId: bob.builderId, kind: 'offer', payload: { sdp: 'x' } }),
+      }));
+      expect(atLimit.response.status).toBe(201);
+
+      const limited = await api('/voice/signal', alice.session({
+        method: 'POST', body: JSON.stringify({ toBuilderId: bob.builderId, kind: 'offer', payload: { sdp: 'x' } }),
+      }));
+      expect(limited.response.status).toBe(429);
+    });
   });
 
   describe('GET /voice/signal', () => {
