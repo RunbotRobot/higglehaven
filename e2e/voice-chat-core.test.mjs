@@ -149,14 +149,29 @@ console.log('landlet created (status should be 201):', landletCreated.status);
 // *reported* position matches, wherever that is), this test needs both
 // genuinely close together for a voice connection to even want to form.
 // window.__testTeleportShopAvatar (src/shop/flightMovement.js) mutates the
-// real shopAvatarPosition directly (also forcing shopFlightState to
-// 'grounded') -- the real report loop (reportOwnPresenceIfNeeded) then
-// reports this teleported position on its own very next tick, same as it
-// would any real walk, so there's no need to also fight it with a direct
-// POST /api/presence that the next real tick would just overwrite anyway.
+// real shopAvatarPosition directly, but does NOT stop the spawn orbit
+// itself (shopSpawnRotating, a separate flag only ever cleared by real
+// navigation input) -- without also clicking #shop-fly-btn first (same as
+// multiplayer-presence.test.mjs's own freeze sequence), the orbit keeps
+// silently overwriting shopAvatarPosition on every subsequent frame,
+// dragging each avatar back out of voice range moments after this
+// teleport. Found as a real contributor to this test's own intermittent
+// failures (though not the only one -- the remaining, deeper "stuck
+// mid-negotiation forever even once position is stable" flakiness traced
+// to a native setRemoteDescription stall, fixed in voiceChat.js itself via
+// VOICE_NEGOTIATION_TIMEOUT_MS): with the orbit still running, every
+// connection attempt looked like it was getting stuck mid-negotiation, but
+// was actually being torn down and restarted repeatedly as the
+// still-orbiting avatars drifted in and out of VOICE_RANGE_M. The real
+// report loop (reportOwnPresenceIfNeeded) reports
+// the teleported position on its own very next tick once the orbit is
+// actually stopped, same as it would any real walk, so there's no need to
+// also fight it with a direct POST /api/presence.
 await pageA.reload({ waitUntil: 'networkidle' });
 await pageA.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 await pageA.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
+await pageA.click('#shop-fly-btn'); // stops the orbit (real navigation input) and starts landing
+await pageA.waitForTimeout(2500); // past SHOP_FLIGHT_LANDING_DURATION_S (2s) -- now 'grounded', orbit stopped
 await pageA.evaluate(() => window.__testTeleportShopAvatar(0, 0, 0));
 
 await chooseIdentity(pageB, { mode: 'build', label: LABEL_B, isNew: true });
@@ -167,6 +182,8 @@ await installVoiceRelay(pageB, { myBuilderId: builderB.builderId, mailboxes });
 await pageB.reload({ waitUntil: 'networkidle' });
 await pageB.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 await pageB.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
+await pageB.click('#shop-fly-btn'); // stops the orbit and starts landing, same as A above
+await pageB.waitForTimeout(2500); // past landing
 // Comfortably inside VOICE_RANGE_M (30.48m) of A's (0,0,0) above.
 await pageB.evaluate(() => window.__testTeleportShopAvatar(1, 0, 0));
 

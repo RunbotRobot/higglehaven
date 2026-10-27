@@ -53,6 +53,19 @@ const VOICE_POLL_INTERVAL_MS = 1200;
 // real voice-activity detection. Tuned loosely; this only drives a cosmetic
 // icon state, not anything the connection/gain logic depends on.
 const VOICE_SPEAKING_RMS_THRESHOLD = 0.03;
+// A connection that hasn't reached 'connected' within this long of its own
+// creation gets torn down (and, since the peer is presumably still nearby,
+// freshly recreated on the very next updateVoicePeersForRange call) rather
+// than left to sit stuck forever. Covers any stall, on either side of the
+// handshake, for any reason -- including a native RTCPeerConnection call
+// (setRemoteDescription, observed directly) that simply never resolves or
+// rejects, confirmed via explicit tracing while validating this feature's
+// own e2e test (see createPeer's own comment on the transceiver-timing
+// hypothesis this ruled out). Comfortably above how long a real handshake
+// normally takes (a couple of VOICE_POLL_INTERVAL_MS round trips), with
+// enough margin below this module's own e2e test's 20s per-connection wait
+// for a fresh retry to still succeed within that same test run.
+const VOICE_NEGOTIATION_TIMEOUT_MS = 8000;
 
 const voiceBtnEl = document.getElementById('shop-voice-btn');
 const voiceBtnIconEl = document.getElementById('shop-voice-btn-icon');
@@ -274,7 +287,13 @@ async function createPeer(builderId) {
   const existing = peers.get(builderId);
   if (existing) return existing;
   const pc = new RTCPeerConnection({ iceServers });
-  const entry = { pc, polite: myBuilderId < builderId, makingOffer: false, ignoreOffer: false, sourceNode: null, gainNode: null };
+  // performance.now() (same monotonic clock updateShopMovement's own `now`
+  // parameter already uses -- see updateVoicePeersForRange's own watchdog
+  // check below), not Date.now()'s wall-clock epoch -- the two aren't
+  // comparable, and mixing them here left an earlier version of this
+  // watchdog comparing against a number that could never cross its own
+  // threshold, found live while validating this feature's own e2e test.
+  const entry = { pc, polite: myBuilderId < builderId, makingOffer: false, ignoreOffer: false, sourceNode: null, gainNode: null, createdAt: performance.now() };
   peers.set(builderId, entry);
 
   pc.onicecandidate = (event) => {
@@ -317,21 +336,27 @@ async function createPeer(builderId) {
   // fired on both sides at nearly the same real-world moment for every
   // single new connection -- true glare on *every* first contact, not just
   // an occasional edge case. Perfect negotiation's polite/impolite
-  // collision handling resolves that correctly in principle, but it still
-  // needs a variable, sometimes-slow number of extra round trips to
-  // converge -- confirmed as the real source of this module's own
-  // intermittent "stuck at signalingState have-local-offer" failures while
-  // validating this feature's own e2e test, including a build with full
-  // signalingState/offer tracing showing both sides correctly receiving
-  // each other's offer yet neither one's connection actually advancing.
-  // Only creating the very first offer on one deterministic side removes
-  // that race for the common case (every avatar starts muted, #2778's
-  // resolution, so the vast majority of first contacts have neither side
-  // holding a mic yet) -- addLocalTrackToAllPeers below still covers the
-  // rarer case where this side already has a mic by the time a brand-new
-  // avatar comes into range, which can still glare against that avatar's
-  // own first offer, but perfect negotiation's existing handling is enough
-  // for that much less common case.
+  // collision handling resolves that correctly, but at the cost of extra
+  // round trips every single time -- unnecessary for the common case
+  // (every avatar starts muted, #2778's resolution, so the vast majority of
+  // first contacts have neither side holding a mic yet). addLocalTrackToAllPeers
+  // below still covers the rarer case where this side already has a mic by
+  // the time a brand-new avatar comes into range, which can still glare
+  // against that avatar's own first offer, but perfect negotiation's
+  // existing handling is enough for that much less common case.
+  //
+  // NOT the fix for this module's own intermittent "stuck at signalingState
+  // have-local-offer/stable forever" e2e failures, confirmed via explicit
+  // setRemoteDescription tracing while validating this feature: that hang
+  // reproduces identically whether only the impolite side offers (this
+  // version) or both sides do (the original, symmetric version) -- it's a
+  // native RTCPeerConnection.setRemoteDescription(offer) call that simply
+  // never resolves or rejects, under this CI container's own two-concurrent-
+  // headless-Chromium-plus-fake-media-device resource constraints, not an
+  // application-level race either version of this code could cause or fix.
+  // VOICE_NEGOTIATION_TIMEOUT_MS below is the actual fix -- a bounded
+  // watchdog that tears down and lets a connection stuck short of
+  // 'connected' retry fresh, regardless of which step it's stuck on.
   if (!entry.polite || localStream) {
     if (localStream) {
       pc.addTrack(localStream.getAudioTracks()[0], localStream);
@@ -406,7 +431,7 @@ function pollVoiceSignalsIfNeeded(now) {
 // avatar (shopOtherAvatars, already landlet-scoped and flying-exclusive —
 // see this module's own header comment), and ramps each connected peer's
 // gain for the ones already open.
-function updateVoicePeersForRange() {
+function updateVoicePeersForRange(now) {
   const seenBuilderIds = new Set();
   for (const [builderId, avatarEntry] of shopOtherAvatars) {
     seenBuilderIds.add(builderId);
@@ -419,6 +444,13 @@ function updateVoicePeersForRange() {
       continue;
     }
     if (distanceM > VOICE_DISCONNECT_RADIUS_M) {
+      teardownPeer(builderId);
+      continue;
+    }
+    if (peerEntry.pc.connectionState !== 'connected' && now - peerEntry.createdAt > VOICE_NEGOTIATION_TIMEOUT_MS) {
+      // Stuck negotiation -- see VOICE_NEGOTIATION_TIMEOUT_MS's own comment.
+      // Still within range and still in shopOtherAvatars, so the next call
+      // to this same function (getOrCreatePeer, above) retries fresh.
       teardownPeer(builderId);
       continue;
     }
@@ -451,7 +483,7 @@ export function updateShopVoiceChatIfNeeded(now) {
     return;
   }
   pollVoiceSignalsIfNeeded(now);
-  updateVoicePeersForRange();
+  updateVoicePeersForRange(now);
   if (micState === 'unmuted') {
     const speakingNow = readMicRms() >= VOICE_SPEAKING_RMS_THRESHOLD;
     if (speakingNow !== isSpeaking) {
