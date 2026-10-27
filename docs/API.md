@@ -3319,6 +3319,28 @@ Rate-limited to 20 attempts per 15-minute window, bucketed by the calling
 admin's own user id (#2657) — not applied to the internal auto-growth call
 path above, which has no admin user id to bucket on.
 
+#### Higher-granularity water/river data (#2805, not yet wired into generation)
+
+`scripts/ingest-geo-data.mjs` also runs a second, finer-grained ingestion
+pass (lakes at a higher sampling resolution than the coarse pass just
+above, plus real USGS NHD river/stream flowlines — a water feature the
+coarse pass never ingests at all) into a separate table,
+`geo_water_cells_fine` (migrations/0156). `worker/lib/world-generation.js`
+exposes two query helpers against it: `isWaterAtFinePoint(db, x, y)` (a
+point-level lookup, same shape as `isNearWaterCell` above but at the fine
+table's own sampling spacing — `worker/geoData.js`'s
+`GEO_WATER_FINE_GRID_SPACING_M`, currently 5m) and
+`fractionOfRegionWater(db, polygon)` (what fraction of a candidate
+landlet polygon's own sampled area is water — the primitive a
+"predominantly water" decision needs). Neither `generate-mosaic` nor
+`generate-ring` above calls either helper yet: both endpoints' real
+water classification still comes entirely from the coarse
+`isNearWaterCell`/`applyRealWaterClassification` path described above,
+unchanged. Wiring a shape-respecting generator that actually consults
+this finer data is `#2806`'s scope, a separate sub-issue of the same
+`#2804` water-first/variable-size landlet generation tracking issue this
+one belongs to.
+
 ## Land candidate rings
 
 ### `GET /api/land-candidate-rings`

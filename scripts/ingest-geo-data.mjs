@@ -17,6 +17,10 @@
 //     Washington/Lake Union polygons (the floor this correction builds up
 //     from — the lake only ever shrank in 1916, never grew, so today's
 //     water was certainly water before too).
+//   - That same NHD service's "Flowline - Large Scale" layer (#2805, sub-
+//     issue of #2804) for real river/stream centerlines, the natural
+//     extension of the waterbody layer above -- same large-scale tier,
+//     same ArcGIS MapServer, just layer 6 instead of layer 12.
 //
 // #2370 (sub-issue of #2368, following up on #2012's explicit deferral of
 // biome once water was wired into real generation) extended this same
@@ -26,17 +30,30 @@
 // (not just points near today's shoreline, water's own optimization),
 // since biome's elevation bands apply everywhere, not only near a lake.
 //
+// #2805 (sub-issue of #2804, water-first/variable-size landlet generation):
+// extended again to also run a second, finer-grained sampling pass over
+// lakes + the new rivers, writing it to a separate output (and, via its
+// own migration, a separate table -- geo_water_cells_fine) rather than
+// raising this script's main --spacing itself. The existing coarse table
+// (geo_water_cells, migrations/0128) and its one consumer
+// (isNearWaterCell/applyRealWaterClassification, worker/lib/
+// world-generation.js) stay exactly as they are -- #2805's own scope note
+// is explicit that those aren't touched here. The fine pass is a *query*
+// primitive for a future shape-respecting generator (#2806) to consult,
+// not wired into generation itself by this script, same as the coarse
+// pass never was either.
+//
 // Not attempted here (explicitly out of scope per #219's own text, still
-// true for biome per #2370's own scope): writing results into the
-// landlets table (#218's data model, #2369's biome column) or wiring this
-// into actual landlet generation — this only produces the datasets a
-// future generation step can consult. Re-run this offline as the world's
-// radius grows (matching docs/SPEC.md §37's own "regenerated offline on
-// major changes" LOD-backdrop convention) rather than fetching live
-// per-request.
+// true for biome per #2370's own scope, still true for the fine/river pass
+// per #2805's own scope): writing results into the landlets table (#218's
+// data model, #2369's biome column) or wiring this into actual landlet
+// generation — this only produces the datasets a future generation step
+// can consult. Re-run this offline as the world's radius grows (matching
+// docs/SPEC.md §37's own "regenerated offline on major changes" LOD-
+// backdrop convention) rather than fetching live per-request.
 //
 // Usage:
-//   node scripts/ingest-geo-data.mjs [--radius=2000] [--spacing=25] [--out=data/geo/pre-human-water-cells.json] [--biome-out=data/geo/biome-cells.json]
+//   node scripts/ingest-geo-data.mjs [--radius=2000] [--spacing=25] [--out=data/geo/pre-human-water-cells.json] [--biome-out=data/geo/biome-cells.json] [--fine-radius=2000] [--fine-spacing=5] [--river-buffer-width-m=12] [--fine-out=data/geo/water-cells-fine.json]
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -44,6 +61,8 @@ import {
   classifyBiome,
   classifyPreHumanWaterType,
   distanceToPolygonM,
+  distanceToPolylineM,
+  GEO_WATER_FINE_GRID_SPACING_M,
   latLonToWorld,
   pointInPolygon,
   worldToLatLon,
@@ -65,7 +84,22 @@ const RECLAMATION_RADIUS_M = parseArg('reclamation-radius', 400); // see geoData
 const OUT_PATH = (process.argv.find((a) => a.startsWith('--out=')) || '--out=data/geo/pre-human-water-cells.json').slice('--out='.length);
 const BIOME_OUT_PATH = (process.argv.find((a) => a.startsWith('--biome-out=')) || '--biome-out=data/geo/biome-cells.json').slice('--biome-out='.length);
 
+// #2805: the second, finer-grained pass's own params. fine-radius defaults
+// to the same RADIUS_M rather than a separate hardcoded default, so a
+// single --radius bump covers both passes unless deliberately overridden.
+const FINE_RADIUS_M = parseArg('fine-radius', RADIUS_M);
+const FINE_SPACING_M = parseArg('fine-spacing', GEO_WATER_FINE_GRID_SPACING_M);
+// A real river channel's actual width varies a lot (a narrow creek vs. the
+// Sammamish/Cedar rivers feeding this lake); 12m is a representative small-
+// river half-width-ish figure chosen by eye, matching this app's own "lower
+// fidelity bar" (docs/SPEC.md §8) rather than per-reach real channel data --
+// the same "representative, not precise" spirit PRE_1916_LAKE_WASHINGTON_LEVEL_M
+// and NEAR_WATER_BIOME_RADIUS_M already use.
+const RIVER_BUFFER_WIDTH_M = parseArg('river-buffer-width-m', 12);
+const FINE_OUT_PATH = (process.argv.find((a) => a.startsWith('--fine-out=')) || '--fine-out=data/geo/water-cells-fine.json').slice('--fine-out='.length);
+
 const NHD_WATERBODY_URL = 'https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/12/query';
+const NHD_FLOWLINE_URL = 'https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/6/query';
 const EPQS_URL = 'https://epqs.nationalmap.gov/v1/json';
 
 // A small pause between elevation requests — this is a shared public
@@ -107,6 +141,32 @@ async function fetchCurrentWaterbodyPolygons({ originLat, originLon, radiusM }) 
   return polygons;
 }
 
+// #2805: same shape as fetchCurrentWaterbodyPolygons just above, against
+// the Flowline layer instead of Waterbody. A flowline feature is a
+// LineString (or, occasionally, MultiLineString for a split/braided
+// reach) rather than a Polygon -- each one becomes an array of world-meter
+// points (or, for MultiLineString, one such array per part) for
+// distanceToPolylineM to walk.
+async function fetchCurrentRiverFlowlines({ originLat, originLon, radiusM }) {
+  const bbox = computeWaterbodyBbox({ originLat, originLon, radiusM });
+  const url = `${NHD_FLOWLINE_URL}?geometry=${encodeURIComponent(bbox)}&geometryType=esriGeometryEnvelope&inSR=4326&outFields=gnis_name,ftype&returnGeometry=true&outSR=4326&f=geojson`;
+  const response = await fetch(url, { signal: AbortSignal.timeout(20000) });
+  if (!response.ok) throw new Error(`NHD flowline query failed: ${response.status}`);
+  const geojson = await response.json();
+  const polylines = [];
+  for (const feature of geojson.features || []) {
+    const geometryType = feature.geometry?.type;
+    if (geometryType === 'LineString') {
+      polylines.push(feature.geometry.coordinates.map(([lon, lat]) => latLonToWorld(lat, lon, { originLat, originLon })));
+    } else if (geometryType === 'MultiLineString') {
+      for (const part of feature.geometry.coordinates) {
+        polylines.push(part.map(([lon, lat]) => latLonToWorld(lat, lon, { originLat, originLon })));
+      }
+    }
+  }
+  return polylines;
+}
+
 // EPQS is a free, unauthenticated public service and occasionally returns a
 // truncated/empty body or a transient 5xx under load — retried a few times
 // with backoff before giving up on this one point, rather than crashing the
@@ -142,6 +202,34 @@ function classifyAgainstPolygons(point, polygons) {
     distanceToShorelineM = Math.min(distanceToShorelineM, distanceToPolygonM(point, polygon));
   }
   return { inCurrentWaterbody, distanceToShorelineM };
+}
+
+// #2805: the fine pass's own classifier -- lakes via classifyAgainstPolygons
+// above, unchanged, plus rivers via distanceToPolylineM against each
+// flowline, within riverBufferWidthM of which counts the same as "inside a
+// lake polygon" (distanceToShorelineM collapses to 0, same as the lake
+// branch, since both feed the same classifyPreHumanWaterType call
+// downstream and a point *inside* a river's channel is exactly as "in the
+// water" as one inside a lake's polygon). A point outside every river's
+// buffer still gets its real distance-to-nearest-river folded into
+// distanceToShorelineM via the same min() pattern classifyAgainstPolygons
+// already uses across multiple lake polygons -- so a point just outside a
+// narrow river's buffer can still correctly resolve to 'water' through the
+// existing reclamation-radius branch of classifyPreHumanWaterType, the same
+// way a point just outside a lake polygon already could.
+function classifyAgainstPolygonsAndRivers(point, polygons, polylines, riverBufferWidthM) {
+  const lakeResult = classifyAgainstPolygons(point, polygons);
+  if (lakeResult.inCurrentWaterbody) return lakeResult;
+
+  let distanceToShorelineM = lakeResult.distanceToShorelineM;
+  for (const polyline of polylines) {
+    const distanceToRiverM = distanceToPolylineM(point, polyline);
+    if (distanceToRiverM <= riverBufferWidthM) {
+      return { inCurrentWaterbody: true, distanceToShorelineM: 0 };
+    }
+    distanceToShorelineM = Math.min(distanceToShorelineM, distanceToRiverM - riverBufferWidthM);
+  }
+  return { inCurrentWaterbody: false, distanceToShorelineM };
 }
 
 async function main() {
@@ -246,6 +334,86 @@ async function main() {
   await mkdir(path.dirname(biomeOutPath), { recursive: true });
   await writeFile(biomeOutPath, JSON.stringify(biomeOutput, null, 2));
   console.log(`Wrote ${biomeOutPath}`);
+
+  // #2805: second pass, lakes (re-fetched, in case fine-radius differs from
+  // the coarse radius above) + rivers, at FINE_SPACING_M instead of
+  // SPACING_M. This is a *separate* dataset/table (geo_water_cells_fine),
+  // not a replacement for the coarse pass above -- see this script's own
+  // header comment for why both stay.
+  console.log(
+    `Ingesting fine water data: radius=${FINE_RADIUS_M}m spacing=${FINE_SPACING_M}m riverBufferWidth=${RIVER_BUFFER_WIDTH_M}m`
+  );
+  const finePolygons = FINE_RADIUS_M === RADIUS_M ? polygons : await fetchCurrentWaterbodyPolygons({
+    originLat: WORLD_ORIGIN_LATITUDE,
+    originLon: WORLD_ORIGIN_LONGITUDE,
+    radiusM: FINE_RADIUS_M,
+  });
+  const polylines = await fetchCurrentRiverFlowlines({
+    originLat: WORLD_ORIGIN_LATITUDE,
+    originLon: WORLD_ORIGIN_LONGITUDE,
+    radiusM: FINE_RADIUS_M,
+  });
+  console.log(`Fetched ${polylines.length} current river/stream flowline(s) from NHD.`);
+
+  const fineCells = [];
+  let fineElevationFetches = 0;
+  for (let x = -FINE_RADIUS_M; x <= FINE_RADIUS_M; x += FINE_SPACING_M) {
+    for (let y = -FINE_RADIUS_M; y <= FINE_RADIUS_M; y += FINE_SPACING_M) {
+      if (Math.hypot(x, y) > FINE_RADIUS_M) continue;
+      const point = { x, y };
+      const { inCurrentWaterbody, distanceToShorelineM } = classifyAgainstPolygonsAndRivers(
+        point, finePolygons, polylines, RIVER_BUFFER_WIDTH_M,
+      );
+
+      // Unlike the coarse/biome pass above, this one has no biome work to
+      // do and classifyPreHumanWaterType only ever consults elevationM
+      // when distanceToShorelineM is within RECLAMATION_RADIUS_M -- so a
+      // point already directly in the water (distanceToShorelineM === 0)
+      // or already well outside any possible reclamation correction can
+      // skip the elevation fetch entirely rather than paying for one on
+      // every point in a much denser grid than the coarse pass uses.
+      let elevationM = null;
+      if (!inCurrentWaterbody && distanceToShorelineM <= RECLAMATION_RADIUS_M) {
+        const { lat, lon } = worldToLatLon(x, y, { originLat: WORLD_ORIGIN_LATITUDE, originLon: WORLD_ORIGIN_LONGITUDE });
+        try {
+          elevationM = await fetchElevationM(lat, lon);
+          fineElevationFetches += 1;
+        } catch (err) {
+          console.warn(`Fine-pass elevation lookup failed for (${lat}, ${lon}), leaving buildable: ${err.message}`);
+        }
+        await sleep(150);
+      }
+
+      const landType = classifyPreHumanWaterType({
+        elevationM: elevationM ?? Infinity,
+        inCurrentWaterbody,
+        distanceToShorelineM,
+        reclamationRadiusM: RECLAMATION_RADIUS_M,
+      });
+      if (landType === 'water') fineCells.push({ x, y, landType });
+    }
+    console.log(`  ...fine row x=${x}: ${fineElevationFetches} elevation lookup(s) so far, ${fineCells.length} fine water cell(s) so far`);
+  }
+  console.log(`Classified fine grid: ${fineCells.length} fine water cell(s), ${fineElevationFetches} live elevation lookup(s).`);
+
+  const fineOutput = {
+    generatedAt: new Date().toISOString(),
+    originLat: WORLD_ORIGIN_LATITUDE,
+    originLon: WORLD_ORIGIN_LONGITUDE,
+    radiusM: FINE_RADIUS_M,
+    spacingM: FINE_SPACING_M,
+    reclamationRadiusM: RECLAMATION_RADIUS_M,
+    riverBufferWidthM: RIVER_BUFFER_WIDTH_M,
+    // Same sparse "water cells only" format as the coarse output above --
+    // see worker/lib/world-generation.js's isWaterAtFinePoint/
+    // fractionOfRegionWater for the query helpers a future generator (#2806)
+    // consults against this.
+    cells: fineCells,
+  };
+  const fineOutPath = path.isAbsolute(FINE_OUT_PATH) ? FINE_OUT_PATH : path.join(repoRoot, FINE_OUT_PATH);
+  await mkdir(path.dirname(fineOutPath), { recursive: true });
+  await writeFile(fineOutPath, JSON.stringify(fineOutput, null, 2));
+  console.log(`Wrote ${fineOutPath}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

@@ -195,6 +195,38 @@ export function distanceToPolygonM(point, polygon) {
   return min;
 }
 
+// #2805 (sub-issue of #2804): a river/stream is a centerline, not a closed
+// ring -- the same point-to-segment math distanceToPolygonM already uses,
+// just walked over consecutive points without wrapping the last one back
+// to the first (a NHD flowline's own LineString/MultiLineString shape, once
+// converted to world meters). A river's real classification isn't "exactly
+// on the line" but "within the channel it actually carves" -- callers turn
+// this into a water/not-water test themselves by comparing against a
+// buffer width (ingest-geo-data.mjs's --river-buffer-width-m), the same way
+// classifyPreHumanWaterType already turns distanceToPolygonM's lake output
+// into a water/not-water test via reclamationRadiusM.
+export function distanceToPolylineM(point, polyline) {
+  let min = Infinity;
+  for (let i = 0; i < polyline.length - 1; i += 1) {
+    min = Math.min(min, distanceToSegmentM(point, polyline[i], polyline[i + 1]));
+  }
+  return min;
+}
+
+// #2805: the fine-grained water-cell table's own sampling spacing, shared
+// between scripts/ingest-geo-data.mjs (which writes the real data at this
+// spacing by default) and worker/lib/world-generation.js's query helpers
+// against it (which must assume this exact spacing to enumerate the same
+// deterministic fixed-origin lattice scripts/ingest-geo-data.mjs samples --
+// there's no row to read a spacing from when a candidate region happens to
+// contain zero water). 5m comfortably resolves the smallest landlet class
+// (1,000 m², ~31.6m across per #2804's own sizing) without the cost of
+// going finer than any generator built on this data could actually use.
+// If this ever needs to change, re-run the fine ingestion pass and update
+// its migration's seed data in the same change -- this constant alone
+// doesn't retroactively reinterpret already-stored rows.
+export const GEO_WATER_FINE_GRID_SPACING_M = 5;
+
 function distanceToSegmentM(point, a, b) {
   const dx = b.x - a.x;
   const dy = b.y - a.y;

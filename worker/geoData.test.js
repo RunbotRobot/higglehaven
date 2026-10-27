@@ -4,6 +4,8 @@ import {
   classifyPreHumanWaterType,
   destinationPoint,
   distanceToPolygonM,
+  distanceToPolylineM,
+  GEO_WATER_FINE_GRID_SPACING_M,
   haversineDistanceM,
   initialBearingDeg,
   latLonToWorld,
@@ -82,6 +84,47 @@ describe('pointInPolygon / distanceToPolygonM', () => {
   it('measures distance from an outside point to the nearest edge as zero inside, positive outside', () => {
     expect(distanceToPolygonM({ x: 120, y: 50 }, square)).toBeCloseTo(20, 6);
     expect(distanceToPolygonM({ x: -30, y: -40 }, square)).toBeCloseTo(50, 6);
+  });
+});
+
+// #2805 (sub-issue of #2804): distanceToPolylineM is distanceToPolygonM's
+// own point-to-segment math, just walked over an open line (a river
+// centerline) instead of a closed ring -- the one difference being that an
+// open line never wraps its last point back to its first.
+describe('distanceToPolylineM', () => {
+  const riverCenterline = [
+    { x: 0, y: 0 },
+    { x: 100, y: 0 },
+    { x: 100, y: 100 },
+  ];
+
+  it('is zero exactly on a vertex or along a segment', () => {
+    expect(distanceToPolylineM({ x: 50, y: 0 }, riverCenterline)).toBeCloseTo(0, 6);
+    expect(distanceToPolylineM({ x: 100, y: 100 }, riverCenterline)).toBeCloseTo(0, 6);
+  });
+
+  it('measures perpendicular distance to the nearest segment', () => {
+    expect(distanceToPolylineM({ x: 50, y: 20 }, riverCenterline)).toBeCloseTo(20, 6);
+    expect(distanceToPolylineM({ x: 120, y: 50 }, riverCenterline)).toBeCloseTo(20, 6);
+  });
+
+  it('does not wrap around back to the first point the way a closed polygon would', () => {
+    // Sits exactly on the implicit (100,100)->(0,0) closing edge a closed
+    // ring (distanceToPolygonM) would add -- a closed ring measures this as
+    // 0, but the open polyline above never has that edge, so it must fall
+    // back to its real nearest real segment (0,0)->(100,0) instead.
+    const point = { x: 50, y: 50 };
+    const polylineDistance = distanceToPolylineM(point, riverCenterline);
+    const closedRingDistance = distanceToPolygonM(point, riverCenterline);
+    expect(closedRingDistance).toBeCloseTo(0, 6);
+    expect(polylineDistance).toBeGreaterThan(closedRingDistance);
+    expect(polylineDistance).toBeCloseTo(50, 6);
+  });
+});
+
+describe('GEO_WATER_FINE_GRID_SPACING_M', () => {
+  it('is fine enough to resolve a 1,000 m² (~31.6m-wide) landlet', () => {
+    expect(GEO_WATER_FINE_GRID_SPACING_M).toBeLessThan(Math.sqrt(1000));
   });
 });
 
