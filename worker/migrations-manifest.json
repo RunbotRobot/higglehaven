@@ -157,5 +157,6 @@
   "0157_voice_signaling_messages.sql",
   "0158_precompute_lead_m.sql",
   "0159_friend_voice_channel_members.sql",
-  "0160_tax_education_content.sql"
+  "0160_voice_conduct_reports.sql",
+  "0161_tax_education_content.sql"
 ]
