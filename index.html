@@ -3747,6 +3747,14 @@
       #friends-status.error {
         color: #ff8a80;
       }
+      /* #2781: empty (display: none via the :empty selector) when the
+         caller isn't currently a member of any friend voice channel --
+         renderFriendVoiceChannelStatus only ever populates it with a
+         single .friend-row-shaped line, reusing that row's own
+         label/actions layout rather than inventing a second one. */
+      #friends-voice-channel-status:empty {
+        display: none;
+      }
       #friends-incoming-list, #friends-outgoing-list, #friends-accepted-list {
         display: flex;
         flex-direction: column;
@@ -5146,6 +5154,16 @@
           <button id="friends-map-btn" type="button">Show Map</button>
         </div>
         <div id="friends-status" role="status" aria-live="polite"></div>
+        <!-- #2781 (sub-issue of #2777): "Group voice channels for friends
+             regardless of proximity" (docs/SPEC.md §2) -- renders the
+             caller's own current friend-channel membership (owned by them
+             or by another friend) above the ordinary friend-request
+             sections below, same "lead with current state" placement
+             #friends-status itself already gets. Populated by
+             renderFriendVoiceChannelStatus (src/account/menu.js); per-
+             friend Join/Leave buttons live inline on each accepted
+             friend's own row further down instead of duplicated here. -->
+        <div id="friends-voice-channel-status" role="status" aria-live="polite"></div>
         <h3>Requests</h3>
         <div id="friends-incoming-list"></div>
         <div id="friends-incoming-empty">No pending requests.</div>

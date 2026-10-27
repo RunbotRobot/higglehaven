@@ -1808,11 +1808,13 @@ export async function fetchNearbyChatMessages({ cursor = null } = {}) {
 // #2817/#2818 (sub-issues of #2780, proximity voice chat): the WebRTC
 // signaling relay — point-to-point, unlike fetchNearbyChatMessages' own
 // landlet-wide broadcast above. src/shop/voiceChat.js is the only caller.
-export async function sendVoiceSignal({ toBuilderId, kind, payload }) {
+// `channelOwnerBuilderId` (#2781) is optional — set only when this signal
+// is for a friend group voice channel peer, see that module's own comment.
+export async function sendVoiceSignal({ toBuilderId, kind, payload, channelOwnerBuilderId } = {}) {
   const { message } = await requestJson('/voice/signal', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ toBuilderId, kind, payload }),
+    body: JSON.stringify({ toBuilderId, kind, payload, channelOwnerBuilderId }),
   });
   return message;
 }
@@ -1844,6 +1846,31 @@ export async function sendVoiceReport({ reportedBuilderId, reason }) {
     body: JSON.stringify({ reportedBuilderId, reason }),
   });
   return reportId;
+}
+
+// #2781 (sub-issue of #2777): friend group voice channels -- membership
+// keyed by accepted friendship instead of #2817/#2818's own landlet-
+// proximity gate above. src/shop/voiceChat.js (join/leave) and
+// src/account/menu.js (the friends-panel UI affordance) are the callers.
+// Returns every channel the caller is currently a member of, including
+// one they themselves own -- [{ ownerBuilderId, members: [builderId...] }].
+export async function fetchFriendVoiceChannels() {
+  const { channels } = await requestJson('/voice/friend-channels');
+  return channels;
+}
+
+// Joining your own channel (ownerBuilderId === the caller's own builderId)
+// is also how a channel gets started in the first place -- see
+// worker/lib/social.js's handleFriendVoiceChannels for why there's no
+// separate "start" endpoint.
+export async function joinFriendVoiceChannel(ownerBuilderId) {
+  return requestJson(`/voice/friend-channels/${encodeURIComponent(ownerBuilderId)}/join`, { method: 'POST' });
+}
+
+// The owner leaving closes the channel for everyone; anyone else leaving
+// only removes themselves — see handleFriendVoiceChannels' own comment.
+export async function leaveFriendVoiceChannel(ownerBuilderId) {
+  return requestJson(`/voice/friend-channels/${encodeURIComponent(ownerBuilderId)}/leave`, { method: 'POST' });
 }
 
 // #1995 (sub-issue of #1976): every currently-active credit orb, optionally

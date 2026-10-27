@@ -3526,13 +3526,17 @@ describe('Worker API', () => {
     expect(generated.body.materializedLandletIds).toEqual([]);
     expect(generated.body.readyForGenerationCompletion).toBe(false);
     expect(generated.body.outerRadiusM).toBeGreaterThan(200);
+    // #2821: generate-ring now runs through generateWaterAwareLandletRing
+    // (water-aware-ring.js) for a fresh, non-adjacent ring like this one --
+    // areaM2 is the real computed polygon area rather than the bare target,
+    // so it's only ever this close, not bit-exact.
+    expect(generated.body.candidates[0].areaM2).toBeCloseTo(1000, 6);
     expect(generated.body.candidates[0]).toMatchObject({
       landletId: 'generated-ring-001',
-      areaM2: 1000,
       landClass: 1,
       ringId: 'generated-ring',
       materializedAt: null,
-      metadata: { generated: true, generator: 'annular-ring-v1', ringIndex: 0 },
+      metadata: { generated: true, generator: 'water-aware-ring-v1', ringIndex: 0 },
     });
 
     // #813/#817

@@ -3266,7 +3266,13 @@ Procedurally creates one gap-free band of class-1, 1,000 m² land candidates.
 The generated wedge-shaped polygons use shared sampled edges, are centered on
 their polygon centroids, and are deterministic for the same inputs. This is a
 bounded dev-only generation primitive rather than a background job: `count`
-must be between 3 and 100, and the complete ring is inserted atomically.
+must be between 3 and 100, and the complete ring is inserted atomically. Real
+water along the ring's own circumference (#2821, below) can narrow a plot's
+own polygon or split it into fragments around a water arc — each candidate's
+own `areaM2` is always the shape's real computed area, so it's only ever
+very close to the requested target, not bit-exact, once that happens (today,
+with `geo_water_cells_fine` still empty in production, this never actually
+triggers, so areas stay exact in practice).
 
 ```json
 {
@@ -3337,10 +3343,10 @@ table's own sampling spacing — `worker/geoData.js`'s
 `fractionOfRegionWater(db, polygon)` (what fraction of a candidate
 landlet polygon's own sampled area is water — the primitive a
 "predominantly water" decision needs). `generate-mosaic` above now uses
-both, via the water-aware generator described next; `generate-ring`
-still doesn't — its own real water classification still comes entirely
-from the coarse `isNearWaterCell`/`applyRealWaterClassification` path
-described above, unchanged.
+both, via the water-aware generator described next — as does `generate-ring`
+below, via the water-aware *ring* generator described further down
+(#2821). Both still also run the coarse `isNearWaterCell`/
+`applyRealWaterClassification` path as a safety net on top.
 
 #### Water-aware, variable-size mosaic generator (#2806/#2810/#2811/#2812)
 
@@ -3376,6 +3382,58 @@ produced a candidate. `geo_water_cells_fine` still ships empty in
 production pending #2805's own NHD-service-outage follow-up, so in
 practice every real `generate-mosaic` call today still only gets its
 water awareness from the coarse safety-net pass, until that lands.
+
+#### Water-aware ring generator (#2821)
+
+The disc-tiling approach above (`generateWeightedVoronoiTiling`) can't be
+reused directly for a ring: it clips a boundary by half-plane bisectors,
+which only stays correct because clipping a convex region by any number
+of half-planes is still convex. An annulus (a ring has a hole) is
+fundamentally not convex — the straight line between two points on its
+own inner edge passes outside the ring, through the hole — so forcing
+the Voronoi core onto it risks a clip corrupting a cell into something
+self-intersecting, and even a version that avoided that specific risk
+couldn't guarantee its cell boundary lands exactly on the true inner
+radius (a power-diagram cell edge is a polygon from half-plane
+intersections, never a literal circle) — fine for water, where only the
+*classification* matters, not fine for the ring's own inner edge, which
+has to exactly abut already-materialized, already-owned land from an
+earlier growth cycle.
+
+`worker/lib/water-aware-ring.js` (`generateWaterAwareLandletRing`) solves
+this a different way, keeping `generateLandletRing`'s own much simpler
+1D angular-partition structure (every plot already shares one radial
+band by construction, with only its angular width varying — no clipping,
+no hole-topology risk at all) rather than forcing a 2D tessellation onto
+it. `detectWaterArcs` scans the ring's circumference in fixed angular
+slices (sampling real `geo_water_cells_fine` data, same "predominantly
+water" threshold as the mosaic path) and merges adjacent water slices
+into real fixed-position arcs; the land plots' own shared scale/outer
+radius (via `ringAreaScale`'s now-generalized `angleBudget` parameter)
+is then solved against whatever angular room is left once those arcs
+are excluded, iterating (detect water in the current band → shrink
+land's angular budget → grow the radius to compensate → re-detect
+against the now-wider band) until the radius stops moving. Placement
+then walks the circle once, inserting each water arc at its own fixed
+position; a land plot whose own fixed width would straddle one gets
+split into two or more smaller fragments around it (losing its exact
+target-area match, an accepted approximation mirroring the mosaic
+path's own "cell polygon never reshaped to the real shoreline" scope
+decision) — the ring stays gap-free and non-overlapping regardless,
+since every unit of angle around the full circle is always accounted
+for by exactly one placed shape.
+
+`generateLandletRingCandidates` (`worker/lib/world-generation.js`) is the
+call site — the same function both `generate-ring` above and the
+automatic growth path (`generateRingAtWorldBoundary`/
+`maintainPrecomputeBuffer`, both via the shared `generateNextAutoRing`)
+funnel through, so this one call-site swap covers all three at once. It
+only takes this path for a *fresh* ring (`adjacentToRingId` unset) — the
+`adjacentToRingId` reuse feature still calls the plain `generateLandletRing`
+with the earlier ring's own exact per-plot areas/landTypes, since that
+feature's whole point is reproducing another ring's own sequence
+verbatim (for matching angular seams), which `generateWaterAwareLandletRing`'s
+independent water-arc placement isn't built to preserve.
 
 ## Land candidate rings
 
@@ -5078,6 +5136,103 @@ test.js` owns `POST /api/voice/report`'s own contract: the id_verified
 gate, the self-report/over-length-reason/nonexistent-recipient `400`s,
 the rate limit, and that both the `voice_conduct_reports` row and the
 paired Control Room card land in the same write.
+
+## Friend group voice channels (#2781)
+
+Sub-issue of #2777 (docs/SPEC.md §2: "Group voice channels for friends
+regardless of proximity"). Extends the proximity voice signaling relay
+above with a second, independent authorization path keyed by accepted
+friendship (the `friendships` table, "Friendships" above) instead of
+landlet/distance proximity — the WebRTC/signaling mechanism itself
+(`voice_signaling_messages`, `POST`/`GET /api/voice/signal`) is unchanged
+and fully reused.
+
+**Model**: `friend_voice_channel_members`
+(`migrations/0159_friend_voice_channel_members.sql`) — one channel per
+owner, keyed by the owner's own `builderId` (no separate channel id).
+Any number of that owner's accepted friends can be members; a member only
+needs to be an accepted friend of the *owner*, not of every other member
+— the same "anyone the host invited talks to everyone else the host
+invited" shape an ordinary group call uses, not a stricter "everyone must
+be mutual friends with everyone" requirement. The owner's own row
+(`member_builder_id = owner_builder_id`) is what marks a channel
+*active* — joining always inserts it (even when some other accepted
+friend is the one joining), so the first join is what opens the channel;
+there is no separate "start" endpoint. The owner leaving deletes every
+row under their `owner_builder_id` at once, closing the channel for
+everyone (mirrors a host hanging up a group call); anyone else leaving
+only removes their own row.
+
+**Gating**: every endpoint below requires `trust_tier === 'id_verified'`
+(`requireIdVerifiedSessionBuilder`), same bar as the signaling relay
+itself.
+
+### `GET /api/voice/friend-channels`
+
+Returns every channel the caller is currently a member of, including one
+they themselves own:
+
+```json
+{ "channels": [{ "ownerBuilderId": "builder-alice", "members": ["builder-alice", "builder-bob"] }] }
+```
+
+`429` after 600 requests per 15 minutes from the same calling builder
+(same budget as the signaling relay's own poll).
+
+### `POST /api/voice/friend-channels/:ownerBuilderId/join`
+
+No body. Joining your own channel (`ownerBuilderId` is the caller's own
+`builderId`) needs no friendship check — this is also how a channel gets
+started in the first place. Joining anyone else's requires an existing
+*accepted* friendship with that owner (`403` otherwise, including when
+only a pending request exists). Idempotent — joining twice is a no-op,
+still `201`. `429` after 40 requests per 15 minutes from the same calling
+builder (an ordinary low-frequency user click, not a high-volume poll).
+
+### `POST /api/voice/friend-channels/:ownerBuilderId/leave`
+
+No body. The owner leaving removes every member (closes the channel for
+everyone); anyone else leaving only removes themselves. A quiet no-op
+(`200`) if the caller was never a member. Same `429` budget as join.
+
+### `POST /api/voice/signal` with `channelOwnerBuilderId`
+
+The signaling relay's own `POST` body (above) takes one additional
+optional field:
+
+```json
+{ "toBuilderId": "...", "kind": "offer", "payload": { "sdp": "..." }, "channelOwnerBuilderId": "builder-alice" }
+```
+
+When present, authorization is "are `toBuilderId` and the caller both
+*currently* members of the friend channel owned by
+`channelOwnerBuilderId` (and is that channel active, i.e. does the
+owner's own row still exist)" — `sharedActiveFriendVoiceChannelExists`,
+worker/lib/social.js — instead of the ordinary landlet-proximity match.
+`400` if they aren't (covers "never a member," "left since joining," and
+"named a channel nobody has ever opened"). The sender still needs a
+recent presence row (unchanged — stored on the row the same as any other
+signal), just not one that matches the recipient's. The stored message
+(and `GET /api/voice/signal`'s own response shape) carries
+`channelOwnerBuilderId` back — `null` for an ordinary proximity signal —
+so the client can skip its distance-based gain ramp for that connection,
+per SPEC's "no distance-based volume ramp here (unlike proximity voice)."
+`GET /api/voice/signal` itself returns a channel-tagged row to its
+recipient regardless of landlet match, since it was authorized by shared
+channel membership at send time, not by a landlet in common.
+
+### Testing note
+
+`worker/friend-voice-channels.test.js` owns this contract: join/leave's
+own id_verified gate, the no-friendship/pending-only `403`s on join,
+self-join-starts-a-channel, idempotent join, a third friend joining the
+same already-open channel, owner-leave-closes-it-for-everyone vs.
+member-leave-removes-only-themselves, the quiet no-op leave, `GET`
+listing, and `POST /voice/signal`'s own `channelOwnerBuilderId` branch
+(the cross-landlet bypass itself, rejecting a non-member or a
+never-opened channel, the still-required sender presence row, a plain
+signal's `channelOwnerBuilderId: null`, and a signal rejected right after
+the recipient leaves).
 
 ## Avatar presence
 

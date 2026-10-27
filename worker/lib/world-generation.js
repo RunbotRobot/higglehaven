@@ -38,6 +38,7 @@ import { GEO_WATER_FINE_GRID_SPACING_M } from '../geoData.js';
 import { generateLandletRing, powerLawPlots } from '../landGenerator.js';
 import { json, HttpError } from './http.js';
 import { defaultMosaicBoundaryRadiusM, generateWaterAwareMosaic } from './water-aware-mosaic.js';
+import { generateWaterAwareLandletRing } from './water-aware-ring.js';
 import { discBoundary } from '../weightedVoronoiGenerator.js';
 import {
   readJson, stringValue, finiteNumber, queryLimit, decodeCursor, encodeCursor, positiveInteger,
@@ -905,7 +906,21 @@ async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, 
   if (innerRadiusM < settings.radius_m) {
     throw new HttpError('innerRadiusM cannot be inside the current world radius', 400);
   }
-  const generated = generateLandletRing({ prefix, count, innerRadiusM, startAngleRad, plots });
+  // #2821: water-aware generation is only safe for a *fresh* ring
+  // (adjacentToRingId null). An adjacent-ring request reuses an earlier
+  // ring's own exact per-plot areas/landTypes verbatim (via its own
+  // `plots`, read back from that ring's stored candidates) specifically
+  // so the two rings' angular seams line up -- generateWaterAwareLandletRing
+  // instead derives its own water-arc placement independently of that
+  // reused sequence, which could desync the adjacent-ring feature's own
+  // boundarySignature guarantee. Not attempted here: the ordinary
+  // (non-adjacent) growth and precompute-buffer paths --
+  // generateRingAtWorldBoundary/maintainPrecomputeBuffer, both of which
+  // always call this with adjacentToRingId null via generateNextAutoRing
+  // -- already cover the real auto-growth scope #2821 asks for.
+  const generated = adjacentToRingId == null
+    ? await generateWaterAwareLandletRing(db, { prefix, count, innerRadiusM, startAngleRad, plots })
+    : generateLandletRing({ prefix, count, innerRadiusM, startAngleRad, plots });
   const radialConflict = await db.prepare(`
     SELECT landlet_id FROM landlet_candidates
     WHERE min_world_radius_m < ? - 0.0000001

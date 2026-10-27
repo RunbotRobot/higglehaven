@@ -28,6 +28,8 @@
 import { currentAuthUser } from '../account/auth.js';
 import {
   fetchMyBuilder, sendVoiceSignal, fetchVoiceSignals, fetchVoiceIceConfig, sendVoiceReport,
+  fetchFriendVoiceChannels, joinFriendVoiceChannel as apiJoinFriendVoiceChannel,
+  leaveFriendVoiceChannel as apiLeaveFriendVoiceChannel,
 } from '../api.js';
 import { shopOtherAvatars } from './presenceAndContent.js';
 import { shopAvatarPosition } from '../main.js';
@@ -69,6 +71,27 @@ const VOICE_SPEAKING_RMS_THRESHOLD = 0.03;
 // for a fresh retry to still succeed within that same test run.
 const VOICE_NEGOTIATION_TIMEOUT_MS = 8000;
 
+// #2781 (sub-issue of #2777): "Group voice channels for friends regardless
+// of proximity" (docs/SPEC.md §2) -- extends this module's own
+// proximity-gated peers (above) with a second, independent kind of peer:
+// one joined by shared membership in a friend voice channel (worker/lib/
+// social.js's handleFriendVoiceChannels/sharedActiveFriendVoiceChannelExists),
+// not by live distance. A peer entry's own `channelOwnerBuilderId` (set at
+// creation, never cleared while the connection lives) is what tells every
+// other function in this file which kind it's looking at: set means "never
+// torn down or gain-ramped by distance, full volume always" (no
+// distance-based volume ramp here, per SPEC's own "regardless of
+// proximity" wording); unset means the ordinary proximity peer logic
+// above still applies in full.
+//
+// Reconciliation (reconcileFriendVoiceChannels below) runs on its own
+// setInterval, not gated behind updateShopVoiceChatIfNeeded's per-frame
+// Shop-mode tick -- a friend group call should keep receiving/relaying
+// signals even while the caller isn't actively moving around Shop mode at
+// all (or even necessarily rendering it), since "regardless of proximity"
+// extends to not needing to be nearby in the same render loop either.
+const FRIEND_VOICE_CHANNEL_POLL_INTERVAL_MS = VOICE_POLL_INTERVAL_MS;
+
 const voiceBtnEl = document.getElementById('shop-voice-btn');
 const voiceBtnIconEl = document.getElementById('shop-voice-btn-icon');
 const voicePeersPanelEl = document.getElementById('shop-voice-peers-panel');
@@ -88,7 +111,11 @@ let myBuilderIdPromise = null;
 let iceServersPromise = null;
 let audioCtx = null;
 
-// builderId -> { pc, polite, makingOffer, ignoreOffer, sourceNode, gainNode, displaySeq }
+// builderId -> { pc, polite, makingOffer, ignoreOffer, sourceNode, gainNode,
+// createdAt, displaySeq, channelOwnerBuilderId }. `channelOwnerBuilderId` is
+// null for an ordinary proximity peer, or the owning builderId of the
+// friend voice channel (#2781) this peer connection belongs to -- see this
+// module's own FRIEND_VOICE_CHANNEL_POLL_INTERVAL_MS comment above.
 const peers = new Map();
 // builderId -> in-flight Promise<entry>, while getOrCreatePeer's own async
 // setup (ensureMyBuilderId/ensureIceServers) hasn't resolved yet -- see
@@ -109,8 +136,14 @@ let voicePeerSeq = 0;
 // client-side, never reaches the server, and scoped to one connection's
 // own lifetime (cleared in teardownPeer): reconnecting to the same
 // builder after they leave and come back starts unmuted again, same as a
-// fresh RTCPeerConnection would.
+// fresh RTCPeerConnection would. Applies uniformly to a proximity peer or
+// a friend-channel peer (#2781) alike -- see desiredGainFor below.
 const mutedPeers = new Set();
+// #2781: last-known result of GET /voice/friend-channels, refreshed by
+// reconcileFriendVoiceChannels below -- src/account/menu.js's friends
+// panel reads this (via getActiveFriendVoiceChannels) to render current
+// channel membership without polling the endpoint a second time itself.
+let myFriendVoiceChannels = [];
 
 function hasIdVerifiedSession() {
   return currentAuthUser?.trustTier === 'id_verified';
@@ -160,6 +193,10 @@ function refreshVoicePeersDiagnostic() {
     // rest of this diagnostic exists -- a real two-peer connection can't be
     // observed from the test's own in-page state.
     muted: mutedPeers.has(builderId),
+    // #2781: present only for a friend-voice-channel peer -- lets an e2e
+    // test (or this module's own future debugging) tell one apart from an
+    // ordinary proximity peer without reaching into internals.
+    channelOwnerBuilderId: entry.channelOwnerBuilderId || null,
   }));
 }
 
@@ -264,7 +301,12 @@ function attachRemoteStream(entry, stream) {
   const ctx = ensureAudioContext();
   entry.sourceNode = ctx.createMediaStreamSource(stream);
   entry.gainNode = ctx.createGain();
-  entry.gainNode.gain.value = 0; // ramped up by updateVoicePeersForRange once distance is known
+  // #2781: a friend-channel peer gets full volume immediately and keeps
+  // it forever -- no distance-based ramp (SPEC's "regardless of
+  // proximity"), so there's nothing for updateVoicePeersForRange to ramp
+  // up later the way it does for an ordinary proximity peer (gain 0 until
+  // distance is known).
+  entry.gainNode.gain.value = entry.channelOwnerBuilderId ? 1 : 0;
   entry.sourceNode.connect(entry.gainNode).connect(ctx.destination);
 }
 
@@ -289,17 +331,31 @@ function voiceGainForDistance(distanceM) {
 // candidates/offers under the same fromBuilderId) -- confirmed as the real
 // cause of this module's own intermittent "stuck at connectionState 'new'"
 // failures while validating this feature's own e2e test.
-async function getOrCreatePeer(builderId) {
+// `channelOwnerBuilderId` (#2781) is passed only when this peer is being
+// created (or needs tagging) for a friend voice channel -- null/omitted
+// for an ordinary proximity peer, unchanged from before #2781.
+async function getOrCreatePeer(builderId, channelOwnerBuilderId = null) {
   const existing = peers.get(builderId);
-  if (existing) return existing;
+  if (existing) {
+    // A peer created first as a proximity connection can later turn out to
+    // also be a friend-channel member (reconcileFriendVoiceChannels calling
+    // in after updateVoicePeersForRange already connected them because
+    // they're nearby, or vice versa) -- tag it in place rather than
+    // tearing down and recreating a connection that's already working.
+    if (channelOwnerBuilderId && !existing.channelOwnerBuilderId) {
+      existing.channelOwnerBuilderId = channelOwnerBuilderId;
+      if (existing.gainNode) existing.gainNode.gain.value = 1;
+    }
+    return existing;
+  }
   const pending = pendingPeers.get(builderId);
   if (pending) return pending;
-  const creation = createPeer(builderId).finally(() => pendingPeers.delete(builderId));
+  const creation = createPeer(builderId, channelOwnerBuilderId).finally(() => pendingPeers.delete(builderId));
   pendingPeers.set(builderId, creation);
   return creation;
 }
 
-async function createPeer(builderId) {
+async function createPeer(builderId, channelOwnerBuilderId = null) {
   await ensureMyBuilderId();
   const iceServers = await ensureIceServers();
   // Re-check now that the awaits above have resolved -- another call could
@@ -307,7 +363,13 @@ async function createPeer(builderId) {
   // offer/answer/ice-candidate from handleIncomingSignal, which also goes
   // through this same function) while this one was still waiting.
   const existing = peers.get(builderId);
-  if (existing) return existing;
+  if (existing) {
+    if (channelOwnerBuilderId && !existing.channelOwnerBuilderId) {
+      existing.channelOwnerBuilderId = channelOwnerBuilderId;
+      if (existing.gainNode) existing.gainNode.gain.value = 1;
+    }
+    return existing;
+  }
   const pc = new RTCPeerConnection({ iceServers });
   // performance.now() (same monotonic clock updateShopMovement's own `now`
   // parameter already uses -- see updateVoicePeersForRange's own watchdog
@@ -317,13 +379,16 @@ async function createPeer(builderId) {
   // threshold, found live while validating this feature's own e2e test.
   const entry = {
     pc, polite: myBuilderId < builderId, makingOffer: false, ignoreOffer: false, sourceNode: null,
-    gainNode: null, createdAt: performance.now(), displaySeq: ++voicePeerSeq,
+    gainNode: null, createdAt: performance.now(), displaySeq: ++voicePeerSeq, channelOwnerBuilderId,
   };
   peers.set(builderId, entry);
 
   pc.onicecandidate = (event) => {
     if (!event.candidate) return;
-    sendVoiceSignal({ toBuilderId: builderId, kind: 'ice-candidate', payload: event.candidate.toJSON() }).catch(() => {});
+    sendVoiceSignal({
+      toBuilderId: builderId, kind: 'ice-candidate', payload: event.candidate.toJSON(),
+      channelOwnerBuilderId: entry.channelOwnerBuilderId || undefined,
+    }).catch(() => {});
   };
   pc.ontrack = (event) => {
     if (event.streams[0]) attachRemoteStream(entry, event.streams[0]);
@@ -337,7 +402,10 @@ async function createPeer(builderId) {
       // sendVoiceSignal) silently drops them unless explicitly copied into
       // a plain object first, the same reason RTCIceCandidate's own
       // .toJSON() is called explicitly above rather than passed as-is.
-      await sendVoiceSignal({ toBuilderId: builderId, kind: 'offer', payload: { type: pc.localDescription.type, sdp: pc.localDescription.sdp } }).catch(() => {});
+      await sendVoiceSignal({
+        toBuilderId: builderId, kind: 'offer', payload: { type: pc.localDescription.type, sdp: pc.localDescription.sdp },
+        channelOwnerBuilderId: entry.channelOwnerBuilderId || undefined,
+      }).catch(() => {});
     } catch {
       // best-effort — onnegotiationneeded fires again if something still
       // needs renegotiating
@@ -467,8 +535,15 @@ async function reportVoicePeer(builderId) {
   }
 }
 
-async function handleIncomingSignal(fromBuilderId, kind, payload) {
-  const entry = await getOrCreatePeer(fromBuilderId);
+// `channelOwnerBuilderId` (#2781) comes straight from the inbound signal
+// message itself (set server-side, see worker/lib/social.js's
+// voiceSignalMessageFromRow) -- an incoming offer can be the very first
+// this side hears of a brand-new friend-channel peer if its own
+// reconcileFriendVoiceChannels poll hasn't landed yet, so getOrCreatePeer
+// needs this to tag the entry correctly even on that reactive path, not
+// just the proactive one.
+async function handleIncomingSignal(fromBuilderId, kind, payload, channelOwnerBuilderId) {
+  const entry = await getOrCreatePeer(fromBuilderId, channelOwnerBuilderId);
   if (kind === 'offer' || kind === 'answer') {
     const description = payload;
     const offerCollision = description.type === 'offer' && (entry.makingOffer || entry.pc.signalingState !== 'stable');
@@ -486,6 +561,7 @@ async function handleIncomingSignal(fromBuilderId, kind, payload) {
       await sendVoiceSignal({
         toBuilderId: fromBuilderId, kind: 'answer',
         payload: { type: entry.pc.localDescription.type, sdp: entry.pc.localDescription.sdp },
+        channelOwnerBuilderId: entry.channelOwnerBuilderId || undefined,
       }).catch(() => {});
     }
   } else if (kind === 'ice-candidate') {
@@ -511,7 +587,7 @@ function pollVoiceSignalsIfNeeded(now) {
     if (result.nextCursor) voiceSignalCursor = result.nextCursor;
     for (const message of result.messages) {
       if (myToken !== voicePollToken) return; // a newer poll superseded this one mid-batch
-      await handleIncomingSignal(message.fromBuilderId, message.kind, message.payload);
+      await handleIncomingSignal(message.fromBuilderId, message.kind, message.payload, message.channelOwnerBuilderId);
     }
   }).catch(() => {});
 }
@@ -532,6 +608,15 @@ function updateVoicePeersForRange(now) {
       if (distanceM <= VOICE_RANGE_M) getOrCreatePeer(builderId).catch(() => {});
       continue;
     }
+    // #2781: a friend-channel peer is governed entirely by
+    // reconcileFriendVoiceChannels (its own watchdog retry included), never
+    // by live distance -- even when they also happen to be nearby right
+    // now. Skipping straight to the next avatar here, rather than falling
+    // through to the distance-teardown/gain-ramp below, is what keeps a
+    // friend's connection (and its full volume) alive exactly when they
+    // walk out of VOICE_DISCONNECT_RADIUS_M, which would otherwise tear it
+    // down as if it were an ordinary proximity peer.
+    if (peerEntry.channelOwnerBuilderId) continue;
     if (distanceM > VOICE_DISCONNECT_RADIUS_M) {
       teardownPeer(builderId);
       continue;
@@ -552,8 +637,14 @@ function updateVoicePeersForRange(now) {
   }
   // Anyone we still hold a connection for but who's no longer nearby at
   // all (despawned, left the landlet) — same cleanup shape as the
-  // distance-based teardown above, just triggered by absence instead.
-  for (const builderId of peers.keys()) {
+  // distance-based teardown above, just triggered by absence instead. A
+  // friend-channel peer is explicitly exempt, same reasoning as the skip
+  // above -- they're frequently not in shopOtherAvatars at all (a friend
+  // elsewhere in the world, the whole point of "regardless of proximity"),
+  // so absence from this Shop-mode-local Map says nothing about whether
+  // reconcileFriendVoiceChannels still wants them connected.
+  for (const [builderId, entry] of peers) {
+    if (entry.channelOwnerBuilderId) continue;
     if (!seenBuilderIds.has(builderId)) teardownPeer(builderId);
   }
 }
@@ -561,6 +652,110 @@ function updateVoicePeersForRange(now) {
 function teardownAllPeers() {
   for (const builderId of [...peers.keys()]) teardownPeer(builderId);
 }
+
+// #2781: which OTHER builderIds the caller should currently hold a
+// friend-channel peer connection open with, derived from
+// myFriendVoiceChannels (every channel the caller is a member of,
+// including one they themselves own) -- a flat merge across channels
+// since a peer either should or shouldn't be connected, regardless of
+// which shared channel justifies it (relevant once a caller could be
+// in more than one channel, e.g. mid-switch between two friends').
+function desiredFriendChannelPeers() {
+  const desired = new Map(); // builderId -> ownerBuilderId (first one wins, arbitrary but stable)
+  for (const channel of myFriendVoiceChannels) {
+    for (const memberBuilderId of channel.members) {
+      if (memberBuilderId === myBuilderId) continue;
+      if (!desired.has(memberBuilderId)) desired.set(memberBuilderId, channel.ownerBuilderId);
+    }
+  }
+  return desired;
+}
+
+// Polled on its own interval (see FRIEND_VOICE_CHANNEL_POLL_INTERVAL_MS's
+// own comment) rather than the Shop-mode render tick: fetches current
+// channel membership, opens a peer for every member newly in it, tears
+// down a friend-channel peer for anyone no longer in any shared channel,
+// and retries a friend-channel connection that's been stuck negotiating
+// too long -- the same VOICE_NEGOTIATION_TIMEOUT_MS watchdog
+// updateVoicePeersForRange runs for proximity peers, just not keyed off
+// shopOtherAvatars (a far-away friend may never appear there at all).
+async function reconcileFriendVoiceChannels() {
+  try {
+    myFriendVoiceChannels = await fetchFriendVoiceChannels();
+  } catch {
+    return; // best-effort; the next poll retries
+  }
+  await ensureMyBuilderId().catch(() => {});
+  const desired = desiredFriendChannelPeers();
+  const now = performance.now();
+  for (const [builderId, ownerBuilderId] of desired) {
+    const existing = peers.get(builderId);
+    if (!existing) {
+      getOrCreatePeer(builderId, ownerBuilderId).catch(() => {});
+      continue;
+    }
+    if (existing.pc.connectionState !== 'connected' && now - existing.createdAt > VOICE_NEGOTIATION_TIMEOUT_MS) {
+      teardownPeer(builderId);
+      getOrCreatePeer(builderId, ownerBuilderId).catch(() => {});
+      continue;
+    }
+    // #2819: a friend-channel peer's gain is otherwise only ever set once
+    // (attachRemoteStream, at connection time) and never revisited --
+    // unlike an ordinary proximity peer, which updateVoicePeersForRange
+    // already re-ramps every frame. Without this, muting a currently
+    // connected friend has no effect: mutedPeers would record the toggle,
+    // but nothing would ever push it onto this peer's own GainNode.
+    if (existing.gainNode) existing.gainNode.gain.value = mutedPeers.has(builderId) ? 0 : 1;
+  }
+  for (const [builderId, entry] of peers) {
+    if (entry.channelOwnerBuilderId && !desired.has(builderId)) teardownPeer(builderId);
+  }
+}
+
+// #2781: src/account/menu.js's friends-panel UI calls these to start/join
+// (the same action -- see worker/lib/social.js's handleFriendVoiceChannels
+// for why there's no separate "start") and leave a friend voice channel.
+// Each resolves once the membership write has landed AND this module's own
+// peers have been reconciled against it, so the UI can safely re-render
+// from getActiveFriendVoiceChannels() right after awaiting either.
+export async function joinFriendVoiceChannel(ownerBuilderId) {
+  await apiJoinFriendVoiceChannel(ownerBuilderId);
+  await reconcileFriendVoiceChannels();
+}
+
+export async function leaveFriendVoiceChannel(ownerBuilderId) {
+  await apiLeaveFriendVoiceChannel(ownerBuilderId);
+  await reconcileFriendVoiceChannels();
+}
+
+// Synchronous read of the last poll's result -- src/account/menu.js uses
+// this to render without triggering its own extra network request. May be
+// stale by up to FRIEND_VOICE_CHANNEL_POLL_INTERVAL_MS; callers that just
+// mutated membership themselves (join/leave above) always get a
+// just-reconciled result instead, since those await a fresh poll already.
+export function getActiveFriendVoiceChannels() {
+  return myFriendVoiceChannels;
+}
+
+// Runs independently of updateShopVoiceChatIfNeeded's per-frame Shop-mode
+// tick -- see FRIEND_VOICE_CHANNEL_POLL_INTERVAL_MS's own comment on why a
+// friend group call shouldn't depend on that render loop at all. Gated on
+// id-verification the same way updateShopVoiceChatIfNeeded is; mic
+// availability itself is unaffected by mode (Shop or otherwise).
+setInterval(() => {
+  if (!hasIdVerifiedSession()) {
+    // Mirrors updateShopVoiceChatIfNeeded's own `!available` branch --
+    // without this, losing id_verified status while never having entered
+    // Shop mode this session (so that function's own teardownAllPeers call
+    // never runs) would leave a friend-channel peer connected indefinitely.
+    for (const [builderId, entry] of peers) {
+      if (entry.channelOwnerBuilderId) teardownPeer(builderId);
+    }
+    return;
+  }
+  pollVoiceSignalsIfNeeded(performance.now());
+  reconcileFriendVoiceChannels();
+}, FRIEND_VOICE_CHANNEL_POLL_INTERVAL_MS);
 
 // Called every Shop-mode render tick (see updateShopMovement in
 // src/shop/flightMovement.js), after updateOtherShopAvatars has refreshed
