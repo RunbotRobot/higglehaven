@@ -108,6 +108,59 @@ describe('Friend voice channels (#2781)', () => {
       expect(view.body.channels[0].members).toHaveLength(2);
     });
 
+    // #2833 (split out of #2781): the owner has no other way to learn their
+    // channel just went active -- mirrors direct-messages.test.js's own
+    // "fires a notification" assertion above.
+    it('notifies the owner once their channel activates for the first time', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-notify-activate-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-notify-activate-bob');
+      await becomeFriends(alice, bob);
+
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+
+      const aliceNotices = await api('/notifications', alice.session());
+      expect(aliceNotices.body.notifications.some(
+        (n) => n.message === 'voice-channel-notify-activate-bob is waiting in your voice channel.')).toBe(true);
+    });
+
+    it('does not notify the owner again when a second friend joins an already-active channel', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-notify-noduplicate-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-notify-noduplicate-bob');
+      const carol = await signupIdVerifiedBuilder('voice-channel-notify-noduplicate-carol');
+      await becomeFriends(alice, bob);
+      await becomeFriends(alice, carol);
+
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+      await api(`/voice/friend-channels/${alice.builderId}/join`, carol.session({ method: 'POST' }));
+
+      const aliceNotices = await api('/notifications', alice.session());
+      const activationNotices = aliceNotices.body.notifications.filter((n) => n.message.endsWith('is waiting in your voice channel.'));
+      expect(activationNotices).toHaveLength(1);
+      expect(activationNotices[0].message).toBe('voice-channel-notify-noduplicate-bob is waiting in your voice channel.');
+    });
+
+    it('does not notify a builder who starts (joins) their own channel', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-notify-selfjoin-alice');
+      await api(`/voice/friend-channels/${alice.builderId}/join`, alice.session({ method: 'POST' }));
+
+      const aliceNotices = await api('/notifications', alice.session());
+      expect(aliceNotices.body.notifications.some((n) => n.message.endsWith('is waiting in your voice channel.'))).toBe(false);
+    });
+
+    it('notifies the owner again on a fresh activation after the channel was closed', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-notify-reactivate-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-notify-reactivate-bob');
+      await becomeFriends(alice, bob);
+
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+      await api(`/voice/friend-channels/${alice.builderId}/leave`, alice.session({ method: 'POST' }));
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+
+      const aliceNotices = await api('/notifications', alice.session());
+      const activationNotices = aliceNotices.body.notifications.filter((n) => n.message.endsWith('is waiting in your voice channel.'));
+      expect(activationNotices).toHaveLength(2);
+    });
+
     it('lets a third accepted friend join the same channel -- membership is not pairwise-only', async () => {
       const alice = await signupIdVerifiedBuilder('voice-channel-group-alice');
       const bob = await signupIdVerifiedBuilder('voice-channel-group-bob');
