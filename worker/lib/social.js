@@ -934,6 +934,26 @@ export async function handleFriendships(request, db, route, url) {
         throw new HttpError('Friendship was accepted before this decline could take effect', 409);
       }
     }
+    // #2838: a friend-voice-channel membership (#2781) is only ever granted
+    // on the strength of an accepted friendship (assertAcceptedFriendship,
+    // handleFriendVoiceChannels' own join branch above) but was never
+    // re-checked after that -- ending the friendship here left a stale
+    // membership row behind, letting a since-unfriended builder keep
+    // signaling into a channel indefinitely with no way for its owner to
+    // remove them. A decline can never have reached an accepted state in
+    // the first place, so this is a no-op for that branch; harmless to run
+    // unconditionally rather than adding another isDecline-shaped special
+    // case. requester/recipient are always two distinct builders, so this
+    // can never touch a channel's own owner-anchor row (owner_builder_id
+    // === member_builder_id).
+    if (result.meta.changes === 1) {
+      await db.batch([
+        db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?')
+          .bind(existing.requester_builder_id, existing.recipient_builder_id),
+        db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?')
+          .bind(existing.recipient_builder_id, existing.requester_builder_id),
+      ]);
+    }
     return json({ deleted: true });
   }
 
