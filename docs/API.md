@@ -10703,15 +10703,21 @@ was not ported in this first pass; the core task/reply/status/waitingOn
 workflow is fully functional, and polish can follow as its own change.
 
 `waitingBadge()` renders a distinct **"Waiting on: Owner (unexplained)"**
-pill (#2254), instead of the plain "Waiting on: Owner" one, when a
-`queued` task's `waitingOn` is `'owner'` but its own `lastReplyFrom` is
+pill (#2254), instead of the plain "Waiting on: Owner" one, when any
+non-`done` task's `waitingOn` is `'owner'` but its own `lastReplyFrom` is
 also `'owner'` — i.e. the owner already spoke last in the thread, with
 no session reply following, yet the card still sits blocked on them.
+(#2700 removed this from gating on `queued` specifically — the
+underlying bypass below is just as reachable on an `in_progress` card.)
 With the reply-create auto-clear described above, this shouldn't be
 reachable through the ordinary API path (an owner reply to a task
 genuinely `waitingOn: 'owner'` clears it in that same request) — it's a
 safety net for a direct-D1 write bypassing that logic, matching the
 fallback access path AGENTS.md's own Control Room section documents.
+`lastReplyFrom` is normalized to the canonical lowercase `'owner'`
+sentinel at write time whenever it matches case-insensitively (#2830,
+same precedent as `waitingOn`/`kind` below), so this badge isn't
+defeated by a caller/`from` value like `"Owner"`.
 
 ## Admin action log (#996, sub-issue-in-spirit of #813/#814)
 

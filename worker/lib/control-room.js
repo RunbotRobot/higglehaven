@@ -81,6 +81,17 @@ export function controlRoomStatusValue(value) {
   return status;
 }
 
+// #2830: last_reply_from feeds waitingBadge()'s own "(unexplained)" strict
+// === against the literal lowercase string 'owner' (admin-control-room.html),
+// but unlike waitingOn/kind (#1070/#1449/#2205) it was never normalized to
+// that canonical form at write time -- a caller/from value like "Owner" or
+// the owner's real name (the direct-D1-write fallback AGENTS.md documents)
+// stored verbatim silently defeats the badge. Any other value (a session
+// name) passes through untouched, same as waitingOn's own canonicalization.
+function canonicalReplyFrom(value) {
+  return value.toLowerCase() === 'owner' ? 'owner' : value;
+}
+
 export function controlRoomTaskFromRow(row) {
   return {
     id: row.task_id,
@@ -421,7 +432,7 @@ async function handleControlRoomTaskCreate(request, env, db) {
       // reason) -- last_reply_from/last_reply_at need to reflect that same
       // reply, same reasoning as handleControlRoomTaskUpdate's own
       // settingWaitingOnOwner branch (#2254).
-      waitingOn === 'owner' ? postedBy : null,
+      waitingOn === 'owner' ? canonicalReplyFrom(postedBy) : null,
       waitingOn === 'owner' ? now : null,
     ),
   ];
@@ -510,7 +521,7 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
   // #2254: settingWaitingOnOwner inserts a real linked reply below (the
   // reason) -- last_reply_from/last_reply_at need to reflect that same
   // reply, same reasoning as the viewed reset above.
-  if (settingWaitingOnOwner) { setIfPresent('last_reply_from', caller); setIfPresent('last_reply_at', now); }
+  if (settingWaitingOnOwner) { setIfPresent('last_reply_from', canonicalReplyFrom(caller)); setIfPresent('last_reply_at', now); }
 
   const statements = [
     db.prepare(`UPDATE control_room_tasks SET ${fields.join(', ')} WHERE task_id = ?`).bind(...values, taskId),
@@ -573,7 +584,7 @@ async function handleControlRoomReplyCreate(request, env, db, taskId) {
       UPDATE control_room_tasks
       SET updated_at = ?, viewed = 0, last_reply_from = ?, last_reply_at = ?${clearsWaitingOnOwner ? ", waiting_on = 'claude'" : ''}
       WHERE task_id = ?
-    `).bind(now, fromCaller, now, taskId),
+    `).bind(now, canonicalReplyFrom(fromCaller), now, taskId),
   ]);
 
   const row = await db.prepare('SELECT * FROM control_room_replies WHERE reply_id = ?').bind(replyId).first();
