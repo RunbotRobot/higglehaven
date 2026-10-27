@@ -1834,6 +1834,18 @@ export async function fetchVoiceIceConfig() {
   return iceServers;
 }
 
+// #2819 (sub-issue of #2780): the report half of the per-shopper mute +
+// report mechanism — mute itself is purely local/client-side
+// (src/shop/voiceChat.js) and never calls the server at all.
+export async function sendVoiceReport({ reportedBuilderId, reason }) {
+  const { reportId } = await requestJson('/voice/report', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ reportedBuilderId, reason }),
+  });
+  return reportId;
+}
+
 // #1995 (sub-issue of #1976): every currently-active credit orb, optionally
 // scoped to one landlet — see docs/API.md's "Credit orbs" for the shape.
 // Unauthenticated, same as GET /api/instances.

@@ -5024,19 +5024,60 @@ generous abuse cap, not real SDP/ICE validation); or `toBuilderId` isn't
 *currently* reporting presence in the caller's own current landlet (the
 server-enforced proximity check described above — covers both "no
 presence row at all" and "presence row, but a different landlet").
-`429` after 60 requests per 15 minutes from the same calling builder (same
-ceiling as `POST /api/nearby-chat` — connection setup is bursty but
-short-lived per peer pair). Returns `201` with the new message.
+`429` after 300 requests per 15 minutes from the same calling builder
+(#2824 — bumped from an initial 60, sized for occasional chat sends, once
+real WebRTC negotiation's own offer+answer+several-trickle-ICE-candidates
+burst, often for several concurrent peers at once, turned out to burn
+through that in seconds). Returns `201` with the new message.
+
+### `POST /api/voice/report`
+
+Sub-issue #2819's half of "per-shopper mute + report" (#2778's own
+resolution: moderation beyond the id_verified gate alone requires both).
+Mute itself is purely local/client-side (`src/shop/voiceChat.js`'s own
+`mutedPeers`) and never calls this or any other endpoint — this is only
+the report path. Requires an ID-verified session.
+
+```json
+{ "reportedBuilderId": "...", "reason": "..." }
+```
+
+`reason` is optional, capped at 280 characters. `400` if:
+`reportedBuilderId` is the caller themselves, `reason` is over 280
+characters once trimmed, or `reportedBuilderId` doesn't name a real
+builder. `429` after 20 requests per 15 minutes from the same calling
+builder (an ordinary anti-spam ceiling, not sized for real-time traffic
+the way the signaling endpoints above are). Returns `201` with the new
+`reportId`.
+
+Deliberately zero-cost/consequence-free for the reporter, same philosophy
+`POST /api/catalog/:templateId/flags` (see "Product flags" below) already
+states for its own structurally similar report — no visible penalty to
+the reporter's own account regardless of outcome, and nothing here
+automatically actions the reported builder either (unlike that endpoint's
+own strike ladder): a report lands as a `voice_conduct_reports`
+(`migrations/0159_voice_conduct_reports.sql`) row and, in the same write,
+a `kind: "voice-report"` Control Room card (direct `control_room_tasks`
+write, same same-process-trusted-caller pattern `POST
+/api/feedback/bug-report`'s own Control Room card uses — see "Control Room
+API" below) for a human to review. Deliberately its own table rather than
+reusing `product_flags`: that table's unit is a listing with a seller
+strike-ladder consequence, the wrong shape for "a builder said something
+inappropriate over voice chat."
 
 ### Testing note
 
-`worker/voice-signal.test.js` owns the backend contract: the id_verified
-gate, the no-presence/different-landlet/nonexistent-recipient/self-signal
-`400`s on send, the unrecognized-`kind`/missing-payload/oversized-payload
-`400`s, point-to-point scoping (two recipients in the same landlet each
-only see messages addressed to themselves), a landlet change between send
-and poll hiding the now-stale message, forward-cursor polling, and the
-covering index.
+`worker/voice-signal.test.js` owns the signaling-relay backend contract:
+the id_verified gate, the no-presence/different-landlet/nonexistent-
+recipient/self-signal `400`s on send, the unrecognized-`kind`/missing-
+payload/oversized-payload `400`s, point-to-point scoping (two recipients
+in the same landlet each only see messages addressed to themselves), a
+landlet change between send and poll hiding the now-stale message,
+forward-cursor polling, and the covering index. `worker/voice-report.
+test.js` owns `POST /api/voice/report`'s own contract: the id_verified
+gate, the self-report/over-length-reason/nonexistent-recipient `400`s,
+the rate limit, and that both the `voice_conduct_reports` row and the
+paired Control Room card land in the same write.
 
 ## Avatar presence
 

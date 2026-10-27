@@ -1073,6 +1073,49 @@
         opacity: 0.6;
         cursor: wait;
       }
+      /* #2819: anchored to the left of #shop-voice-btn (top: 222px, 32px
+         tall, right: 8px) rather than stacked into the #shop-nearby-chat-
+         panel's own vertical slot below it, so the two never collide when
+         both happen to be open at once. Same display:none/.open toggle
+         shape as #shop-nearby-chat-panel, just driven by "is anyone
+         connected" instead of a tap. */
+      #shop-voice-peers-panel {
+        display: none;
+        position: fixed;
+        z-index: 16;
+        top: 222px;
+        right: 48px;
+        width: 180px;
+        background: rgb(var(--pill-rgb) / 0.85);
+        border-radius: 8px;
+        padding: 6px;
+      }
+      #shop-voice-peers-panel.open {
+        display: block;
+      }
+      .shop-voice-peer-row {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 0;
+        font: 12px/1.4 sans-serif;
+        color: var(--pill-text);
+      }
+      .shop-voice-peer-row .shop-voice-peer-label {
+        flex: 1 1 auto;
+      }
+      .shop-voice-peer-row button {
+        padding: 2px 7px;
+        border-radius: 6px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        font: 11px/1.4 sans-serif;
+        cursor: pointer;
+      }
+      .shop-voice-peer-row button.shop-voice-peer-muted {
+        background: rgb(255 92 92 / 0.45);
+      }
       .compass-label {
         position: absolute;
         color: var(--pill-text-soft);
@@ -4671,6 +4714,18 @@
          the icon/class always shows what the mic is doing right now
          (muted/unmuted/speaking/denied), and a click toggles it. -->
     <button id="shop-voice-btn" class="shop-ui muted" type="button" aria-label="Unmute microphone"><span id="shop-voice-btn-icon" aria-hidden="true">🎤</span></button>
+    <!-- #2819 (sub-issue of #2780): per-shopper mute + report, one row per
+         currently-connected voice peer -- #2778's own resolution required
+         both beyond the trust-tier gate alone. No display name (nearby
+         chat's own "unlabeled" precedent -- src/shop/nearbyChat.js -- a
+         stranger's voice connection carries no identity either): each row
+         is just a stable per-connection sequence number
+         (src/shop/voiceChat.js's own displaySeq). Auto-shown/hidden by
+         JS (the 'open' class) based on whether there's anyone connected to
+         act on at all -- no separate toggle button of its own needed. -->
+    <div id="shop-voice-peers-panel">
+      <div id="shop-voice-peers-list"></div>
+    </div>
     <div id="topbar-left">
       <div id="wordmark-panel">
         <img id="wordmark" src="/wordmark.png" alt="higglehaven" />

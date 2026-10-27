@@ -240,6 +240,56 @@ const bSeesA = await waitForConnected(pageB, builderA.builderId);
 console.log('A\'s own view of its connection to B:', aSeesB);
 console.log('B\'s own view of its connection to A:', bSeesA);
 
+// #2819: per-shopper mute + report, exercised here on the same two
+// already-connected peers rather than paying for a second, separate
+// connection setup. Mute is a pure client-side gain override (never
+// touches the server), but report is a real authenticated POST --
+// unlike /voice/signal/ice-config, this test's account can't reach a
+// real 201 here either (the same DIDIT_API_KEY reachability gap this
+// file's own header comment explains), so /voice/report gets the same
+// kind of mock as those two.
+let reportRequestBody = null;
+await pageA.route('**/api/voice/report', async (route) => {
+  reportRequestBody = JSON.parse(route.request().postData() || '{}');
+  await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ reportId: 'voice-report-test-1' }) });
+});
+await pageA.evaluate(() => {
+  window.prompt = () => 'Was shouting over voice chat';
+  window.alert = () => {};
+});
+
+await pageA.waitForSelector('#shop-voice-peers-panel.open', { timeout: 10000 });
+const peerRowCountBeforeMute = await pageA.evaluate(
+  () => document.querySelectorAll('#shop-voice-peers-list .shop-voice-peer-row').length,
+);
+console.log('A sees exactly one connected-peer row in the mute/report panel (should be true):', peerRowCountBeforeMute === 1);
+
+await pageA.click('#shop-voice-peers-list button[data-action="mute"]');
+await pageA.waitForSelector('#shop-voice-peers-list button.shop-voice-peer-muted', { timeout: 5000 });
+const aMutedBAfterToggle = await pageA.evaluate((builderId) => {
+  const entry = window.__shopVoicePeers?.find((p) => p.builderId === builderId);
+  return entry?.muted === true;
+}, builderB.builderId);
+console.log('A\'s own mute toggle for B took effect (should be true):', aMutedBAfterToggle);
+
+// Un-mute again -- back to the normal distance-ramped gain the rest of
+// this test's own flying-exclusion teardown below doesn't otherwise care
+// about, but leaving this stuck muted would be a silent side effect of a
+// test that's nominally just checking the toggle.
+await pageA.click('#shop-voice-peers-list button[data-action="mute"]');
+await pageA.waitForFunction(() => {
+  const btn = document.querySelector('#shop-voice-peers-list button[data-action="mute"]');
+  return btn && !btn.classList.contains('shop-voice-peer-muted');
+}, { timeout: 5000 });
+
+await pageA.click('#shop-voice-peers-list button[data-action="report"]');
+// The click handler's own fetch is async and unawaited from this test's
+// perspective -- poll briefly for the mocked route to have actually fired
+// rather than asserting immediately after the click.
+for (let i = 0; i < 20 && reportRequestBody === null; i++) await pageA.waitForTimeout(150);
+console.log('A\'s report POST reached the mocked endpoint with the expected body (should be true):',
+  reportRequestBody?.reportedBuilderId === builderB.builderId && reportRequestBody?.reason === 'Was shouting over voice chat');
+
 // Flying-avatar exclusion (#2043, reused here with no extra code of its
 // own): GET /api/presence withholds a flying builder's row entirely, so B
 // taking off should make B disappear from A's own shopOtherAvatars on A's
@@ -261,11 +311,17 @@ async function waitForTeardown(page, builderId, timeoutMs = 8000) {
 const bTornDownInA = await waitForTeardown(pageA, builderB.builderId);
 console.log('A\'s connection to B torn down once B started flying (should be true):', bTornDownInA);
 
+const reportedCorrectly = reportRequestBody?.reportedBuilderId === builderB.builderId
+  && reportRequestBody?.reason === 'Was shouting over voice chat';
+
 const errors = [...sessionA.errors, ...sessionB.errors];
 const pass =
   landletCreated.status === 201 &&
   aMutedByDefault && bMutedByDefault &&
   !!aSeesB && !!bSeesA &&
+  peerRowCountBeforeMute === 1 &&
+  aMutedBAfterToggle &&
+  reportedCorrectly &&
   bTornDownInA &&
   errors.length === 0;
 

@@ -26,7 +26,9 @@
 // sides can call addTrack/addTransceiver independently and let
 // onnegotiationneeded sort it out.
 import { currentAuthUser } from '../account/auth.js';
-import { fetchMyBuilder, sendVoiceSignal, fetchVoiceSignals, fetchVoiceIceConfig } from '../api.js';
+import {
+  fetchMyBuilder, sendVoiceSignal, fetchVoiceSignals, fetchVoiceIceConfig, sendVoiceReport,
+} from '../api.js';
 import { shopOtherAvatars } from './presenceAndContent.js';
 import { shopAvatarPosition } from '../main.js';
 
@@ -69,6 +71,8 @@ const VOICE_NEGOTIATION_TIMEOUT_MS = 8000;
 
 const voiceBtnEl = document.getElementById('shop-voice-btn');
 const voiceBtnIconEl = document.getElementById('shop-voice-btn-icon');
+const voicePeersPanelEl = document.getElementById('shop-voice-peers-panel');
+const voicePeersListEl = document.getElementById('shop-voice-peers-list');
 
 // 'muted' (default every session, per #2778's resolution — no auto-
 // activate-on-proximity) | 'unmuted' | 'denied' (getUserMedia failed/was
@@ -84,7 +88,7 @@ let myBuilderIdPromise = null;
 let iceServersPromise = null;
 let audioCtx = null;
 
-// builderId -> { pc, polite, makingOffer, ignoreOffer, sourceNode, gainNode }
+// builderId -> { pc, polite, makingOffer, ignoreOffer, sourceNode, gainNode, displaySeq }
 const peers = new Map();
 // builderId -> in-flight Promise<entry>, while getOrCreatePeer's own async
 // setup (ensureMyBuilderId/ensureIceServers) hasn't resolved yet -- see
@@ -93,6 +97,20 @@ const pendingPeers = new Map();
 let voiceSignalCursor = null;
 let voiceLastPollAt = 0;
 let voicePollToken = 0;
+// #2819: a stable, ever-increasing label for each connection's own
+// lifetime (createPeer assigns the next one) -- shopOtherAvatars/presence
+// carries no display name at all (nearby chat's own deliberately
+// "unlabeled" precedent, src/shop/nearbyChat.js), so this is the only
+// thing distinguishing one connected peer from another in the mute/report
+// panel below; re-using builderId itself there would leak an otherwise
+// anonymous identifier into the UI for no benefit.
+let voicePeerSeq = 0;
+// builderId -> locally muted (#2819's per-shopper mute) -- purely
+// client-side, never reaches the server, and scoped to one connection's
+// own lifetime (cleared in teardownPeer): reconnecting to the same
+// builder after they leave and come back starts unmuted again, same as a
+// fresh RTCPeerConnection would.
+const mutedPeers = new Set();
 
 function hasIdVerifiedSession() {
   return currentAuthUser?.trustTier === 'id_verified';
@@ -138,6 +156,10 @@ function refreshVoicePeersDiagnostic() {
   window.__shopVoicePeers = [...peers.entries()].map(([builderId, entry]) => ({
     builderId, connectionState: entry.pc.connectionState, signalingState: entry.pc.signalingState,
     iceConnectionState: entry.pc.iceConnectionState, polite: entry.polite,
+    // #2819: this module's own mute toggle state for the same reason the
+    // rest of this diagnostic exists -- a real two-peer connection can't be
+    // observed from the test's own in-page state.
+    muted: mutedPeers.has(builderId),
   }));
 }
 
@@ -293,7 +315,10 @@ async function createPeer(builderId) {
   // comparable, and mixing them here left an earlier version of this
   // watchdog comparing against a number that could never cross its own
   // threshold, found live while validating this feature's own e2e test.
-  const entry = { pc, polite: myBuilderId < builderId, makingOffer: false, ignoreOffer: false, sourceNode: null, gainNode: null, createdAt: performance.now() };
+  const entry = {
+    pc, polite: myBuilderId < builderId, makingOffer: false, ignoreOffer: false, sourceNode: null,
+    gainNode: null, createdAt: performance.now(), displaySeq: ++voicePeerSeq,
+  };
   peers.set(builderId, entry);
 
   pc.onicecandidate = (event) => {
@@ -322,6 +347,7 @@ async function createPeer(builderId) {
   };
   pc.onconnectionstatechange = () => {
     refreshVoicePeersDiagnostic();
+    renderVoicePeersList(); // #2819: connectionState is this panel's own "connected" filter
     if (pc.connectionState === 'failed' || pc.connectionState === 'closed') teardownPeer(builderId);
   };
   pc.onsignalingstatechange = refreshVoicePeersDiagnostic;
@@ -375,7 +401,70 @@ function teardownPeer(builderId) {
   entry.gainNode?.disconnect();
   entry.pc.close();
   peers.delete(builderId);
+  mutedPeers.delete(builderId); // #2819: mute is scoped to this connection's own lifetime
   refreshVoicePeersDiagnostic();
+  renderVoicePeersList();
+}
+
+// #2819: one row per currently-connected (not still-negotiating) peer, each
+// with a local mute toggle and a report action -- see this module's own
+// VOICE_RANGE_M-area comment block and index.html's own markup comment for
+// why there's no display name. Re-rendered from scratch on every call
+// (connect/disconnect/mute toggle) rather than diffed -- the list is tiny
+// (bounded by how many avatars can realistically be in voice range at
+// once) and event handling is delegated at the panel level below, so a
+// full rebuild never loses or duplicates a listener.
+function renderVoicePeersList() {
+  if (!voicePeersPanelEl || !voicePeersListEl) return;
+  const connected = [...peers.entries()]
+    .filter(([, entry]) => entry.pc.connectionState === 'connected')
+    .sort(([, a], [, b]) => a.displaySeq - b.displaySeq);
+  voicePeersPanelEl.classList.toggle('open', connected.length > 0);
+  voicePeersListEl.innerHTML = connected.map(([builderId, entry]) => {
+    const muted = mutedPeers.has(builderId);
+    return `<div class="shop-voice-peer-row" data-builder-id="${builderId}">`
+      + `<span class="shop-voice-peer-label">Nearby voice ${entry.displaySeq}</span>`
+      + `<button type="button" data-action="mute" class="${muted ? 'shop-voice-peer-muted' : ''}">${muted ? 'Unmute' : 'Mute'}</button>`
+      + '<button type="button" data-action="report">Report</button>'
+      + '</div>';
+  }).join('');
+}
+
+if (voicePeersListEl) {
+  voicePeersListEl.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-action]');
+    const row = event.target.closest('[data-builder-id]');
+    if (!button || !row) return;
+    const builderId = row.dataset.builderId;
+    if (button.dataset.action === 'mute') {
+      if (mutedPeers.has(builderId)) mutedPeers.delete(builderId);
+      else mutedPeers.add(builderId);
+      renderVoicePeersList();
+      refreshVoicePeersDiagnostic(); // keeps window.__shopVoicePeers' own muted field current
+    } else if (button.dataset.action === 'report') {
+      reportVoicePeer(builderId);
+    }
+  });
+}
+
+// Same prompt()-based lightweight text-input convention this codebase
+// already uses for every other short, optional free-text capture (product/
+// seller reviews, land/friend renames -- src/shop/productCheckout.js,
+// src/account/menu.js) rather than a bespoke modal. A cancelled prompt
+// (null) submits nothing -- #1212's own product-flag reporting is
+// "zero-cost/consequence-free for the flagger by design," and an accidental
+// click shouldn't be able to fire a report with no way to back out.
+async function reportVoicePeer(builderId) {
+  const reason = window.prompt(
+    'Report this nearby voice for inappropriate conduct? Optionally describe why (up to 280 characters), or leave blank:', '',
+  );
+  if (reason === null) return; // cancelled
+  try {
+    await sendVoiceReport({ reportedBuilderId: builderId, reason: reason.trim() || undefined });
+    window.alert('Report submitted. Thank you.');
+  } catch {
+    window.alert('Could not submit the report -- please try again.');
+  }
 }
 
 async function handleIncomingSignal(fromBuilderId, kind, payload) {
@@ -454,7 +543,12 @@ function updateVoicePeersForRange(now) {
       teardownPeer(builderId);
       continue;
     }
-    if (peerEntry.gainNode) peerEntry.gainNode.gain.value = voiceGainForDistance(distanceM);
+    if (peerEntry.gainNode) {
+      // #2819: a locally-muted peer stays silent regardless of distance --
+      // overrides the ramp rather than replacing it, so un-muting later
+      // immediately reflects wherever they actually are by then.
+      peerEntry.gainNode.gain.value = mutedPeers.has(builderId) ? 0 : voiceGainForDistance(distanceM);
+    }
   }
   // Anyone we still hold a connection for but who's no longer nearby at
   // all (despawned, left the landlet) — same cleanup shape as the
