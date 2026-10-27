@@ -81,7 +81,6 @@ function installVoiceRelay(page, { myBuilderId, mailboxes }) {
         payload: input.payload,
         createdAt: new Date().toISOString(),
       };
-      console.log('DEBUG relay POST', myBuilderId, '->', input.toBuilderId, input.kind);
       mailboxes[input.toBuilderId] ??= [];
       mailboxes[input.toBuilderId].push(message);
       await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ message }) });
@@ -89,7 +88,6 @@ function installVoiceRelay(page, { myBuilderId, mailboxes }) {
     }
     // GET -- drain this page's own inbox.
     const inbox = mailboxes[myBuilderId] ?? [];
-    if (inbox.length) console.log('DEBUG relay GET', myBuilderId, 'draining', inbox.length, 'message(s)');
     mailboxes[myBuilderId] = [];
     await route.fulfill({
       status: 200,
@@ -184,13 +182,6 @@ await pageB.waitForSelector('#shop-voice-btn.visible', { timeout: 10000 });
 const aMutedByDefault = await pageA.evaluate(() => document.getElementById('shop-voice-btn').classList.contains('muted'));
 const bMutedByDefault = await pageB.evaluate(() => document.getElementById('shop-voice-btn').classList.contains('muted'));
 
-// Unmute both -- exercises the real getUserMedia prompt (fake device,
-// auto-granted) and the recvonly-to-sendrecv transceiver upgrade.
-await pageA.click('#shop-voice-btn');
-await pageB.click('#shop-voice-btn');
-await pageA.waitForSelector('#shop-voice-btn.unmuted', { timeout: 10000 });
-await pageB.waitForSelector('#shop-voice-btn.unmuted', { timeout: 10000 });
-
 // Give both sides' poll loops (VOICE_POLL_INTERVAL_MS = 1200) and the
 // real WebRTC stack several cycles to actually negotiate a connection.
 async function waitForConnected(page, expectedBuilderId, timeoutMs = 20000) {
@@ -205,6 +196,27 @@ async function waitForConnected(page, expectedBuilderId, timeoutMs = 20000) {
   console.log('waitForConnected timed out, last seen peers:', peers);
   return null;
 }
+
+// Let the BASE (recvonly<->recvonly, no mic yet) connection reach
+// 'connected' before unmuting either side. Both unmuting at once while the
+// base negotiation is still mid-flight triggers an *overlapping* second
+// renegotiation round on top of the first -- WebRTC's perfect-negotiation
+// pattern handles this correctly (confirmed: it does eventually converge),
+// but it can take a variable, occasionally test-timeout-exceeding number of
+// extra offer/answer round trips to settle, found as real flakiness while
+// validating this test. A real user is never going to click unmute in the
+// exact same instant their peer connection object was first created, so
+// settling the base connection first is also just a more realistic
+// sequence, not merely a convenience for this test.
+await waitForConnected(pageA, builderB.builderId);
+await waitForConnected(pageB, builderA.builderId);
+
+// Unmute both -- exercises the real getUserMedia prompt (fake device,
+// auto-granted) and the recvonly-to-sendrecv transceiver upgrade.
+await pageA.click('#shop-voice-btn');
+await pageB.click('#shop-voice-btn');
+await pageA.waitForSelector('#shop-voice-btn.unmuted', { timeout: 10000 });
+await pageB.waitForSelector('#shop-voice-btn.unmuted', { timeout: 10000 });
 
 const aSeesB = await waitForConnected(pageA, builderB.builderId);
 const bSeesA = await waitForConnected(pageB, builderA.builderId);

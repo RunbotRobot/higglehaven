@@ -308,10 +308,36 @@ async function createPeer(builderId) {
   pc.onsignalingstatechange = refreshVoicePeersDiagnostic;
   pc.oniceconnectionstatechange = refreshVoicePeersDiagnostic;
 
-  if (localStream) {
-    pc.addTrack(localStream.getAudioTracks()[0], localStream);
-  } else {
-    pc.addTransceiver('audio', { direction: 'recvonly' });
+  // Deliberately NOT symmetric: only the impolite side proactively creates
+  // a transceiver here (recvonly, or sendrecv via addTrack if it already
+  // has a mic) -- the polite side waits passively for the impolite side's
+  // offer to arrive instead of also racing to create its own. Both sides
+  // independently calling addTransceiver at connection-setup time (the
+  // original, symmetric version of this code) meant onnegotiationneeded
+  // fired on both sides at nearly the same real-world moment for every
+  // single new connection -- true glare on *every* first contact, not just
+  // an occasional edge case. Perfect negotiation's polite/impolite
+  // collision handling resolves that correctly in principle, but it still
+  // needs a variable, sometimes-slow number of extra round trips to
+  // converge -- confirmed as the real source of this module's own
+  // intermittent "stuck at signalingState have-local-offer" failures while
+  // validating this feature's own e2e test, including a build with full
+  // signalingState/offer tracing showing both sides correctly receiving
+  // each other's offer yet neither one's connection actually advancing.
+  // Only creating the very first offer on one deterministic side removes
+  // that race for the common case (every avatar starts muted, #2778's
+  // resolution, so the vast majority of first contacts have neither side
+  // holding a mic yet) -- addLocalTrackToAllPeers below still covers the
+  // rarer case where this side already has a mic by the time a brand-new
+  // avatar comes into range, which can still glare against that avatar's
+  // own first offer, but perfect negotiation's existing handling is enough
+  // for that much less common case.
+  if (!entry.polite || localStream) {
+    if (localStream) {
+      pc.addTrack(localStream.getAudioTracks()[0], localStream);
+    } else {
+      pc.addTransceiver('audio', { direction: 'recvonly' });
+    }
   }
   refreshVoicePeersDiagnostic();
   return entry;
@@ -336,8 +362,7 @@ async function handleIncomingSignal(fromBuilderId, kind, payload) {
     if (entry.ignoreOffer) return;
     try {
       await entry.pc.setRemoteDescription(description);
-    } catch (err) {
-      console.error('DEBUG setRemoteDescription failed for', fromBuilderId, description?.type, 'collision=', offerCollision, 'polite=', entry.polite, 'signalingState=', entry.pc.signalingState, err);
+    } catch {
       return; // best-effort
     }
     if (description.type === 'offer') {
