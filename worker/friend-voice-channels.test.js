@@ -26,6 +26,7 @@ async function becomeFriends(a, b) {
   await api(`/friendships/${sent.body.friendship.friendshipId}`, b.session({
     method: 'PATCH', body: JSON.stringify({ status: 'accepted' }),
   }));
+  return sent.body.friendship.friendshipId;
 }
 
 async function setPresence(builderId, { landletId, updatedAt = new Date().toISOString() } = {}) {
@@ -165,6 +166,56 @@ describe('Friend voice channels (#2781)', () => {
       const bob = await signupIdVerifiedBuilder('voice-channel-leave-noop-bob');
       const left = await api(`/voice/friend-channels/${bob.builderId}/leave`, alice.session({ method: 'POST' }));
       expect(left.response.status).toBe(200);
+    });
+  });
+
+  // #2838: a channel membership was only ever checked against the
+  // friendship at join time (assertAcceptedFriendship above), never again
+  // afterward -- unfriending left a stale membership row behind with no
+  // way for the channel's owner to remove it themselves.
+  describe('unfriending a channel member (#2838)', () => {
+    it('removes the stale membership when the owner unfriends a joined member', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-unfriend-owner-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-unfriend-owner-bob');
+      const friendshipId = await becomeFriends(alice, bob);
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+
+      const unfriended = await api(`/friendships/${friendshipId}`, alice.session({ method: 'DELETE' }));
+      expect(unfriended.response.status).toBe(200);
+
+      const aliceView = await api('/voice/friend-channels', alice.session());
+      expect(aliceView.body.channels).toEqual([{ ownerBuilderId: alice.builderId, members: [alice.builderId] }]);
+      const bobView = await api('/voice/friend-channels', bob.session());
+      expect(bobView.body.channels).toEqual([]);
+    });
+
+    it('removes the stale membership when a member unfriends the channel owner', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-unfriend-member-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-unfriend-member-bob');
+      const friendshipId = await becomeFriends(alice, bob);
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+
+      const unfriended = await api(`/friendships/${friendshipId}`, bob.session({ method: 'DELETE' }));
+      expect(unfriended.response.status).toBe(200);
+
+      const bobView = await api('/voice/friend-channels', bob.session());
+      expect(bobView.body.channels).toEqual([]);
+    });
+
+    it('does not affect an unrelated accepted friend\'s own membership in the same channel', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-unfriend-unrelated-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-unfriend-unrelated-bob');
+      const carol = await signupIdVerifiedBuilder('voice-channel-unfriend-unrelated-carol');
+      const bobFriendshipId = await becomeFriends(alice, bob);
+      await becomeFriends(alice, carol);
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+      await api(`/voice/friend-channels/${alice.builderId}/join`, carol.session({ method: 'POST' }));
+
+      await api(`/friendships/${bobFriendshipId}`, alice.session({ method: 'DELETE' }));
+
+      const aliceView = await api('/voice/friend-channels', alice.session());
+      expect(aliceView.body.channels).toHaveLength(1);
+      expect(aliceView.body.channels[0].members.sort()).toEqual([alice.builderId, carol.builderId].sort());
     });
   });
 
