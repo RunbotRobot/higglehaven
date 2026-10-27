@@ -18,8 +18,9 @@ import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll } from 'vitest';
 import { describe, expect, it } from 'vitest';
 import { biomeAt } from './lib/world-generation.js';
+import { defaultMosaicBoundaryRadiusM, generateWaterAwareMosaic } from './lib/water-aware-mosaic.js';
+import { discBoundary } from './weightedVoronoiGenerator.js';
 import { generateLandletRing } from './landGenerator.js';
-import { generateOrganicMosaic } from './organicLandGenerator.js';
 import { pointInPolygon } from './geometry.js';
 import { api, signupAdmin } from './test-helpers.js';
 
@@ -118,17 +119,23 @@ describe('Real biome data upgrades newly-generated landlets to a real biome (#23
   // distance-0 match always wins over any real grid cell, whatever its
   // own real classification happens to be), not that the rest of the
   // mosaic stays unclassified, which real data already makes untrue.
+  // #2812: generateOrganicMosaic is gone from this call path -- predicting
+  // the real layout now means calling the new generator the same way
+  // generateLandletMosaicCandidates itself does (no fine-grained water is
+  // ever seeded in this file, so the tessellation itself is unaffected;
+  // only biomeAt's own lookup, applied after generation, is this test's
+  // real subject).
   it('sets biome on a mosaic-generated cell when seeded near a real biome cell', async () => {
-    const predictedCells = generateOrganicMosaic({ prefix: 'biome-mosaic-test', count: 16 });
+    const radiusM = defaultMosaicBoundaryRadiusM(16, 'biome-mosaic-test');
+    const predicted = await generateWaterAwareMosaic(env.DB, {
+      boundary: discBoundary(radiusM), landletCount: 16, seed: 'biome-mosaic-test',
+    });
     // Same origin-exclusion logic generateLandletMosaicCandidates applies
     // internally -- the cell covering (0, 0) is folded into starter-landlet
     // directly and never becomes its own candidate.
-    const centralIndex = predictedCells.findIndex((cell) => pointInPolygon(
-      { x: 0, y: 0 },
-      cell.polygon.map((point) => ({ x: point.x + cell.center.x, y: point.y + cell.center.y })),
-    ));
+    const centralIndex = predicted.cells.findIndex((cell) => pointInPolygon({ x: 0, y: 0 }, cell.polygon));
     const nonCentralIndex = centralIndex === 0 ? 1 : 0;
-    const biomeCenter = predictedCells[nonCentralIndex].center;
+    const biomeCenter = predicted.cells[nonCentralIndex].center;
     await seedBiomeCell(biomeCenter.x, biomeCenter.y, 'alpine', 25);
 
     const generated = await api('/land-candidates/generate-mosaic', adminSession({

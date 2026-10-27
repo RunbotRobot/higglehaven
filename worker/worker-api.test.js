@@ -3664,19 +3664,35 @@ describe('Worker API', () => {
     expect(invalid.response.status).toBe(400);
   });
 
-  it('queues a deterministic organic mosaic, folding the origin cell into starter-landlet', async () => {
+  // #2812: generateOrganicMosaic's fixed 16x1000m2 template is gone -- this
+  // now exercises the real water-aware power-law generator (#2806/#2810/
+  // #2811), still fully deterministic for a fixed (prefix, count): seed
+  // 'organic-patch' at count 16 is known (verified directly against
+  // powerLawPlots(16, 'organic-patch') + the real generator) to draw
+  // exactly one class-2 cell and fifteen class-1 cells, with the class-2
+  // one never the cell covering the origin -- so it always survives as one
+  // of the 15 real candidates below, not folded into starter-landlet.
+  it('queues a deterministic water-aware mosaic, folding the origin cell into starter-landlet', async () => {
     const generated = await api('/land-candidates/generate-mosaic', adminSession({
       method: 'POST',
       body: JSON.stringify({ prefix: 'organic-patch', count: 16 }),
     }));
     expect(generated.response.status).toBe(201);
-    // One of the 16 template cells always covers the world origin — the same
-    // point starter-landlet sits on — so it's folded into starter-landlet
-    // directly instead of becoming a 16th competing candidate there.
+    // One of the 16 generated cells always covers the world origin — the
+    // same point starter-landlet sits on — so it's folded into
+    // starter-landlet directly instead of becoming a 16th competing
+    // candidate there.
     expect(generated.body.candidates).toHaveLength(15);
-    expect(generated.body.candidates.every((candidate) => candidate.areaM2 === 1000)).toBe(true);
-    expect(generated.body.candidates.every((candidate) => candidate.polygon.length >= 12)).toBe(true);
-    expect(generated.body.candidates.every((candidate) => candidate.metadata.generator === 'organic-mosaic-v1')).toBe(true);
+    expect(generated.body.candidates.every((candidate) => candidate.polygon.length >= 3)).toBe(true);
+    expect(generated.body.candidates.every((candidate) => candidate.metadata.generator === 'water-aware-mosaic-v1')).toBe(true);
+    expect(generated.body.candidates.every((candidate) => Number.isInteger(candidate.landClass) && candidate.landClass >= 1)).toBe(true);
+    const classOne = generated.body.candidates.filter((candidate) => candidate.landClass === 1);
+    const largerClass = generated.body.candidates.filter((candidate) => candidate.landClass > 1);
+    expect(classOne.every((candidate) => Math.abs(candidate.areaM2 - 1000) / 1000 <= 0.05)).toBe(true);
+    // The power-law mix (#2806) means not every cell is the old fixed
+    // 1,000 m² -- this is the actual behavior change this issue ships.
+    expect(largerClass).toHaveLength(1);
+    expect(largerClass[0].areaM2).toBeGreaterThan(1000);
     expect(generated.body.materializedLandletIds.length).toBeGreaterThan(0);
     expect(generated.body.starterLandletId).toBe('starter-landlet');
 
@@ -3691,8 +3707,8 @@ describe('Worker API', () => {
     expect(JSON.parse(mosaicLog.detail_json)).toEqual({ count: 16 });
 
     const starter = await api('/landlets/starter-landlet');
-    expect(starter.body.landlet.polygon.length).toBeGreaterThanOrEqual(12);
-    expect(starter.body.landlet.metadata.generator).toBe('organic-mosaic-v1');
+    expect(starter.body.landlet.polygon.length).toBeGreaterThanOrEqual(3);
+    expect(starter.body.landlet.metadata.generator).toBe('water-aware-mosaic-v1');
     expect(mosaicIndices).not.toContain(starter.body.landlet.metadata.mosaicIndex);
     // starter-landlet already existed as a row before this call (unlike its
     // 15 siblings, which are freshly inserted) -- it must still come out
@@ -3708,6 +3724,48 @@ describe('Worker API', () => {
     expect(starterClaim.body.landlet).toMatchObject({
       landletId: 'starter-landlet', status: 'claimed', ownerBuilderId: centerPlotBuilder.builderId,
     });
+
+    // #2812's own regression ask: the free self-claim path's existing
+    // landlet_class = 1 gate (worker/lib/land.js's POST .../claim, #1703)
+    // must still be the thing protecting a real, variable-size generated
+    // landlet from being claimed for free -- no new enforcement code, just
+    // confirming the gate still does its job once a landlet's real area
+    // can be anything. Only a *materialized* candidate has a real
+    // `landlets` row to complete/claim at all -- pick from
+    // materializedLandletIds rather than assuming every candidate reached
+    // that bar this deep into the shared suite.
+    const materializedClassOne = classOne.find((candidate) => generated.body.materializedLandletIds.includes(candidate.landletId));
+    const materializedLargerClass = largerClass.find((candidate) => generated.body.materializedLandletIds.includes(candidate.landletId));
+    expect(materializedClassOne).toBeDefined();
+    expect(materializedLargerClass).toBeDefined();
+
+    await api(`/landlets/${materializedClassOne.landletId}/generation-complete`, adminSession({ method: 'POST' }));
+    await api(`/landlets/${materializedLargerClass.landletId}/generation-complete`, adminSession({ method: 'POST' }));
+    // Forced straight to greenbelt/claimable by direct SQL rather than
+    // depending on generation-complete's own enclosure check to have
+    // already been satisfied -- that's a real but separate fact (covered
+    // by this file's own dedicated world-growth tests) this regression
+    // doesn't need to re-assert.
+    await env.DB.prepare(`
+      UPDATE landlets SET status = 'greenbelt', claimable_at = COALESCE(claimable_at, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      WHERE landlet_id IN (?, ?) AND owner_builder_id IS NULL
+    `).bind(materializedClassOne.landletId, materializedLargerClass.landletId).run();
+
+    const classOneClaimer = await signupBuilder('class-one-claimer');
+    const classOneClaim = await api(`/landlets/${materializedClassOne.landletId}/claim`, classOneClaimer.session({ method: 'POST' }));
+    expect(classOneClaim.response.status).toBe(200);
+    expect(classOneClaim.body.landlet.status).toBe('claimed');
+    // POST .../claim never touches area_m2 itself (confirmed by reading
+    // its own SQL) -- what actually keeps a free self-claim at
+    // essentially 1,000 m² is that only a landlet_class = 1 candidate is
+    // even eligible, and every landlet_class = 1 cell converges within
+    // this generator's own 2% tolerance of exactly 1,000 m².
+    expect(Math.abs(classOneClaim.body.landlet.areaM2 - 1000) / 1000).toBeLessThanOrEqual(0.02);
+
+    const largerClassClaimer = await signupBuilder('larger-class-claimer');
+    const largerClassClaim = await api(`/landlets/${materializedLargerClass.landletId}/claim`, largerClassClaimer.session({ method: 'POST' }));
+    expect(largerClassClaim.response.status).toBe(409);
+    expect(largerClassClaim.body.error).toMatch(/larger than the free starter size/i);
 
     const duplicate = await api('/land-candidates/generate-mosaic', adminSession({
       method: 'POST', body: JSON.stringify({ prefix: 'organic-patch', count: 16 }),

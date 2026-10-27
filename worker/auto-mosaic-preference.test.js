@@ -52,7 +52,7 @@ describe('scheduled() automatic world growth prefers mosaic over ring (#1085)', 
     const starter = await env.DB.prepare(
       `SELECT metadata_json FROM landlets WHERE landlet_id = 'starter-landlet'`,
     ).first();
-    expect(JSON.parse(starter.metadata_json).generator).toBe('organic-mosaic-v1');
+    expect(JSON.parse(starter.metadata_json).generator).toBe('water-aware-mosaic-v1');
 
     // Ring generation must not have run at all this tick -- mosaic being
     // available took priority over it entirely, not just a fallback that

@@ -3201,51 +3201,55 @@ admin user id to bucket on outside an HTTP request.
 
 ### `POST /api/land-candidates/generate-mosaic`
 
-Creates a deterministic Eroded Mosaic patch of exactly 16 class-1 lands centered on
-the world origin. The request contains `prefix` and `count`; `prefix` also seeds
-the blue-noise site placement and stable IDs. Every land is exactly 1,000 m².
-The stored template was produced offline from a shared equal-area power diagram,
-with the same sampled S-curve used by both polygons along every seam. Request
-handling only applies a deterministic rigid rotation seeded by `prefix`; it does
-not solve the diagram synchronously. This keeps generation compatible with the
-Cloudflare Workers free-tier CPU budget. The zero-signed-area bends preserve
-plot area while preventing gaps and overlaps.
+Creates a deterministic, water-aware mosaic of `count` land candidates
+centered on the world origin (#2806/#2810/#2811/#2812, replacing the
+original fixed-16x1,000m² Eroded Mosaic template — see "Water-aware,
+variable-size mosaic generator" below for how it actually works). The
+request contains `prefix` (also seeds site placement and stable IDs),
+`count` (between 3 and 100, like `generate-ring` below), and optionally
+`radiusM` (the boundary disc's own radius; defaults to an estimate sized
+so `count` cells' power-law target areas exactly fill the disc when no
+real water falls inside it — see `defaultMosaicBoundaryRadiusM`,
+`worker/lib/water-aware-mosaic.js`). Each cell's target area is drawn
+from `powerLawPlots` (`worker/landGenerator.js`) — the same authoritative
+power-law size tiers `generate-ring`'s own `distribution: 'power-law'`
+option below uses — so most cells are exactly 1,000 m² (class 1) with a
+shrinking share of larger classes, not a fixed single size.
 
-One of the 16 template cells always covers the world origin — the same point
-`starter-landlet` sits on, since the template is only rotated by `prefix`'s
-seed, never translated. Rather than inserting a competing candidate there,
-that cell's polygon is written onto `starter-landlet` directly (its
-`center`, `polygon`, and `metadata` update in place). Unlike its 15
-siblings, `starter-landlet` already exists as a landlet row rather than a
-fresh candidate, so it skips the normal materialize-then-generation-complete
-pipeline — this call promotes it straight to `greenbelt`/claimable (the same
-end state the other cells eventually reach) whenever it's currently
+One of the generated cells always covers the world origin — the same
+point `starter-landlet` sits on, since the boundary disc is always
+centered there. Rather than inserting a competing candidate there, that
+cell's polygon is written onto `starter-landlet` directly (its `center`,
+`polygon`, and `metadata` update in place). Unlike its siblings,
+`starter-landlet` already exists as a landlet row rather than a fresh
+candidate, so it skips the normal materialize-then-generation-complete
+pipeline — this call promotes it straight to `greenbelt`/claimable (the
+same end state the other cells eventually reach) whenever it's currently
 unowned, so it claims and releases exactly like any other land. A landlet
 already genuinely claimed by a real builder is left alone. The response's
-`candidates` array therefore contains the other 15 cells, not 16, and
-`starterLandletId` names the landlet that received the 16th. Candidates
-among those 15 that intersect the current availability circle materialize
-as generating landlets immediately; remaining complete shapes stay queued
+`candidates` array therefore contains the other `count - 1` cells, and
+`starterLandletId` names the landlet that received the origin cell.
+Candidates that intersect the current availability circle materialize as
+generating landlets immediately; remaining complete shapes stay queued
 and non-selectable until a later expansion reaches them. The response
 contains `candidates`, `materializedLandletIds`, and `starterLandletId`.
 
 Reusing a prefix returns `409`. So does any generated cell overlapping an
 existing landlet or candidate — checked by real polygon intersection, not
 just a radial band like `generate-ring` uses, since this generator has no
-radial structure for a band check to work with (every call covers the same
-disc around the origin, only rotated). In practice this means the endpoint
-is only callable once per world: a second call, with any prefix, still
-covers that same disc and will conflict with the first call's land.
+radial structure for a band check to work with (every call covers a disc
+around the origin, only rotated/resized). In practice this means the
+endpoint is only callable once per world at a given `radiusM`: a second
+call, with any prefix, still covers overlapping land and will conflict
+with the first call's.
 
-This endpoint is the current organic-generation prototype. New world data
-should use it instead of the legacy annular endpoint below. Larger land classes
-remain a future extension; this first version deliberately emits only exact
-1,000 m² class-1 lands.
-
-Each generated cell's `landType` (#2014) is `water` instead of the usual
-`buildable` default when its center falls near a real pre-1916 water cell
-ingested into `geo_water_cells` (`scripts/ingest-geo-data.mjs`,
-migrations/0128) — forward-generation only, never retroactive.
+Each generated cell's `landType` is `water` either because the
+water-aware generator itself classified it that way (a real water body
+within the boundary, #2811) or — a safety-net upgrade pass kept
+unconditionally, same as before — its center falls near a real pre-1916
+water cell ingested into the older, coarser `geo_water_cells`
+(`scripts/ingest-geo-data.mjs`, migrations/0128). Forward-generation
+only, never retroactive.
 
 Each generated cell's `biome` (#2371) is similarly set from real ingested
 data in `geo_biome_cells` (migrations/0149) when its center falls near a
@@ -3332,39 +3336,46 @@ table's own sampling spacing — `worker/geoData.js`'s
 `GEO_WATER_FINE_GRID_SPACING_M`, currently 5m) and
 `fractionOfRegionWater(db, polygon)` (what fraction of a candidate
 landlet polygon's own sampled area is water — the primitive a
-"predominantly water" decision needs). Neither `generate-mosaic` nor
-`generate-ring` above calls either helper yet: both endpoints' real
-water classification still comes entirely from the coarse
-`isNearWaterCell`/`applyRealWaterClassification` path described above,
-unchanged. Wiring a shape-respecting generator that actually consults
-this finer data is `#2806`'s scope, a separate sub-issue of the same
-`#2804` water-first/variable-size landlet generation tracking issue this
-one belongs to.
+"predominantly water" decision needs). `generate-mosaic` above now uses
+both, via the water-aware generator described next; `generate-ring`
+still doesn't — its own real water classification still comes entirely
+from the coarse `isNearWaterCell`/`applyRealWaterClassification` path
+described above, unchanged.
 
-#### Water-aware, variable-size mosaic generator (#2806/#2810/#2811, not yet wired into generate-mosaic)
+#### Water-aware, variable-size mosaic generator (#2806/#2810/#2811/#2812)
 
-Two new modules build the actual replacement for `generateOrganicMosaic`'s
-fixed equal-area template, still not called by `generate-mosaic` above
-(that wiring is `#2812`'s own scope). `worker/weightedVoronoiGenerator.js`
-(`generateWeightedVoronoiTiling`, #2810) is a pure, network/DB-free power
-diagram (weighted Voronoi) that tiles a boundary into polygons converging
-on a list of target areas — e.g. from `powerLawPlots` (`worker/
-landGenerator.js`), which already implements #2806's own power-law size
-tiers. `worker/lib/water-aware-mosaic.js` (`generateWaterAwareMosaic`,
-#2811) wraps it with real water data: it clusters `geo_water_cells_fine`
-sample points within a boundary into contiguous blobs
-(`fetchWaterBlobs`), feeds each blob in as its own fixed, non-relaxing
-site in the same tessellation as the ordinary land sites (so land cells
-genuinely relax away from real water through the same power-bisector math
-that already keeps land cells from overlapping each other, not just a
-classification pass after the fact), then flags each finished cell
-`water` or `buildable` via `fractionOfRegionWater` (a fixed water-blob
-cell is always `water`). A cell's stored polygon is never reshaped against
-the real water boundary — only its `landType` changes, the same
-coarse-path binary classification `applyRealWaterClassification` already
-uses; genuine shoreline-following polygon edges would need real water
-*polygon* geometry, not just the sample-point grid this data is, and
-isn't attempted here.
+The actual replacement for `generateOrganicMosaic`'s old fixed equal-area
+template, wired into `generate-mosaic` above. `worker/
+weightedVoronoiGenerator.js` (`generateWeightedVoronoiTiling`, #2810) is
+a pure, network/DB-free power diagram (weighted Voronoi) that tiles a
+boundary into polygons converging on a list of target areas — e.g. from
+`powerLawPlots` (`worker/landGenerator.js`), which already implements
+#2806's own power-law size tiers. `worker/lib/water-aware-mosaic.js`
+(`generateWaterAwareMosaic`, #2811) wraps it with real water data: it
+clusters `geo_water_cells_fine` sample points within a boundary into
+contiguous blobs (`fetchWaterBlobs`), feeds each blob in as its own
+fixed, non-relaxing site in the same tessellation as the ordinary land
+sites (so land cells genuinely relax away from real water through the
+same power-bisector math that already keeps land cells from overlapping
+each other, not just a classification pass after the fact), then flags
+each finished cell `water` or `buildable` via `fractionOfRegionWater` (a
+fixed water-blob cell is always `water`). A cell's stored polygon is
+never reshaped against the real water boundary — only its `landType`
+changes, the same coarse-path binary classification
+`applyRealWaterClassification` already uses; genuine shoreline-following
+polygon edges would need real water *polygon* geometry, not just the
+sample-point grid this data is, and isn't attempted here.
+`worker/lib/world-generation.js`'s `generateLandletMosaicCandidates`
+(#2812) is the actual call site: it sizes a boundary disc via
+`defaultMosaicBoundaryRadiusM` (or a caller-supplied `radiusM`), calls
+`generateWaterAwareMosaic`, then shapes each cell into the same
+candidate-row format `generateOrganicMosaic`'s own cells always had —
+every other generator, and everything downstream of
+`candidateRowFromLandlet`, never needs to know which generator actually
+produced a candidate. `geo_water_cells_fine` still ships empty in
+production pending #2805's own NHD-service-outage follow-up, so in
+practice every real `generate-mosaic` call today still only gets its
+water awareness from the coarse safety-net pass, until that lands.
 
 ## Land candidate rings
 

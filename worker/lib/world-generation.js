@@ -36,8 +36,9 @@ import {
 } from '../geometry.js';
 import { GEO_WATER_FINE_GRID_SPACING_M } from '../geoData.js';
 import { generateLandletRing, powerLawPlots } from '../landGenerator.js';
-import { generateOrganicMosaic } from '../organicLandGenerator.js';
 import { json, HttpError } from './http.js';
+import { defaultMosaicBoundaryRadiusM, generateWaterAwareMosaic } from './water-aware-mosaic.js';
+import { discBoundary } from '../weightedVoronoiGenerator.js';
 import {
   readJson, stringValue, finiteNumber, queryLimit, decodeCursor, encodeCursor, positiveInteger,
 } from './validation.js';
@@ -264,22 +265,61 @@ async function applyRealBiomeClassification(db, candidates) {
   }));
 }
 
+// #2812 (sub-issue of #2806): shapes one generateWaterAwareMosaic cell
+// into the same candidate shape generateOrganicMosaic's own cells always
+// had (landletId/name/areaM2/center/landClass/landType/polygon/metadata)
+// — candidateRowFromLandlet and everything downstream of it never needs
+// to know which generator actually produced a candidate. `polygon` is
+// converted from generateWeightedVoronoiTiling's own absolute coordinate
+// space to the plot-local offsets every other generator's candidates use
+// (callers read a real position back out via `center` + these offsets).
+function candidateFromMosaicCell(cell, prefix, index) {
+  return {
+    landletId: `${prefix}-${String(index + 1).padStart(3, '0')}`,
+    name: `${prefix} ${index + 1}`,
+    areaM2: cell.areaM2,
+    center: cell.center,
+    landClass: cell.landClass,
+    landType: cell.landType,
+    polygon: cell.polygon.map((point) => ({ x: point.x - cell.center.x, y: point.y - cell.center.y })),
+    metadata: {
+      generated: true, generator: 'water-aware-mosaic-v1', mosaicIndex: index, ...cell.plotMetadata,
+    },
+  };
+}
+
 // Split out from the generate-mosaic handler below so #1085's automatic
 // path (generateAutoMosaicIfFreshWorld) can reuse the exact same
 // generation/validation/overlap-guard logic without an admin session —
 // same split generateLandletRingCandidates already uses for generate-ring,
 // including the optional adminUserId (action log entry only written when
-// a real admin is the one calling it).
-async function generateLandletMosaicCandidates(db, { prefix, count }, adminUserId) {
-  const mosaicCells = generateOrganicMosaic({ prefix, count });
+// a real admin is the one calling it). `radiusM` defaults to
+// defaultMosaicBoundaryRadiusM's own estimate (sized so `count` cells'
+// power-law target areas exactly fill the disc when no water is present)
+// — a caller (e.g. #2807's future precompute job) can still pass a
+// specific radius directly, per this issue's own "coordinate on the
+// calling convention rather than assuming #2807's shape unilaterally".
+async function generateLandletMosaicCandidates(db, { prefix, count, radiusM }, adminUserId) {
+  const effectiveRadiusM = radiusM ?? defaultMosaicBoundaryRadiusM(count, prefix);
+  const mosaicResult = await generateWaterAwareMosaic(db, {
+    boundary: discBoundary(effectiveRadiusM), landletCount: count, seed: prefix,
+  });
+  const mosaicCells = mosaicResult.cells.map((cell, index) => candidateFromMosaicCell(cell, prefix, index));
+  // generateWaterAwareMosaic already classifies water from the real,
+  // high-granularity geo_water_cells_fine data (#2805/#2811) -- this is a
+  // safety-net upgrade pass against the older, coarser geo_water_cells
+  // table on top of that, same as generateOrganicMosaic's own candidates
+  // always got. Harmless and valuable in practice while the fine table is
+  // still empty pending #2805's own NHD-outage follow-up: it's the only
+  // real water awareness this path has until that lands.
   await applyRealWaterClassification(db, mosaicCells);
   await applyRealBiomeClassification(db, mosaicCells);
   const generated = mosaicCells.map((candidate) =>
     validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
 
-  // The mosaic template always covers the world origin as part of its
-  // 16-cell disc (organicLandGenerator.js only rotates it, never
-  // translates it) — the same point 'starter-landlet' sits on. Rather than
+  // The mosaic's own disc always covers the world origin (discBoundary is
+  // centered at (0,0), same as generateOrganicMosaic's own fixed template
+  // always was) — the same point 'starter-landlet' sits on. Rather than
   // inserting a competing candidate there, the cell containing the origin
   // becomes starter-landlet's own shape directly, so there's exactly one
   // polygon at the center instead of two independently-placed ones.
@@ -390,8 +430,18 @@ async function handleLandCandidates(request, db, route, url) {
       throw new HttpError('prefix must contain only lowercase letters, numbers, and hyphens', 400);
     }
     const count = positiveInteger(input.count, 'count');
-    if (count !== 16) throw new HttpError('count must be 16', 400);
-    const result = await generateLandletMosaicCandidates(db, { prefix, count }, admin.user_id);
+    // #2812: generateOrganicMosaic's own fixed-16-cell template is gone --
+    // this now generates a real power-law size mix (#2806), so the count
+    // bound matches generate-ring's own below rather than a single fixed
+    // value a variable-count generator has no reason to keep.
+    if (count < 3 || count > 100) throw new HttpError('count must be between 3 and 100', 400);
+    // Optional: a caller (e.g. a future #2807 precompute job) that already
+    // knows how large an area it wants generated can pass this directly,
+    // per #2812's own "coordinate on the calling convention" note --
+    // defaults to defaultMosaicBoundaryRadiusM's own estimate otherwise.
+    const radiusM = input.radiusM === undefined ? undefined : finiteNumber(input.radiusM, 'radiusM');
+    if (radiusM !== undefined && radiusM <= 0) throw new HttpError('radiusM must be greater than zero', 400);
+    const result = await generateLandletMosaicCandidates(db, { prefix, count, radiusM }, admin.user_id);
     return json(result, 201);
   }
 

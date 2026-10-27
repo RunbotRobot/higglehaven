@@ -114,6 +114,20 @@ export async function fetchWaterBlobs(db, boundary, clusterDistanceM = GEO_WATER
   });
 }
 
+// #2812 (sub-issue of #2806): the boundary a caller should generate
+// `landletCount` cells into, sized so the Voronoi tessellation's own
+// target areas exactly sum to the boundary's own area when no water is
+// present (the algorithm has no "leftover" concept -- every unit of
+// boundary area belongs to some site). Ignores any real water that might
+// turn out to be inside this boundary by construction -- there's no way
+// to know that without already having a boundary to query against, and
+// #2807's own auto-widening precompute buffer is where correcting for a
+// consistently-undersized yield belongs, not here.
+export function defaultMosaicBoundaryRadiusM(landletCount, seed) {
+  const totalAreaM2 = powerLawPlots(landletCount, seed).reduce((sum, plot) => sum + plot.areaM2, 0);
+  return Math.sqrt(totalAreaM2 / Math.PI);
+}
+
 // Main entry point: a water-aware replacement for generateOrganicMosaic's
 // own call shape, but variable-count/variable-size (#2806's own
 // power-law size mix, via powerLawPlots) instead of a fixed 16x1000m2
@@ -123,6 +137,11 @@ export async function fetchWaterBlobs(db, boundary, clusterDistanceM = GEO_WATER
 // scope describes; their total target area is scaled down by however much
 // of `boundary` real water already accounts for, so the land sites are
 // never asked to converge on more buildable area than is actually left.
+// Each returned cell carries `landClass`/`plotMetadata` straight from its
+// own powerLawPlots draw (null/`{waterBlob: true}` for a water cell) --
+// #2812's own wiring (worker/lib/world-generation.js) needs these to shape
+// a real landlet_candidates row, the same way generateOrganicMosaic's own
+// candidates always carried a landClass.
 export async function generateWaterAwareMosaic(db, {
   boundary, landletCount, seed, waterThreshold = PREDOMINANTLY_WATER_THRESHOLD,
 }) {
@@ -149,10 +168,25 @@ export async function generateWaterAwareMosaic(db, {
     boundary, areas: landAreas, seed, fixedSites, avoidRegions,
   });
 
-  const cells = await Promise.all(result.cells.map(async (cell) => {
-    if (cell.fixed) return { ...cell, landType: 'water', waterFraction: 1 };
+  // result.cells lists the randomly-placed land sites first, then the
+  // fixed water-blob sites, in the same order generateWeightedVoronoiTiling
+  // itself builds them (`[...randomSites, ...pinnedSites]`) -- so index i
+  // for i < landAreas.length is always rawPlots[i]'s own cell, letting
+  // landClass/metadata (#2812's own wiring needs these to shape a real
+  // candidate row) carry through from the power-law draw.
+  const cells = await Promise.all(result.cells.map(async (cell, index) => {
+    if (cell.fixed) {
+      return { ...cell, landType: 'water', waterFraction: 1, landClass: null, plotMetadata: { waterBlob: true } };
+    }
+    const plot = rawPlots[index];
     const waterFraction = await fractionOfRegionWater(db, cell.polygon);
-    return { ...cell, landType: waterFraction >= waterThreshold ? 'water' : 'buildable', waterFraction };
+    return {
+      ...cell,
+      landType: waterFraction >= waterThreshold ? 'water' : 'buildable',
+      waterFraction,
+      landClass: plot.landClass,
+      plotMetadata: plot.metadata,
+    };
   }));
 
   return {
