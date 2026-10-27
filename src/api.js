@@ -1805,6 +1805,35 @@ export async function fetchNearbyChatMessages({ cursor = null } = {}) {
   return requestJson(`/nearby-chat?${query.toString()}`);
 }
 
+// #2817/#2818 (sub-issues of #2780, proximity voice chat): the WebRTC
+// signaling relay — point-to-point, unlike fetchNearbyChatMessages' own
+// landlet-wide broadcast above. src/shop/voiceChat.js is the only caller.
+export async function sendVoiceSignal({ toBuilderId, kind, payload }) {
+  const { message } = await requestJson('/voice/signal', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ toBuilderId, kind, payload }),
+  });
+  return message;
+}
+
+// Same forward-cursor poll shape as fetchNearbyChatMessages above, except
+// the response is always the caller's own inbox, never a landlet-wide feed.
+export async function fetchVoiceSignals({ cursor = null } = {}) {
+  const query = new URLSearchParams();
+  if (cursor) query.set('cursor', cursor);
+  return requestJson(`/voice/signal?${query.toString()}`);
+}
+
+// #2818: STUN always; TURN only once the owner's self-hosted relay secret
+// is actually configured server-side (worker/lib/social.js's
+// handleVoiceIceConfig) — fetched once and cached by the caller, not
+// polled, since this almost never changes mid-session.
+export async function fetchVoiceIceConfig() {
+  const { iceServers } = await requestJson('/voice/ice-config');
+  return iceServers;
+}
+
 // #1995 (sub-issue of #1976): every currently-active credit orb, optionally
 // scoped to one landlet — see docs/API.md's "Credit orbs" for the shape.
 // Unauthenticated, same as GET /api/instances.

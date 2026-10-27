@@ -459,7 +459,35 @@ function voiceSignalMessageFromRow(row) {
   };
 }
 
-export async function handleVoiceSignal(request, db, route, url) {
+// #2818 (sub-issue of #2780): the owner is self-hosting a TURN relay (GCP
+// e2-micro + LiveKit's embedded TURN, per #2778's resolution) — its address/
+// credentials are a Worker secret (TURN_SERVER_URL/TURN_SERVER_USERNAME/
+// TURN_SERVER_CREDENTIAL), never committed. STUN is always included so this
+// works today, before that secret is ever set, and picks up the real TURN
+// relay the moment it's configured with no client-side code change. A
+// public STUN server (no account/credentials needed) — Cloudflare's own
+// free tier doesn't run one, same reasoning #2778 gave for why TURN needs
+// its own answer.
+const VOICE_ICE_CONFIG_RATE_LIMIT_MAX = PRESENCE_NEARBY_RATE_LIMIT_MAX;
+
+async function handleVoiceIceConfig(request, db, env) {
+  const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+  await checkRateLimit(db, `voice-ice-config:${sessionBuilder.builder_id}`, VOICE_ICE_CONFIG_RATE_LIMIT_MAX);
+  const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
+  if (env?.TURN_SERVER_URL) {
+    iceServers.push({
+      urls: env.TURN_SERVER_URL,
+      username: env.TURN_SERVER_USERNAME,
+      credential: env.TURN_SERVER_CREDENTIAL,
+    });
+  }
+  return json({ iceServers });
+}
+
+export async function handleVoiceSignal(request, db, route, url, env) {
+  if (route.length === 2 && route[1] === 'ice-config' && request.method === 'GET') {
+    return handleVoiceIceConfig(request, db, env);
+  }
   if (route.length !== 2 || route[1] !== 'signal') {
     return json({ error: 'Not found' }, 404);
   }

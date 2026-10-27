@@ -661,9 +661,10 @@ async function handleApi(request, env, url, ctx) {
   }
 
   // #2817 (sub-issue of #2780, itself sub-issue of #2777): proximity
-  // voice chat's WebRTC signaling relay.
+  // voice chat's WebRTC signaling relay, plus #2818's own ICE-server-config
+  // endpoint (needs env directly for the TURN secret, not just env.DB).
   if (route[0] === 'voice') {
-    return handleVoiceSignal(request, env.DB, route, url);
+    return handleVoiceSignal(request, env.DB, route, url, env);
   }
 
   if (route[0] === 'purchases') {
