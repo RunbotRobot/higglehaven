@@ -73,6 +73,10 @@ let audioCtx = null;
 
 // builderId -> { pc, polite, makingOffer, ignoreOffer, sourceNode, gainNode }
 const peers = new Map();
+// builderId -> in-flight Promise<entry>, while getOrCreatePeer's own async
+// setup (ensureMyBuilderId/ensureIceServers) hasn't resolved yet -- see
+// that function's own comment for the race this guards against.
+const pendingPeers = new Map();
 let voiceSignalCursor = null;
 let voiceLastPollAt = 0;
 let voicePollToken = 0;
@@ -119,7 +123,8 @@ function refreshVoicePeersDiagnostic() {
   // can't just read local in-memory state the way a single-session feature
   // would.
   window.__shopVoicePeers = [...peers.entries()].map(([builderId, entry]) => ({
-    builderId, connectionState: entry.pc.connectionState, polite: entry.polite,
+    builderId, connectionState: entry.pc.connectionState, signalingState: entry.pc.signalingState,
+    iceConnectionState: entry.pc.iceConnectionState, polite: entry.polite,
   }));
 }
 
@@ -239,11 +244,35 @@ function voiceGainForDistance(distanceM) {
   return 1 - smooth;
 }
 
+// #2818: updateVoicePeersForRange calls this on every frame for any nearby
+// avatar not yet in `peers` -- without the pendingPeers guard below, several
+// frames can all see "not created yet" before the first call's own
+// ensureMyBuilderId/ensureIceServers awaits resolve, each racing to create
+// its own separate RTCPeerConnection for the same builderId. Only the last
+// one to finish would end up in `peers`, leaving the earlier ones orphaned
+// (never torn down, still live, still sending their own ICE
+// candidates/offers under the same fromBuilderId) -- confirmed as the real
+// cause of this module's own intermittent "stuck at connectionState 'new'"
+// failures while validating this feature's own e2e test.
 async function getOrCreatePeer(builderId) {
   const existing = peers.get(builderId);
   if (existing) return existing;
+  const pending = pendingPeers.get(builderId);
+  if (pending) return pending;
+  const creation = createPeer(builderId).finally(() => pendingPeers.delete(builderId));
+  pendingPeers.set(builderId, creation);
+  return creation;
+}
+
+async function createPeer(builderId) {
   await ensureMyBuilderId();
   const iceServers = await ensureIceServers();
+  // Re-check now that the awaits above have resolved -- another call could
+  // have raced ahead and already landed an entry in `peers` (e.g. a direct
+  // offer/answer/ice-candidate from handleIncomingSignal, which also goes
+  // through this same function) while this one was still waiting.
+  const existing = peers.get(builderId);
+  if (existing) return existing;
   const pc = new RTCPeerConnection({ iceServers });
   const entry = { pc, polite: myBuilderId < builderId, makingOffer: false, ignoreOffer: false, sourceNode: null, gainNode: null };
   peers.set(builderId, entry);
@@ -276,6 +305,8 @@ async function getOrCreatePeer(builderId) {
     refreshVoicePeersDiagnostic();
     if (pc.connectionState === 'failed' || pc.connectionState === 'closed') teardownPeer(builderId);
   };
+  pc.onsignalingstatechange = refreshVoicePeersDiagnostic;
+  pc.oniceconnectionstatechange = refreshVoicePeersDiagnostic;
 
   if (localStream) {
     pc.addTrack(localStream.getAudioTracks()[0], localStream);
