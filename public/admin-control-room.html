@@ -44,6 +44,7 @@
   .pill-done { background: #dcefd0; color: #386418; }
   .pill-tag { background: #f3e6cf; color: #7a5a12; }
   .pill-bug-report { background: #f0d9e8; color: #7a1a52; font-weight: 700; }
+  .pill-voice-report { background: #fde0d0; color: #8a3a12; font-weight: 700; }
   .pill-waiting-owner { background: #f6d4cb; color: #8a2a12; font-weight: 800; }
   .pill-waiting-owner-unexplained { background: #f6a48c; color: #5c1505; font-weight: 800; }
   .pill-waiting-claude { background: #dcefd0; color: #386418; }
@@ -404,9 +405,14 @@
   // GitHub-backed/feedback kind is implicit from its number/chip/url) --
   // a bug report has none of those, so without this it's indistinguishable
   // from an ordinary owner-posted feedback note at a glance.
+  // #2819: same gap for a voice-chat conduct report (worker/lib/social.js's
+  // handleVoiceReportCreate) -- reuses the same pill styling as bug-report
+  // (just its own label/color below) rather than inventing a new visual
+  // language for "a trust-and-safety item that needs a human look."
   function kindBadge(task) {
-    if (task.kind !== 'bug-report') return '';
-    return '<span class="pill pill-bug-report">Bug report</span>';
+    if (task.kind === 'bug-report') return '<span class="pill pill-bug-report">Bug report</span>';
+    if (task.kind === 'voice-report') return '<span class="pill pill-voice-report">Voice report</span>';
+    return '';
   }
 
   function renderCard(task) {
