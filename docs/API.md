@@ -3337,10 +3337,12 @@ table's own sampling spacing — `worker/geoData.js`'s
 `fractionOfRegionWater(db, polygon)` (what fraction of a candidate
 landlet polygon's own sampled area is water — the primitive a
 "predominantly water" decision needs). `generate-mosaic` above now uses
-both, via the water-aware generator described next; `generate-ring`
-still doesn't — its own real water classification still comes entirely
-from the coarse `isNearWaterCell`/`applyRealWaterClassification` path
-described above, unchanged.
+both, via the water-aware generator described next. `generate-ring`'s
+own real water classification still comes entirely from the coarse
+`isNearWaterCell`/`applyRealWaterClassification` path described above —
+a water-aware *algorithm* for the ring shape now exists (#2821, see
+below), but it isn't wired into this endpoint or the automatic growth
+path yet; that's a tracked follow-up, not done here.
 
 #### Water-aware, variable-size mosaic generator (#2806/#2810/#2811/#2812)
 
@@ -3376,6 +3378,50 @@ produced a candidate. `geo_water_cells_fine` still ships empty in
 production pending #2805's own NHD-service-outage follow-up, so in
 practice every real `generate-mosaic` call today still only gets its
 water awareness from the coarse safety-net pass, until that lands.
+
+#### Water-aware ring generator (#2821, not yet wired into `generate-ring`)
+
+The disc-tiling approach above (`generateWeightedVoronoiTiling`) can't be
+reused directly for a ring: it clips a boundary by half-plane bisectors,
+which only stays correct because clipping a convex region by any number
+of half-planes is still convex. An annulus (a ring has a hole) is
+fundamentally not convex — the straight line between two points on its
+own inner edge passes outside the ring, through the hole — so forcing
+the Voronoi core onto it risks a clip corrupting a cell into something
+self-intersecting, and even a version that avoided that specific risk
+couldn't guarantee its cell boundary lands exactly on the true inner
+radius (a power-diagram cell edge is a polygon from half-plane
+intersections, never a literal circle) — fine for water, where only the
+*classification* matters, not fine for the ring's own inner edge, which
+has to exactly abut already-materialized, already-owned land from an
+earlier growth cycle.
+
+`worker/lib/water-aware-ring.js` (`generateWaterAwareLandletRing`) solves
+this a different way, keeping `generateLandletRing`'s own much simpler
+1D angular-partition structure (every plot already shares one radial
+band by construction, with only its angular width varying — no clipping,
+no hole-topology risk at all) rather than forcing a 2D tessellation onto
+it. `detectWaterArcs` scans the ring's circumference in fixed angular
+slices (sampling real `geo_water_cells_fine` data, same "predominantly
+water" threshold as the mosaic path) and merges adjacent water slices
+into real fixed-position arcs; the land plots' own shared scale/outer
+radius (via `ringAreaScale`'s now-generalized `angleBudget` parameter)
+is then solved against whatever angular room is left once those arcs
+are excluded, iterating (detect water in the current band → shrink
+land's angular budget → grow the radius to compensate → re-detect
+against the now-wider band) until the radius stops moving. Placement
+then walks the circle once, inserting each water arc at its own fixed
+position; a land plot whose own fixed width would straddle one gets
+split into two or more smaller fragments around it (losing its exact
+target-area match, an accepted approximation mirroring the mosaic
+path's own "cell polygon never reshaped to the real shoreline" scope
+decision) — the ring stays gap-free and non-overlapping regardless,
+since every unit of angle around the full circle is always accounted
+for by exactly one placed shape. Not yet called from `generate-ring` or
+the automatic growth path above (`generateLandletRingCandidates`/
+`generateRingAtWorldBoundary`, `worker/lib/world-generation.js`) — same
+algorithm-then-wiring split the mosaic path itself used (#2810/#2811
+before #2812's own wiring leaf).
 
 ## Land candidate rings
 

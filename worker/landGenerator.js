@@ -72,16 +72,23 @@ export function powerLawPlots(count, seed) {
   return plots;
 }
 
-function ringAreaScale(areas, arcSegments) {
+// #2821 (sub-issue of #2804): `angleBudget` generalizes this from "fit the
+// whole circle" to "fit whatever angular room is actually left" -- the
+// water-aware ring generator (worker/lib/water-aware-ring.js) needs this
+// to size land plots' shared scale/radius against TAU minus however much
+// of the circle real water already claims, without duplicating this
+// binary search. Default TAU keeps every existing caller (generateLandletRing
+// below) byte-for-byte unchanged.
+export function ringAreaScale(areas, arcSegments, angleBudget = TAU) {
   let low = Math.max(...areas) / arcSegments;
   let high = low * 2;
   const angleSum = (scale) => areas.reduce(
     (sum, area) => sum + arcSegments * Math.asin(Math.min(1, area / (scale * arcSegments))), 0,
   );
-  while (angleSum(high) > TAU) high *= 2;
+  while (angleSum(high) > angleBudget) high *= 2;
   for (let iteration = 0; iteration < 80; iteration += 1) {
     const middle = (low + high) / 2;
-    if (angleSum(middle) > TAU) low = middle;
+    if (angleSum(middle) > angleBudget) low = middle;
     else high = middle;
   }
   return high;
