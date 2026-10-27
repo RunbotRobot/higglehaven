@@ -118,6 +118,17 @@ async function launchVoicePage(label) {
   await page.route('**/api/voice/ice-config', (route) => route.fulfill({
     status: 200, contentType: 'application/json', body: JSON.stringify({ iceServers: [] }),
   }));
+  // #2781: src/shop/voiceChat.js's own setInterval polls GET
+  // /api/voice/friend-channels unconditionally (same hasIdVerifiedSession()
+  // gate as the signal/ice-config calls above, not just while this suite's
+  // own proximity peers are being exercised) -- same always-403-for-a-
+  // mocked-trustTier-account gap this file's own header comment explains
+  // for the other two voice endpoints, so it needs the same treatment.
+  // Nothing in this suite joins a friend channel, so an empty list is all
+  // that's needed to keep that poll from ever reaching the real backend.
+  await page.route('**/api/voice/friend-channels*', (route) => route.fulfill({
+    status: 200, contentType: 'application/json', body: JSON.stringify({ channels: [] }),
+  }));
   await page.goto(BASE_URL, { waitUntil: 'networkidle' });
   await page.waitForTimeout(1500);
   return { browser, page, errors };

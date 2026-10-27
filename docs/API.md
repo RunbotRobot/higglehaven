@@ -5096,6 +5096,103 @@ only see messages addressed to themselves), a landlet change between send
 and poll hiding the now-stale message, forward-cursor polling, and the
 covering index.
 
+## Friend group voice channels (#2781)
+
+Sub-issue of #2777 (docs/SPEC.md §2: "Group voice channels for friends
+regardless of proximity"). Extends the proximity voice signaling relay
+above with a second, independent authorization path keyed by accepted
+friendship (the `friendships` table, "Friendships" above) instead of
+landlet/distance proximity — the WebRTC/signaling mechanism itself
+(`voice_signaling_messages`, `POST`/`GET /api/voice/signal`) is unchanged
+and fully reused.
+
+**Model**: `friend_voice_channel_members`
+(`migrations/0159_friend_voice_channel_members.sql`) — one channel per
+owner, keyed by the owner's own `builderId` (no separate channel id).
+Any number of that owner's accepted friends can be members; a member only
+needs to be an accepted friend of the *owner*, not of every other member
+— the same "anyone the host invited talks to everyone else the host
+invited" shape an ordinary group call uses, not a stricter "everyone must
+be mutual friends with everyone" requirement. The owner's own row
+(`member_builder_id = owner_builder_id`) is what marks a channel
+*active* — joining always inserts it (even when some other accepted
+friend is the one joining), so the first join is what opens the channel;
+there is no separate "start" endpoint. The owner leaving deletes every
+row under their `owner_builder_id` at once, closing the channel for
+everyone (mirrors a host hanging up a group call); anyone else leaving
+only removes their own row.
+
+**Gating**: every endpoint below requires `trust_tier === 'id_verified'`
+(`requireIdVerifiedSessionBuilder`), same bar as the signaling relay
+itself.
+
+### `GET /api/voice/friend-channels`
+
+Returns every channel the caller is currently a member of, including one
+they themselves own:
+
+```json
+{ "channels": [{ "ownerBuilderId": "builder-alice", "members": ["builder-alice", "builder-bob"] }] }
+```
+
+`429` after 600 requests per 15 minutes from the same calling builder
+(same budget as the signaling relay's own poll).
+
+### `POST /api/voice/friend-channels/:ownerBuilderId/join`
+
+No body. Joining your own channel (`ownerBuilderId` is the caller's own
+`builderId`) needs no friendship check — this is also how a channel gets
+started in the first place. Joining anyone else's requires an existing
+*accepted* friendship with that owner (`403` otherwise, including when
+only a pending request exists). Idempotent — joining twice is a no-op,
+still `201`. `429` after 40 requests per 15 minutes from the same calling
+builder (an ordinary low-frequency user click, not a high-volume poll).
+
+### `POST /api/voice/friend-channels/:ownerBuilderId/leave`
+
+No body. The owner leaving removes every member (closes the channel for
+everyone); anyone else leaving only removes themselves. A quiet no-op
+(`200`) if the caller was never a member. Same `429` budget as join.
+
+### `POST /api/voice/signal` with `channelOwnerBuilderId`
+
+The signaling relay's own `POST` body (above) takes one additional
+optional field:
+
+```json
+{ "toBuilderId": "...", "kind": "offer", "payload": { "sdp": "..." }, "channelOwnerBuilderId": "builder-alice" }
+```
+
+When present, authorization is "are `toBuilderId` and the caller both
+*currently* members of the friend channel owned by
+`channelOwnerBuilderId` (and is that channel active, i.e. does the
+owner's own row still exist)" — `sharedActiveFriendVoiceChannelExists`,
+worker/lib/social.js — instead of the ordinary landlet-proximity match.
+`400` if they aren't (covers "never a member," "left since joining," and
+"named a channel nobody has ever opened"). The sender still needs a
+recent presence row (unchanged — stored on the row the same as any other
+signal), just not one that matches the recipient's. The stored message
+(and `GET /api/voice/signal`'s own response shape) carries
+`channelOwnerBuilderId` back — `null` for an ordinary proximity signal —
+so the client can skip its distance-based gain ramp for that connection,
+per SPEC's "no distance-based volume ramp here (unlike proximity voice)."
+`GET /api/voice/signal` itself returns a channel-tagged row to its
+recipient regardless of landlet match, since it was authorized by shared
+channel membership at send time, not by a landlet in common.
+
+### Testing note
+
+`worker/friend-voice-channels.test.js` owns this contract: join/leave's
+own id_verified gate, the no-friendship/pending-only `403`s on join,
+self-join-starts-a-channel, idempotent join, a third friend joining the
+same already-open channel, owner-leave-closes-it-for-everyone vs.
+member-leave-removes-only-themselves, the quiet no-op leave, `GET`
+listing, and `POST /voice/signal`'s own `channelOwnerBuilderId` branch
+(the cross-landlet bypass itself, rejecting a non-member or a
+never-opened channel, the still-required sender presence row, a plain
+signal's `channelOwnerBuilderId: null`, and a signal rejected right after
+the recipient leaves).
+
 ## Avatar presence
 
 Tracking issue #1095 (docs/SPEC.md §9 phase 4: "seeing other avatars

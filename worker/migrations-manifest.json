@@ -155,5 +155,6 @@
   "0155_nearby_chat_messages.sql",
   "0156_geo_water_cells_fine.sql",
   "0157_voice_signaling_messages.sql",
-  "0158_precompute_lead_m.sql"
+  "0158_precompute_lead_m.sql",
+  "0159_friend_voice_channel_members.sql"
 ]
