@@ -428,7 +428,18 @@ export async function handleNearbyChat(request, db, route, url) {
 // here is addressed to one specific `toBuilderId` -- the GET poll below
 // only ever returns messages where the caller is the recipient, never a
 // landlet's whole traffic.
-const VOICE_SIGNAL_SEND_RATE_LIMIT_MAX = NEARBY_CHAT_SEND_RATE_LIMIT_MAX;
+// #2824: this used to just reuse NEARBY_CHAT_SEND_RATE_LIMIT_MAX (60 per
+// RATE_LIMIT_WINDOW_MS) -- sized for occasional, keystroke-driven chat
+// sends, not real WebRTC negotiation. One peer connection alone needs an
+// offer + an answer + several trickle-ICE candidates (commonly 5-10+), and
+// walking into a landlet with several nearby avatars at once (an ordinary
+// scenario here, not an edge case) negotiates multiple connections
+// concurrently -- the old limit could be burned through in seconds.
+// Same "needs a much higher ceiling than those endpoints'" reasoning
+// worker/lib/world-objects.js's own INSTANCE_WRITE_RATE_LIMIT_MAX comment
+// (#827) already documents for syncUpdate's own burst-of-many-sends-per-
+// active-session shape.
+const VOICE_SIGNAL_SEND_RATE_LIMIT_MAX = 300;
 const VOICE_SIGNAL_POLL_RATE_LIMIT_MAX = PRESENCE_REPORT_RATE_LIMIT_MAX;
 const VOICE_SIGNAL_POLL_LIMIT = 50;
 const VOICE_SIGNAL_KINDS = new Set(['offer', 'answer', 'ice-candidate']);
