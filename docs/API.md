@@ -4931,6 +4931,102 @@ index. `worker/nearby-chat-cleanup.test.js` covers
 `pruneStaleNearbyChatMessages` directly, the same shape
 `avatar-presence-cleanup.test.js` already established for its own sweep.
 
+## Proximity voice signaling (#2817)
+
+Sub-issue of #2780 (itself sub-issue of #2777, docs/SPEC.md §2's "100 feet
+(~30m) of complete silence as the outer range, with volume ramping up
+gradually as avatars get closer"). This is the backend half only — a
+point-to-point WebRTC signaling relay (SDP offer/answer, ICE candidates)
+between two nearby avatars' browsers, mirroring Nearby chat's own gating
+and landlet-scoping conventions above as closely as possible. The actual
+`RTCPeerConnection` client code, mic permission UX, distance-based gain
+curve, and flying-avatar exclusion are a separate, not-yet-landed
+sub-issue (#2818) that consumes these endpoints; per-shopper mute/report
+is a further sub-issue (#2819) on top of that. #2778's owner resolution
+(closed 2026-10-27) settled the three judgment calls these sub-issues
+depend on: mic muted by default every session (no auto-activate), a
+report+mute mechanism beyond the trust-tier gate is required, and TURN
+relay is self-hosted (GCP e2-micro + LiveKit's embedded TURN) — the
+signaling relay below is agnostic to which TURN server backs it.
+
+**Gating**: requires `trust_tier === 'id_verified'`
+(`requireIdVerifiedSessionBuilder`), same bar as Nearby chat and direct
+messages, per SPEC §6.
+
+**Landlet scoping, point-to-point**: unlike Nearby chat's landlet-wide
+broadcast, each `voice_signaling_messages`
+(`migrations/0157_voice_signaling_messages.sql`) row is addressed to one
+specific `toBuilderId` — `GET` only ever returns messages where the
+caller is the recipient. The server independently derives *both* the
+caller's and the named recipient's current landlet via
+`callersCurrentLandletId` (never trusting either side's own claim, the
+same #2269 anti-spoof reasoning) and rejects (`400`) unless they match —
+this is what makes the 100ft voice range a real, server-enforced boundary
+on who a connection can be set up with, not just a client-side rendering
+choice. Like Nearby chat, this is deliberately ephemeral live state —
+`pruneStaleVoiceSignalingMessages` sweeps rows older than 2 minutes (much
+tighter than chat's 30-minute window, since a signaling message is only
+useful for the few seconds a connection is actually being negotiated).
+
+### Signal message object
+
+```json
+{
+  "messageId": "voice-signal-3f1a9c20-9e44-4b7a-8c3d-1a2b3c4d5e6f",
+  "fromBuilderId": "builder-alice",
+  "kind": "offer",
+  "payload": { "sdp": "..." },
+  "createdAt": "2026-10-27T00:00:00.000Z"
+}
+```
+
+`kind` is one of `"offer"`, `"answer"`, `"ice-candidate"`. `payload` is an
+opaque JSON value (an SDP string/object or an ICE candidate object) — the
+server stores and relays it verbatim without inspecting its shape; the
+client-side WebRTC stack is the actual producer/consumer.
+
+### `GET /api/voice/signal`
+
+Requires an ID-verified session. Same forward-cursor poll shape as `GET
+/api/nearby-chat` (`{ "messages": [...], "nextCursor": "...", "landletId":
+"..." }`, `created_at ASC, message_id ASC`, same-cursor-echoed-back when
+quiet, `landletId` reflecting whichever landlet the response was computed
+for) — except `messages` here is only ever the caller's own inbox
+(`to_builder_id = caller`), not a landlet-wide feed. Returns `{ "messages":
+[], "nextCursor": null, "landletId": null }` when the caller has no
+recent-enough presence row. `429` after 600 requests per 15 minutes from
+the same calling builder (same budget as `GET /api/presence`/`GET
+/api/nearby-chat`'s own polls).
+
+### `POST /api/voice/signal`
+
+Requires an ID-verified session.
+
+```json
+{ "toBuilderId": "...", "kind": "offer", "payload": { "sdp": "..." } }
+```
+
+`400` if: the caller has no recent-enough presence row; `toBuilderId` is
+the caller themselves; `kind` isn't one of the three recognized values;
+`payload` is missing; `payload` serializes to over 20,000 characters (a
+generous abuse cap, not real SDP/ICE validation); or `toBuilderId` isn't
+*currently* reporting presence in the caller's own current landlet (the
+server-enforced proximity check described above — covers both "no
+presence row at all" and "presence row, but a different landlet").
+`429` after 60 requests per 15 minutes from the same calling builder (same
+ceiling as `POST /api/nearby-chat` — connection setup is bursty but
+short-lived per peer pair). Returns `201` with the new message.
+
+### Testing note
+
+`worker/voice-signal.test.js` owns the backend contract: the id_verified
+gate, the no-presence/different-landlet/nonexistent-recipient/self-signal
+`400`s on send, the unrecognized-`kind`/missing-payload/oversized-payload
+`400`s, point-to-point scoping (two recipients in the same landlet each
+only see messages addressed to themselves), a landlet change between send
+and poll hiding the now-stale message, forward-cursor polling, and the
+covering index.
+
 ## Avatar presence
 
 Tracking issue #1095 (docs/SPEC.md §9 phase 4: "seeing other avatars

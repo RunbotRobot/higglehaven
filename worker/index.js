@@ -136,7 +136,7 @@ import {
 // imported back the same way builder-profile.js/auth-routes.js already do).
 import {
   handleNotifications, notificationFromRow, handlePresence, handleFriendships, friendshipFromRow,
-  handleDirectMessages, directMessageFromRow, handleNearbyChat,
+  handleDirectMessages, directMessageFromRow, handleNearbyChat, handleVoiceSignal,
 } from './lib/social.js';
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
@@ -460,6 +460,12 @@ export default {
     ctx.waitUntil(pruneStaleNearbyChatMessages(env.DB).catch((error) => {
       console.error('pruneStaleNearbyChatMessages failed', error);
     }));
+    // #2817 (sub-issue of #2780, itself sub-issue of #2777): without this,
+    // a voice signaling message sits in voice_signaling_messages forever --
+    // nothing else ever deletes one.
+    ctx.waitUntil(pruneStaleVoiceSignalingMessages(env.DB).catch((error) => {
+      console.error('pruneStaleVoiceSignalingMessages failed', error);
+    }));
     // #1619: without this, a video-to-3D job stuck in 'processing' (no
     // webhook ever arrived, polling stopped once the frontend gave up)
     // sits there forever with no automatic timeout/expiry.
@@ -636,6 +642,12 @@ async function handleApi(request, env, url, ctx) {
   // #2779 (sub-issue of #2777): proximity text chat.
   if (route[0] === 'nearby-chat') {
     return handleNearbyChat(request, env.DB, route, url);
+  }
+
+  // #2817 (sub-issue of #2780, itself sub-issue of #2777): proximity
+  // voice chat's WebRTC signaling relay.
+  if (route[0] === 'voice') {
+    return handleVoiceSignal(request, env.DB, route, url);
   }
 
   if (route[0] === 'purchases') {
@@ -2392,6 +2404,18 @@ const NEARBY_CHAT_MESSAGE_STALE_CLEANUP_MS = 30 * 60 * 1000;
 export async function pruneStaleNearbyChatMessages(db) {
   const cutoff = new Date(Date.now() - NEARBY_CHAT_MESSAGE_STALE_CLEANUP_MS).toISOString();
   await db.prepare('DELETE FROM nearby_chat_messages WHERE created_at < ?').bind(cutoff).run();
+}
+
+// #2817 (sub-issue of #2780, itself sub-issue of #2777): voice_signaling_messages
+// (migrations/0157) is only useful for the few seconds a WebRTC connection is
+// being negotiated -- a much shorter-lived purpose than a nearby chat message
+// someone might still be reading, so this window is tighter than
+// NEARBY_CHAT_MESSAGE_STALE_CLEANUP_MS above.
+const VOICE_SIGNAL_MESSAGE_STALE_CLEANUP_MS = 2 * 60 * 1000;
+
+export async function pruneStaleVoiceSignalingMessages(db) {
+  const cutoff = new Date(Date.now() - VOICE_SIGNAL_MESSAGE_STALE_CLEANUP_MS).toISOString();
+  await db.prepare('DELETE FROM voice_signaling_messages WHERE created_at < ?').bind(cutoff).run();
 }
 
 // #1135: production D1 (users, builders, purchases, balances, ...) has no
