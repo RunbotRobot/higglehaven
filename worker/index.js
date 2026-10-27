@@ -67,7 +67,7 @@ import {
 // from this module instead -- see land.js's own comment).
 import {
   handleLandCandidates, handleLandCandidateRings, handleWorld, autoGrowWorldIfNeeded,
-  candidateRowFromLandlet, computeGreenbeltRatio,
+  candidateRowFromLandlet, computeGreenbeltRatio, maintainPrecomputeBuffer,
 } from './lib/world-generation.js';
 // #2613 (leaf of #2540): sold-out markers & self-dealing flag review.
 import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-admin.js';
@@ -412,8 +412,24 @@ export default {
   // missed cycle just means the next scheduled run tries again.
   async scheduled(event, env, ctx) {
     if (!env.DB) return;
+    // #2807 (sub-issue of #2804): maintainPrecomputeBuffer below must run
+    // strictly *after* autoGrowWorldIfNeeded finishes, not as an
+    // independent concurrent job like every other call in this handler --
+    // on a fresh world, autoGrowWorldIfNeeded's own Phase 2 is what
+    // decides whether the world starts via the one-time origin-centered
+    // mosaic seed or a ring (generateAutoMosaicIfFreshWorld's own
+    // comment). Firing both at once races them for that same
+    // origin-centered space: if the buffer job's own ring generation
+    // reaches it first, the mosaic seed's own overlap guard rejects it
+    // and generateAutoMosaicIfFreshWorld silently (and permanently, since
+    // that seed is a one-time operation) falls back to ring generation
+    // instead. Chained in one promise so a failure in either still logs
+    // on its own line, the same shape every other job's own bare
+    // `.catch` here already uses.
     ctx.waitUntil(autoGrowWorldIfNeeded(env.DB).catch((error) => {
       console.error('autoGrowWorldIfNeeded failed', error);
+    }).then(() => maintainPrecomputeBuffer(env.DB)).catch((error) => {
+      console.error('maintainPrecomputeBuffer failed', error);
     }));
     ctx.waitUntil(autoAuctionInactiveLandlets(env.DB).catch((error) => {
       console.error('autoAuctionInactiveLandlets failed', error);

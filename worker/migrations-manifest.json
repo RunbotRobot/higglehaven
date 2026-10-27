@@ -154,5 +154,6 @@
   "0154_placed_instance_groups.sql",
   "0155_nearby_chat_messages.sql",
   "0156_geo_water_cells_fine.sql",
-  "0157_voice_signaling_messages.sql"
+  "0157_voice_signaling_messages.sql",
+  "0158_precompute_lead_m.sql"
 ]
