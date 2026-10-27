@@ -7,8 +7,9 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { isNearWaterCell } from './lib/world-generation.js';
+import { defaultMosaicBoundaryRadiusM, generateWaterAwareMosaic } from './lib/water-aware-mosaic.js';
+import { discBoundary } from './weightedVoronoiGenerator.js';
 import { generateLandletRing } from './landGenerator.js';
-import { generateOrganicMosaic } from './organicLandGenerator.js';
 import { pointInPolygon } from './geometry.js';
 import { api, signupAdmin } from './test-helpers.js';
 
@@ -91,18 +92,29 @@ describe('Real water-cell data upgrades newly-generated landlets to water (#2014
   // "inherently a one-time operation" constraint generateAutoMosaicIfFresh-
   // World's own comment describes. The unseeded cells' assertion below
   // covers the no-regression case within this one call instead.
+  // #2812: generateOrganicMosaic is gone from this call path -- predicting
+  // the real layout now means calling the new generator the same way
+  // generateLandletMosaicCandidates itself does, against a DB state with
+  // no fine-grained water yet (geo_water_cells_fine, #2805/#2811's own
+  // table), so this prediction matches the real endpoint's own call
+  // exactly up to the point this test seeds coarse water below. Seeding
+  // the *coarse* table (geo_water_cells, as seedWaterCell always has)
+  // rather than the fine one is deliberate: it only feeds
+  // applyRealWaterClassification's safety-net upgrade pass (this test's
+  // real subject), never the tessellation itself, so the predicted layout
+  // stays valid after seeding instead of shifting underneath it.
   it('upgrades a mosaic-generated cell to water when seeded near a real water cell, leaving the rest buildable', async () => {
-    const predictedCells = generateOrganicMosaic({ prefix: 'water-mosaic-test', count: 16 });
+    const radiusM = defaultMosaicBoundaryRadiusM(16, 'water-mosaic-test');
+    const predicted = await generateWaterAwareMosaic(env.DB, {
+      boundary: discBoundary(radiusM), landletCount: 16, seed: 'water-mosaic-test',
+    });
     // Same origin-exclusion logic generateLandletMosaicCandidates applies
     // internally -- the cell covering (0, 0) is folded into starter-landlet
     // directly and never becomes its own candidate, so the water cell must
     // land on a different one to actually show up in the response below.
-    const centralIndex = predictedCells.findIndex((cell) => pointInPolygon(
-      { x: 0, y: 0 },
-      cell.polygon.map((point) => ({ x: point.x + cell.center.x, y: point.y + cell.center.y })),
-    ));
+    const centralIndex = predicted.cells.findIndex((cell) => pointInPolygon({ x: 0, y: 0 }, cell.polygon));
     const nonCentralIndex = centralIndex === 0 ? 1 : 0;
-    const waterCenter = predictedCells[nonCentralIndex].center;
+    const waterCenter = predicted.cells[nonCentralIndex].center;
     await seedWaterCell(waterCenter.x, waterCenter.y, 25);
 
     const generated = await api('/land-candidates/generate-mosaic', adminSession({

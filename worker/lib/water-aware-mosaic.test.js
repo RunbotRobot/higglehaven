@@ -67,6 +67,10 @@ describe('generateWaterAwareMosaic (#2811)', () => {
     expect(result.cells.every((cell) => cell.landType === 'buildable')).toBe(true);
     const sumAreas = result.cells.reduce((sum, cell) => sum + cell.areaM2, 0);
     expect(Math.abs(sumAreas - polygonArea(boundary)) / polygonArea(boundary)).toBeLessThanOrEqual(0.02);
+    // #2812's own wiring needs landClass on every land cell to shape a
+    // real candidate row (the free-self-claim landlet_class = 1 gate
+    // depends on this being correct, not just present).
+    expect(result.cells.every((cell) => Number.isInteger(cell.landClass) && cell.landClass >= 1)).toBe(true);
   });
 
   it('classifies a seeded water blob as its own water cell, and shrinks land cells\' total budget to compensate', async () => {
@@ -83,6 +87,8 @@ describe('generateWaterAwareMosaic (#2811)', () => {
     const landCells = result.cells.filter((cell) => cell.landType === 'buildable');
     expect(waterCells.length).toBeGreaterThanOrEqual(1);
     expect(landCells.length).toBeGreaterThan(0);
+    expect(waterCells.every((cell) => cell.landClass === null)).toBe(true);
+    expect(landCells.every((cell) => Number.isInteger(cell.landClass) && cell.landClass >= 1)).toBe(true);
 
     const totalWaterAreaM2 = waterCells.reduce((sum, cell) => sum + cell.areaM2, 0);
     const totalLandAreaM2 = landCells.reduce((sum, cell) => sum + cell.areaM2, 0);
