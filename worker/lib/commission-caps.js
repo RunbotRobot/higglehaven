@@ -38,17 +38,25 @@ export function counterpartyKeyFor(buyerBuilderId, buyerLabel) {
   return buyerBuilderId || buyerLabel;
 }
 
-// How much of *this* sale's commission can be credited to the seller
-// right now -- the caller does `creditNowCents = Math.min(builderShareCents,
-// remainingCapCents)` regardless of which path below produced the number,
-// so both paths return "remaining headroom for this sale," not the raw
-// cap itself, even though the established path's own cap is a per-sale
-// limit (so "headroom" and "the cap" are the same number there) while the
-// new-builder path's cap is cumulative across every past sale to this
-// counterparty (so "headroom" is the cap minus what's already been
-// credited from them, which can be less than the flat cap or, once
-// exhausted, zero).
-export async function remainingCommissionCapCents(db, { builderId, counterpartyKey }) {
+// #2879: used to be one function (remainingCommissionCapCents) that read
+// the new-builder cumulative total with a plain pre-batch SELECT, handed
+// the resulting number back to the caller to apply later in its own
+// batch -- a classic TOCTOU (worker/lib/purchase-creation.js's purchase
+// INSERT, the write that number ends up gating, happens strictly later).
+// Two near-simultaneous sales from the same counterparty could each read
+// "$0 already credited," each independently credit their own full share,
+// and jointly blow past NEW_BUILDER_FLAT_CAP_CENTS -- found via a
+// backlog-exploration pass, no concurrency test existed to catch it.
+//
+// Split in two: this half (the established-builder per-sale cap) has no
+// concurrency problem of its own and stays a plain pre-read -- it's a
+// flat per-sale limit derived from historical averages, so two concurrent
+// sales each independently satisfy it regardless of each other, never
+// accumulating against one another the way the cumulative cap does. Only
+// the new-builder cumulative path's actual credit application needed to
+// move into commissionCreditClaimStatement's atomic write, below -- see
+// that function's own comment for the mechanics.
+export async function commissionCapPlanFor(db, { builderId }) {
   const { results: counterpartyAverages } = await db.prepare(`
     SELECT COALESCE(buyer_builder_id, buyer_label) AS counterparty, AVG(builder_share_cents) AS avg_share_cents
     FROM purchases
@@ -58,14 +66,58 @@ export async function remainingCommissionCapCents(db, { builderId, counterpartyK
 
   if (counterpartyAverages.length >= MIN_ESTABLISHED_COUNTERPARTIES) {
     const overallAverage = counterpartyAverages.reduce((sum, row) => sum + row.avg_share_cents, 0) / counterpartyAverages.length;
-    return Math.round(ESTABLISHED_CAP_MULTIPLIER * overallAverage);
+    return { established: true, capCents: Math.round(ESTABLISHED_CAP_MULTIPLIER * overallAverage) };
   }
+  return { established: false };
+}
 
-  const alreadyCredited = await db.prepare(`
-    SELECT COALESCE(SUM(builder_share_cents), 0) AS total FROM purchases
-    WHERE builder_id = ? AND refunded_at IS NULL AND COALESCE(buyer_builder_id, buyer_label) = ?
-  `).bind(builderId, counterpartyKey).first();
-  return Math.max(0, NEW_BUILDER_FLAT_CAP_CENTS - alreadyCredited.total);
+// #2879: the new-builder cumulative cap's credit decision, made and
+// applied atomically in one statement instead of a separate pre-read --
+// the same "fold the check into the write's own guarded WHERE/subquery,
+// evaluated live instead of trusting an earlier read" idiom worker/lib/
+// land.js's claim UPDATE, auctions.js's bid INSERT, and world-generation.js's
+// settings UPDATE already use elsewhere in this codebase.
+//
+// Must be pushed into the SAME db.batch() as this sale's own purchase row
+// INSERT, and ordered strictly after it -- the subquery below sums
+// `purchases.builder_share_cents` (the same "every non-refunded sale's
+// full share counts against future cap headroom, whether actually
+// credited or still escrowed" semantics the old pre-read used) for every
+// OTHER non-refunded purchase from this counterparty (purchase_id != ?
+// excludes this sale's own just-inserted row), evaluated fresh at the
+// instant this UPDATE actually executes -- never a value read before the
+// transaction started. Two concurrent sales' claims are then strictly
+// ordered relative to each other (each sees whichever purchase rows had
+// already committed first), which is what keeps their combined credited
+// total from ever exceeding the cap: see issue #2879 for the inductive
+// argument.
+//
+// amountExpr appears twice (SET and RETURNING) since SQLite has no
+// per-statement variable to compute it once and reuse across clauses --
+// it's a pure function of already-committed rows as of this statement's
+// own execution, so evaluating it twice within the one statement can't
+// introduce any staleness between the two.
+//
+// RETURNING credited_cents is how the caller learns the actual split
+// (credited now vs. escrowed) without a second read: worker/index.js's
+// own RETURNING-based writes (e.g. the landlet-release UPDATE in
+// builderDeletionStatements) are the precedent for reading a write's own
+// effect straight off its result instead of a follow-up SELECT.
+export function commissionCreditClaimStatement(db, { purchaseId, builderId, counterpartyKey, builderShareCents }) {
+  const amountExpr = `
+    MAX(0, MIN(?, ? - COALESCE((
+      SELECT SUM(builder_share_cents) FROM purchases
+      WHERE builder_id = ? AND refunded_at IS NULL AND purchase_id != ?
+        AND COALESCE(buyer_builder_id, buyer_label) = ?
+    ), 0)))
+  `;
+  const amountArgs = [builderShareCents, NEW_BUILDER_FLAT_CAP_CENTS, builderId, purchaseId, counterpartyKey];
+  return db.prepare(`
+    UPDATE builders
+    SET higgles_balance_cents = higgles_balance_cents + ${amountExpr}
+    WHERE builder_id = ?
+    RETURNING ${amountExpr} AS credited_cents
+  `).bind(...amountArgs, builderId, ...amountArgs);
 }
 
 // Builds the commission_holds insert statement for the portion of a

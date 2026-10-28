@@ -188,6 +188,46 @@ describe('New-builder cumulative per-counterparty cap (#1109)', () => {
     const holdB = await env.DB.prepare('SELECT * FROM commission_holds WHERE purchase_id = ?').bind(purchaseB.purchaseId).first();
     expect(holdB).toBeNull();
   });
+
+  // #2879: regression for a genuine TOCTOU race -- remainingCommissionCapCents
+  // used to read "already credited" with a plain pre-batch SELECT, so two
+  // near-simultaneous purchases from the same counterparty could each read
+  // $0 already credited and each credit their own full share, jointly
+  // exceeding NEW_BUILDER_FLAT_CAP_CENTS. Promise.all here reproduces the
+  // same interleaving the real bug needed: both requests' awaited DB reads
+  // overlap in the event loop even though nothing here is truly
+  // multi-threaded. Fixed by commissionCreditClaimStatement, which makes
+  // and applies the credit decision as one atomic, live-evaluated write
+  // instead of a separate stale read.
+  it('never jointly credits over the cap when two purchases from the same counterparty race', async () => {
+    // Each purchase's own commission is ~60% of the flat cap -- comfortably
+    // under cap alone, but the two together are 120% of it, so the bug (if
+    // present) credits both in full and the fix must still cap the total.
+    const priceCents = Math.round((NEW_BUILDER_FLAT_CAP_CENTS * 0.6) / 0.01);
+    const seller = await setUpSeller('new-builder-race', priceCents);
+    await createTemplate('new-builder-race-template-2', priceCents);
+    await placeInstance('new-builder-race-instance-2', 'new-builder-race-landlet', 'new-builder-race-template-2', seller);
+    const buyer = await signupAdmin('new-builder-race-buyer');
+    const beforeBalance = (await builderRow(seller.builderId)).higgles_balance_cents;
+
+    const [first, second] = await Promise.all([
+      purchase('new-builder-race-instance', buyer),
+      purchase('new-builder-race-instance-2', buyer),
+    ]);
+
+    const afterBalance = (await builderRow(seller.builderId)).higgles_balance_cents;
+    const totalCreditedNow = afterBalance - beforeBalance;
+    const totalShareCents = first.builderShareCents + second.builderShareCents;
+    expect(totalShareCents).toBeGreaterThan(NEW_BUILDER_FLAT_CAP_CENTS);
+    expect(totalCreditedNow).toBeLessThanOrEqual(NEW_BUILDER_FLAT_CAP_CENTS);
+    expect(totalCreditedNow).toBeLessThan(totalShareCents);
+
+    // Whatever wasn't credited now must be escrowed, not silently dropped.
+    const holds = await env.DB.prepare(
+      'SELECT COALESCE(SUM(amount_cents), 0) AS total FROM commission_holds WHERE purchase_id IN (?, ?)',
+    ).bind(first.purchaseId, second.purchaseId).first();
+    expect(totalCreditedNow + holds.total).toBe(totalShareCents);
+  });
 });
 
 describe('Refund clawback interaction with an active hold (#1109)', () => {
