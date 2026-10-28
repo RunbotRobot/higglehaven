@@ -52,7 +52,10 @@ const PORT = process.env.E2E_PORT || '8787';
 // two vars before running `node e2e/run-all.mjs`) -- deliberately separate
 // names from STRIPE_SECRET_KEY/STRIPE_PUBLISHABLE_KEY themselves, which are
 // live production Worker secrets this job must never see.
-const REAL_STRIPE_TEST_FILES = new Set(['verify-card-real-stripe.test.mjs']);
+// #2861: purchase-checkout-real-stripe.test.mjs added alongside
+// verify-card-real-stripe.test.mjs -- the other real-Stripe-Elements call
+// site #2859 asked for coverage of, see that file's own header comment.
+const REAL_STRIPE_TEST_FILES = new Set(['verify-card-real-stripe.test.mjs', 'purchase-checkout-real-stripe.test.mjs']);
 function realStripeWranglerVars(testFile) {
   if (!REAL_STRIPE_TEST_FILES.has(testFile)) return [];
   const { E2E_STRIPE_SECRET_KEY, E2E_STRIPE_PUBLISHABLE_KEY } = process.env;
