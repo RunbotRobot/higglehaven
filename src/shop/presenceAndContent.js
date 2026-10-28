@@ -209,8 +209,9 @@ export let shopBuilderLabels = new Map(); // builderId -> label, fetched once in
 export function setShopBuilderLabels(map) {
   shopBuilderLabels = map;
 }
-// #2626: main.js's own renderBuilderIdentityField onRenamed callback
-// patches a single label in place on a successful rename (#741) -- a
+// #2626: src/build/scene.js's own renderBuilderIdentityField onRenamed
+// callback (#2565) patches a single label in place on a successful rename
+// (#741) -- a
 // dedicated setter rather than exposing the Map itself for `.set()`, same
 // "narrow the exposed surface to the one real operation" reasoning as
 // shop/avatar.js's own addShopIdleSwayYawOffset.

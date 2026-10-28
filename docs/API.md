@@ -4102,7 +4102,7 @@ mutable `placed_instances` rows remain the builder's current draft, while a
 landlet's `activeVersionId` points at the snapshot intended for shoppers.
 
 **Frontend wiring:** the Settings modal's Build tab (`renderBuildSettingsSection`
-in `src/main.js`) is the only UI surface for any of this. "Publish" saves the
+in `src/build/scene.js`) is the only UI surface for any of this. "Publish" saves the
 current draft as a new version and activates it in one step (the common
 case); each history row also offers "Set Live" (activate that version alone,
 `POST .../activate`, current draft untouched) and "Restore to Editor"
@@ -6843,7 +6843,7 @@ path works end to end, not just that a row landed in the table).
 ### Frontend wiring
 
 Settings' Build tab, alongside Land Cap (`renderAuctionSection` in
-`src/main.js`, called from `renderBuildSettingsSection` — #197: auctioning
+`src/build/scene.js`, called from `renderBuildSettingsSection` — #197: auctioning
 a landlet is a Build-mode concern, not a Sell one, per the project owner
 directly, so it moved out of a standalone "Auctions" tab rather than
 staying separate on the theory that bidding on someone *else's* landlet
@@ -6982,7 +6982,7 @@ total vs. a queryable time-windowed ledger).
 ### Frontend wiring
 
 Settings' Build tab shows a "Land Cap" field (`renderLandCapField` in
-`src/main.js`) above Publish/Version History — a builder-account fact, not
+`src/build/scene.js`) above Publish/Version History — a builder-account fact, not
 tied to the currently-active landlet, so it renders whenever a builder
 identity is active regardless of `currentMode`/`currentLandletId` (unlike
 Publish, which needs an active Build-mode landlet). It shows `ownedAreaM2`
@@ -8550,7 +8550,7 @@ though #615 (see "Real-money seller payouts" above) does now restrict
 access based on whether a form is on file, since a corrected/updated
 submission should always be allowed to replace a stale one.
 
-The Settings modal's General tab (`src/main.js`) is the actual "in-app
+The Settings modal's General tab (`src/settings/modal.js`) is the actual "in-app
 flow" this issue originally asked for — a form choosing W-9 vs. W-8BEN,
 showing the fields each requires, and a status note reporting whatever's
 currently on file. #614 shipped only this backend endpoint at first (see
@@ -10707,7 +10707,7 @@ entries sorted first, so a state-specific page doesn't hide the
 country-wide one.
 
 Rendered read-only in Settings' General tab, directly below the tax
-paperwork field (`src/main.js`'s `renderTaxEducationField`) — a
+paperwork field (`src/settings/modal.js`'s `renderTaxEducationField`) — a
 `<details>` disclosure per matched entry, plain text throughout (no rich
 HTML rendering of `body`), with "Submit the form above to see general
 tax info for your jurisdiction" shown instead when `jurisdiction` comes
@@ -11317,7 +11317,7 @@ and `GET`/`PUT /api/builders/me/avatar`'s own response (the latter
 extended by this same change) specifically so the frontend can compare
 the two without a second round trip.
 
-**Compatibility in the UI** (`src/main.js`): `animationCompatibility(
+**Compatibility in the UI** (`src/shop/mode.js`): `animationCompatibility(
 animationSignature, avatarSignature)` returns one of four states —
 `'compatible'`/`'incompatible'` (both signatures present, compared by
 exact string equality), `'no-avatar'` (the shopper has no custom avatar

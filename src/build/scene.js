@@ -45,26 +45,33 @@
 // setLastKnownDistance) from main.js as its own stopgap, pending this
 // leaf — that import is repointed to this module as part of this PR.
 //
-// Settings' Build tab (renderBuildSettingsSection, main.js) stays out of
-// this leaf's scope entirely — it's Version History/Publish/Saved Layouts,
-// none of which touch this module's own state. Its sibling Low Stock/Sold
-// Out Markers sections (renderLowStockSection/renderSoldOutMarkersSection,
-// also main.js) do read/write this module's lowStockFilterMaxQty/
-// lowStockFilterMaxDays/showSoldOutMarkers/soldOutMarkers and call its
-// updateLowStockHighlights/applySoldOutMarkerVisibility/
-// removeSoldOutMarkerMesh — exported here for that reason, imported back
-// into main.js. Per the design comment's item #2 (still unresolved, #2565's
-// own question), whether render*SettingsSection functions should move
-// into their own feature modules isn't decided here.
+// #2565 (owner Option A, 2026-10-28, resolving the design comment's item
+// #2): Settings' Build tab -- renderBuildSettingsSection (Version History/
+// Publish/Saved Layouts), plus renderLandCapField/renderRedeemHigglesField/
+// renderAuctionSection/renderLowStockSection/renderSoldOutMarkersSection and
+// the Build-specific renderBuilderIdentityField (wrapping settings/modal.js's
+// shared renderIdentityField) -- now live here too, extracted wholesale
+// from src/main.js. settings/modal.js's renderSettingsSection just calls
+// renderBuildSettingsSection() rather than reaching into this module's own
+// state directly.
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import {
   createInstanceRemote, updateInstanceRemote, deleteInstanceRemote,
   createInstancesRemote, upsertInstancesRemote, deleteInstancesRemote,
-  fetchLandlets, fetchLandletLevels, addLandletLevel, deleteLandletLevel,
+  fetchLandlets, fetchLandlet, fetchLandletLevels, addLandletLevel, deleteLandletLevel,
   groupInstancesRemote, ungroupInstancesRemote,
+  fetchMyBuilder, renameBuilder, deleteBuilder,
+  fetchBuilderRedeemStatus, submitBuilderStripeAccount, redeemHiggles,
+  fetchAllLandlets, startAuction, fetchAuctions, fetchAllAuctions, fetchAuction,
+  fetchAuctionBids, fetchBuildersByIds, placeBid, resolveAuctionNow,
+  fetchLowStock, fetchSoldOutMarkers, dismissSoldOutMarker,
+  fetchLandletVersions, saveLandletVersion, clearVersionIdempotencyKey,
+  fetchLandletVersion, activateLandletVersion, replaceLandletDraft, clearDraftIdempotencyKey,
+  fetchSavedLayouts, deleteSavedLayout,
 } from '../api.js';
+import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
 import { toDisplayLength, fromDisplayLength, formatLength, formatArea } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
 import { footprintScaleAtHeight } from '../../worker/earthCurvature.js';
@@ -75,11 +82,22 @@ import {
   AXIS_DIMENSION_KEY, AXIS_LIST, FLOORING_THICKNESS_M, isFlooringTemplate,
   createMeshForInstance, disposeMaterialTextures, disposeObject,
 } from '../world/models.js';
-import { builderId, currentLandletId, LANDLET_AREA_M2, LANDLET_SIDE_M, LANDLET_HEIGHT_M } from '../world/state.js';
+import {
+  builderId, setBuilderId, currentLandletId, setCurrentLandletId, currentMode,
+  LANDLET_AREA_M2, LANDLET_SIDE_M, LANDLET_HEIGHT_M,
+} from '../world/state.js';
 import { scene, camera, renderer, canvas, registerModeFrameUpdate } from '../world/scene.js';
 import { runClaimFlow } from '../claim/flow.js';
-import { shapeForLandlet, BUILD_TARGET_LANDLET_ID_KEY } from '../main.js';
+import { currentAuthUser } from '../account/auth.js';
+import { ensureBuilderIdentity } from '../account/identity.js';
+import {
+  shapeForLandlet, BUILD_TARGET_LANDLET_ID_KEY, formatHiggles, MAX_MONEY_CENTS, daysInMonth,
+  START_MODE_KEY, PREVIEW_SAVED_LAYOUT_ID_KEY,
+} from '../main.js';
 import { addItemBtn, closeCatalogPicker } from '../catalog/picker.js';
+import {
+  settingsSectionEl, settingsRenderToken, renderSettingsSection, renderIdentityField,
+} from '../settings/modal.js';
 
 // Vertical construction (issue #167/#168/#169): the current lándlet's own
 // ground-level area (needed to preview a level's cap cost client-side
@@ -3708,5 +3726,1350 @@ export async function resolveLandletId() {
   const owned = await fetchLandlets({ status: 'claimed', ownerBuilderId: builderId, limit: 1 });
   if (owned.length > 0) return owned[0].landletId;
   return runClaimFlow();
+}
+
+// #2565 (leaf of #2504/#2500, Option A per owner decision 2026-10-28): the
+// Settings modal's Build tab -- extracted wholesale from src/main.js.
+// settings/modal.js's renderSettingsSection just calls
+// renderBuildSettingsSection() below rather than reaching into this
+// module's own state directly.
+
+// Land cap (docs/SPEC.md §3, docs/API.md's "Land cap") — a builder-account
+// fact, not tied to the currently-active landlet the way Publish/Version
+// History below are, so this shows regardless of currentMode/
+// currentLandletId (as long as a builder identity has actually been
+// chosen at all this session — builderId can still be null if Settings is
+// opened from Shop mode before ever entering Build).
+async function renderLandCapField() {
+  const myToken = settingsRenderToken;
+  // builderId can be null here purely because Settings was opened from Shop
+  // mode before Build mode ever ran ensureBuilderIdentity() this session —
+  // not because the visitor is actually logged out. If they already have a
+  // session, silently establish it the same way (requireLogin's own
+  // `if (currentAuthUser) return currentAuthUser` means this never pops a
+  // login prompt) instead of just leaving this whole field missing.
+  if (!builderId && currentAuthUser) setBuilderId(await ensureBuilderIdentity());
+  // #905: a tab switch (or modal reopen) during that await already tore
+  // down and rebuilt settingsSectionEl for a different tab — appending
+  // below would land this field there instead of silently vanishing with
+  // it, same as a stale renderNotifications/renderForLandlet call already
+  // gets caught by their own load tokens.
+  if (myToken !== settingsRenderToken) return;
+  if (!builderId) return;
+  const field = document.createElement('div');
+  field.id = 'land-cap-field';
+  field.className = 'settings-field';
+  const fieldLabel = document.createElement('span');
+  fieldLabel.textContent = 'Land Cap';
+  field.appendChild(fieldLabel);
+  const status = document.createElement('div');
+  status.className = 'settings-empty-note';
+  status.textContent = 'Loading…';
+  field.appendChild(status);
+  settingsSectionEl.appendChild(field);
+  try {
+    // ownedAreaM2 comes straight from the builder object now (#312) —
+    // the backend's own recomputeLandCap already sums every owned
+    // landlet's ground area *and* every level's own cap_consumed_m2
+    // (docs/API.md's "Vertical construction") to grow landCapM2 itself,
+    // so reading it back here is both more accurate (a frontend-side sum
+    // over fetchAllLandlets alone silently ignored level area) and
+    // cheaper (no second paginated fetch needed at all). Uses
+    // fetchMyBuilder (GET /api/builders/me) rather than scanning the full
+    // GET /api/builders roster for this account's own row (found via
+    // #711's own investigation: the full-roster fetch this used to do
+    // would silently stop finding a late-signed-up builder's own row the
+    // moment that list endpoint gets capped) — this account's own record
+    // is always exactly what's needed here, never anyone else's.
+    const me = await fetchMyBuilder();
+    const ownedAreaM2 = me.ownedAreaM2 ?? 0;
+    status.textContent = `You own ${formatArea(ownedAreaM2, 0)} of your ${formatArea(me.landCapM2, 0)} cap. ` +
+      'Your cap grows automatically as you earn higgles from selling lándlets via auction — never purchasable with cash.';
+  } catch (err) {
+    status.textContent = err.message || 'Could not load your land cap.';
+  }
+}
+
+function renderBuilderIdentityField() {
+  renderIdentityField('Builder', {
+    fetchProfile: fetchMyBuilder,
+    idKey: 'builderId',
+    renameProfile: (id, label) => renameBuilder(id, label),
+    deleteProfile: (id) => deleteBuilder(id),
+    // #740: deleteBuilder hard-deletes the builder row, including any
+    // real-money-backed higgles balance on it — nothing preserves or
+    // refunds it. Disclose the actual amount at stake rather than leaving
+    // it a silent side effect of "this can't be undone".
+    deleteWarning: (profile) => {
+      const balanceCents = profile?.higglesBalanceCents ?? 0;
+      const balanceNote = balanceCents > 0
+        ? ` You'll also forfeit your ${formatHiggles(balanceCents)} higgles balance — it cannot be recovered.`
+        : '';
+      return `Reset your builder profile? Any lándlet you currently own is released back to greenbelt (its build is cleared) — this can't be undone.${balanceNote} Your login stays active either way; use Delete Account under Account above to delete that too.`;
+    },
+    // #2068: Reset Profile releases any owned lándlet back to greenbelt
+    // server-side (see deleteWarning's own wording above) -- currentLandletId
+    // must be cleared alongside builderId, not left stale, since it's no
+    // longer a landlet this session owns. Previously harmless (nothing in
+    // Settings > Build auto-fetched anything landlet-ownership-gated), but
+    // renderSoldOutMarkersSection's own auto-fetch surfaced it: the very
+    // next full renderSettingsSection() redraw this same Reset Profile
+    // triggers would otherwise still query the old, just-released landlet
+    // and get a real 403 back.
+    onDeleted: () => { setBuilderId(null); setCurrentLandletId(null); },
+    // #741: keep Shop mode's own "Built by X" attribution (populated once
+    // in enterShopMode) from showing a stale pre-rename label for the rest
+    // of this session.
+    onRenamed: (id, label) => { setShopBuilderLabel(id, label); },
+  });
+}
+
+// #723: #624/#625 shipped GET/POST /api/builders/me/stripe-account and
+// .../redeem — a builder's own exit from higgles to real cash — but
+// nothing in this file ever called either. Lives alongside Land Cap
+// above, not the Sell tab's own payout section, since redeeming a
+// higgles balance is a builder-account concern independent of whether
+// this account also sells anything. Reuses renderSellSettingsSection's
+// own Stripe Custom-account onboarding form almost verbatim (same
+// fields, different account row) rather than sharing code with it, to
+// avoid touching that already-working, real-money-adjacent flow.
+async function renderRedeemHigglesField() {
+  const myToken = settingsRenderToken;
+  if (!builderId && currentAuthUser) setBuilderId(await ensureBuilderIdentity());
+  // #905: see renderLandCapField's own comment — a tab switch/modal reopen
+  // during that await already tore down settingsSectionEl for a different
+  // tab, so this real-money redemption form must not land there.
+  if (myToken !== settingsRenderToken) return;
+  if (!builderId) return;
+
+  const statusField = document.createElement('div');
+  statusField.className = 'settings-field';
+  const statusLabel = document.createElement('span');
+  statusLabel.textContent = 'Redeem Higgles';
+  statusField.appendChild(statusLabel);
+  const statusNote = document.createElement('div');
+  statusNote.className = 'settings-empty-note';
+  statusNote.setAttribute('role', 'status');
+  statusNote.setAttribute('aria-live', 'polite');
+  statusNote.textContent = 'Loading…';
+  statusField.appendChild(statusNote);
+  settingsSectionEl.appendChild(statusField);
+
+  const formField = document.createElement('div');
+  formField.className = 'settings-field';
+  settingsSectionEl.appendChild(formField);
+  // #1912: exposes this call's own formField so a test can tell a fixed
+  // early-return (no children ever appended to it) apart from the
+  // pre-fix behavior (the form still gets built and appended onto this
+  // now-detached node after a superseded tab switch) -- there's no
+  // DOM-visible difference to check otherwise, since this appendChild
+  // above (unlike renderSellSettingsSection's later, gated
+  // settingsSectionEl.appendChild(payoutsField)) is the last direct
+  // append to the live settingsSectionEl either way.
+  window.__testLastRedeemFormField = formField;
+
+  let redeemStatus;
+  try {
+    redeemStatus = await fetchBuilderRedeemStatus();
+  } catch (err) {
+    statusNote.textContent = err.message || 'Could not load your redemption status.';
+    statusNote.classList.add('error');
+    return;
+  }
+  // #1912: a tab switch (or modal reopen) during that await already tore
+  // down and rebuilt settingsSectionEl for a different tab — same #1732/#905
+  // guard renderSellSettingsSection already has after its own second await.
+  if (myToken !== settingsRenderToken) return;
+
+  function describeAccountStatus() {
+    if (!redeemStatus.configured) {
+      return "Stripe payouts aren't set up on this server yet — check back later.";
+    }
+    if (redeemStatus.status === 'complete') return 'Your payout account is fully set up.';
+    if (redeemStatus.status === 'requirements_due') {
+      return `Stripe needs more information: ${redeemStatus.requirementsCurrentlyDue.join(', ')}`;
+    }
+    if (redeemStatus.status === 'action_needed') return 'Stripe flagged an issue with this account — resubmit below.';
+    if (redeemStatus.connected) return 'Your account was created — verification is pending.';
+    return 'Not set up yet. Redeeming higgles for cash needs this first.';
+  }
+
+  function refreshStatusNote() {
+    statusNote.textContent = `Available to redeem: ${formatHiggles(redeemStatus.availableCents)} — ${describeAccountStatus()}`;
+    statusNote.classList.remove('error');
+  }
+  refreshStatusNote();
+
+  const fields = [
+    ['firstName', 'First name', 'text'],
+    ['lastName', 'Last name', 'text'],
+    ['dobDay', 'Birth day', 'number'],
+    ['dobMonth', 'Birth month', 'number'],
+    ['dobYear', 'Birth year', 'number'],
+    ['ssnLast4', 'SSN (last 4 digits)', 'text'],
+    ['addressLine1', 'Street address', 'text'],
+    ['addressCity', 'City', 'text'],
+    ['addressState', 'State', 'text'],
+    ['addressPostalCode', 'ZIP code', 'text'],
+    ['addressCountry', 'Country (2-letter code)', 'text'],
+    ['routingNumber', 'Bank routing number', 'text'],
+    ['accountNumber', 'Bank account number', 'text'],
+  ];
+  const inputs = {};
+  const form = document.createElement('div');
+  form.className = 'stripe-onboarding-form';
+  for (const [key, fieldLabel, type] of fields) {
+    const label = document.createElement('label');
+    label.textContent = fieldLabel;
+    const input = document.createElement('input');
+    input.type = type;
+    if (key === 'addressCountry') input.value = 'US';
+    if (key === 'dobMonth') { input.min = '1'; input.max = '12'; }
+    if (key === 'dobDay') { input.min = '1'; input.max = '31'; }
+    label.appendChild(input);
+    form.appendChild(label);
+    inputs[key] = input;
+  }
+  // #1940: dobDay's own max (31) never accounted for which month was
+  // entered -- keep it in sync so the browser's own number-input
+  // clamping/invalid-state catches Feb 30 etc. before submit does.
+  function refreshDobDayMax() {
+    const month = parseInt(inputs.dobMonth.value, 10);
+    const year = parseInt(inputs.dobYear.value, 10);
+    if (!Number.isFinite(month) || month < 1 || month > 12) return;
+    inputs.dobDay.max = String(daysInMonth(Number.isFinite(year) ? year : new Date().getUTCFullYear(), month));
+  }
+  inputs.dobMonth.addEventListener('input', refreshDobDayMax);
+  inputs.dobYear.addEventListener('input', refreshDobDayMax);
+  const submitBtn = document.createElement('button');
+  submitBtn.type = 'button';
+  submitBtn.className = 'version-action-btn';
+  submitBtn.textContent = redeemStatus.connected ? 'Update payout account' : 'Set up payout account';
+  form.appendChild(submitBtn);
+  const formStatus = document.createElement('div');
+  formStatus.className = 'settings-empty-note';
+  form.appendChild(formStatus);
+
+  submitBtn.addEventListener('click', async () => {
+    formStatus.textContent = '';
+    formStatus.classList.remove('error');
+    submitBtn.disabled = true;
+    try {
+      const updated = await submitBuilderStripeAccount({
+        individual: {
+          firstName: inputs.firstName.value,
+          lastName: inputs.lastName.value,
+          dobDay: Number(inputs.dobDay.value),
+          dobMonth: Number(inputs.dobMonth.value),
+          dobYear: Number(inputs.dobYear.value),
+          ssnLast4: inputs.ssnLast4.value,
+          addressLine1: inputs.addressLine1.value,
+          addressCity: inputs.addressCity.value,
+          addressState: inputs.addressState.value,
+          addressPostalCode: inputs.addressPostalCode.value,
+          addressCountry: inputs.addressCountry.value,
+        },
+        externalAccount: {
+          routingNumber: inputs.routingNumber.value,
+          accountNumber: inputs.accountNumber.value,
+          currency: 'usd',
+        },
+      });
+      redeemStatus = { ...redeemStatus, ...updated };
+      // #1403: submitBtn's "Set up"/"Update payout account" label (line
+      // 5918 above) is only ever set once, at this function's own initial
+      // render, gated on redeemStatus.connected as it stood then — a
+      // first-time submit flips connected from false to true right here,
+      // but nothing re-evaluated that gate afterward, so the button kept
+      // reading "Set up payout account" until the tab was closed and
+      // reopened. Same renderSettingsSection() full-redraw idiom #1373
+      // already uses for the sibling Sell tab's own onboarding form.
+      renderSettingsSection();
+      return;
+    } catch (err) {
+      formStatus.textContent = err.message || 'Could not submit — check the fields above.';
+      formStatus.classList.add('error');
+    } finally {
+      submitBtn.disabled = false;
+    }
+  });
+
+  formField.appendChild(form);
+
+  if (redeemStatus.availableCents > 0) {
+    const redeemBtn = document.createElement('button');
+    redeemBtn.type = 'button';
+    redeemBtn.className = 'version-action-btn';
+    redeemBtn.textContent = 'Redeem';
+    formField.appendChild(redeemBtn);
+    const redeemStatusNote = document.createElement('div');
+    redeemStatusNote.className = 'settings-empty-note';
+    formField.appendChild(redeemStatusNote);
+
+    redeemBtn.addEventListener('click', async () => {
+      redeemBtn.disabled = true;
+      redeemStatusNote.textContent = '';
+      redeemStatusNote.classList.remove('error');
+      try {
+        const result = await redeemHiggles();
+        redeemStatusNote.textContent = `Redeemed ${formatHiggles(result.redeemedCents)}.`;
+      } catch (err) {
+        // Currently always hits here — #653 pauses every redemption
+        // pending a fraud-provenance design, and the server's own error
+        // message already explains that clearly; surfaced as-is rather
+        // than special-cased.
+        redeemStatusNote.textContent = err.message || 'Could not redeem right now.';
+        redeemStatusNote.classList.add('error');
+      } finally {
+        redeemBtn.disabled = false;
+      }
+    });
+  }
+}
+
+// Publish + Version History (see docs/API.md's "Landlet drafts"/"Landlet
+// versions") — the one place the already-existing draft/version/activate
+// backend gets a frontend. Only meaningful while actually in Build mode on
+// a claimed landlet (Settings itself stays reachable from Shop too, but
+// there's no landlet to publish from there).
+export function renderBuildSettingsSection() {
+  renderBuilderIdentityField();
+  renderLandCapField();
+  renderRedeemHigglesField();
+  renderAuctionSection();
+  renderLowStockSection();
+  renderSoldOutMarkersSection();
+  if (currentMode !== 'build' || !currentLandletId) {
+    const note = document.createElement('div');
+    note.className = 'settings-empty-note';
+    note.textContent = 'Enter Build mode on a claimed lándlet to publish or manage versions.';
+    settingsSectionEl.appendChild(note);
+    return;
+  }
+  const landletId = currentLandletId;
+
+  const publishField = document.createElement('div');
+  publishField.className = 'settings-field';
+  const publishLabel = document.createElement('span');
+  publishLabel.textContent = 'Publish';
+  publishField.appendChild(publishLabel);
+  const publishHint = document.createElement('div');
+  publishHint.className = 'settings-empty-note';
+  publishHint.textContent = 'Shoppers see whatever was last published here, not your live edits, until you publish again.';
+  publishField.appendChild(publishHint);
+  const publishBtn = document.createElement('button');
+  publishBtn.type = 'button';
+  publishBtn.className = 'version-action-btn';
+  publishBtn.textContent = 'Publish';
+  publishField.appendChild(publishBtn);
+  const publishStatus = document.createElement('div');
+  publishStatus.id = 'build-publish-status';
+  publishStatus.className = 'settings-empty-note';
+  publishField.appendChild(publishStatus);
+  settingsSectionEl.appendChild(publishField);
+
+  const historyField = document.createElement('div');
+  historyField.className = 'settings-field';
+  const historyLabel = document.createElement('span');
+  historyLabel.textContent = 'Version History';
+  historyField.appendChild(historyLabel);
+  const historyList = document.createElement('div');
+  historyList.className = 'version-list';
+  historyField.appendChild(historyList);
+  const historyLoadMoreBtn = document.createElement('button');
+  historyLoadMoreBtn.type = 'button';
+  historyLoadMoreBtn.className = 'version-action-btn';
+  historyLoadMoreBtn.textContent = 'Load more';
+  historyLoadMoreBtn.hidden = true;
+  historyField.appendChild(historyLoadMoreBtn);
+  settingsSectionEl.appendChild(historyField);
+
+  // #634/#635 (sub-issues of #631): a removed level's swept-out instances
+  // (#633) land here — reusing Version History's own .settings-field/
+  // .version-list/.version-row/.version-action-btn look immediately above
+  // rather than inventing a second list style for what's structurally the
+  // same kind of thing (a builder's own named, timestamped, deletable
+  // snapshot of instances).
+  const savedLayoutsField = document.createElement('div');
+  savedLayoutsField.className = 'settings-field';
+  const savedLayoutsLabel = document.createElement('span');
+  savedLayoutsLabel.textContent = 'Saved Layouts';
+  savedLayoutsField.appendChild(savedLayoutsLabel);
+  const savedLayoutsHint = document.createElement('div');
+  savedLayoutsHint.className = 'settings-empty-note';
+  savedLayoutsHint.textContent = "Instances swept off active space when you remove a level here, so nothing's really lost.";
+  savedLayoutsField.appendChild(savedLayoutsHint);
+  const savedLayoutsList = document.createElement('div');
+  savedLayoutsList.className = 'version-list';
+  savedLayoutsField.appendChild(savedLayoutsList);
+  const savedLayoutsLoadMoreBtn = document.createElement('button');
+  savedLayoutsLoadMoreBtn.type = 'button';
+  savedLayoutsLoadMoreBtn.id = 'saved-layouts-load-more-btn';
+  savedLayoutsLoadMoreBtn.textContent = 'Load more';
+  savedLayoutsLoadMoreBtn.hidden = true;
+  savedLayoutsField.appendChild(savedLayoutsLoadMoreBtn);
+  settingsSectionEl.appendChild(savedLayoutsField);
+
+  let savedLayoutsLoadToken = 0;
+  // The cursor for whatever page comes after the ones currently rendered —
+  // null once there's nothing more to load. Same shape as
+  // notificationsNextCursor (src/main.js ~8974) — #1215 found this panel's
+  // own `fetchSavedLayouts({ limit: 20 })` never read the API's own
+  // already-supported `nextCursor` at all, silently hiding anything past
+  // the first 20 saved layouts.
+  let savedLayoutsNextCursor = null;
+
+  function appendSavedLayoutRow(savedLayout) {
+    const row = document.createElement('div');
+    row.className = 'version-row';
+
+    const info = document.createElement('div');
+    info.className = 'version-row-info';
+    const itemWord = savedLayout.instanceCount === 1 ? 'item' : 'items';
+    info.textContent = `${savedLayout.name} — ${savedLayout.instanceCount} ${itemWord}`;
+    row.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.className = 'version-row-actions';
+
+    const previewBtn = document.createElement('button');
+    previewBtn.type = 'button';
+    previewBtn.className = 'version-action-btn';
+    previewBtn.textContent = 'Preview';
+    previewBtn.addEventListener('click', () => {
+      sessionStorage.setItem(PREVIEW_SAVED_LAYOUT_ID_KEY, savedLayout.savedLayoutId);
+      sessionStorage.setItem(START_MODE_KEY, 'layoutPreview');
+      location.reload();
+    });
+    actions.appendChild(previewBtn);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'version-action-btn';
+    deleteBtn.textContent = 'Delete';
+    deleteBtn.addEventListener('click', async () => {
+      if (!confirm(`Permanently delete "${savedLayout.name}"? This can't be undone.`)) return;
+      deleteBtn.disabled = true;
+      try {
+        await deleteSavedLayout(savedLayout.savedLayoutId);
+        renderSavedLayoutsList();
+      } catch (err) {
+        alert(err.message || 'Could not delete this saved layout.');
+        deleteBtn.disabled = false;
+      }
+    });
+    actions.appendChild(deleteBtn);
+
+    row.appendChild(actions);
+    savedLayoutsList.appendChild(row);
+  }
+
+  async function renderSavedLayoutsList() {
+    const myLoadToken = ++savedLayoutsLoadToken;
+    savedLayoutsList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    savedLayoutsLoadMoreBtn.hidden = true;
+    savedLayoutsNextCursor = null;
+    let page;
+    try {
+      page = await fetchSavedLayouts({ limit: 20 });
+    } catch (err) {
+      if (myLoadToken !== savedLayoutsLoadToken) return; // superseded while loading — a newer call owns the panel now
+      savedLayoutsList.innerHTML = '';
+      const errNote = document.createElement('div');
+      errNote.className = 'settings-empty-note';
+      errNote.textContent = err.message || 'Could not load saved layouts.';
+      savedLayoutsList.appendChild(errNote);
+      return;
+    }
+    if (myLoadToken !== savedLayoutsLoadToken) return; // superseded while loading — a newer call owns the panel now
+    savedLayoutsList.innerHTML = '';
+    if (page.savedLayouts.length === 0) {
+      savedLayoutsList.innerHTML = '<div class="settings-empty-note">Nothing saved yet — removing a level with instances on it saves them here first.</div>';
+      return;
+    }
+    for (const savedLayout of page.savedLayouts) appendSavedLayoutRow(savedLayout);
+    savedLayoutsNextCursor = page.nextCursor;
+    savedLayoutsLoadMoreBtn.hidden = !savedLayoutsNextCursor;
+  }
+  renderSavedLayoutsList();
+
+  savedLayoutsLoadMoreBtn.addEventListener('click', async () => {
+    const myLoadToken = savedLayoutsLoadToken; // this panel's current, already-rendered load — not a fresh reset
+    savedLayoutsLoadMoreBtn.disabled = true;
+    try {
+      const page = await fetchSavedLayouts({ limit: 20, cursor: savedLayoutsNextCursor });
+      if (myLoadToken !== savedLayoutsLoadToken) return; // panel was reset while this page was loading
+      for (const savedLayout of page.savedLayouts) appendSavedLayoutRow(savedLayout);
+      savedLayoutsNextCursor = page.nextCursor;
+      savedLayoutsLoadMoreBtn.hidden = !savedLayoutsNextCursor;
+    } catch (err) {
+      console.warn('Could not load more saved layouts:', err);
+    } finally {
+      savedLayoutsLoadMoreBtn.disabled = false;
+    }
+  });
+
+  // renderVersionHistory() is called from several places in quick
+  // succession — the initial render, and again after Publish or after
+  // either row's own Set Live resolves — each doing its own network
+  // round-trip before touching historyList. Only the button that was
+  // clicked gets disabled, so nothing stops a second call (e.g. clicking
+  // Set Live on a different row) from starting before an earlier one's
+  // response has come back; without a staleness guard, an earlier, slower
+  // call's response can land after a later one's and overwrite the DOM
+  // with out-of-date version/activeVersionId data. Same monotonic-token
+  // fix as friendsLoadToken (#448).
+  let versionHistoryLoadToken = 0;
+  // The cursor for whatever page comes after the ones currently rendered —
+  // null once there's nothing more to load, same shape as
+  // notificationsNextCursor (#320) and savedLayoutsNextCursor (#1215).
+  // Reset to null every time renderVersionHistory starts a fresh first
+  // page; advanced by historyLoadMoreBtn's click handler as later pages
+  // come in.
+  let versionHistoryNextCursor = null;
+  // Set by renderVersionHistory on the initial load; historyLoadMoreBtn's
+  // click handler reuses it for later pages rather than re-fetching
+  // fetchLandlet on every "Load more" click just to learn the same id again.
+  let versionHistoryActiveVersionId = null;
+
+  function appendVersionRow(version, activeVersionId) {
+    const row = document.createElement('div');
+    row.className = 'version-row';
+
+    const info = document.createElement('div');
+    info.className = 'version-row-info';
+    const itemWord = version.instanceCount === 1 ? 'item' : 'items';
+    const liveTag = version.versionId === activeVersionId ? ' — live' : '';
+    info.textContent = `${version.name} — ${version.instanceCount} ${itemWord} — ${new Date(version.createdAt).toLocaleString()}${liveTag}`;
+    row.appendChild(info);
+
+    const actions = document.createElement('div');
+    actions.className = 'version-row-actions';
+
+    const setLiveBtn = document.createElement('button');
+    setLiveBtn.type = 'button';
+    setLiveBtn.className = 'version-action-btn';
+    setLiveBtn.textContent = 'Set Live';
+    setLiveBtn.disabled = version.versionId === activeVersionId;
+    setLiveBtn.addEventListener('click', async () => {
+      setLiveBtn.disabled = true;
+      try {
+        await activateLandletVersion(landletId, version.versionId);
+        // Feedback goes through the shared publishStatus, not a status
+        // element inside this row — renderVersionHistory() (below) tears
+        // down and rebuilds every row's DOM, including this one, so
+        // anything set on a per-row element here would be wiped before
+        // ever actually being visible.
+        publishStatus.textContent = `Shoppers now see "${version.name}".`;
+        publishStatus.classList.remove('error');
+        renderVersionHistory();
+      } catch (err) {
+        publishStatus.textContent = err.message || 'Could not activate.';
+        publishStatus.classList.add('error');
+        setLiveBtn.disabled = false;
+      }
+    });
+    actions.appendChild(setLiveBtn);
+
+    const restoreBtn = document.createElement('button');
+    restoreBtn.type = 'button';
+    restoreBtn.className = 'version-action-btn';
+    restoreBtn.textContent = 'Restore to Editor';
+    restoreBtn.addEventListener('click', async () => {
+      if (!confirm(`Replace everything currently placed with "${version.name}"? This saves its own version first, so it's reversible, but everything since your last save will be gone from the live editor.`)) return;
+      restoreBtn.disabled = true;
+      publishStatus.textContent = 'Restoring…';
+      publishStatus.classList.remove('error');
+      try {
+        const full = await fetchLandletVersion(landletId, version.versionId);
+        // #2250: each restore wraps the prior name in this same prefix/
+        // suffix, so a chain of restores grows versionName past the
+        // server's own MAX_LABEL_LENGTH (100, worker/index.js) and the
+        // restore starts failing a 400 that has nothing to do with the
+        // instances actually being restored -- this is an auto-generated
+        // label the user never typed, so truncate it rather than let the
+        // server reject it.
+        const wrappedVersionName = `Restored from "${version.name}"`;
+        const versionName = wrappedVersionName.length > 100
+          ? `${wrappedVersionName.slice(0, 99)}…`
+          : wrappedVersionName;
+        await replaceLandletDraft(landletId, {
+          instances: full.instances,
+          versionName,
+        });
+        clearDraftIdempotencyKey(landletId);
+        // Simplest correct way to get the live scene back in sync with
+        // whatever the server now holds — the same "something changed
+        // server-side, reload" pattern claimBackBtn already uses
+        // elsewhere in this file.
+        sessionStorage.setItem(START_MODE_KEY, 'build');
+        location.reload();
+      } catch (err) {
+        publishStatus.textContent = err.message || 'Could not restore.';
+        publishStatus.classList.add('error');
+        restoreBtn.disabled = false;
+      }
+    });
+    actions.appendChild(restoreBtn);
+
+    row.appendChild(actions);
+    historyList.appendChild(row);
+  }
+
+  async function renderVersionHistory() {
+    const myLoadToken = ++versionHistoryLoadToken;
+    historyList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    historyLoadMoreBtn.hidden = true;
+    versionHistoryNextCursor = null;
+    let versions;
+    let activeVersionId;
+    let nextCursor;
+    try {
+      [{ versions, nextCursor }, { activeVersionId }] = await Promise.all([
+        fetchLandletVersions(landletId, { limit: 20 }),
+        fetchLandlet(landletId),
+      ]);
+    } catch (err) {
+      if (myLoadToken !== versionHistoryLoadToken) return; // superseded while loading — a newer call owns the panel now
+      historyList.innerHTML = '';
+      const errNote = document.createElement('div');
+      errNote.className = 'settings-empty-note';
+      errNote.textContent = err.message || 'Could not load version history.';
+      historyList.appendChild(errNote);
+      return;
+    }
+    if (myLoadToken !== versionHistoryLoadToken) return; // superseded while loading — a newer call owns the panel now
+    historyList.innerHTML = '';
+    if (versions.length === 0) {
+      historyList.innerHTML = '<div class="settings-empty-note">No versions saved yet — Publish creates the first one.</div>';
+      return;
+    }
+    for (const version of versions) appendVersionRow(version, activeVersionId);
+    versionHistoryNextCursor = nextCursor;
+    versionHistoryActiveVersionId = activeVersionId;
+    historyLoadMoreBtn.hidden = !versionHistoryNextCursor;
+  }
+
+  historyLoadMoreBtn.addEventListener('click', async () => {
+    const myLoadToken = versionHistoryLoadToken; // this panel's current, already-rendered load — not a fresh reset
+    historyLoadMoreBtn.disabled = true;
+    try {
+      const { versions, nextCursor } = await fetchLandletVersions(landletId, { limit: 20, cursor: versionHistoryNextCursor });
+      if (myLoadToken !== versionHistoryLoadToken) return; // panel was reset while this page was loading
+      for (const version of versions) appendVersionRow(version, versionHistoryActiveVersionId);
+      versionHistoryNextCursor = nextCursor;
+      historyLoadMoreBtn.hidden = !versionHistoryNextCursor;
+    } catch (err) {
+      console.warn('Could not load more versions:', err);
+    } finally {
+      historyLoadMoreBtn.disabled = false;
+    }
+  });
+
+  publishBtn.addEventListener('click', async () => {
+    publishBtn.disabled = true;
+    publishStatus.textContent = 'Publishing…';
+    publishStatus.classList.remove('error');
+    try {
+      const version = await saveLandletVersion(landletId, {});
+      clearVersionIdempotencyKey(landletId);
+      await activateLandletVersion(landletId, version.versionId);
+      publishStatus.textContent = `Published as "${version.name}" — shoppers now see this.`;
+      renderVersionHistory();
+    } catch (err) {
+      publishStatus.textContent = err.message || 'Could not publish.';
+      publishStatus.classList.add('error');
+    } finally {
+      publishBtn.disabled = false;
+    }
+  });
+
+  renderVersionHistory();
+}
+
+function formatAuctionTimeRemaining(isoString) {
+  const ms = new Date(isoString).getTime() - Date.now();
+  if (ms <= 0) return 'ending soon';
+  const hours = Math.floor(ms / (60 * 60 * 1000));
+  const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
+  return hours >= 1 ? `${hours}h ${minutes}m left` : `${minutes}m left`;
+}
+
+function formatAuctionSummary(auction) {
+  const bidText = auction.highestBidCents !== null
+    ? `high bid ${formatHiggles(auction.highestBidCents)} (${auction.bidCount} bid${auction.bidCount === 1 ? '' : 's'})`
+    : `no bids yet, starts at ${formatHiggles(auction.startingBidCents)}`;
+  const outcomeText = auction.startingBidCents === 0
+    ? 'free to the highest bidder, or released if unsold'
+    : `stays yours at ${formatHiggles(auction.startingBidCents)} if unsold`;
+  return `${auction.landletId} — ${bidText} — ${formatAuctionTimeRemaining(auction.endsAt)} — ${outcomeText}`;
+}
+
+// Land acquisition auctions (docs/SPEC.md §5, docs/API.md's "Land
+// acquisition auctions") — lives in the Build settings tab, alongside Land
+// Cap (#197: auctioning a landlet is a Build-mode concern, not a Sell one,
+// per the project owner directly). Covers both starting a voluntary
+// auction on whatever landlet this identity currently owns and
+// browsing/bidding on every other active auction in the world — the
+// latter isn't tied to currentLandletId, so it still renders here even
+// outside an active Build session, same as Land Cap above it.
+async function renderAuctionSection() {
+  const myToken = settingsRenderToken;
+  // Same Shop-mode-opened-Settings gap as renderLandCapField above — an
+  // already-logged-in visitor can still have a null builderId simply
+  // because nothing's called ensureBuilderIdentity() yet this session.
+  // Establish it silently (no login prompt, since requireLogin short-
+  // circuits on an existing currentAuthUser) rather than showing a
+  // "choose an identity" dead end to someone who already has one.
+  if (!builderId && currentAuthUser) setBuilderId(await ensureBuilderIdentity());
+  // #905: see renderLandCapField's own comment — a tab switch/modal reopen
+  // during that await already tore down settingsSectionEl for a different
+  // tab, so this section (with a live "Start Auction" button) must not
+  // land there.
+  if (myToken !== settingsRenderToken) return;
+  if (!builderId) {
+    const note = document.createElement('div');
+    note.className = 'settings-empty-note';
+    note.textContent = 'Choose a builder identity to start or bid on an auction.';
+    settingsSectionEl.appendChild(note);
+    return;
+  }
+
+  const startField = document.createElement('div');
+  startField.className = 'settings-field';
+  const startLabel = document.createElement('span');
+  startLabel.textContent = 'Sell Your Lándlet';
+  startField.appendChild(startLabel);
+  const startStatus = document.createElement('div');
+  startStatus.className = 'settings-empty-note';
+  startField.appendChild(startStatus);
+  settingsSectionEl.appendChild(startField);
+
+  const listField = document.createElement('div');
+  listField.className = 'settings-field';
+  const listLabel = document.createElement('span');
+  listLabel.textContent = 'Active Auctions';
+  listField.appendChild(listLabel);
+  const auctionList = document.createElement('div');
+  auctionList.className = 'auction-list';
+  listField.appendChild(auctionList);
+  settingsSectionEl.appendChild(listField);
+
+  // Guards against the picker's `change` handler firing renderForLandlet
+  // again before a previous call's own fetchAuctions round-trip has
+  // resolved (#442) — without this, switching the picker quickly (A→B, or
+  // A→B→A) races two async renders over the same shared startField/
+  // startStatus DOM nodes, and whichever fetch happens to resolve last
+  // wins regardless of which landlet is actually selected by then. Bumped
+  // at the start of every call; a call whose token has been superseded by
+  // a newer one bails out without touching the DOM once its await
+  // returns, the same generation-counter idiom #424/#425 already use for
+  // this exact race shape elsewhere in Settings.
+  let landletRenderToken = 0;
+
+  async function renderForLandlet(landletId) {
+    const myToken = ++landletRenderToken;
+    startStatus.textContent = '';
+    startStatus.classList.remove('error');
+    for (const el of startField.querySelectorAll('.auction-start-form, .auction-row')) el.remove();
+    let activeForMine;
+    try {
+      activeForMine = await fetchAuctions({ status: 'active', landletId });
+    } catch (err) {
+      if (myToken !== landletRenderToken) return;
+      startStatus.textContent = err.message || 'Could not check for an existing auction.';
+      startStatus.classList.add('error');
+      return;
+    }
+    if (myToken !== landletRenderToken) return;
+    if (activeForMine.length > 0) {
+      const row = document.createElement('div');
+      // #2607: also carries auction-row-mine -- the sibling Active Auctions
+      // list (buildAuctionRow, below) renders plain .auction-row elements
+      // for every site-wide active auction, so .auction-row alone no longer
+      // uniquely identifies this picker's own "your auction is live" row.
+      row.className = 'auction-row auction-row-mine';
+      const info = document.createElement('div');
+      info.className = 'auction-row-info';
+      info.textContent = `Your auction is live — ${formatAuctionSummary(activeForMine[0])}`;
+      row.appendChild(info);
+      startField.appendChild(row);
+      return;
+    }
+
+    startStatus.textContent = 'A $0 starting bid gives it away free if nobody bids; any other amount keeps it yours if it goes unsold.';
+    const form = document.createElement('div');
+    form.className = 'auction-start-form';
+    const bidLabel = document.createElement('label');
+    bidLabel.textContent = 'Starting bid ($)';
+    const bidInput = document.createElement('input');
+    bidInput.type = 'number';
+    bidInput.min = '0';
+    bidInput.step = '0.01';
+    bidInput.value = '0';
+    bidLabel.appendChild(bidInput);
+    form.appendChild(bidLabel);
+    const durationLabel = document.createElement('label');
+    durationLabel.textContent = 'Duration (hours)';
+    const durationInput = document.createElement('input');
+    durationInput.type = 'number';
+    durationInput.min = '1';
+    durationInput.max = '8760';
+    durationInput.step = '1';
+    durationInput.value = '24';
+    durationLabel.appendChild(durationInput);
+    form.appendChild(durationLabel);
+    const startBtn = document.createElement('button');
+    startBtn.type = 'button';
+    startBtn.className = 'auction-start-btn';
+    startBtn.textContent = 'Start Auction';
+    startBtn.addEventListener('click', async () => {
+      const dollars = Number(bidInput.value);
+      const hours = Number(durationInput.value);
+      if (!Number.isFinite(dollars) || dollars < 0) {
+        startStatus.textContent = 'Starting bid must be zero or more.';
+        startStatus.classList.add('error');
+        return;
+      }
+      if (Math.round(dollars * 100) > MAX_MONEY_CENTS) {
+        startStatus.textContent = `Starting bid must be ${formatHiggles(MAX_MONEY_CENTS)} or less.`;
+        startStatus.classList.add('error');
+        return;
+      }
+      if (!Number.isFinite(hours) || hours < 1) {
+        startStatus.textContent = 'Duration must be at least 1 hour.';
+        startStatus.classList.add('error');
+        return;
+      }
+      // #1922: mirrors the server's own cap (worker/index.js's handleAuctions
+      // POST, "durationHours must be 8760 (one year) or fewer") -- without
+      // this, an unusually large value passes client validation and
+      // surfaces that raw server message instead of a friendly one.
+      if (hours > 8760) {
+        startStatus.textContent = 'Duration must be 8760 hours (one year) or fewer.';
+        startStatus.classList.add('error');
+        return;
+      }
+      startBtn.disabled = true;
+      try {
+        await startAuction(landletId, {
+          startingBidCents: Math.round(dollars * 100),
+          durationHours: Math.round(hours),
+        });
+        await renderForLandlet(landletId);
+        await renderAuctionList();
+      } catch (err) {
+        startStatus.textContent = err.message || 'Could not start the auction.';
+        startStatus.classList.add('error');
+        startBtn.disabled = false;
+      }
+    });
+    form.appendChild(startBtn);
+    startField.appendChild(form);
+  }
+
+  async function renderStartSection() {
+    startStatus.textContent = '';
+    startStatus.classList.remove('error');
+    for (const el of startField.querySelectorAll('.auction-start-form, .auction-row, .landlet-picker')) el.remove();
+    let owned;
+    try {
+      // fetchAllLandlets pages through every one of this builder's owned
+      // landlets, not just fetchLandlets's own first 100-per-page limit
+      // (#186's own shape). Needed here too now that #199 lets a seller
+      // hold two simultaneously-claimed landlets (starting a $0 auction,
+      // or getting a first bid on any starting amount, frees the claim
+      // lock immediately rather than waiting for resolution) — "exactly
+      // one owned landlet" is no longer a safe assumption (#249).
+      owned = await fetchAllLandlets({ status: 'claimed', ownerBuilderId: builderId });
+    } catch (err) {
+      startStatus.textContent = err.message || 'Could not check your lándlets.';
+      startStatus.classList.add('error');
+      return;
+    }
+    if (owned.length === 0) {
+      startStatus.textContent = 'Claim a lándlet first to auction it off.';
+      return;
+    }
+
+    // Per the owner's own #249 product call: a picker across every
+    // claimed landlet the builder owns, defaulting to whichever one
+    // they're currently in Build mode on (falling back to the first
+    // owned landlet when that one isn't in this list at all — e.g.
+    // Settings opened from Shop mode with no Build-mode landlet active).
+    let selectedLandletId = owned.some((l) => l.landletId === currentLandletId)
+      ? currentLandletId
+      : owned[0].landletId;
+
+    if (owned.length > 1) {
+      const pickerRow = document.createElement('div');
+      pickerRow.className = 'landlet-picker';
+      const pickerLabel = document.createElement('label');
+      pickerLabel.textContent = 'Lándlet';
+      const picker = document.createElement('select');
+      for (const landlet of owned) {
+        const option = document.createElement('option');
+        option.value = landlet.landletId;
+        option.textContent = landlet.name || landlet.landletId;
+        if (landlet.landletId === selectedLandletId) option.selected = true;
+        picker.appendChild(option);
+      }
+      picker.addEventListener('change', () => {
+        selectedLandletId = picker.value;
+        renderForLandlet(selectedLandletId);
+      });
+      pickerLabel.appendChild(picker);
+      pickerRow.appendChild(pickerLabel);
+      startField.appendChild(pickerRow);
+    }
+
+    await renderForLandlet(selectedLandletId);
+  }
+
+  // #2016: each row's own bid button only disables itself (see its click
+  // handler below), not the whole panel or any other row — so a bid on
+  // row A and a bid on row B can both be in flight at once, each
+  // triggering its own renderAuctionList() call. Without this guard,
+  // whichever fetchAllAuctions() round-trip happens to resolve last wins
+  // regardless of which bid was actually placed most recently, the same
+  // "slower, earlier-issued fetch lands after a faster, newer one" race
+  // landletRenderToken already guards against for renderForLandlet just
+  // above.
+  let auctionListLoadToken = 0;
+
+  async function renderAuctionList() {
+    const myToken = ++auctionListLoadToken;
+    auctionList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    let auctions;
+    try {
+      // The world's full active-auction list, not one landlet's own — use
+      // the paginating fetch so this doesn't silently truncate past 100
+      // simultaneously active auctions (#190, same shape as #186).
+      auctions = await fetchAllAuctions({ status: 'active' });
+    } catch (err) {
+      if (myToken !== auctionListLoadToken) return;
+      auctionList.innerHTML = '';
+      const errNote = document.createElement('div');
+      errNote.className = 'settings-empty-note';
+      errNote.textContent = err.message || 'Could not load auctions.';
+      auctionList.appendChild(errNote);
+      return;
+    }
+    if (myToken !== auctionListLoadToken) return;
+    auctionList.innerHTML = '';
+    if (auctions.length === 0) {
+      auctionList.innerHTML = '<div class="settings-empty-note">No active auctions right now.</div>';
+      return;
+    }
+    for (const auction of auctions) {
+      auctionList.appendChild(buildAuctionRow(auction));
+    }
+  }
+
+  // Split out of renderAuctionList so a single row can be re-fetched and
+  // swapped in place (see the Refresh button below) without re-rendering
+  // — and re-requesting bid history for — every other row in the list.
+  function buildAuctionRow(auction) {
+    const row = document.createElement('div');
+    row.className = 'auction-row';
+    const info = document.createElement('div');
+    info.className = 'auction-row-info';
+    info.textContent = formatAuctionSummary(auction);
+    row.appendChild(info);
+
+    // Single-auction detail refetch (fetchAuction, #733) — a per-row
+    // way to see this one auction's own current status/highest bid
+    // without waiting for or triggering the full-list refresh already
+    // used after placeBid/resolveAuctionNow below.
+    const refreshBtn = document.createElement('button');
+    refreshBtn.type = 'button';
+    refreshBtn.className = 'auction-refresh-btn';
+    refreshBtn.textContent = 'Refresh';
+    refreshBtn.addEventListener('click', async () => {
+      refreshBtn.disabled = true;
+      try {
+        const updated = await fetchAuction(auction.auctionId);
+        row.replaceWith(buildAuctionRow(updated));
+      } catch (err) {
+        alert(err.message || 'Could not refresh this auction.');
+        refreshBtn.disabled = false;
+      }
+    });
+    row.appendChild(refreshBtn);
+
+    // Bid history — GET /auctions already gives every row its own
+    // bidCount (auctionsFromRowsBatch), so this button only renders once
+    // there's actually something to show. The full per-bid list
+    // (amount, bidder, timestamp) itself is fetched lazily via
+    // fetchAuctionBids on first expand, not eagerly for every row in the
+    // list — same "don't fetch what nobody asked to see yet" shape as
+    // the rest of this settings panel.
+    if (auction.bidCount > 0) {
+      const bidHistoryToggle = document.createElement('button');
+      bidHistoryToggle.type = 'button';
+      bidHistoryToggle.className = 'auction-bid-history-btn';
+      bidHistoryToggle.textContent = `View Bids (${auction.bidCount})`;
+      const bidHistoryList = document.createElement('div');
+      bidHistoryList.className = 'auction-bid-history';
+      bidHistoryList.hidden = true;
+      bidHistoryToggle.addEventListener('click', async () => {
+        if (!bidHistoryList.hidden) {
+          bidHistoryList.hidden = true;
+          bidHistoryToggle.textContent = `View Bids (${auction.bidCount})`;
+          return;
+        }
+        bidHistoryToggle.disabled = true;
+        bidHistoryList.hidden = false;
+        bidHistoryList.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+        try {
+          const { bids, totalCount } = await fetchAuctionBids(auction.auctionId);
+          // Bidder labels resolved via the batch-by-ids lookup (#717/
+          // #720), scoped to just the distinct bidders on this one
+          // auction rather than the whole roster.
+          const labels = new Map(
+            (await fetchBuildersByIds(bids.map((bid) => bid.bidderBuilderId)))
+              .map((b) => [b.builderId, b.label]),
+          );
+          bidHistoryList.innerHTML = '';
+          // Already highest-first from the server (ORDER BY amount_cents
+          // DESC, created_at in handleAuctionBids) — no client-side sort
+          // needed.
+          for (const bid of bids) {
+            const bidRow = document.createElement('div');
+            bidRow.className = 'auction-bid-history-row';
+            const label = labels.get(bid.bidderBuilderId) || 'an unknown builder';
+            bidRow.textContent = `${formatHiggles(bid.amountCents)} — ${label} — ${new Date(bid.createdAt).toLocaleString()}`;
+            bidHistoryList.appendChild(bidRow);
+          }
+          // #1275: the server caps this list at 200 rows — flag it when
+          // that cap actually bites, instead of silently showing a
+          // partial list under a "Hide Bids (N)" label that implies it's
+          // everything.
+          if (totalCount > bids.length) {
+            const truncationNote = document.createElement('div');
+            truncationNote.className = 'settings-empty-note';
+            truncationNote.textContent = `Showing top ${bids.length} of ${totalCount} bids.`;
+            bidHistoryList.appendChild(truncationNote);
+          }
+          bidHistoryToggle.textContent = `Hide Bids (${auction.bidCount})`;
+        } catch (err) {
+          bidHistoryList.innerHTML = '';
+          const errNote = document.createElement('div');
+          errNote.className = 'settings-empty-note';
+          errNote.textContent = err.message || 'Could not load bid history.';
+          bidHistoryList.appendChild(errNote);
+        } finally {
+          bidHistoryToggle.disabled = false;
+        }
+      });
+      row.appendChild(bidHistoryToggle);
+      row.appendChild(bidHistoryList);
+    }
+
+    // GET /auctions already resolves anything past its end time before
+    // this list is built (see resolveDueAuctions in worker/index.js) —
+    // this button exists only for the narrow gap between that moment
+    // and the *next* fetch, e.g. a second tab that loaded the list a
+    // moment before this one's own timer ran out. Anyone can trigger
+    // it; resolution is an objective time-based fact, not a seller- or
+    // bidder-specific action.
+    const isPastDue = new Date(auction.endsAt).getTime() <= Date.now();
+    if (isPastDue) {
+      const resolveBtn = document.createElement('button');
+      resolveBtn.type = 'button';
+      resolveBtn.className = 'auction-resolve-btn';
+      resolveBtn.textContent = 'Resolve Now';
+      resolveBtn.addEventListener('click', async () => {
+        resolveBtn.disabled = true;
+        try {
+          await resolveAuctionNow(auction.auctionId);
+          // #1346: resolution happens synchronously server-side, before
+          // this await returns -- it credits the seller's higgles balance
+          // and transfers the landlet immediately, the exact figures Land
+          // Cap/Redeem Higgles display. Those are sibling fields with their
+          // own fetch, not refreshed by renderAuctionList/renderStartSection
+          // below. Same #1124 idiom (a full renderSettingsSection() redraw,
+          // the same thing a manual tab switch already triggers) rather
+          // than patching only this section's own calls.
+          renderSettingsSection();
+          return;
+        } catch (err) {
+          alert(err.message || 'Could not resolve this auction.');
+          resolveBtn.disabled = false;
+        }
+      });
+      row.appendChild(resolveBtn);
+    } else if (auction.sellerBuilderId !== builderId) {
+      // A seller doesn't bid on their own listing — same row, just no
+      // bid form, rather than a disabled one (nothing useful to type
+      // into it).
+      const form = document.createElement('div');
+      form.className = 'auction-row-bid-form';
+      const minCents = auction.highestBidCents !== null ? auction.highestBidCents + 1 : auction.startingBidCents;
+      const bidInput = document.createElement('input');
+      bidInput.type = 'number';
+      bidInput.className = 'auction-row-bid-input';
+      bidInput.min = (minCents / 100).toFixed(2);
+      bidInput.step = '0.01';
+      bidInput.placeholder = `${formatHiggles(minCents)}+`;
+      form.appendChild(bidInput);
+      const bidBtn = document.createElement('button');
+      bidBtn.type = 'button';
+      bidBtn.className = 'auction-bid-btn';
+      bidBtn.textContent = 'Place Bid';
+      bidBtn.addEventListener('click', async () => {
+        const dollars = Number(bidInput.value);
+        if (!Number.isFinite(dollars) || dollars < 0) {
+          alert('Enter a bid amount of zero or more.');
+          return;
+        }
+        const amountCents = Math.round(dollars * 100);
+        if (amountCents > MAX_MONEY_CENTS) {
+          alert(`Enter a bid of ${formatHiggles(MAX_MONEY_CENTS)} or less.`);
+          return;
+        }
+        if (amountCents < minCents) {
+          alert(`Enter a bid of at least ${formatHiggles(minCents)}.`);
+          return;
+        }
+        bidBtn.disabled = true;
+        try {
+          await placeBid(auction.auctionId, { amountCents });
+          await renderAuctionList();
+          await renderStartSection();
+        } catch (err) {
+          alert(err.message || 'Could not place bid.');
+          bidBtn.disabled = false;
+        }
+      });
+      form.appendChild(bidBtn);
+      row.appendChild(form);
+    }
+    return row;
+  }
+
+  renderStartSection();
+  renderAuctionList();
+}
+
+// #1949 (sub-issue of #1947): a builder-wide list of their own placed
+// products carrying finite stock, each annotated with the server's own
+// estimated days-remaining figure -- same "builder-wide, independent of
+// which/any landlet is active" placement as renderAuctionSection just
+// above, filterable client-side by remaining quantity and/or days
+// remaining the same way the catalog picker's own search box filters
+// already-fetched tiles (filterCatalogTiles) rather than re-fetching per
+// keystroke.
+async function renderLowStockSection() {
+  const myToken = settingsRenderToken;
+  if (!builderId && currentAuthUser) setBuilderId(await ensureBuilderIdentity());
+  if (myToken !== settingsRenderToken) return;
+  if (!builderId) {
+    const note = document.createElement('div');
+    note.className = 'settings-empty-note';
+    note.textContent = 'Choose a builder identity to see which of your placed products are low on stock.';
+    settingsSectionEl.appendChild(note);
+    return;
+  }
+
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const label = document.createElement('span');
+  label.textContent = 'Low Stock';
+  field.appendChild(label);
+
+  const filterRow = document.createElement('div');
+  filterRow.className = 'low-stock-filter-row';
+  const qtyLabel = document.createElement('label');
+  qtyLabel.textContent = 'Max remaining';
+  const qtyInput = document.createElement('input');
+  qtyInput.type = 'number';
+  qtyInput.min = '0';
+  qtyInput.placeholder = 'Any';
+  qtyInput.className = 'low-stock-filter-input';
+  // #1950: restores whatever threshold was active last time this section
+  // was rendered -- without this, merely reopening Settings (or switching
+  // tabs and back) would reset the inputs to blank and silently clear the
+  // in-world highlight these drive, even though the builder never asked
+  // for that.
+  qtyInput.value = lowStockFilterMaxQty == null ? '' : String(lowStockFilterMaxQty);
+  qtyLabel.appendChild(qtyInput);
+  filterRow.appendChild(qtyLabel);
+  const daysLabel = document.createElement('label');
+  daysLabel.textContent = 'Max days remaining';
+  const daysInput = document.createElement('input');
+  daysInput.type = 'number';
+  daysInput.min = '0';
+  daysInput.placeholder = 'Any';
+  daysInput.className = 'low-stock-filter-input';
+  daysInput.value = lowStockFilterMaxDays == null ? '' : String(lowStockFilterMaxDays);
+  daysLabel.appendChild(daysInput);
+  filterRow.appendChild(daysLabel);
+  field.appendChild(filterRow);
+
+  const list = document.createElement('div');
+  list.className = 'low-stock-list';
+  field.appendChild(list);
+  const empty = document.createElement('div');
+  empty.className = 'settings-empty-note';
+  field.appendChild(empty);
+  settingsSectionEl.appendChild(field);
+
+  // A days-remaining threshold only ever excludes a row that actually has a
+  // number -- 'unpredictable'/'notEnoughData' rows (daysRemaining: null)
+  // have nothing to compare against a numeric threshold, so they stay
+  // filtered out once that threshold is set rather than matching by
+  // accident on a missing value.
+  function applyFilter() {
+    const maxQty = qtyInput.value === '' ? null : Number(qtyInput.value);
+    const maxDays = daysInput.value === '' ? null : Number(daysInput.value);
+    setLowStockFilterMaxQty(maxQty);
+    setLowStockFilterMaxDays(maxDays);
+    let anyVisible = false;
+    const matchingTemplateIds = new Set();
+    for (const row of list.children) {
+      const qty = Number(row.dataset.stockQuantity);
+      const days = row.dataset.daysRemaining === '' ? null : Number(row.dataset.daysRemaining);
+      const matchesQty = maxQty == null || qty <= maxQty;
+      const matchesDays = maxDays == null || (days != null && days <= maxDays);
+      const matches = matchesQty && matchesDays;
+      row.hidden = !matches;
+      if (matches) {
+        anyVisible = true;
+        matchingTemplateIds.add(row.dataset.templateId);
+      }
+    }
+    empty.hidden = list.children.length === 0 || anyVisible;
+    empty.textContent = list.children.length === 0
+      ? 'None of your placed products carry finite stock yet.'
+      : 'No placed products match this filter.';
+    // #1950: only an actually-set threshold counts as "the filter is
+    // active" -- the unfiltered full list (both inputs still "Any")
+    // highlights nothing in the 3D view, matching the issue's own
+    // "matching the active filter" wording rather than highlighting every
+    // finite-stock item by default.
+    updateLowStockHighlights((maxQty != null || maxDays != null) ? matchingTemplateIds : null);
+  }
+  qtyInput.addEventListener('input', applyFilter);
+  daysInput.addEventListener('input', applyFilter);
+
+  let templates;
+  try {
+    templates = await fetchLowStock();
+  } catch (err) {
+    if (myToken !== settingsRenderToken) return;
+    empty.hidden = false;
+    empty.textContent = err.message || 'Could not load low-stock products.';
+    return;
+  }
+  if (myToken !== settingsRenderToken) return;
+
+  for (const t of templates) {
+    const row = document.createElement('div');
+    row.className = 'low-stock-row';
+    row.dataset.templateId = t.templateId;
+    row.dataset.stockQuantity = String(t.stockQuantity);
+    row.dataset.daysRemaining = t.daysRemaining == null ? '' : String(t.daysRemaining);
+    const info = document.createElement('div');
+    info.className = 'low-stock-row-info';
+    const countLabel = t.placedInstanceCount === 1 ? '1 placed' : `${t.placedInstanceCount} placed`;
+    const stockLabel = t.stockQuantity === 1 ? '1 left (one-of-a-kind)' : `${t.stockQuantity} left`;
+    let estimateLabel;
+    if (t.predictability === 'unpredictable') estimateLabel = 'hard to predict';
+    else if (t.predictability === 'notEnoughData') estimateLabel = 'not enough data yet';
+    else if (t.predictability === 'estimatedFromCategory') estimateLabel = `~${t.daysRemaining}d left (est. from similar products)`;
+    else estimateLabel = `~${t.daysRemaining}d left`;
+    info.textContent = `"${t.name}" — ${stockLabel}, ${countLabel} — ${estimateLabel}`;
+    row.appendChild(info);
+    list.appendChild(row);
+  }
+  applyFilter();
+}
+
+// #2068 (leaf sub-issue of #1973/#1947, owner requirement): "On the build
+// screen looking at their land, they should be able to toggle on/off
+// grayed-out items that have disappeared which they haven't dismissed
+// yet." Unlike renderLowStockSection above (which decorates an already-
+// placed, still-live mesh), a sold-out marker has no live instance left to
+// attach to -- each one gets its own standalone ghost box at its own
+// recorded position instead. Landlet-scoped (fetchSoldOutMarkers takes
+// currentLandletId), not a cross-landlet "mine" list, since a marker's x/y
+// only mean anything inside the one landlet's own scene.
+async function renderSoldOutMarkersSection() {
+  const myToken = settingsRenderToken;
+  if (currentMode !== 'build' || !currentLandletId) return;
+
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const label = document.createElement('span');
+  label.textContent = 'Sold-out markers';
+  field.appendChild(label);
+
+  const toggleRow = document.createElement('label');
+  toggleRow.className = 'sold-out-marker-toggle-row';
+  const toggle = document.createElement('input');
+  toggle.type = 'checkbox';
+  toggle.id = 'sold-out-marker-toggle';
+  toggle.checked = showSoldOutMarkers;
+  toggleRow.appendChild(toggle);
+  toggleRow.appendChild(document.createTextNode(' Show grayed-out markers where sold-out items used to be'));
+  field.appendChild(toggleRow);
+
+  const list = document.createElement('div');
+  list.className = 'sold-out-marker-list';
+  field.appendChild(list);
+  const empty = document.createElement('div');
+  empty.className = 'settings-empty-note';
+  field.appendChild(empty);
+  settingsSectionEl.appendChild(field);
+
+  toggle.addEventListener('change', () => {
+    setShowSoldOutMarkers(toggle.checked);
+    applySoldOutMarkerVisibility();
+  });
+
+  let markers;
+  try {
+    markers = await fetchSoldOutMarkers(currentLandletId);
+  } catch (err) {
+    if (myToken !== settingsRenderToken) return;
+    empty.hidden = false;
+    empty.textContent = err.message || 'Could not load sold-out markers.';
+    return;
+  }
+  if (myToken !== settingsRenderToken) return;
+
+  setSoldOutMarkers(markers);
+  applySoldOutMarkerVisibility();
+  empty.hidden = markers.length > 0;
+  empty.textContent = 'Nothing sold out on this land yet.';
+
+  for (const marker of markers) {
+    const row = document.createElement('div');
+    row.className = 'sold-out-marker-row';
+    row.dataset.markerId = marker.markerId;
+    const info = document.createElement('div');
+    info.className = 'sold-out-marker-row-info';
+    info.textContent = `"${marker.templateName}" sold out`;
+    row.appendChild(info);
+    const dismissBtn = document.createElement('button');
+    dismissBtn.className = 'sold-out-marker-row-dismiss';
+    dismissBtn.textContent = 'Dismiss';
+    dismissBtn.addEventListener('click', async () => {
+      dismissBtn.disabled = true;
+      try {
+        await dismissSoldOutMarker(currentLandletId, marker.markerId);
+        setSoldOutMarkers(soldOutMarkers.filter((m) => m.markerId !== marker.markerId));
+        removeSoldOutMarkerMesh(marker.markerId);
+        row.remove();
+        empty.hidden = list.children.length > 0;
+      } catch (err) {
+        alert(err.message || 'Could not dismiss this marker.');
+        dismissBtn.disabled = false;
+      }
+    });
+    row.appendChild(dismissBtn);
+    list.appendChild(row);
+  }
 }
 

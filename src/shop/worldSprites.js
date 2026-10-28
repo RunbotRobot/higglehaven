@@ -47,9 +47,11 @@
 // shopEquippedAvatarSkeletonSignature stays in main.js (set elsewhere,
 // during avatar equip/swap, not sprite-rendering's own concern) -- exported
 // there, read here by productInfoText, never reassigned by this module.
-// Same for formatPriceCents/DIGITAL_GOOD_DISCLAIMER_TEXT (already exported)
-// and animationCompatibility/animationCompatibilityLabel (now exported for
-// this module to import).
+// Same for formatPriceCents/DIGITAL_GOOD_DISCLAIMER_TEXT (already exported).
+// animationCompatibility/animationCompatibilityLabel moved to ./mode.js
+// (#2565) -- imported from there instead now; a circular import with that
+// module (which itself imports several things back from this one), same
+// shape every other extracted leaf here already uses.
 import * as THREE from 'three';
 import { camera } from '../world/scene.js';
 import { meshDimensions } from '../world/models.js';
@@ -59,8 +61,8 @@ import {
 } from '../api.js';
 import {
   shopEquippedAvatarSkeletonSignature, formatPriceCents, DIGITAL_GOOD_DISCLAIMER_TEXT,
-  animationCompatibility, animationCompatibilityLabel,
 } from '../main.js';
+import { animationCompatibility, animationCompatibilityLabel } from './mode.js';
 // #2628: spawnConfettiBurst now lives in src/shop/productCheckout.js.
 import { spawnConfettiBurst } from './productCheckout.js';
 

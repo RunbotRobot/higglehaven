@@ -60,6 +60,7 @@ import { CATALOG as FALLBACK_CATALOG } from '../catalog.js';
 import {
   fetchCatalog, fetchWorld, fetchAllLandlets, fetchBuildersByIds,
   fetchMyEquippedAvatar, fetchMyEquippedAnimation, fetchOwnLastPresence,
+  fetchMyOwnedAvatars, equipAvatar, fetchMyOwnedAnimations, equipAnimation,
 } from '../api.js';
 import { curvatureDropM, relativeCurvatureDropM } from '../../worker/earthCurvature.js';
 import {
@@ -74,9 +75,13 @@ import {
 import {
   shopAvatar, setShopAvatar, createShopAvatar, createCustomShopAvatar,
   shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM,
-  resetShopAvatarIdleState,
+  resetShopAvatarIdleState, refreshEquippedShopAvatar,
 } from './avatar.js';
-import { beginShopSpawn, updateShopMovement } from './flightMovement.js';
+import {
+  beginShopSpawn, updateShopMovement,
+  getShopCameraLockToFacing, setShopCameraLockToFacing,
+} from './flightMovement.js';
+import { settingsSectionEl } from '../settings/modal.js';
 import {
   shopDomeRiseM, resetShopDomeRiseM, paintVerticalGradient,
   SHOP_SKY_VERTEX_SHADER, SHOP_SKY_FRAGMENT_SHADER, initShopSkyMaterial, updateShopSky,
@@ -787,4 +792,299 @@ export async function enterShopMode() {
     });
   });
   registerFacingOverride(() => shopAvatarFacing);
+}
+
+// #2565 (leaf of #2504/#2500, Option A per owner decision 2026-10-28): the
+// Settings modal's Shop tab -- extracted wholesale from src/main.js.
+// settings/modal.js's renderSettingsSection just calls this rather than
+// reaching into Shop's own state directly.
+//
+// animationCompatibility/animationCompatibilityLabel move here too (My
+// Animations' own compatibility badges are the only call site left in
+// main.js once this leaf moves out) -- exported for shop/worldSprites.js's
+// own productInfoText to import from here instead of from main.js.
+
+// #1164 (sub-issue of #1161): shared by this file's own two compatibility
+// surfaces (this settings panel, and the Shop-mode buy hint in
+// shop/worldSprites.js) so "what does compatible/incompatible/unknown
+// actually mean" lives in exactly one place. Exact-match string equality
+// (#1162's own contract — see computeSkeletonSignature's doc comment on why
+// this is never fuzzy), gated on both signatures actually being present:
+// `null` either means "the default procedural avatar" (no skeleton at all,
+// see myAvatarJson's own comment) or "this animation file carries no
+// skeleton," and neither can ever match anything, compatible or not.
+export function animationCompatibility(animationSignature, avatarSignature) {
+  if (!avatarSignature) return 'no-avatar';
+  if (!animationSignature) return 'unknown';
+  return animationSignature === avatarSignature ? 'compatible' : 'incompatible';
+}
+
+export function animationCompatibilityLabel(compatibility) {
+  switch (compatibility) {
+    case 'compatible': return 'Compatible with your equipped avatar';
+    case 'incompatible': return 'Incompatible with your equipped avatar';
+    case 'no-avatar': return 'Equip a custom avatar to check compatibility';
+    default: return 'Compatibility unknown';
+  }
+}
+
+// Owner: "I want the instructional note at the bottom of the shop screen
+// that explains the three controls... to go into a Help section in Menu
+// to clean up the interface." Moved out of the always-visible #shop-hint
+// overlay (removed from index.html/enterShopMode) into this Settings tab,
+// which already existed as an empty placeholder — reachable any time via
+// Menu → Settings → Shop, not just while actually standing in the world.
+export function renderShopSettingsSection() {
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const label = document.createElement('span');
+  label.textContent = 'Controls';
+  field.appendChild(label);
+  const note = document.createElement('div');
+  note.className = 'settings-empty-note';
+  note.textContent = 'Left stick to walk (push further to run) — right stick to look — double-tap 🕊️ (or double-press space) to fly.';
+  field.appendChild(note);
+  settingsSectionEl.appendChild(field);
+
+  // #1588: opt-in free-look-recenters-on-facing. Off by default — the
+  // existing free-look/facing independence (see updateShopMovement's own
+  // comment on this) is the baseline behavior, not something this toggle
+  // should change for anyone who hasn't asked for it.
+  const cameraLockField = document.createElement('div');
+  cameraLockField.className = 'settings-field';
+  const cameraLockLabel = document.createElement('span');
+  cameraLockLabel.textContent = 'Camera';
+  cameraLockField.appendChild(cameraLockLabel);
+  const cameraLockRow = document.createElement('div');
+  cameraLockRow.className = 'settings-radio-row';
+  const cameraLockLabelEl = document.createElement('label');
+  const cameraLockCheckbox = document.createElement('input');
+  cameraLockCheckbox.type = 'checkbox';
+  cameraLockCheckbox.checked = getShopCameraLockToFacing();
+  cameraLockCheckbox.addEventListener('change', () => {
+    setShopCameraLockToFacing(cameraLockCheckbox.checked);
+  });
+  cameraLockLabelEl.appendChild(cameraLockCheckbox);
+  cameraLockLabelEl.appendChild(document.createTextNode("Ease the camera back to face the way I'm walking"));
+  cameraLockRow.appendChild(cameraLockLabelEl);
+  cameraLockField.appendChild(cameraLockRow);
+  settingsSectionEl.appendChild(cameraLockField);
+
+  // #1340: My Animations' own compatibility badges are a function of
+  // whichever avatar is currently equipped -- without wiring the two
+  // together, re-equipping via My Avatars left My Animations rendering
+  // badges against the previous avatar until Settings was closed and
+  // reopened. refreshMyAnimationsList is reassigned below once
+  // renderMyAnimationsField exists; the forward reference preserves the
+  // existing DOM order (My Avatars field above My Animations field).
+  let refreshMyAnimationsList = () => {};
+  renderMyAvatarsField(() => refreshMyAnimationsList());
+  refreshMyAnimationsList = renderMyAnimationsField();
+}
+
+// #713 (sub-issue of #710): #679 shipped the backend (GET /api/builders/
+// me/avatars, GET/PUT /api/builders/me/avatar) and in-world rendering of
+// whatever ends up equipped, but nothing in this file ever called any of
+// it — a builder who bought an avatar-category listing (#712 finally made
+// one purchasable through the app) had no way to ever equip it. Lives in
+// the Shop tab, not General, since equipping only ever affects the
+// Shop-mode player character. Reuses Saved Layouts/Version History's own
+// .version-list/.version-row row shape above (a named, actionable list
+// entry is the same kind of thing here).
+function renderMyAvatarsField(onEquipped) {
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const label = document.createElement('span');
+  label.textContent = 'My Avatars';
+  field.appendChild(label);
+  const hint = document.createElement('div');
+  hint.className = 'settings-empty-note';
+  hint.textContent = 'Equip an avatar you own to replace the default Shop-mode character.';
+  field.appendChild(hint);
+  const list = document.createElement('div');
+  list.className = 'version-list';
+  field.appendChild(list);
+  settingsSectionEl.appendChild(field);
+
+  let myAvatarsLoadToken = 0;
+  async function renderMyAvatarsList() {
+    const myLoadToken = ++myAvatarsLoadToken;
+    list.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    let avatars;
+    let equipped;
+    try {
+      [avatars, equipped] = await Promise.all([fetchMyOwnedAvatars(), fetchMyEquippedAvatar()]);
+    } catch (err) {
+      if (myLoadToken !== myAvatarsLoadToken) return; // superseded while loading — a newer call owns the panel now
+      list.innerHTML = '';
+      const errNote = document.createElement('div');
+      errNote.className = 'settings-empty-note';
+      errNote.textContent = err.message || 'Could not load your avatars.';
+      list.appendChild(errNote);
+      return;
+    }
+    if (myLoadToken !== myAvatarsLoadToken) return; // superseded while loading — a newer call owns the panel now
+    list.innerHTML = '';
+
+    // The default (no template equipped) is always offered as its own row,
+    // even with zero owned avatars — it's a real, equippable choice (the
+    // revert target from PUT .../avatar's own { templateId: null } shape),
+    // not just a placeholder for an empty list.
+    const rowSpecs = [{ templateId: null, name: 'Default avatar', purchasedAt: null }, ...avatars.map((avatar) => ({ templateId: avatar.templateId, name: avatar.name, purchasedAt: avatar.purchasedAt }))];
+    for (const { templateId, name, purchasedAt } of rowSpecs) {
+      const row = document.createElement('div');
+      row.className = 'version-row';
+
+      const info = document.createElement('div');
+      info.className = 'version-row-info';
+      const isEquipped = equipped.equippedTemplateId === templateId;
+      const parts = [isEquipped ? `${name} — equipped` : name];
+      if (purchasedAt) {
+        const purchaseDate = new Date(purchasedAt);
+        if (!Number.isNaN(purchaseDate.getTime())) parts.push(`purchased ${purchaseDate.toLocaleDateString()}`);
+      }
+      info.textContent = parts.join(' — ');
+      row.appendChild(info);
+
+      const actions = document.createElement('div');
+      actions.className = 'version-row-actions';
+      const equipBtn = document.createElement('button');
+      equipBtn.type = 'button';
+      equipBtn.className = 'version-action-btn';
+      equipBtn.textContent = 'Equip';
+      equipBtn.disabled = isEquipped;
+      equipBtn.addEventListener('click', async () => {
+        equipBtn.disabled = true;
+        try {
+          const newEquipped = await equipAvatar(templateId);
+          // #1164: keep the Shop-mode buy hint's own compatibility note
+          // (productInfoText) current — without this, re-equipping while
+          // already in Shop mode left it comparing against whichever
+          // avatar was equipped when enterShopMode last ran.
+          setShopEquippedAvatarSkeletonSignature(newEquipped.skeletonSignature);
+          await refreshEquippedShopAvatar(newEquipped.modelUrl);
+          renderMyAvatarsList();
+          onEquipped?.();
+        } catch (err) {
+          alert(err.message || 'Could not equip this avatar.');
+          equipBtn.disabled = false;
+        }
+      });
+      actions.appendChild(equipBtn);
+      row.appendChild(actions);
+      list.appendChild(row);
+    }
+  }
+  renderMyAvatarsList();
+}
+
+// #1164: the "My Animations" sibling of renderMyAvatarsField just above —
+// same row shape, equip/unequip against owned_animations (#1163) instead
+// of owned_avatars, plus a compatibility badge per row (see
+// animationCompatibility) since, unlike an avatar, whether an animation
+// actually plays correctly depends on which avatar is currently equipped.
+// Equipping an incompatible animation is still allowed here, deliberately
+// — the issue's own scope note is that incompatibility should be
+// *visible*, not blocked outright; #1165's own "sane fallback behavior if
+// the shopper later switches to a different, incompatible avatar while an
+// animation is applied" only makes sense if that combination can exist in
+// the first place.
+function renderMyAnimationsField() {
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const label = document.createElement('span');
+  label.textContent = 'My Animations';
+  field.appendChild(label);
+  const hint = document.createElement('div');
+  hint.className = 'settings-empty-note';
+  hint.textContent = 'Apply an animation you own to your currently equipped avatar.';
+  field.appendChild(hint);
+  const list = document.createElement('div');
+  list.className = 'version-list';
+  field.appendChild(list);
+  settingsSectionEl.appendChild(field);
+
+  let myAnimationsLoadToken = 0;
+  async function renderMyAnimationsList() {
+    const myLoadToken = ++myAnimationsLoadToken;
+    list.innerHTML = '<div class="settings-empty-note">Loading…</div>';
+    let animations;
+    let equipped;
+    let equippedAvatar;
+    try {
+      [animations, equipped, equippedAvatar] = await Promise.all([
+        fetchMyOwnedAnimations(), fetchMyEquippedAnimation(), fetchMyEquippedAvatar(),
+      ]);
+    } catch (err) {
+      if (myLoadToken !== myAnimationsLoadToken) return; // superseded while loading — a newer call owns the panel now
+      list.innerHTML = '';
+      const errNote = document.createElement('div');
+      errNote.className = 'settings-empty-note';
+      errNote.textContent = err.message || 'Could not load your animations.';
+      list.appendChild(errNote);
+      return;
+    }
+    if (myLoadToken !== myAnimationsLoadToken) return; // superseded while loading — a newer call owns the panel now
+    list.innerHTML = '';
+
+    if (animations.length === 0) {
+      const emptyNote = document.createElement('div');
+      emptyNote.className = 'settings-empty-note';
+      emptyNote.textContent = "You don't own any standalone animations yet.";
+      list.appendChild(emptyNote);
+      return;
+    }
+
+    // Unlike My Avatars, "None applied" is only a meaningful choice once
+    // you own at least one animation — an empty list above already covers
+    // "nothing to apply" on its own, so this row only appears alongside
+    // real owned animations.
+    const rowSpecs = [{ templateId: null, name: 'None applied', skeletonSignature: null, purchasedAt: null }, ...animations];
+    for (const { templateId, name, skeletonSignature, purchasedAt } of rowSpecs) {
+      const row = document.createElement('div');
+      row.className = 'version-row';
+
+      const info = document.createElement('div');
+      info.className = 'version-row-info';
+      const isEquipped = equipped.equippedTemplateId === templateId;
+      const parts = [isEquipped ? `${name} — applied` : name];
+      if (templateId !== null) {
+        parts.push(animationCompatibilityLabel(animationCompatibility(skeletonSignature, equippedAvatar.skeletonSignature)));
+      }
+      if (purchasedAt) {
+        const purchaseDate = new Date(purchasedAt);
+        if (!Number.isNaN(purchaseDate.getTime())) parts.push(`purchased ${purchaseDate.toLocaleDateString()}`);
+      }
+      info.textContent = parts.join(' — ');
+      row.appendChild(info);
+
+      const actions = document.createElement('div');
+      actions.className = 'version-row-actions';
+      const equipBtn = document.createElement('button');
+      equipBtn.type = 'button';
+      equipBtn.className = 'version-action-btn';
+      equipBtn.textContent = templateId === null ? 'Clear' : 'Apply';
+      equipBtn.disabled = isEquipped;
+      equipBtn.addEventListener('click', async () => {
+        equipBtn.disabled = true;
+        try {
+          await equipAnimation(templateId);
+          // #1165: live-swap the Shop-mode avatar's actual playing clips
+          // the same way re-equipping an avatar already does — the avatar
+          // itself (shopAvatar.modelUrl) doesn't change here, only which
+          // animation createCustomShopAvatar binds against it.
+          await refreshEquippedShopAvatar(shopAvatar?.modelUrl);
+          renderMyAnimationsList();
+        } catch (err) {
+          alert(err.message || 'Could not apply this animation.');
+          equipBtn.disabled = false;
+        }
+      });
+      actions.appendChild(equipBtn);
+      row.appendChild(actions);
+      list.appendChild(row);
+    }
+  }
+  renderMyAnimationsList();
+  return renderMyAnimationsList;
 }
