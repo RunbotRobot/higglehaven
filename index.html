@@ -5077,11 +5077,26 @@
           </label>
         </div>
         <div id="verify-card-step" hidden>
-          <p id="verify-card-intro">
-            Add a credit card (not debit or prepaid) to verify your age. This only checks the card type — it is
-            never charged.
-          </p>
-          <div id="verify-card-element"></div>
+          <!-- #2862: split out from verify-card-step itself so
+               enterVerifyCardStep's own simulated/dev-mode branch (no real
+               Stripe configured) can hide just the real-card-only parts --
+               verify-id-instead-btn below needs to stay visible either way,
+               since this modal's own intro text above promises ID
+               verification as an alternative regardless of whether the
+               card path itself has anything real to show. -->
+          <div id="verify-card-form">
+            <p id="verify-card-intro">
+              Add a credit card (not debit or prepaid) to verify your age. This only checks the card type — it is
+              never charged.
+            </p>
+            <div id="verify-card-element"></div>
+          </div>
+          <!-- Until now nothing inside this modal actually offered the
+               ID-verification alternative its own intro text promises --
+               the only way to reach startDiditVerification() was the
+               separate Account panel, unreachable once already inside this
+               no-escape modal. -->
+          <button id="verify-id-instead-btn" type="button">Verify by government ID instead</button>
         </div>
         <div id="verify-status" role="status" aria-live="polite"></div>
         <div id="verify-modal-actions">
