@@ -237,7 +237,12 @@ let shopLastReportedFlying; // #2043: same undefined-until-first-report shape as
 // see pollNearbyPresenceIfNeeded/updateOtherShopAvatars. builderId -> {
 // group, fromX/Y/Z/Heading (previous poll's position, lerp start),
 // toX/Y/Z/Heading (latest poll's position, lerp target), receivedAt (when
-// the latest poll landed, for timing the lerp against) }.
+// the latest poll landed, for timing the lerp against), lerpDurationMs
+// (#2864: the real elapsed time since the *previous* snapshot, used as
+// this lerp's own duration instead of always assuming exactly
+// SHOP_PRESENCE_POLL_INTERVAL_MS — see pollNearbyPresenceIfNeeded's own
+// comment on why that fixed assumption produces a visible freeze/catch-up
+// snap under an uneven poll cadence) }.
 export const shopOtherAvatars = new Map();
 let shopLastPresencePollAt = 0;
 let presencePollToken = 0; // #1911: guards pollNearbyPresenceIfNeeded against a stale out-of-order response
@@ -512,6 +517,7 @@ export async function pollNearbyPresenceIfNeeded(now) {
       entry = {
         group,
         fromX: avatar.x, fromY: avatar.y, fromZ: avatar.z, fromHeading: avatar.heading ?? 0,
+        lerpDurationMs: SHOP_PRESENCE_POLL_INTERVAL_MS, // nothing to compare against yet; from === to anyway
       };
       shopOtherAvatars.set(avatar.builderId, entry);
     } else {
@@ -519,6 +525,13 @@ export async function pollNearbyPresenceIfNeeded(now) {
       entry.fromY = entry.toY;
       entry.fromZ = entry.toZ;
       entry.fromHeading = entry.toHeading;
+      // #2864: this snapshot's own real arrival gap, not a fixed
+      // assumption — an uneven/delayed poll cadence (network jitter, a
+      // throttled/backgrounded tab, a skipped tick) would otherwise make
+      // updateOtherShopAvatars clamp at t=1 and sit frozen until the next
+      // snapshot finally lands, then visibly snap through the real
+      // distance covered in too short a window.
+      entry.lerpDurationMs = Math.max(1, now - entry.receivedAt);
     }
     entry.toX = avatar.x;
     entry.toY = avatar.y;
@@ -574,7 +587,7 @@ function refreshOtherShopAvatarsDiagnostic() {
 // visible snap/teleport on each poll tick (the issue's own "smoothing").
 export function updateOtherShopAvatars(now) {
   for (const entry of shopOtherAvatars.values()) {
-    const t = Math.min(1, (now - entry.receivedAt) / SHOP_PRESENCE_POLL_INTERVAL_MS);
+    const t = Math.min(1, (now - entry.receivedAt) / entry.lerpDurationMs);
     entry.group.position.set(
       THREE.MathUtils.lerp(entry.fromX, entry.toX, t),
       THREE.MathUtils.lerp(entry.fromY, entry.toY, t),
