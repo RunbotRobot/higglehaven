@@ -335,7 +335,7 @@ import {
   cancelPlacementMode, updateTrimLengthInput,
   measurePointA, measurePointB, updateMeasureResultText,
   syncUpdate, footprintsOverlap, footprintCorners,
-  removeLowStockHighlight,
+  removeLowStockHighlight, landletElevationGroup,
 } from './build/scene.js';
 
 // Exported for src/catalog/picker.js (#2558) -- its own renderBundlePicker/
@@ -4184,7 +4184,7 @@ async function enterSellMode() {
   rotateControls.detach();
   for (const mesh of productMeshes) {
     removeLowStockHighlight(mesh);
-    scene.remove(mesh);
+    landletElevationGroup.remove(mesh);
     disposeObject(mesh);
   }
   productMeshes.length = 0;

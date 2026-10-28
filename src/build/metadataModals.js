@@ -16,11 +16,10 @@ import {
   fetchCalendarEvents, deleteCalendarEvent, editCalendarEvent,
   fetchInstanceBackups, addInstanceBackup, reorderInstanceBackups, deleteInstanceBackup,
 } from '../api.js';
-import { scene } from '../world/scene.js';
 import { findTemplate, createMeshForInstance, disposeObject } from '../world/models.js';
 import { currentAuthUser } from '../account/auth.js';
 import { openCatalogPickerForPick } from '../catalog/picker.js';
-import { selectedMeshes, updateSelectionUI, persistLayout, syncUpdate } from './scene.js';
+import { selectedMeshes, updateSelectionUI, persistLayout, syncUpdate, landletElevationGroup } from './scene.js';
 
 const communitySignBtn = document.getElementById('toggle-community-sign');
 const communityCalendarBtn = document.getElementById('toggle-community-calendar');
@@ -394,7 +393,10 @@ async function showBackupReferenceMesh(mesh) {
       material.opacity = BACKUP_REFERENCE_OPACITY;
     }
   });
-  scene.add(reference);
+  // #2871: x/y/z above was copied straight from mesh.position (already
+  // landletElevationGroup-local post-reparenting), so the reference needs
+  // to live in that same group to render at the matching height.
+  landletElevationGroup.add(reference);
   backupReferenceMesh = reference;
 }
 
@@ -402,7 +404,7 @@ async function showBackupReferenceMesh(mesh) {
 // needs this same cleanup when a Backup Chain pick session ends.
 export function hideBackupReferenceMesh() {
   if (!backupReferenceMesh) return;
-  scene.remove(backupReferenceMesh);
+  landletElevationGroup.remove(backupReferenceMesh);
   disposeObject(backupReferenceMesh);
   backupReferenceMesh = null;
 }

@@ -51,7 +51,7 @@ import { authInitPromise, accountRecoveryFlowActive, currentAuthUser } from '../
 import { ensureShopperIdentity } from '../account/identity.js';
 import {
   controls, rotateControls, translateControls, clearSelection,
-  productMeshes, removeLowStockHighlight,
+  productMeshes, removeLowStockHighlight, landletElevationGroup,
   setActiveLowStockTemplateIds, setLowStockFilterMaxQty, setLowStockFilterMaxDays,
   clearSoldOutMarkerMeshes, setShowSoldOutMarkers, setSoldOutMarkers,
   removeSelectionOutline,
@@ -427,7 +427,7 @@ export async function enterShopMode() {
   rotateControls.detach();
   for (const mesh of productMeshes) {
     removeLowStockHighlight(mesh);
-    scene.remove(mesh);
+    landletElevationGroup.remove(mesh);
     disposeObject(mesh);
   }
   productMeshes.length = 0;
