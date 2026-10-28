@@ -36,6 +36,32 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, '..');
 const PORT = process.env.E2E_PORT || '8787';
+// #2859: unlike every other .dev.vars value above (written once, shared by
+// every file in this job), real Stripe test-mode credentials are only ever
+// wanted by the one file that specifically exercises the non-simulated
+// Stripe Elements path -- every other file's own coverage already assumes
+// `stripeConfigured(env)` is false (see worker/lib/purchase-creation.js's
+// own E2E_SIMULATE_PAID_PURCHASES comment) and would silently start
+// exercising real Stripe code paths it was never written against if these
+// leaked into a shared .dev.vars instead. `wrangler dev --var KEY:VALUE`
+// injects a binding for one spawn only, without touching the file every
+// other test file's own wrangler dev also reads. Sourced from
+// E2E_STRIPE_SECRET_KEY/E2E_STRIPE_PUBLISHABLE_KEY (CI: the
+// E2E_STRIPE_SECRET_KEY/E2E_STRIPE_PUBLISHABLE_KEY repo secrets, wired into
+// this job's own env by .github/workflows/ci.yml; locally: export the same
+// two vars before running `node e2e/run-all.mjs`) -- deliberately separate
+// names from STRIPE_SECRET_KEY/STRIPE_PUBLISHABLE_KEY themselves, which are
+// live production Worker secrets this job must never see.
+const REAL_STRIPE_TEST_FILES = new Set(['verify-card-real-stripe.test.mjs']);
+function realStripeWranglerVars(testFile) {
+  if (!REAL_STRIPE_TEST_FILES.has(testFile)) return [];
+  const { E2E_STRIPE_SECRET_KEY, E2E_STRIPE_PUBLISHABLE_KEY } = process.env;
+  if (!E2E_STRIPE_SECRET_KEY || !E2E_STRIPE_PUBLISHABLE_KEY) return [];
+  return [
+    '--var', `STRIPE_SECRET_KEY:${E2E_STRIPE_SECRET_KEY}`,
+    '--var', `STRIPE_PUBLISHABLE_KEY:${E2E_STRIPE_PUBLISHABLE_KEY}`,
+  ];
+}
 // A literal IP, not the "localhost" hostname — Node/Chromium's dual-stack
 // DNS resolution can intermittently try ::1 first (Happy Eyeballs), and a
 // request that lands there gets refused outright if wrangler dev is only
@@ -224,7 +250,7 @@ async function runOneTest(testFile) {
   }
 
   const wranglerLogFilesBefore = listWranglerLogFiles();
-  const wrangler = spawn('npx', ['wrangler', 'dev', '--local', '--ip', '127.0.0.1', '--port', PORT], {
+  const wrangler = spawn('npx', ['wrangler', 'dev', '--local', '--ip', '127.0.0.1', '--port', PORT, ...realStripeWranglerVars(testFile)], {
     cwd: repoRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
