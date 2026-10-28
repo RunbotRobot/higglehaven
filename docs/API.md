@@ -10674,9 +10674,13 @@ country-wide one.
 Rendered read-only in Settings' General tab, directly below the tax
 paperwork field (`src/main.js`'s `renderTaxEducationField`) — a
 `<details>` disclosure per matched entry, plain text throughout (no rich
-HTML rendering of `body`), with "Submit tax paperwork above to see
-general tax info for your jurisdiction" shown instead when
-`jurisdiction` comes back `null`.
+HTML rendering of `body`), with "Submit the form above to see general
+tax info for your jurisdiction" shown instead when `jurisdiction` comes
+back `null`. That wording deliberately avoids the substring "tax
+paperwork" — `e2e/tax-paperwork-settings.test.mjs`'s own locator matches
+every `.settings-field` whose text contains that phrase (case-
+insensitive), so this field's status text can't contain it too without
+becoming a spurious extra match.
 
 ## Control Room API (N31)
 

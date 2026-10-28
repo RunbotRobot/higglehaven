@@ -1133,7 +1133,15 @@ async function renderTaxEducationField() {
   if (myToken !== settingsRenderToken) return;
 
   if (!result.jurisdiction) {
-    status.textContent = 'Submit tax paperwork above to see general tax info for your jurisdiction.';
+    // #2858/e2e fallout: deliberately avoids the substring "tax paperwork"
+    // (case-insensitive) -- e2e/tax-paperwork-settings.test.mjs's own
+    // `taxField` locator matches every .settings-field whose text contains
+    // that phrase (it already relies on this to reach the submit button's
+    // own "Submit tax paperwork" label via .last()), so this field's own
+    // status text can't contain it too without becoming a second/third
+    // match that locator's own .last() would then pick up instead of the
+    // real form-submission status it's checking.
+    status.textContent = 'Submit the form above to see general tax info for your jurisdiction.';
     return;
   }
   if (!result.entries.length) {
