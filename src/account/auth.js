@@ -80,6 +80,14 @@ let verifyCardElement = null;
 // card element to mount at all; the Continue button goes straight to
 // confirmCard(null).
 let verifyStripeSetup = null;
+// The same Stripe.js instance that created verifyCardElement, reused for
+// confirmCardSetup below -- Stripe.js requires the exact same instance for
+// both (a second `Stripe(publishableKey)` call creates a distinct object
+// even with an identical key), or confirmCardSetup rejects with "Please
+// use the same instance of `Stripe`...". Found live (owner report,
+// 2026-10-28): calling Stripe(...) fresh in both enterVerifyCardStep and
+// the click handler below hit exactly this.
+let verifyStripeInstance = null;
 
 async function enterVerifyCardStep() {
   verifyAgeStepEl.hidden = true;
@@ -93,8 +101,8 @@ async function enterVerifyCardStep() {
       verifyContinueBtn.textContent = 'Verify (dev mode)';
     } else {
       const Stripe = await loadStripeJs();
-      const stripe = Stripe(verifyStripeSetup.publishableKey);
-      const elements = stripe.elements();
+      verifyStripeInstance = Stripe(verifyStripeSetup.publishableKey);
+      const elements = verifyStripeInstance.elements();
       verifyCardElement = elements.create('card');
       verifyCardElement.mount(verifyCardElementEl);
       verifyContinueBtn.textContent = 'Verify card';
@@ -108,6 +116,7 @@ async function enterVerifyCardStep() {
 
 function openVerifyModal(user) {
   verifyStripeSetup = null;
+  verifyStripeInstance = null;
   verifyAgeAttestInput.checked = false;
   verifyCardStepEl.hidden = true;
   if (verifyCardElement) { verifyCardElement.unmount(); verifyCardElement = null; }
@@ -160,9 +169,7 @@ verifyContinueBtn.addEventListener('click', async () => {
   try {
     let setupIntentId = null;
     if (!verifyStripeSetup?.simulated) {
-      const Stripe = await loadStripeJs();
-      const stripe = Stripe(verifyStripeSetup.publishableKey);
-      const result = await stripe.confirmCardSetup(verifyStripeSetup.clientSecret, {
+      const result = await verifyStripeInstance.confirmCardSetup(verifyStripeSetup.clientSecret, {
         payment_method: { card: verifyCardElement },
       });
       if (result.error) throw new Error(result.error.message || 'Card verification failed.');

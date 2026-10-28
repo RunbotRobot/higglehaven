@@ -35,6 +35,9 @@ import {
 } from './lib/control-room.js';
 // #2719 (sub-issue of #2715): Submit Feedback bug-report storage.
 import { handleFeedback } from './lib/feedback.js';
+// #2842 (sub-issue of #2841): jurisdiction-keyed tax education content,
+// storage + admin UI only.
+import { handleTaxEducation } from './lib/tax-education.js';
 import {
   handleAdminBootstrap, handleGrantAdmin, handleRevokeAdmin, handleListAdmins, handleSuspendAccount,
   handleUnsuspendAccount, handleSuspensionStatus, handleAdminUserSearch, handleAdminUserDetail,
@@ -739,6 +742,10 @@ async function handleApi(request, env, url, ctx) {
 
   if (route[0] === 'control-room') {
     return handleControlRoom(request, env, route, url);
+  }
+
+  if (route[0] === 'tax-education') {
+    return handleTaxEducation(request, env, env.DB, route, url);
   }
 
   if (request.method === 'GET' && route.length === 1 && route[0] === 'admin-action-log') {
