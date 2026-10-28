@@ -682,7 +682,12 @@ export async function enterShopMode() {
     const groundGeometry = new THREE.ShapeGeometry(shapeForLandlet(record));
     if (plotColorKey === 'greenbelt') normalizeGroundShapeUVs(groundGeometry);
     const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
-    groundMesh.position.z = 0.02;
+    // #2851: Shop mode's own ground mesh never called curveGroundGeometry
+    // (world-curvature *between* landlets is a separate, unaddressed
+    // problem here -- see applyLandletShape's own comment on this) --
+    // this plot-level real elevation offset is independent of that, just
+    // a uniform z lift for this one landlet's own real terrain height.
+    groundMesh.position.z = 0.02 + (record.elevationM ?? 0);
     group.add(groundMesh);
     scene.add(group);
     shopLandlets.set(record.landletId, {

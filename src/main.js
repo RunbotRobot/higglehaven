@@ -4320,7 +4320,10 @@ function addBuildModeNeighborOutlines(currentLandletRecord, allLandlets) {
     const dy = record.center.y - currentLandletRecord.center.y;
     if (Math.hypot(dx, dy) > SHOP_LOAD_RADIUS_M) continue;
     const geometry = new THREE.ShapeGeometry(shapeForLandlet(record));
-    curveGroundGeometry(geometry);
+    // #2851: same real-elevation composition applyLandletShape's own
+    // main-plot geometry gets, so a neighbor outline doesn't read as
+    // sitting at the wrong height relative to the plot being built on.
+    curveGroundGeometry(geometry, record.elevationM ?? 0);
     const mesh = new THREE.Mesh(geometry, neighborMaterial);
     const group = new THREE.Group();
     // Just under the main plot's own ground (z 0.02, applyLandletShape/the
