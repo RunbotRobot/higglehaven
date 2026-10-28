@@ -43,8 +43,13 @@ if (!process.env.E2E_STRIPE_SECRET_KEY || !process.env.E2E_STRIPE_PUBLISHABLE_KE
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
-await page.click('.mode-nav-btn[data-mode="build"]');
-await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+// N44: Shop mode gates its own entry the same way Build/Sell do, and a
+// fresh page load already lands on Shop by default -- #auth-modal is
+// already open by the time this runs, same race chooseIdentity's own
+// comment in e2e/helpers.mjs documents (an earlier version of this test
+// clicked a mode-nav button first, which the modal was already
+// intercepting pointer events for). No click needed; this test only
+// cares about the account/verification flow, not which mode it lands in.
 await page.waitForSelector('#auth-modal.visible', { timeout: 8000 });
 
 await page.click('.auth-tab-btn[data-auth-view="signup"]');
