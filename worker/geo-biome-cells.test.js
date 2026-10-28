@@ -17,7 +17,7 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll } from 'vitest';
 import { describe, expect, it } from 'vitest';
-import { biomeAt } from './lib/world-generation.js';
+import { biomeAt, elevationAt } from './lib/world-generation.js';
 import { defaultMosaicBoundaryRadiusM, generateWaterAwareMosaic } from './lib/water-aware-mosaic.js';
 import { discBoundary } from './weightedVoronoiGenerator.js';
 import { generateLandletRing } from './landGenerator.js';
@@ -32,10 +32,10 @@ beforeAll(async () => {
   adminSession = admin.session;
 });
 
-async function seedBiomeCell(x, y, biome, spacingM = 25) {
+async function seedBiomeCell(x, y, biome, spacingM = 25, elevationM = null) {
   await env.DB.prepare(`
-    INSERT INTO geo_biome_cells (x_m, y_m, biome, spacing_m, generated_at) VALUES (?, ?, ?, ?, ?)
-  `).bind(x, y, biome, spacingM, new Date().toISOString()).run();
+    INSERT INTO geo_biome_cells (x_m, y_m, biome, spacing_m, generated_at, elevation_m) VALUES (?, ?, ?, ?, ?, ?)
+  `).bind(x, y, biome, spacingM, new Date().toISOString(), elevationM).run();
 }
 
 describe('biomeAt (#2370)', () => {
@@ -64,6 +64,46 @@ describe('biomeAt (#2370)', () => {
   it('is null for a point far from every seeded cell', async () => {
     await seedBiomeCell(19000, 19000, 'lowland');
     expect(await biomeAt(env.DB, 20000, 20000)).toBeNull();
+  });
+});
+
+// #2850 (leaf of #2373, sub-issue of #2368): elevationAt, mirroring
+// biomeAt's own coverage above exactly -- same table, same nearest-cell
+// lookup shape, just a different column and a real "predates #2850,
+// elevation_m never backfilled" gap to cover that biome doesn't have.
+describe('elevationAt (#2850)', () => {
+  it('is null far outside the real ingested dataset, with no cell seeded', async () => {
+    expect(await elevationAt(env.DB, 22000, 22000)).toBeNull();
+  });
+
+  it('returns the exact elevation of a seeded cell', async () => {
+    await seedBiomeCell(22100, 22200, 'upland', 25, 123.456);
+    expect(await elevationAt(env.DB, 22100, 22200)).toBe(123.456);
+  });
+
+  it('returns the elevation within the cell\'s own spacing, null just beyond it', async () => {
+    await seedBiomeCell(22500, 22500, 'alpine', 25, 500);
+    expect(await elevationAt(env.DB, 22520, 22500)).toBe(500); // 20m away, within 25m spacing
+    expect(await elevationAt(env.DB, 22560, 22500)).toBeNull(); // 60m away, outside it
+  });
+
+  it('returns the nearest cell\'s elevation when two different cells are both in range', async () => {
+    await seedBiomeCell(23000, 23000, 'lowland', 30, 10);
+    await seedBiomeCell(23040, 23000, 'near_water', 30, 2);
+    // 10m from the first cell, 30m from the second -- nearest wins.
+    expect(await elevationAt(env.DB, 23010, 23000)).toBe(10);
+  });
+
+  it('is null for a cell that predates #2850 and was never backfilled, even though biomeAt still resolves it', async () => {
+    await seedBiomeCell(24000, 24000, 'lowland', 25, null);
+    expect(await biomeAt(env.DB, 24000, 24000)).toBe('lowland');
+    expect(await elevationAt(env.DB, 24000, 24000)).toBeNull();
+  });
+
+  it('skips a nearer cell with no elevation reading in favor of a farther one that has it', async () => {
+    await seedBiomeCell(25000, 25000, 'lowland', 30, null); // nearer, but no elevation
+    await seedBiomeCell(25020, 25000, 'lowland', 30, 42); // farther, has elevation
+    expect(await elevationAt(env.DB, 25005, 25000)).toBe(42);
   });
 });
 

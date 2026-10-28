@@ -158,5 +158,6 @@
   "0158_precompute_lead_m.sql",
   "0159_friend_voice_channel_members.sql",
   "0160_voice_conduct_reports.sql",
-  "0161_tax_education_content.sql"
+  "0161_tax_education_content.sql",
+  "0162_geo_biome_cells_elevation.sql"
 ]

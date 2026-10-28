@@ -227,6 +227,27 @@ export async function biomeAt(db, x, y) {
   return row ? row.biome : null;
 }
 
+// #2850 (leaf of #2373, sub-issue of #2368, Option C real terrain --
+// owner decision 2026-10-27): the real elevation at a point, from
+// geo_biome_cells' own elevation_m column (migrations/0161) -- same
+// nearest-sampled-cell lookup biomeAt above already establishes, just
+// against elevation_m instead of biome. Null when no sampled cell is
+// close enough to have a reading, or when the nearest cell predates
+// #2850 and was never backfilled (elevation_m is nullable precisely for
+// that gap) -- a future terrain-geometry consumer (#2851) is expected to
+// treat null the same way biome's own null already means "genuinely
+// unclassified," not "assume sea level."
+export async function elevationAt(db, x, y) {
+  const row = await db.prepare(`
+    SELECT elevation_m FROM geo_biome_cells
+    WHERE elevation_m IS NOT NULL
+      AND (x_m - ?) * (x_m - ?) + (y_m - ?) * (y_m - ?) <= spacing_m * spacing_m
+    ORDER BY (x_m - ?) * (x_m - ?) + (y_m - ?) * (y_m - ?) ASC
+    LIMIT 1
+  `).bind(x, x, y, y, x, x, y, y).first();
+  return row ? row.elevation_m : null;
+}
+
 // #2014 (sub-issue of #2012): the one real consumer of isNearWaterCell.
 // Every freshly-generated plot/cell from either generator defaults to
 // 'buildable' today (generateOrganicMosaic never sets landType at all;
