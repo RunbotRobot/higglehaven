@@ -1125,7 +1125,16 @@ function updateShopFlight(dt) {
     const obstructionTopZ = shopLandingObstructionTopZ(shopAvatarPosition.x, shopAvatarPosition.y);
     const minAltitudeM = obstructionTopZ === null
       ? bareGroundAltitudeM(shopAvatarPosition.x, shopAvatarPosition.y)
-      : obstructionTopZ + curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
+      // #2853: obstructionTopZ is an absolute world z (already including this
+      // landlet's own elevationM via the item's group), so converting it to
+      // this frame's altitude terms now also needs shopTerrainHeightAtM
+      // subtracted -- the per-frame sync below adds that same term back in,
+      // so omitting it here double-counts the landlet's elevation on top of
+      // itself. (Pre-#2853, with no terrain term in that sync, this line
+      // correctly needed only the curvature inversion -- that's no longer
+      // the whole story now that altitude also carries a terrain component.)
+      : obstructionTopZ - shopTerrainHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
+        + curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
     const { altitudeM, landed } = clampedLandingAltitudeM(
       shopFlightTransitionElapsedS, SHOP_FLIGHT_LANDING_DURATION_S, shopFlightLandingStartAltitudeM, minAltitudeM,
     );
@@ -1148,7 +1157,10 @@ function updateShopFlight(dt) {
         const nudgedObstructionTopZ = shopLandingObstructionTopZ(openSpot.x, openSpot.y);
         shopFlightAltitudeM = nudgedObstructionTopZ === null
           ? bareGroundAltitudeM(openSpot.x, openSpot.y)
-          : nudgedObstructionTopZ + curvatureDropM(Math.hypot(openSpot.x, openSpot.y));
+          // #2853: same shopTerrainHeightAtM subtraction as the pre-nudge
+          // computation above, and for the same reason.
+          : nudgedObstructionTopZ - shopTerrainHeightAtM(openSpot.x, openSpot.y)
+            + curvatureDropM(Math.hypot(openSpot.x, openSpot.y));
       }
       shopAvatarPosition.x = openSpot.x;
       shopAvatarPosition.y = openSpot.y;
@@ -1314,9 +1326,14 @@ function shopPositionBlocked(x, y, z) {
 // practice) without re-deriving "which landlet is (x, y) actually inside"
 // from scratch here. Converts world z into this frame's altitude terms,
 // same as shopAvatarPosition.z's own formula (curvatureDropM subtracted
-// there, so added back here to invert it).
+// there, so added back here to invert it). #2853: that formula now also
+// adds shopTerrainHeightAtM(x, y), which for ordinary ground already equals
+// this same elevationM -- so this also needs that term subtracted here, or
+// the per-frame sync re-adds the landlet's own elevation on top of a value
+// that already has it baked in, landing the avatar at roughly double its
+// real elevationM instead of resting on the real ground.
 function bareGroundAltitudeM(x, y) {
-  return (shopCurrentLandletEntry?.record.elevationM ?? 0) + curvatureDropM(Math.hypot(x, y));
+  return (shopCurrentLandletEntry?.record.elevationM ?? 0) - shopTerrainHeightAtM(x, y) + curvatureDropM(Math.hypot(x, y));
 }
 
 function shopLandingObstructionTopZ(x, y) {
