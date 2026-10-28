@@ -666,7 +666,13 @@ export async function enterShopMode() {
     if (distanceFromOrigin - SHOP_LANDLET_CULL_MARGIN_M > world.radiusM) continue;
 
     const group = new THREE.Group();
-    group.position.set(record.center.x, record.center.y, 0);
+    // #2871: the real per-landlet elevationM lift lives on `group` itself,
+    // not just groundMesh below — every placed product instance and credit
+    // orb (loadShopLandletInstances/loadCreditOrbsForLandlet,
+    // presenceAndContent.js) is added as a child of this same group with no
+    // elevation term of its own, so putting the offset here is what makes
+    // them move with the ground instead of staying at the old baseline.
+    group.position.set(record.center.x, record.center.y, record.elevationM ?? 0);
     // #220/#2371: only an unclaimed 'greenbelt' plot gets the textured
     // ground — claimed/generating/water keep their own flat
     // SHOP_PLOT_COLORS fill, since those are ownership-status indicators,
@@ -687,7 +693,10 @@ export async function enterShopMode() {
     // problem here -- see applyLandletShape's own comment on this) --
     // this plot-level real elevation offset is independent of that, just
     // a uniform z lift for this one landlet's own real terrain height.
-    groundMesh.position.z = 0.02 + (record.elevationM ?? 0);
+    // #2871: the lift itself now lives on `group.position.z` above (so
+    // instances/orbs get it too) -- this is just the pre-existing small
+    // anti-z-fighting epsilon, unrelated to elevation.
+    groundMesh.position.z = 0.02;
     group.add(groundMesh);
     scene.add(group);
     shopLandlets.set(record.landletId, {
