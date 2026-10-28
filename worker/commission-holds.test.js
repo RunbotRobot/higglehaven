@@ -3,7 +3,7 @@
 // new-builder cumulative flat cap), the escrow hold they create,
 // clawBackPurchaseCommission's interaction with an active hold on refund,
 // and releaseDueCommissionHolds' own cron sweep. See migrations/
-// 0160_commission_holds.sql and worker/lib/commission-caps.js for the
+// 0164_commission_holds.sql and worker/lib/commission-caps.js for the
 // full mechanism.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';

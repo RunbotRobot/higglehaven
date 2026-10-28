@@ -955,6 +955,41 @@ describe('Control Room replies (#N31)', () => {
     expect(got.body.task.lastReplyFrom).toBe('higglehaven8');
     expect(got.body.task.lastReplyAt).toBe(got.body.task.updatedAt);
   });
+
+  // #2830: lastReplyFrom feeds waitingBadge()'s own strict === against the
+  // literal lowercase string 'owner' (admin-control-room.html) -- a caller
+  // who writes a case-variant like "Owner"/"OWNER" must still normalize to
+  // that canonical form, same #1070/#1449/#2205 precedent already covering
+  // waitingOn/kind, or the "(unexplained)" safety-net badge silently never
+  // renders for a card whose owner-authored reply used different casing.
+  it('normalizes a case-variant owner reply to the canonical lastReplyFrom on reply-create', async () => {
+    const task = await createTask();
+    await api(`/control-room/tasks/${task.id}/replies`, keySession({
+      method: 'POST', body: JSON.stringify({ from: 'Owner', text: 'Just a note.' }),
+    }));
+
+    const got = await api(`/control-room/tasks/${task.id}`, keySession());
+    expect(got.body.task.lastReplyFrom).toBe('owner');
+    // The reply's own `from` attribution is unaffected -- only the task's
+    // own lastReplyFrom sentinel column is normalized.
+    const replies = await api(`/control-room/tasks/${task.id}/replies`, keySession());
+    expect(replies.body.replies[0].from).toBe('Owner');
+  });
+
+  it('normalizes a case-variant caller to the canonical lastReplyFrom when setting waitingOn:owner via update', async () => {
+    const task = await createTask();
+    const got = await api(`/control-room/tasks/${task.id}`, keySession({
+      method: 'PATCH', body: JSON.stringify({ caller: 'OWNER', waitingOn: 'owner', reason: 'Needs a design call.' }),
+    }));
+    expect(got.body.task.lastReplyFrom).toBe('owner');
+  });
+
+  it('normalizes a case-variant from to the canonical lastReplyFrom when creating a task with waitingOn:owner', async () => {
+    const task = await createTask({
+      from: 'Owner', title: 'Needs a design call', waitingOn: 'owner', reason: 'Needs the owner\'s judgment on X.',
+    });
+    expect(task.lastReplyFrom).toBe('owner');
+  });
 });
 
 // N31 option 3 (owner: "I would like to do option 3. Isn't there a way to

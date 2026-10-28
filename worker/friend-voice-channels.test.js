@@ -26,6 +26,7 @@ async function becomeFriends(a, b) {
   await api(`/friendships/${sent.body.friendship.friendshipId}`, b.session({
     method: 'PATCH', body: JSON.stringify({ status: 'accepted' }),
   }));
+  return sent.body.friendship.friendshipId;
 }
 
 async function setPresence(builderId, { landletId, updatedAt = new Date().toISOString() } = {}) {
@@ -107,6 +108,59 @@ describe('Friend voice channels (#2781)', () => {
       expect(view.body.channels[0].members).toHaveLength(2);
     });
 
+    // #2833 (split out of #2781): the owner has no other way to learn their
+    // channel just went active -- mirrors direct-messages.test.js's own
+    // "fires a notification" assertion above.
+    it('notifies the owner once their channel activates for the first time', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-notify-activate-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-notify-activate-bob');
+      await becomeFriends(alice, bob);
+
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+
+      const aliceNotices = await api('/notifications', alice.session());
+      expect(aliceNotices.body.notifications.some(
+        (n) => n.message === 'voice-channel-notify-activate-bob is waiting in your voice channel.')).toBe(true);
+    });
+
+    it('does not notify the owner again when a second friend joins an already-active channel', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-notify-noduplicate-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-notify-noduplicate-bob');
+      const carol = await signupIdVerifiedBuilder('voice-channel-notify-noduplicate-carol');
+      await becomeFriends(alice, bob);
+      await becomeFriends(alice, carol);
+
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+      await api(`/voice/friend-channels/${alice.builderId}/join`, carol.session({ method: 'POST' }));
+
+      const aliceNotices = await api('/notifications', alice.session());
+      const activationNotices = aliceNotices.body.notifications.filter((n) => n.message.endsWith('is waiting in your voice channel.'));
+      expect(activationNotices).toHaveLength(1);
+      expect(activationNotices[0].message).toBe('voice-channel-notify-noduplicate-bob is waiting in your voice channel.');
+    });
+
+    it('does not notify a builder who starts (joins) their own channel', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-notify-selfjoin-alice');
+      await api(`/voice/friend-channels/${alice.builderId}/join`, alice.session({ method: 'POST' }));
+
+      const aliceNotices = await api('/notifications', alice.session());
+      expect(aliceNotices.body.notifications.some((n) => n.message.endsWith('is waiting in your voice channel.'))).toBe(false);
+    });
+
+    it('notifies the owner again on a fresh activation after the channel was closed', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-notify-reactivate-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-notify-reactivate-bob');
+      await becomeFriends(alice, bob);
+
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+      await api(`/voice/friend-channels/${alice.builderId}/leave`, alice.session({ method: 'POST' }));
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+
+      const aliceNotices = await api('/notifications', alice.session());
+      const activationNotices = aliceNotices.body.notifications.filter((n) => n.message.endsWith('is waiting in your voice channel.'));
+      expect(activationNotices).toHaveLength(2);
+    });
+
     it('lets a third accepted friend join the same channel -- membership is not pairwise-only', async () => {
       const alice = await signupIdVerifiedBuilder('voice-channel-group-alice');
       const bob = await signupIdVerifiedBuilder('voice-channel-group-bob');
@@ -165,6 +219,56 @@ describe('Friend voice channels (#2781)', () => {
       const bob = await signupIdVerifiedBuilder('voice-channel-leave-noop-bob');
       const left = await api(`/voice/friend-channels/${bob.builderId}/leave`, alice.session({ method: 'POST' }));
       expect(left.response.status).toBe(200);
+    });
+  });
+
+  // #2838: a channel membership was only ever checked against the
+  // friendship at join time (assertAcceptedFriendship above), never again
+  // afterward -- unfriending left a stale membership row behind with no
+  // way for the channel's owner to remove it themselves.
+  describe('unfriending a channel member (#2838)', () => {
+    it('removes the stale membership when the owner unfriends a joined member', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-unfriend-owner-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-unfriend-owner-bob');
+      const friendshipId = await becomeFriends(alice, bob);
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+
+      const unfriended = await api(`/friendships/${friendshipId}`, alice.session({ method: 'DELETE' }));
+      expect(unfriended.response.status).toBe(200);
+
+      const aliceView = await api('/voice/friend-channels', alice.session());
+      expect(aliceView.body.channels).toEqual([{ ownerBuilderId: alice.builderId, members: [alice.builderId] }]);
+      const bobView = await api('/voice/friend-channels', bob.session());
+      expect(bobView.body.channels).toEqual([]);
+    });
+
+    it('removes the stale membership when a member unfriends the channel owner', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-unfriend-member-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-unfriend-member-bob');
+      const friendshipId = await becomeFriends(alice, bob);
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+
+      const unfriended = await api(`/friendships/${friendshipId}`, bob.session({ method: 'DELETE' }));
+      expect(unfriended.response.status).toBe(200);
+
+      const bobView = await api('/voice/friend-channels', bob.session());
+      expect(bobView.body.channels).toEqual([]);
+    });
+
+    it('does not affect an unrelated accepted friend\'s own membership in the same channel', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-unfriend-unrelated-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-unfriend-unrelated-bob');
+      const carol = await signupIdVerifiedBuilder('voice-channel-unfriend-unrelated-carol');
+      const bobFriendshipId = await becomeFriends(alice, bob);
+      await becomeFriends(alice, carol);
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+      await api(`/voice/friend-channels/${alice.builderId}/join`, carol.session({ method: 'POST' }));
+
+      await api(`/friendships/${bobFriendshipId}`, alice.session({ method: 'DELETE' }));
+
+      const aliceView = await api('/voice/friend-channels', alice.session());
+      expect(aliceView.body.channels).toHaveLength(1);
+      expect(aliceView.body.channels[0].members.sort()).toEqual([alice.builderId, carol.builderId].sort());
     });
   });
 

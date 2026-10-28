@@ -1,7 +1,7 @@
 // #1109 (owner decision, 2026-10-27): velocity-based limits on commission
 // cash outs, to close the chargeback fraud gap a plain refund's own
 // REFUND_PAYOUT_RATE haircut (migrations/0052) can't reach -- see
-// migrations/0160_commission_holds.sql's own comment for the full
+// migrations/0164_commission_holds.sql's own comment for the full
 // mechanism (credit-time cap-and-escrow).
 //
 // Two cap shapes, chosen by the SELLING builder's own established-or-not

@@ -28,10 +28,22 @@ import { activeCatalog, LANDLET_SIDE_M } from './state.js';
 // clampToLandlet's own comment on this) — this is about the underlying
 // geometry being correct, not a visible effect, per #135's own note not
 // to over-build visual fidelity here.
-export function curveGroundGeometry(geometry) {
+// #2851 (leaf of #2373, Option C real terrain): `heightOffsetM` is a
+// second, independent height contribution composed additively with
+// curvedPosition's own Earth-curvature sag -- not a replacement for it.
+// Real elevation data (worker/lib/world-generation.js's
+// applyRealElevationClassification, via #2850's own elevationAt) is
+// sampled far coarser than a single landlet's own footprint, so this is
+// intentionally one uniform offset applied to every vertex, giving a
+// landlet-level height step rather than a true intra-landlet slope --
+// the real ingested data doesn't support finer variation than that yet
+// (see that function's own comment). Defaults to 0 so every pre-#2851
+// call site (previews, synthetic ground shapes with no real landlet
+// position behind them) is unaffected.
+export function curveGroundGeometry(geometry, heightOffsetM = 0) {
   const position = geometry.attributes.position;
   for (let i = 0; i < position.count; i++) {
-    const curved = curvedPosition({ x: position.getX(i), y: position.getY(i), z: position.getZ(i) });
+    const curved = curvedPosition({ x: position.getX(i), y: position.getY(i), z: position.getZ(i) + heightOffsetM });
     position.setXYZ(i, curved.x, curved.y, curved.z);
   }
   position.needsUpdate = true;

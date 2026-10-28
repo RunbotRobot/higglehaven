@@ -35,6 +35,9 @@ import {
 } from './lib/control-room.js';
 // #2719 (sub-issue of #2715): Submit Feedback bug-report storage.
 import { handleFeedback } from './lib/feedback.js';
+// #2842 (sub-issue of #2841): jurisdiction-keyed tax education content,
+// storage + admin UI only.
+import { handleTaxEducation } from './lib/tax-education.js';
 import {
   handleAdminBootstrap, handleGrantAdmin, handleRevokeAdmin, handleListAdmins, handleSuspendAccount,
   handleUnsuspendAccount, handleSuspensionStatus, handleAdminUserSearch, handleAdminUserDetail,
@@ -95,7 +98,7 @@ import { handleInstancePurchase, handlePurchaseFinalize, purchaseFromRow } from 
 // creation" leaf's own functions, #2614).
 import { handlePurchases } from './lib/purchase-lifecycle.js';
 // #1109: velocity-based commission-cash-out caps -- see
-// migrations/0160_commission_holds.sql's own comment for the full
+// migrations/0164_commission_holds.sql's own comment for the full
 // mechanism. releaseDueCommissionHolds is this module's own cron sweep,
 // wired into scheduled() below the same way every other job there is.
 import { releaseDueCommissionHolds } from './lib/commission-caps.js';
@@ -750,6 +753,10 @@ async function handleApi(request, env, url, ctx) {
 
   if (route[0] === 'control-room') {
     return handleControlRoom(request, env, route, url);
+  }
+
+  if (route[0] === 'tax-education') {
+    return handleTaxEducation(request, env, env.DB, route, url);
   }
 
   if (request.method === 'GET' && route.length === 1 && route[0] === 'admin-action-log') {
@@ -3939,6 +3946,7 @@ export function validateLandlet(input, fallbackId) {
     landClass: positiveInteger(input.landClass ?? 1, 'landClass'),
     landType: landletLandType(input.landType || 'buildable'),
     biome: landletBiome(input.biome ?? null),
+    elevationM: landletElevationM(input.elevationM ?? null),
     polygon: validatePolygon(input.polygon || []),
     generatedAt: optionalIsoDateString(input.generatedAt, 'generatedAt'),
     claimableAt: optionalIsoDateString(input.claimableAt, 'claimableAt'),
@@ -4146,6 +4154,11 @@ export function landletFromRow(row) {
     landClass: row.landlet_class ?? 1,
     landType: row.landlet_type ?? 'buildable',
     biome: row.biome ?? null,
+    // #2851: already baselined relative to WORLD_ELEVATION_BASELINE_M
+    // (worker/lib/world-generation.js) at generation time -- consumers
+    // add this straight onto a ground vertex's local z, same "read the
+    // already-final value" shape as biome just above.
+    elevationM: row.elevation_m ?? null,
     polygon: JSON.parse(row.polygon_json || '[]'),
     generatedAt: row.generated_at,
     claimableAt: row.claimable_at,
@@ -4165,6 +4178,7 @@ export function candidateFromRow(row) {
     landClass: row.landlet_class,
     landType: row.landlet_type ?? 'buildable',
     biome: row.biome ?? null,
+    elevationM: row.elevation_m ?? null,
     polygon: JSON.parse(row.polygon_json || '[]'),
     metadata: JSON.parse(row.metadata_json || '{}'),
     materializedAt: row.materialized_at,
@@ -4300,6 +4314,18 @@ function landletBiome(value) {
     throw new HttpError('biome must be a string or null', 400);
   }
   return value;
+}
+
+// #2851: same "shape-validated only, null means genuinely unclassified"
+// treatment landletBiome gets just above -- already a baselined relative
+// value by the time it reaches here (worker/lib/world-generation.js's
+// applyRealElevationClassification), not something this function
+// computes or re-derives.
+function landletElevationM(value) {
+  if (value === null) return null;
+  const number = Number(value);
+  if (!Number.isFinite(number)) throw new HttpError('elevationM must be a finite number or null', 400);
+  return number;
 }
 
 function validatePolygon(value) {

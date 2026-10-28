@@ -5082,19 +5082,60 @@ generous abuse cap, not real SDP/ICE validation); or `toBuilderId` isn't
 *currently* reporting presence in the caller's own current landlet (the
 server-enforced proximity check described above — covers both "no
 presence row at all" and "presence row, but a different landlet").
-`429` after 60 requests per 15 minutes from the same calling builder (same
-ceiling as `POST /api/nearby-chat` — connection setup is bursty but
-short-lived per peer pair). Returns `201` with the new message.
+`429` after 300 requests per 15 minutes from the same calling builder
+(#2824 — bumped from an initial 60, sized for occasional chat sends, once
+real WebRTC negotiation's own offer+answer+several-trickle-ICE-candidates
+burst, often for several concurrent peers at once, turned out to burn
+through that in seconds). Returns `201` with the new message.
+
+### `POST /api/voice/report`
+
+Sub-issue #2819's half of "per-shopper mute + report" (#2778's own
+resolution: moderation beyond the id_verified gate alone requires both).
+Mute itself is purely local/client-side (`src/shop/voiceChat.js`'s own
+`mutedPeers`) and never calls this or any other endpoint — this is only
+the report path. Requires an ID-verified session.
+
+```json
+{ "reportedBuilderId": "...", "reason": "..." }
+```
+
+`reason` is optional, capped at 280 characters. `400` if:
+`reportedBuilderId` is the caller themselves, `reason` is over 280
+characters once trimmed, or `reportedBuilderId` doesn't name a real
+builder. `429` after 20 requests per 15 minutes from the same calling
+builder (an ordinary anti-spam ceiling, not sized for real-time traffic
+the way the signaling endpoints above are). Returns `201` with the new
+`reportId`.
+
+Deliberately zero-cost/consequence-free for the reporter, same philosophy
+`POST /api/catalog/:templateId/flags` (see "Product flags" below) already
+states for its own structurally similar report — no visible penalty to
+the reporter's own account regardless of outcome, and nothing here
+automatically actions the reported builder either (unlike that endpoint's
+own strike ladder): a report lands as a `voice_conduct_reports`
+(`migrations/0159_voice_conduct_reports.sql`) row and, in the same write,
+a `kind: "voice-report"` Control Room card (direct `control_room_tasks`
+write, same same-process-trusted-caller pattern `POST
+/api/feedback/bug-report`'s own Control Room card uses — see "Control Room
+API" below) for a human to review. Deliberately its own table rather than
+reusing `product_flags`: that table's unit is a listing with a seller
+strike-ladder consequence, the wrong shape for "a builder said something
+inappropriate over voice chat."
 
 ### Testing note
 
-`worker/voice-signal.test.js` owns the backend contract: the id_verified
-gate, the no-presence/different-landlet/nonexistent-recipient/self-signal
-`400`s on send, the unrecognized-`kind`/missing-payload/oversized-payload
-`400`s, point-to-point scoping (two recipients in the same landlet each
-only see messages addressed to themselves), a landlet change between send
-and poll hiding the now-stale message, forward-cursor polling, and the
-covering index.
+`worker/voice-signal.test.js` owns the signaling-relay backend contract:
+the id_verified gate, the no-presence/different-landlet/nonexistent-
+recipient/self-signal `400`s on send, the unrecognized-`kind`/missing-
+payload/oversized-payload `400`s, point-to-point scoping (two recipients
+in the same landlet each only see messages addressed to themselves), a
+landlet change between send and poll hiding the now-stale message,
+forward-cursor polling, and the covering index. `worker/voice-report.
+test.js` owns `POST /api/voice/report`'s own contract: the id_verified
+gate, the self-report/over-length-reason/nonexistent-recipient `400`s,
+the rate limit, and that both the `voice_conduct_reports` row and the
+paired Control Room card land in the same write.
 
 ## Friend group voice channels (#2781)
 
@@ -10513,6 +10554,134 @@ reaches `settleDelayS` within a single episode.
 `e2e/shop-idle-lean-randomization.test.mjs` mirrors the settle-delay half
 of that for `window.__testShopLeanPose()`'s own equivalent fields.
 
+## Tax education content API (#2842)
+
+docs/SPEC.md §7: "Tax education (not advice)... jurisdiction-keyed,
+plain-language, regularly-updated general informational summaries,
+explicitly not personalized advice, human-reviewed before publishing,
+prioritized by expected builder geography." This is storage + the
+Admin Dashboard's own admin-editable UI for that content only — a
+distinct feature from the W-9/W-8BEN tax-*paperwork* mechanics documented
+above (`/api/tax/...`), which this doesn't touch. Deciding who authors/
+reviews content (#2844) is still owner judgment, not yet resolved — every
+*admin* route below is `requireAdmin`-gated the same as the rest of
+`public/admin-dashboard.html`. Surfacing reviewed content to builders
+(#2843) is built — see `GET /api/tax-education/mine` below, the one
+route here any authenticated account (not just an admin) can call.
+
+Deliberately not keyed off the W-9/W-8BEN flow's own `country` field: that
+one lives inside `payee_tax_id_encrypted` (an encrypted blob holding
+SSN/foreign-TIN alongside country), unqueryable in plain SQL without a
+decrypt on every read, and reusing a sensitive tax-identity field as the
+join key for a page anyone can eventually read would be real scope creep
+against data this codebase otherwise keeps tightly encrypted. This
+feature's own `countryCode`/`stateCode` are a separate, non-sensitive
+classification on a brand-new `tax_education_content` table
+(`migrations/0161_tax_education_content.sql`).
+
+### `GET /api/tax-education`
+
+`requireAdmin`. Optional `?countryCode=` query param (case-insensitive,
+normalized to uppercase) filters to one country; omitted, returns every
+entry (capped at 500, newest-updated first). Response: `{ entries: [...] }`,
+each entry shaped as below.
+
+### `POST /api/tax-education`
+
+`requireAdmin`. Body: `{ countryCode, stateCode?, title, body }`.
+`countryCode` must be a 2-letter code (ISO 3166-1 alpha-2), normalized to
+uppercase. `stateCode` is optional (1-10 letters/digits/hyphens,
+normalized to uppercase) — `null`/omitted means the entry applies to the
+whole country. `title` is a `labelValue` (≤100 chars); `body` is the
+plain-language content itself (≤20,000 chars). A freshly created entry is
+always unreviewed (`reviewedAt`/`reviewedBy` both `null`) — see
+`PATCH` below for how an entry becomes reviewed.
+
+Returns `201` with `{ entry }`:
+```json
+{
+  "id": "tax-edu-<uuid>",
+  "countryCode": "US",
+  "stateCode": null,
+  "title": "...",
+  "body": "...",
+  "reviewed": false,
+  "reviewedAt": null,
+  "reviewedBy": null,
+  "createdAt": "...",
+  "updatedAt": "..."
+}
+```
+
+### `GET /api/tax-education/:id` / `PATCH /api/tax-education/:id` / `DELETE /api/tax-education/:id`
+
+`requireAdmin`. `GET`/`DELETE` 404 on an unknown id; `DELETE` returns
+`{ deleted: true }`.
+
+`PATCH` accepts any subset of `countryCode`/`stateCode`/`title`/`body`
+(same validation as `POST`), plus `reviewed` (boolean) to flip the review
+gate: `reviewed: true` stamps `reviewedAt`/`reviewedBy` from the
+**calling admin's own session** (never a client-supplied value — a
+`reviewedBy` field in the request body is silently ignored, the same
+"the server derives who did this, not the client" discipline this
+codebase applies everywhere else an acting identity gets recorded);
+`reviewed: false` clears both back to `null`. There is no separate
+boolean column for "is this live" — `reviewedAt != null` is both the
+review record and the publish gate `GET .../mine` below reads, so the
+two can't drift out of sync the way a parallel boolean could.
+
+### `GET /api/tax-education/mine` (#2843)
+
+`requireCurrentUser` — any authenticated account, not `requireAdmin`;
+same bar as `GET /api/tax/summary` and every other "read my own
+account's tax state" endpoint. Resolves the caller's own jurisdiction
+from whatever W-9/W-8BEN they already have on file (`getUserTaxJurisdiction`,
+`worker/lib/seller-payouts-tax.js`) — this is the first real caller of
+`decryptTaxIdPayload` (see that function's own comment), scoped to
+decrypting one user's own single row to answer their own request, never
+a bulk scan of `users.tax_id_encrypted` across accounts (the reason that
+field stays off-limits as a join key, per the note above). A W-9 filer's
+country is always `'US'` (the form has no country field of its own); a
+W-8BEN filer's own free-text `country` field is run through
+`worker/lib/country-codes.js`'s `countryNameToCode` (official ISO 3166-1
+short English names plus a handful of common informal ones — "USA",
+"UK", etc.) since that field isn't an ISO-code picker. The W-9 form's own
+free-text `state` field goes through that same file's `usStateNameToCode`
+the same way. Neither lookup guesses past its fixed list — a name it
+doesn't recognize resolves to no state/no jurisdiction rather than a
+wrong one.
+
+No tax form on file (or a W-8BEN country/W-9 state neither lookup
+recognizes) returns `{ entries: [], jurisdiction: null }`. Otherwise:
+```json
+{
+  "entries": [
+    { "id": "tax-edu-<uuid>", "countryCode": "US", "stateCode": "CA", "title": "...", "body": "..." }
+  ],
+  "jurisdiction": { "country": "US", "state": "CA" }
+}
+```
+`entries` is the public-facing shape only (no `reviewed`/`reviewedAt`/
+`reviewedBy`/`createdAt`/`updatedAt` — `reviewedBy` in particular is the
+reviewing admin's own email, not something an ordinary reader of their
+own matched content needs). Matches every *reviewed* row whose
+`countryCode` equals the resolved country and whose `stateCode` is either
+`null` (country-wide) or equals the resolved state — both tiers are
+returned together when the caller has a resolved state, state-specific
+entries sorted first, so a state-specific page doesn't hide the
+country-wide one.
+
+Rendered read-only in Settings' General tab, directly below the tax
+paperwork field (`src/main.js`'s `renderTaxEducationField`) — a
+`<details>` disclosure per matched entry, plain text throughout (no rich
+HTML rendering of `body`), with "Submit the form above to see general
+tax info for your jurisdiction" shown instead when `jurisdiction` comes
+back `null`. That wording deliberately avoids the substring "tax
+paperwork" — `e2e/tax-paperwork-settings.test.mjs`'s own locator matches
+every `.settings-field` whose text contains that phrase (case-
+insensitive), so this field's status text can't contain it too without
+becoming a spurious extra match.
+
 ## Control Room API (N31)
 
 The multi-session "Control Room" coordination board (a shared task/reply
@@ -10703,15 +10872,21 @@ was not ported in this first pass; the core task/reply/status/waitingOn
 workflow is fully functional, and polish can follow as its own change.
 
 `waitingBadge()` renders a distinct **"Waiting on: Owner (unexplained)"**
-pill (#2254), instead of the plain "Waiting on: Owner" one, when a
-`queued` task's `waitingOn` is `'owner'` but its own `lastReplyFrom` is
+pill (#2254), instead of the plain "Waiting on: Owner" one, when any
+non-`done` task's `waitingOn` is `'owner'` but its own `lastReplyFrom` is
 also `'owner'` — i.e. the owner already spoke last in the thread, with
 no session reply following, yet the card still sits blocked on them.
+(#2700 removed this from gating on `queued` specifically — the
+underlying bypass below is just as reachable on an `in_progress` card.)
 With the reply-create auto-clear described above, this shouldn't be
 reachable through the ordinary API path (an owner reply to a task
 genuinely `waitingOn: 'owner'` clears it in that same request) — it's a
 safety net for a direct-D1 write bypassing that logic, matching the
 fallback access path AGENTS.md's own Control Room section documents.
+`lastReplyFrom` is normalized to the canonical lowercase `'owner'`
+sentinel at write time whenever it matches case-insensitively (#2830,
+same precedent as `waitingOn`/`kind` below), so this badge isn't
+defeated by a caller/`from` value like `"Owner"`.
 
 ## Admin action log (#996, sub-issue-in-spirit of #813/#814)
 
@@ -10783,6 +10958,9 @@ to introduce new request/response shapes:
 - **Tax / 1099 e-filing** (#1823) — `GET /api/tax/admin-forms` and its
   `approve`/`file`/`void` siblings, plus the e-filing connection test (see
   that section above).
+- **Tax education content** (#2842) — `/api/tax-education` CRUD plus the
+  `reviewed` flag toggle (see "Tax education content API" above) — a
+  distinct feature from the 1099 e-filing panel just above.
 - **Purchases (admin fallback)** (#1824) — refund/mark-shipped for a
   purchase whose seller has since deleted their account; ordinary
   seller-initiated refund/ship has its own seller-facing UI and isn't

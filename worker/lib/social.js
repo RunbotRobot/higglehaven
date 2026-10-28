@@ -540,12 +540,34 @@ async function handleFriendVoiceChannels(request, db, route) {
     // "active" (sharedActiveFriendVoiceChannelExists above), so the very
     // first join by ANY accepted friend is what opens the owner's channel,
     // with no separate explicit "start" action required of the owner.
+    //
+    // #2833 (split out of #2781): the owner has no way to know their
+    // channel just went active unless they happen to have their Friends
+    // panel open -- the "notification-only, not permission-gating" default
+    // that issue's own text suggests, since any accepted friend opening it
+    // is already the intended, unchanged join model. Checked before the
+    // insert (not via its own row count after) so this reads as "was it
+    // already active", not "did this exact INSERT do anything" -- an
+    // ON CONFLICT DO NOTHING no-op looks identical to a real insert from
+    // the statement's own result.
+    const alreadyActive = ownerBuilderId !== sessionBuilder.builder_id && !!(await db.prepare(
+      'SELECT 1 FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?',
+    ).bind(ownerBuilderId, ownerBuilderId).first());
     await db.batch([
       db.prepare('INSERT INTO friend_voice_channel_members (owner_builder_id, member_builder_id) VALUES (?, ?) ON CONFLICT (owner_builder_id, member_builder_id) DO NOTHING')
         .bind(ownerBuilderId, ownerBuilderId),
       db.prepare('INSERT INTO friend_voice_channel_members (owner_builder_id, member_builder_id) VALUES (?, ?) ON CONFLICT (owner_builder_id, member_builder_id) DO NOTHING')
         .bind(ownerBuilderId, sessionBuilder.builder_id),
     ]);
+    // Only the activation itself notifies the owner -- a later friend
+    // joining an already-active channel doesn't re-notify them, same as a
+    // group call's other guests arriving doesn't re-ring the host's phone.
+    // Outside the batch above, same reasoning notificationStatement's own
+    // comment gives for every other fireNotification call site (a
+    // best-effort FYI, never allowed to roll back the real mutation).
+    if (ownerBuilderId !== sessionBuilder.builder_id && !alreadyActive) {
+      await fireNotification(db, ownerBuilderId, `${sessionBuilder.label} is waiting in your voice channel.`);
+    }
     return json({ ok: true }, 201);
   }
 
@@ -593,9 +615,83 @@ async function handleVoiceIceConfig(request, db, env) {
   return json({ iceServers });
 }
 
+// #2819 (sub-issue of #2780): the report half of the per-shopper mute +
+// report mechanism #2778's resolution required ("Moderation beyond the
+// trust-tier gate: report mechanism + per-shopper mute both required").
+// Mute itself is purely local/client-side (src/shop/voiceChat.js) and
+// never reaches this file at all; this is only the report path, which
+// does need a durable, admin-reviewable record. See migrations/0159's own
+// comment for why this is its own table rather than reusing
+// worker/lib/reputation.js's product-flag/strike-ladder pipeline (wrong
+// unit -- a product, not a builder -- and wrong consequence model for a
+// single voice-chat conduct report). "Zero-cost/consequence-free for the
+// flagger by design" -- same reasoning reputation.js's own product-flag
+// comment states -- so this never affects the reporter's own account
+// regardless of outcome: an ordinary anti-spam rate limit, no other
+// penalty or visible result.
+const VOICE_REPORT_CREATE_RATE_LIMIT_MAX = 20;
+
+async function handleVoiceReportCreate(request, db) {
+  const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+  await checkRateLimit(db, `voice-report-create:${sessionBuilder.builder_id}`, VOICE_REPORT_CREATE_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const reportedBuilderId = stringValue(input.reportedBuilderId, 'reportedBuilderId');
+  if (reportedBuilderId === sessionBuilder.builder_id) {
+    throw new HttpError('reportedBuilderId cannot be the caller themselves', 400);
+  }
+  // Same optional-free-text-with-a-cap shape handleProductFlags' own POST
+  // (worker/lib/reputation.js) already uses for its own report reason.
+  const reason = input.reason === undefined || input.reason === null || input.reason === ''
+    ? null
+    : stringValue(input.reason, 'reason');
+  if (reason && reason.length > 280) throw new HttpError('reason must be 280 characters or fewer', 400);
+  // Resolves the reported builder's own label for the admin-facing Control
+  // Room card below, and doubles as the existence check -- an absent entry
+  // means reportedBuilderId doesn't name a real builder.
+  const labelsById = await labelsByBuilderId(db, [reportedBuilderId]);
+  const reportedLabel = labelsById.get(reportedBuilderId);
+  if (reportedLabel === undefined) {
+    throw new HttpError('reportedBuilderId does not name a real builder', 400);
+  }
+  const reportId = `voice-report-${crypto.randomUUID()}`;
+  const now = new Date().toISOString();
+  // #2720's own direct `control_room_tasks` write (worker/lib/feedback.js's
+  // bug-report pattern) reused here for the same reason: every other
+  // source of Control Room work lands as a card the instant it exists
+  // rather than requiring a separate D1 query nobody will remember to run,
+  // and this is itself the trusted, same-process caller writing on the
+  // reporter's behalf (not a round trip through the validating
+  // /api/control-room/tasks HTTP API). `voice-report-<uuid>` keeps this
+  // id visually distinct from its own reportId while still pairing 1:1 via
+  // the shared uuid, same convention `bug-report-<uuid>` already
+  // establishes.
+  const controlRoomTaskId = `voice-report-${reportId.slice('voice-report-'.length)}`;
+  const controlRoomTitle = `Voice chat conduct report against "${reportedLabel}"`;
+  const controlRoomNoteLines = [`Reported builder: "${reportedLabel}" (${reportedBuilderId})`];
+  if (reason) controlRoomNoteLines.push(`Reason: ${reason}`);
+  await db.batch([
+    db.prepare(`
+      INSERT INTO voice_conduct_reports (report_id, reporter_builder_id, reported_builder_id, reason)
+      VALUES (?, ?, ?, ?)
+    `).bind(reportId, sessionBuilder.builder_id, reportedBuilderId, reason),
+    db.prepare(`
+      INSERT INTO control_room_tasks (
+        task_id, kind, note_number, title, status, session, posted_by,
+        note, note_updated_at, note_author, created_at, updated_at
+      ) VALUES (?, 'voice-report', (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', 'voice-report', ?, ?, 'voice-report', ?, ?)
+    `).bind(
+      controlRoomTaskId, controlRoomTitle, controlRoomNoteLines.join('\n'), now, now, now,
+    ),
+  ]);
+  return json({ reportId }, 201);
+}
+
 export async function handleVoiceSignal(request, db, route, url, env) {
   if (route.length === 2 && route[1] === 'ice-config' && request.method === 'GET') {
     return handleVoiceIceConfig(request, db, env);
+  }
+  if (route.length === 2 && route[1] === 'report' && request.method === 'POST') {
+    return handleVoiceReportCreate(request, db);
   }
   // #2781: friend group voice channels -- membership management lives in
   // its own handler (several sub-routes under here), separate from the
@@ -933,6 +1029,26 @@ export async function handleFriendships(request, db, route, url) {
       if (stillThere) {
         throw new HttpError('Friendship was accepted before this decline could take effect', 409);
       }
+    }
+    // #2838: a friend-voice-channel membership (#2781) is only ever granted
+    // on the strength of an accepted friendship (assertAcceptedFriendship,
+    // handleFriendVoiceChannels' own join branch above) but was never
+    // re-checked after that -- ending the friendship here left a stale
+    // membership row behind, letting a since-unfriended builder keep
+    // signaling into a channel indefinitely with no way for its owner to
+    // remove them. A decline can never have reached an accepted state in
+    // the first place, so this is a no-op for that branch; harmless to run
+    // unconditionally rather than adding another isDecline-shaped special
+    // case. requester/recipient are always two distinct builders, so this
+    // can never touch a channel's own owner-anchor row (owner_builder_id
+    // === member_builder_id).
+    if (result.meta.changes === 1) {
+      await db.batch([
+        db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?')
+          .bind(existing.requester_builder_id, existing.recipient_builder_id),
+        db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?')
+          .bind(existing.recipient_builder_id, existing.requester_builder_id),
+      ]);
     }
     return json({ deleted: true });
   }
