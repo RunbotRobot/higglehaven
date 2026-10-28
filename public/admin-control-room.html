@@ -791,6 +791,16 @@
   loadTasks();
   loadAdmins();
   setInterval(() => {
+    // #2883: this is a plain always-on setInterval with no Page
+    // Visibility handling -- a forgotten-open/backgrounded admin tab kept
+    // hitting /tasks (+ one /replies call per expanded card) every
+    // POLL_MS indefinitely, against the same D1 database #2868's own
+    // voiceChat.js poll already drove to its free-tier daily row-read cap
+    // once today. Same fix as that one: skip the network calls while
+    // hidden, resume on the very next tick once visible again (document.
+    // hidden is read fresh each tick, so no separate visibilitychange
+    // listener is needed).
+    if (document.hidden) return;
     loadTasks();
     expanded.forEach((id) => loadReplies(id));
   }, POLL_MS);
