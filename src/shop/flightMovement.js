@@ -87,7 +87,7 @@ import {
   shopLandlets, shopOtherAvatars,
   reportOwnPresenceIfNeeded, pollNearbyPresenceIfNeeded, updateOtherShopAvatars,
   updateCreditOrbs, updateCreditOrbPopEffects,
-  updateShopProximity, updateShopLandletInfo,
+  updateShopProximity, updateShopLandletInfo, shopTerrainHeightAtM,
 } from './presenceAndContent.js';
 // #2779 (sub-issue of #2777): nearby-avatars-only text chat, a fully
 // self-contained leaf with no main.js/presenceAndContent.js legacy to
@@ -647,7 +647,10 @@ window.__testTeleportShopAvatar = (x, y, z) => {
   // "already landed" snapshot rather than momentarily-still-flying.
   if (z !== undefined) {
     shopAvatarPosition.z = z;
-    shopFlightAltitudeM = z + curvatureDropM(Math.hypot(x, y));
+    // #2853: inverse of updateShopMovement's own per-frame sync formula
+    // below, so the very next frame's recompute lands back on this exact z
+    // instead of drifting by whatever real terrain sits at (x, y).
+    shopFlightAltitudeM = z - shopTerrainHeightAtM(x, y) + curvatureDropM(Math.hypot(x, y));
     shopFlightState = 'grounded';
   }
 };
@@ -1044,8 +1047,11 @@ function updateGoToLastLocation(dt) {
     shopFlightState = 'flying';
     shopFlightTransitionElapsedS = 0;
     shopFlightAltitudeM = SHOP_SPAWN_START_ALTITUDE_M;
-    shopAvatarPosition.z =
-      shopFlightAltitudeM - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
+    // #2853: see updateShopMovement's own per-frame sync formula for why
+    // this adds the real terrain height at the teleport target.
+    shopAvatarPosition.z = shopFlightAltitudeM
+      + shopTerrainHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
+      - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
     // Face whichever direction the shopper was last facing, if known —
     // falls back to whatever shopYaw already was (invisible either way at
     // this exact instant, so it's never a visible jump) rather than
@@ -1593,8 +1599,26 @@ export function updateShopMovement(now) {
   // deliberately not reprojecting x/y here too — same "differential sag,
   // not a full re-projection" scope cut relativeCurvatureDropM already
   // documents for ground meshes; see #166.
+  //
+  // #2853 (leaf of #2373, Option C real terrain): shopTerrainHeightAtM adds
+  // the second, real-elevation piece of "local ground" alongside that same
+  // curvature sag -- the landlet directly underneath no longer always sits
+  // at a flat 0. shopFlightAltitudeM/takeoff/landing/the flight ceiling/the
+  // speed curve are untouched: each already only ever reasoned about height
+  // *above* this same local-ground reference, so this is purely an added
+  // term at the one place that converts that relative altitude into an
+  // absolute world z, not a redefinition of what altitude means anywhere
+  // else. The landing-floor computation below (shopLandingObstructionTopZ)
+  // doesn't need a matching fix for this -- standing on a placed item's own
+  // top surface already composes correctly once this term exists (the
+  // item's absolute height already includes the landlet's own elevationM
+  // lift via its group position, post-#2871, and that same lift is what
+  // this term adds back here, so the two cancel to the item's own local
+  // height above its own landlet's ground -- exactly what
+  // shopLandingObstructionTopZ already returns, unchanged).
   shopAvatarPosition.z =
-    shopFlightAltitudeM - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
+    shopFlightAltitudeM + shopTerrainHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
+    - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
 
   // The walk-cycle and idle sway are both ground-only poses — flying holds
   // a plain neutral pose instead (a real flight pose, arms/legs extended,
@@ -1843,9 +1867,11 @@ export function beginShopSpawn(spawnOrbitRadiusM, yaw) {
   // Normally kept in sync every frame by the update loop (see
   // shopFlightAltitudeM's own comment) — set once here too so the
   // positionShopCamera() call below (synchronous, before that loop's first
-  // tick) doesn't position the camera against a stale z.
-  shopAvatarPosition.z =
-    shopFlightAltitudeM - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
+  // tick) doesn't position the camera against a stale z. #2853: same added
+  // terrain term as that loop's own formula.
+  shopAvatarPosition.z = shopFlightAltitudeM
+    + shopTerrainHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
+    - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
   shopUpHeld = false;
   shopDownHeld = false;
   shopVerticalInput = 0;
