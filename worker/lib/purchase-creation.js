@@ -33,7 +33,8 @@ import { requireVerifiedSession, sha256Hex } from './auth.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 import { fireNotification } from './notifications.js';
 import {
-  counterpartyKeyFor, remainingCommissionCapCents, commissionHoldInsertStatement, COMMISSION_HOLD_DURATION_DAYS,
+  counterpartyKeyFor, commissionCapPlanFor, commissionCreditClaimStatement, commissionHoldInsertStatement,
+  COMMISSION_HOLD_DURATION_DAYS,
 } from './commission-caps.js';
 import {
   stripeConfigured, stripeRequest, appBaseUrl, generateToken, sendEmail, escapeHtml, formatCents,
@@ -608,17 +609,30 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
     : null;
 
   // #1109: how much of this sale's commission the velocity cap lets
-  // through right now -- a DB read, so it has to happen before the batch
-  // below, same as builderStillExists/buyerBuilderStillExists just above.
-  // Only looked up under the same guard the credit itself is already
-  // gated on (nothing to cap on a free/no-seller sale).
+  // through right now. The established-builder cap (a flat per-sale
+  // limit) is still just a pre-batch read -- no concurrency problem of
+  // its own, see commissionCapPlanFor's own comment. The new-builder
+  // cumulative cap's actual credit decision, by contrast, can no longer
+  // be made here: #2879 found that doing so (a plain pre-read, used to
+  // compute a number applied later in the batch below) was a TOCTOU race
+  // letting concurrent sales from the same counterparty jointly exceed
+  // NEW_BUILDER_FLAT_CAP_CENTS. commissionCreditClaimStatement makes and
+  // applies that decision atomically instead, pushed into the batch
+  // itself right after this sale's own purchase-row INSERT -- see that
+  // function's own comment for why it has to run there rather than here.
   let creditNowCents = builderShareCents;
   let escrowCents = 0;
+  let counterpartyKey = null;
+  let newBuilderClaim = false;
   if (builderId && builderShareCents > 0) {
-    const counterpartyKey = counterpartyKeyFor(buyerBuilderStillExists ? meta.buyerBuilderId : null, buyerLabel);
-    const remainingCapCents = await remainingCommissionCapCents(db, { builderId, counterpartyKey });
-    creditNowCents = Math.min(builderShareCents, remainingCapCents);
-    escrowCents = builderShareCents - creditNowCents;
+    counterpartyKey = counterpartyKeyFor(buyerBuilderStillExists ? meta.buyerBuilderId : null, buyerLabel);
+    const capPlan = await commissionCapPlanFor(db, { builderId });
+    if (capPlan.established) {
+      creditNowCents = Math.min(builderShareCents, capPlan.capCents);
+      escrowCents = builderShareCents - creditNowCents;
+    } else {
+      newBuilderClaim = true;
+    }
   }
 
   const statements = [
@@ -633,18 +647,26 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash),
   ];
-  // #2439: a free listing (price_cents 0, reachable since
-  // computePurchaseAmounts only rejects a null price, not a zero one)
-  // produces builderShareCents === 0 — crediting that is a no-op, but
-  // higgles_earnings_events.amount_cents has its own CHECK (amount_cents
-  // > 0) (migration 0093), so unconditionally inserting a zero-amount row
-  // turned what should be a clean $0 sale into an uncaught "CHECK
-  // constraint failed", surfacing as a generic 400 via databaseHttpError.
-  // #1109: creditNowCents (not builderShareCents) is what's actually
-  // credited immediately -- the cap computed above may have deferred
-  // part of it into escrowCents, pushed as a commission_holds row below
-  // instead.
-  if (builderId && creditNowCents > 0) {
+  // #2879: must come right after the purchase-row INSERT above, and in
+  // the same batch -- commissionCreditClaimStatement's own live subquery
+  // relies on this sale's own row already existing (so it can exclude
+  // it) by the time this statement runs.
+  let claimIndex = -1;
+  if (newBuilderClaim) {
+    claimIndex = statements.length;
+    statements.push(commissionCreditClaimStatement(db, { purchaseId, builderId, counterpartyKey, builderShareCents }));
+  } else if (builderId && creditNowCents > 0) {
+    // #2439: a free listing (price_cents 0, reachable since
+    // computePurchaseAmounts only rejects a null price, not a zero one)
+    // produces builderShareCents === 0 — crediting that is a no-op, but
+    // higgles_earnings_events.amount_cents has its own CHECK (amount_cents
+    // > 0) (migration 0093), so unconditionally inserting a zero-amount row
+    // turned what should be a clean $0 sale into an uncaught "CHECK
+    // constraint failed", surfacing as a generic 400 via databaseHttpError.
+    // #1109: creditNowCents (not builderShareCents) is what's actually
+    // credited immediately -- the cap computed above may have deferred
+    // part of it into escrowCents, pushed as a commission_holds row below
+    // instead.
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(creditNowCents, builderId),
@@ -652,7 +674,7 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
         .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents),
     );
   }
-  if (builderId && escrowCents > 0) {
+  if (!newBuilderClaim && builderId && escrowCents > 0) {
     statements.push(commissionHoldInsertStatement(db, { purchaseId, builderId, amountCents: escrowCents }));
   }
   if (isAvatarCategory && buyerBuilderStillExists) {
@@ -661,7 +683,30 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
   if (isAnimationCategory && buyerBuilderStillExists) {
     statements.push(...ownedAnimationStatements(db, meta.buyerBuilderId, meta.templateId, purchaseId));
   }
-  await db.batch(statements);
+  const batchResults = await db.batch(statements);
+  if (claimIndex >= 0) {
+    // #2879: 0 rows back means the builder self-deleted in the window
+    // between builderStillExists above and this statement actually
+    // running -- the same already-accepted race #1122's own notification
+    // comment describes for this exact function, just reached here
+    // instead. Nothing to credit or escrow for a builder who's gone.
+    const claimedRow = batchResults[claimIndex].results[0];
+    creditNowCents = claimedRow ? claimedRow.credited_cents : 0;
+    escrowCents = claimedRow ? builderShareCents - creditNowCents : 0;
+    const followUp = [];
+    if (creditNowCents > 0) {
+      followUp.push(
+        db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
+          .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents),
+      );
+    }
+    if (escrowCents > 0) {
+      followUp.push(commissionHoldInsertStatement(db, { purchaseId, builderId, amountCents: escrowCents }));
+    }
+    if (followUp.length > 0) {
+      await db.batch(followUp);
+    }
+  }
   // #2267: writePurchaseRow's own self-dealing check (below) never ran on
   // this fallback path, even though every value it needs is already in
   // scope here -- same "after commit, not inside the batch" placement as
@@ -810,15 +855,23 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
     : null;
 
   // #1109: same cap lookup as writeOrphanedPurchaseRow's own identical
-  // block -- see that one's comment for the full reasoning. A DB read, so
-  // it has to happen before the batch below.
+  // block -- see that one's comment for the full reasoning, and #2879's
+  // comment there for why the new-builder cumulative path's actual credit
+  // decision moved into commissionCreditClaimStatement (pushed into the
+  // batch below) instead of being read here.
   let creditNowCents = builderShareCents;
   let escrowCents = 0;
+  let counterpartyKey = null;
+  let newBuilderClaim = false;
   if (builderId && builderShareCents > 0) {
-    const counterpartyKey = counterpartyKeyFor(buyerBuilderStillExists ? buyerBuilderId : null, buyerLabel);
-    const remainingCapCents = await remainingCommissionCapCents(db, { builderId, counterpartyKey });
-    creditNowCents = Math.min(builderShareCents, remainingCapCents);
-    escrowCents = builderShareCents - creditNowCents;
+    counterpartyKey = counterpartyKeyFor(buyerBuilderStillExists ? buyerBuilderId : null, buyerLabel);
+    const capPlan = await commissionCapPlanFor(db, { builderId });
+    if (capPlan.established) {
+      creditNowCents = Math.min(builderShareCents, capPlan.capCents);
+      escrowCents = builderShareCents - creditNowCents;
+    } else {
+      newBuilderClaim = true;
+    }
   }
 
   const statements = [
@@ -833,17 +886,24 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
       isDigitalGood ? 1 : 0, tokenHash),
   ];
-  // #2439: same zero-commission guard as handlePurchaseFinalize's own
-  // identical block above — a free listing (price_cents 0) makes
-  // builderShareCents 0, and crediting that is a no-op, but
-  // higgles_earnings_events.amount_cents' own CHECK (amount_cents > 0)
-  // (migration 0093) turned an unconditional insert of that zero-amount
-  // row into an uncaught "CHECK constraint failed" on an otherwise-clean
-  // $0 purchase.
-  // #1109: creditNowCents, not builderShareCents, is what's actually
-  // credited immediately -- see writeOrphanedPurchaseRow's own identical
-  // block for why.
-  if (builderId && creditNowCents > 0) {
+  // #2879: must come right after the purchase-row INSERT above, and in
+  // the same batch -- see writeOrphanedPurchaseRow's own identical block
+  // for why.
+  let claimIndex = -1;
+  if (newBuilderClaim) {
+    claimIndex = statements.length;
+    statements.push(commissionCreditClaimStatement(db, { purchaseId, builderId, counterpartyKey, builderShareCents }));
+  } else if (builderId && creditNowCents > 0) {
+    // #2439: same zero-commission guard as handlePurchaseFinalize's own
+    // identical block above — a free listing (price_cents 0) makes
+    // builderShareCents 0, and crediting that is a no-op, but
+    // higgles_earnings_events.amount_cents' own CHECK (amount_cents > 0)
+    // (migration 0093) turned an unconditional insert of that zero-amount
+    // row into an uncaught "CHECK constraint failed" on an otherwise-clean
+    // $0 purchase.
+    // #1109: creditNowCents, not builderShareCents, is what's actually
+    // credited immediately -- see writeOrphanedPurchaseRow's own identical
+    // block for why.
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(creditNowCents, builderId),
@@ -851,7 +911,7 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
         .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents),
     );
   }
-  if (builderId && escrowCents > 0) {
+  if (!newBuilderClaim && builderId && escrowCents > 0) {
     statements.push(commissionHoldInsertStatement(db, { purchaseId, builderId, amountCents: escrowCents }));
   }
   if (isAvatarCategory && buyerBuilderStillExists) {
@@ -860,7 +920,27 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
   if (isAnimationCategory && buyerBuilderStillExists) {
     statements.push(...ownedAnimationStatements(db, buyerBuilderId, template.template_id, purchaseId));
   }
-  await db.batch(statements);
+  const batchResults = await db.batch(statements);
+  if (claimIndex >= 0) {
+    // #2879: same self-delete-in-the-gap handling as writeOrphanedPurchaseRow's
+    // own identical block -- see that one's comment for why.
+    const claimedRow = batchResults[claimIndex].results[0];
+    creditNowCents = claimedRow ? claimedRow.credited_cents : 0;
+    escrowCents = claimedRow ? builderShareCents - creditNowCents : 0;
+    const followUp = [];
+    if (creditNowCents > 0) {
+      followUp.push(
+        db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
+          .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents),
+      );
+    }
+    if (escrowCents > 0) {
+      followUp.push(commissionHoldInsertStatement(db, { purchaseId, builderId, amountCents: escrowCents }));
+    }
+    if (followUp.length > 0) {
+      await db.batch(followUp);
+    }
+  }
   // #1122: fired after the batch above commits, not inside it — a landlet
   // owner who self-deletes between this function reading builderId and the
   // INSERT running would otherwise fail the notification's own FK and roll
