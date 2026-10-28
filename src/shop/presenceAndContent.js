@@ -379,6 +379,21 @@ export function updateShopLandletInfo() {
   accountMenuLandletInfoEl.hidden = false;
 }
 
+// #2853 (leaf of #2373, Option C real terrain): the real per-landlet
+// elevationM offset (#2850/#2851) that flightMovement.js's own altitude
+// math needs to add wherever it used to assume ground is flat at 0 --
+// same unconditional full-scan-over-shopLandlets shape updateShopLandletInfo
+// above already uses for its own landletContainsPoint lookup, but without
+// that one's `status === 'claimed'` filter: elevationM applies to every
+// landlet regardless of claim status, same as group.position.z's own
+// unconditional application in enterShopMode (src/shop/mode.js).
+export function shopTerrainHeightAtM(worldX, worldY) {
+  for (const entry of shopLandlets.values()) {
+    if (landletContainsPoint(entry.record, worldX, worldY)) return entry.record.elevationM ?? 0;
+  }
+  return 0;
+}
+
 // Same "logged in AND actually verified" check assertVerified enforces
 // server-side (worker/index.js: age_attested_at set, trust_tier !== 'none')
 // — mirrors the existing ageAttested/trustTier idiom requireCurrentUser's

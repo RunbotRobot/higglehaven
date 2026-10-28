@@ -2279,6 +2279,51 @@ describe('Worker API', () => {
     expect(invalid.body).toEqual({ error: 'biome must be a string or null' });
   });
 
+  // #2853 (leaf of #2373, found while building the client-side flight/
+  // movement terrain-height fix): validateLandlet already round-trips
+  // elevationM through this exact creation path (worker/index.js's own
+  // landletElevationM), but the INSERT this handler used to run (worker/
+  // lib/land.js's landletParams/the POST /landlets statement) never
+  // included the elevation_m column at all -- so the create response
+  // itself (which just echoes back the validated input object, not a
+  // fresh DB read) looked correct while the column silently stayed NULL.
+  // Re-fetching via GET (a real SELECT, unlike the create response) is
+  // what actually catches this -- confirmed this test fails against the
+  // pre-fix handler without that re-fetch.
+  it('defaults elevationM to null, round-trips a real value (confirmed via a fresh GET, not just the create response), and rejects a non-finite one', async () => {
+    const defaulted = await createGreenbeltLandlet('default-elevation-landlet', { x: 6000, y: 1900 });
+    expect(defaulted.body.landlet.elevationM).toBeNull();
+
+    const created = await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'real-elevation-landlet',
+        name: 'Real elevation landlet',
+        areaM2: 1000,
+        elevationM: 12.5,
+        center: { x: 6000, y: 2000 },
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    expect(created.body.landlet.elevationM).toBe(12.5);
+
+    const refetched = await api('/landlets/real-elevation-landlet', adminSession());
+    expect(refetched.body.landlet.elevationM).toBe(12.5);
+
+    const invalid = await api('/landlets', adminSession({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'invalid-elevation-landlet',
+        name: 'Invalid elevation',
+        areaM2: 1000,
+        elevationM: 'not-a-number',
+        center: { x: 6000, y: 2100 },
+      }),
+    }));
+    expect(invalid.response.status).toBe(400);
+    expect(invalid.body).toEqual({ error: 'elevationM must be a finite number or null' });
+  });
+
   // #1573: generatedAt/claimableAt went through validateLandlet with no type
   // check at all, so a non-string value (an object/array) reached a raw D1
   // bind and crashed with an unhandled 500 instead of a clean 400 -- unlike

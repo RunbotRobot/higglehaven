@@ -710,7 +710,7 @@ async function explainClaimConflict(db, landletId, builderId) {
 }
 
 function landletParams(landlet) {
-  return [landlet.landletId, landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status, landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt, landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType, landlet.biome ?? null];
+  return [landlet.landletId, landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status, landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt, landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType, landlet.biome ?? null, landlet.elevationM ?? null];
 }
 
 export async function handleLandlets(request, db, route, url) {
@@ -1200,8 +1200,8 @@ export async function handleLandlets(request, db, route, url) {
     const inserted = await db.prepare(`
       INSERT INTO landlets
         (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, landlet_class,
-         polygon_json, generated_at, claimable_at, metadata_json, landlet_type, biome, max_world_radius_m)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+         polygon_json, generated_at, claimable_at, metadata_json, landlet_type, biome, elevation_m, max_world_radius_m)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       WHERE ? = 0 OR NOT EXISTS (
         SELECT 1 FROM landlets AS owned
         WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
