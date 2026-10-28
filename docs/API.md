@@ -10554,6 +10554,81 @@ reaches `settleDelayS` within a single episode.
 `e2e/shop-idle-lean-randomization.test.mjs` mirrors the settle-delay half
 of that for `window.__testShopLeanPose()`'s own equivalent fields.
 
+## Tax education content API (#2842)
+
+docs/SPEC.md §7: "Tax education (not advice)... jurisdiction-keyed,
+plain-language, regularly-updated general informational summaries,
+explicitly not personalized advice, human-reviewed before publishing,
+prioritized by expected builder geography." This is storage + the
+Admin Dashboard's own admin-editable UI for that content only — a
+distinct feature from the W-9/W-8BEN tax-*paperwork* mechanics documented
+above (`/api/tax/...`), which this doesn't touch. Surfacing this content
+to builders (#2843) and deciding who authors/reviews it (#2844, owner
+judgment) are separate, not-yet-built sub-issues — every route below is
+`requireAdmin`-gated the same as the rest of `public/admin-dashboard.html`,
+with no public read endpoint yet.
+
+Deliberately not keyed off the W-9/W-8BEN flow's own `country` field: that
+one lives inside `payee_tax_id_encrypted` (an encrypted blob holding
+SSN/foreign-TIN alongside country), unqueryable in plain SQL without a
+decrypt on every read, and reusing a sensitive tax-identity field as the
+join key for a page anyone can eventually read would be real scope creep
+against data this codebase otherwise keeps tightly encrypted. This
+feature's own `countryCode`/`stateCode` are a separate, non-sensitive
+classification on a brand-new `tax_education_content` table
+(`migrations/0161_tax_education_content.sql`).
+
+### `GET /api/tax-education`
+
+`requireAdmin`. Optional `?countryCode=` query param (case-insensitive,
+normalized to uppercase) filters to one country; omitted, returns every
+entry (capped at 500, newest-updated first). Response: `{ entries: [...] }`,
+each entry shaped as below.
+
+### `POST /api/tax-education`
+
+`requireAdmin`. Body: `{ countryCode, stateCode?, title, body }`.
+`countryCode` must be a 2-letter code (ISO 3166-1 alpha-2), normalized to
+uppercase. `stateCode` is optional (1-10 letters/digits/hyphens,
+normalized to uppercase) — `null`/omitted means the entry applies to the
+whole country. `title` is a `labelValue` (≤100 chars); `body` is the
+plain-language content itself (≤20,000 chars). A freshly created entry is
+always unreviewed (`reviewedAt`/`reviewedBy` both `null`) — see
+`PATCH` below for how an entry becomes reviewed.
+
+Returns `201` with `{ entry }`:
+```json
+{
+  "id": "tax-edu-<uuid>",
+  "countryCode": "US",
+  "stateCode": null,
+  "title": "...",
+  "body": "...",
+  "reviewed": false,
+  "reviewedAt": null,
+  "reviewedBy": null,
+  "createdAt": "...",
+  "updatedAt": "..."
+}
+```
+
+### `GET /api/tax-education/:id` / `PATCH /api/tax-education/:id` / `DELETE /api/tax-education/:id`
+
+`requireAdmin`. `GET`/`DELETE` 404 on an unknown id; `DELETE` returns
+`{ deleted: true }`.
+
+`PATCH` accepts any subset of `countryCode`/`stateCode`/`title`/`body`
+(same validation as `POST`), plus `reviewed` (boolean) to flip the review
+gate: `reviewed: true` stamps `reviewedAt`/`reviewedBy` from the
+**calling admin's own session** (never a client-supplied value — a
+`reviewedBy` field in the request body is silently ignored, the same
+"the server derives who did this, not the client" discipline this
+codebase applies everywhere else an acting identity gets recorded);
+`reviewed: false` clears both back to `null`. There is no separate
+boolean column for "is this live" — `reviewedAt != null` is both the
+review record and (once #2843 builds surfacing) the publish gate, so the
+two can't drift out of sync the way a parallel boolean could.
+
 ## Control Room API (N31)
 
 The multi-session "Control Room" coordination board (a shared task/reply
@@ -10830,6 +10905,9 @@ to introduce new request/response shapes:
 - **Tax / 1099 e-filing** (#1823) — `GET /api/tax/admin-forms` and its
   `approve`/`file`/`void` siblings, plus the e-filing connection test (see
   that section above).
+- **Tax education content** (#2842) — `/api/tax-education` CRUD plus the
+  `reviewed` flag toggle (see "Tax education content API" above) — a
+  distinct feature from the 1099 e-filing panel just above.
 - **Purchases (admin fallback)** (#1824) — refund/mark-shipped for a
   purchase whose seller has since deleted their account; ordinary
   seller-initiated refund/ship has its own seller-facing UI and isn't
