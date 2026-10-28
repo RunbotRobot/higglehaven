@@ -113,6 +113,23 @@ import {
 export let currentLandletAreaM2 = LANDLET_AREA_M2;
 export let currentLandletLevels = [];
 export let currentLevelIndex = 0;
+
+// #2871: every placed product (plus the group-move pivot, trim preview,
+// alignment guides, and sold-out ghost markers -- anything positioned
+// relative to a real product's own x/y/z) lives inside this group rather
+// than directly in `scene`, so a landlet's real elevationM (set on this
+// group's own position.z by applyLandletShape, below) lifts all of them
+// together with the ground. `landlet` itself stays out of this group --
+// its own elevation lift is baked straight into its geometry instead (see
+// applyLandletShape's own curveGroundGeometry call) -- so nothing here
+// double-counts that offset. Selection outlines/low-stock highlights and
+// the measure tool are deliberately NOT in this group: the former track
+// their target's *world* bounding box every frame regardless of parent,
+// and the latter is positioned from raycast hit points, which are already
+// world-space and therefore already elevation-correct once the meshes
+// they're cast against are.
+export const landletElevationGroup = new THREE.Group();
+scene.add(landletElevationGroup);
 export function setCurrentLandletAreaM2(value) {
   currentLandletAreaM2 = value;
 }
@@ -491,7 +508,12 @@ wireDraggingBehavior(translateControls);
 // mesh instead (see objectChange below), which is what keeps the group's
 // relative arrangement intact while moving it as a unit.
 const groupMovePivot = new THREE.Object3D();
-scene.add(groupMovePivot);
+// #2871: its own position is set directly from getSelectionPivot(), a
+// centroid of selected meshes' own (landletElevationGroup-local)
+// positions -- living in that same group keeps the gizmo's visual
+// position matching the real meshes it's attached to, rather than
+// rendering elevationM off from them.
+landletElevationGroup.add(groupMovePivot);
 let groupMoveMeshes = null; // meshes being moved together, captured at drag start
 let groupMoveSet = null; // same meshes as a Set, for O(1) "is this mine?" checks during collision sweeps
 let groupMoveStartPositions = null; // mesh -> its position when the drag began (fixed for the whole drag)
@@ -521,7 +543,11 @@ function makeAlignmentGuide() {
   const line = new THREE.Line(geometry, alignmentGuideMaterial);
   line.visible = false;
   line.renderOrder = 999;
-  scene.add(line);
+  // #2871: drawn from a dragged mesh's own (now landletElevationGroup-
+  // local) position.z -- lives in that same group so the guide stays
+  // visually level with the item it's guiding, not stranded at the old
+  // pre-elevation baseline.
+  landletElevationGroup.add(line);
   return line;
 }
 const alignmentGuideX = makeAlignmentGuide(); // shown when the dragged item's X is currently snapped — drawn running along Y, at the shared X coordinate
@@ -898,12 +924,16 @@ async function updateTrimPreview(object) {
     return;
   }
   if (trimPreviewMesh) {
-    scene.remove(trimPreviewMesh);
+    landletElevationGroup.remove(trimPreviewMesh);
     disposeObject(trimPreviewMesh);
   }
   trimPreviewMesh = preview;
   trimPreviewLength = clampedLength;
-  scene.add(trimPreviewMesh);
+  // #2871: instanceLike.z above was copied straight from object.position.z
+  // (already landletElevationGroup-local post-reparenting), so the
+  // preview needs to live in that same group to render at the matching
+  // height rather than the old un-lifted baseline.
+  landletElevationGroup.add(trimPreviewMesh);
   object.visible = false;
   // The selection outline tracks whatever mesh it was built for via its
   // own world matrix every frame regardless of that mesh's own .visible —
@@ -924,7 +954,7 @@ function clearTrimPreview(object) {
     trimPreviewTimer = null;
   }
   if (trimPreviewMesh) {
-    scene.remove(trimPreviewMesh);
+    landletElevationGroup.remove(trimPreviewMesh);
     disposeObject(trimPreviewMesh);
     trimPreviewMesh = null;
   }
@@ -1054,6 +1084,12 @@ export function applyLandletShape(landletRecord) {
   // (worker/lib/world-generation.js), composed with this geometry's own
   // Earth-curvature sag rather than replacing it.
   curveGroundGeometry(landlet.geometry, landletRecord.elevationM ?? 0);
+  // #2871: the same lift, applied to every placed product (and anything
+  // positioned relative to one) via landletElevationGroup's own position
+  // instead of baking it into each one's own geometry/position -- see
+  // that group's own declaration comment for why this doesn't double up
+  // with the line just above.
+  landletElevationGroup.position.z = landletRecord.elevationM ?? 0;
   oldGeometry.dispose();
   // #2371: landletMaterial starts out on the default/unclassified texture
   // (created before any real landlet is known) -- swap to this landlet's
@@ -1123,9 +1159,9 @@ async function replaceMeshWithCrop(mesh, crop) {
     return null;
   }
   productMeshes[index] = newMesh;
-  scene.remove(mesh);
+  landletElevationGroup.remove(mesh);
   disposeObject(mesh);
-  scene.add(newMesh);
+  landletElevationGroup.add(newMesh);
   newMesh.userData.safePosition = newMesh.position.clone();
 
   if (selectedMeshes.has(mesh)) {
@@ -1161,7 +1197,12 @@ export const productMeshes = [];
 export async function addInstanceToScene(instance) {
   const object = await createMeshForInstance(instance);
   if (!object) return null;
-  scene.add(object);
+  // #2871: lives in landletElevationGroup, not `scene` directly, so this
+  // single choke point's own "covers every way a new mesh can appear"
+  // guarantee also means every placed product picks up the current
+  // landlet's real elevationM lift for free, bootstrap's initial batch
+  // included.
+  landletElevationGroup.add(object);
   productMeshes.push(object);
   // #1950: covers every way a new mesh can appear -- bootstrap()'s initial
   // batch, placing a fresh item from the catalog, and undo/redo recreating
@@ -1433,7 +1474,7 @@ function deleteInstance(mesh, { sync = true } = {}) {
   // would keep floating in the scene, pointing at nothing, after the item
   // itself is gone.
   removeLowStockHighlight(mesh);
-  scene.remove(mesh);
+  landletElevationGroup.remove(mesh);
   disposeObject(mesh);
   persistLayout();
   if (sync) syncDelete(instanceId);
@@ -2522,16 +2563,21 @@ function addSoldOutMarkerMesh(marker) {
     color: SOLD_OUT_MARKER_COLOR, transparent: true, opacity: 0.35, depthWrite: false,
   });
   const mesh = new THREE.Mesh(geometry, material);
+  // marker.x/y/z is the sold-out item's own last-recorded, pre-elevation
+  // position (same convention every live instance's own x/y/z already
+  // uses) -- #2871: lives in landletElevationGroup so this ghost marker
+  // rises/sinks with the real ground the same way a still-live instance
+  // at that same spot would.
   mesh.position.set(marker.x, marker.y, marker.z || 0.5);
   mesh.userData.markerId = marker.markerId;
-  scene.add(mesh);
+  landletElevationGroup.add(mesh);
   soldOutMarkerMeshes.set(marker.markerId, mesh);
 }
 
 export function removeSoldOutMarkerMesh(markerId) {
   const mesh = soldOutMarkerMeshes.get(markerId);
   if (!mesh) return;
-  scene.remove(mesh);
+  landletElevationGroup.remove(mesh);
   mesh.geometry.dispose();
   mesh.material.dispose();
   soldOutMarkerMeshes.delete(markerId);
@@ -3265,6 +3311,23 @@ window.__testProductScreenPositions = () => productMeshes.map((mesh) => ({
   instanceId: mesh.userData.instanceId,
   ...projectMeshToScreen(mesh),
 }));
+
+// #2871: lets a test confirm every placed product's own elevationM lift
+// (landletElevationGroup.position.z, read here directly since that's the
+// exact same value applyLandletShape also bakes into the ground mesh's
+// own geometry -- see that group's own declaration comment) actually
+// reaches world space: worldZ for a product should equal its own
+// (landletElevationGroup-local) position.z plus the group's own offset,
+// not just the local value alone. Same window.__test* convention as this
+// file's other hooks, inert unless a test calls it.
+window.__testLandletElevationWorldZ = () => ({
+  elevationGroupZ: landletElevationGroup.position.z,
+  products: productMeshes.map((mesh) => {
+    const worldPos = new THREE.Vector3();
+    mesh.getWorldPosition(worldPos);
+    return { instanceId: mesh.userData.instanceId, localZ: mesh.position.z, worldZ: worldPos.z };
+  }),
+});
 
 window.addEventListener('pointermove', (event) => {
   if (event.pointerId !== swipePointerId || !swipeStartPos) return;
