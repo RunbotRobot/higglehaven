@@ -117,9 +117,25 @@ async function signUpAndVerifyWithRealCard(page, label) {
 // onboarding endpoint. ---
 const { browser: sellerBrowser, page: sellerPage, errors: sellerErrors } = await launchPage({ promptAnswer: SELLER_LABEL });
 
-await sellerPage.click('.mode-nav-btn[data-mode="build"]');
-await sellerPage.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+// N44 (see e2e/helpers.mjs's own chooseIdentity comment): a fresh page
+// load already lands on Shop mode by default, which gates its own entry
+// the same way Build/Sell do -- #auth-modal can already be showing before
+// this click ever runs, in which case clicking the nav bar underneath it
+// just times out against the still-open modal intercepting pointer events
+// (found via a real CI failure on this exact line). Mirrors chooseIdentity's
+// own two-part guard: skip the click if the modal's already up, then -- once
+// verification clears Shop's own gate below, not necessarily Build's --
+// switch into the actually-requested mode afterward.
+const sellerAuthModalAlreadyShown = (await sellerPage.locator('#auth-modal.visible').count()) > 0;
+if (!sellerAuthModalAlreadyShown) {
+  await sellerPage.click('.mode-nav-btn[data-mode="build"]');
+  await sellerPage.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+}
 await signUpAndVerifyWithRealCard(sellerPage, SELLER_LABEL);
+if (sellerAuthModalAlreadyShown) {
+  await sellerPage.click('.mode-nav-btn[data-mode="build"]');
+  await sellerPage.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+}
 
 // Same claim-flow shape as e2e/helpers.mjs's own claimLandlet, inlined
 // rather than reused since that helper assumes #auth-modal/#verify-modal
@@ -241,8 +257,16 @@ const { browser, page, errors } = await launchPage({ promptAnswer: BUYER_LABEL }
 const dialogMessages = [];
 page.on('dialog', (dialog) => { dialogMessages.push(dialog.message()); });
 
-await page.click('.mode-nav-btn[data-mode="shop"]');
-await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+// Same N44 race as the seller's own build-mode entry above -- Shop is
+// already the default landing mode on a fresh load, so #auth-modal can
+// already be open (and intercepting this exact click) before this ever
+// runs. Unlike the seller's build-mode case, no post-verification
+// re-click is needed afterward: clearing Shop's own gate already *is*
+// clearing the mode this test actually wants.
+if ((await page.locator('#auth-modal.visible').count()) === 0) {
+  await page.click('.mode-nav-btn[data-mode="shop"]');
+  await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
+}
 await signUpAndVerifyWithRealCard(page, BUYER_LABEL);
 
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
