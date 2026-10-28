@@ -14,6 +14,21 @@
 // it) and adding that same term everywhere flightMovement.js had read
 // mesh.position.z without it.
 //
+// #2853 update: shopLandingObstructionTopZ (itemTop below) is an absolute
+// world z, unchanged by #2853, so it still tracks elevationM 1:1 exactly as
+// this test originally asserted. bareGroundAltitudeM (groundFloor below) is
+// not a world z, though -- it's the *altitude* a landing needs to reach to
+// rest on bare ground, and #2853's own per-frame sync now adds a landlet's
+// elevationM back in separately via shopTerrainHeightAtM when turning that
+// altitude into a real z. bareGroundAltitudeM has to subtract that same
+// term to avoid double-counting elevationM (see its own comment), so by
+// design it now stays constant regardless of elevationM -- the ground's
+// real z still rises by elevationM, just via that other route instead of
+// through this helper's own return value. See
+// e2e/shop-terrain-elevation-landing.test.mjs for the real-z-level check
+// (a full takeoff/landing sequence) that this altitude-level helper no
+// longer directly proves on its own.
+//
 // This directly exercises the real production functions via the e2e-only
 // window.__testBareGroundAltitudeM/__testShopLandingObstructionTopZ hooks
 // (same convention window.__testNearestOpenLandingSpot already
@@ -115,15 +130,15 @@ const itemTopAfter = await page.evaluate(
   ([x, y]) => window.__testShopLandingObstructionTopZ(x, y),
   [treeWorldX, treeWorldY],
 );
-console.log(`bare-ground floor / tree top, after setting elevation_m = ${TEST_ELEVATION_M} (both should have risen by exactly that amount):`, { groundFloorAfter, itemTopAfter });
+console.log(`bare-ground floor (altitude, should stay ~unchanged -- see #2853 update above) / tree top (world z, should have risen by exactly ${TEST_ELEVATION_M}), after setting elevation_m = ${TEST_ELEVATION_M}:`, { groundFloorAfter, itemTopAfter });
 
 const groundDelta = groundFloorAfter - groundFloorBefore;
 const itemDelta = itemTopAfter - itemTopBefore;
-console.log('ground floor delta / item top delta (both should equal TEST_ELEVATION_M -- ground and item rising together, not desyncing):', { groundDelta, itemDelta, TEST_ELEVATION_M });
+console.log('ground floor altitude delta (should be ~0 post-#2853 -- elevationM is handled elsewhere now) / item top world-z delta (should equal TEST_ELEVATION_M):', { groundDelta, itemDelta, TEST_ELEVATION_M });
 
 const pass =
   !myLandlet.elevationM &&
-  Math.abs(groundDelta - TEST_ELEVATION_M) < 0.01 &&
+  Math.abs(groundDelta) < 0.01 &&
   Math.abs(itemDelta - TEST_ELEVATION_M) < 0.01 &&
   errors.length === 0;
 await finish(browser, {
