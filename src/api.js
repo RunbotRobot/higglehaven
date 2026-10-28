@@ -407,6 +407,14 @@ export async function submitTaxIdForm(payload) {
   });
 }
 
+// #2843 (sub-issue of #2841) — general, jurisdiction-matched tax
+// education content (not advice), resolved server-side from whatever
+// W-9/W-8BEN is already on file above; { entries: [], jurisdiction: null }
+// when none is.
+export async function fetchMyTaxEducation() {
+  return requestJson('/tax-education/mine');
+}
+
 // Seller-initiated once a physical real-money order has actually been
 // shipped — starts the 7-day payout-hold fallback clock (see #454).
 export async function markPurchaseShipped(purchaseId) {

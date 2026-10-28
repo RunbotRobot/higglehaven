@@ -4,7 +4,7 @@
 // are separate sub-issues — these tests only cover this issue's own
 // scope: admin CRUD + the reviewed_at/reviewed_by gate.
 import { applyD1Migrations, env } from 'cloudflare:test';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { api, signupAdmin, signupBuilder } from './test-helpers.js';
 
 let adminSession;
@@ -15,6 +15,15 @@ beforeAll(async () => {
   const admin = await signupAdmin('tax-education-admin');
   adminSession = admin.session;
   adminEmail = admin.email;
+  // #2843: GET /tax-education/mine resolves jurisdiction from a caller's
+  // own on-file W-9/W-8BEN, which needs this configured the same way
+  // tax-id-form.test.js's own beforeAll does (own D1 isolate per test
+  // file, so this can't leak into any other file's own tests).
+  env.TAX_ID_ENCRYPTION_KEY = 'a'.repeat(64);
+});
+
+afterAll(() => {
+  env.TAX_ID_ENCRYPTION_KEY = undefined;
 });
 
 async function createEntry(overrides = {}) {
@@ -155,5 +164,113 @@ describe('Tax education content admin API (#2842)', () => {
   it('404s deleting a nonexistent id', async () => {
     const got = await api('/tax-education/tax-edu-does-not-exist', adminSession({ method: 'DELETE' }));
     expect(got.response.status).toBe(404);
+  });
+});
+
+async function submitW9(builderSession, state) {
+  const got = await api('/tax/id-form', builderSession({
+    method: 'POST',
+    body: JSON.stringify({
+      formType: 'w9', legalName: 'Ada Lovelace', addressLine1: '1 Way', city: 'Somewhere',
+      state, postalCode: '00000', taxIdNumber: '123-45-6789',
+    }),
+  }));
+  expect(got.response.status).toBe(200);
+}
+
+async function submitW8ben(builderSession, country) {
+  const got = await api('/tax/id-form', builderSession({
+    method: 'POST',
+    body: JSON.stringify({
+      formType: 'w8ben', legalName: 'Grace Hopper', addressLine1: '1 Way', city: 'Somewhere',
+      country, countryOfCitizenship: country, foreignTaxId: 'FTIN-000',
+    }),
+  }));
+  expect(got.response.status).toBe(200);
+}
+
+// #2843: surfaces #2842's own reviewed content to a caller, matched
+// against the jurisdiction resolved from THEIR OWN already-on-file W-9/
+// W-8BEN (getUserTaxJurisdiction, worker/lib/seller-payouts-tax.js) --
+// never a new location-collection step.
+describe('GET /tax-education/mine (#2843)', () => {
+  it('requires a session', async () => {
+    const got = await api('/tax-education/mine');
+    expect(got.response.status).toBe(401);
+  });
+
+  it('returns no entries and a null jurisdiction when no tax form is on file', async () => {
+    const builder = await signupBuilder('tax-education-mine-no-form');
+    const got = await api('/tax-education/mine', builder.session());
+    expect(got.response.status).toBe(200);
+    expect(got.body).toEqual({ entries: [], jurisdiction: null });
+  });
+
+  it('matches a reviewed country-wide entry from a W-9 filer (country resolves to US)', async () => {
+    const builder = await signupBuilder('tax-education-mine-w9-us');
+    await submitW9(builder.session, 'TX');
+    const entry = await createEntry({ countryCode: 'US', title: 'US general info' });
+    await api(`/tax-education/${entry.id}`, adminSession({ method: 'PATCH', body: JSON.stringify({ reviewed: true }) }));
+
+    const got = await api('/tax-education/mine', builder.session());
+    expect(got.body.jurisdiction).toEqual({ country: 'US', state: 'TX' });
+    expect(got.body.entries.some((e) => e.id === entry.id)).toBe(true);
+    // Public shape only -- no admin-authoring metadata.
+    expect(got.body.entries[0]).toEqual({ id: expect.any(String), countryCode: expect.any(String), stateCode: null, title: expect.any(String), body: expect.any(String) });
+  });
+
+  it('excludes an unreviewed entry', async () => {
+    const builder = await signupBuilder('tax-education-mine-unreviewed');
+    await submitW9(builder.session, 'TX');
+    const entry = await createEntry({ countryCode: 'US', title: 'Not yet reviewed' });
+
+    const got = await api('/tax-education/mine', builder.session());
+    expect(got.body.entries.some((e) => e.id === entry.id)).toBe(false);
+  });
+
+  it('matches a state-specific entry for a filer in that state, and still includes a country-wide one', async () => {
+    const builder = await signupBuilder('tax-education-mine-w9-state');
+    await submitW9(builder.session, 'California');
+
+    const stateEntry = await createEntry({ countryCode: 'US', stateCode: 'CA', title: 'California specifics' });
+    await api(`/tax-education/${stateEntry.id}`, adminSession({ method: 'PATCH', body: JSON.stringify({ reviewed: true }) }));
+    const countryEntry = await createEntry({ countryCode: 'US', title: 'US general' });
+    await api(`/tax-education/${countryEntry.id}`, adminSession({ method: 'PATCH', body: JSON.stringify({ reviewed: true }) }));
+
+    const got = await api('/tax-education/mine', builder.session());
+    expect(got.body.jurisdiction).toEqual({ country: 'US', state: 'CA' });
+    const ids = got.body.entries.map((e) => e.id);
+    expect(ids).toContain(stateEntry.id);
+    expect(ids).toContain(countryEntry.id);
+    // State-specific sorts first.
+    expect(ids.indexOf(stateEntry.id)).toBeLessThan(ids.indexOf(countryEntry.id));
+  });
+
+  it('does not match a different state\'s own state-specific entry', async () => {
+    const builder = await signupBuilder('tax-education-mine-w9-other-state');
+    await submitW9(builder.session, 'NY');
+    const nyOnlyEntry = await createEntry({ countryCode: 'US', stateCode: 'CA', title: 'California only' });
+    await api(`/tax-education/${nyOnlyEntry.id}`, adminSession({ method: 'PATCH', body: JSON.stringify({ reviewed: true }) }));
+
+    const got = await api('/tax-education/mine', builder.session());
+    expect(got.body.entries.some((e) => e.id === nyOnlyEntry.id)).toBe(false);
+  });
+
+  it('resolves a W-8BEN free-text country name to a jurisdiction match', async () => {
+    const builder = await signupBuilder('tax-education-mine-w8ben-france');
+    await submitW8ben(builder.session, 'France');
+    const entry = await createEntry({ countryCode: 'FR', title: 'France general info' });
+    await api(`/tax-education/${entry.id}`, adminSession({ method: 'PATCH', body: JSON.stringify({ reviewed: true }) }));
+
+    const got = await api('/tax-education/mine', builder.session());
+    expect(got.body.jurisdiction).toEqual({ country: 'FR', state: null });
+    expect(got.body.entries.some((e) => e.id === entry.id)).toBe(true);
+  });
+
+  it('returns a null jurisdiction for a W-8BEN free-text country name it does not recognize', async () => {
+    const builder = await signupBuilder('tax-education-mine-w8ben-unknown');
+    await submitW8ben(builder.session, 'Not A Real Country Name');
+    const got = await api('/tax-education/mine', builder.session());
+    expect(got.body).toEqual({ entries: [], jurisdiction: null });
   });
 });

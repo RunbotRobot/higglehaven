@@ -61,6 +61,7 @@ import {
   fetchMyOwnedAnimations,
   equipAnimation,
   submitTaxIdForm,
+  fetchMyTaxEducation,
   fetchSellerStripeAccount,
   submitSellerStripeAccount,
   submitBuilderStripeAccount,
@@ -1095,7 +1096,68 @@ function renderGeneralSettingsSection() {
   settingsSectionEl.appendChild(versionField);
 
   renderTaxPaperworkField();
+  renderTaxEducationField();
   renderNotificationPreferencesField();
+}
+
+// #2843 (sub-issue of #2841, docs/SPEC.md §7): general, jurisdiction-
+// matched tax info (not advice) — read-only, right below the tax
+// paperwork field above since the jurisdiction match comes from that same
+// on-file W-9/W-8BEN. Same async-field-in-General shape as
+// renderNotificationPreferencesField below (currentAuthUser-gated,
+// settingsRenderToken-guarded against a tab switch/modal reopen racing
+// the fetch).
+async function renderTaxEducationField() {
+  if (!currentAuthUser) return;
+  const myToken = settingsRenderToken;
+
+  const field = document.createElement('div');
+  field.className = 'settings-field';
+  const fieldLabel = document.createElement('span');
+  fieldLabel.textContent = 'Tax Education';
+  field.appendChild(fieldLabel);
+  const status = document.createElement('div');
+  status.className = 'settings-empty-note';
+  status.textContent = 'Loading…';
+  field.appendChild(status);
+  settingsSectionEl.appendChild(field);
+
+  let result;
+  try {
+    result = await fetchMyTaxEducation();
+  } catch (err) {
+    status.textContent = err.message || 'Could not load tax education content.';
+    status.classList.add('error');
+    return;
+  }
+  if (myToken !== settingsRenderToken) return;
+
+  if (!result.jurisdiction) {
+    status.textContent = 'Submit tax paperwork above to see general tax info for your jurisdiction.';
+    return;
+  }
+  if (!result.entries.length) {
+    status.textContent = 'No general tax info is available for your jurisdiction yet.';
+    return;
+  }
+  field.removeChild(status);
+
+  const note = document.createElement('div');
+  note.className = 'settings-empty-note';
+  note.textContent = 'General information only — not personalized tax advice.';
+  field.appendChild(note);
+
+  for (const entry of result.entries) {
+    const entryWrap = document.createElement('details');
+    entryWrap.className = 'tax-education-entry';
+    const summary = document.createElement('summary');
+    summary.textContent = entry.title;
+    entryWrap.appendChild(summary);
+    const body = document.createElement('p');
+    body.textContent = entry.body;
+    entryWrap.appendChild(body);
+    field.appendChild(entryWrap);
+  }
 }
 
 // #2067 (leaf sub-issue of #1973, part of #1947): account-level opt-in

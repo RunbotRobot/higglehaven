@@ -22,6 +22,7 @@ import { readJson, stringValue, labelValue } from './validation.js';
 import { requireCurrentUser, sha256Hex } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
+import { countryNameToCode, usStateNameToCode } from './country-codes.js';
 import {
   encryptTaxIdPayload, decryptTaxIdPayload, stripeAccountStatusJson,
   getOrCreateSellerForUser, nonnegativeInteger, formatCents, stripeConfigured, stripeRequest,
@@ -113,6 +114,32 @@ async function handleTaxIdForm(request, env, db, user) {
     WHERE user_id = ?
   `).bind(form.formType, completedAt, encrypted, user.user_id).run();
   return json({ taxFormType: form.formType, taxFormCompletedAt: completedAt });
+}
+
+// #2843 (sub-issue of #2841): the first real caller of decryptTaxIdPayload
+// (its own comment above notes nothing called it for real before this) --
+// resolves a SINGLE user's own already-on-file W-9/W-8BEN into the
+// country/state #2842's tax_education_content table is keyed on, so
+// GET /api/tax-education/mine (worker/lib/tax-education.js) can surface
+// jurisdiction-relevant content without a new location-collection step.
+// Deliberately scoped to one user's own row at a time (never a bulk scan
+// across users.tax_id_encrypted) -- #2842's own migration comment explains
+// why this field stays off-limits as a bulk join key; decrypting a user's
+// own form to answer their own request is a different, narrower thing.
+// A w9 filer's country is always 'US' (the form itself has no country
+// field -- w9 implies it); a w8ben filer's own country field is the
+// signal. Returns null when there's nothing on file yet (the overwhelmingly
+// common case for any account that hasn't crossed the earnings threshold
+// #615 requires paperwork for).
+export async function getUserTaxJurisdiction(env, user) {
+  if (!user.tax_id_encrypted) return null;
+  const form = await decryptTaxIdPayload(env, user.tax_id_encrypted);
+  if (form.formType === 'w9') return { country: 'US', state: usStateNameToCode(form.state) };
+  // form.country is free text (see country-codes.js's own comment) --
+  // countryNameToCode returns null for anything it doesn't recognize,
+  // same "no jurisdiction match" outcome as having no form on file.
+  const country = countryNameToCode(form.country);
+  return country ? { country, state: null } : null;
 }
 
 // #625 (sub-issue of #349/#324): a builder's higgles balance was, until

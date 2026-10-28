@@ -10562,11 +10562,12 @@ explicitly not personalized advice, human-reviewed before publishing,
 prioritized by expected builder geography." This is storage + the
 Admin Dashboard's own admin-editable UI for that content only — a
 distinct feature from the W-9/W-8BEN tax-*paperwork* mechanics documented
-above (`/api/tax/...`), which this doesn't touch. Surfacing this content
-to builders (#2843) and deciding who authors/reviews it (#2844, owner
-judgment) are separate, not-yet-built sub-issues — every route below is
-`requireAdmin`-gated the same as the rest of `public/admin-dashboard.html`,
-with no public read endpoint yet.
+above (`/api/tax/...`), which this doesn't touch. Deciding who authors/
+reviews content (#2844) is still owner judgment, not yet resolved — every
+*admin* route below is `requireAdmin`-gated the same as the rest of
+`public/admin-dashboard.html`. Surfacing reviewed content to builders
+(#2843) is built — see `GET /api/tax-education/mine` below, the one
+route here any authenticated account (not just an admin) can call.
 
 Deliberately not keyed off the W-9/W-8BEN flow's own `country` field: that
 one lives inside `payee_tax_id_encrypted` (an encrypted blob holding
@@ -10626,8 +10627,56 @@ gate: `reviewed: true` stamps `reviewedAt`/`reviewedBy` from the
 codebase applies everywhere else an acting identity gets recorded);
 `reviewed: false` clears both back to `null`. There is no separate
 boolean column for "is this live" — `reviewedAt != null` is both the
-review record and (once #2843 builds surfacing) the publish gate, so the
+review record and the publish gate `GET .../mine` below reads, so the
 two can't drift out of sync the way a parallel boolean could.
+
+### `GET /api/tax-education/mine` (#2843)
+
+`requireCurrentUser` — any authenticated account, not `requireAdmin`;
+same bar as `GET /api/tax/summary` and every other "read my own
+account's tax state" endpoint. Resolves the caller's own jurisdiction
+from whatever W-9/W-8BEN they already have on file (`getUserTaxJurisdiction`,
+`worker/lib/seller-payouts-tax.js`) — this is the first real caller of
+`decryptTaxIdPayload` (see that function's own comment), scoped to
+decrypting one user's own single row to answer their own request, never
+a bulk scan of `users.tax_id_encrypted` across accounts (the reason that
+field stays off-limits as a join key, per the note above). A W-9 filer's
+country is always `'US'` (the form has no country field of its own); a
+W-8BEN filer's own free-text `country` field is run through
+`worker/lib/country-codes.js`'s `countryNameToCode` (official ISO 3166-1
+short English names plus a handful of common informal ones — "USA",
+"UK", etc.) since that field isn't an ISO-code picker. The W-9 form's own
+free-text `state` field goes through that same file's `usStateNameToCode`
+the same way. Neither lookup guesses past its fixed list — a name it
+doesn't recognize resolves to no state/no jurisdiction rather than a
+wrong one.
+
+No tax form on file (or a W-8BEN country/W-9 state neither lookup
+recognizes) returns `{ entries: [], jurisdiction: null }`. Otherwise:
+```json
+{
+  "entries": [
+    { "id": "tax-edu-<uuid>", "countryCode": "US", "stateCode": "CA", "title": "...", "body": "..." }
+  ],
+  "jurisdiction": { "country": "US", "state": "CA" }
+}
+```
+`entries` is the public-facing shape only (no `reviewed`/`reviewedAt`/
+`reviewedBy`/`createdAt`/`updatedAt` — `reviewedBy` in particular is the
+reviewing admin's own email, not something an ordinary reader of their
+own matched content needs). Matches every *reviewed* row whose
+`countryCode` equals the resolved country and whose `stateCode` is either
+`null` (country-wide) or equals the resolved state — both tiers are
+returned together when the caller has a resolved state, state-specific
+entries sorted first, so a state-specific page doesn't hide the
+country-wide one.
+
+Rendered read-only in Settings' General tab, directly below the tax
+paperwork field (`src/main.js`'s `renderTaxEducationField`) — a
+`<details>` disclosure per matched entry, plain text throughout (no rich
+HTML rendering of `body`), with "Submit tax paperwork above to see
+general tax info for your jurisdiction" shown instead when
+`jurisdiction` comes back `null`.
 
 ## Control Room API (N31)
 
