@@ -3935,6 +3935,7 @@ export function validateLandlet(input, fallbackId) {
     landClass: positiveInteger(input.landClass ?? 1, 'landClass'),
     landType: landletLandType(input.landType || 'buildable'),
     biome: landletBiome(input.biome ?? null),
+    elevationM: landletElevationM(input.elevationM ?? null),
     polygon: validatePolygon(input.polygon || []),
     generatedAt: optionalIsoDateString(input.generatedAt, 'generatedAt'),
     claimableAt: optionalIsoDateString(input.claimableAt, 'claimableAt'),
@@ -4142,6 +4143,11 @@ export function landletFromRow(row) {
     landClass: row.landlet_class ?? 1,
     landType: row.landlet_type ?? 'buildable',
     biome: row.biome ?? null,
+    // #2851: already baselined relative to WORLD_ELEVATION_BASELINE_M
+    // (worker/lib/world-generation.js) at generation time -- consumers
+    // add this straight onto a ground vertex's local z, same "read the
+    // already-final value" shape as biome just above.
+    elevationM: row.elevation_m ?? null,
     polygon: JSON.parse(row.polygon_json || '[]'),
     generatedAt: row.generated_at,
     claimableAt: row.claimable_at,
@@ -4161,6 +4167,7 @@ export function candidateFromRow(row) {
     landClass: row.landlet_class,
     landType: row.landlet_type ?? 'buildable',
     biome: row.biome ?? null,
+    elevationM: row.elevation_m ?? null,
     polygon: JSON.parse(row.polygon_json || '[]'),
     metadata: JSON.parse(row.metadata_json || '{}'),
     materializedAt: row.materialized_at,
@@ -4296,6 +4303,18 @@ function landletBiome(value) {
     throw new HttpError('biome must be a string or null', 400);
   }
   return value;
+}
+
+// #2851: same "shape-validated only, null means genuinely unclassified"
+// treatment landletBiome gets just above -- already a baselined relative
+// value by the time it reaches here (worker/lib/world-generation.js's
+// applyRealElevationClassification), not something this function
+// computes or re-derives.
+function landletElevationM(value) {
+  if (value === null) return null;
+  const number = Number(value);
+  if (!Number.isFinite(number)) throw new HttpError('elevationM must be a finite number or null', 400);
+  return number;
 }
 
 function validatePolygon(value) {

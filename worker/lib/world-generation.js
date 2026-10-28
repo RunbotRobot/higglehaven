@@ -287,6 +287,42 @@ async function applyRealBiomeClassification(db, candidates) {
   }));
 }
 
+// #2851 (leaf of #2373, Option C real terrain): the real elevation at a
+// point's raw meters-above-sea-level reading means little on its own --
+// the whole ingested region sits several meters above sea level (#2850's
+// own seed data), so applying it unbaselined as a ground-mesh height
+// offset would float the entire world's ground plane up by that much,
+// not give mountains-higher-valleys-lower *relative* terrain. Baselining
+// against each landlet's own elevation (subtracting a point from itself)
+// would be wrong the other way -- it zeroes out every real height
+// difference, defeating the entire point of #2851. This uses a single,
+// shared *regional* baseline instead: the real elevation #2850's own
+// migration (0162) already recorded at the world's own origin (0,0),
+// frozen here as a constant rather than looked up live, so a landlet
+// classified today and one classified after more of the world has been
+// ingested still measure "height above the same fixed reference," not a
+// baseline that silently drifts as ingestion coverage grows over time.
+const WORLD_ELEVATION_BASELINE_M = 11.232;
+
+// Mirrors applyRealBiomeClassification's exact shape just above, for
+// elevation -- #2850's own elevationAt(db, x, y), minus the fixed
+// regional baseline above, stored as the already-relative value every
+// later consumer (src/build/scene.js/src/world/models.js) just adds
+// straight onto a ground vertex's local z. Real elevation data here is
+// sampled far coarser (#2850's own ~25m spacing) than a single landlet's
+// own footprint, so this intentionally applies one real sample as a
+// uniform offset across a whole landlet's ground mesh -- a real per-
+// vertex *slope* within one landlet isn't something the actual ingested
+// data supports yet; that's a natural follow-up once finer sampling or
+// an interpolation layer exists, not something to fabricate here.
+async function applyRealElevationClassification(db, candidates) {
+  await Promise.all(candidates.map(async (candidate) => {
+    if (candidate.elevationM !== undefined && candidate.elevationM !== null) return;
+    const elevationM = await elevationAt(db, candidate.center.x, candidate.center.y);
+    if (elevationM !== null) candidate.elevationM = elevationM - WORLD_ELEVATION_BASELINE_M;
+  }));
+}
+
 // #2812 (sub-issue of #2806): shapes one generateWaterAwareMosaic cell
 // into the same candidate shape generateOrganicMosaic's own cells always
 // had (landletId/name/areaM2/center/landClass/landType/polygon/metadata)
@@ -336,6 +372,7 @@ async function generateLandletMosaicCandidates(db, { prefix, count, radiusM }, a
   // real water awareness this path has until that lands.
   await applyRealWaterClassification(db, mosaicCells);
   await applyRealBiomeClassification(db, mosaicCells);
+  await applyRealElevationClassification(db, mosaicCells);
   const generated = mosaicCells.map((candidate) =>
     validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
 
@@ -845,6 +882,7 @@ function candidateRowFromLandlet(landlet) {
     landlet_class: landlet.landClass,
     landlet_type: landlet.landType,
     biome: landlet.biome ?? null,
+    elevation_m: landlet.elevationM ?? null,
     polygon_json: JSON.stringify(landlet.polygon),
     metadata_json: JSON.stringify(landlet.metadata),
   };
@@ -853,13 +891,13 @@ function candidateRowFromLandlet(landlet) {
 function candidateInsertStatement(db, row) {
   return db.prepare(`
     INSERT INTO landlet_candidates
-      (landlet_id, name, area_m2, center_x_m, center_y_m, landlet_class, landlet_type, biome, polygon_json,
-       metadata_json, min_world_radius_m, max_world_radius_m, ring_id)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      (landlet_id, name, area_m2, center_x_m, center_y_m, landlet_class, landlet_type, biome, elevation_m,
+       polygon_json, metadata_json, min_world_radius_m, max_world_radius_m, ring_id)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).bind(
     row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.landlet_class, row.landlet_type,
-    row.biome ?? null, row.polygon_json, row.metadata_json, landletMinWorldRadius(row), landletMaxWorldRadius(row),
-    row.ring_id || null,
+    row.biome ?? null, row.elevation_m ?? null, row.polygon_json, row.metadata_json,
+    landletMinWorldRadius(row), landletMaxWorldRadius(row), row.ring_id || null,
   );
 }
 
@@ -894,9 +932,9 @@ function candidateMaterializationSweepStatements(db, landletIds) {
     db.prepare(`
       INSERT INTO landlets
         (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, landlet_class,
-         landlet_type, biome, polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
+         landlet_type, biome, elevation_m, polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
       SELECT landlet_id, name, area_m2, center_x_m, center_y_m, 'generating', NULL, landlet_class,
-             landlet_type, biome, polygon_json, NULL, NULL, metadata_json, max_world_radius_m
+             landlet_type, biome, elevation_m, polygon_json, NULL, NULL, metadata_json, max_world_radius_m
       FROM landlet_candidates
       WHERE landlet_id IN (${placeholders})
         AND materialized_at IS NULL
@@ -953,6 +991,7 @@ async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, 
   }
   await applyRealWaterClassification(db, generated.landlets);
   await applyRealBiomeClassification(db, generated.landlets);
+  await applyRealElevationClassification(db, generated.landlets);
   const landlets = generated.landlets.map((candidate) =>
     validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
   const rows = landlets.map((landlet) => ({ ...candidateRowFromLandlet(landlet), ring_id: prefix }));
@@ -1486,11 +1525,11 @@ function candidateMaterializationStatements(db, candidates) {
     db.prepare(`
       INSERT INTO landlets
         (landlet_id, name, area_m2, center_x_m, center_y_m, status, owner_builder_id, landlet_class,
-         landlet_type, biome, polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
-      VALUES (?, ?, ?, ?, ?, 'generating', NULL, ?, ?, ?, ?, NULL, NULL, ?, ?)
+         landlet_type, biome, elevation_m, polygon_json, generated_at, claimable_at, metadata_json, max_world_radius_m)
+      VALUES (?, ?, ?, ?, ?, 'generating', NULL, ?, ?, ?, ?, ?, NULL, NULL, ?, ?)
     `).bind(
       row.landlet_id, row.name, row.area_m2, row.center_x_m, row.center_y_m, row.landlet_class,
-      row.landlet_type, row.biome, row.polygon_json, row.metadata_json, landletMaxWorldRadius(row),
+      row.landlet_type, row.biome, row.elevation_m, row.polygon_json, row.metadata_json, landletMaxWorldRadius(row),
     ),
     db.prepare(`
       UPDATE landlet_candidates SET materialized_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -1502,4 +1541,5 @@ function candidateMaterializationStatements(db, candidates) {
 export {
   handleLandCandidates, handleLandCandidateRings, handleWorld, autoGrowWorldIfNeeded,
   candidateRowFromLandlet, computeGreenbeltRatio, maintainPrecomputeBuffer,
+  applyRealElevationClassification, WORLD_ELEVATION_BASELINE_M,
 };

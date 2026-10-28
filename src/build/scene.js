@@ -1032,7 +1032,10 @@ export function applyLandletShape(landletRecord) {
   const oldGeometry = landlet.geometry;
   landlet.geometry = new THREE.ShapeGeometry(shapeForLandlet(landletRecord));
   normalizeGroundShapeUVs(landlet.geometry);
-  curveGroundGeometry(landlet.geometry);
+  // #2851: real terrain elevation, already baselined server-side
+  // (worker/lib/world-generation.js), composed with this geometry's own
+  // Earth-curvature sag rather than replacing it.
+  curveGroundGeometry(landlet.geometry, landletRecord.elevationM ?? 0);
   oldGeometry.dispose();
   // #2371: landletMaterial starts out on the default/unclassified texture
   // (created before any real landlet is known) -- swap to this landlet's
