@@ -7756,6 +7756,41 @@ trip against Stripe's real API — including the "Orphaned real-money
 purchases" fallback above, which only runs after that round trip — is not
 covered by any automated test in this repo.
 
+**Real Stripe Elements e2e coverage (#2859).** `src/account/auth.js`'s
+age/card-verification step (`handleCardSetupIntent`/`handleConfirmCard`
+above) also loads real Stripe.js and mounts a real card `Element` once
+`STRIPE_SECRET_KEY` is configured — and until #2859, nothing in this
+suite ever configured it, so that branch (and the real
+`confirmCardSetup` round trip) had zero automated coverage; that's
+exactly how #2857's "calling `Stripe(publishableKey)` twice rejects at
+confirm time" bug shipped unnoticed. `e2e/verify-card-real-stripe.test.mjs`
+exercises it for real: signs up, fills Stripe's documented `4242 4242
+4242 4242` test card into the real Stripe Elements iframe, and confirms
+`trustTier`/`cardFunding` land on `credit_card`/`credit` via a genuine
+Stripe round trip. This needs real Stripe **test-mode** credentials
+(`E2E_STRIPE_SECRET_KEY`/`E2E_STRIPE_PUBLISHABLE_KEY` — deliberately
+separate names from the live `STRIPE_SECRET_KEY`/`STRIPE_PUBLISHABLE_KEY`
+Worker secrets above, never wired into a real deployment), which
+`e2e/run-all.mjs` passes to `wrangler dev` via `--var` for that one test
+file only (its own `REAL_STRIPE_TEST_FILES` gate), never into the shared
+`.dev.vars` every other file's own `wrangler dev` also reads — every
+other test file's own coverage assumes `stripeConfigured(env)` is
+`false` (see `E2E_SIMULATE_PAID_PURCHASES` just below) and would
+silently start exercising real Stripe code paths it was never written
+against otherwise. Set via `E2E_STRIPE_SECRET_KEY`/
+`E2E_STRIPE_PUBLISHABLE_KEY` repo secrets in `.github/workflows/ci.yml`'s
+`e2e-tests` job; locally, export the same two env vars before running
+`node e2e/run-all.mjs` — absent either way (a fork PR, or before the
+owner provisions the secrets), the test file skips itself (`SKIP:`,
+exit 0) rather than failing the shard.
+Still **not** covered: the purchase-checkout call site
+(`src/shop/productCheckout.js`'s `runCheckoutFlow` / `createPurchaseCheckout`
+above) also uses real Stripe.js, but only once a seller has a real,
+capability-enabled Stripe Connect **test** account — provisioning one
+needs Stripe Connect's own test-mode instant-verification fixture
+values, a meaningfully harder and less confidently-automatable problem
+than a card number; tracked separately rather than guessed at here.
+
 **`E2E_SIMULATE_PAID_PURCHASES` test seam (#1231).** The post-purchase
 shipping/delivery-confirmation flow ("Mark purchase shipped"/"Purchase
 delivery confirmation" above) only ever applies to a purchase with a real
