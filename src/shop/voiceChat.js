@@ -763,6 +763,16 @@ setInterval(() => {
     }
     return;
   }
+  // #2868: unlike updateShopVoiceChatIfNeeded (driven by Shop mode's own
+  // requestAnimationFrame loop, which already stops on its own once the
+  // tab is backgrounded), this is a plain always-on setInterval with no
+  // such natural pause -- a forgotten-open, backgrounded tab for any
+  // id_verified account kept polling both endpoints below indefinitely,
+  // which is what actually drove the D1 free-tier daily row-read cap to
+  // zero. Skipping the network work while hidden and resuming on the very
+  // next tick once visible again (no separate visibilitychange listener
+  // needed -- document.hidden is just read fresh each tick) is the fix.
+  if (document.hidden) return;
   pollVoiceSignalsIfNeeded(performance.now());
   reconcileFriendVoiceChannels();
 }, FRIEND_VOICE_CHANNEL_POLL_INTERVAL_MS);
