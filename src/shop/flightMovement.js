@@ -84,7 +84,7 @@ import { shopDomeRiseM } from './sky.js';
 // presence, and credit orbs now live in src/shop/presenceAndContent.js --
 // see that module's own comment for its dependency notes.
 import {
-  shopLandlets, shopOtherAvatars,
+  shopLandlets, shopOtherAvatars, shopCurrentLandletEntry,
   reportOwnPresenceIfNeeded, pollNearbyPresenceIfNeeded, updateOtherShopAvatars,
   updateCreditOrbs, updateCreditOrbPopEffects,
   updateShopProximity, updateShopLandletInfo,
@@ -1110,14 +1110,15 @@ function updateShopFlight(dt) {
     if (shopFlightTransitionElapsedS >= SHOP_FLIGHT_TAKEOFF_DURATION_S) shopFlightState = 'flying';
   } else if (shopFlightState === 'landing') {
     shopFlightTransitionElapsedS += dt;
-    // #1090: minAltitudeM is 0 (bare ground) unless there's a placed item
+    // #1090/#2852: minAltitudeM is this landlet's own bare-ground height
+    // (see bareGroundAltitudeM's own comment) unless there's a placed item
     // directly under the avatar's current (x, y), in which case it's that
     // item's own top surface (converted from world z into this frame's
     // altitude terms, same as shopAvatarPosition.z's own formula below) —
     // the floor this descent should stop at instead of passing through.
     const obstructionTopZ = shopLandingObstructionTopZ(shopAvatarPosition.x, shopAvatarPosition.y);
     const minAltitudeM = obstructionTopZ === null
-      ? 0
+      ? bareGroundAltitudeM(shopAvatarPosition.x, shopAvatarPosition.y)
       : obstructionTopZ + curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
     const { altitudeM, landed } = clampedLandingAltitudeM(
       shopFlightTransitionElapsedS, SHOP_FLIGHT_LANDING_DURATION_S, shopFlightLandingStartAltitudeM, minAltitudeM,
@@ -1140,7 +1141,7 @@ function updateShopFlight(dt) {
       if (openSpot.x !== shopAvatarPosition.x || openSpot.y !== shopAvatarPosition.y) {
         const nudgedObstructionTopZ = shopLandingObstructionTopZ(openSpot.x, openSpot.y);
         shopFlightAltitudeM = nudgedObstructionTopZ === null
-          ? 0
+          ? bareGroundAltitudeM(openSpot.x, openSpot.y)
           : nudgedObstructionTopZ + curvatureDropM(Math.hypot(openSpot.x, openSpot.y));
       }
       shopAvatarPosition.x = openSpot.x;
@@ -1267,8 +1268,13 @@ function shopPositionBlocked(x, y, z) {
       const worldX = entry.group.position.x + mesh.position.x;
       const worldY = entry.group.position.y + mesh.position.y;
       const { height } = meshDimensions(mesh);
-      const itemZMin = mesh.position.z - height / 2;
-      const itemZMax = mesh.position.z + height / 2;
+      // #2852: entry.group.position.z now carries this landlet's real
+      // terrain elevation (#2851) -- worldX/worldY above already add the
+      // group's own x/y, so z needs the same treatment, or every item on
+      // an elevated/sunken landlet collides at its old flat-baseline
+      // height instead of its real one.
+      const itemZMin = entry.group.position.z + mesh.position.z - height / 2;
+      const itemZMax = entry.group.position.z + mesh.position.z + height / 2;
       // #1829: landing (the clamp at #1090, just below) rests the avatar at
       // exactly z === itemZMax -- standing on an object's own top surface,
       // not overlapping it, so this exclusion has to be >= here too, or
@@ -1291,6 +1297,22 @@ function shopPositionBlocked(x, y, z) {
 // shopPositionBlocked, which also gates on vertical overlap with a specific
 // z) — that's exactly the floor a straight-down descent needs to stop at,
 // regardless of how high above it the avatar currently is.
+// #2852: the floor a landing (or #2044's landing-spot nudge) rests on
+// when there's no placed item underneath -- before #2851's real terrain,
+// this was always exactly world z 0 everywhere; now it's this landlet's
+// own real elevation (#2851's already-baselined record.elevationM).
+// shopCurrentLandletEntry is whichever landlet updateShopLandletInfo last
+// resolved the avatar as standing on/near -- close enough for both call
+// sites below (the original spot and a #2044 nudge a few meters away,
+// never far enough to cross into a different landlet's own elevation in
+// practice) without re-deriving "which landlet is (x, y) actually inside"
+// from scratch here. Converts world z into this frame's altitude terms,
+// same as shopAvatarPosition.z's own formula (curvatureDropM subtracted
+// there, so added back here to invert it).
+function bareGroundAltitudeM(x, y) {
+  return (shopCurrentLandletEntry?.record.elevationM ?? 0) + curvatureDropM(Math.hypot(x, y));
+}
+
 function shopLandingObstructionTopZ(x, y) {
   const avatarCorners = shopAvatarFootprintCorners(x, y);
   let topZ = null;
@@ -1302,7 +1324,11 @@ function shopLandingObstructionTopZ(x, y) {
       const worldY = entry.group.position.y + mesh.position.y;
       if (!footprintsOverlap(avatarCorners, footprintCorners(mesh, worldX, worldY))) continue;
       const { height } = meshDimensions(mesh);
-      const itemZMax = mesh.position.z + height / 2;
+      // #2852: same entry.group.position.z addition shopPositionBlocked's
+      // own itemZMin/itemZMax just above now make -- without it, landing
+      // on an item on an elevated/sunken landlet rests at the item's old
+      // flat-baseline top instead of its real one.
+      const itemZMax = entry.group.position.z + mesh.position.z + height / 2;
       if (topZ === null || itemZMax > topZ) topZ = itemZMax;
     }
   }
@@ -1361,7 +1387,11 @@ export function findShopIdleInteractionTarget(x, y) {
           instanceId: mesh.userData.instanceId,
           worldX,
           worldY,
-          worldZ: mesh.position.z - height / 2 + target.heightM,
+          // #2852: same entry.group.position.z addition shopPositionBlocked
+          // and shopLandingObstructionTopZ now make for the same reason --
+          // a sit/lean target on an elevated/sunken landlet otherwise
+          // resolves to its old flat-baseline height.
+          worldZ: entry.group.position.z + mesh.position.z - height / 2 + target.heightM,
           worldFacingRad: mesh.rotation.z + target.facingRad,
           distance,
         });
@@ -1430,6 +1460,12 @@ window.__testNearestOpenLandingSpot = (x, y) => nearestOpenLandingSpot(x, y);
 // above -- lets a test compute the real world-boundary radius a landing
 // should be clamped to, instead of hardcoding/guessing it.
 window.__testShopAvatarMaxRadiusM = () => shopAvatarMaxRadiusM();
+// #2852: same e2e-only convention -- lets a test read the real floor a
+// landing/item-collision check resolves to at (x, y), to confirm it
+// tracks a landlet's own real terrain elevation rather than the old
+// flat-baseline-everywhere assumption.
+window.__testBareGroundAltitudeM = (x, y) => bareGroundAltitudeM(x, y);
+window.__testShopLandingObstructionTopZ = (x, y) => shopLandingObstructionTopZ(x, y);
 
 // Tries the full requested move first; if that's blocked, slides along
 // whichever single axis is still open (the same axis-separated collision

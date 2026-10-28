@@ -217,7 +217,13 @@ export function setShopBuilderLabels(map) {
 export function setShopBuilderLabel(builderId, label) {
   shopBuilderLabels.set(builderId, label);
 }
-let shopCurrentLandletEntry = null; // whichever shopLandlets entry the shopper is standing on, else null — see updateShopLandletInfo
+// #2852: exported (same plain-`let`-binding shape shopDomeRiseM already
+// uses, per that export's own comment -- a live ES binding, no getter
+// needed for a read-only consumer) so flightMovement.js's landing code can
+// read the current landlet's own elevationM for bare-ground resting
+// height, the same landlet updateShopLandletInfo below already resolves
+// for presence reporting.
+export let shopCurrentLandletEntry = null; // whichever shopLandlets entry the shopper is standing on, else null — see updateShopLandletInfo
 // #2626: main.js's own enterShopMode forces this back to null at Shop-mode
 // bootstrap (and again once shopBuilderLabels' real labels land) to force
 // updateShopLandletInfo's own change-detection to recompute/re-render --
