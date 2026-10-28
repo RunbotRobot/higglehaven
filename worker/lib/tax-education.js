@@ -5,7 +5,8 @@
 // requireAdmin-gated, same bar as the rest of public/admin-dashboard.html.
 import { json, HttpError } from './http.js';
 import { readJson, stringValue, labelValue } from './validation.js';
-import { requireAdmin } from './auth.js';
+import { requireAdmin, requireCurrentUser } from './auth.js';
+import { getUserTaxJurisdiction } from './seller-payouts-tax.js';
 
 const TAX_EDUCATION_BODY_MAX_LENGTH = 20000;
 
@@ -58,6 +59,13 @@ export async function handleTaxEducation(request, env, db, route, url) {
     if (request.method === 'POST') return handleTaxEducationCreate(request, db);
     return json({ error: 'Not found' }, 404);
   }
+  // #2843: checked before the generic contentId branch below -- 'mine' is
+  // a fixed route segment, not a client-suppliable content_id (those are
+  // always `tax-edu-<uuid>`, so this never collides with a real one).
+  if (route.length === 2 && route[1] === 'mine') {
+    if (request.method === 'GET') return handleTaxEducationMine(request, env, db);
+    return json({ error: 'Not found' }, 404);
+  }
   if (route.length === 2) {
     const contentId = route[1];
     if (request.method === 'GET') return handleTaxEducationGet(request, db, contentId);
@@ -66,6 +74,39 @@ export async function handleTaxEducation(request, env, db, route, url) {
     return json({ error: 'Not found' }, 404);
   }
   return json({ error: 'Not found' }, 404);
+}
+
+// #2843's own scope: surface reviewed content matching the CALLING user's
+// own jurisdiction, resolved from their own already-on-file W-9/W-8BEN
+// (getUserTaxJurisdiction, worker/lib/seller-payouts-tax.js) rather than
+// collecting a new location signal. requireCurrentUser (not requireAdmin)
+// -- any authenticated account can read this, same bar as GET /api/tax/
+// summary and every other "read my own account's tax state" endpoint.
+// Returns only the public-facing fields (no reviewedBy/reviewedAt/
+// createdAt/updatedAt -- those are admin-authoring metadata, not
+// something an ordinary reader of their own matched content needs, and
+// reviewedBy in particular is the reviewing admin's own email).
+async function handleTaxEducationMine(request, env, db) {
+  const user = await requireCurrentUser(request, db);
+  const jurisdiction = await getUserTaxJurisdiction(env, user);
+  if (!jurisdiction) return json({ entries: [], jurisdiction: null });
+  // state_code = ? matches a state-specific entry; state_code IS NULL
+  // matches a country-wide one regardless of the caller's own state (or
+  // lack of one) -- a binding of NULL makes the first half of the OR
+  // always false, which is exactly "no state-specific match possible,
+  // fall through to country-wide" when jurisdiction.state is itself null.
+  const { results } = await db.prepare(`
+    SELECT * FROM tax_education_content
+    WHERE reviewed_at IS NOT NULL AND country_code = ? AND (state_code = ? OR state_code IS NULL)
+    ORDER BY state_code IS NULL ASC, updated_at DESC
+    LIMIT 50
+  `).bind(jurisdiction.country, jurisdiction.state).all();
+  return json({
+    entries: results.map((row) => ({
+      id: row.content_id, countryCode: row.country_code, stateCode: row.state_code, title: row.title, body: row.body,
+    })),
+    jurisdiction,
+  });
 }
 
 async function handleTaxEducationList(request, db, url) {
