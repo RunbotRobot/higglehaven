@@ -33,6 +33,9 @@ import { requireVerifiedSession, sha256Hex } from './auth.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 import { fireNotification } from './notifications.js';
 import {
+  counterpartyKeyFor, remainingCommissionCapCents, commissionHoldInsertStatement, COMMISSION_HOLD_DURATION_DAYS,
+} from './commission-caps.js';
+import {
   stripeConfigured, stripeRequest, appBaseUrl, generateToken, sendEmail, escapeHtml, formatCents,
 } from '../index.js';
 
@@ -604,6 +607,20 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
     ? await db.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(meta.buyerBuilderId).first()
     : null;
 
+  // #1109: how much of this sale's commission the velocity cap lets
+  // through right now -- a DB read, so it has to happen before the batch
+  // below, same as builderStillExists/buyerBuilderStillExists just above.
+  // Only looked up under the same guard the credit itself is already
+  // gated on (nothing to cap on a free/no-seller sale).
+  let creditNowCents = builderShareCents;
+  let escrowCents = 0;
+  if (builderId && builderShareCents > 0) {
+    const counterpartyKey = counterpartyKeyFor(buyerBuilderStillExists ? meta.buyerBuilderId : null, buyerLabel);
+    const remainingCapCents = await remainingCommissionCapCents(db, { builderId, counterpartyKey });
+    creditNowCents = Math.min(builderShareCents, remainingCapCents);
+    escrowCents = builderShareCents - creditNowCents;
+  }
+
   const statements = [
     db.prepare(`
       INSERT INTO purchases
@@ -623,13 +640,20 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
   // > 0) (migration 0093), so unconditionally inserting a zero-amount row
   // turned what should be a clean $0 sale into an uncaught "CHECK
   // constraint failed", surfacing as a generic 400 via databaseHttpError.
-  if (builderId && builderShareCents > 0) {
+  // #1109: creditNowCents (not builderShareCents) is what's actually
+  // credited immediately -- the cap computed above may have deferred
+  // part of it into escrowCents, pushed as a commission_holds row below
+  // instead.
+  if (builderId && creditNowCents > 0) {
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
-        .bind(builderShareCents, builderId),
+        .bind(creditNowCents, builderId),
       db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
-        .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
+        .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents),
     );
+  }
+  if (builderId && escrowCents > 0) {
+    statements.push(commissionHoldInsertStatement(db, { purchaseId, builderId, amountCents: escrowCents }));
   }
   if (isAvatarCategory && buyerBuilderStillExists) {
     statements.push(...ownedAvatarStatements(db, meta.buyerBuilderId, meta.templateId, purchaseId));
@@ -650,8 +674,13 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
   // roll back the purchase row itself (a real-money receipt) along with it,
   // just to avoid a notification that was never more than best-effort.
   if (builderId) {
+    // #1109: a builder should see when part of a sale's commission is
+    // sitting in escrow rather than quietly crediting less than the
+    // notification claims -- same wording addition as writePurchaseRow's
+    // own identical notification below.
+    const escrowNote = escrowCents > 0 ? ` (${formatCents(escrowCents)} held for ${COMMISSION_HOLD_DURATION_DAYS} days per standard review policy)` : '';
     await fireNotification(db, builderId,
-      `A sale finalized after its listing changed underneath it (${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`);
+      `A sale finalized after its listing changed underneath it (${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.${escrowNote}`);
   }
 
   const row = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
@@ -779,6 +808,19 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
   const buyerBuilderStillExists = buyerBuilderId
     ? await db.prepare('SELECT 1 FROM builders WHERE builder_id = ?').bind(buyerBuilderId).first()
     : null;
+
+  // #1109: same cap lookup as writeOrphanedPurchaseRow's own identical
+  // block -- see that one's comment for the full reasoning. A DB read, so
+  // it has to happen before the batch below.
+  let creditNowCents = builderShareCents;
+  let escrowCents = 0;
+  if (builderId && builderShareCents > 0) {
+    const counterpartyKey = counterpartyKeyFor(buyerBuilderStillExists ? buyerBuilderId : null, buyerLabel);
+    const remainingCapCents = await remainingCommissionCapCents(db, { builderId, counterpartyKey });
+    creditNowCents = Math.min(builderShareCents, remainingCapCents);
+    escrowCents = builderShareCents - creditNowCents;
+  }
+
   const statements = [
     db.prepare(`
       INSERT INTO purchases
@@ -798,13 +840,19 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
   // (migration 0093) turned an unconditional insert of that zero-amount
   // row into an uncaught "CHECK constraint failed" on an otherwise-clean
   // $0 purchase.
-  if (builderId && builderShareCents > 0) {
+  // #1109: creditNowCents, not builderShareCents, is what's actually
+  // credited immediately -- see writeOrphanedPurchaseRow's own identical
+  // block for why.
+  if (builderId && creditNowCents > 0) {
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
-        .bind(builderShareCents, builderId),
+        .bind(creditNowCents, builderId),
       db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
-        .bind(`earnings-${crypto.randomUUID()}`, builderId, builderShareCents),
+        .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents),
     );
+  }
+  if (builderId && escrowCents > 0) {
+    statements.push(commissionHoldInsertStatement(db, { purchaseId, builderId, amountCents: escrowCents }));
   }
   if (isAvatarCategory && buyerBuilderStillExists) {
     statements.push(...ownedAvatarStatements(db, buyerBuilderId, template.template_id, purchaseId));
@@ -818,8 +866,11 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
   // INSERT running would otherwise fail the notification's own FK and roll
   // back the purchase row (a real-money receipt) along with it.
   if (builderId) {
+    // #1109: same escrow note as writeOrphanedPurchaseRow's own identical
+    // notification above.
+    const escrowNote = escrowCents > 0 ? ` (${formatCents(escrowCents)} held for ${COMMISSION_HOLD_DURATION_DAYS} days per standard review policy)` : '';
     await fireNotification(db, builderId,
-      `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.`);
+      `"${template.name}" sold (${quantity}x, ${formatCents(totalCents)} total) — you earned ${formatCents(builderShareCents)} in commission higgles.${escrowNote}`);
   }
   // #2019: soft self-dealing signal, never blocks or affects this purchase
   // itself -- a side effect after the real write already committed, same

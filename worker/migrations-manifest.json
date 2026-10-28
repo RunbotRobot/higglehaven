@@ -160,5 +160,6 @@
   "0160_voice_conduct_reports.sql",
   "0161_tax_education_content.sql",
   "0162_geo_biome_cells_elevation.sql",
-  "0163_landlet_elevation.sql"
+  "0163_landlet_elevation.sql",
+  "0164_commission_holds.sql"
 ]

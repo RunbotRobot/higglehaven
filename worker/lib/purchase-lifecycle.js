@@ -347,14 +347,38 @@ export async function clawBackPurchaseCommission(db, purchase, templateName) {
   // notifications.builder_id is itself NOT NULL, so skip both statements
   // rather than crediting/notifying a builder that no longer exists.
   if (purchase.builder_id) {
-    await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
-      .bind(purchase.builder_share_cents, purchase.builder_id).run();
+    // #1109: part of this sale's commission may have been deferred into
+    // an escrowed commission_holds row (worker/lib/commission-caps.js)
+    // rather than ever actually credited to higgles_balance_cents at
+    // purchase time -- clawing back the full purchase.builder_share_cents
+    // unconditionally would pull that never-credited amount out of the
+    // balance too, driving it artificially negative. Clawing back only
+    // what was actually credited (builder_share_cents minus any still-
+    // active hold's own amount_cents), and revoking that hold in the same
+    // step so releaseDueCommissionHolds' own cron sweep never later
+    // credits a hold whose underlying purchase has since been reversed,
+    // keeps this correct whether or not a cap ever applied to this sale.
+    // The common case (no hold row at all) behaves exactly as before.
+    const activeHold = await db.prepare(
+      'SELECT hold_id, amount_cents FROM commission_holds WHERE purchase_id = ? AND released_at IS NULL AND revoked_at IS NULL',
+    ).bind(purchase.purchase_id).first();
+    const clawbackAmountCents = activeHold
+      ? purchase.builder_share_cents - activeHold.amount_cents
+      : purchase.builder_share_cents;
+    if (clawbackAmountCents > 0) {
+      await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
+        .bind(clawbackAmountCents, purchase.builder_id).run();
+    }
+    if (activeHold) {
+      await db.prepare('UPDATE commission_holds SET revoked_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE hold_id = ? AND released_at IS NULL AND revoked_at IS NULL')
+        .bind(activeHold.hold_id).run();
+    }
     // #1122: fired separately, after the debit above commits — a self-
     // delete race on purchase.builder_id between this function's caller
     // reading the purchase row and this point would otherwise fail the
     // notification's own FK and roll back the clawback debit along with it.
     await fireNotification(db, purchase.builder_id,
-      `"${templateName}" purchase refunded — ${formatCents(purchase.builder_share_cents)} commission clawed back.`);
+      `"${templateName}" purchase refunded — ${formatCents(clawbackAmountCents)} commission clawed back.`);
   }
 
   // #754: without this, a refunded avatar purchase left the buyer holding
