@@ -63,9 +63,11 @@ const verifyModalEl = document.getElementById('verify-modal');
 const verifyAgeStepEl = document.getElementById('verify-age-step');
 const verifyAgeAttestInput = document.getElementById('verify-age-attest');
 const verifyCardStepEl = document.getElementById('verify-card-step');
+const verifyCardFormEl = document.getElementById('verify-card-form');
 const verifyCardElementEl = document.getElementById('verify-card-element');
 const verifyStatusEl = document.getElementById('verify-status');
 const verifyContinueBtn = document.getElementById('verify-continue-btn');
+const verifyIdInsteadBtn = document.getElementById('verify-id-instead-btn');
 const verifyLogoutBtn = document.getElementById('verify-logout-btn');
 
 function setVerifyStatus(text, type) {
@@ -97,9 +99,15 @@ async function enterVerifyCardStep() {
   try {
     verifyStripeSetup = await cardSetupIntent();
     if (verifyStripeSetup.simulated) {
-      verifyCardStepEl.hidden = true;
+      // #2862: only the real-card-only parts hide here now -- verifyCardStepEl
+      // itself (and verifyIdInsteadBtn inside it) stays visible so the ID
+      // alternative is still offered even when there's no real card form to
+      // show (this deployment not configuring Stripe at all, same as this
+      // test environment always does -- see #2859's own comment on that).
+      verifyCardFormEl.hidden = true;
       verifyContinueBtn.textContent = 'Verify (dev mode)';
     } else {
+      verifyCardFormEl.hidden = false;
       const Stripe = await loadStripeJs();
       verifyStripeInstance = Stripe(verifyStripeSetup.publishableKey);
       const elements = verifyStripeInstance.elements();
@@ -142,6 +150,11 @@ function closeVerifyModal() {
   verifyModalEl.classList.remove('visible');
   closeModalA11y(verifyModalEl);
   if (verifyCardElement) { verifyCardElement.unmount(); verifyCardElement = null; }
+  // #2862: this modal can resolve via the card path while an ID-verification
+  // poll (started from verifyIdInsteadBtn below) is still in flight -- stop
+  // it so a later "approved" tick doesn't fire against a modal that already
+  // closed.
+  stopDiditPoll();
 }
 
 verifyContinueBtn.addEventListener('click', async () => {
@@ -191,6 +204,27 @@ verifyLogoutBtn.addEventListener('click', async () => {
   verifyLogoutBtn.disabled = false;
   closeVerifyModal();
   notifyVerifyResult(null);
+});
+
+// #2862: the alternative this modal's own intro text promises but never
+// offered -- same startDiditVerification()/poll flow authVerifyIdBtn below
+// already uses, just resolving this modal's own waitForVerifyResult()
+// instead of refreshing the Account panel.
+verifyIdInsteadBtn.addEventListener('click', async () => {
+  setVerifyStatus('');
+  verifyIdInsteadBtn.disabled = true;
+  try {
+    const { url } = await startDiditVerification();
+    window.open(url, '_blank', 'noopener');
+    setVerifyStatus('Complete verification in the new tab, then come back here.');
+    pollDiditVerificationStatus(setVerifyStatus, () => {
+      if (currentAuthUser && currentAuthUser.trustTier !== 'none') notifyVerifyResult(currentAuthUser);
+    });
+  } catch (err) {
+    setVerifyStatus(err.message || 'Could not start government-ID verification.', 'error');
+  } finally {
+    verifyIdInsteadBtn.disabled = false;
+  }
 });
 
 // Blocks until `user` (already logged in) has cleared the age-attestation
@@ -574,7 +608,13 @@ function stopDiditPoll() {
   }
 }
 
-async function pollDiditVerificationStatus() {
+// #2862: setStatusFn/onApproved parameterize this for verifyIdInsteadBtn's
+// own call site below, which polls into #verify-modal's own status line and
+// resolves that modal's waitForVerifyResult() instead of just refreshing the
+// Account panel -- onApproved defaults to a no-op since refreshCurrentUser()
+// already calls refreshAccountAuthUI() internally, which is all the original
+// authVerifyIdBtn call site below ever needed.
+async function pollDiditVerificationStatus(setStatusFn = setAuthStatus, onApproved = () => {}) {
   stopDiditPoll();
   const intervalMs = 3000;
   const deadline = Date.now() + 5 * 60 * 1000;
@@ -584,11 +624,12 @@ async function pollDiditVerificationStatus() {
       const { status } = await fetchDiditVerificationStatus();
       if (status === 'approved') {
         await refreshCurrentUser();
-        setAuthStatus('Government-ID verification approved!', 'success');
+        setStatusFn('Government-ID verification approved!', 'success');
+        onApproved();
         return;
       }
       if (status === 'declined') {
-        setAuthStatus('Government-ID verification was declined — you can try again.', 'error');
+        setStatusFn('Government-ID verification was declined — you can try again.', 'error');
         return;
       }
     } catch (err) {
@@ -599,7 +640,7 @@ async function pollDiditVerificationStatus() {
       // builder's real status can't be fetched from here. Stop and ask
       // for a login instead of looking stuck.
       if (err.status === 401) {
-        setAuthStatus('Log in to check your verification status.');
+        setStatusFn('Log in to check your verification status.');
         return;
       }
       // Any other failure shouldn't give up outright — keep polling
@@ -608,7 +649,7 @@ async function pollDiditVerificationStatus() {
       console.warn('Could not check Didit verification status:', err);
     }
     if (Date.now() >= deadline) {
-      setAuthStatus('Still waiting on verification — this will pick up automatically next time you open your account.', '');
+      setStatusFn('Still waiting on verification — this will pick up automatically next time you open your account.', '');
       return;
     }
     diditPollTimer = setTimeout(tick, intervalMs);

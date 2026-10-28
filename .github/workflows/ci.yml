@@ -94,6 +94,19 @@ jobs:
   e2e-tests:
     needs: discover-e2e-files
     runs-on: ubuntu-latest
+    # #2859: Stripe test-mode credentials for e2e/verify-card-real-stripe.test.mjs
+    # -- the ONLY file that reads these (e2e/run-all.mjs's own
+    # REAL_STRIPE_TEST_FILES gate), passed through to wrangler dev for that
+    # one spawn via --var, never written into the shared .dev.vars every
+    # other file's wrangler dev also reads. Deliberately separate secrets
+    # from the live STRIPE_SECRET_KEY/STRIPE_PUBLISHABLE_KEY Worker secrets --
+    # don't confuse the two or wire test keys into the production Worker.
+    # Absent on a fork PR (secrets aren't exposed to those) or before the
+    # owner provisions them -- that file's own guard just skips in either
+    # case rather than failing the shard.
+    env:
+      E2E_STRIPE_SECRET_KEY: ${{ secrets.E2E_STRIPE_SECRET_KEY }}
+      E2E_STRIPE_PUBLISHABLE_KEY: ${{ secrets.E2E_STRIPE_PUBLISHABLE_KEY }}
     strategy:
       # One shard failing shouldn't cancel the others still in flight —
       # fail-fast would hide exactly the information a growing suite most

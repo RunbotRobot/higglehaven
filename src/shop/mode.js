@@ -666,18 +666,12 @@ export async function enterShopMode() {
     if (distanceFromOrigin - SHOP_LANDLET_CULL_MARGIN_M > world.radiusM) continue;
 
     const group = new THREE.Group();
-    // #2852: the group's own z carries this landlet's real terrain
-    // elevation (#2851's own record.elevationM, already baselined) --
-    // every child (ground mesh, every placed item's mesh, signs,
-    // calendars) rides along with it, so the whole plot sits at its real
-    // height together rather than the ground alone floating away from
-    // everything placed on it (the bug #2851 itself left: it lifted only
-    // groundMesh's own z, leaving items created at their ordinary
-    // ground-rest z -- ground.position.z = height/2 -- stranded at the
-    // old flat baseline underneath/above the now-elevated ground). World-
-    // curvature *between* landlets is a separate, still-unaddressed
-    // problem (see applyLandletShape's own comment) -- this is just a
-    // uniform z lift for this one landlet's own real terrain height.
+    // #2871: the real per-landlet elevationM lift lives on `group` itself,
+    // not just groundMesh below — every placed product instance and credit
+    // orb (loadShopLandletInstances/loadCreditOrbsForLandlet,
+    // presenceAndContent.js) is added as a child of this same group with no
+    // elevation term of its own, so putting the offset here is what makes
+    // them move with the ground instead of staying at the old baseline.
     group.position.set(record.center.x, record.center.y, record.elevationM ?? 0);
     // #220/#2371: only an unclaimed 'greenbelt' plot gets the textured
     // ground — claimed/generating/water keep their own flat
@@ -694,10 +688,14 @@ export async function enterShopMode() {
     const groundGeometry = new THREE.ShapeGeometry(shapeForLandlet(record));
     if (plotColorKey === 'greenbelt') normalizeGroundShapeUVs(groundGeometry);
     const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
-    // #2852: the real elevation lift now lives on the group itself (see
-    // its own comment just above) -- this stays the plain local offset it
-    // always was pre-#2851, just enough to sit a hair above the group's
-    // own z=0 so it doesn't z-fight with whatever's directly on it.
+    // #2851: Shop mode's own ground mesh never called curveGroundGeometry
+    // (world-curvature *between* landlets is a separate, unaddressed
+    // problem here -- see applyLandletShape's own comment on this) --
+    // this plot-level real elevation offset is independent of that, just
+    // a uniform z lift for this one landlet's own real terrain height.
+    // #2871: the lift itself now lives on `group.position.z` above (so
+    // instances/orbs get it too) -- this is just the pre-existing small
+    // anti-z-fighting epsilon, unrelated to elevation.
     groundMesh.position.z = 0.02;
     group.add(groundMesh);
     scene.add(group);
