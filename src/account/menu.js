@@ -222,7 +222,7 @@ notificationsMarkAllBtn.addEventListener('click', async () => {
 
 // Owner (Control Room feedback): "Builders should see their lánd cap in
 // the menu somewhere" — until now the only place it appeared was Settings
-// > Build (renderLandCapField above), which needs Build mode active *and*
+// > Build (renderLandCapField, src/build/scene.js), which needs Build mode active *and*
 // Settings opened *and* its Build tab picked. Same "no live polling,
 // refresh on open" approach as refreshNotificationsBadge/refreshFriendsBadge
 // just below, except the source of truth to refresh against is this panel
@@ -236,7 +236,7 @@ async function refreshAccountMenuLandCap() {
   }
   try {
     // fetchMyBuilder (GET /api/builders/me), not a full-roster scan — see
-    // renderLandCapField's own comment above on why.
+    // renderLandCapField's own comment (src/build/scene.js) on why.
     const me = await fetchMyBuilder();
     accountMenuLandCapEl.textContent = `Land cap: ${formatArea(me.ownedAreaM2 ?? 0, 0)} / ${formatArea(me.landCapM2, 0)}`;
     accountMenuLandCapEl.hidden = false;
