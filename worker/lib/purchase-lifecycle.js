@@ -362,9 +362,24 @@ export async function clawBackPurchaseCommission(db, purchase, templateName) {
     const activeHold = await db.prepare(
       'SELECT hold_id, amount_cents FROM commission_holds WHERE purchase_id = ? AND released_at IS NULL AND revoked_at IS NULL',
     ).bind(purchase.purchase_id).first();
-    const clawbackAmountCents = activeHold
+    const creditedCents = activeHold
       ? purchase.builder_share_cents - activeHold.amount_cents
       : purchase.builder_share_cents;
+    // #2247: an earlier PARTIAL refund (handlePartialRefundWebhookEvent,
+    // worker/lib/stripe.js) may already have proportionally clawed back
+    // part of this same commission before this full reversal landed --
+    // purchase.refunded_amount_cents is read by this function's caller
+    // before THIS reversal's own guarded UPDATE runs, so it still holds
+    // whatever cumulative partial-refund total had accumulated up to (but
+    // not including) this full reversal. Clawing back the full
+    // creditedCents again on top of that would double-count the portion
+    // already recovered. `|| 0` covers a hand-built purchase object with
+    // no such field (e.g. this file's own notification-fk-race test) the
+    // same way its missing total_cents already does.
+    const alreadyClawedBackCents = purchase.total_cents > 0
+      ? Math.min(creditedCents, Math.round((creditedCents * (purchase.refunded_amount_cents || 0)) / purchase.total_cents))
+      : 0;
+    const clawbackAmountCents = creditedCents - alreadyClawedBackCents;
     if (clawbackAmountCents > 0) {
       await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
         .bind(clawbackAmountCents, purchase.builder_id).run();

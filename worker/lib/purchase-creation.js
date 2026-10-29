@@ -1148,6 +1148,11 @@ export function purchaseFromRow(row) {
     platformShareCents: row.platform_share_cents,
     createdAt: row.created_at,
     refundedAt: row.refunded_at,
+    // #2247: the one place this app's own data now shows a partial refund
+    // ever happened on this purchase at all -- see migrations/0166's own
+    // comment for why this is the durable record the owner's decision
+    // asked for, closing finding 3 ("zero audit trail") of that issue.
+    refundedAmountCents: row.refunded_amount_cents,
     paymentIntentId: row.payment_intent_id,
     // #454: never expose delivery_confirm_token_hash itself — same
     // discipline as password_reset_tokens never exposing its hash either.

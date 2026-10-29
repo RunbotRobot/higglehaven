@@ -162,5 +162,6 @@
   "0162_geo_biome_cells_elevation.sql",
   "0163_landlet_elevation.sql",
   "0164_commission_holds.sql",
-  "0165_commission_holds_builder_id_set_null.sql"
+  "0165_commission_holds_builder_id_set_null.sql",
+  "0166_purchases_refunded_amount.sql"
 ]
