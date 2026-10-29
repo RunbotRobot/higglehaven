@@ -336,18 +336,64 @@ describe('Stripe purchase-reversal webhooks (#1086)', () => {
   // refund (Stripe fires this event for any refund amount, not just a
   // full one) -- treating it as a full reversal clawed back the entire
   // commission and revoked ownership over e.g. a $1 goodwill refund on a
-  // $100 purchase.
-  it('does not claw back anything on a partial refund (charge.refunded with refunded: false)', async () => {
-    const { builder, purchaseId } = await createRealMoneyPurchase('webhook-partial-refund', 'pi_webhook_partial_refund');
+  // $100 purchase. #2247 (owner decision 2026-10-25) later resolved what
+  // SHOULD happen instead: a proportional clawback of exactly the
+  // refunded fraction, not zero and not the full amount -- see
+  // handlePartialRefundWebhookEvent's own comment.
+  it('proportionally claws back the builder commission on a partial refund (#2247)', async () => {
+    const { builder, purchaseId, builderShareCents } = await createRealMoneyPurchase('webhook-partial-refund', 'pi_webhook_partial_refund');
     const before = await builderRow(builder.builderId);
 
-    const response = await postStripeWebhook(chargeRefundedEvent('pi_webhook_partial_refund', { refunded: false, amount_refunded: 100 }));
+    // 1000 of 10000 total_cents -- a clean 10% refund fraction.
+    const response = await postStripeWebhook(chargeRefundedEvent('pi_webhook_partial_refund', { refunded: false, amount_refunded: 1000 }));
     expect(response.status).toBe(200);
 
-    const purchaseRow = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    const purchaseRow = await env.DB.prepare('SELECT refunded_at, refunded_amount_cents FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
     expect(purchaseRow.refunded_at).toBeNull();
+    expect(purchaseRow.refunded_amount_cents).toBe(1000);
+    const expectedClawbackCents = Math.round(builderShareCents * 0.1);
+    expect(expectedClawbackCents).toBeGreaterThan(0);
     const after = await builderRow(builder.builderId);
-    expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents);
+    expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents - expectedClawbackCents);
+  });
+
+  // A second, later partial refund on the same purchase must claw back
+  // only the NEWLY-refunded fraction, not the whole cumulative total again
+  // -- charge.amount_refunded is always the charge's running total, not a
+  // per-event delta, so naively treating it as a delta would massively
+  // over-claw-back on a second event.
+  it('claws back only the incremental fraction on a second partial refund of the same purchase', async () => {
+    const { builder, purchaseId, builderShareCents } = await createRealMoneyPurchase('webhook-second-partial-refund', 'pi_webhook_second_partial_refund');
+    const before = await builderRow(builder.builderId);
+
+    await postStripeWebhook(chargeRefundedEvent('pi_webhook_second_partial_refund', { refunded: false, amount_refunded: 1000 }));
+    const response = await postStripeWebhook(chargeRefundedEvent('pi_webhook_second_partial_refund', { refunded: false, amount_refunded: 3000 }));
+    expect(response.status).toBe(200);
+
+    const purchaseRow = await env.DB.prepare('SELECT refunded_at, refunded_amount_cents FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    expect(purchaseRow.refunded_at).toBeNull();
+    expect(purchaseRow.refunded_amount_cents).toBe(3000);
+    const expectedTotalClawbackCents = Math.round(builderShareCents * 0.3);
+    const after = await builderRow(builder.builderId);
+    expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents - expectedTotalClawbackCents);
+  });
+
+  // A retried webhook delivery (Stripe retries any non-2xx response) must
+  // not double-claw-back -- re-delivering the identical amount_refunded is
+  // a no-op the second time.
+  it('is idempotent against a retried delivery reporting the same amount_refunded again', async () => {
+    const { builder, purchaseId, builderShareCents } = await createRealMoneyPurchase('webhook-partial-refund-retry', 'pi_webhook_partial_refund_retry');
+    const before = await builderRow(builder.builderId);
+
+    await postStripeWebhook(chargeRefundedEvent('pi_webhook_partial_refund_retry', { refunded: false, amount_refunded: 1000 }));
+    const retry = await postStripeWebhook(chargeRefundedEvent('pi_webhook_partial_refund_retry', { refunded: false, amount_refunded: 1000 }));
+    expect(retry.status).toBe(200);
+
+    const purchaseRow = await env.DB.prepare('SELECT refunded_amount_cents FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    expect(purchaseRow.refunded_amount_cents).toBe(1000);
+    const expectedClawbackCents = Math.round(builderShareCents * 0.1);
+    const after = await builderRow(builder.builderId);
+    expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents - expectedClawbackCents);
   });
 
   // A subsequent charge.refunded delivery reporting the charge is now FULLY
@@ -367,6 +413,33 @@ describe('Stripe purchase-reversal webhooks (#1086)', () => {
     const purchaseRow = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
     expect(purchaseRow.refunded_at).not.toBeNull();
     const after = await builderRow(builder.builderId);
+    expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents - builderShareCents);
+  });
+
+  // #2247: a genuine partial refund (amount_refunded actually set, unlike
+  // the degenerate case above) followed by a later full reversal must claw
+  // back only the REMAINING, not-yet-recovered portion of the commission
+  // on the full event -- clawBackPurchaseCommission would otherwise claw
+  // back the full creditedCents a second time on top of what the partial
+  // event already recovered, double-counting it and driving the builder's
+  // balance further negative than the purchase ever actually cost them.
+  it('does not double-claw-back commission already recovered by an earlier partial refund once the charge is later fully refunded', async () => {
+    const { builder, purchaseId, builderShareCents } = await createRealMoneyPurchase('webhook-partial-then-full-refund', 'pi_webhook_partial_then_full_refund');
+    const before = await builderRow(builder.builderId);
+
+    const partial = await postStripeWebhook(chargeRefundedEvent('pi_webhook_partial_then_full_refund', { refunded: false, amount_refunded: 4000 }));
+    expect(partial.status).toBe(200);
+
+    const full = await postStripeWebhook(chargeRefundedEvent('pi_webhook_partial_then_full_refund', { refunded: true }));
+    expect(full.status).toBe(200);
+
+    const purchaseRow = await env.DB.prepare('SELECT refunded_at, refunded_amount_cents FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    expect(purchaseRow.refunded_at).not.toBeNull();
+    expect(purchaseRow.refunded_amount_cents).toBe(10000);
+    const after = await builderRow(builder.builderId);
+    // The total clawback across BOTH events must equal exactly
+    // builderShareCents -- not more (double-counted) and not less
+    // (under-recovered).
     expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents - builderShareCents);
   });
 

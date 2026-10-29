@@ -23,8 +23,9 @@ import { readJson, stringValue } from './validation.js';
 // worker/lib/purchase-lifecycle.js -- this webhook's own chargeback path
 // still needs it, just from its new home.
 import { clawBackPurchaseCommission } from './purchase-lifecycle.js';
+import { fireNotification } from './notifications.js';
 import {
-  stripeConfigured, stripeRequest, deriveStripeOnboardingStatus, userFromRow,
+  stripeConfigured, stripeRequest, deriveStripeOnboardingStatus, userFromRow, formatCents,
 } from '../index.js';
 
 // #1978: workerd requires every named export of the main Worker entry
@@ -174,19 +175,105 @@ async function handlePurchaseReversalWebhookEvent(db, event) {
   // carry no `refunded` field at all, so this only applies to
   // charge.refunded itself; a real chargeback/dispute still claws back in
   // full immediately, per #1086's own deliberate design.
-  if (event.type === 'charge.refunded' && event.data?.object?.refunded !== true) return;
   const purchase = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
   if (!purchase) return;
 
+  // #2247 (owner decision 2026-10-25): a partial refund used to just
+  // `return` here, entirely invisible to this app -- see
+  // handlePartialRefundWebhookEvent's own comment for what it does instead.
+  if (event.type === 'charge.refunded' && event.data?.object?.refunded !== true) {
+    await handlePartialRefundWebhookEvent(db, purchase, event.data.object);
+    return;
+  }
+
   const guard = await db.prepare(
-    `UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    `UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), refunded_amount_cents = ?
      WHERE purchase_id = ? AND refunded_at IS NULL`,
-  ).bind(purchase.purchase_id).run();
+  ).bind(purchase.total_cents, purchase.purchase_id).run();
   if (guard.meta.changes === 0) return;
 
   const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
     .bind(purchase.template_id).first();
   await clawBackPurchaseCommission(db, purchase, template?.name || 'A product');
+}
+
+// #2247 (owner decision 2026-10-25, on the issue's own open question about
+// whether builder_share_cents/the builder's higgles balance should see a
+// proportional clawback too, and on 1099-K gross income): "yes -- a partial
+// refund should proportionally reduce the builder's payout share and
+// 1099-K gross income by the refunded fraction, with a durable record of
+// the adjustment (consistent with #836's refund-reversal decision for
+// earnings events)." purchases.refunded_amount_cents (migrations/0166) is
+// that durable record; worker/lib/seller-payouts-tax.js's
+// purchaseSellerShareCents/annualGrossIncome/generateTax1099Drafts read it
+// back to proportionally shrink the seller's own payout share and 1099-K
+// gross income -- this function only handles the builder's commission
+// side and the record itself, since those are the only two things a
+// webhook event can act on directly (the seller-side numbers are derived
+// lazily, not stored).
+//
+// charge.amount_refunded is always the charge's cumulative total refunded
+// so far, not a per-event delta (a charge can be partially refunded more
+// than once) -- requiring it to have grown both gives idempotency against
+// a retried webhook delivery (Stripe retries any non-2xx response;
+// re-delivering the same amount_refunded would otherwise double-claw-back
+// the builder) and rejects a same-or-shrinking value outright, which
+// should never happen for a real Stripe charge.
+async function handlePartialRefundWebhookEvent(db, purchase, charge) {
+  const newRefundedCents = charge.amount_refunded;
+  if (typeof newRefundedCents !== 'number' || newRefundedCents <= purchase.refunded_amount_cents) return;
+
+  // Same optimistic-concurrency shape as every other guarded purchases
+  // write in this file (refunded_at above, paid_out_at elsewhere) -- if a
+  // concurrent delivery of an even-newer amount_refunded already landed
+  // between this function's own read and this write, this one loses and
+  // no-ops; the newer delivery's own read already saw this one's value
+  // (or will, on Stripe's automatic retry), so nothing is lost.
+  const guard = await db.prepare(
+    'UPDATE purchases SET refunded_amount_cents = ? WHERE purchase_id = ? AND refunded_at IS NULL AND refunded_amount_cents = ?',
+  ).bind(newRefundedCents, purchase.purchase_id, purchase.refunded_amount_cents).run();
+  if (guard.meta.changes === 0) return;
+
+  // builder_id can be null (migrations/0062 -- SET NULL on the host
+  // builder's self-delete), same guard clawBackPurchaseCommission's own
+  // comment explains for the full-refund path.
+  if (!purchase.builder_id || purchase.total_cents <= 0) return;
+
+  // #1109's own commission_holds interaction (part of a sale's commission
+  // may be escrowed, not yet actually credited to higgles_balance_cents)
+  // applies here too -- only claw back what was actually credited, same as
+  // clawBackPurchaseCommission. Unlike that function, this does NOT also
+  // shrink an active hold's own amount_cents proportionally -- doing so
+  // safely would need to guard against commission_holds' own
+  // CHECK (amount_cents > 0) once enough cumulative partial refunds ate
+  // through it, which is real but separate scope; left as a known,
+  // accepted residual gap for now (same shape as #1109's own "known
+  // residual gap, accepted rather than solved here").
+  const activeHold = await db.prepare(
+    'SELECT amount_cents FROM commission_holds WHERE purchase_id = ? AND released_at IS NULL AND revoked_at IS NULL',
+  ).bind(purchase.purchase_id).first();
+  const creditedCents = activeHold ? purchase.builder_share_cents - activeHold.amount_cents : purchase.builder_share_cents;
+  if (creditedCents <= 0) return;
+  // Clawed back as the DIFFERENCE between two cumulative proportions
+  // (rounded against the full refunded total each time), not a per-event
+  // delta rounded on its own -- the same cumulative-then-diff shape
+  // clawBackPurchaseCommission's own #2247 comment uses for the inverse
+  // direction. This keeps repeated partial refunds on the same purchase
+  // exactly consistent with each other and with any later full reversal:
+  // summing several independently-rounded deltas can drift a cent or two
+  // off the "true" proportional total, while re-deriving each cumulative
+  // total from scratch and diffing never can.
+  const clawbackSoFarCents = Math.min(creditedCents, Math.round((creditedCents * purchase.refunded_amount_cents) / purchase.total_cents));
+  const clawbackTotalCents = Math.min(creditedCents, Math.round((creditedCents * newRefundedCents) / purchase.total_cents));
+  const clawbackCents = clawbackTotalCents - clawbackSoFarCents;
+  if (clawbackCents <= 0) return;
+
+  await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
+    .bind(clawbackCents, purchase.builder_id).run();
+  const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
+    .bind(purchase.template_id).first();
+  await fireNotification(db, purchase.builder_id,
+    `"${template?.name || 'A product'}" partially refunded -- ${formatCents(clawbackCents)} commission clawed back.`);
 }
 
 // #556 (docs/SPEC.md §6): credit-card-type detection at signup, the

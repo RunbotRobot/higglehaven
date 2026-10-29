@@ -1886,6 +1886,30 @@ fraud shape is still open through a chargeback. See #1109 for a separate,
 broader anti-fraud mechanism meant to cover this gap at the cash-out
 layer instead.
 
+**#2232/#2247**: `charge.refunded` fires for a refund of ANY size, not
+just a full one — the Charge object's own `refunded` boolean (true only
+once `amount_refunded` reaches the full charge amount) is the only
+signal that distinguishes the two. A partial refund does NOT set
+`refunded_at` or run the full clawback above (the buyer kept most of
+their payment and the product, so revoking ownership/crediting back the
+full commission would be wrong) — but per the owner's decision on
+#2247, it does now (a) record the charge's cumulative
+`amount_refunded` into `purchases.refunded_amount_cents`
+(migrations/0166 — defaults to 0, so an un-refunded purchase is
+unaffected), (b) proportionally claw back whatever portion of the
+builder's commission was actually credited (not the escrowed part of
+an active `commission_holds` row — left untouched as a known residual
+gap, same shape as #1109's own) by the newly-refunded fraction, and (c)
+notify the builder. The seller's own numbers are never written anywhere
+directly — `purchaseSellerShareCents`/`annualGrossIncome`/
+`generateTax1099Drafts` (all in `worker/lib/seller-payouts-tax.js`) read
+`refunded_amount_cents` back at computation time instead, so the
+seller's payout share and 1099-K gross income both reflect the
+refunded fraction lazily, with no separate write to keep in sync. A
+full refund/dispute also now stamps `refunded_amount_cents = total_cents`
+in the same guarded update that sets `refunded_at`, so the column stays
+a complete record across every reversal path, not just the partial one.
+
 ### `GET /api/builders/me/redeem`
 ### `POST /api/builders/me/redeem`
 
@@ -2031,6 +2055,13 @@ seller marks it shipped (see "Mark purchase shipped" below) — a fallback
 for exactly the case where confirmation never happens. A simulated
 (higgles) purchase has no real Stripe balance at all and never appears
 here.
+
+**#2247**: a purchase mid-way through a partial refund (`refunded_at`
+still `NULL`, `refunded_amount_cents > 0` — see `POST /api/auth/stripe-webhook`
+above) still appears here, but its own contribution to `availableCents`/
+`heldCents` is the proportionally-reduced share (`purchaseSellerShareCents`
+in `worker/lib/seller-payouts-tax.js`), not the full pre-refund one — the
+real Stripe balance backing it has already shrunk by the same fraction.
 
 Both require a session (`401` otherwise) and act on the calling account's
 own seller profile.
@@ -8472,17 +8503,25 @@ past one (`400` if it isn't a plain 4-digit year between 2000 and 2100).
 (migrations/0050) for the account's own builder profile — every account
 has one (see "Builders"), so this is never absent, just possibly `0`.
 
-`sellerPayoutCents` sums `purchases.total_cents` — the full buyer-paid
-transaction amount, **not** the seller's own net share after commission —
-for every non-refunded, real-money (`payment_intent_id NOT NULL`) purchase
-of the account's own seller profile, if it has one (`0` if it doesn't).
-This is deliberate, not an oversight: Form 1099-K's own "gross amount"
-instructions define gross as the full transaction total "without regard to
-any adjustments ... for fees," so the commission higglehaven keeps is not
-netted out here even though it never reaches the seller's own Stripe
-balance (contrast with `GET /api/sellers/me/payouts`'s `availableCents`
-above, which *is* the net, post-commission share — a different question:
-"what can I withdraw" vs. "what does the IRS say I grossed").
+`sellerPayoutCents` sums `purchases.total_cents - purchases.
+refunded_amount_cents` — the full buyer-paid transaction amount, **not**
+the seller's own net share after commission — for every non-refunded,
+real-money (`payment_intent_id NOT NULL`) purchase of the account's own
+seller profile, if it has one (`0` if it doesn't). This is deliberate,
+not an oversight: Form 1099-K's own "gross amount" instructions define
+gross as the full transaction total "without regard to any adjustments
+... for fees," so the commission higglehaven keeps is not netted out
+here even though it never reaches the seller's own Stripe balance
+(contrast with `GET /api/sellers/me/payouts`'s `availableCents` above,
+which *is* the net, post-commission share — a different question: "what
+can I withdraw" vs. "what does the IRS say I grossed"). The
+`refunded_amount_cents` subtraction is a separate question again (#2247,
+2026-10-29): it's not an "adjustment for fees," it's gross actually
+returning to the buyer on a *partial* refund — `refunded_at IS NULL`
+alone only ever excluded a *fully*-refunded purchase (always `0` before
+this), so a still-partially-refunded one needs its own live reduction
+here or this total stays overstated for exactly as long as the purchase
+itself stays unrefunded-in-full.
 
 Both totals key off `purchases.created_at`/`higgles_earnings_events.created_at`
 (the transaction date), not `paid_out_at` — this may need revisiting once

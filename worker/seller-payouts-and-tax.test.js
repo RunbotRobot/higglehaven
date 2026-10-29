@@ -139,6 +139,27 @@ describe('Seller payouts (#454)', () => {
     expect(summary.body.heldCents).toBe(0);
   });
 
+  // #2247 (owner decision 2026-10-25): a purchase mid-way through a
+  // partial refund (refunded_at still NULL -- see worker/stripe-webhook
+  // .test.js's own #2232/#2247 coverage for how refunded_amount_cents gets
+  // here) must contribute its proportionally-reduced share, not the full
+  // pre-refund one -- the real Stripe balance backing it has already
+  // shrunk by the same fraction.
+  it('a partially-refunded purchase contributes its proportionally-reduced share, not the full pre-refund one', async () => {
+    const builder = await signupBuilder('payout-partial-refund-builder');
+    const seller = await createConnectedSeller('payout-partial-refund-seller');
+    const purchaseId = await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true });
+
+    // 1000 of 5000 total_cents refunded so far (20%) -- 4900 * 0.8 = 3920.
+    await env.DB.prepare('UPDATE purchases SET refunded_amount_cents = ? WHERE purchase_id = ?')
+      .bind(1000, purchaseId).run();
+
+    const summary = await api('/sellers/me/payouts', seller.session());
+    expect(summary.response.status).toBe(200);
+    expect(summary.body.availableCents).toBe(3920);
+    expect(summary.body.heldCents).toBe(0);
+  });
+
   it('a physical good stays held until shipped, and only its own seller can mark it shipped', async () => {
     const builder = await signupBuilder('payout-physical-builder');
     const seller = await createConnectedSeller('payout-physical-seller');
@@ -874,6 +895,22 @@ describe('Seller payouts (#454)', () => {
       expect(got.body.sellerPayoutCents).toBe(0);
     });
 
+    // #2247 (owner decision 2026-10-25): unlike a FULL refund above (which
+    // excludes the purchase entirely via refunded_at), a partial refund
+    // reduces the gross total by exactly the refunded fraction rather than
+    // leaving it at the stale, overstated pre-refund total_cents.
+    it("reduces a seller's gross total by a partial refund's fraction, not just a full one", async () => {
+      const builder = await signupBuilder('tax-summary-partial-refund-builder');
+      const seller = await createConnectedSeller('tax-summary-partial-refund-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller, { isDigitalGood: true }); // priceCents 5000
+      await env.DB.prepare('UPDATE purchases SET refunded_amount_cents = ? WHERE purchase_id = ?')
+        .bind(2000, purchaseId).run(); // 40% refunded so far
+
+      const got = await api('/tax/summary', seller.session());
+      expect(got.body.sellerPayoutCents).toBe(3000); // 5000 - 2000, not the stale 5000
+      expect(got.body.totalCents).toBe(3000);
+    });
+
     it('only counts income within the requested calendar year', async () => {
       const builder = await signupBuilder('tax-summary-year-builder');
       const seller = await createConnectedSeller('tax-summary-year-seller');
@@ -1073,6 +1110,40 @@ describe('Seller payouts (#454)', () => {
       expect(result.payoutCents).toBe(3000);
     });
 
+    // #2247 (owner decision 2026-10-25): a partially-refunded purchase
+    // (refunded_at still NULL, so it's still in the `eligible` array at
+    // all) must contribute its proportionally-reduced share to
+    // payoutCents, and its refund-aware (not stale) total to the tax
+    // budget's own grossIncludedCents accounting.
+    it('proportionally reduces both payoutCents and the tax-budget gross for a partially-refunded purchase', () => {
+      const yearStart = '2026-01-01T00:00:00.000Z';
+      const yearEnd = '2027-01-01T00:00:00.000Z';
+      // total_cents 10000, commission_cents 200 -> gross share 9800;
+      // refunded_amount_cents 4000 (40% refunded) -> share 9800 * 0.6 = 5880,
+      // tax-budget gross 10000 - 4000 = 6000.
+      const partiallyRefunded = {
+        purchase_id: 'partial', created_at: '2026-06-15T00:00:00.000Z',
+        total_cents: 10000, commission_cents: 200, refunded_amount_cents: 4000,
+      };
+      const result = selectPurchasesForPayout([partiallyRefunded], {
+        payoutCapCents: 1000000, taxBudgetCents: 1000000, yearStart, yearEnd,
+      });
+      expect(result.included.map((p) => p.purchase_id)).toEqual(['partial']);
+      expect(result.payoutCents).toBe(5880);
+      // Confirmed via a second purchase whose own gross exactly fills the
+      // remaining tax budget -- it only fits if the first purchase's own
+      // gross contribution was correctly reduced to 6000, not the stale
+      // 10000 (which would leave only 0 headroom instead of 4000).
+      const second = {
+        purchase_id: 'second', created_at: '2026-07-01T00:00:00.000Z', total_cents: 4000, commission_cents: 0,
+      };
+      const withSecond = selectPurchasesForPayout([partiallyRefunded, second], {
+        payoutCapCents: 1000000, taxBudgetCents: 10000, yearStart, yearEnd,
+      });
+      expect(withSecond.skippedForTax).toBe(false);
+      expect(withSecond.included.map((p) => p.purchase_id)).toEqual(['partial', 'second']);
+    });
+
     it('does not block a payout while combined earnings stay under the threshold', async () => {
       const builder = await signupBuilder('tax-gate-under-builder');
       const seller = await createConnectedSeller('tax-gate-under-seller');
@@ -1175,6 +1246,24 @@ describe('Seller payouts (#454)', () => {
       expect(forms).toEqual([expect.objectContaining({ formType: '1099-k', status: 'draft', grossIncomeCents: 2000000 })]);
     });
 
+    // #2247 (owner decision 2026-10-25): a 1099-K draft's own
+    // grossIncomeCents must already reflect a partial refund at generation
+    // time, same as the Tax summary endpoint's sellerPayoutCents -- not
+    // the stale pre-refund total_cents.
+    it("generates a 1099-K draft using the refund-aware total when a qualifying purchase has a partial refund", async () => {
+      const builder = await signupBuilder('tax-1099-k-partial-refund-builder');
+      const seller = await createConnectedSeller('tax-1099-k-partial-refund-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller);
+      // $25,000 total, $3,000 refunded -> $22,000 refund-aware gross,
+      // still comfortably above the $20,000 threshold.
+      await env.DB.prepare('UPDATE purchases SET total_cents = 2500000, refunded_amount_cents = 300000 WHERE purchase_id = ?')
+        .bind(purchaseId).run();
+
+      const got = await api(`/tax/admin-forms?year=${new Date().getUTCFullYear()}`, adminSession());
+      const forms = got.body.forms.filter((f) => f.email === seller.email);
+      expect(forms).toEqual([expect.objectContaining({ formType: '1099-k', status: 'draft', grossIncomeCents: 2200000 })]);
+    });
+
     // #2214: generateTax1099Drafts only ever upserts payees its own
     // threshold-crossing queries still return -- a draft whose payee later
     // drops back under the threshold (here, via a refund) stopped
@@ -1199,6 +1288,36 @@ describe('Seller payouts (#454)', () => {
       await env.DB.prepare(
         "UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE purchase_id = ?",
       ).bind(purchaseId).run();
+
+      const after = await api(`/tax/admin-forms?year=${year}`, adminSession());
+      expect(after.body.forms.find((f) => f.email === seller.email)).toBeUndefined();
+      const row = await env.DB.prepare(
+        "SELECT * FROM tax_1099_forms WHERE user_id = (SELECT user_id FROM users WHERE email = ?) AND tax_year = ?",
+      ).bind(seller.email, year).first();
+      expect(row).toBeNull();
+    });
+
+    // #2247: the same pruning behavior as the FULL-refund case just above,
+    // but driven by a partial refund large enough to drop the refund-aware
+    // live total back under the 1099-K threshold -- refunded_at stays
+    // NULL the entire time (unlike the test above), so pruneStaleTax1099
+    // Drafts' own live-total query is the only thing that can catch this.
+    it("removes a still-draft 1099-K form once a partial refund drops the seller's refund-aware total back under the threshold", async () => {
+      const builder = await signupBuilder('tax-1099-k-partial-refund-prune-builder');
+      const seller = await createConnectedSeller('tax-1099-k-partial-refund-prune-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller);
+      await env.DB.prepare('UPDATE purchases SET total_cents = 2000000 WHERE purchase_id = ?').bind(purchaseId).run();
+
+      const year = new Date().getUTCFullYear();
+      const before = await api(`/tax/admin-forms?year=${year}`, adminSession());
+      expect(before.body.forms.find((f) => f.email === seller.email)).toMatchObject({
+        formType: '1099-k', status: 'draft', grossIncomeCents: 2000000,
+      });
+
+      // A $19,000 partial refund drops the refund-aware total to $1,000 --
+      // well under the $20,000 threshold, with refunded_at still NULL.
+      await env.DB.prepare('UPDATE purchases SET refunded_amount_cents = ? WHERE purchase_id = ?')
+        .bind(1900000, purchaseId).run();
 
       const after = await api(`/tax/admin-forms?year=${year}`, adminSession());
       expect(after.body.forms.find((f) => f.email === seller.email)).toBeUndefined();

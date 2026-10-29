@@ -1,0 +1,29 @@
+-- #2247 (owner decision 2026-10-25): a partial Stripe refund (charge.refunded
+-- firing with event.data.object.refunded !== true -- #2232's own early-return
+-- guard in handlePurchaseReversalWebhookEvent) used to be entirely invisible
+-- to this app: nothing logged, stored, or adjusted anywhere, even though
+-- Stripe had already pulled money back out of the seller's connected-account
+-- balance. This column is the durable record the owner's decision asked
+-- for, and the basis for proportionally reducing the seller's own payout
+-- share, the builder's commission share, and 1099-K gross income by the
+-- refunded fraction (worker/lib/stripe.js's handlePartialRefundWebhookEvent,
+-- worker/lib/seller-payouts-tax.js's purchaseSellerShareCents/
+-- annualGrossIncome/generateTax1099Drafts).
+--
+-- Cumulative, not a per-event delta: Stripe's own charge.amount_refunded is
+-- always the charge's running total refunded so far, and a charge can be
+-- partially refunded more than once (a $10 goodwill credit today, another
+-- $5 next week) -- storing the cumulative figure directly mirrors Stripe's
+-- own source of truth and makes every write idempotent against a retried
+-- webhook delivery (same value in, same value out), rather than needing to
+-- track "already-applied deltas" separately.
+--
+-- NOT NULL DEFAULT 0 rather than nullable: unlike elevation_m/biome
+-- (migrations/0148/0163), where NULL means "never computed, distinct from
+-- a genuine zero," there is no such distinction here -- a purchase with no
+-- partial refund at all and a purchase refunded for exactly $0 (impossible
+-- in practice, but not a real third state even if it happened) both mean
+-- "zero cents of this purchase have been refunded," so 0 is unambiguous and
+-- lets every existing row (pre-migration) start from the correct value with
+-- no backfill needed.
+ALTER TABLE purchases ADD COLUMN refunded_amount_cents INTEGER NOT NULL DEFAULT 0;

@@ -406,8 +406,20 @@ async function resumeBuilderRedemption(env, db, sessionBuilder, pending) {
 // case where confirmation never happens.
 const PHYSICAL_GOOD_HOLD_DAYS = 7;
 
+// #2247 (owner decision 2026-10-25): a partial refund (purchases.
+// refunded_amount_cents, migrations/0166 -- never NULL, defaults to 0 for
+// every purchase that's never had one) proportionally shrinks the
+// seller's own share by the same fraction of the purchase that's been
+// refunded so far -- a $20 refund on a $100 purchase's $98 share leaves
+// the seller with $78.40 (98% of the remaining $80), not the full $98
+// Stripe's own reversed balance no longer backs. Guarded against
+// total_cents <= 0 purely for safety (free/simulated purchases never carry
+// a real refunded_amount_cents, so this branch shouldn't be reachable with
+// a non-zero one in practice) -- a 0/0 division would otherwise be NaN.
 function purchaseSellerShareCents(purchase) {
-  return purchase.total_cents - purchase.commission_cents;
+  const grossShareCents = purchase.total_cents - purchase.commission_cents;
+  if (!purchase.refunded_amount_cents || purchase.total_cents <= 0) return grossShareCents;
+  return Math.round((grossShareCents * (purchase.total_cents - purchase.refunded_amount_cents)) / purchase.total_cents);
 }
 
 function isPurchaseEligibleForPayout(purchase) {
@@ -511,13 +523,20 @@ export function selectPurchasesForPayout(eligible, { payoutCapCents, taxBudgetCe
   for (const purchase of eligible) {
     const share = purchaseSellerShareCents(purchase);
     if (payoutCents + share > payoutCapCents) continue;
+    // #2247: a partially-refunded-but-not-yet-fully-refunded purchase can
+    // still appear in `eligible` (refunded_at IS NULL) -- its own gross
+    // contribution toward this tax year's budget needs the same refund-
+    // aware reduction annualGrossIncome/generateTax1099Drafts use, or this
+    // budget check would wrongly reserve headroom for income that was
+    // already (partially) given back.
+    const grossCents = purchase.total_cents - (purchase.refunded_amount_cents || 0);
     const countsTowardTaxYear = purchase.created_at >= yearStart && purchase.created_at < yearEnd;
-    if (countsTowardTaxYear && grossIncludedCents + purchase.total_cents > taxBudgetCents) {
+    if (countsTowardTaxYear && grossIncludedCents + grossCents > taxBudgetCents) {
       skippedForTax = true;
       continue;
     }
     payoutCents += share;
-    if (countsTowardTaxYear) grossIncludedCents += purchase.total_cents;
+    if (countsTowardTaxYear) grossIncludedCents += grossCents;
     included.push(purchase);
   }
   return { included, payoutCents, skippedForTax };
@@ -836,8 +855,13 @@ async function annualGrossIncome(db, { builderId, sellerId }, year) {
       WHERE builder_id = ? AND created_at >= ? AND created_at < ?
     `).bind(builderId, yearStart, yearEnd).first(),
     sellerId
+      // #2247: refunded_amount_cents (migrations/0166, defaults 0) reduces
+      // this purchase's own gross contribution by exactly what's been
+      // refunded so far -- refunded_at IS NULL already excludes a FULLY
+      // refunded purchase entirely (unchanged), this only matters for one
+      // still mid-way through a partial refund.
       ? db.prepare(`
-          SELECT COALESCE(SUM(total_cents), 0) AS total FROM purchases
+          SELECT COALESCE(SUM(total_cents - refunded_amount_cents), 0) AS total FROM purchases
           WHERE seller_id = ? AND payment_intent_id IS NOT NULL AND refunded_at IS NULL
             AND created_at >= ? AND created_at < ?
         `).bind(sellerId, yearStart, yearEnd).first()
@@ -905,8 +929,12 @@ async function generateTax1099Drafts(db, year) {
       WHERE b.user_id IS NOT NULL AND e.created_at >= ? AND e.created_at < ?
       GROUP BY b.user_id HAVING total >= ?
     `).bind(yearStart, yearEnd, TAX_1099_NEC_THRESHOLD_CENTS).all(),
+    // #2247: same refunded_amount_cents reduction as annualGrossIncome's
+    // own sellerPayoutCents query just above -- a 1099-K draft's
+    // gross_income_cents must reflect the refund-aware total, not the
+    // stale pre-refund one.
     db.prepare(`
-      SELECT s.user_id AS user_id, SUM(p.total_cents) AS total
+      SELECT s.user_id AS user_id, SUM(p.total_cents - p.refunded_amount_cents) AS total
       FROM purchases p JOIN sellers s ON s.seller_id = p.seller_id
       WHERE s.user_id IS NOT NULL AND p.payment_intent_id IS NOT NULL AND p.refunded_at IS NULL
         AND p.created_at >= ? AND p.created_at < ?
@@ -952,10 +980,14 @@ async function pruneStaleTax1099Drafts(db, year, yearStart, yearEnd) {
       WHERE f.tax_year = ? AND f.form_type = '1099-nec' AND f.status = 'draft'
         AND COALESCE(live.total, 0) < ?
     `).bind(yearStart, yearEnd, year, TAX_1099_NEC_THRESHOLD_CENTS).all(),
+    // #2247: same refunded_amount_cents-aware total as generateTax1099Drafts'
+    // own kRows query above -- a draft whose refund-aware live total has
+    // dropped back under threshold must prune the same way #2214's own
+    // fully-refunded case already does.
     db.prepare(`
       SELECT f.form_id FROM tax_1099_forms f
       LEFT JOIN (
-        SELECT s.user_id AS user_id, SUM(p.total_cents) AS total
+        SELECT s.user_id AS user_id, SUM(p.total_cents - p.refunded_amount_cents) AS total
         FROM purchases p JOIN sellers s ON s.seller_id = p.seller_id
         WHERE s.user_id IS NOT NULL AND p.payment_intent_id IS NOT NULL AND p.refunded_at IS NULL
           AND p.created_at >= ? AND p.created_at < ?
