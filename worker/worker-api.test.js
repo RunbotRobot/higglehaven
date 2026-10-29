@@ -3562,15 +3562,21 @@ describe('Worker API', () => {
   });
 
   it('procedurally queues an exact-area ring outside the world boundary', async () => {
+    // #2805's own real seed data (migrations/0167) only covers out to
+    // radius 300m -- innerRadiusM here stays safely beyond that so this
+    // test's own plain ring-mechanics assertions (exact candidate count,
+    // naming, area) stay deterministic regardless of real-world water;
+    // generate-ring's real water-awareness (#2821) has its own dedicated
+    // coverage elsewhere, not this test's concern.
     const generated = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',
-      body: JSON.stringify({ prefix: 'generated-ring', count: 6, innerRadiusM: 200 }),
+      body: JSON.stringify({ prefix: 'generated-ring', count: 6, innerRadiusM: 310 }),
     }));
     expect(generated.response.status).toBe(201);
     expect(generated.body.candidates).toHaveLength(6);
     expect(generated.body.materializedLandletIds).toEqual([]);
     expect(generated.body.readyForGenerationCompletion).toBe(false);
-    expect(generated.body.outerRadiusM).toBeGreaterThan(200);
+    expect(generated.body.outerRadiusM).toBeGreaterThan(310);
     // #2821: generate-ring now runs through generateWaterAwareLandletRing
     // (water-aware-ring.js) for a fresh, non-adjacent ring like this one --
     // areaM2 is the real computed polygon area rather than the bare target,
@@ -3635,7 +3641,7 @@ describe('Worker API', () => {
 
     const conflict = await api('/land-candidates/generate-ring', adminSession({
       method: 'POST',
-      body: JSON.stringify({ prefix: 'overlapping-ring', count: 6, innerRadiusM: 200 }),
+      body: JSON.stringify({ prefix: 'overlapping-ring', count: 6, innerRadiusM: 310 }),
     }));
     expect(conflict.response.status).toBe(409);
     expect(conflict.body.error).toBe('Generated ring would overlap existing land candidates');
@@ -3717,14 +3723,14 @@ describe('Worker API', () => {
     await expect(env.DB.prepare(`
       INSERT INTO landlet_candidate_rings
         (ring_id, inner_radius_m, outer_radius_m, candidate_count, distribution, start_angle_rad)
-      VALUES ('concurrent-overlap', 201, 202, 3, NULL, 0)
+      VALUES ('concurrent-overlap', 311, 312, 3, NULL, 0)
     `).run()).rejects.toThrow(/generated ring radial overlap/);
 
     await expect(env.DB.prepare(`
       INSERT INTO landlet_candidate_rings
         (ring_id, inner_radius_m, outer_radius_m, candidate_count, distribution, start_angle_rad,
          boundary_signature, adjacent_to_ring_id)
-      VALUES ('bad-parent-ring', 300, 301, 3, NULL, 0, 'bad-signature', 'generated-ring')
+      VALUES ('bad-parent-ring', 320, 321, 3, NULL, 0, 'bad-signature', 'generated-ring')
     `).run()).rejects.toThrow(/generated ring adjacency parent mismatch/);
 
     const invalid = await api('/land-candidates/generate-ring', adminSession({

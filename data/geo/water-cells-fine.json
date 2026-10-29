@@ -1,0 +1,5996 @@
+{
+  "generatedAt": "2026-10-29T12:02:25.306Z",
+  "originLat": 47.638887,
+  "originLon": -122.280433,
+  "radiusM": 300,
+  "spacingM": 5,
+  "reclamationRadiusM": 400,
+  "riverBufferWidthM": 12,
+  "cells": [
+    {
+      "x": -290,
+      "y": -75,
+      "landType": "water"
+    },
+    {
+      "x": -290,
+      "y": -70,
+      "landType": "water"
+    },
+    {
+      "x": -290,
+      "y": -65,
+      "landType": "water"
+    },
+    {
+      "x": -290,
+      "y": -60,
+      "landType": "water"
+    },
+    {
+      "x": -285,
+      "y": -90,
+      "landType": "water"
+    },
+    {
+      "x": -285,
+      "y": -85,
+      "landType": "water"
+    },
+    {
+      "x": -285,
+      "y": -80,
+      "landType": "water"
+    },
+    {
+      "x": -285,
+      "y": -75,
+      "landType": "water"
+    },
+    {
+      "x": -285,
+      "y": -70,
+      "landType": "water"
+    },
+    {
+      "x": -285,
+      "y": -65,
+      "landType": "water"
+    },
+    {
+      "x": -280,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": -280,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": -280,
+      "y": -95,
+      "landType": "water"
+    },
+    {
+      "x": -280,
+      "y": -90,
+      "landType": "water"
+    },
+    {
+      "x": -280,
+      "y": -85,
+      "landType": "water"
+    },
+    {
+      "x": -280,
+      "y": -80,
+      "landType": "water"
+    },
+    {
+      "x": -280,
+      "y": -75,
+      "landType": "water"
+    },
+    {
+      "x": -280,
+      "y": -70,
+      "landType": "water"
+    },
+    {
+      "x": -275,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": -275,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": -275,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": -275,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": -275,
+      "y": -95,
+      "landType": "water"
+    },
+    {
+      "x": -275,
+      "y": -90,
+      "landType": "water"
+    },
+    {
+      "x": -275,
+      "y": -85,
+      "landType": "water"
+    },
+    {
+      "x": -275,
+      "y": -80,
+      "landType": "water"
+    },
+    {
+      "x": -275,
+      "y": -75,
+      "landType": "water"
+    },
+    {
+      "x": -275,
+      "y": -70,
+      "landType": "water"
+    },
+    {
+      "x": -270,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -270,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -270,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": -270,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": -270,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": -270,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": -270,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": -270,
+      "y": -95,
+      "landType": "water"
+    },
+    {
+      "x": -270,
+      "y": -90,
+      "landType": "water"
+    },
+    {
+      "x": -270,
+      "y": -85,
+      "landType": "water"
+    },
+    {
+      "x": -270,
+      "y": -80,
+      "landType": "water"
+    },
+    {
+      "x": -270,
+      "y": -75,
+      "landType": "water"
+    },
+    {
+      "x": -270,
+      "y": -70,
+      "landType": "water"
+    },
+    {
+      "x": -270,
+      "y": -65,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -95,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -90,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -85,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -80,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -75,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -70,
+      "landType": "water"
+    },
+    {
+      "x": -265,
+      "y": -65,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -95,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -90,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -85,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -80,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -75,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -70,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -65,
+      "landType": "water"
+    },
+    {
+      "x": -260,
+      "y": -60,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -95,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -90,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -85,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -80,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -75,
+      "landType": "water"
+    },
+    {
+      "x": -255,
+      "y": -70,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -90,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -85,
+      "landType": "water"
+    },
+    {
+      "x": -250,
+      "y": -80,
+      "landType": "water"
+    },
+    {
+      "x": -245,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -245,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -245,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -245,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -245,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -245,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -245,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -245,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -245,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -245,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -245,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": -245,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": -245,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": -245,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": -240,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -240,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -240,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -240,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -240,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -240,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -240,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -240,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -240,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -240,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -240,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -240,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -240,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": -240,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": -240,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": -235,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -235,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -235,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -235,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -235,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -235,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -235,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -235,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -235,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -235,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -235,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -235,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -235,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -235,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": -230,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": -225,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": -220,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": -215,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": -210,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": -205,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -200,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -195,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -190,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": -185,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -180,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": -175,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -170,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -165,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -160,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -155,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": -155,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": -155,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": -155,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": -155,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": -155,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": -155,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": -155,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": -155,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -155,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": -155,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": -155,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": -155,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -150,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": -150,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": -150,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": -150,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": -150,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": -150,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": -150,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": -150,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": -150,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -150,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": -150,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": -150,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": -145,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": -145,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": -145,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": -145,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": -145,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": -145,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": -145,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": -145,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": -145,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": -145,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -140,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": -140,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": -140,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": -140,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": -140,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": -140,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": -140,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": -140,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": -140,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": -140,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": -140,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -135,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": -135,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": -135,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": -135,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": -135,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": -135,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": -135,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": -135,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": -135,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": -135,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -130,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": -130,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": -130,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": -130,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": -130,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": -130,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": -125,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": -125,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": -125,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": -125,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": -125,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": -120,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": -120,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": -115,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": -115,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": -110,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": -105,
+      "y": -280,
+      "landType": "water"
+    },
+    {
+      "x": -105,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": -100,
+      "y": -280,
+      "landType": "water"
+    },
+    {
+      "x": -100,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": -95,
+      "y": -280,
+      "landType": "water"
+    },
+    {
+      "x": -95,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": -90,
+      "y": -285,
+      "landType": "water"
+    },
+    {
+      "x": -90,
+      "y": -280,
+      "landType": "water"
+    },
+    {
+      "x": -90,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": -85,
+      "y": -285,
+      "landType": "water"
+    },
+    {
+      "x": -85,
+      "y": -280,
+      "landType": "water"
+    },
+    {
+      "x": -80,
+      "y": -285,
+      "landType": "water"
+    },
+    {
+      "x": 50,
+      "y": -295,
+      "landType": "water"
+    },
+    {
+      "x": 55,
+      "y": -290,
+      "landType": "water"
+    },
+    {
+      "x": 60,
+      "y": -290,
+      "landType": "water"
+    },
+    {
+      "x": 60,
+      "y": -285,
+      "landType": "water"
+    },
+    {
+      "x": 60,
+      "y": -280,
+      "landType": "water"
+    },
+    {
+      "x": 60,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 65,
+      "y": -290,
+      "landType": "water"
+    },
+    {
+      "x": 65,
+      "y": -285,
+      "landType": "water"
+    },
+    {
+      "x": 65,
+      "y": -280,
+      "landType": "water"
+    },
+    {
+      "x": 65,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": 65,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 70,
+      "y": -290,
+      "landType": "water"
+    },
+    {
+      "x": 70,
+      "y": -285,
+      "landType": "water"
+    },
+    {
+      "x": 70,
+      "y": -280,
+      "landType": "water"
+    },
+    {
+      "x": 70,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": 70,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": 70,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": 70,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 70,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 70,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 75,
+      "y": -290,
+      "landType": "water"
+    },
+    {
+      "x": 75,
+      "y": -285,
+      "landType": "water"
+    },
+    {
+      "x": 75,
+      "y": -280,
+      "landType": "water"
+    },
+    {
+      "x": 75,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": 75,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": 75,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 75,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 75,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 75,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 75,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 80,
+      "y": -285,
+      "landType": "water"
+    },
+    {
+      "x": 80,
+      "y": -280,
+      "landType": "water"
+    },
+    {
+      "x": 80,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": 80,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": 80,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": 80,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 80,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 80,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 80,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 80,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 80,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 85,
+      "y": -285,
+      "landType": "water"
+    },
+    {
+      "x": 85,
+      "y": -280,
+      "landType": "water"
+    },
+    {
+      "x": 85,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": 85,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": 85,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 85,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 85,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 85,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 85,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 85,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 85,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 85,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 90,
+      "y": -285,
+      "landType": "water"
+    },
+    {
+      "x": 90,
+      "y": -280,
+      "landType": "water"
+    },
+    {
+      "x": 90,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": 90,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": 90,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": 90,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 90,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 90,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 90,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 90,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 90,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 90,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 90,
+      "y": -60,
+      "landType": "water"
+    },
+    {
+      "x": 95,
+      "y": -280,
+      "landType": "water"
+    },
+    {
+      "x": 95,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": 95,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": 95,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": 95,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 95,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 95,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 95,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 95,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 95,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 95,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 95,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -280,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 100,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 105,
+      "y": -280,
+      "landType": "water"
+    },
+    {
+      "x": 105,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": 105,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": 105,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": 105,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 105,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 105,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 105,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 105,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 105,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 105,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 105,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 105,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 105,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 110,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": 115,
+      "y": -275,
+      "landType": "water"
+    },
+    {
+      "x": 115,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": 115,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": 115,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 115,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 115,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 115,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 115,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 115,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 115,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 115,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 115,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 115,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 115,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": 120,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": 120,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": 120,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 120,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 120,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 120,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 120,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 120,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 120,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 120,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 120,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 120,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 120,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 120,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 120,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 125,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -270,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 130,
+      "y": -80,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 135,
+      "y": -90,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -265,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 140,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -260,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 145,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 150,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -255,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 155,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 160,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -250,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 165,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -245,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 170,
+      "y": -65,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -80,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -75,
+      "landType": "water"
+    },
+    {
+      "x": 175,
+      "y": -70,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -240,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -85,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -80,
+      "landType": "water"
+    },
+    {
+      "x": 180,
+      "y": -75,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -235,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -95,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -90,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -85,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -80,
+      "landType": "water"
+    },
+    {
+      "x": 185,
+      "y": -75,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -230,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -95,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -90,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -85,
+      "landType": "water"
+    },
+    {
+      "x": 190,
+      "y": -80,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -225,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -95,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -90,
+      "landType": "water"
+    },
+    {
+      "x": 195,
+      "y": -85,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -220,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -95,
+      "landType": "water"
+    },
+    {
+      "x": 200,
+      "y": -90,
+      "landType": "water"
+    },
+    {
+      "x": 205,
+      "y": -215,
+      "landType": "water"
+    },
+    {
+      "x": 205,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 205,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 205,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 205,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 205,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 205,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": 205,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 205,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": 205,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": 205,
+      "y": -100,
+      "landType": "water"
+    },
+    {
+      "x": 210,
+      "y": -210,
+      "landType": "water"
+    },
+    {
+      "x": 210,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 210,
+      "y": -200,
+      "landType": "water"
+    },
+    {
+      "x": 210,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": 210,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 210,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": 215,
+      "y": -205,
+      "landType": "water"
+    },
+    {
+      "x": 215,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 215,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 215,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 215,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 215,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 215,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 215,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 215,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 215,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 215,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": 220,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 220,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 220,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 220,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 220,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 220,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 220,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 220,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 220,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 220,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 220,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 220,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 220,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 220,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": 220,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -195,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": 225,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -190,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 230,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": 235,
+      "y": -185,
+      "landType": "water"
+    },
+    {
+      "x": 235,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 235,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 235,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 235,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 235,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 235,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 235,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 235,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 235,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 235,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 235,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 235,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": 235,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": 235,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 240,
+      "y": -180,
+      "landType": "water"
+    },
+    {
+      "x": 240,
+      "y": -175,
+      "landType": "water"
+    },
+    {
+      "x": 240,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 240,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 240,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 240,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 240,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 240,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 240,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 240,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 240,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 240,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": 240,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": 240,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 240,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": 245,
+      "y": -170,
+      "landType": "water"
+    },
+    {
+      "x": 245,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 245,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 245,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 245,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 245,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 245,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 245,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 245,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 245,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": 245,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": 245,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 245,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": 250,
+      "y": -165,
+      "landType": "water"
+    },
+    {
+      "x": 250,
+      "y": -160,
+      "landType": "water"
+    },
+    {
+      "x": 250,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 250,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 250,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 250,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 250,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 250,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 250,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": 255,
+      "y": -155,
+      "landType": "water"
+    },
+    {
+      "x": 255,
+      "y": -150,
+      "landType": "water"
+    },
+    {
+      "x": 255,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 255,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 255,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 255,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 255,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": 260,
+      "y": -145,
+      "landType": "water"
+    },
+    {
+      "x": 260,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 260,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 260,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 260,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": 260,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": 260,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": 265,
+      "y": -140,
+      "landType": "water"
+    },
+    {
+      "x": 265,
+      "y": -135,
+      "landType": "water"
+    },
+    {
+      "x": 265,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 265,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": 265,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 265,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": 265,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": 270,
+      "y": -130,
+      "landType": "water"
+    },
+    {
+      "x": 270,
+      "y": -125,
+      "landType": "water"
+    },
+    {
+      "x": 270,
+      "y": -120,
+      "landType": "water"
+    },
+    {
+      "x": 270,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 270,
+      "y": -110,
+      "landType": "water"
+    },
+    {
+      "x": 270,
+      "y": -105,
+      "landType": "water"
+    },
+    {
+      "x": 275,
+      "y": -115,
+      "landType": "water"
+    },
+    {
+      "x": 275,
+      "y": -110,
+      "landType": "water"
+    }
+  ]
+}

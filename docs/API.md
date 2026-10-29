@@ -3301,9 +3301,10 @@ must be between 3 and 100, and the complete ring is inserted atomically. Real
 water along the ring's own circumference (#2821, below) can narrow a plot's
 own polygon or split it into fragments around a water arc — each candidate's
 own `areaM2` is always the shape's real computed area, so it's only ever
-very close to the requested target, not bit-exact, once that happens (today,
-with `geo_water_cells_fine` still empty in production, this never actually
-triggers, so areas stay exact in practice).
+very close to the requested target, not bit-exact, once that happens — real
+data in `geo_water_cells_fine` (#2805's real seed data, migrations/0167)
+now actually triggers this for a ring whose circumference passes near
+real water.
 
 ```json
 {
@@ -3360,7 +3361,7 @@ Rate-limited to 20 attempts per 15-minute window, bucketed by the calling
 admin's own user id (#2657) — not applied to the internal auto-growth call
 path above, which has no admin user id to bucket on.
 
-#### Higher-granularity water/river data (#2805, not yet wired into generation)
+#### Higher-granularity water/river data (#2805)
 
 `scripts/ingest-geo-data.mjs` also runs a second, finer-grained ingestion
 pass (lakes at a higher sampling resolution than the coarse pass just
@@ -3409,10 +3410,11 @@ sample-point grid this data is, and isn't attempted here.
 candidate-row format `generateOrganicMosaic`'s own cells always had —
 every other generator, and everything downstream of
 `candidateRowFromLandlet`, never needs to know which generator actually
-produced a candidate. `geo_water_cells_fine` still ships empty in
-production pending #2805's own NHD-service-outage follow-up, so in
-practice every real `generate-mosaic` call today still only gets its
-water awareness from the coarse safety-net pass, until that lands.
+produced a candidate. `geo_water_cells_fine` now carries real seed data
+(#2805's own NHD-service-outage follow-up, migrations/0167 — 300m radius,
+matching `geo_water_cells`' own migration 0128 radius choice), so a real
+`generate-mosaic` call near that area gets genuine water-aware shaping,
+not just the coarse safety-net pass.
 
 #### Water-aware ring generator (#2821)
 
