@@ -88,6 +88,11 @@ console.log(`first row mentions author+text (should mention "${LABEL}" and "Bonf
 // Both rows share the same author now, so this test distinguishes them by
 // event text instead (the thing that's actually still unique per event).
 await page.locator('.calendar-event-row').filter({ hasText: 'Market day' }).locator('.calendar-event-row-delete').click();
+// #2388: the moderation delete now requires a removal category, collected
+// via this themed modal instead of a plain confirm().
+await page.waitForSelector('#moderation-category-modal.visible', { timeout: 5000 });
+await page.locator('input[name="moderation-category"][value="other"]').check();
+await page.locator('#moderation-category-delete-btn').click();
 // #2635 (sub-issue of #2635, 2nd waitForFunction sweep): the 2-arg call
 // bound { timeout } to the unused `arg` slot, so the real applied timeout
 // was always Playwright's dishonored 30000ms default, never 5000 -- the

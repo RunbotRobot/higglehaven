@@ -41,6 +41,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
+import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
 import {
   activeCatalog, setActiveCatalog, sellerId, setSellerId, currentMode,
 } from '../world/state.js';
@@ -1627,9 +1628,15 @@ function renderSellerList() {
         deleteRowBtn.textContent = '×';
         deleteRowBtn.setAttribute('aria-label', 'Delete review');
         deleteRowBtn.addEventListener('click', async () => {
+          // #2388: seller-moderation delete -- the server now requires a
+          // removal category on this path (see worker/lib/content-
+          // moderation.js), same as the sign-posts/calendar-events
+          // moderation panels in src/build/metadataModals.js.
+          const category = await promptModerationCategory();
+          if (!category) return;
           deleteRowBtn.disabled = true;
           try {
-            await deleteProductReview(template.templateId, review.reviewId);
+            await deleteProductReview(template.templateId, review.reviewId, { category });
             await renderReviews();
           } catch (err) {
             console.warn('Could not delete review:', err);

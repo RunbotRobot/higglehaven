@@ -11,6 +11,7 @@
 // session ends (the low-opacity placement reference this module shows
 // must disappear the moment the picker closes, pick or cancel alike).
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
+import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
 import {
   fetchSignPosts, deleteSignPost,
   fetchCalendarEvents, deleteCalendarEvent, editCalendarEvent,
@@ -128,10 +129,15 @@ async function renderSignPosts() {
     deleteRowBtn.textContent = '×';
     deleteRowBtn.setAttribute('aria-label', 'Delete post');
     deleteRowBtn.addEventListener('click', async () => {
-      if (!confirm('Delete this post? This can\'t be undone.')) return;
+      // #2388: this panel is the landlet owner's moderation view -- the
+      // server now requires a removal category on that path (see
+      // worker/lib/content-moderation.js), collected here instead of the
+      // native confirm() this flow used before.
+      const category = await promptModerationCategory();
+      if (!category) return;
       deleteRowBtn.disabled = true;
       try {
-        await deleteSignPost(instanceId, post.postId);
+        await deleteSignPost(instanceId, post.postId, { category });
         await renderSignPosts();
       } catch (err) {
         alert(err.message || 'Could not delete this post.');
@@ -296,10 +302,14 @@ async function renderCalendarEvents() {
     deleteRowBtn.textContent = '×';
     deleteRowBtn.setAttribute('aria-label', 'Delete event');
     deleteRowBtn.addEventListener('click', async () => {
-      if (!confirm('Delete this event? This can\'t be undone.')) return;
+      // #2388: same moderation-category requirement as the sign-posts panel
+      // above -- this panel lists (and lets the landlet owner delete) every
+      // event on the calendar, not just this viewer's own.
+      const category = await promptModerationCategory();
+      if (!category) return;
       deleteRowBtn.disabled = true;
       try {
-        await deleteCalendarEvent(instanceId, event.eventId);
+        await deleteCalendarEvent(instanceId, event.eventId, { category });
         await renderCalendarEvents();
       } catch (err) {
         alert(err.message || 'Could not delete this event.');

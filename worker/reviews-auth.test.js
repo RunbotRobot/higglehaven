@@ -177,7 +177,11 @@ describe('Product reviews', () => {
     expect(listed.body.averageRating).toBe(5);
 
     // Deleting the first review frees that same purchase up to review again.
-    await api(`/catalog/${templateId}/reviews/${first.body.review.reviewId}`, { method: 'DELETE' });
+    // #2388: the anonymous/orphaned-template delete path now requires a
+    // removal category too.
+    await api(`/catalog/${templateId}/reviews/${first.body.review.reviewId}`, {
+      method: 'DELETE', body: JSON.stringify({ category: 'other' }),
+    });
     const third = await api(`/catalog/${templateId}/reviews`, shopper.session({
       method: 'POST',
       body: JSON.stringify({ rating: 2 }),
@@ -409,7 +413,11 @@ describe('Product reviews', () => {
     expect(listed.body.count).toBe(2);
     expect(listed.body.averageRating).toBe(4); // (5 + 3) / 2
 
-    const deleted = await api(`/catalog/${templateId}/reviews/${secondReview.body.review.reviewId}`, { method: 'DELETE' });
+    // #2388: the anonymous/orphaned-template delete path now requires a
+    // removal category too.
+    const deleted = await api(`/catalog/${templateId}/reviews/${secondReview.body.review.reviewId}`, {
+      method: 'DELETE', body: JSON.stringify({ category: 'other' }),
+    });
     expect(deleted.response.status).toBe(200);
     expect(deleted.body).toEqual({ deleted: true });
 
@@ -417,7 +425,9 @@ describe('Product reviews', () => {
     expect(listedAfterDelete.body.reviews).toHaveLength(1);
     expect(listedAfterDelete.body.averageRating).toBe(5);
 
-    const deleteMissing = await api(`/catalog/${templateId}/reviews/${secondReview.body.review.reviewId}`, { method: 'DELETE' });
+    const deleteMissing = await api(`/catalog/${templateId}/reviews/${secondReview.body.review.reviewId}`, {
+      method: 'DELETE', body: JSON.stringify({ category: 'other' }),
+    });
     expect(deleteMissing.response.status).toBe(404);
   });
 
@@ -488,9 +498,21 @@ describe('Product reviews', () => {
     const listedStillThere = await api(`/catalog/${templateId}/reviews`);
     expect(listedStillThere.body.reviews).toHaveLength(1);
 
-    const deleted = await api(`/catalog/${templateId}/reviews/${reviewId}`, seller.session({ method: 'DELETE' }));
+    // #2388: the seller-moderation delete now requires a removal category.
+    const missingCategory = await api(`/catalog/${templateId}/reviews/${reviewId}`, seller.session({ method: 'DELETE' }));
+    expect(missingCategory.response.status).toBe(415);
+
+    const deleted = await api(`/catalog/${templateId}/reviews/${reviewId}`, seller.session({
+      method: 'DELETE', body: JSON.stringify({ category: 'spam' }),
+    }));
     expect(deleted.response.status).toBe(200);
     expect(deleted.body).toEqual({ deleted: true });
+
+    const snapshot = await env.DB.prepare(
+      'SELECT * FROM moderation_removal_snapshots WHERE source_table = ? AND source_id = ?',
+    ).bind('product_reviews', reviewId).first();
+    expect(snapshot).not.toBeNull();
+    expect(snapshot.removed_category).toBe('spam');
   });
 
   // #1712 (owner confirmed): an admin can remove any review outright --
@@ -522,7 +544,9 @@ describe('Product reviews', () => {
     expect(posted.response.status).toBe(201);
     const reviewId = posted.body.review.reviewId;
 
-    const asAdmin = await api(`/catalog/${templateId}/reviews/${reviewId}`, adminSession({ method: 'DELETE' }));
+    const asAdmin = await api(`/catalog/${templateId}/reviews/${reviewId}`, adminSession({
+      method: 'DELETE', body: JSON.stringify({ category: 'harassment' }),
+    }));
     expect(asAdmin.response.status).toBe(200);
     expect(asAdmin.body).toEqual({ deleted: true });
 
@@ -576,7 +600,9 @@ describe('Product reviews', () => {
     const reviewId = posted.body.review.reviewId;
 
     const attempts = await Promise.all(
-      Array.from({ length: 2 }, () => api(`/catalog/${templateId}/reviews/${reviewId}`, adminSession({ method: 'DELETE' }))),
+      Array.from({ length: 2 }, () => api(`/catalog/${templateId}/reviews/${reviewId}`, adminSession({
+        method: 'DELETE', body: JSON.stringify({ category: 'harassment' }),
+      }))),
     );
     for (const attempt of attempts) {
       expect([200, 404]).toContain(attempt.response.status);
@@ -690,7 +716,11 @@ describe('Product reviews', () => {
     expect(patched.response.status).toBe(200);
     expect(patched.body.template.name).toBe('Renamed after seller deletion');
 
-    const reviewDeleted = await api(`/catalog/${templateId}/reviews/${reviewId}`, { method: 'DELETE' });
+    // #2388: the (now-anonymous, dangling-seller) delete path still requires
+    // a removal category.
+    const reviewDeleted = await api(`/catalog/${templateId}/reviews/${reviewId}`, {
+      method: 'DELETE', body: JSON.stringify({ category: 'other' }),
+    });
     expect(reviewDeleted.response.status).toBe(200);
 
     const templateDeleted = await api(`/catalog/${templateId}`, { method: 'DELETE' });
@@ -1268,7 +1298,9 @@ describe('Product reviews', () => {
       const deleteRejectedByShopper = await api(`/catalog/${templateId}/reviews/${reviewId}`, shopper.session({ method: 'DELETE' }));
       expect(deleteRejectedByShopper.response.status).toBe(403);
 
-      const deletedBySeller = await api(`/catalog/${templateId}/reviews/${reviewId}`, seller.session({ method: 'DELETE' }));
+      const deletedBySeller = await api(`/catalog/${templateId}/reviews/${reviewId}`, seller.session({
+        method: 'DELETE', body: JSON.stringify({ category: 'other' }),
+      }));
       expect(deletedBySeller.response.status).toBe(200);
     });
 
@@ -1496,6 +1528,9 @@ describe('Product reviews', () => {
     // Moderation deletes (admin override, seller) are not the user editing/
     // deleting their own content -- the owner's own framing was specifically
     // about self-service, so these must not write to the history table.
+    // #2388: same asymmetry the calendar-events/sign-posts moderation tests
+    // close -- a seller/admin moderation delete now writes to
+    // moderation_removal_snapshots instead (never user_content_edit_history).
     it('does not snapshot to user_content_edit_history on a seller or admin moderation delete', async () => {
       const seller = await signupSeller('review-history-moderation-seller');
       const shopper = await signupBuilder('review-history-moderation-shopper');
@@ -1515,13 +1550,21 @@ describe('Product reviews', () => {
       await createPurchase(templateId, shopper);
       const reviewId = await postReview(templateId, shopper);
 
-      const deletedBySeller = await api(`/catalog/${templateId}/reviews/${reviewId}`, seller.session({ method: 'DELETE' }));
+      const deletedBySeller = await api(`/catalog/${templateId}/reviews/${reviewId}`, seller.session({
+        method: 'DELETE', body: JSON.stringify({ category: 'spam' }),
+      }));
       expect(deletedBySeller.response.status).toBe(200);
 
       const history = await env.DB.prepare(
         'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
       ).bind('product_reviews', reviewId).all();
       expect(history.results).toHaveLength(0);
+
+      const snapshot = await env.DB.prepare(
+        'SELECT * FROM moderation_removal_snapshots WHERE source_table = ? AND source_id = ?',
+      ).bind('product_reviews', reviewId).first();
+      expect(snapshot).not.toBeNull();
+      expect(snapshot.removed_category).toBe('spam');
     });
   });
 });

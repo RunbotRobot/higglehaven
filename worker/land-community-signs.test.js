@@ -513,14 +513,32 @@ describe('Community signs', () => {
     const unauthenticatedDelete = await api(`/instances/sign-with-posts/posts/${posted.body.post.postId}`, { method: 'DELETE' });
     expect(unauthenticatedDelete.response.status).toBe(401);
 
-    const deleted = await api(`/instances/sign-with-posts/posts/${posted.body.post.postId}`, signsBuilder.session({ method: 'DELETE' }));
+    // #2388: the hosting landlet owner's moderation delete now requires a
+    // removal category.
+    const missingCategory = await api(`/instances/sign-with-posts/posts/${posted.body.post.postId}`, signsBuilder.session({ method: 'DELETE' }));
+    expect(missingCategory.response.status).toBe(415);
+
+    const deleted = await api(`/instances/sign-with-posts/posts/${posted.body.post.postId}`, signsBuilder.session({
+      method: 'DELETE',
+      body: JSON.stringify({ category: 'spam' }),
+    }));
     expect(deleted.response.status).toBe(200);
     expect(deleted.body).toEqual({ deleted: true });
 
     const listedAfterDelete = await api('/instances/sign-with-posts/posts');
     expect(listedAfterDelete.body.posts).toEqual([]);
 
-    const deleteMissing = await api(`/instances/sign-with-posts/posts/${posted.body.post.postId}`, signsBuilder.session({ method: 'DELETE' }));
+    const snapshot = await env.DB.prepare(
+      'SELECT * FROM moderation_removal_snapshots WHERE source_table = ? AND source_id = ?',
+    ).bind('sign_posts', posted.body.post.postId).first();
+    expect(snapshot).not.toBeNull();
+    expect(snapshot.removed_category).toBe('spam');
+    expect(JSON.parse(snapshot.snapshot_json)).toMatchObject({ text: 'Great little shop!' });
+
+    const deleteMissing = await api(`/instances/sign-with-posts/posts/${posted.body.post.postId}`, signsBuilder.session({
+      method: 'DELETE',
+      body: JSON.stringify({ category: 'spam' }),
+    }));
     expect(deleteMissing.response.status).toBe(404);
   });
 
@@ -568,9 +586,31 @@ describe('Community signs', () => {
     expect(posted.response.status).toBe(201);
     const postId = posted.body.post.postId;
 
-    const deleted = await api(`/instances/sign-admin-override-instance/posts/${postId}`, adminSession({ method: 'DELETE' }));
+    // #2388: an unrecognized category is rejected before the delete runs at
+    // all -- the post must still be there afterward.
+    const badCategory = await api(`/instances/sign-admin-override-instance/posts/${postId}`, adminSession({
+      method: 'DELETE',
+      body: JSON.stringify({ category: 'not-a-real-category' }),
+    }));
+    expect(badCategory.response.status).toBe(400);
+
+    // #2388: sexual_content is the one category the owner's decision says
+    // must retain nothing at all, not even a text fragment -- snapshot_json
+    // stays NULL even though every other category gets a real snapshot
+    // (see the 'spam' case in the test above).
+    const deleted = await api(`/instances/sign-admin-override-instance/posts/${postId}`, adminSession({
+      method: 'DELETE',
+      body: JSON.stringify({ category: 'sexual_content' }),
+    }));
     expect(deleted.response.status).toBe(200);
     expect(deleted.body).toEqual({ deleted: true });
+
+    const snapshot = await env.DB.prepare(
+      'SELECT * FROM moderation_removal_snapshots WHERE source_table = ? AND source_id = ?',
+    ).bind('sign_posts', postId).first();
+    expect(snapshot).not.toBeNull();
+    expect(snapshot.removed_category).toBe('sexual_content');
+    expect(snapshot.snapshot_json).toBeNull();
 
     const listed = await api('/instances/sign-admin-override-instance/posts');
     expect(listed.body.posts).toEqual([]);
@@ -664,7 +704,9 @@ describe('Community signs', () => {
       api(`/instances/sign-patch-delete-race-instance/posts/${postId}`, signsShopper.session({
         method: 'PATCH', body: JSON.stringify({ text: 'Raced edit' }),
       })),
-      api(`/instances/sign-patch-delete-race-instance/posts/${postId}`, adminSession({ method: 'DELETE' })),
+      api(`/instances/sign-patch-delete-race-instance/posts/${postId}`, adminSession({
+        method: 'DELETE', body: JSON.stringify({ category: 'spam' }),
+      })),
     ]);
 
     // The real bug was an uncaught TypeError surfacing as a raw 500 from
@@ -850,7 +892,9 @@ describe('Community signs', () => {
     };
     let deleted;
     try {
-      deleted = await api(`/instances/sign-delete-ownership-race-instance/posts/${postId}`, owner.session({ method: 'DELETE' }));
+      deleted = await api(`/instances/sign-delete-ownership-race-instance/posts/${postId}`, owner.session({
+        method: 'DELETE', body: JSON.stringify({ category: 'spam' }),
+      }));
     } finally {
       env.DB.prepare = originalPrepare;
     }
@@ -889,10 +933,14 @@ describe('Community signs', () => {
     ).bind(postId, 'sign-delete-rate-limit-instance', 'A Shopper', 'Nice place')));
 
     for (let i = 0; i < 20; i++) {
-      const attempt = await api(`/instances/sign-delete-rate-limit-instance/posts/${postIds[i]}`, rateLimitBuilder.session({ method: 'DELETE' }));
+      const attempt = await api(`/instances/sign-delete-rate-limit-instance/posts/${postIds[i]}`, rateLimitBuilder.session({
+        method: 'DELETE', body: JSON.stringify({ category: 'spam' }),
+      }));
       expect(attempt.response.status).toBe(200);
     }
-    const limited = await api(`/instances/sign-delete-rate-limit-instance/posts/${postIds[20]}`, rateLimitBuilder.session({ method: 'DELETE' }));
+    const limited = await api(`/instances/sign-delete-rate-limit-instance/posts/${postIds[20]}`, rateLimitBuilder.session({
+      method: 'DELETE', body: JSON.stringify({ category: 'spam' }),
+    }));
     expect(limited.response.status).toBe(429);
   });
 
