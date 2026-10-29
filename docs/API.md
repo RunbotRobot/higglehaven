@@ -526,7 +526,8 @@ the requesting account's own data as a single JSON bundle:
     "account": { "userId": "...", "email": "...", "username": "...", "...": "..." },
     "builder": { "builderId": "...", "label": "...", "...": "..." },
     "seller": null,
-    "diditVerificationSessions": []
+    "diditVerificationSessions": [],
+    "moderationDecisions": []
   }
 }
 ```
@@ -545,6 +546,25 @@ every ID-verification session this account started (`sessionId`, `status`,
 `createdAt`, `processedAt`) — status/timestamps only, deliberately never a
 raw Didit payload, since that's a third party's data about the account,
 not the account's own authored content.
+
+**#2385** (owner decision 2026-10-25, resolving a gap #1983's own scope
+survey left open): `profile.moderationDecisions` lists every
+`account_moderation_decisions` row (migrations/0110, #1404's AI-driven
+account-moderation audit trail — first consumer the Stripe reinstatement
+flow, #1065/#1406/#1407) naming this account's own builder as subject —
+`outcome`, `reasoning`, `decidedAt` only. `reasoning` is the human-readable
+judgment summary the column was designed to hold (e.g. "repeat chargeback
+pattern within 90 days"), not a rubric internals dump. Deliberately
+excludes `rubricVersion` and the secondary-review fields
+(`reviewStatus`/`reviewedBy`/`reviewOutcome`/`reviewNotes`/`reviewedAt`) —
+those describe moderation methodology, which the owner's standing rubric-
+secrecy call (same reasoning `tax1099Forms` below cites for the tax-ID
+question) says should never be exposed anywhere a user, including the
+decision's own subject, could read it and reverse-engineer how to stay
+just under it. `decisionType`/`subjectRef`/`decidedBy`/`decisionId` are
+left out too — internal case-routing/audit-trail plumbing, not part of
+what was decided or why. Empty for a builder-less account, same guard
+every other builder-keyed section uses.
 
 The response shape has one top-level key per data section — `profile`
 here, `commerce` and `social` below. A "Download my data" Settings UI

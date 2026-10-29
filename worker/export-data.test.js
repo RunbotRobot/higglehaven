@@ -64,6 +64,55 @@ describe('GET /auth/export-data (#1984)', () => {
     }]);
   });
 
+  // #2385 (owner decision 2026-10-25): account_moderation_decisions rows
+  // naming this account's own builder as subject belong in the export --
+  // but only outcome/reasoning/decidedAt, never rubric_version or the
+  // secondary-review fields (decision methodology, deliberately kept off
+  // anything a user could read and reverse-engineer).
+  it('includes account moderation decisions by outcome/reasoning/timestamp only, never the rubric or review fields', async () => {
+    const account = await signupBuilder('export-data-moderation');
+    await env.DB.prepare(`
+      INSERT INTO account_moderation_decisions
+        (decision_id, decision_type, subject_builder_id, outcome, rubric_version, reasoning, decided_by, decided_at,
+         review_status, reviewed_by, review_outcome, review_notes, reviewed_at)
+      VALUES (?, 'stripe_reinstatement', ?, 'denied', 'v3-secret-thresholds', 'Repeat chargeback pattern within 90 days', 'claude',
+              '2026-10-01T00:00:00.000Z', 'reviewed', 'admin-x', 'confirmed', 'internal notes a user must never see', '2026-10-02T00:00:00.000Z')
+    `).bind('moderation-export-test-decision', account.builderId).run();
+
+    const result = await api('/auth/export-data', account.session());
+    expect(result.response.status).toBe(200);
+    expect(result.body.profile.moderationDecisions).toEqual([{
+      outcome: 'denied',
+      reasoning: 'Repeat chargeback pattern within 90 days',
+      decidedAt: '2026-10-01T00:00:00.000Z',
+    }]);
+  });
+
+  it('reports no moderation decisions for an account with none', async () => {
+    const account = await signupBuilder('export-data-moderation-none');
+    const result = await api('/auth/export-data', account.session());
+    expect(result.response.status).toBe(200);
+    expect(result.body.profile.moderationDecisions).toEqual([]);
+  });
+
+  // #2385: the subject's own account is the only one this export scopes
+  // by -- a decision naming a DIFFERENT builder as subject must never leak
+  // into this account's own export just because both rows exist in the
+  // same table.
+  it('does not include another builder\'s own moderation decisions', async () => {
+    const account = await signupBuilder('export-data-moderation-other');
+    const other = await signupBuilder('export-data-moderation-victim');
+    await env.DB.prepare(`
+      INSERT INTO account_moderation_decisions
+        (decision_id, decision_type, subject_builder_id, outcome, rubric_version, reasoning, decided_by)
+      VALUES (?, 'stripe_reinstatement', ?, 'approved', 'v3', 'Not this account', 'claude')
+    `).bind('moderation-export-test-other-decision', other.builderId).run();
+
+    const result = await api('/auth/export-data', account.session());
+    expect(result.response.status).toBe(200);
+    expect(result.body.profile.moderationDecisions).toEqual([]);
+  });
+
   it('rate-limits repeated calls from the same account', async () => {
     const account = await signupBuilder('export-data-rate-limit');
     for (let i = 0; i < 10; i += 1) {

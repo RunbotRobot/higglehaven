@@ -3300,6 +3300,28 @@ async function handleExportData(request, db) {
     SELECT session_id, status, created_at, processed_at FROM didit_verification_sessions
     WHERE user_id = ? ORDER BY created_at ASC
   `).bind(user.user_id).all();
+  // #2385 (owner decision 2026-10-25, resolving the gap #1983's own scope
+  // survey left open): account_moderation_decisions (migrations/0110) is
+  // this app's most direct "what does higglehaven know about me and why"
+  // record, so it belongs in a right-to-access export -- but only
+  // `outcome`/`decidedAt` and `reasoning` itself (the human-readable
+  // judgment summary #1404 designed this column to hold, e.g. "repeat
+  // violation of X policy"), never `rubricVersion` or the secondary-review
+  // fields (`reviewStatus`/`reviewedBy`/`reviewOutcome`/`reviewNotes`/
+  // `reviewedAt`) -- those describe moderation methodology, which the
+  // owner's standing call on the rubric itself (same reasoning #1983
+  // already flagged for the tax-ID question) says should never be exposed
+  // anywhere a user, including the decision's own subject, could read it
+  // and reverse-engineer how to stay just under it. `decisionType`/
+  // `subjectRef`/`decidedBy`/`decisionId` are left out too -- internal
+  // case-routing/audit-trail plumbing, not part of what was decided or why.
+  // Scoped by subject_builder_id, same builderRow guard every other
+  // builder-keyed export below already uses -- a builder-less account has
+  // no moderation history to report.
+  const moderationDecisions = builderRow ? await db.prepare(`
+    SELECT outcome, reasoning, decided_at FROM account_moderation_decisions
+    WHERE subject_builder_id = ? ORDER BY decided_at ASC
+  `).bind(builderRow.builder_id).all() : { results: [] };
   return json({
     exportedAt: new Date().toISOString(),
     profile: {
@@ -3311,6 +3333,11 @@ async function handleExportData(request, db) {
         status: row.status,
         createdAt: row.created_at,
         processedAt: row.processed_at,
+      })),
+      moderationDecisions: moderationDecisions.results.map((row) => ({
+        outcome: row.outcome,
+        reasoning: row.reasoning,
+        decidedAt: row.decided_at,
       })),
     },
     commerce: await exportCommerceData(db, builderRow, user.user_id),
