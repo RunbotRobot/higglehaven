@@ -445,6 +445,92 @@ describe('Bundles', () => {
     expect(indexes.some((idx) => idx.name === 'idx_bundles_builder_id')).toBe(false);
     expect(indexes.some((idx) => idx.name === 'idx_bundles_shared')).toBe(false);
   });
+
+  // #792 (owner decision, 2026-10-28): deleting a catalog template a bundle
+  // still references is notify-only -- deletion proceeds regardless, and
+  // the affected bundle owner just gets told. Uses its own dedicated
+  // template (not the shared placeholder-chair/placeholder-tree fixtures
+  // other tests in this file rely on staying around) since it genuinely
+  // deletes it.
+  it('notifies a bundle owner when a template their bundle references is deleted, and still deletes it', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'bundle-delete-notify-template', name: 'Bundle delete notify template',
+        color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    const bundleOwner = await signupBuilder('bundle-delete-notify-owner');
+    const bundle = await api('/bundles', bundleOwner.session({
+      method: 'POST',
+      body: JSON.stringify(bundleBody({
+        name: 'Notify-on-delete bundle',
+        items: [{ templateId: 'bundle-delete-notify-template', dx: 0, dy: 0, dz: 0 }],
+      })),
+    }));
+    expect(bundle.response.status).toBe(201);
+
+    const deleted = await api('/catalog/bundle-delete-notify-template', { method: 'DELETE' });
+    expect(deleted.response.status).toBe(200);
+
+    const notices = await api('/notifications', bundleOwner.session());
+    expect(notices.body.notifications).toHaveLength(1);
+    expect(notices.body.notifications[0].message).toContain('"Bundle delete notify template" was deleted by its seller');
+    expect(notices.body.notifications[0].message).toContain('your bundle "Notify-on-delete bundle"');
+    // No template_id attached -- there's nothing left to link to, and the
+    // row's gone by the time this fires (see notifyBundleOwnersOfTemplateDeletion's
+    // own comment in worker/lib/catalog.js for why).
+    expect(notices.body.notifications[0].templateId).toBeNull();
+  });
+
+  // Same owner decision as above, but for the batch DELETE sibling, which
+  // can remove several templates in one call -- this specifically covers
+  // the case where one bundle references more than one of the templates
+  // being deleted in the same batch, mirroring #1220's own
+  // "don't regress to one notification per template" test for the
+  // dimension-change batch path.
+  it('combines multiple deleted templates referenced by the same bundle into one batch-delete notification', async () => {
+    const templateA = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'bundle-batch-delete-notify-a', name: 'Bundle batch delete notify A',
+        color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(templateA.response.status).toBe(201);
+    const templateB = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'bundle-batch-delete-notify-b', name: 'Bundle batch delete notify B',
+        color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(templateB.response.status).toBe(201);
+    const bundleOwner = await signupBuilder('bundle-batch-delete-notify-owner');
+    const bundle = await api('/bundles', bundleOwner.session({
+      method: 'POST',
+      body: JSON.stringify(bundleBody({
+        name: 'Batch notify-on-delete bundle',
+        items: [
+          { templateId: 'bundle-batch-delete-notify-a', dx: 0, dy: 0, dz: 0 },
+          { templateId: 'bundle-batch-delete-notify-b', dx: 1, dy: 0, dz: 0 },
+        ],
+      })),
+    }));
+    expect(bundle.response.status).toBe(201);
+
+    const deleted = await api('/catalog/batch', {
+      method: 'DELETE',
+      body: JSON.stringify({ templateIds: ['bundle-batch-delete-notify-a', 'bundle-batch-delete-notify-b'] }),
+    });
+    expect(deleted.response.status).toBe(200);
+
+    const notices = await api('/notifications', bundleOwner.session());
+    expect(notices.body.notifications).toHaveLength(1);
+    expect(notices.body.notifications[0].message).toContain('"Bundle batch delete notify A", "Bundle batch delete notify B" were deleted by their seller');
+    expect(notices.body.notifications[0].message).toContain('your bundle "Batch notify-on-delete bundle"');
+  });
 });
 
 describe('Prohibited categories and digital goods', () => {
