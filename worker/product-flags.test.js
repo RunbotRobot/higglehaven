@@ -618,4 +618,68 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
       expect(attach.body.error).toMatch(/temporarily unavailable pending review/);
     });
   });
+
+  // #2218 (owner decision, 2026-10-25): the seller's own Duplicate button
+  // used to have no server-side check at all against the source listing
+  // it copies from -- an admin's "approve" above only ever sets
+  // flagged_hidden_at on the one listing being moderated, never anything
+  // that stops a brand-new, unflagged copy from being created immediately
+  // after. POST /catalog's own sourceTemplateId check (worker/lib/catalog.js)
+  // is what closes it.
+  describe('Blocking duplicate re-creation of a moderator-removed listing (#2218)', () => {
+    async function approveAndHide(templateId) {
+      const flaggerA = await signupBuilder(`${templateId}-flagger-a`);
+      const flaggerB = await signupBuilder(`${templateId}-flagger-b`);
+      await api(`/catalog/${templateId}/flags`, flaggerA.session({ method: 'POST', body: JSON.stringify({}) }));
+      await api(`/catalog/${templateId}/flags`, flaggerB.session({ method: 'POST', body: JSON.stringify({}) }));
+      const resolved = await api(`/catalog/${templateId}/flags/resolve`, adminSession({
+        method: 'POST',
+        body: JSON.stringify({ action: 'approve' }),
+      }));
+      expect(resolved.response.status).toBe(200);
+      expect(resolved.body.resolvedStatus).toBe('approved');
+    }
+
+    it('rejects creating a new template with sourceTemplateId pointing at a moderator-removed listing', async () => {
+      const seller = await signupSeller('dup-block-seller');
+      await createTemplate('dup-block-source', seller);
+      await approveAndHide('dup-block-source');
+
+      const duplicate = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'Dup block source (copy)', color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+          priceCents: 500, sellerId: seller.sellerId, sourceTemplateId: 'dup-block-source',
+        }),
+      }));
+      expect(duplicate.response.status).toBe(403);
+      expect(duplicate.body.error).toMatch(/removed for a policy violation/);
+    });
+
+    it('allows creating a new template with sourceTemplateId pointing at a listing with no pending/approved flags', async () => {
+      const seller = await signupSeller('dup-allow-seller');
+      await createTemplate('dup-allow-source', seller);
+
+      const duplicate = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'Dup allow source (copy)', color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+          priceCents: 500, sellerId: seller.sellerId, sourceTemplateId: 'dup-allow-source',
+        }),
+      }));
+      expect(duplicate.response.status).toBe(201);
+    });
+
+    it('ignores a sourceTemplateId that does not reference any existing template', async () => {
+      const seller = await signupSeller('dup-missing-source-seller');
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'No real source', color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+          priceCents: 500, sellerId: seller.sellerId, sourceTemplateId: 'template-does-not-exist',
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+    });
+  });
 });
