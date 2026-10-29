@@ -221,6 +221,17 @@ verifyIdInsteadBtn.addEventListener('click', async () => {
       if (currentAuthUser && currentAuthUser.trustTier !== 'none') notifyVerifyResult(currentAuthUser);
     });
   } catch (err) {
+    // #2882: startDiditVerification can 400 ("already ID-verified") when the
+    // server reconciles a stale-but-actually-approved session as a side
+    // effect of this very call -- trust_tier is already raised server-side
+    // by the time this throws, so re-check the real current user instead of
+    // assuming the error means nothing changed (this modal has no other
+    // escape but logout, see its own "no escape" comment above).
+    try {
+      const refreshed = await fetchCurrentUser();
+      currentAuthUser = refreshed;
+      if (refreshed.trustTier !== 'none') { notifyVerifyResult(refreshed); return; }
+    } catch { /* fall through to showing the original error below */ }
     setVerifyStatus(err.message || 'Could not start government-ID verification.', 'error');
   } finally {
     verifyIdInsteadBtn.disabled = false;
