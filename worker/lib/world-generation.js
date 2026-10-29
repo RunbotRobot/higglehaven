@@ -1510,7 +1510,8 @@ async function maintainPrecomputeBuffer(db) {
   // caught all the way up to the buffer's edge") can land a hair below
   // the other, making a strict `<=` miss a catch-up that's real in every
   // sense that matters at landlet scale.
-  if (bufferOuterRadiusM !== null && bufferOuterRadiusM <= settings.radius_m + 0.0000001) {
+  const isCaughtUp = bufferOuterRadiusM !== null && bufferOuterRadiusM <= settings.radius_m + 0.0000001;
+  if (isCaughtUp) {
     // Widen the lead *before* topping back up below, so this same tick's
     // own catch-up generation already aims for the newly-widened target
     // instead of the stale, apparently-insufficient one.
@@ -1522,13 +1523,33 @@ async function maintainPrecomputeBuffer(db) {
 
   const refreshedSettings = await getWorldSettings(db);
   const targetOuterRadiusM = refreshedSettings.radius_m + refreshedSettings.precompute_lead_m;
-  let outerRadiusM = bufferOuterRadiusM ?? refreshedSettings.radius_m;
+  const startingOuterRadiusM = bufferOuterRadiusM ?? refreshedSettings.radius_m;
+  let outerRadiusM = startingOuterRadiusM;
   for (let step = 0; step < WORLD_GROWTH_MAX_STEPS && outerRadiusM < targetOuterRadiusM; step += 1) {
     const ring = await generateNextAutoRing(db, Math.max(outerRadiusM, refreshedSettings.radius_m), {
       skipMaterializationSweep: true,
     });
     if (!ring) break; // no clear room found this pass — the next scheduled run tries again
     outerRadiusM = ring.outerRadiusM;
+  }
+
+  // #2894: a widen is only ever supposed to apply "the first time" a
+  // catch-up is found (#2807's own closing comment) -- but genuinely
+  // stuck generation (every ring attempt conflicting, independent of how
+  // far out the target is) makes this same tick's own top-up above a
+  // provable no-op (outerRadiusM never moves past where it started).
+  // Without this, the widen just applied would stick regardless, and the
+  // *next* tick would see the exact same "still caught up" state and
+  // widen again -- compounding by PRECOMPUTE_LEAD_WIDENING_FACTOR every
+  // tick, forever, for a problem a wider lead was never going to fix.
+  // Reverting to the lead this call actually started with means a
+  // persistent stall keeps retrying at a steady lead instead of raising
+  // its own target out of reach of ever actually recovering.
+  if (isCaughtUp && outerRadiusM === startingOuterRadiusM) {
+    await db.prepare(`
+      UPDATE world_settings SET precompute_lead_m = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE world_id = 'default-world'
+    `).bind(settings.precompute_lead_m).run();
   }
 }
 

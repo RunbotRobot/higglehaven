@@ -81,6 +81,47 @@ describe('maintainPrecomputeBuffer (#2807)', () => {
     expect(radiiAfterWiden.at(-1)).toBeGreaterThanOrEqual(bufferOuterRadiusM + afterWiden.precompute_lead_m);
   });
 
+  // #2894: the widen above is supposed to apply once per genuine catch-up,
+  // not compound every tick a stall persists -- distinguished here by
+  // planting a candidate that conflicts with every possible ring position
+  // (min_world_radius_m 0, max_world_radius_m NULL so it's structurally
+  // invisible to currentPrecomputeBufferOuterRadiusM's own measurement
+  // query, which only reads rows with max_world_radius_m IS NOT NULL) so
+  // generateNextAutoRing can never make real progress, independent of how
+  // far out the target radius is pushed.
+  it('does not keep widening precompute_lead_m on repeated ticks when generation is genuinely stuck', async () => {
+    await maintainPrecomputeBuffer(env.DB); // build a real buffer first
+    const builtRadii = await autoRingOuterRadii();
+    const bufferOuterRadiusM = builtRadii.at(-1);
+
+    await env.DB.prepare(
+      "UPDATE world_settings SET radius_m = ? WHERE world_id = 'default-world'",
+    ).bind(bufferOuterRadiusM).run();
+    await env.DB.prepare(`
+      INSERT INTO landlet_candidates
+        (landlet_id, name, area_m2, center_x_m, center_y_m, landlet_class, landlet_type,
+         polygon_json, metadata_json, min_world_radius_m, max_world_radius_m)
+      VALUES ('blocker-001', 'blocker', 1000, 0, 0, 1, 'buildable', '[]', '{}', 0, NULL)
+    `).run();
+
+    const beforeStuck = await worldSettings();
+
+    await maintainPrecomputeBuffer(env.DB);
+    const afterTick1 = await worldSettings();
+    expect(afterTick1.precompute_lead_m).toBeCloseTo(beforeStuck.precompute_lead_m, 6);
+
+    await maintainPrecomputeBuffer(env.DB);
+    const afterTick2 = await worldSettings();
+    expect(afterTick2.precompute_lead_m).toBeCloseTo(beforeStuck.precompute_lead_m, 6);
+
+    await maintainPrecomputeBuffer(env.DB);
+    const afterTick3 = await worldSettings();
+    expect(afterTick3.precompute_lead_m).toBeCloseTo(beforeStuck.precompute_lead_m, 6);
+
+    const radiiAfterStuck = await autoRingOuterRadii();
+    expect(radiiAfterStuck).toEqual(builtRadii);
+  });
+
   it('never force-materializes or encloses the outermost ring it generates -- it sits staged until real growth reaches it', async () => {
     const before = await worldSettings();
     await maintainPrecomputeBuffer(env.DB);
