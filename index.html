@@ -2628,6 +2628,12 @@
         color: var(--pill-text-soft);
         font-size: 11px;
       }
+      /* #2218: same danger color as .seller-row-flagged-badge below. */
+      .seller-card-flagged-badge {
+        color: #b3402c;
+        font-size: 11px;
+        font-weight: 600;
+      }
       .seller-row {
         display: flex;
         flex-direction: column;
@@ -2665,6 +2671,14 @@
         font-size: 15px;
         font-weight: 600;
         color: var(--pill-text);
+      }
+      /* #2218: same danger color as .seller-row-status.error below --
+         deliberately visible rather than hidden/deleted, so a seller's
+         own moderation history stays transparent in their own list. */
+      .seller-row-flagged-badge {
+        font-size: 11px;
+        font-weight: 600;
+        color: #b3402c;
       }
       .seller-row-dims {
         font-size: 11px;

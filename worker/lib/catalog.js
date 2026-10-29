@@ -1459,6 +1459,27 @@ export async function handleCatalog(request, db, route, url, models, env) {
         throw new HttpError('priceCents is required', 400);
       }
     }
+    // #2218 (owner decision, 2026-10-25): the Duplicate button already
+    // disables itself client-side once its own source is
+    // flagged_hidden_at (src/sell/mode.js's renderSellerList), but that's
+    // only a UI-level block, trivially bypassable via a direct API call --
+    // sourceTemplateId is the Duplicate button's own explicit "this is
+    // the template I'm copying from" declaration (it always knows exactly
+    // which one), checked here independently of the client's own gate.
+    // Deliberately a plain existence+flag check against one named source,
+    // not a content-similarity match against every one of the seller's
+    // other templates -- the issue's own body raises that fuzzier
+    // approach as a separate, still-undecided design question (how
+    // strict a match -- modelUrl only, or also name/color?), which this
+    // decision doesn't resolve.
+    if (input.sourceTemplateId) {
+      const source = await db.prepare(
+        'SELECT flagged_hidden_at FROM catalog_templates WHERE template_id = ?',
+      ).bind(stringValue(input.sourceTemplateId, 'sourceTemplateId')).first();
+      if (source?.flagged_hidden_at) {
+        throw new HttpError('This product was removed for a policy violation and cannot be duplicated', 403);
+      }
+    }
     await assertUploadedModelExists(models, template.modelUrl);
     // #2748 (leaf of #2745's shared-products redesign): migrations/0153_
     // shared_products.sql's own comment explicitly leaves "every listing

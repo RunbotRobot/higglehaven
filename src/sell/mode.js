@@ -473,6 +473,18 @@ function renderSellerList() {
     label.className = 'seller-row-label';
     label.textContent = template.name;
     toggle.appendChild(label);
+    // #2218 (owner decision, 2026-10-25): a product an admin removed for
+    // a policy violation stays visible here (never hidden/deleted, so the
+    // seller's own history/transparency stays intact) but carries this
+    // indicator, and -- unlike every other action on this row -- Duplicate
+    // is disabled for it below, since re-creating a removed listing is
+    // exactly the moderation bypass this decision closes.
+    if (template.flaggedHiddenAt) {
+      const flaggedBadge = document.createElement('div');
+      flaggedBadge.className = 'seller-row-flagged-badge';
+      flaggedBadge.textContent = 'Removed — policy violation';
+      toggle.appendChild(flaggedBadge);
+    }
     row.appendChild(toggle);
 
     const details = document.createElement('div');
@@ -1075,6 +1087,11 @@ function renderSellerList() {
     duplicateBtn.className = 'seller-row-action-btn';
     duplicateBtn.type = 'button';
     duplicateBtn.textContent = 'Duplicate';
+    // #2218: client-side half of the moderation-bypass fix -- the real
+    // enforcement is the server's own sourceTemplateId check in the
+    // create handler (see this button's own click handler below); this
+    // just keeps a seller from even trying on a removed listing.
+    duplicateBtn.disabled = !!template.flaggedHiddenAt;
     duplicateBtn.addEventListener('click', async () => {
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
@@ -1099,6 +1116,13 @@ function renderSellerList() {
           // ever runs while the Seller modal is open, which already
           // guaranteed one via openSellerModal().
           sellerId,
+          // #2218: declares exactly which template this is duplicating
+          // from, so the server can independently reject a copy of one
+          // that's been removed by admin moderation -- this button is
+          // already disabled for that case (see its own flaggedHiddenAt
+          // check below), but the server check is what actually closes
+          // the gap against a direct API call bypassing this UI.
+          sourceTemplateId: template.templateId,
         });
         // #327: fire-and-forget, deliberately not awaited -- same reasoning
         // as the upload-flow and resize-save call sites. Without this, the
@@ -1895,6 +1919,19 @@ function renderSellerListView() {
       digitalGood.className = 'seller-card-digital-good';
       digitalGood.textContent = 'Digital good';
       card.appendChild(digitalGood);
+    }
+
+    // #2218: same visible-not-hidden indicator as Manage view's own row
+    // badge (renderSellerList above) -- this view has no Duplicate button
+    // of its own to disable (tapping a card just jumps into Manage,
+    // focusSellerManageRow below, where that control and its own guard
+    // live), but a moderator-removed product's own transparency shouldn't
+    // depend on which view the seller happens to have open.
+    if (template.flaggedHiddenAt) {
+      const flaggedBadge = document.createElement('span');
+      flaggedBadge.className = 'seller-card-flagged-badge';
+      flaggedBadge.textContent = 'Removed — policy violation';
+      card.appendChild(flaggedBadge);
     }
 
     card.addEventListener('click', () => focusSellerManageRow(template.templateId));
