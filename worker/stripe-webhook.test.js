@@ -443,11 +443,11 @@ describe('Stripe purchase-reversal webhooks (#1086)', () => {
     expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents - builderShareCents);
   });
 
-  it('claws back the commission immediately on charge.dispute.created, before any resolution', async () => {
-    const { builder, purchaseId, builderShareCents } = await createRealMoneyPurchase('webhook-dispute-created', 'pi_webhook_dispute_created');
+  it('claws back the commission on charge.dispute.funds_withdrawn, the real money-movement signal', async () => {
+    const { builder, purchaseId, builderShareCents } = await createRealMoneyPurchase('webhook-dispute-withdrawn', 'pi_webhook_dispute_withdrawn');
     const before = await builderRow(builder.builderId);
 
-    const response = await postStripeWebhook(disputeEvent('charge.dispute.created', 'pi_webhook_dispute_created', { status: 'warning_needs_response' }));
+    const response = await postStripeWebhook(disputeEvent('charge.dispute.funds_withdrawn', 'pi_webhook_dispute_withdrawn'));
     expect(response.status).toBe(200);
 
     const purchaseRow = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
@@ -456,34 +456,81 @@ describe('Stripe purchase-reversal webhooks (#1086)', () => {
     expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents - builderShareCents);
   });
 
-  it('claws back the commission on charge.dispute.closed too, when no earlier event already did', async () => {
-    const { builder, purchaseId, builderShareCents } = await createRealMoneyPurchase('webhook-dispute-closed', 'pi_webhook_dispute_closed');
-    const before = await builderRow(builder.builderId);
-
-    const response = await postStripeWebhook(disputeEvent('charge.dispute.closed', 'pi_webhook_dispute_closed', { status: 'lost' }));
-    expect(response.status).toBe(200);
-
-    const purchaseRow = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
-    expect(purchaseRow.refunded_at).not.toBeNull();
-    const after = await builderRow(builder.builderId);
-    expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents - builderShareCents);
-  });
-
-  // #2231: charge.dispute.closed fires on every final outcome, not just a
-  // loss -- a dispute the merchant WON returned the withheld funds, so
-  // there's nothing to claw back. Without this, a fresh 'won' close with
-  // no earlier dispute.created event clawed back a purchase that was
-  // never actually reversed.
-  it('does not claw back the commission on charge.dispute.closed when the dispute was won', async () => {
-    const { builder, purchaseId, builderShareCents } = await createRealMoneyPurchase('webhook-dispute-won', 'pi_webhook_dispute_won');
+  // #2419 (owner decision 2026-10-25): charge.dispute.created also fires
+  // for a pre-dispute INQUIRY (status warning_*), which never actually
+  // withdraws any funds -- only charge.dispute.funds_withdrawn does.
+  // Neither charge.dispute.created nor charge.dispute.closed is in
+  // STRIPE_PURCHASE_REVERSAL_EVENT_TYPES anymore, so both must be safe
+  // no-ops now, regardless of status -- this is the regression test for
+  // the bug #2419 itself describes (an inquiry used to claw back the
+  // full commission immediately, with nothing that ever reversed it).
+  it('does not claw back anything on charge.dispute.created or charge.dispute.closed -- only funds_withdrawn/funds_reinstated are real money-movement signals', async () => {
+    const { builder, purchaseId, builderShareCents } = await createRealMoneyPurchase('webhook-dispute-inquiry', 'pi_webhook_dispute_inquiry');
     const before = await builderRow(builder.builderId);
     expect(builderShareCents).toBeGreaterThan(0);
 
-    const response = await postStripeWebhook(disputeEvent('charge.dispute.closed', 'pi_webhook_dispute_won', { status: 'won' }));
-    expect(response.status).toBe(200);
+    const created = await postStripeWebhook(disputeEvent('charge.dispute.created', 'pi_webhook_dispute_inquiry', { status: 'warning_needs_response' }));
+    expect(created.status).toBe(200);
+    const closedWon = await postStripeWebhook(disputeEvent('charge.dispute.closed', 'pi_webhook_dispute_inquiry', { status: 'won' }));
+    expect(closedWon.status).toBe(200);
+    const closedLost = await postStripeWebhook(disputeEvent('charge.dispute.closed', 'pi_webhook_dispute_inquiry', { status: 'lost' }));
+    expect(closedLost.status).toBe(200);
 
     const purchaseRow = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
     expect(purchaseRow.refunded_at).toBeNull();
+    const after = await builderRow(builder.builderId);
+    expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents);
+  });
+
+  // #2419: charge.dispute.funds_reinstated is the real reversal signal --
+  // the dispute resolved in the merchant's favor and the card network
+  // actually returned the withheld funds. Credits back the exact amount
+  // funds_withdrawn clawed back, and un-marks the purchase as reversed.
+  it('reinstates the commission and un-marks the purchase on charge.dispute.funds_reinstated', async () => {
+    const { builder, purchaseId, builderShareCents } = await createRealMoneyPurchase('webhook-dispute-reinstated', 'pi_webhook_dispute_reinstated');
+    const before = await builderRow(builder.builderId);
+
+    const withdrawn = await postStripeWebhook(disputeEvent('charge.dispute.funds_withdrawn', 'pi_webhook_dispute_reinstated'));
+    expect(withdrawn.status).toBe(200);
+    const afterWithdrawn = await builderRow(builder.builderId);
+    expect(afterWithdrawn.higgles_balance_cents).toBe(before.higgles_balance_cents - builderShareCents);
+
+    const reinstated = await postStripeWebhook(disputeEvent('charge.dispute.funds_reinstated', 'pi_webhook_dispute_reinstated'));
+    expect(reinstated.status).toBe(200);
+
+    const purchaseRow = await env.DB.prepare('SELECT refunded_at, refunded_amount_cents FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    expect(purchaseRow.refunded_at).toBeNull();
+    expect(purchaseRow.refunded_amount_cents).toBe(0);
+    const afterReinstated = await builderRow(builder.builderId);
+    expect(afterReinstated.higgles_balance_cents).toBe(before.higgles_balance_cents);
+  });
+
+  // A retried delivery of funds_reinstated (Stripe's at-least-once
+  // guarantee) must not double-credit -- the second one finds refunded_at
+  // already NULL and no-ops.
+  it('is idempotent against a retried funds_reinstated delivery', async () => {
+    const { builder, builderShareCents } = await createRealMoneyPurchase('webhook-dispute-reinstated-retry', 'pi_webhook_dispute_reinstated_retry');
+    const before = await builderRow(builder.builderId);
+
+    await postStripeWebhook(disputeEvent('charge.dispute.funds_withdrawn', 'pi_webhook_dispute_reinstated_retry'));
+    await postStripeWebhook(disputeEvent('charge.dispute.funds_reinstated', 'pi_webhook_dispute_reinstated_retry'));
+    const retried = await postStripeWebhook(disputeEvent('charge.dispute.funds_reinstated', 'pi_webhook_dispute_reinstated_retry'));
+    expect(retried.status).toBe(200);
+
+    const after = await builderRow(builder.builderId);
+    expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents);
+  });
+
+  // funds_reinstated arriving for a purchase that was never actually
+  // reversed (no prior funds_withdrawn, refunded_at already NULL) must be
+  // a safe no-op, not a free, unearned credit.
+  it('does nothing when funds_reinstated arrives for a purchase that was never reversed', async () => {
+    const { builder } = await createRealMoneyPurchase('webhook-dispute-never-reversed', 'pi_webhook_dispute_never_reversed');
+    const before = await builderRow(builder.builderId);
+
+    const response = await postStripeWebhook(disputeEvent('charge.dispute.funds_reinstated', 'pi_webhook_dispute_never_reversed'));
+    expect(response.status).toBe(200);
+
     const after = await builderRow(builder.builderId);
     expect(after.higgles_balance_cents).toBe(before.higgles_balance_cents);
   });
@@ -502,22 +549,20 @@ describe('Stripe purchase-reversal webhooks (#1086)', () => {
   });
 
   // Whichever of a purchase's possibly-several reversal events lands
-  // first (a dispute created, then later closed) wins the clawback via
-  // the same refunded_at-guarded update handlePurchaseRefund itself
-  // uses — every later event for the same purchase must be a no-op, not
-  // a second clawback.
+  // first (a retried webhook delivery, say) wins the clawback via the
+  // same refunded_at-guarded update handlePurchaseRefund itself uses —
+  // every later event for the same purchase must be a no-op, not a
+  // second clawback.
   it('only claws back once across multiple reversal events for the same purchase', async () => {
     const { builder, builderShareCents } = await createRealMoneyPurchase('webhook-idempotent', 'pi_webhook_idempotent');
     const before = await builderRow(builder.builderId);
 
-    const created = await postStripeWebhook(disputeEvent('charge.dispute.created', 'pi_webhook_idempotent', { status: 'warning_needs_response' }));
-    expect(created.status).toBe(200);
-    const closed = await postStripeWebhook(disputeEvent('charge.dispute.closed', 'pi_webhook_idempotent', { status: 'lost' }));
-    expect(closed.status).toBe(200);
+    const withdrawn = await postStripeWebhook(disputeEvent('charge.dispute.funds_withdrawn', 'pi_webhook_idempotent'));
+    expect(withdrawn.status).toBe(200);
     // A retried delivery of the very same event, which Stripe's own
     // at-least-once delivery guarantee makes an ordinary occurrence, not
     // an edge case.
-    const retried = await postStripeWebhook(disputeEvent('charge.dispute.closed', 'pi_webhook_idempotent', { status: 'lost' }));
+    const retried = await postStripeWebhook(disputeEvent('charge.dispute.funds_withdrawn', 'pi_webhook_idempotent'));
     expect(retried.status).toBe(200);
 
     const after = await builderRow(builder.builderId);
