@@ -45,15 +45,26 @@ const STRIPE_RATE_LIMIT_MAX = 20;
 const STRIPE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 5 * 60;
 
 // #1086: a charge can be reversed by Stripe's own initiative -- a bank
-// chargeback (charge.dispute.created withholds the disputed amount from
-// the connected account's balance immediately, not just once resolved;
-// charge.dispute.closed follows once the dispute's outcome is final) or a
-// dashboard-initiated refund (charge.refunded) -- entirely outside this
-// app's own POST /purchases/:id/refund. Each of these three event types'
-// own object (a Charge or a Dispute) carries a top-level `payment_intent`
-// field, the same join key handlePurchaseReversalWebhookEvent below looks
-// purchases up by.
-const STRIPE_PURCHASE_REVERSAL_EVENT_TYPES = ['charge.refunded', 'charge.dispute.created', 'charge.dispute.closed'];
+// chargeback or a dashboard-initiated refund (charge.refunded) -- entirely
+// outside this app's own POST /purchases/:id/refund. Each of these event
+// types' own object (a Charge or a Dispute) carries a top-level
+// `payment_intent` field, the same join key handlePurchaseReversalWebhookEvent
+// below looks purchases up by.
+//
+// #2419 (owner decision 2026-10-25): originally this list used
+// charge.dispute.created/charge.dispute.closed -- but per Stripe's own
+// "How disputes work" docs, charge.dispute.created also fires for a
+// pre-dispute INQUIRY (a "retrieval"/"request for information", status
+// `warning_*`), which never actually withdraws any funds -- only a
+// escalation to a real, formal dispute does. Clawing back the full
+// commission and revoking ownership grants on a mere inquiry that later
+// resolves informally (no money ever moved) was wrong, with nothing that
+// ever reversed it. charge.dispute.funds_withdrawn/.funds_reinstated are
+// Stripe's own dedicated real-money-movement signals for a dispute --
+// switching to them means this list now only ever reacts to events where
+// funds actually changed hands, for a refund exactly as much as for a
+// dispute.
+const STRIPE_PURCHASE_REVERSAL_EVENT_TYPES = ['charge.refunded', 'charge.dispute.funds_withdrawn', 'charge.dispute.funds_reinstated'];
 
 // #766: stripe_onboarding_status/stripe_requirements_due are only ever
 // written by a seller/builder actively resubmitting the onboarding form
@@ -132,38 +143,42 @@ export async function handleStripeWebhook(request, env, db) {
 // builder_share_cents the same way an ordinary refund already does,
 // balance allowed to go negative -- same precedent as the 2026-09-10
 // decision on #651 that handlePurchaseRefund's own comments reference.
-// Whichever of a purchase's possibly-several reversal events (a dispute
-// created then later closed, or a retried webhook delivery) lands first
-// wins the clawback via the same refunded_at-guarded update
-// handlePurchaseRefund itself uses (worker/index.js); every later one for
-// the same purchase affects 0 rows and is a deliberate no-op, not an
-// error. Unlike handlePurchaseRefund, this never checks paid_out_at: that
-// guard exists there to let the endpoint *refuse* a refund it would
-// otherwise have to initiate itself, but a webhook is reporting money
-// Stripe has already moved on its own -- there's nothing left here to
-// refuse by rejecting this write, only a payout-bookkeeping mismatch to
-// leave for manual reconciliation separately (same "leave the policy call
-// to a human" shape as writeOrphanedPurchaseRow's own comment elsewhere
-// in worker/index.js). Known residual gap, accepted rather than solved
-// here (owner, same thread): a chargeback can't be capped at
-// REFUND_PAYOUT_RATE the way a self-service refund is -- the card network
-// controls the reversed amount, not us -- so the fraud triangle #651
-// closed for ordinary refunds is still open for a real chargeback;
-// tracked separately at #1109, not a blocker for this fix.
+// Whichever of a purchase's possibly-several reversal events (a retried
+// webhook delivery, say) lands first wins the clawback via the same
+// refunded_at-guarded update handlePurchaseRefund itself uses
+// (worker/index.js); every later one for the same purchase affects 0 rows
+// and is a deliberate no-op, not an error. Unlike handlePurchaseRefund,
+// this never checks paid_out_at: that guard exists there to let the
+// endpoint *refuse* a refund it would otherwise have to initiate itself,
+// but a webhook is reporting money Stripe has already moved on its own --
+// there's nothing left here to refuse by rejecting this write, only a
+// payout-bookkeeping mismatch to leave for manual reconciliation
+// separately (same "leave the policy call to a human" shape as
+// writeOrphanedPurchaseRow's own comment elsewhere in worker/index.js).
+// Known residual gap, accepted rather than solved here (owner, same
+// thread): a chargeback can't be capped at REFUND_PAYOUT_RATE the way a
+// self-service refund is -- the card network controls the reversed
+// amount, not us -- so the fraud triangle #651 closed for ordinary
+// refunds is still open for a real chargeback; tracked separately at
+// #1109, not a blocker for this fix.
 async function handlePurchaseReversalWebhookEvent(db, event) {
-  // #2231: charge.dispute.closed fires on every final dispute outcome, not
-  // just a loss -- its own object's `status` is 'won', 'lost', or
-  // 'warning_closed'. 'won' means the card network ruled for the merchant
-  // and returned the withheld funds -- nothing was actually reversed, so
-  // there's nothing to claw back. This only covers the case where no
-  // earlier dispute.created event already clawed back this purchase (the
-  // refunded_at guard below already no-ops that case, same as before --
-  // reversing an already-applied clawback is a separate, non-mechanical
-  // follow-up, not decided here).
-  if (event.type === 'charge.dispute.closed' && event.data?.object?.status === 'won') return;
-
   const paymentIntentId = event.data?.object?.payment_intent;
   if (!paymentIntentId) return;
+  const purchase = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
+  if (!purchase) return;
+
+  // #2419 (owner decision 2026-10-25): charge.dispute.funds_reinstated is
+  // the real-money counterpart to funds_withdrawn below -- the card
+  // network returned the previously-withheld funds because the dispute
+  // resolved in the merchant's favor. Handled entirely separately from
+  // the clawback path below -- see handleDisputeFundsReinstatedWebhookEvent's
+  // own comment for what it does and, just as importantly, what it
+  // deliberately does not attempt.
+  if (event.type === 'charge.dispute.funds_reinstated') {
+    await handleDisputeFundsReinstatedWebhookEvent(db, purchase);
+    return;
+  }
+
   // #2232: charge.refunded fires for ANY refund on a charge, partial or
   // full -- the Charge object's own `refunded` boolean is the only
   // authoritative signal for "fully refunded" (it's true only once
@@ -171,13 +186,11 @@ async function handlePurchaseReversalWebhookEvent(db, event) {
   // $1 goodwill partial refund on a $100 purchase clawed back the builder's
   // entire commission and revoked all ownership that purchase granted, the
   // same way a genuine full refund does -- even though the buyer kept 99%
-  // of their payment and the product. Dispute events (charge.dispute.*)
-  // carry no `refunded` field at all, so this only applies to
-  // charge.refunded itself; a real chargeback/dispute still claws back in
-  // full immediately, per #1086's own deliberate design.
-  const purchase = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
-  if (!purchase) return;
-
+  // of their payment and the product. charge.dispute.funds_withdrawn
+  // carries no `refunded` field at all, so this only applies to
+  // charge.refunded itself; a real withdrawal still claws back in full
+  // immediately, per #1086's own deliberate design.
+  //
   // #2247 (owner decision 2026-10-25): a partial refund used to just
   // `return` here, entirely invisible to this app -- see
   // handlePartialRefundWebhookEvent's own comment for what it does instead.
@@ -195,6 +208,50 @@ async function handlePurchaseReversalWebhookEvent(db, event) {
   const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
     .bind(purchase.template_id).first();
   await clawBackPurchaseCommission(db, purchase, template?.name || 'A product');
+}
+
+// #2419 (owner decision 2026-10-25): reverses the money side of an
+// earlier charge.dispute.funds_withdrawn clawback once the card network
+// actually returns the funds (the dispute resolved in the merchant's
+// favor) -- credits back the same amount clawBackPurchaseCommission
+// debited (same credited-vs-held math, mirrored), and un-marks the
+// purchase as reversed so it's once again a normal, valid sale for
+// payout/1099 purposes.
+//
+// Per the owner's own comment on #2419 ("likely resolves part of #2235's
+// gap... as a side effect"), this is deliberately only a PARTIAL fix for
+// #2235: it never attempts to restore the owned_avatar_purchases/
+// owned_animation_purchases ownership grants clawBackPurchaseCommission
+// already destructively DELETEd (the underlying catalog_templates row
+// may not even exist anymore by now), or to un-revoke a commission_holds
+// row. Both remain the known, accepted residual gap #2235's own body
+// describes in detail -- reinstating money is safe and mechanical;
+// reinstating ownership isn't, and still needs that issue's own design
+// call.
+async function handleDisputeFundsReinstatedWebhookEvent(db, purchase) {
+  const guard = await db.prepare(
+    'UPDATE purchases SET refunded_at = NULL, refunded_amount_cents = 0 WHERE purchase_id = ? AND refunded_at IS NOT NULL',
+  ).bind(purchase.purchase_id).run();
+  if (guard.meta.changes === 0) return;
+
+  if (!purchase.builder_id) return;
+  // Same credited-amount math clawBackPurchaseCommission used when it
+  // originally debited this -- a hold this purchase's own clawback
+  // revoked (revoked_at set, the row otherwise left as-is) is the one
+  // amount that was never actually credited to the builder in the first
+  // place, so it's excluded from what gets credited back here too.
+  const revokedHold = await db.prepare(
+    'SELECT amount_cents FROM commission_holds WHERE purchase_id = ? AND revoked_at IS NOT NULL',
+  ).bind(purchase.purchase_id).first();
+  const creditBackCents = revokedHold ? purchase.builder_share_cents - revokedHold.amount_cents : purchase.builder_share_cents;
+  if (creditBackCents <= 0) return;
+
+  await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
+    .bind(creditBackCents, purchase.builder_id).run();
+  const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
+    .bind(purchase.template_id).first();
+  await fireNotification(db, purchase.builder_id,
+    `"${template?.name || 'A product'}" dispute resolved in your favor -- ${formatCents(creditBackCents)} commission reinstated.`);
 }
 
 // #2247 (owner decision 2026-10-25, on the issue's own open question about

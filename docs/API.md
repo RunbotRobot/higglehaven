@@ -1872,21 +1872,45 @@ table is a safe no-op `200`, not an error — a normal outcome for events on
 Stripe accounts this app never created (a test event in the dashboard, a
 webhook still configured after an account was deleted, etc).
 
-**#1086**: `charge.refunded`, `charge.dispute.created`, and
-`charge.dispute.closed` — a charge can be reversed by Stripe's own
-initiative (a bank chargeback, or a dashboard-initiated refund) entirely
-outside this app's own `POST /api/purchases/:purchaseId/refund` below.
-Without handling these, that purchase's row and the builder's commission
-credit both go permanently stale: `refunded_at` never gets set,
-`higgles_balance_cents` is never clawed back, `unpaidSellerPurchases`
+**#1086/#2419**: `charge.refunded`, `charge.dispute.funds_withdrawn`, and
+`charge.dispute.funds_reinstated` — a charge can be reversed by Stripe's
+own initiative (a bank chargeback, or a dashboard-initiated refund)
+entirely outside this app's own `POST /api/purchases/:purchaseId/refund`
+below. Without handling these, that purchase's row and the builder's
+commission credit both go permanently stale: `refunded_at` never gets
+set, `higgles_balance_cents` is never clawed back, `unpaidSellerPurchases`
 still treats the seller-share as claimable, and the tax-reporting
 threshold gate still counts it as legitimate gross income. Each event's
 own object (a Charge or a Dispute) carries a top-level `payment_intent`
 field, the join key used to look the `purchases` row up. Whichever of a
-purchase's possibly-several reversal events lands first (a dispute
-created, then later closed; or a retried webhook delivery) wins the
-clawback via the same `refunded_at`-guarded update `/refund` itself
-uses — every later event for the same purchase is a deliberate no-op.
+purchase's possibly-several reversal events lands first (a retried
+webhook delivery, say) wins the clawback via the same `refunded_at`-
+guarded update `/refund` itself uses — every later event for the same
+purchase is a deliberate no-op.
+
+**#2419** (owner decision 2026-10-25, superseding the original #1086
+design): this list originally used `charge.dispute.created`/
+`charge.dispute.closed` — but per Stripe's own "How disputes work" docs,
+`charge.dispute.created` also fires for a pre-dispute *inquiry* (a
+"retrieval"/"request for information", `status` prefixed `warning_`),
+which never actually withdraws any funds; only an escalation to a real,
+formal dispute does. Clawing back the full commission and revoking
+ownership on a mere inquiry that later resolves informally — no money
+ever moved — was wrong, with nothing that ever reversed it.
+`charge.dispute.funds_withdrawn`/`.funds_reinstated` are Stripe's own
+dedicated real-money-movement signals for a dispute, so this list now
+only ever reacts to events where funds actually changed hands, for a
+dispute exactly as much as for a refund. `funds_reinstated` reverses the
+money side of an earlier `funds_withdrawn` clawback (credits back the
+same amount that was debited, clears `refunded_at`/`refunded_amount_cents`
+back to "never reversed") once the dispute resolves in the merchant's
+favor — but deliberately only the money side. It never attempts to
+restore `owned_avatar_purchases`/`owned_animation_purchases` ownership
+grants the earlier clawback already destructively deleted (the
+underlying `catalog_templates` row may not even exist anymore), or to
+un-revoke a `commission_holds` row — both remain a known, accepted
+residual gap tracked at #2235, since reinstating money is safe and
+mechanical while reinstating ownership isn't.
 Unlike `/refund`, this never checks `paid_out_at`: that guard exists on
 the endpoint to let it *refuse* a refund it would otherwise have to
 initiate itself, but a webhook is reporting money Stripe has already
