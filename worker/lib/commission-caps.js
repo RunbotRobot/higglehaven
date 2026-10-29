@@ -167,6 +167,18 @@ async function releaseOrRevokeHold(db, hold) {
       .bind(hold.hold_id).run();
     return;
   }
+  // #2880: builder_id can now be null (migrations/0165 switched its own FK
+  // from CASCADE to SET NULL) if the builder self-deleted while this hold
+  // was still outstanding. Crediting a null builder_id would violate
+  // higgles_earnings_events.builder_id's own NOT NULL constraint and fail
+  // this whole batch -- not destructive (the hold row survives, this
+  // function is just retried every sweep), but also never actually
+  // resolves it, so it'd log a swallowed error forever. What should
+  // actually happen to a null-builder hold's money on release is a real
+  // policy decision, not made here (see #2880) -- leaving it untouched
+  // (neither released nor revoked) keeps it queryable/visible pending
+  // that decision instead of guessing at it.
+  if (hold.builder_id === null) return;
   await db.batch([
     db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
       .bind(hold.amount_cents, hold.builder_id),
