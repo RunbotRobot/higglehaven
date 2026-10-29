@@ -188,7 +188,27 @@ export async function fractionOfRegionWater(db, polygon) {
   const minY = Math.floor(Math.min(...ys) / spacing) * spacing;
   const maxY = Math.ceil(Math.max(...ys) / spacing) * spacing;
 
+  // Found via #2805's own real-seed-data follow-up: this table only ever
+  // stores WATER points (sparse), so if the polygon's own bounding box
+  // contains none at all, the fraction is unambiguously 0 regardless of
+  // the polygon's own lattice-point count -- querying first (scoped to
+  // this same bbox, typically a handful of rows) and bailing out here
+  // skips the full enumeration below entirely in the overwhelmingly
+  // common "no water nearby" case. Previously this enumeration ran
+  // unconditionally, before ever checking the DB -- harmless while
+  // geo_water_cells_fine shipped empty (nothing to find either way), but
+  // catastrophic for a polygon whose own bounding box is huge (a large
+  // candidate landlet far from the origin): millions of pointInPolygon
+  // checks for a result that was always going to be 0.
+  const rows = await db.prepare(`
+    SELECT x_m, y_m FROM geo_water_cells_fine
+    WHERE x_m >= ? AND x_m <= ? AND y_m >= ? AND y_m <= ?
+  `).bind(minX, maxX, minY, maxY).all();
+  if (!rows.results || rows.results.length === 0) return 0;
+
   const latticeKey = (x, y) => `${Math.round(x / spacing)},${Math.round(y / spacing)}`;
+  const waterKeys = new Set(rows.results.map((row) => latticeKey(row.x_m, row.y_m)));
+
   const insideKeys = [];
   for (let x = minX; x <= maxX; x += spacing) {
     for (let y = minY; y <= maxY; y += spacing) {
@@ -196,12 +216,6 @@ export async function fractionOfRegionWater(db, polygon) {
     }
   }
   if (insideKeys.length === 0) return 0;
-
-  const rows = await db.prepare(`
-    SELECT x_m, y_m FROM geo_water_cells_fine
-    WHERE x_m >= ? AND x_m <= ? AND y_m >= ? AND y_m <= ?
-  `).bind(minX, maxX, minY, maxY).all();
-  const waterKeys = new Set((rows.results || []).map((row) => latticeKey(row.x_m, row.y_m)));
 
   const waterCount = insideKeys.filter((key) => waterKeys.has(key)).length;
   return waterCount / insideKeys.length;
@@ -364,12 +378,10 @@ async function generateLandletMosaicCandidates(db, { prefix, count, radiusM }, a
   });
   const mosaicCells = mosaicResult.cells.map((cell, index) => candidateFromMosaicCell(cell, prefix, index));
   // generateWaterAwareMosaic already classifies water from the real,
-  // high-granularity geo_water_cells_fine data (#2805/#2811) -- this is a
-  // safety-net upgrade pass against the older, coarser geo_water_cells
-  // table on top of that, same as generateOrganicMosaic's own candidates
-  // always got. Harmless and valuable in practice while the fine table is
-  // still empty pending #2805's own NHD-outage follow-up: it's the only
-  // real water awareness this path has until that lands.
+  // high-granularity geo_water_cells_fine data (#2805/#2811, now real
+  // seed data per migrations/0167) -- this is a safety-net upgrade pass
+  // against the older, coarser geo_water_cells table on top of that, same
+  // as generateOrganicMosaic's own candidates always got.
   await applyRealWaterClassification(db, mosaicCells);
   await applyRealBiomeClassification(db, mosaicCells);
   await applyRealElevationClassification(db, mosaicCells);

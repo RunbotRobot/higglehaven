@@ -112,6 +112,34 @@ async function fetchWaterKeySet(db, outerRadiusM) {
 // uses for its own single-query-then-process-locally pattern).
 function fractionOfRegionWaterLocal(polygon, waterKeys) {
   const spacing = GEO_WATER_FINE_GRID_SPACING_M;
+
+  // Found via #2805's own real-seed-data follow-up: geo_water_cells_fine
+  // only ever stores WATER points (sparse), so if none of waterKeys' own
+  // real points fall inside this slice's polygon, the fraction is
+  // unambiguously 0 regardless of how many lattice points the polygon
+  // itself contains -- checking the (small, already-fetched-once-per-
+  // ring) water set directly skips the full bounding-box lattice walk
+  // below entirely in the common "no water in this slice" case. That
+  // walk's cost scales with the polygon's own bounding-box AREA, which
+  // for a thin angular ring slice far from the origin can be enormous
+  // even though its angular span is tiny -- arc length (and so bbox
+  // size) grows with radius, so a 5-degree slice at a multi-hundred-km
+  // ring radius enumerates tens of millions of points for a result that
+  // was always going to be 0. Reconstructing each key back to real
+  // coordinates is exact: every stored x_m/y_m is already an exact
+  // multiple of spacing (the fixed-origin lattice scripts/
+  // ingest-geo-data.mjs samples on), so key = round(coord/spacing) round-
+  // trips losslessly.
+  let anyWaterInside = false;
+  for (const key of waterKeys) {
+    const [kx, ky] = key.split(',').map(Number);
+    if (pointInPolygon({ x: kx * spacing, y: ky * spacing }, polygon)) {
+      anyWaterInside = true;
+      break;
+    }
+  }
+  if (!anyWaterInside) return 0;
+
   const xs = polygon.map((point) => point.x);
   const ys = polygon.map((point) => point.y);
   const minX = Math.floor(Math.min(...xs) / spacing) * spacing;
@@ -144,12 +172,13 @@ function fractionOfRegionWaterLocal(polygon, waterKeys) {
 // below normalizes that back into its own walk's bounds itself.
 //
 // sliceCount's default (72, i.e. 5-degree slices) is a reasonable-looking
-// starting point, not a value tuned against real data -- geo_water_cells_
-// fine is still empty in production pending #2805's own NHD-outage
-// follow-up, so there's nothing real to tune this default against yet.
-// Revisit once real water data exists and a real ring generation reveals
-// whether this is too coarse (missing a narrow water feature) or too fine
-// (wasted iteration) in practice.
+// starting point, not a value tuned against real data. geo_water_cells_
+// fine now carries real seed data (#2805's own NHD-outage follow-up,
+// migrations/0167), but tuning this default needs a real ring generation
+// run against it to reveal whether 5-degree slices are too coarse
+// (missing a narrow water feature) or too fine (wasted iteration) in
+// practice -- not attempted here, left as a follow-up once that's
+// observed.
 export async function detectWaterArcs(db, {
   innerRadiusM, outerRadiusM, startAngleRad = 0, sliceCount = 72, waterThreshold = PREDOMINANTLY_WATER_THRESHOLD,
 }) {
