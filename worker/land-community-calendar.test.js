@@ -350,9 +350,22 @@ describe('Community calendar', () => {
     expect(posted.response.status).toBe(201);
     const eventId = posted.body.event.eventId;
 
-    const deleted = await api(`/instances/calendar-admin-override-instance/events/${eventId}`, adminSession({ method: 'DELETE' }));
+    // #2388: the admin-override delete now requires a removal category.
+    const missingCategory = await api(`/instances/calendar-admin-override-instance/events/${eventId}`, adminSession({ method: 'DELETE' }));
+    expect(missingCategory.response.status).toBe(415);
+
+    const deleted = await api(`/instances/calendar-admin-override-instance/events/${eventId}`, adminSession({
+      method: 'DELETE', body: JSON.stringify({ category: 'harassment' }),
+    }));
     expect(deleted.response.status).toBe(200);
     expect(deleted.body).toEqual({ deleted: true });
+
+    const snapshot = await env.DB.prepare(
+      'SELECT * FROM moderation_removal_snapshots WHERE source_table = ? AND source_id = ?',
+    ).bind('calendar_events', eventId).first();
+    expect(snapshot).not.toBeNull();
+    expect(snapshot.removed_category).toBe('harassment');
+    expect(JSON.parse(snapshot.snapshot_json)).toMatchObject({ text: 'Abusive/policy-violating text goes here.' });
 
     const listed = await api('/instances/calendar-admin-override-instance/events');
     expect(listed.body.events).toEqual([]);
@@ -704,7 +717,9 @@ describe('Community calendar', () => {
     };
     let deleted;
     try {
-      deleted = await api(`/instances/calendar-delete-ownership-race-instance/events/${eventId}`, moderator.session({ method: 'DELETE' }));
+      deleted = await api(`/instances/calendar-delete-ownership-race-instance/events/${eventId}`, moderator.session({
+        method: 'DELETE', body: JSON.stringify({ category: 'spam' }),
+      }));
     } finally {
       env.DB.prepare = originalPrepare;
     }
@@ -786,10 +801,14 @@ describe('Community calendar', () => {
     ).bind(eventId, 'calendar-delete-rate-limit-instance', rateLimitBuilder.builder.label, 'An event')));
 
     for (let i = 0; i < 20; i++) {
-      const attempt = await api(`/instances/calendar-delete-rate-limit-instance/events/${eventIds[i]}`, rateLimitBuilder.session({ method: 'DELETE' }));
+      const attempt = await api(`/instances/calendar-delete-rate-limit-instance/events/${eventIds[i]}`, rateLimitBuilder.session({
+        method: 'DELETE', body: JSON.stringify({ category: 'spam' }),
+      }));
       expect(attempt.response.status).toBe(200);
     }
-    const limited = await api(`/instances/calendar-delete-rate-limit-instance/events/${eventIds[20]}`, rateLimitBuilder.session({ method: 'DELETE' }));
+    const limited = await api(`/instances/calendar-delete-rate-limit-instance/events/${eventIds[20]}`, rateLimitBuilder.session({
+      method: 'DELETE', body: JSON.stringify({ category: 'spam' }),
+    }));
     expect(limited.response.status).toBe(429);
   });
 
@@ -905,7 +924,9 @@ describe('Community calendar', () => {
         api(`/instances/${instanceId}/events/${eventId}`, owner.session({
           method: 'PATCH', body: JSON.stringify({ text: 'Raced edit' }),
         })),
-        api(`/instances/${instanceId}/events/${eventId}`, adminSession({ method: 'DELETE' })),
+        api(`/instances/${instanceId}/events/${eventId}`, adminSession({
+          method: 'DELETE', body: JSON.stringify({ category: 'spam' }),
+        })),
       ]);
 
       expect([200, 404, 409]).toContain(patchResult.response.status);
@@ -1042,7 +1063,9 @@ describe('Community calendar', () => {
       await env.DB.prepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
         .bind(newOwner.builderId, landletId).run();
 
-      const deleted = await api(`/instances/${instanceId}/events/${eventId}`, newOwner.session({ method: 'DELETE' }));
+      const deleted = await api(`/instances/${instanceId}/events/${eventId}`, newOwner.session({
+        method: 'DELETE', body: JSON.stringify({ category: 'other' }),
+      }));
       expect(deleted.response.status).toBe(200);
     });
 
@@ -1066,7 +1089,9 @@ describe('Community calendar', () => {
       const deleteRejectedByStranger = await api(`/instances/${instanceId}/events/${eventId}`, stranger.session({ method: 'DELETE' }));
       expect(deleteRejectedByStranger.response.status).toBe(403);
 
-      const deletedByOwner = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({ method: 'DELETE' }));
+      const deletedByOwner = await api(`/instances/${instanceId}/events/${eventId}`, owner.session({
+        method: 'DELETE', body: JSON.stringify({ category: 'other' }),
+      }));
       expect(deletedByOwner.response.status).toBe(200);
     });
 
@@ -1194,23 +1219,38 @@ describe('Community calendar', () => {
     // event left behind by a former owner) is not the user editing/deleting
     // their own content -- the owner's own framing was specifically about
     // self-service, so these must not write to the history table.
+    //
+    // #2388: this is exactly the asymmetry that issue closed -- a
+    // moderation delete now writes to moderation_removal_snapshots instead
+    // (a separate, admin-only table, never user_content_edit_history), so
+    // this test also confirms that write happens, not just that the old
+    // table stays untouched.
     it('does not snapshot to user_content_edit_history on an admin or landlet-moderation delete', async () => {
       const { owner, instanceId, landletId } = await setupCalendar('history-moderation');
       const adminEventId = await postEvent(instanceId, owner, { text: 'Admin will remove this.' });
-      const adminDeleted = await api(`/instances/${instanceId}/events/${adminEventId}`, adminSession({ method: 'DELETE' }));
+      const adminDeleted = await api(`/instances/${instanceId}/events/${adminEventId}`, adminSession({
+        method: 'DELETE', body: JSON.stringify({ category: 'harassment' }),
+      }));
       expect(adminDeleted.response.status).toBe(200);
 
       const moderationEventId = await postEvent(instanceId, owner, { text: 'New owner will remove this.' });
       const newOwner = await signupBuilder('cal-au-history-moderation-new-owner');
       await env.DB.prepare('UPDATE landlets SET owner_builder_id = ? WHERE landlet_id = ?')
         .bind(newOwner.builderId, landletId).run();
-      const moderationDeleted = await api(`/instances/${instanceId}/events/${moderationEventId}`, newOwner.session({ method: 'DELETE' }));
+      const moderationDeleted = await api(`/instances/${instanceId}/events/${moderationEventId}`, newOwner.session({
+        method: 'DELETE', body: JSON.stringify({ category: 'spam' }),
+      }));
       expect(moderationDeleted.response.status).toBe(200);
 
       const history = await env.DB.prepare(
         'SELECT * FROM user_content_edit_history WHERE source_table = ? AND source_id IN (?, ?)',
       ).bind('calendar_events', adminEventId, moderationEventId).all();
       expect(history.results).toHaveLength(0);
+
+      const snapshots = await env.DB.prepare(
+        'SELECT * FROM moderation_removal_snapshots WHERE source_table = ? AND source_id IN (?, ?)',
+      ).bind('calendar_events', adminEventId, moderationEventId).all();
+      expect(snapshots.results).toHaveLength(2);
     });
   });
 });

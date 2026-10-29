@@ -10,6 +10,7 @@ import {
 } from './validation.js';
 import { currentUser, requireSessionBuilder, requireVerifiedSession } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
+import { moderationRemovalCategory, recordModerationRemovalSnapshot } from './content-moderation.js';
 // #2535 (see its own module's comment for the general shape): these
 // haven't been extracted from worker/index.js yet -- requireOwnedLandlet(s)
 // is a genuinely cross-cutting auth/ownership helper used from dozens of
@@ -956,10 +957,17 @@ export async function handleSignPosts(request, db, route) {
     const admin = requester && requester.is_admin ? requester : null;
     if (admin) {
       await checkRateLimit(db, `sign-post-delete:${admin.user_id}`, SIGN_POST_DELETE_RATE_LIMIT_MAX);
+      // #2388: required on every moderation delete now -- see
+      // worker/lib/content-moderation.js for why this is validated before
+      // the delete, with the snapshot itself only written after it's
+      // confirmed to have actually happened (same idiom as the admin
+      // action log line right below).
+      const category = moderationRemovalCategory(await readJson(request));
       const deletedByAdmin = await db.prepare('DELETE FROM sign_posts WHERE post_id = ?').bind(postId).run();
       if (deletedByAdmin.meta.changes === 0) {
         throw new HttpError('Post changed concurrently — refetch and retry', 409);
       }
+      await recordModerationRemovalSnapshot(db, 'sign_posts', postId, category, existing, admin.user_id);
       await adminActionLogStatement(db, admin.user_id, 'delete_sign_post_override', 'sign_post', postId).run();
       return json({ deleted: true });
     }
@@ -989,6 +997,9 @@ export async function handleSignPosts(request, db, route) {
     // always.
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
     await checkRateLimit(db, `sign-post-delete:${sessionBuilder.builder_id}`, SIGN_POST_DELETE_RATE_LIMIT_MAX);
+    // #2388: same requirement as the admin-override branch above, validated
+    // before the DELETE below.
+    const category = moderationRemovalCategory(await readJson(request));
     // #960: requireOwnedLandlet above is a point-in-time check, and
     // checkRateLimit is a real awaited write in between -- without this,
     // an auction resolving (transferring ownership) in that gap would let
@@ -1005,6 +1016,10 @@ export async function handleSignPosts(request, db, route) {
     if (deleted.meta.changes === 0) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
+    // #2388: logged only after the delete is confirmed to have actually
+    // happened, same idiom as recordContentEditHistory's own calls
+    // elsewhere in this file.
+    await recordModerationRemovalSnapshot(db, 'sign_posts', postId, category, existing, sessionBuilder.user_id);
     return json({ deleted: true });
   }
 
@@ -1229,10 +1244,14 @@ export async function handleCalendarEvents(request, db, route) {
     const admin = requester && requester.is_admin ? requester : null;
     if (admin) {
       await checkRateLimit(db, `calendar-event-delete:${admin.user_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
+      // #2388: same requirement as handleSignPosts' own admin-override
+      // branch above -- see worker/lib/content-moderation.js.
+      const category = moderationRemovalCategory(await readJson(request));
       const deletedByAdmin = await db.prepare('DELETE FROM calendar_events WHERE event_id = ?').bind(eventId).run();
       if (deletedByAdmin.meta.changes === 0) {
         throw new HttpError('Event changed concurrently — refetch and retry', 409);
       }
+      await recordModerationRemovalSnapshot(db, 'calendar_events', eventId, category, existing, admin.user_id);
       await adminActionLogStatement(db, admin.user_id, 'delete_calendar_event_override', 'calendar_event', eventId).run();
       return json({ deleted: true });
     }
@@ -1260,6 +1279,9 @@ export async function handleCalendarEvents(request, db, route) {
     }
     await requireOwnedLandlet(db, instance.landlet_id, sessionBuilder.builder_id);
     await checkRateLimit(db, `calendar-event-delete:${sessionBuilder.builder_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
+    // #2388: same requirement as the admin-override branch above, and as
+    // handleSignPosts' own landlet-owner-moderation branch.
+    const category = moderationRemovalCategory(await readJson(request));
     // #960: same #929 idiom as the sign-posts DELETE above -- see its own
     // comment.
     const deleted = await db.prepare(`
@@ -1272,6 +1294,8 @@ export async function handleCalendarEvents(request, db, route) {
     if (deleted.meta.changes === 0) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
+    // #2388: logged only after the delete is confirmed.
+    await recordModerationRemovalSnapshot(db, 'calendar_events', eventId, category, existing, sessionBuilder.user_id);
     return json({ deleted: true });
   }
 

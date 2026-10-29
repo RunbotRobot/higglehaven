@@ -1315,8 +1315,16 @@ export async function createSignPost(instanceId, { text }) {
   return post;
 }
 
-export async function deleteSignPost(instanceId, postId) {
-  await requestJson(`/instances/${encodeURIComponent(instanceId)}/posts/${encodeURIComponent(postId)}`, { method: 'DELETE' });
+// #2388: `category` is required server-side on a moderation delete (admin
+// override or the landlet-owner moderation path) and ignored/unread on an
+// author's own self-delete (that branch never calls readJson at all) -- so
+// it's an optional param here, sent only when the caller is the moderation
+// UI, not the author's own "delete my post" button.
+export async function deleteSignPost(instanceId, postId, { category } = {}) {
+  await requestJson(`/instances/${encodeURIComponent(instanceId)}/posts/${encodeURIComponent(postId)}`, {
+    method: 'DELETE',
+    ...(category ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ category }) } : {}),
+  });
 }
 
 // #1830: lets a shopper edit their own previously-posted note (gated
@@ -1383,8 +1391,13 @@ export async function createCalendarEvent(instanceId, { text, scheduledAt } = {}
   return event;
 }
 
-export async function deleteCalendarEvent(instanceId, eventId) {
-  await requestJson(`/instances/${encodeURIComponent(instanceId)}/events/${encodeURIComponent(eventId)}`, { method: 'DELETE' });
+// #2388: same optional-category shape as deleteSignPost above -- required
+// server-side on a moderation delete, unread on the author's own self-delete.
+export async function deleteCalendarEvent(instanceId, eventId, { category } = {}) {
+  await requestJson(`/instances/${encodeURIComponent(instanceId)}/events/${encodeURIComponent(eventId)}`, {
+    method: 'DELETE',
+    ...(category ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ category }) } : {}),
+  });
 }
 
 // #1975: lets an event's own author edit it directly (gated author-only
@@ -1501,8 +1514,15 @@ export async function createProductReview(templateId, { rating, text } = {}) {
   return review;
 }
 
-export async function deleteProductReview(templateId, reviewId) {
-  await requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews/${encodeURIComponent(reviewId)}`, { method: 'DELETE' });
+// #2388: same optional-category shape as deleteSignPost/deleteCalendarEvent
+// above -- required server-side on a moderation delete (admin, seller, or
+// the anonymous/orphaned-template fallback), unread on the author's own
+// self-delete.
+export async function deleteProductReview(templateId, reviewId, { category } = {}) {
+  await requestJson(`/catalog/${encodeURIComponent(templateId)}/reviews/${encodeURIComponent(reviewId)}`, {
+    method: 'DELETE',
+    ...(category ? { headers: { 'content-type': 'application/json' }, body: JSON.stringify({ category }) } : {}),
+  });
 }
 
 // #1975: author-only -- PATCH 403s with "Not your review" for anyone else's

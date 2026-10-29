@@ -130,6 +130,11 @@ console.log('summary text (should mention the 4.0 average and "2 reviews"):', su
 // would use. Distinguished by the absence of "Lovely product" rather than
 // a differing author label.
 await row().locator('.product-review-row').filter({ hasNotText: 'Lovely product' }).locator('.product-review-row-delete').click();
+// #2388: the seller-moderation delete now requires a removal category,
+// collected via this themed modal instead of deleting outright.
+await page.waitForSelector('#moderation-category-modal.visible', { timeout: 5000 });
+await page.locator('input[name="moderation-category"][value="other"]').check();
+await page.locator('#moderation-category-delete-btn').click();
 await page.waitForFunction(() => document.querySelectorAll('.product-review-row').length === 1, null, { timeout: 15000 });
 const rowCountAfterDelete = await row().locator('.product-review-row').count();
 console.log('rows shown after deleting one via the panel (should be 1):', rowCountAfterDelete);

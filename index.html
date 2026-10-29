@@ -2218,6 +2218,71 @@
         background: var(--brand-green);
         color: #16240a;
       }
+      /* #2388: same shell as #bundle-name-modal above, for the moderation-
+         delete category picker. */
+      #moderation-category-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #moderation-category-modal.visible {
+        display: flex;
+      }
+      #moderation-category-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #moderation-category-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #moderation-category-modal-subtitle {
+        margin: 0;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      #moderation-category-options {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      #moderation-category-options label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      #moderation-category-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #moderation-category-delete-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: #c0392b;
+        color: #fff;
+      }
+      #moderation-category-delete-btn:disabled {
+        opacity: 0.5;
+      }
       /* #453: real-money checkout — same modal shell as #upload-modal,
          stacked above the world (no other modal opens over Shop mode's
          world view), holding a Stripe Elements card field. */
@@ -4929,6 +4994,31 @@
         </label>
         <div id="bundle-name-modal-actions">
           <button id="bundle-name-save-btn" type="button">Save</button>
+        </div>
+      </div>
+    </div>
+    <!-- #2388: the themed modal a moderator/admin/seller now sees before any
+         moderation delete of a sign post, calendar event, or product review
+         -- the server requires this category on every such delete (see
+         worker/lib/content-moderation.js), so the UI must collect it before
+         calling deleteSignPost/deleteCalendarEvent/deleteProductReview with
+         one. Same bundle-name-modal shell/pattern (#2761) a moderation flow
+         gets exactly like any other user-facing prompt -- native confirm()
+         is not an option here either. -->
+    <div id="moderation-category-modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div id="moderation-category-modal-content">
+        <button id="moderation-category-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2 id="moderation-category-modal-title">Remove this content</h2>
+        <p id="moderation-category-modal-subtitle">Why is this being removed? A snapshot is kept for every category except sexual content, which is deleted with nothing retained.</p>
+        <div id="moderation-category-options" role="radiogroup" aria-labelledby="moderation-category-modal-title">
+          <label><input type="radio" name="moderation-category" value="harassment" />Harassment</label>
+          <label><input type="radio" name="moderation-category" value="spam" />Spam</label>
+          <label><input type="radio" name="moderation-category" value="scam" />Scam</label>
+          <label><input type="radio" name="moderation-category" value="sexual_content" />Sexual content</label>
+          <label><input type="radio" name="moderation-category" value="other" />Other</label>
+        </div>
+        <div id="moderation-category-modal-actions">
+          <button id="moderation-category-delete-btn" type="button" disabled>Delete</button>
         </div>
       </div>
     </div>

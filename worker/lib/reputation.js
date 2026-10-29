@@ -25,6 +25,7 @@ import { readJson, stringValue } from './validation.js';
 import { fireNotification } from './notifications.js';
 import { currentUser, requireAdmin, assertOwner, requireSessionBuilder } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
+import { moderationRemovalCategory, recordModerationRemovalSnapshot } from './content-moderation.js';
 import {
   requireSessionSeller, sellerExists, recordContentEditHistory,
   reviewFromRow, sellerFeedbackFromRow,
@@ -321,8 +322,15 @@ export async function handleProductReviews(request, db, route) {
       await recordContentEditHistory(db, 'product_reviews', reviewId, 'delete', existing, requester.user_id);
       return json({ deleted: true });
     }
+    // #2388: every moderation path below (admin, seller, and the anonymous/
+    // orphaned-template fallback) now requires a category, unlike the
+    // author's own self-delete branch above which already returned. Read
+    // and validated before the shared DELETE runs, same as this file's own
+    // PATCH branch validates input before its UPDATE.
+    let category;
     if (admin) {
       await checkRateLimit(db, `product-review-delete:${admin.user_id}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
+      category = moderationRemovalCategory(await readJson(request));
     } else if (template?.seller_id && await sellerExists(db, template.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(template.seller_id, sessionSeller.seller_id, 'Not your catalog template');
@@ -332,8 +340,10 @@ export async function handleProductReviews(request, db, route) {
       // actions in this file (FRIENDSHIP_MUTATE_RATE_LIMIT_MAX #899,
       // CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX #944).
       await checkRateLimit(db, `product-review-delete:${sessionSeller.seller_id}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
+      category = moderationRemovalCategory(await readJson(request));
     } else {
       await checkRateLimit(db, `product-review-delete:${clientIp(request)}`, PRODUCT_REVIEW_DELETE_RATE_LIMIT_MAX);
+      category = moderationRemovalCategory(await readJson(request));
     }
     const result = await db.prepare('DELETE FROM product_reviews WHERE review_id = ?').bind(reviewId).run();
     // `admin` is only set on the admin-override branch above; an ordinary
@@ -347,6 +357,13 @@ export async function handleProductReviews(request, db, route) {
     // "logged only after confirmed" idiom delete_land_candidate already uses.
     if (admin && result.meta.changes === 1) {
       await adminActionLogStatement(db, admin.user_id, 'delete_review_override', 'product_review', reviewId).run();
+    }
+    // #2388: same "logged only after confirmed" idiom -- requester may be
+    // null here (the anonymous/orphaned-template branch has no authenticated
+    // caller at all), which recordModerationRemovalSnapshot's own
+    // removedByUserId param is nullable for exactly this reason.
+    if (result.meta.changes === 1) {
+      await recordModerationRemovalSnapshot(db, 'product_reviews', reviewId, category, existing, requester?.user_id ?? null);
     }
     return json({ deleted: true });
   }

@@ -5711,6 +5711,17 @@ Three independent ways in, either sufficient on its own:
   moderates." A session logged in as the owner of the sign's own hosting
   landlet (`403` otherwise), regardless of who the post's own author is.
 
+**#2388:** both moderation paths above (admin and the landlet owner) now
+require a body `{ "category" }`, one of `harassment`/`spam`/`scam`/
+`sexual_content`/`other` — `400` for anything else, including a missing
+field. The author's own self-delete path above takes no body at all (the
+server never reads one on that branch). On a successful moderation delete,
+the category plus a snapshot of the row as it existed right before removal
+is recorded in `moderation_removal_snapshots` (see "Moderation removal
+snapshots" below) — except for `sexual_content`, where nothing at all is
+retained, not even the post's own text, per the owner's own decision
+(2026-10-20).
+
 `401` with no session at all. `404` if the post doesn't exist (or belongs
 to a different instance). Deleting the sign instance itself cascades to
 every post on it (`ON DELETE CASCADE`, migrations/0041) — no orphaned
@@ -5753,10 +5764,13 @@ project keeps a class per genuinely different element even when the look
 is identical). Build mode itself never renders a sign's post sprites
 (those are Shop-mode-only, see below), so this modal is the only place a
 builder ever sees what's actually been posted. Each row's only action is
-a delete (×) button calling `DELETE .../posts/:postId` and re-rendering
-the list; the modal's own "Remove Community Sign" button un-flags the
-instance (`isCommunitySign = false`, synced the same way the initial flag
-was set) and closes the modal.
+a delete (×) button; since #2388, clicking it opens the themed
+`#moderation-category-modal` (`src/ui/moderationCategoryModal.js`, the
+same reusable Promise-based pattern #2761 established) to collect the
+required removal category before calling `DELETE .../posts/:postId` with
+it and re-rendering the list. The modal's own "Remove Community Sign"
+button un-flags the instance (`isCommunitySign = false`, synced the same
+way the initial flag was set) and closes the modal.
 
 ### Frontend wiring — Shop mode
 
@@ -5930,6 +5944,12 @@ framing. The admin-override and landlet-owner moderation `DELETE` paths
 deliberately do **not** write to it; that table is for a genuine author's
 own edit/delete of their own content, not moderation.
 
+**#2388:** those same two moderation `DELETE` paths (admin override and
+landlet-owner moderation) instead require a body `{ "category" }` — same
+required field, same five-value enum, same `400` on anything else, same
+`moderation_removal_snapshots` write (sexual_content retaining nothing) as
+sign posts' `DELETE` above. The author-direct `DELETE` path takes no body.
+
 **`POST` requires a real session either way (since #1830, sign posts too)
 — the distinction is *whose*.** This endpoint requires a session logged
 in as the hosting landlet's own owning builder specifically (`401`/`403`
@@ -5949,7 +5969,10 @@ shopper-authored `authorLabel`.
 Sign, with the identical toggle-then-manage design (first click flags it,
 a second click while already flagged opens `#calendar-events-modal`
 instead of un-flagging — moderation and un-flagging both live inside that
-modal, mirroring `#sign-posts-modal`). In Shop mode, `registerShopCalendar`/
+modal, mirroring `#sign-posts-modal`). Since #2388, that modal's own
+per-row delete button opens the same `#moderation-category-modal` sign
+posts' own delete button does, collecting the required removal category
+before calling `DELETE .../events/:eventId` with it. In Shop mode, `registerShopCalendar`/
 `rebuildCalendarSprites`/`updateCalendarFade` mirror their sign
 counterparts exactly, down to reusing `makeSignPostSprite` directly (it's
 generic single-line text-sprite rendering with nothing sign-specific in
@@ -6129,6 +6152,24 @@ deletes (admin override, seller) do **not** write to this table — the
 owner's own framing was specifically about a user's edit/delete of *their
 own* entry, not every removal of that content.
 
+**#2388 (owner decision, 2026-10-20): every moderation `DELETE` path —
+admin, the template's own seller, and the anonymous/orphaned-template
+fallback alike — now requires a body `{ "category" }`**, one of
+`harassment`/`spam`/`scam`/`sexual_content`/`other` (`400` for anything
+else, including a missing field; validated and rejected *before* the
+`DELETE` runs). The review's own author-direct delete path above takes no
+body at all. On a successful moderation delete, the category plus a
+snapshot of the review's row right before removal lands in
+`moderation_removal_snapshots` (see "Moderation removal snapshots" below)
+— a separate, admin-only table from `user_content_edit_history` above,
+since this is a moderator/admin/seller acting on someone else's content,
+not an author's own self-service edit/delete: different actor/intent,
+different visibility (this must never surface back to the review's own
+author), different retention (`sexual_content` retains nothing at all, not
+even a text fragment — the one category exempt from getting a snapshot).
+The anonymous/orphaned-template fallback has no authenticated caller at
+all, so its snapshot's `removedByUserId` is `null`.
+
 `POST` also notifies the template's own seller (#1043) — best-effort,
 fired after the insert succeeds, same "informational, never worth failing
 the write over" convention every other notification source in this file
@@ -6171,7 +6212,10 @@ panel, the same idiom as that row's existing Extensibility panel — fetched
 lazily on first open, showing the averaged star summary plus each review
 with its own delete button. There is no Build-mode toggle or modal for
 this at all; a builder placing a copy of a reviewable product has nothing
-to opt in or moderate.
+to opt in or moderate. Since #2388, that delete button opens the same
+`#moderation-category-modal` the sign-posts/calendar-events moderation
+panels use, collecting the required removal category before calling
+`DELETE .../reviews/:reviewId` with it.
 
 In Shop mode, every loaded placed instance registers into `shopReviews`
 unconditionally (`registerShopReview`, keyed by the instance's underlying
@@ -11007,6 +11051,57 @@ fallback access path AGENTS.md's own Control Room section documents.
 sentinel at write time whenever it matches case-insensitively (#2830,
 same precedent as `waitingOn`/`kind` below), so this badge isn't
 defeated by a caller/`from` value like `"Owner"`.
+
+## Moderation removal snapshots (#2388)
+
+`moderation_removal_snapshots` (`migrations/0168_moderation_removal_snapshots.sql`)
+closes an asymmetry `user_content_edit_history` (migrations/0129, see
+"Product reviews" above) left open: that table snapshots a row only when
+its own **author** edits/deletes it — a moderator/admin/seller removing
+someone *else's* `sign_posts`/`calendar_events`/`product_reviews` row left
+no record anywhere of what was actually removed, only (on the admin-
+override paths) a bare `admin_action_log` row with a `null` `detail`.
+
+Every moderation `DELETE` across all three content types (see "Community
+signs"/"Community calendar"/"Product reviews" above) now requires a body
+`{ "category" }` — one of `harassment`/`spam`/`scam`/`sexual_content`/
+`other` (`worker/lib/content-moderation.js`'s `MODERATION_REMOVAL_CATEGORIES`,
+`400` for anything else or a missing field) — and writes one row here
+right after the delete is confirmed to have actually happened (never
+before, and never for a delete that lost a concurrency race, same "logged
+only after confirmed" idiom `recordContentEditHistory`/`admin_action_log`
+already follow):
+
+- `snapshotId`, `sourceTable` (`'sign_posts'`/`'calendar_events'`/
+  `'product_reviews'`), `sourceId` (the removed row's own id — no FK to
+  the live table, same reasoning `user_content_edit_history`'s own
+  migration gives: this must survive regardless of what later happens to
+  the already-deleted row it describes), `removedCategory`.
+- `snapshotJson` — the full removed row, JSON-serialized, **except when
+  `removedCategory` is `sexual_content`: always `null` there, no
+  exceptions.** Per the owner's own decision (2026-10-20): "If category is
+  sexual_content: hard delete, nothing retained anywhere... not in a
+  snapshot, not even as a text fragment." Every other category keeps a
+  real snapshot, same dispute-retention spirit as
+  `user_content_edit_history`'s own author-initiated ones.
+- `removedByUserId` — nullable (`ON DELETE SET NULL`, same as
+  `user_content_edit_history.actor_user_id`): `null` specifically for the
+  `product_reviews` anonymous/orphaned-template delete path, which has no
+  authenticated caller at all.
+- `removedAt`.
+
+Deliberately a **separate** table from `user_content_edit_history`, not a
+shared one, per the owner's own reasoning: different actor/intent (a
+moderator/admin acting on someone else's content, vs. an author's own
+self-edit), different visibility (this must never surface to the content's
+own original author or to whoever reported it — admin-only, unlike edit
+history which the frontend's own dispute-review UI may eventually show the
+author), and an independently adjustable retention policy the category
+split above needs. Nothing in this app currently reads this table back
+through any API — same internal-record-only posture `admin_action_log` had
+before #996 gave it a browse endpoint — the practical way to query it today
+is directly against D1, the same `(source_table, source_id, removed_at)`
+index shape `user_content_edit_history`'s own lookup index already uses.
 
 ## Admin action log (#996, sub-issue-in-spirit of #813/#814)
 
