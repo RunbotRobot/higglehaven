@@ -367,3 +367,75 @@ describe('releaseDueCommissionHolds cron sweep (#1109)', () => {
     expect(afterSweepHold.revoked_at).not.toBeNull();
   });
 });
+
+// #2880: commission_holds.builder_id used to CASCADE on the host builder's
+// own self-delete, silently destroying the record of an active hold's
+// escrowed money -- same real-money gap migrations/0062/0086 already fixed
+// for purchases.builder_id/higgles_redemptions.builder_id. migrations/
+// 0165_commission_holds_builder_id_set_null.sql switches it to SET NULL
+// instead; what should actually happen to a null-builder hold's money on
+// release is a genuine owner-judgment call, not decided here -- these
+// tests only confirm the record survives and the sweep stays safe, not
+// what it eventually does with the money.
+describe('Builder self-delete while holding an active commission_holds row (#2880)', () => {
+  it('keeps the hold record (with a nulled builderId) instead of destroying it', async () => {
+    const seller = await setUpSeller('self-delete-active-hold', 1000);
+    for (let i = 0; i < MIN_ESTABLISHED_COUNTERPARTIES; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const buyer = await signupAdmin(`self-delete-active-hold-history-${i}`);
+      // eslint-disable-next-line no-await-in-loop
+      await purchase('self-delete-active-hold-instance', buyer);
+    }
+    await createTemplate('self-delete-active-hold-big-template', 100000);
+    await placeInstance('self-delete-active-hold-big-instance', 'self-delete-active-hold-landlet', 'self-delete-active-hold-big-template', seller);
+    const bigBuyer = await signupAdmin('self-delete-active-hold-big-buyer');
+    const bigPurchase = await purchase('self-delete-active-hold-big-instance', bigBuyer);
+    const hold = await env.DB.prepare('SELECT * FROM commission_holds WHERE purchase_id = ?').bind(bigPurchase.purchaseId).first();
+    expect(hold).toBeTruthy(); // confirms a hold really was created
+
+    const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+
+    const holdAfterDelete = await env.DB.prepare('SELECT * FROM commission_holds WHERE hold_id = ?').bind(hold.hold_id).first();
+    expect(holdAfterDelete).toBeTruthy(); // not CASCADE-deleted along with the builder
+    expect(holdAfterDelete.builder_id).toBeNull();
+    expect(holdAfterDelete.amount_cents).toBe(hold.amount_cents);
+    expect(holdAfterDelete.released_at).toBeNull();
+    expect(holdAfterDelete.revoked_at).toBeNull();
+  });
+
+  it('leaves a null-builder hold untouched (neither released nor revoked) once due, instead of crashing the sweep', async () => {
+    const seller = await setUpSeller('self-delete-due-hold', 1000);
+    for (let i = 0; i < MIN_ESTABLISHED_COUNTERPARTIES; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const buyer = await signupAdmin(`self-delete-due-hold-history-${i}`);
+      // eslint-disable-next-line no-await-in-loop
+      await purchase('self-delete-due-hold-instance', buyer);
+    }
+    await createTemplate('self-delete-due-hold-big-template', 100000);
+    await placeInstance('self-delete-due-hold-big-instance', 'self-delete-due-hold-landlet', 'self-delete-due-hold-big-template', seller);
+    const bigBuyer = await signupAdmin('self-delete-due-hold-big-buyer');
+    const bigPurchase = await purchase('self-delete-due-hold-big-instance', bigBuyer);
+    const hold = await env.DB.prepare('SELECT * FROM commission_holds WHERE purchase_id = ?').bind(bigPurchase.purchaseId).first();
+
+    const deleted = await api(`/builders/${seller.builderId}`, seller.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+
+    // Force it due, same as the ordinary cron-sweep tests above.
+    await env.DB.prepare('UPDATE commission_holds SET release_at = \'2000-01-01T00:00:00.000Z\' WHERE hold_id = ?').bind(hold.hold_id).run();
+
+    // Must not throw -- a null builder_id would otherwise violate
+    // higgles_earnings_events.builder_id's own NOT NULL constraint.
+    await expect(releaseDueCommissionHolds(env.DB)).resolves.toBeUndefined();
+
+    // released_at staying null (not just "no throw") is the real
+    // confirmation nothing got credited -- releaseOrRevokeHold's own
+    // credit/ledger-insert/released_at-set happen together in one batch,
+    // so a null released_at here means that batch never ran at all for
+    // this hold.
+    const holdAfterSweep = await env.DB.prepare('SELECT released_at, revoked_at, builder_id FROM commission_holds WHERE hold_id = ?').bind(hold.hold_id).first();
+    expect(holdAfterSweep.builder_id).toBeNull();
+    expect(holdAfterSweep.released_at).toBeNull();
+    expect(holdAfterSweep.revoked_at).toBeNull();
+  });
+});
