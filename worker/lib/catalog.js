@@ -752,6 +752,58 @@ async function notifyBuildersOfDimensionChangeBatch(db, candidates) {
   }));
 }
 
+// #792 (owner decision, 2026-10-28, live conversation): deletion proceeds
+// regardless of any bundle still referencing the deleted template(s) --
+// affected bundle owners just get notified, mirroring
+// notifyBuildersOfDimensionChange's own "tell them, don't block them"
+// precedent for the lesser case of a resize. A bundle keeps working with a
+// visible gap where a deleted item was (placeClipboardItems, #469,
+// already skips a missing template and surfaces a post-placement alert --
+// that part needed no change, only this notification side did).
+//
+// `templates` is always an array (one entry from the single-item DELETE
+// handler, up to 100 from the batch one) so a batch delete that removes
+// several templates one bundle references all at once still produces one
+// notification per affected bundle, not one per template -- same "one
+// grouped query + one batched fan-out" idiom notifyBuildersOfDimensionChangeBatch
+// above already uses for its own batch sibling.
+//
+// Each notification is fired with templateId left at fireNotifications'
+// own default (null), never one of the ids just deleted -- unlike
+// notifyBuildersOfDimensionChange(Batch) above, where the template still
+// exists when it fires. notifications.template_id is nullable (ON DELETE
+// SET NULL), but that clause only governs an EXISTING row whose template
+// is deleted later; inserting a NEW row that references an id already
+// gone fails the FK check at insert time regardless. There's nothing left
+// to link to once the template's actually deleted anyway.
+async function notifyBundleOwnersOfTemplateDeletion(db, templates) {
+  if (templates.length === 0) return;
+  const templateIds = templates.map(({ templateId }) => templateId);
+  const placeholders = templateIds.map(() => '?').join(', ');
+  const { results } = await db.prepare(`
+    SELECT DISTINCT b.builder_id AS builderId, b.name AS bundleName, json_extract(value, '$.templateId') AS templateId
+    FROM bundles b, json_each(b.items_json)
+    WHERE json_extract(value, '$.templateId') IN (${placeholders})
+  `).bind(...templateIds).all();
+  if (results.length === 0) return;
+
+  const nameByTemplateId = new Map(templates.map(({ templateId, name }) => [templateId, name]));
+  const affectedByBuilderAndBundle = new Map();
+  for (const row of results) {
+    const key = `${row.builderId}\u0000${row.bundleName}`;
+    const entry = affectedByBuilderAndBundle.get(key) ?? { builderId: row.builderId, bundleName: row.bundleName, templateNames: [] };
+    entry.templateNames.push(nameByTemplateId.get(row.templateId));
+    affectedByBuilderAndBundle.set(key, entry);
+  }
+  await fireNotifications(db, [...affectedByBuilderAndBundle.values()].map(({ builderId, bundleName, templateNames }) => {
+    const deletedList = templateNames.map((name) => `"${name}"`).join(', ');
+    const message = templateNames.length === 1
+      ? `${deletedList} was deleted by its seller — your bundle "${bundleName}" will skip it when placed; everything else in the bundle still works.`
+      : `${deletedList} were deleted by their seller — your bundle "${bundleName}" will skip them when placed; everything else in the bundle still works.`;
+    return { builderId, message };
+  }));
+}
+
 async function assertUploadedModelExists(bucket, modelUrl) {
   if (!modelUrl?.startsWith('/uploads/')) return;
   if (!bucket) throw new HttpError('R2 binding MODELS is not configured', 500);
@@ -884,7 +936,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
     if (new Set(templateIds).size !== templateIds.length) throw new HttpError('templateIds must be unique', 400);
     const placeholders = templateIds.map(() => '?').join(', ');
     const existing = await db.prepare(`
-      SELECT template_id, seller_id FROM catalog_templates WHERE template_id IN (${placeholders})
+      SELECT template_id, seller_id, name FROM catalog_templates WHERE template_id IN (${placeholders})
     `).bind(...templateIds).all();
     if (existing.results.length !== templateIds.length) {
       throw new HttpError('Every templateId must reference an existing catalog template', 404);
@@ -917,6 +969,12 @@ export async function handleCatalog(request, db, route, url, models, env) {
     await db.batch(templateIds.map((templateId) => db.prepare(
       'DELETE FROM catalog_templates WHERE template_id = ?',
     ).bind(templateId)));
+    // #792: fired after the batch commits, not inside it -- same
+    // reasoning as the single-item DELETE handler's own identical call.
+    await notifyBundleOwnersOfTemplateDeletion(
+      db,
+      existing.results.map((row) => ({ templateId: row.template_id, name: row.name })),
+    );
     return json({ deletedTemplateIds: templateIds });
   }
 
@@ -1635,7 +1693,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
   }
 
   if (request.method === 'DELETE' && route.length === 2) {
-    const existing = await db.prepare('SELECT seller_id FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
+    const existing = await db.prepare('SELECT seller_id, name FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Catalog template not found' }, 404);
     if (existing.seller_id && await sellerExists(db, existing.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
@@ -1657,6 +1715,11 @@ export async function handleCatalog(request, db, route, url, models, env) {
     }
     await assertCatalogTemplatesDeletable(db, [route[1]]);
     await db.prepare('DELETE FROM catalog_templates WHERE template_id = ?').bind(route[1]).run();
+    // #792: fired after the delete commits, not inside it -- same "never
+    // risk rolling back a real mutation over a best-effort notification"
+    // placement as every other post-batch fireNotification(s) call in
+    // this codebase.
+    await notifyBundleOwnersOfTemplateDeletion(db, [{ templateId: route[1], name: existing.name }]);
     return json({ deleted: true });
   }
 
