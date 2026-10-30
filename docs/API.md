@@ -1901,16 +1901,31 @@ ever moved — was wrong, with nothing that ever reversed it.
 dedicated real-money-movement signals for a dispute, so this list now
 only ever reacts to events where funds actually changed hands, for a
 dispute exactly as much as for a refund. `funds_reinstated` reverses the
-money side of an earlier `funds_withdrawn` clawback (credits back the
-same amount that was debited, clears `refunded_at`/`refunded_amount_cents`
-back to "never reversed") once the dispute resolves in the merchant's
-favor — but deliberately only the money side. It never attempts to
-restore `owned_avatar_purchases`/`owned_animation_purchases` ownership
-grants the earlier clawback already destructively deleted (the
-underlying `catalog_templates` row may not even exist anymore), or to
-un-revoke a `commission_holds` row — both remain a known, accepted
-residual gap tracked at #2235, since reinstating money is safe and
-mechanical while reinstating ownership isn't.
+money side of an earlier `funds_withdrawn` clawback once the dispute
+resolves in the merchant's favor — but deliberately only the money side.
+It never attempts to restore `owned_avatar_purchases`/
+`owned_animation_purchases` ownership grants the earlier clawback already
+destructively deleted (the underlying `catalog_templates` row may not
+even exist anymore), or to un-revoke a `commission_holds` row — both
+remain a known, accepted residual gap tracked at #2235, since reinstating
+money is safe and mechanical while reinstating ownership isn't.
+**#2901**: a partial refund that happened *before* the dispute is a
+separate, already-settled event the buyer keeps permanently regardless of
+how the dispute resolves — `funds_withdrawn`'s own clawback already
+excludes whatever that earlier partial refund had already clawed back
+(see #2232/#2247 below), so `funds_reinstated` must credit back only that
+same remaining portion, not the purchase's full commission (crediting
+back the full amount would double-refund the portion the earlier partial
+refund already, correctly, recovered). The pre-dispute cumulative
+`refunded_amount_cents` is preserved in a new column,
+`purchases.pre_dispute_refunded_amount_cents` (migrations/0169, written
+by the `funds_withdrawn` branch before it overwrites `refunded_amount_cents`
+to the full `total_cents`), so `funds_reinstated` can restore
+`refunded_amount_cents` back to that pre-dispute value (not to `0`,
+unless there was none) and compute its own credit-back as `creditedCents`
+minus the proportional share that pre-dispute value represents — the
+same `alreadyClawedBackCents` shape `clawBackPurchaseCommission` already
+uses for the withdrawal side.
 Unlike `/refund`, this never checks `paid_out_at`: that guard exists on
 the endpoint to let it *refuse* a refund it would otherwise have to
 initiate itself, but a webhook is reporting money Stripe has already
