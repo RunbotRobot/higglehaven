@@ -161,7 +161,9 @@ async function releaseOrRevokeHold(db, hold) {
   // runs -- but re-checking the purchase itself, not just trusting this
   // hold row's own already-read revoked_at, closes any ordering/race gap
   // between that revoke and this sweep picking the row up first.
-  const purchase = await db.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(hold.purchase_id).first();
+  const purchase = await db.prepare(
+    'SELECT refunded_at, refunded_amount_cents, total_cents, builder_share_cents FROM purchases WHERE purchase_id = ?',
+  ).bind(hold.purchase_id).first();
   if (purchase?.refunded_at) {
     await db.prepare('UPDATE commission_holds SET revoked_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE hold_id = ? AND released_at IS NULL AND revoked_at IS NULL')
       .bind(hold.hold_id).run();
@@ -179,12 +181,65 @@ async function releaseOrRevokeHold(db, hold) {
   // (neither released nor revoked) keeps it queryable/visible pending
   // that decision instead of guessing at it.
   if (hold.builder_id === null) return;
+
+  // #2902: a partial refund that landed while this hold was still active
+  // isn't reflected in hold.amount_cents itself -- handlePartialRefundWebhookEvent
+  // (worker/lib/stripe.js) only claws back against the purchase's own
+  // already-credited immediate share (builder_share_cents - hold.amount_cents),
+  // deliberately leaving the hold's own amount_cents untouched (that
+  // function's own "known, accepted residual gap" comment). Releasing the
+  // hold's full original amount regardless would overpay the builder by
+  // whatever fraction of the sale the buyer already got refunded. Instead,
+  // release only the proportional remaining share, closing that accepted
+  // gap at the one point (release) where it actually has to be resolved
+  // rather than deferred again.
+  //
+  // immediateCreditedCents/alreadyClawedBackCents exactly reconstruct what
+  // handlePartialRefundWebhookEvent already removed from the builder's
+  // balance so far: a hold stays active (and therefore this same
+  // builder_share_cents - hold.amount_cents split) for its whole pre-
+  // release lifetime, so every partial refund up to now clawed back
+  // against that identical immediate-share base, using this same
+  // cumulative-proportion-diff shape. trueTotalShouldBeRemovedCents is
+  // the SAME quantity re-derived against the FULL builder_share_cents --
+  // the proportional total that should have come out of this purchase's
+  // commission by now if there had never been a hold splitting it into
+  // two separately-tracked buckets at all. Releasing hold.amount_cents
+  // minus whatever of that total hasn't already come out via the
+  // immediate-share clawback keeps the running balance contribution from
+  // this purchase exactly equal to builder_share_cents * (1 - refunded
+  // fraction) the instant this release lands -- the same invariant any
+  // later partial refund already assumes true once this hold is gone (its
+  // own creditedCents becomes the full builder_share_cents at that point,
+  // per that function's existing code).
+  let amountCents = hold.amount_cents;
+  const refundedCents = purchase.refunded_amount_cents || 0;
+  if (refundedCents > 0 && purchase.total_cents > 0) {
+    const immediateCreditedCents = purchase.builder_share_cents - hold.amount_cents;
+    const alreadyClawedBackCents = immediateCreditedCents > 0
+      ? Math.min(immediateCreditedCents, Math.round((immediateCreditedCents * refundedCents) / purchase.total_cents))
+      : 0;
+    const trueTotalShouldBeRemovedCents = Math.min(
+      purchase.builder_share_cents,
+      Math.round((purchase.builder_share_cents * refundedCents) / purchase.total_cents),
+    );
+    amountCents = Math.max(0, hold.amount_cents - (trueTotalShouldBeRemovedCents - alreadyClawedBackCents));
+  }
+
+  const releaseStatement = db.prepare('UPDATE commission_holds SET released_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE hold_id = ? AND released_at IS NULL AND revoked_at IS NULL')
+    .bind(hold.hold_id);
+  if (amountCents <= 0) {
+    // The partial refund(s) already ate through this hold's entire
+    // remaining share -- nothing left to credit, but the hold itself
+    // still needs marking released so the sweep stops retrying it.
+    await releaseStatement.run();
+    return;
+  }
   await db.batch([
     db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
-      .bind(hold.amount_cents, hold.builder_id),
+      .bind(amountCents, hold.builder_id),
     db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
-      .bind(`earnings-${crypto.randomUUID()}`, hold.builder_id, hold.amount_cents),
-    db.prepare('UPDATE commission_holds SET released_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE hold_id = ? AND released_at IS NULL AND revoked_at IS NULL')
-      .bind(hold.hold_id),
+      .bind(`earnings-${crypto.randomUUID()}`, hold.builder_id, amountCents),
+    releaseStatement,
   ]);
 }
