@@ -505,6 +505,52 @@ describe('Stripe purchase-reversal webhooks (#1086)', () => {
     expect(afterReinstated.higgles_balance_cents).toBe(before.higgles_balance_cents);
   });
 
+  // #2901: a partial refund that happened BEFORE the dispute is a separate,
+  // already-settled event the buyer keeps permanently regardless of how the
+  // dispute resolves -- funds_withdrawn correctly claws back only the
+  // REMAINING, not-yet-recovered portion (same alreadyClawedBackCents shape
+  // as the partial-then-full-refund test above), so funds_reinstated must
+  // credit back only that same remaining portion, not the purchase's full
+  // commission. Crediting back the full amount would double-refund the
+  // portion the earlier partial refund already (correctly) clawed back --
+  // the bug this regression test guards against.
+  it('reinstates only the portion this dispute itself clawed back when an earlier partial refund already recovered some commission', async () => {
+    const { builder, purchaseId, builderShareCents } = await createRealMoneyPurchase('webhook-partial-dispute-reinst', 'pi_webhook_partial_then_dispute_reinstated');
+    const before = await builderRow(builder.builderId);
+
+    // 4000 of 10000 total_cents -- a clean 40% refund fraction, before any dispute.
+    const partial = await postStripeWebhook(chargeRefundedEvent('pi_webhook_partial_then_dispute_reinstated', { refunded: false, amount_refunded: 4000 }));
+    expect(partial.status).toBe(200);
+    const partialClawbackCents = Math.round(builderShareCents * 0.4);
+    const afterPartial = await builderRow(builder.builderId);
+    expect(afterPartial.higgles_balance_cents).toBe(before.higgles_balance_cents - partialClawbackCents);
+
+    const withdrawn = await postStripeWebhook(disputeEvent('charge.dispute.funds_withdrawn', 'pi_webhook_partial_then_dispute_reinstated'));
+    expect(withdrawn.status).toBe(200);
+    const disputeClawbackCents = builderShareCents - partialClawbackCents;
+    const afterWithdrawn = await builderRow(builder.builderId);
+    // Total clawed back across both events must equal exactly builderShareCents.
+    expect(afterWithdrawn.higgles_balance_cents).toBe(before.higgles_balance_cents - builderShareCents);
+    const withdrawnRow = await env.DB.prepare('SELECT refunded_amount_cents, pre_dispute_refunded_amount_cents FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    expect(withdrawnRow.refunded_amount_cents).toBe(10000);
+    expect(withdrawnRow.pre_dispute_refunded_amount_cents).toBe(4000);
+
+    const reinstated = await postStripeWebhook(disputeEvent('charge.dispute.funds_reinstated', 'pi_webhook_partial_then_dispute_reinstated'));
+    expect(reinstated.status).toBe(200);
+
+    const purchaseRow = await env.DB.prepare('SELECT refunded_at, refunded_amount_cents, pre_dispute_refunded_amount_cents FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    expect(purchaseRow.refunded_at).toBeNull();
+    // Restored to the pre-dispute partial-refund total, not zeroed -- the
+    // buyer still permanently keeps that earlier partial refund.
+    expect(purchaseRow.refunded_amount_cents).toBe(4000);
+    expect(purchaseRow.pre_dispute_refunded_amount_cents).toBeNull();
+    const afterReinstated = await builderRow(builder.builderId);
+    // Only the dispute's own clawback is reversed -- net balance change is
+    // exactly the earlier partial refund's clawback, matching afterPartial.
+    expect(afterReinstated.higgles_balance_cents).toBe(before.higgles_balance_cents - partialClawbackCents);
+    expect(afterReinstated.higgles_balance_cents).toBe(afterWithdrawn.higgles_balance_cents + disputeClawbackCents);
+  });
+
   // A retried delivery of funds_reinstated (Stripe's at-least-once
   // guarantee) must not double-credit -- the second one finds refunded_at
   // already NULL and no-ops.

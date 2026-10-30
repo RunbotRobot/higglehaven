@@ -1,0 +1,24 @@
+-- #2901: a dispute's charge.dispute.funds_withdrawn clawback (worker/lib/
+-- stripe.js's generic reversal branch) always set refunded_amount_cents to
+-- the purchase's full total_cents -- correct for the dispute itself (the
+-- card network withdrew everything), but this blindly overwrote whatever
+-- cumulative partial-refund total (#2247, migrations/0166) already existed
+-- on the purchase before the dispute, with no way to recover it later.
+-- handleDisputeFundsReinstatedWebhookEvent (the charge.dispute.funds_reinstated
+-- counterpart) needs that pre-dispute value to correctly credit back only
+-- what THIS dispute actually took -- not the purchase's full commission,
+-- which double-refunds the portion an earlier, separate partial refund had
+-- already (correctly) clawed back, and which the buyer still permanently
+-- keeps.
+--
+-- Nullable, not NOT NULL DEFAULT 0: NULL means "no dispute has ever
+-- withdrawn funds on this purchase" -- distinct from a genuine 0, which
+-- means "a dispute withdrew funds, but there was legitimately no prior
+-- partial refund (0 cents) at that moment." The reinstatement handler reads
+-- this column to decide how much to credit back and then clears it to NULL
+-- again, so a purchase disputed more than once (withdrawn, reinstated,
+-- withdrawn again) always captures the value from rather than a stale one
+-- from an earlier dispute cycle. Same nullable-vs-zero reasoning
+-- migrations/0148/0163 (elevation_m/biome) already established, cited by
+-- 0166's own comment for why refunded_amount_cents itself didn't need it.
+ALTER TABLE purchases ADD COLUMN pre_dispute_refunded_amount_cents INTEGER;

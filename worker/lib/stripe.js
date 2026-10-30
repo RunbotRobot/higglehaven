@@ -199,10 +199,18 @@ async function handlePurchaseReversalWebhookEvent(db, event) {
     return;
   }
 
+  // #2901: only a dispute withdrawal can later be reinstated (an ordinary
+  // full charge.refunded has no reinstatement event at all), so only that
+  // branch needs to preserve the pre-dispute refunded_amount_cents for
+  // handleDisputeFundsReinstatedWebhookEvent to read back later -- see that
+  // function's own comment and migrations/0169 for why. A plain full refund
+  // leaves this NULL (its existing value, if any, from a since-resolved
+  // earlier dispute cycle on this same purchase).
+  const isDisputeWithdrawal = event.type === 'charge.dispute.funds_withdrawn';
   const guard = await db.prepare(
-    `UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), refunded_amount_cents = ?
+    `UPDATE purchases SET refunded_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), refunded_amount_cents = ?, pre_dispute_refunded_amount_cents = ?
      WHERE purchase_id = ? AND refunded_at IS NULL`,
-  ).bind(purchase.total_cents, purchase.purchase_id).run();
+  ).bind(purchase.total_cents, isDisputeWithdrawal ? purchase.refunded_amount_cents : null, purchase.purchase_id).run();
   if (guard.meta.changes === 0) return;
 
   const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
@@ -228,10 +236,23 @@ async function handlePurchaseReversalWebhookEvent(db, event) {
 // describes in detail -- reinstating money is safe and mechanical;
 // reinstating ownership isn't, and still needs that issue's own design
 // call.
+//
+// #2901: a partial refund that happened BEFORE this dispute is a separate,
+// already-settled event -- the buyer keeps it permanently regardless of how
+// this dispute resolves. pre_dispute_refunded_amount_cents (migrations/0169,
+// written by the funds_withdrawn branch above) is that pre-dispute
+// cumulative total; restoring refunded_amount_cents to it (not to 0) keeps
+// worker/lib/seller-payouts-tax.js's income/payout math correctly reflecting
+// that still-standing partial refund, and crediting back only creditedCents
+// minus the proportional share that pre-dispute total already represents
+// (the exact mirror of clawBackPurchaseCommission's own alreadyClawedBackCents)
+// avoids crediting back money this dispute's own withdrawal never actually
+// took in the first place.
 async function handleDisputeFundsReinstatedWebhookEvent(db, purchase) {
+  const preDisputeRefundedCents = purchase.pre_dispute_refunded_amount_cents || 0;
   const guard = await db.prepare(
-    'UPDATE purchases SET refunded_at = NULL, refunded_amount_cents = 0 WHERE purchase_id = ? AND refunded_at IS NOT NULL',
-  ).bind(purchase.purchase_id).run();
+    'UPDATE purchases SET refunded_at = NULL, refunded_amount_cents = ?, pre_dispute_refunded_amount_cents = NULL WHERE purchase_id = ? AND refunded_at IS NOT NULL',
+  ).bind(preDisputeRefundedCents, purchase.purchase_id).run();
   if (guard.meta.changes === 0) return;
 
   if (!purchase.builder_id) return;
@@ -243,7 +264,11 @@ async function handleDisputeFundsReinstatedWebhookEvent(db, purchase) {
   const revokedHold = await db.prepare(
     'SELECT amount_cents FROM commission_holds WHERE purchase_id = ? AND revoked_at IS NOT NULL',
   ).bind(purchase.purchase_id).first();
-  const creditBackCents = revokedHold ? purchase.builder_share_cents - revokedHold.amount_cents : purchase.builder_share_cents;
+  const creditedCents = revokedHold ? purchase.builder_share_cents - revokedHold.amount_cents : purchase.builder_share_cents;
+  const alreadyClawedBackCents = purchase.total_cents > 0
+    ? Math.min(creditedCents, Math.round((creditedCents * preDisputeRefundedCents) / purchase.total_cents))
+    : 0;
+  const creditBackCents = creditedCents - alreadyClawedBackCents;
   if (creditBackCents <= 0) return;
 
   await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
