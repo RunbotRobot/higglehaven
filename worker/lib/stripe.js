@@ -299,13 +299,22 @@ async function handlePartialRefundWebhookEvent(db, purchase, charge) {
   // #1109's own commission_holds interaction (part of a sale's commission
   // may be escrowed, not yet actually credited to higgles_balance_cents)
   // applies here too -- only claw back what was actually credited, same as
-  // clawBackPurchaseCommission. Unlike that function, this does NOT also
-  // shrink an active hold's own amount_cents proportionally -- doing so
-  // safely would need to guard against commission_holds' own
-  // CHECK (amount_cents > 0) once enough cumulative partial refunds ate
-  // through it, which is real but separate scope; left as a known,
-  // accepted residual gap for now (same shape as #1109's own "known
-  // residual gap, accepted rather than solved here").
+  // clawBackPurchaseCommission. This does NOT shrink an active hold's own
+  // amount_cents proportionally -- doing so safely would need to guard
+  // against commission_holds' own CHECK (amount_cents > 0) once enough
+  // cumulative partial refunds ate through it. That used to be flagged
+  // here as a known, accepted residual gap, but #2902 closed it from the
+  // other direction instead: releaseOrRevokeHold (worker/lib/
+  // commission-caps.js) now independently recomputes the correct
+  // proportional-remaining release straight from this same purchase's
+  // refunded_amount_cents at release time, not from hold.amount_cents
+  // alone, and clawBackPurchaseCommission's own full-refund path already
+  // revokes the hold outright regardless of its amount_cents. So every
+  // consumer treats hold.amount_cents purely as "the originally escrowed
+  // amount" and derives the correct split from the live
+  // refunded_amount_cents independently -- leaving amount_cents itself
+  // un-shrunk has no incorrect downstream effect, so shrinking it is
+  // unneeded, not merely deferred.
   const activeHold = await db.prepare(
     'SELECT amount_cents FROM commission_holds WHERE purchase_id = ? AND released_at IS NULL AND revoked_at IS NULL',
   ).bind(purchase.purchase_id).first();
