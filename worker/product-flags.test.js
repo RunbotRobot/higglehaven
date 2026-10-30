@@ -617,6 +617,94 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
       expect(attach.response.status).toBe(400);
       expect(attach.body.error).toMatch(/temporarily unavailable pending review/);
     });
+
+    // #2914: the reject branch above only ever cleared the one template's
+    // own flagged_hidden_at -- #2783's auto-hide-sets-products.flagged_hidden_at
+    // cascade (just above) had no corresponding clear anywhere, so rejecting
+    // the flags that triggered it left the product permanently unattachable.
+    it('rejecting the flags that triggered auto-hide also clears products.flagged_hidden_at, unblocking a new listing attach', async () => {
+      const sellerA = await signupSeller('reject-clears-product-seller-a');
+      const sellerB = await signupSeller('reject-clears-product-seller-b');
+      await createTemplate('reject-clears-product-listing-a', sellerA);
+      await createProduct('reject-clears-product-1');
+      await linkToProduct('reject-clears-product-listing-a', 'reject-clears-product-1');
+
+      const flaggers = await Promise.all([1, 2, 3].map((n) => signupBuilder(`reject-clears-product-flagger-${n}`)));
+      let lastResult;
+      for (const flagger of flaggers) {
+        lastResult = await api('/catalog/reject-clears-product-listing-a/flags', flagger.session({ method: 'POST', body: JSON.stringify({}) }));
+      }
+      expect(lastResult.body.autoHidden).toBe(true);
+      const hiddenProduct = await env.DB.prepare('SELECT flagged_hidden_at FROM products WHERE product_id = ?')
+        .bind('reject-clears-product-1').first();
+      expect(hiddenProduct.flagged_hidden_at).toBeTruthy();
+
+      const resolved = await api('/catalog/reject-clears-product-listing-a/flags/resolve', adminSession({
+        method: 'POST',
+        body: JSON.stringify({ action: 'reject' }),
+      }));
+      expect(resolved.response.status).toBe(200);
+
+      const product = await env.DB.prepare('SELECT flagged_hidden_at FROM products WHERE product_id = ?')
+        .bind('reject-clears-product-1').first();
+      expect(product.flagged_hidden_at).toBeNull();
+
+      const attach = await api('/catalog/listings', sellerB.session({
+        method: 'POST',
+        body: JSON.stringify({ productId: 'reject-clears-product-1', priceCents: 500 }),
+      }));
+      expect(attach.response.status).toBe(201);
+    });
+
+    // The flip side of the test above: a reject on one listing must never
+    // clear products.flagged_hidden_at if a SIBLING listing of the same
+    // product already had its own flags approved -- that's a confirmed
+    // removal of the whole product (the approve branch's own cascade,
+    // tested above), and nothing about rejecting a different, unrelated
+    // listing's flags should be able to undo it. Same "never undo an
+    // approved removal" shape #2467 already established per-template.
+    it('rejecting one listing\'s flags never undoes a sibling listing\'s own approved removal of the shared product', async () => {
+      const sellerA = await signupSeller('reject-keeps-product-seller-a');
+      const sellerB = await signupSeller('reject-keeps-product-seller-b');
+      await createTemplate('reject-keeps-product-listing-a', sellerA);
+      await createTemplate('reject-keeps-product-listing-b', sellerB);
+      await createProduct('reject-keeps-product-1');
+      await linkToProduct('reject-keeps-product-listing-a', 'reject-keeps-product-1');
+      await linkToProduct('reject-keeps-product-listing-b', 'reject-keeps-product-1');
+
+      // Auto-hide listing-a (its own flags stay pending -- never resolved
+      // yet) without ever approving them.
+      const flaggersA = await Promise.all([1, 2, 3].map((n) => signupBuilder(`reject-keeps-product-flagger-a-${n}`)));
+      for (const flagger of flaggersA) {
+        await api('/catalog/reject-keeps-product-listing-a/flags', flagger.session({ method: 'POST', body: JSON.stringify({}) }));
+      }
+
+      // Approve listing-b's own flags -- a confirmed removal that cascades
+      // to the shared product (siblingCount > 1 here, listing-a and -b).
+      const flaggerB = await signupBuilder('reject-keeps-product-flagger-b');
+      await api('/catalog/reject-keeps-product-listing-b/flags', flaggerB.session({ method: 'POST', body: JSON.stringify({}) }));
+      const approved = await api('/catalog/reject-keeps-product-listing-b/flags/resolve', adminSession({
+        method: 'POST',
+        body: JSON.stringify({ action: 'approve' }),
+      }));
+      expect(approved.response.status).toBe(200);
+      const confirmedHidden = await env.DB.prepare('SELECT flagged_hidden_at FROM products WHERE product_id = ?')
+        .bind('reject-keeps-product-1').first();
+      expect(confirmedHidden.flagged_hidden_at).toBeTruthy();
+
+      // Now reject listing-a's own (still-pending, never approved) flags.
+      const rejected = await api('/catalog/reject-keeps-product-listing-a/flags/resolve', adminSession({
+        method: 'POST',
+        body: JSON.stringify({ action: 'reject' }),
+      }));
+      expect(rejected.response.status).toBe(200);
+
+      // The product-level hide from listing-b's own confirmed removal must
+      // survive -- it is never this unrelated rejection's call to undo.
+      const product = await env.DB.prepare('SELECT flagged_hidden_at FROM products WHERE product_id = ?')
+        .bind('reject-keeps-product-1').first();
+      expect(product.flagged_hidden_at).toBeTruthy();
+    });
   });
 
   // #2218 (owner decision, 2026-10-25): the seller's own Duplicate button

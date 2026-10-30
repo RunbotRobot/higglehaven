@@ -586,6 +586,27 @@ export async function handleProductFlags(request, db, route) {
         UPDATE catalog_templates SET flagged_hidden_at = NULL
         WHERE template_id = ? AND NOT EXISTS (SELECT 1 FROM product_flags WHERE template_id = ? AND status = 'approved')
       `).bind(templateId, templateId).run();
+      // #2914: auto-hide (above) sets products.flagged_hidden_at too, for
+      // any template with a product_id -- the reject clear above only ever
+      // touched catalog_templates, so that product-level hide stayed set
+      // forever, with no code path anywhere to ever clear it again,
+      // permanently blocking any future POST /catalog/listings onto this
+      // product (worker/lib/catalog.js's own flagged_hidden_at check).
+      // Same "never undo an approved removal" guard as the per-template
+      // clear just above, scoped to the whole product: stays hidden if ANY
+      // sibling listing of this product has its own approved flag batch
+      // (the approve branch's own cascade intentionally sets this for a
+      // confirmed-counterfeit product), clears otherwise.
+      if (template.product_id) {
+        await db.prepare(`
+          UPDATE products SET flagged_hidden_at = NULL
+          WHERE product_id = ? AND NOT EXISTS (
+            SELECT 1 FROM product_flags pf
+            JOIN catalog_templates ct ON ct.template_id = pf.template_id
+            WHERE ct.product_id = ? AND pf.status = 'approved'
+          )
+        `).bind(template.product_id, template.product_id).run();
+      }
     }
     await adminActionLogStatement(db, admin.user_id, `${resolvedStatus}_product_flags`, 'catalog_template', templateId, {
       flagsResolved: resolved.meta.changes,
