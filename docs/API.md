@@ -8,11 +8,26 @@ from browser `localStorage` placeholders toward persistent data.
 
 - Real account auth (signup/login, session cookies) and a real seller/builder
   identity model are built and live — see "Authentication," "Authorization
-  model," and "Builders" below. Payments, multiplayer, and moderation are
-  still dev-only/simulated today — that's an open gap against docs/SPEC.md,
-  not a scope boundary this backend is meant to stay behind. See AGENTS.md's
-  "Proposing big feature work" for how this project picks that kind of work
-  up.
+  model," and "Builders" below. **Correction (#2908):** this line used to
+  also claim "payments, multiplayer, and moderation are still dev-only/
+  simulated today" — the exact same stale claim AGENTS.md's own
+  "Real account auth..." line made until it was directly corrected
+  (2026-10-25, `higglehaven8`) for being "actively misleading every session
+  that read it." All three are now substantially real and shipped: real-
+  money checkout via a real Stripe PaymentIntent (see "Purchases"/
+  "Real-money checkout" below), real-time avatar presence plus the full
+  proximity-voice-chat/friend-voice-channel/nearby-chat tree (#2777, fully
+  closed), and real, enforced content moderation (strike ladder, product/
+  self-dealing flags, moderation removal snapshots — see "Prohibited
+  categories and digital goods," "Product flags," and "Moderation removal
+  snapshots" below). Check AGENTS.md's own correction note and the sections
+  cited above for current status rather than re-deriving a "payments/
+  multiplayer/moderation missing" scope from this line's old wording — that
+  note is the live source of truth here, so this line won't re-state it and
+  risk drifting independently again. Any remaining gap against docs/SPEC.md
+  is still an open one to flag, not a scope boundary this backend is meant
+  to stay behind — see AGENTS.md's "Proposing big feature work" for how
+  this project picks that kind of work up.
 - Internal names use plain `a` (`land`, `landlet`) even when display copy may
   eventually use accented customer-facing strings. The currency term
   (`higgle`/`higgles`) has no "a" at all, so this split doesn't apply to it —
@@ -10360,11 +10375,16 @@ satisfying only half of the spec's own two-part condition. Applies on
 create, update, and the batch-import path alike, since all three route
 through `validateTemplate`.
 
-Since this dev-mode app has no checkout or delivery mechanism of any kind
-(real or digital), "digital goods are excluded by default" has nothing
-concrete to be excepted *from* here — the two parts of this spec item with
-a real, enforceable rule are exactly the model requirement and the
-mandatory controlled disclaimer, both implemented above.
+Real-money checkout now exists (see "Purchases"/"Real-money checkout"
+above — this line used to say "no checkout ... of any kind," see #2908),
+but there is still no *delivery* mechanism of any kind, digital or
+physical — buying a product here only ever writes a commission/ledger
+purchase record (see "Purchases" above), never transfers an item or file
+to the buyer. So "digital goods are excluded by default" still has
+nothing concrete to be excepted *from*, just not because checkout itself
+is missing — the two parts of this spec item with a real, enforceable
+rule are exactly the model requirement and the mandatory controlled
+disclaimer, both implemented above.
 
 ### Frontend wiring
 
@@ -10444,12 +10464,14 @@ The preview modal's info text (see "Product pricing" above) appends
 domestic-only-flagged — the same tap-to-inspect disclosure treatment as
 the digital-goods disclaimer above.
 
-**Deferred, not built here:** this dev-mode backend has no real shopper
-address/geo data anywhere (no checkout, no payment integration — see
-`AGENTS.md`'s "Real payments ... are still not built"), so there is
-nothing real for a live "does this ship to me" filter to filter against.
-Per-destination-zone shipping *cost* is a checkout-time concern that
-depends on that same missing real-payments integration. And the spec's
+**Deferred, not built here:** real-money checkout now exists (see
+"Purchases"/"Real-money checkout" above — this line used to say otherwise,
+see #2908), but it still collects no real shopper address/geo data of any
+kind (confirmed in `worker/lib/purchase-creation.js`), so there is nothing
+real for a live "does this ship to me" filter to filter against yet.
+Per-destination-zone shipping *cost* is a real but still-unbuilt checkout-
+time feature on top of that now-real payments integration — no longer
+blocked on payments not existing, just not yet built. And the spec's
 "dimmed" visual treatment (fading a placed item's 3D mesh) has no
 precedent anywhere in this codebase yet — every other seller-set
 disclosure (`noReturns`, `digitalGoodDisclaimer`) surfaces as tap-to-inspect
