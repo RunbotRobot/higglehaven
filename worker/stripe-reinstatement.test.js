@@ -272,6 +272,77 @@ describe('Stripe reinstatement request (#1407)', () => {
     expect(row.stripe_onboarding_status).toBe('complete');
   });
 
+  // #2917: performReinstatementReset used to null stripe_account_id with no
+  // check for real money still mid-flight on the account being
+  // disconnected -- the same "claimed, not yet confirmed" condition
+  // sellerDeletionStatements (worker/index.js) already blocks self-delete
+  // on. Without this guard, a pending payout's eventual retry would target
+  // whatever NEW stripe_account_id the seller re-onboards with instead of
+  // the account the sale proceeds actually landed in.
+  it('approves (logs the decision) but refuses the reset while a seller payout is still in flight', async () => {
+    const seller = await signupSeller('stripe-reinstate-inflight-payout');
+    const userId = await userIdFor(seller.email);
+    await env.DB.prepare("UPDATE sellers SET stripe_account_id = 'acct_dead_reinstate_inflight', stripe_onboarding_status = 'action_needed' WHERE seller_id = ?")
+      .bind(seller.sellerId).run();
+    await insertFlag('seller', seller.sellerId, { disposition: 'suspected', flaggedAt: NINETY_ONE_DAYS_AGO });
+    await insertApprovedDiditSession(userId, THIRTY_DAYS_AGO);
+    // Claimed (paid_out_at set) but not yet confirmed (stripe_payout_id
+    // still NULL) -- exactly the window a real Stripe payout call is
+    // in flight in, mirroring sellerDeletionStatements' own guard query.
+    await env.DB.prepare(`
+      INSERT INTO purchases
+        (purchase_id, instance_id, template_id, seller_id, unit_price_cents, total_cents,
+         commission_cents, builder_share_cents, platform_share_cents, payment_intent_id, paid_out_at)
+      VALUES ('reinstate-inflight-purchase', 'inflight-instance', 'inflight-template', ?, 500, 500, 50, 0, 50, 'pi_inflight', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    `).bind(seller.sellerId).run();
+
+    const result = await api('/sellers/me/stripe-reinstatement-request', seller.session({ method: 'POST' }));
+    expect(result.response.status).toBe(409);
+    expect(result.body.error).toMatch(/in flight/i);
+
+    // The rubric's own verdict is still recorded -- only the mechanical
+    // reset is deferred, not the moderation decision itself.
+    const decision = await env.DB.prepare(
+      "SELECT * FROM account_moderation_decisions WHERE decision_type = 'stripe_reinstatement' AND subject_ref = ?",
+    ).bind(`seller:${seller.sellerId}`).first();
+    expect(decision.outcome).toBe('approved');
+
+    const row = await env.DB.prepare('SELECT stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?')
+      .bind(seller.sellerId).first();
+    expect(row.stripe_account_id).toBe('acct_dead_reinstate_inflight');
+    expect(row.stripe_onboarding_status).toBe('action_needed');
+  });
+
+  it('approves (logs the decision) but refuses the reset while a builder higgles redemption is still in flight', async () => {
+    const builder = await signupBuilder('stripe-reinstate-inflight-redemption');
+    const userId = await userIdFor(builder.email);
+    await env.DB.prepare("UPDATE builders SET stripe_account_id = 'acct_dead_reinstate_builder_inflight' WHERE builder_id = ?")
+      .bind(builder.builderId).run();
+    await insertFlag('builder', builder.builderId, { disposition: 'suspected', flaggedAt: NINETY_ONE_DAYS_AGO });
+    await insertApprovedDiditSession(userId, THIRTY_DAYS_AGO);
+    // Transfer succeeded (stripe_transfer_id set), payout never confirmed
+    // (stripe_payout_id still NULL) -- the exact state handleBuilderRedeem's
+    // own catch block leaves behind when the payout call fails after the
+    // transfer already succeeded.
+    await env.DB.prepare(`
+      INSERT INTO higgles_redemptions (redemption_id, builder_id, amount_cents, stripe_transfer_id, stripe_payout_id)
+      VALUES ('reinstate-inflight-redemption', ?, 1000, 'tr_inflight', NULL)
+    `).bind(builder.builderId).run();
+
+    const result = await api('/builders/me/stripe-reinstatement-request', builder.session({ method: 'POST' }));
+    expect(result.response.status).toBe(409);
+    expect(result.body.error).toMatch(/in flight/i);
+
+    const decision = await env.DB.prepare(
+      "SELECT * FROM account_moderation_decisions WHERE decision_type = 'stripe_reinstatement' AND subject_ref = ?",
+    ).bind(`builder:${builder.builderId}`).first();
+    expect(decision.outcome).toBe('approved');
+
+    const row = await env.DB.prepare('SELECT stripe_account_id FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(row.stripe_account_id).toBe('acct_dead_reinstate_builder_inflight');
+  });
+
   it('works identically for a builder subject, logging subject_builder_id', async () => {
     const builder = await signupBuilder('stripe-reinstate-builder-approved');
     const userId = await userIdFor(builder.email);

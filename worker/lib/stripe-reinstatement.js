@@ -82,6 +82,33 @@ async function requireSeller(db, sellerId) {
   return row;
 }
 
+// #2916: mirrors builderDeletionBlockMessage's own higgles_redemptions
+// check and sellerDeletionStatements' own purchases check (worker/index.js)
+// -- the same "real money still in motion on this exact connected account"
+// condition that already blocks self-delete, but previously missing here.
+// Without this, approving reinstatement reset stripe_account_id to NULL out
+// from under a still-in-flight builder redemption/seller payout: the
+// Transfer (builder) or sale proceeds (seller) already landed in the OLD
+// connected account, but resumeBuilderRedemption/a later payout attempt
+// would then act against the subject's NEW (or null) stripe_account_id
+// instead -- the money is stranded in an account the subject's own row no
+// longer references, with no path back to it.
+async function hasInFlightRealMoney(db, subjectType, subjectId) {
+  if (subjectType === 'builder') {
+    const row = await db.prepare(
+      'SELECT 1 FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL LIMIT 1',
+    ).bind(subjectId).first();
+    return !!row;
+  }
+  const row = await db.prepare(`
+    SELECT 1 FROM purchases
+    WHERE seller_id = ? AND payment_intent_id IS NOT NULL AND refunded_at IS NULL
+      AND (paid_out_at IS NULL OR stripe_payout_id IS NULL)
+    LIMIT 1
+  `).bind(subjectId).first();
+  return !!row;
+}
+
 const SUBJECT_TABLE = { builder: 'builders', seller: 'sellers' };
 const SUBJECT_ID_COLUMN = { builder: 'builder_id', seller: 'seller_id' };
 
@@ -251,6 +278,15 @@ export async function handleStripeReinstatementRequest(request, env, db, subject
   if (outcome === 'approved') {
     const current = await requireSubject(db, subjectType, subjectId);
     if (current.stripe_account_id) {
+      // #2916: the rubric itself is satisfied (recordDecision above already
+      // logged 'approved'), but resetting the Stripe linkage right now would
+      // strand real money that's still mid-flight on the CURRENT connected
+      // account -- see hasInFlightRealMoney's own comment. Refuse the reset
+      // (not the approval) until it clears; the caller can retry once the
+      // in-flight redemption/payout resolves.
+      if (await hasInFlightRealMoney(db, subjectType, subjectId)) {
+        throw new HttpError('Reinstatement is approved, but a redemption/payout is still in flight on this account -- retry once it completes.', 409);
+      }
       // #2740: same concurrency guard (and the same obligation to check its
       // result) as the sibling admin stripe-account-reset endpoint just
       // above this file's own callers in worker/index.js (#1414) -- without
