@@ -707,19 +707,25 @@ export async function handleVoiceSignal(request, db, route, url, env) {
     const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
     await checkRateLimit(db, `voice-signal-poll:${sessionBuilder.builder_id}`, VOICE_SIGNAL_POLL_RATE_LIMIT_MAX);
     const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
-    if (landletId === null) {
-      return json({ messages: [], nextCursor: null, landletId: null });
-    }
     const limit = queryLimit(url.searchParams.get('limit'), VOICE_SIGNAL_POLL_LIMIT);
     const cursor = decodeCursor(url.searchParams.get('cursor'));
-    // #2781: a friend-channel-tagged row (channel_owner_builder_id set) is
-    // returned regardless of landlet match -- it was authorized by shared
-    // channel membership at send time, not by the sender/recipient sharing
-    // a landlet, so the recipient's own current landlet_id (bound below,
-    // still required to reach this far at all -- see the no-presence-row
-    // early return above) has no bearing on whether they should see it.
-    const conditions = ['to_builder_id = ?', '(landlet_id = ? OR channel_owner_builder_id IS NOT NULL)'];
-    const bindings = [sessionBuilder.builder_id, landletId];
+    // #2897: a friend-channel-tagged row (channel_owner_builder_id set) is
+    // authorized by shared channel membership at send time, not by the
+    // sender/recipient sharing a landlet -- "Group voice channels for
+    // friends regardless of proximity" (docs/SPEC.md §2), and
+    // src/shop/voiceChat.js's own friend-channel poll deliberately keeps
+    // running outside Shop mode's render tick for exactly this reason. The
+    // caller's own landletId can therefore legitimately be null here (they
+    // left Shop mode mid-call, so avatar_presence went stale) without that
+    // meaning they should stop receiving channel-tagged signals -- only
+    // the *proximity* half of the query below actually needs a real
+    // landletId to match against.
+    const conditions = landletId === null
+      ? ['to_builder_id = ?', 'channel_owner_builder_id IS NOT NULL']
+      : ['to_builder_id = ?', '(landlet_id = ? OR channel_owner_builder_id IS NOT NULL)'];
+    const bindings = landletId === null
+      ? [sessionBuilder.builder_id]
+      : [sessionBuilder.builder_id, landletId];
     if (cursor) {
       // Same ascending/"poll forward from here" ordering as
       // handleNearbyChat's own cursor above.
