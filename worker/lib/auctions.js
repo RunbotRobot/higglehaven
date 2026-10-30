@@ -308,12 +308,13 @@ const AUCTION_BID_RATE_LIMIT_MAX = 20;
 // #1741: resolveAuctionIfDue's underlying resolveAuction can credit a real
 // higgles balance, transfer land ownership, and fire notifications to both
 // parties the first time an ended auction is observed — reachable
-// unauthenticated via both the single-item GET below and POST .../resolve.
-// Repeated hits after the first are harmless no-ops (resolveAuction's own
-// `WHERE status = 'active'` guard), but this was still the one endpoint in
-// this resolve/trigger shape without the IP-keyed rate limit its own sibling
-// (EVENT_TRIGGER_RATE_LIMIT_MAX, which explicitly calls out this endpoint by
-// name in its own comment) already has.
+// unauthenticated via the single-item GET and POST .../resolve below, and
+// (per #2912) via handleAuctionBids' own POST branch too, ahead of that
+// branch's auth/bid-rate-limit checks. Repeated hits after the first are
+// harmless no-ops (resolveAuction's own `WHERE status = 'active'` guard),
+// but this was still the one call shape without the IP-keyed rate limit its
+// own sibling (EVENT_TRIGGER_RATE_LIMIT_MAX, which explicitly calls out
+// this endpoint by name in its own comment) already has.
 const AUCTION_RESOLVE_RATE_LIMIT_MAX = 20;
 
 // #1790: the list branch below triggers the same resolveDueAuctions sweep,
@@ -486,6 +487,13 @@ export async function handleAuctionBids(request, db, route) {
 
   if (request.method === 'POST') {
     const auction = await requireAuction(db, auctionId);
+    // #2912: resolveAuctionIfDue is the same real-money, real-land-transfer
+    // settlement trigger #1741 rate-limited at its other two call sites
+    // (the single-item GET and POST .../resolve above) -- this third call
+    // site was missed by that fix and, unlike those two, ran before any
+    // auth or rate limit at all (requireSessionBuilder/auction-bid's own
+    // rate limit both happen further down, after this already executed).
+    await checkRateLimit(db, `auction-resolve:${clientIp(request)}`, AUCTION_RESOLVE_RATE_LIMIT_MAX);
     const resolved = await resolveAuctionIfDue(db, auction);
     if (resolved.status !== 'active') {
       throw new HttpError('This auction has already ended', 409);

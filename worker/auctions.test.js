@@ -167,6 +167,40 @@ describe('Auctions', () => {
     expect(limitedResolve.response.status).toBe(429);
   });
 
+  // #2912: handleAuctionBids' own POST branch is a third call site for the
+  // same resolveAuctionIfDue settlement trigger #1741 rate-limited above --
+  // missed by that fix, and unlike the other two, it ran with no guard at
+  // all before any auth or bid-rate-limit check (both happen later in that
+  // branch). Hitting it unauthenticated, with no request body, still needs
+  // to trip the limit, since the fix must sit ahead of readJson/
+  // requireSessionBuilder to close the real gap (an unauthenticated caller
+  // triggering settlement for free). Same shared auction-resolve:${ip}
+  // bucket as the GET/resolve test above -- a fresh IP keeps this isolated.
+  it('rate-limits repeated POST .../bids calls from the same IP even before any auth or body is read', async () => {
+    const owner = await signupBuilder('auction-bids-resolve-rate-limit-owner');
+    await createGreenbeltLandlet('auction-bids-resolve-rate-limit-landlet');
+    await claim('auction-bids-resolve-rate-limit-landlet', owner);
+    const started = await api('/landlets/auction-bids-resolve-rate-limit-landlet/auction', owner.session({
+      method: 'POST', body: JSON.stringify({}),
+    }));
+    const auctionId = started.body.auction.auctionId;
+
+    const ip = `test-${crypto.randomUUID()}`;
+    const bucketKey = `auction-resolve:${ip}`;
+    const now = Date.now();
+    await env.DB.batch(Array.from({ length: 20 }, () => env.DB.prepare(
+      'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+    ).bind(bucketKey, now)));
+
+    // No session, no body -- an unauthenticated caller reaching this
+    // endpoint with nothing but a known auctionId is exactly the gap #2912
+    // described. If the limiter weren't in front of resolveAuctionIfDue,
+    // this would instead fail downstream (missing session/body), not with
+    // the 429 this test asserts.
+    const limited = await api(`/auctions/${auctionId}/bids`, { method: 'POST', headers: { 'cf-connecting-ip': ip } });
+    expect(limited.response.status).toBe(429);
+  });
+
   // #1790: the list endpoint runs the same resolve-sweep as the single-item
   // GET/POST .../resolve branches above (just batched over up to
   // AUCTION_SWEEP_LIMIT auctions instead of one), but was missing a guard —
