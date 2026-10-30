@@ -10865,8 +10865,14 @@ the same way. Neither lookup guesses past its fixed list — a name it
 doesn't recognize resolves to no state/no jurisdiction rather than a
 wrong one.
 
-No tax form on file (or a W-8BEN country/W-9 state neither lookup
-recognizes) returns `{ entries: [], jurisdiction: null }`. Otherwise:
+No tax form on file, or a W-8BEN filer's own country text that doesn't
+resolve, returns `{ entries: [], jurisdiction: null }` — there's no
+jurisdiction at all to match against. A W-9 filer's country is never in
+that position (it's hardcoded `'US'`, never derived from free text), so
+a W-9 filer whose own `state` text doesn't resolve instead gets
+`jurisdiction: { country: 'US', state: null }` — only country-wide
+entries match in that case, rather than losing the match entirely over
+an unresolved state. Otherwise:
 ```json
 {
   "entries": [

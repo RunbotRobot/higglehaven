@@ -273,4 +273,21 @@ describe('GET /tax-education/mine (#2843)', () => {
     const got = await api('/tax-education/mine', builder.session());
     expect(got.body).toEqual({ entries: [], jurisdiction: null });
   });
+
+  // #2910: a W-9 filer's country is hardcoded 'US' (never derived from
+  // free text), so an unresolved state only nulls out `state` -- unlike
+  // the W-8BEN case above, where the country itself (and so the whole
+  // jurisdiction) fails to resolve. docs/API.md used to describe this W-9
+  // case the same as the W-8BEN one (full `jurisdiction: null`), which
+  // this test would have caught -- it didn't exist before #2910.
+  it('still resolves country-wide US entries for a W-9 filer whose state text does not recognize', async () => {
+    const builder = await signupBuilder('tax-education-mine-w9-unknown-state');
+    await submitW9(builder.session, 'Not A Real State');
+    const entry = await createEntry({ countryCode: 'US', title: 'US general info' });
+    await api(`/tax-education/${entry.id}`, adminSession({ method: 'PATCH', body: JSON.stringify({ reviewed: true }) }));
+
+    const got = await api('/tax-education/mine', builder.session());
+    expect(got.body.jurisdiction).toEqual({ country: 'US', state: null });
+    expect(got.body.entries.some((e) => e.id === entry.id)).toBe(true);
+  });
 });
