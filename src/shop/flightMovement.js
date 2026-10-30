@@ -84,7 +84,7 @@ import { shopDomeRiseM } from './sky.js';
 // presence, and credit orbs now live in src/shop/presenceAndContent.js --
 // see that module's own comment for its dependency notes.
 import {
-  shopLandlets, shopOtherAvatars, shopCurrentLandletEntry,
+  shopLandlets, shopOtherAvatars,
   reportOwnPresenceIfNeeded, pollNearbyPresenceIfNeeded, updateOtherShopAvatars,
   updateCreditOrbs, updateCreditOrbPopEffects,
   updateShopProximity, updateShopLandletInfo, shopTerrainHeightAtM,
@@ -1124,7 +1124,7 @@ function updateShopFlight(dt) {
     // the floor this descent should stop at instead of passing through.
     const obstructionTopZ = shopLandingObstructionTopZ(shopAvatarPosition.x, shopAvatarPosition.y);
     const minAltitudeM = obstructionTopZ === null
-      ? bareGroundAltitudeM(shopAvatarPosition.x, shopAvatarPosition.y)
+      ? bareGroundAltitudeM()
       // #2853: obstructionTopZ is an absolute world z (already including this
       // landlet's own elevationM via the item's group), so converting it to
       // this frame's altitude terms now also needs shopTerrainHeightAtM
@@ -1156,7 +1156,7 @@ function updateShopFlight(dt) {
       if (openSpot.x !== shopAvatarPosition.x || openSpot.y !== shopAvatarPosition.y) {
         const nudgedObstructionTopZ = shopLandingObstructionTopZ(openSpot.x, openSpot.y);
         shopFlightAltitudeM = nudgedObstructionTopZ === null
-          ? bareGroundAltitudeM(openSpot.x, openSpot.y)
+          ? bareGroundAltitudeM()
           // #2853: same shopTerrainHeightAtM subtraction as the pre-nudge
           // computation above, and for the same reason.
           : nudgedObstructionTopZ - shopTerrainHeightAtM(openSpot.x, openSpot.y)
@@ -1315,25 +1315,35 @@ function shopPositionBlocked(x, y, z) {
 // shopPositionBlocked, which also gates on vertical overlap with a specific
 // z) — that's exactly the floor a straight-down descent needs to stop at,
 // regardless of how high above it the avatar currently is.
-// #2852: the floor a landing (or #2044's landing-spot nudge) rests on
-// when there's no placed item underneath -- before #2851's real terrain,
-// this was always exactly world z 0 everywhere; now it's this landlet's
-// own real elevation (#2851's already-baselined record.elevationM).
-// shopCurrentLandletEntry is whichever landlet updateShopLandletInfo last
-// resolved the avatar as standing on/near -- close enough for both call
-// sites below (the original spot and a #2044 nudge a few meters away,
-// never far enough to cross into a different landlet's own elevation in
-// practice) without re-deriving "which landlet is (x, y) actually inside"
-// from scratch here. Converts world z into this frame's altitude terms,
-// same as shopAvatarPosition.z's own formula (curvatureDropM subtracted
-// there, so added back here to invert it). #2853: that formula now also
-// adds shopTerrainHeightAtM(x, y), which for ordinary ground already equals
-// this same elevationM -- so this also needs that term subtracted here, or
-// the per-frame sync re-adds the landlet's own elevation on top of a value
-// that already has it baked in, landing the avatar at roughly double its
-// real elevationM instead of resting on the real ground.
-function bareGroundAltitudeM(x, y) {
-  return (shopCurrentLandletEntry?.record.elevationM ?? 0) - shopTerrainHeightAtM(x, y) + curvatureDropM(Math.hypot(x, y));
+// #2852/#2853: the floor a landing (or #2044's landing-spot nudge) rests
+// on when there's no placed item underneath. "Altitude" here is always
+// height above *local* ground, and the per-frame sync
+// (updateShopMovement's own `shopAvatarPosition.z = altitude +
+// shopTerrainHeightAtM(x, y) - curvatureDropM(...)`) already adds the
+// real landlet elevation at (x, y) back in when converting that altitude
+// into a world z -- so resting exactly on bare ground is always altitude
+// 0, full stop, regardless of elevationM or curvature; e2e/shop-terrain-
+// elevation-consistency.test.mjs's own comment already documents this as
+// "by design... now stays constant regardless of elevationM."
+//
+// #2899: this used to compute that constant indirectly, by subtracting
+// `shopCurrentLandletEntry?.record.elevationM` back out again --
+// algebraically a no-op in the common case (shopCurrentLandletEntry's own
+// elevationM matches shopTerrainHeightAtM(x, y) for the same landlet), but
+// a real bug whenever it didn't: shopCurrentLandletEntry only ever tracks
+// a *claimed* landlet (updateShopLandletInfo's own `status === 'claimed'`
+// filter), while shopTerrainHeightAtM deliberately has no such filter
+// (its own comment: elevation applies "regardless of claim status"). A
+// landing on bare, unclaimed-but-elevated ground left shopCurrentLandletEntry
+// null, so this returned `0 - shopTerrainHeightAtM(x, y) + curvatureDropM`
+// instead of `0` -- which the per-frame sync's own `+shopTerrainHeightAtM`
+// term then cancelled back down to the OLD flat z=0 baseline, sinking/
+// floating the avatar away from that landlet's real, non-flat ground by
+// exactly its own elevationM. Returning the already-known constant
+// directly removes the dependency on shopCurrentLandletEntry (and the
+// claimed-vs-unclaimed asymmetry) entirely, rather than patching around it.
+function bareGroundAltitudeM() {
+  return 0;
 }
 
 function shopLandingObstructionTopZ(x, y) {
