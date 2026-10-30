@@ -19,6 +19,12 @@ beforeEach(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
 });
 
+// See its own citation below -- generously bounds the inherent chord-
+// bowing of a ring's straight-edged polygon approximation of its true
+// circular inner boundary, well above the ~0.07m real effect measured
+// for this ring's own geometry.
+const RING_INNER_EDGE_BOW_TOLERANCE_M = 1;
+
 async function worldSettings() {
   return env.DB.prepare("SELECT * FROM world_settings WHERE world_id = 'default-world'").first();
 }
@@ -89,18 +95,83 @@ describe('maintainPrecomputeBuffer (#2807)', () => {
       "SELECT ring_id FROM landlet_candidate_rings WHERE ring_id LIKE 'auto-ring-%' AND outer_radius_m = ?",
     ).bind(radii.at(-1)).first()).ring_id;
 
-    // The outermost ring's own inner edge sits well past the live radius
-    // (that's the whole point of staying `precompute_lead_m` ahead), so
-    // unlike a ring generated right at the live radius (which can
-    // legitimately materialize immediately, same as reactive growth's own
-    // first ring already does), this one's candidates must still be
-    // sitting staged, untouched by the normal materialization sweep.
+    // The outermost ring's own inner edge sits at or past the live radius
+    // (never inside it -- that's the whole point of staying
+    // `precompute_lead_m` ahead), so unlike a ring generated to fill an
+    // actual gap behind the live radius, this one's candidates must still
+    // be sitting staged, untouched by the normal materialization sweep.
     const { results } = await env.DB.prepare(
       'SELECT * FROM landlet_candidates WHERE ring_id = ?',
     ).bind(outermostRingId).all();
     expect(results.length).toBeGreaterThan(0);
     expect(results.every((row) => row.materialized_at === null)).toBe(true);
-    expect(results.every((row) => row.min_world_radius_m > before.radius_m)).toBe(true);
+    // #2895: generateLandletRingCandidates' own comment (worker/lib/
+    // world-generation.js, the #2807 skipMaterializationSweep note)
+    // already documents this exact effect -- a ring's nominal inner edge
+    // sits right at the live radius, but its straight-edged polygon
+    // approximation of that circular boundary bows slightly inward, so a
+    // candidate right at the inner edge can report a real
+    // min_world_radius_m a little *less* than the live radius despite
+    // never being meant to materialize. RING_INNER_EDGE_BOW_TOLERANCE_M
+    // absorbs that documented, inherent discretization artifact (measured
+    // ~0.07m for this ring's own geometry) without weakening this test's
+    // real invariant, which the materialized_at assertion above already
+    // covers directly -- this check still catches a genuine regression
+    // (candidates generated meters, not centimeters, inside the live
+    // radius).
+    expect(results.every((row) => row.min_world_radius_m > before.radius_m - RING_INNER_EDGE_BOW_TOLERANCE_M)).toBe(true);
+  });
+
+  // #2894: the widen above is supposed to apply once per genuine catch-up,
+  // not compound every tick a stall persists -- distinguished here by
+  // planting a candidate that conflicts with every possible ring position
+  // (min_world_radius_m 0, max_world_radius_m NULL so it's structurally
+  // invisible to currentPrecomputeBufferOuterRadiusM's own measurement
+  // query, which only reads rows with max_world_radius_m IS NOT NULL) so
+  // generateNextAutoRing can never make real progress, independent of how
+  // far out the target radius is pushed. Placed after every other test
+  // that depends on a real (non-stuck) buffer actually being buildable --
+  // this file's whole describe block shares one D1 instance across all
+  // its own tests (vitest.config.js's own comment on why -- one instance
+  // per test *file*, not per test), so the blocker planted here would
+  // otherwise permanently stop any later test from generating a new ring
+  // at all, regardless of the cleanup below.
+  it('does not keep widening precompute_lead_m on repeated ticks when generation is genuinely stuck', async () => {
+    await maintainPrecomputeBuffer(env.DB); // build a real buffer first
+    const builtRadii = await autoRingOuterRadii();
+    const bufferOuterRadiusM = builtRadii.at(-1);
+
+    await env.DB.prepare(
+      "UPDATE world_settings SET radius_m = ? WHERE world_id = 'default-world'",
+    ).bind(bufferOuterRadiusM).run();
+    await env.DB.prepare(`
+      INSERT INTO landlet_candidates
+        (landlet_id, name, area_m2, center_x_m, center_y_m, landlet_class, landlet_type,
+         polygon_json, metadata_json, min_world_radius_m, max_world_radius_m)
+      VALUES ('blocker-001', 'blocker', 1000, 0, 0, 1, 'buildable', '[]', '{}', 0, NULL)
+    `).run();
+
+    const beforeStuck = await worldSettings();
+
+    await maintainPrecomputeBuffer(env.DB);
+    const afterTick1 = await worldSettings();
+    expect(afterTick1.precompute_lead_m).toBeCloseTo(beforeStuck.precompute_lead_m, 6);
+
+    await maintainPrecomputeBuffer(env.DB);
+    const afterTick2 = await worldSettings();
+    expect(afterTick2.precompute_lead_m).toBeCloseTo(beforeStuck.precompute_lead_m, 6);
+
+    await maintainPrecomputeBuffer(env.DB);
+    const afterTick3 = await worldSettings();
+    expect(afterTick3.precompute_lead_m).toBeCloseTo(beforeStuck.precompute_lead_m, 6);
+
+    const radiiAfterStuck = await autoRingOuterRadii();
+    expect(radiiAfterStuck).toEqual(builtRadii);
+
+    // #2895: clean up so this planted blocker can't also poison the
+    // scheduled()-cron test below (same shared-D1-instance reasoning as
+    // this test's own placement above).
+    await env.DB.prepare("DELETE FROM landlet_candidates WHERE landlet_id = 'blocker-001'").run();
   });
 
   it('is actually wired into the scheduled() cron, not just reachable directly', async () => {
