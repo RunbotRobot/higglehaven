@@ -400,5 +400,44 @@ describe('Friend voice channels (#2781)', () => {
       }));
       expect(rejected.response.status).toBe(400);
     });
+
+    // #2897: "regardless of proximity" has to mean regardless of the
+    // *recipient's* own live position too, not just the sender's --
+    // src/shop/voiceChat.js's own friend-channel poll deliberately keeps
+    // running outside Shop mode's render tick specifically so a call can
+    // survive the recipient leaving Shop mode mid-conversation, but their
+    // avatar_presence row (only ever written by Shop-mode-specific code)
+    // still goes stale 10s after that. The GET poll must keep delivering a
+    // channel-tagged signal regardless, even once the recipient's own
+    // landlet lookup comes back null.
+    it('still delivers a pending channel signal once the recipient\'s own presence has gone stale', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-signal-stale-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-signal-stale-bob');
+      await becomeFriends(alice, bob);
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+
+      await setPresence(alice.builderId, { landletId: 'voice-channel-landlet-stale-a' });
+      await setPresence(bob.builderId, { landletId: 'voice-channel-landlet-stale-b' });
+
+      const sent = await api('/voice/signal', alice.session({
+        method: 'POST',
+        body: JSON.stringify({
+          toBuilderId: bob.builderId, kind: 'offer', payload: { sdp: 'channel-offer' }, channelOwnerBuilderId: alice.builderId,
+        }),
+      }));
+      expect(sent.response.status).toBe(201);
+
+      // Bob leaves Shop mode (e.g. opens Build mode) for longer than
+      // PRESENCE_STALE_AFTER_MS while still on the call.
+      await setPresence(bob.builderId, {
+        landletId: 'voice-channel-landlet-stale-b',
+        updatedAt: new Date(Date.now() - 15000).toISOString(),
+      });
+
+      const bobView = await api('/voice/signal', bob.session());
+      expect(bobView.body.landletId).toBeNull();
+      expect(bobView.body.messages).toHaveLength(1);
+      expect(bobView.body.messages[0]).toMatchObject({ channelOwnerBuilderId: alice.builderId, fromBuilderId: alice.builderId });
+    });
   });
 });

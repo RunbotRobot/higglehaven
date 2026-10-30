@@ -5138,10 +5138,19 @@ Requires an ID-verified session. Same forward-cursor poll shape as `GET
 "..." }`, `created_at ASC, message_id ASC`, same-cursor-echoed-back when
 quiet, `landletId` reflecting whichever landlet the response was computed
 for) — except `messages` here is only ever the caller's own inbox
-(`to_builder_id = caller`), not a landlet-wide feed. Returns `{ "messages":
-[], "nextCursor": null, "landletId": null }` when the caller has no
-recent-enough presence row. `429` after 600 requests per 15 minutes from
-the same calling builder (same budget as `GET /api/presence`/`GET
+(`to_builder_id = caller`), not a landlet-wide feed. `landletId` is `null`
+when the caller has no recent-enough presence row — but unlike `GET
+/api/nearby-chat` (which really does return nothing in that case,
+`nearby-chat` being inherently landlet-scoped), this still returns any
+pending friend-channel-tagged message (see `channelOwnerBuilderId` below)
+regardless: a null `landletId` only ever suppresses the proximity half of
+this poll, never channel-tagged delivery (`#2897` — "regardless of
+proximity" has to mean regardless of the *recipient's* own live position
+too, not just the sender's, since `src/shop/voiceChat.js`'s own
+friend-channel poll deliberately keeps running outside Shop mode's render
+tick so a call can survive the recipient leaving Shop mode mid-
+conversation). `429` after 600 requests per 15 minutes from the same
+calling builder (same budget as `GET /api/presence`/`GET
 /api/nearby-chat`'s own polls).
 
 ### `POST /api/voice/signal`
@@ -5296,7 +5305,9 @@ so the client can skip its distance-based gain ramp for that connection,
 per SPEC's "no distance-based volume ramp here (unlike proximity voice)."
 `GET /api/voice/signal` itself returns a channel-tagged row to its
 recipient regardless of landlet match, since it was authorized by shared
-channel membership at send time, not by a landlet in common.
+channel membership at send time, not by a landlet in common — including
+when the recipient's own landlet lookup comes back `null` entirely (`#2897`;
+see `GET /api/voice/signal`'s own section above).
 
 ### Testing note
 
@@ -5308,8 +5319,10 @@ member-leave-removes-only-themselves, the quiet no-op leave, `GET`
 listing, and `POST /voice/signal`'s own `channelOwnerBuilderId` branch
 (the cross-landlet bypass itself, rejecting a non-member or a
 never-opened channel, the still-required sender presence row, a plain
-signal's `channelOwnerBuilderId: null`, and a signal rejected right after
-the recipient leaves).
+signal's `channelOwnerBuilderId: null`, a signal rejected right after the
+recipient leaves, and `#2897`'s own regression: a channel signal still
+delivered on `GET /voice/signal` once the recipient's own presence row
+has gone stale).
 
 ## Avatar presence
 
