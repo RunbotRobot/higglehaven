@@ -298,6 +298,113 @@ describe('Refund clawback interaction with an active hold (#1109)', () => {
   });
 });
 
+// #2902: a partial refund that lands while a commission hold is still
+// active doesn't shrink the hold's own amount_cents (handlePartialRefundWebhookEvent's
+// own accepted residual gap, worker/lib/stripe.js) -- these tests drive
+// the purchase row and builder balance directly into the exact state that
+// webhook handler would have produced (same "bypass the real trigger,
+// isolate the sweep's own logic" shape the refunded-purchase sweep test
+// above already uses), since this test file's purchases never go through
+// a real Stripe webhook at all (Stripe is unconfigured here, same as
+// every other commission-holds test).
+describe('Commission-hold release accounts for a partial refund that landed while active (#2902)', () => {
+  it('releases only the proportional remaining share once a 50% partial refund already clawed back the immediate credit', async () => {
+    const seller = await setUpSeller('partial-refund-active-hold', 1000);
+    for (let i = 0; i < MIN_ESTABLISHED_COUNTERPARTIES; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const buyer = await signupAdmin(`partial-refund-active-hold-history-${i}`);
+      // eslint-disable-next-line no-await-in-loop
+      await purchase('partial-refund-active-hold-instance', buyer);
+    }
+    await createTemplate('partial-refund-active-hold-big-template', 100000);
+    await placeInstance('partial-refund-active-hold-big-instance', 'partial-refund-active-hold-landlet', 'partial-refund-active-hold-big-template', seller);
+    const bigBuyer = await signupAdmin('partial-refund-active-hold-big-buyer');
+    const beforeBalance = (await builderRow(seller.builderId)).higgles_balance_cents;
+    const bigPurchase = await purchase('partial-refund-active-hold-big-instance', bigBuyer);
+    const hold = await env.DB.prepare('SELECT * FROM commission_holds WHERE purchase_id = ?').bind(bigPurchase.purchaseId).first();
+    expect(hold.amount_cents).toBeGreaterThan(0); // confirms a real hold exists to shrink
+
+    // Simulate a clean 50% partial refund -- the exact DB effects
+    // handlePartialRefundWebhookEvent itself would have produced: claws
+    // back only the already-credited immediate share (builder_share_cents
+    // minus the hold), and records the cumulative refunded total.
+    const immediateCreditedCents = bigPurchase.builderShareCents - hold.amount_cents;
+    const refundedCents = Math.round(bigPurchase.totalCents / 2);
+    const immediateClawbackCents = Math.min(immediateCreditedCents, Math.round((immediateCreditedCents * refundedCents) / bigPurchase.totalCents));
+    await env.DB.batch([
+      env.DB.prepare('UPDATE purchases SET refunded_amount_cents = ? WHERE purchase_id = ?').bind(refundedCents, bigPurchase.purchaseId),
+      env.DB.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?').bind(immediateClawbackCents, seller.builderId),
+    ]);
+    const afterPartialRefundBalance = (await builderRow(seller.builderId)).higgles_balance_cents;
+
+    // Force the hold due, then release it.
+    await env.DB.prepare('UPDATE commission_holds SET release_at = \'2000-01-01T00:00:00.000Z\' WHERE hold_id = ?').bind(hold.hold_id).run();
+    await releaseDueCommissionHolds(env.DB);
+
+    const expectedTrueRemovedCents = Math.round(bigPurchase.builderShareCents * refundedCents / bigPurchase.totalCents);
+    const expectedReleaseCents = hold.amount_cents - (expectedTrueRemovedCents - immediateClawbackCents);
+    const afterReleaseBalance = (await builderRow(seller.builderId)).higgles_balance_cents;
+    expect(afterReleaseBalance - afterPartialRefundBalance).toBe(expectedReleaseCents);
+    // Net result across the whole purchase lifetime: exactly half the
+    // commission retained, matching the 50% refund -- not the full
+    // builder_share_cents the pre-#2902 code released regardless.
+    expect(afterReleaseBalance - beforeBalance).toBe(bigPurchase.builderShareCents - expectedTrueRemovedCents);
+    expect(afterReleaseBalance - beforeBalance).toBeLessThan(bigPurchase.builderShareCents);
+
+    const releasedHold = await env.DB.prepare('SELECT released_at, revoked_at FROM commission_holds WHERE hold_id = ?').bind(hold.hold_id).first();
+    expect(releasedHold.released_at).not.toBeNull();
+    expect(releasedHold.revoked_at).toBeNull();
+
+    const earningsEvents = await env.DB.prepare(
+      'SELECT COUNT(*) AS count FROM higgles_earnings_events WHERE builder_id = ? AND amount_cents = ?',
+    ).bind(seller.builderId, expectedReleaseCents).first();
+    expect(earningsEvents.count).toBeGreaterThan(0);
+  });
+
+  it('releases nothing (but still marks the hold released) once a large enough partial refund already ate through the whole remaining share', async () => {
+    const seller = await setUpSeller('partial-refund-eats-hold', 1000);
+    for (let i = 0; i < MIN_ESTABLISHED_COUNTERPARTIES; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const buyer = await signupAdmin(`partial-refund-eats-hold-history-${i}`);
+      // eslint-disable-next-line no-await-in-loop
+      await purchase('partial-refund-eats-hold-instance', buyer);
+    }
+    await createTemplate('partial-refund-eats-hold-big-template', 100000);
+    await placeInstance('partial-refund-eats-hold-big-instance', 'partial-refund-eats-hold-landlet', 'partial-refund-eats-hold-big-template', seller);
+    const bigBuyer = await signupAdmin('partial-refund-eats-hold-big-buyer');
+    const bigPurchase = await purchase('partial-refund-eats-hold-big-instance', bigBuyer);
+    const hold = await env.DB.prepare('SELECT * FROM commission_holds WHERE purchase_id = ?').bind(bigPurchase.purchaseId).first();
+
+    // A partial refund just 1 cent short of the full purchase total --
+    // not a full refund (so this still goes through the partial-refund
+    // path, not the refunded_at revoke branch), but close enough that
+    // rounding the proportional share to the nearest cent correctly
+    // collapses the remaining release to zero. (A genuinely partial,
+    // i.e. non-100%, refund can mathematically only approach but never
+    // exceed the hold's own remaining share -- see the formula in
+    // releaseOrRevokeHold -- so this edge, not an arbitrary high
+    // percentage, is what actually drives the release to 0.)
+    const immediateCreditedCents = bigPurchase.builderShareCents - hold.amount_cents;
+    const refundedCents = bigPurchase.totalCents - 1;
+    const immediateClawbackCents = Math.min(immediateCreditedCents, Math.round((immediateCreditedCents * refundedCents) / bigPurchase.totalCents));
+    await env.DB.batch([
+      env.DB.prepare('UPDATE purchases SET refunded_amount_cents = ? WHERE purchase_id = ?').bind(refundedCents, bigPurchase.purchaseId),
+      env.DB.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?').bind(immediateClawbackCents, seller.builderId),
+    ]);
+    const afterPartialRefundBalance = (await builderRow(seller.builderId)).higgles_balance_cents;
+
+    await env.DB.prepare('UPDATE commission_holds SET release_at = \'2000-01-01T00:00:00.000Z\' WHERE hold_id = ?').bind(hold.hold_id).run();
+    await releaseDueCommissionHolds(env.DB);
+
+    // Nothing left in the hold to release -- balance unchanged by this step.
+    expect((await builderRow(seller.builderId)).higgles_balance_cents).toBe(afterPartialRefundBalance);
+    const releasedHold = await env.DB.prepare('SELECT released_at, revoked_at FROM commission_holds WHERE hold_id = ?').bind(hold.hold_id).first();
+    // Still marked released, not left dangling for the sweep to retry forever.
+    expect(releasedHold.released_at).not.toBeNull();
+    expect(releasedHold.revoked_at).toBeNull();
+  });
+});
+
 describe('releaseDueCommissionHolds cron sweep (#1109)', () => {
   it('credits a past-due hold and leaves a not-yet-due one alone', async () => {
     const seller = await setUpSeller('release-sweep', 1000);
