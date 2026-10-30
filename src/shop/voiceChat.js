@@ -302,7 +302,7 @@ if (voiceBtnEl) {
   });
 }
 
-function attachRemoteStream(entry, stream) {
+function attachRemoteStream(builderId, entry, stream) {
   const ctx = ensureAudioContext();
   entry.sourceNode = ctx.createMediaStreamSource(stream);
   entry.gainNode = ctx.createGain();
@@ -311,7 +311,13 @@ function attachRemoteStream(entry, stream) {
   // proximity"), so there's nothing for updateVoicePeersForRange to ramp
   // up later the way it does for an ordinary proximity peer (gain 0 until
   // distance is known).
-  entry.gainNode.gain.value = entry.channelOwnerBuilderId ? 1 : 0;
+  // #2905: ontrack (this function's only caller) can fire again later --
+  // e.g. a friend who joined muted-by-default (#2778) only sends their
+  // first real track once they grant their mic, well after their row (and
+  // mute button) already exist in the panel -- so this must respect an
+  // already-recorded mute rather than hardcoding full volume, the same as
+  // reconcileFriendVoiceChannels's own gain-sync already does.
+  entry.gainNode.gain.value = entry.channelOwnerBuilderId ? (mutedPeers.has(builderId) ? 0 : 1) : 0;
   entry.sourceNode.connect(entry.gainNode).connect(ctx.destination);
 }
 
@@ -349,7 +355,9 @@ async function getOrCreatePeer(builderId, channelOwnerBuilderId = null) {
     // tearing down and recreating a connection that's already working.
     if (channelOwnerBuilderId && !existing.channelOwnerBuilderId) {
       existing.channelOwnerBuilderId = channelOwnerBuilderId;
-      if (existing.gainNode) existing.gainNode.gain.value = 1;
+      // #2905: respect an already-recorded mute rather than hardcoding
+      // full volume -- see attachRemoteStream's own comment for why.
+      if (existing.gainNode) existing.gainNode.gain.value = mutedPeers.has(builderId) ? 0 : 1;
     }
     return existing;
   }
@@ -371,7 +379,9 @@ async function createPeer(builderId, channelOwnerBuilderId = null) {
   if (existing) {
     if (channelOwnerBuilderId && !existing.channelOwnerBuilderId) {
       existing.channelOwnerBuilderId = channelOwnerBuilderId;
-      if (existing.gainNode) existing.gainNode.gain.value = 1;
+      // #2905: respect an already-recorded mute rather than hardcoding
+      // full volume -- see attachRemoteStream's own comment for why.
+      if (existing.gainNode) existing.gainNode.gain.value = mutedPeers.has(builderId) ? 0 : 1;
     }
     return existing;
   }
@@ -396,7 +406,7 @@ async function createPeer(builderId, channelOwnerBuilderId = null) {
     }).catch(() => {});
   };
   pc.ontrack = (event) => {
-    if (event.streams[0]) attachRemoteStream(entry, event.streams[0]);
+    if (event.streams[0]) attachRemoteStream(builderId, entry, event.streams[0]);
     // #2834: attachRemoteStream sets entry.gainNode, which window.__shopVoicePeers'
     // own gainValue field reads -- refresh here so that diagnostic reflects
     // it right away, rather than staying stale (null) until some other
