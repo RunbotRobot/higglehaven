@@ -1564,6 +1564,16 @@ export async function handleCatalog(request, db, route, url, models, env) {
     if (product.flagged_hidden_at) {
       throw new HttpError('This product is temporarily unavailable pending review', 400);
     }
+    // #2946: the sibling single-item create (above) and the PATCH/PUT
+    // handler (below) both already guard their own modelUrl this way --
+    // this handler denormalizes product.model_url straight into a new
+    // listing without ever checking it still exists. A product whose
+    // every catalog_templates listing has since been deleted has no
+    // remaining reference the model-cleanup cron would have seen before
+    // #2946's own fix to selectModelUrlReferencesChunked, so its model
+    // could already be gone from R2 by the time an old productId gets
+    // reused here.
+    await assertUploadedModelExists(models, product.model_url);
     const templateId = `template-${crypto.randomUUID()}`;
     await db.prepare(`
       INSERT INTO catalog_templates

@@ -16,6 +16,16 @@ beforeAll(async () => {
 
 async function createProduct(overrides = {}) {
   const productId = overrides.productId ?? `listings-fixture-product-${crypto.randomUUID()}`;
+  const modelUrl = overrides.modelUrl ?? '/uploads/models/shared-lamp.glb';
+  // #2946: POST /api/catalog/listings now calls assertUploadedModelExists
+  // on the product's own model_url before attaching a new listing to it
+  // -- same real-R2-object requirement the sibling single-item create
+  // already has (worker/worker-api.test.js's own `env.MODELS.put` is the
+  // precedent for seeding this directly rather than going through the
+  // real upload endpoint for every fixture call).
+  if (modelUrl?.startsWith('/uploads/') && !overrides.skipModelSeed) {
+    await env.MODELS.put(decodeURIComponent(modelUrl.slice('/uploads/'.length)), new Uint8Array([1]));
+  }
   await env.DB.prepare(`
     INSERT INTO products (product_id, name, category, subcategory, color, width_m, depth_m, height_m, model_url, original_seller_id, flagged_hidden_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -26,7 +36,7 @@ async function createProduct(overrides = {}) {
     overrides.subcategory ?? 'table lamp',
     overrides.color ?? '#ddeeff',
     overrides.width ?? 0.3, overrides.depth ?? 0.3, overrides.height ?? 1.1,
-    overrides.modelUrl ?? '/uploads/shared-lamp.glb',
+    modelUrl,
     overrides.originalSellerId ?? null,
     overrides.flaggedHiddenAt ?? null,
   ).run();
@@ -82,11 +92,34 @@ describe('POST /api/catalog/listings (#2747)', () => {
     expect(result.body.error).toMatch(/temporarily unavailable pending review/);
   });
 
+  // #2946: the product's model_url is its own permanent reference that
+  // selectModelUrlReferencesChunked (worker/lib/models.js) now also
+  // checks, but this endpoint itself still needs its own guard against
+  // attaching a brand-new, purchasable listing to a model that's already
+  // gone from R2 (e.g. every catalog_templates listing that used to
+  // reference it was deleted, the cleanup cron swept it, and now this
+  // productId -- still valid, since products rows are never deleted --
+  // gets reused for a fresh listing attach).
+  it('refuses to attach a new listing when the product\'s model no longer exists in R2', async () => {
+    const seller = await signupSeller('listings-missing-model');
+    const productId = await createProduct({ modelUrl: '/uploads/models/never-uploaded.glb', skipModelSeed: true });
+    const result = await api('/catalog/listings', seller.session({
+      method: 'POST',
+      body: JSON.stringify({ productId, priceCents: 500 }),
+    }));
+    expect(result.response.status).toBe(400);
+    expect(result.body.error).toMatch(/does not reference an existing uploaded model/);
+
+    const rows = await env.DB.prepare('SELECT COUNT(*) AS count FROM catalog_templates WHERE product_id = ?')
+      .bind(productId).all();
+    expect(rows.results[0].count).toBe(0);
+  });
+
   it('creates a listing with every shared field copied from the product, and the caller as its seller', async () => {
     const seller = await signupSeller('listings-happy-path');
     const productId = await createProduct({
       name: 'Shared Lamp Deluxe', category: 'lighting', subcategory: 'floor lamp',
-      color: '#112233', width: 0.4, depth: 0.4, height: 1.6, modelUrl: '/uploads/deluxe-lamp.glb',
+      color: '#112233', width: 0.4, depth: 0.4, height: 1.6, modelUrl: '/uploads/models/deluxe-lamp.glb',
     });
 
     const result = await api('/catalog/listings', seller.session({
@@ -104,7 +137,7 @@ describe('POST /api/catalog/listings (#2747)', () => {
       subcategory: 'floor lamp',
       color: '#112233',
       dimensions: { width: 0.4, depth: 0.4, height: 1.6 },
-      modelUrl: '/uploads/deluxe-lamp.glb',
+      modelUrl: '/uploads/models/deluxe-lamp.glb',
       sellerId: seller.sellerId,
       priceCents: 2500,
       stockQuantity: 10,
