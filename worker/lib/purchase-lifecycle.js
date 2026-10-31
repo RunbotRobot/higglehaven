@@ -359,12 +359,31 @@ export async function clawBackPurchaseCommission(db, purchase, templateName) {
     // credits a hold whose underlying purchase has since been reversed,
     // keeps this correct whether or not a cap ever applied to this sale.
     // The common case (no hold row at all) behaves exactly as before.
-    const activeHold = await db.prepare(
-      'SELECT hold_id, amount_cents FROM commission_holds WHERE purchase_id = ? AND released_at IS NULL AND revoked_at IS NULL',
-    ).bind(purchase.purchase_id).first();
-    const creditedCents = activeHold
-      ? purchase.builder_share_cents - activeHold.amount_cents
-      : purchase.builder_share_cents;
+    //
+    // #2936: revoke-first, not read-first. A plain pre-read SELECT here
+    // (the old shape) can go stale against a concurrent releaseDueCommissionHolds
+    // sweep -- if the sweep's own credit+release already committed between
+    // this function's read and its debit, the debit below would still
+    // only remove the pre-sweep "immediate share," under-clawing back by
+    // exactly the amount the sweep just (correctly, on its own) credited.
+    // This guarded UPDATE's own WHERE (released_at IS NULL AND revoked_at
+    // IS NULL) is the live, atomic answer to "is this hold still mine to
+    // exclude from the debit, right now" -- RETURNING hands back the
+    // revoked hold's own amount_cents in the same atomic step a separate
+    // SELECT-then-UPDATE couldn't guarantee. If a concurrent sweep's own
+    // credit already won, this WHERE simply finds no row (0 rows), and
+    // activeHoldAmountCents correctly stays 0 -- that hold's money was
+    // already credited elsewhere, so none of it should be excluded from
+    // this debit either; the full builder_share_cents (minus whatever an
+    // earlier partial refund already recovered, below) gets clawed back,
+    // correctly reclaiming what the sweep just credited.
+    const revokedHold = await db.prepare(`
+      UPDATE commission_holds SET revoked_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE purchase_id = ? AND released_at IS NULL AND revoked_at IS NULL
+      RETURNING amount_cents
+    `).bind(purchase.purchase_id).first();
+    const activeHoldAmountCents = revokedHold?.amount_cents ?? 0;
+    const creditedCents = purchase.builder_share_cents - activeHoldAmountCents;
     // #2247: an earlier PARTIAL refund (handlePartialRefundWebhookEvent,
     // worker/lib/stripe.js) may already have proportionally clawed back
     // part of this same commission before this full reversal landed --
@@ -383,10 +402,6 @@ export async function clawBackPurchaseCommission(db, purchase, templateName) {
     if (clawbackAmountCents > 0) {
       await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
         .bind(clawbackAmountCents, purchase.builder_id).run();
-    }
-    if (activeHold) {
-      await db.prepare('UPDATE commission_holds SET revoked_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE hold_id = ? AND released_at IS NULL AND revoked_at IS NULL')
-        .bind(activeHold.hold_id).run();
     }
     // #1122: fired separately, after the debit above commits — a self-
     // delete race on purchase.builder_id between this function's caller
