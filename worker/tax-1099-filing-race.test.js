@@ -22,6 +22,10 @@ import { api, signupAdmin, signupBuilder } from './test-helpers.js';
 let adminSession;
 let createCallCount = 0;
 let nextCreateShouldFail = false;
+// #2939: the vendor payload itself, captured so a test can assert on the
+// actual State/CountryCd values transmitted -- every other test in this
+// file only cares that a call happened, not what was in it.
+let lastCreateRequestBody = null;
 const originalFetch = globalThis.fetch;
 
 beforeAll(async () => {
@@ -43,6 +47,7 @@ beforeAll(async () => {
     }
     if (url.includes('/Form1099NEC/Create') || url.includes('/Form1099K/Create')) {
       createCallCount += 1;
+      lastCreateRequestBody = rest[0]?.body ? JSON.parse(rest[0].body) : null;
       if (nextCreateShouldFail) {
         nextCreateShouldFail = false;
         return new Response(JSON.stringify({ StatusMessage: 'simulated vendor failure' }), { status: 502 });
@@ -63,7 +68,11 @@ afterAll(() => {
   env.TAX_1099_PAYER_EIN = undefined;
 });
 
-async function approvedFormFor(label) {
+// #2939: formFields lets a caller override/replace the default w9 shape
+// (e.g. a w8ben submission, or a spelled-out state/country) -- every
+// pre-existing call site below passes nothing and keeps the original w9
+// defaults unchanged.
+async function approvedFormFor(label, formFields = {}) {
   const builder = await signupBuilder(label);
   const builderMe = await api('/builders/me', builder.session());
   // A real submission through /tax/id-form, not a faked tax_id_encrypted
@@ -76,6 +85,7 @@ async function approvedFormFor(label) {
     body: JSON.stringify({
       formType: 'w9', legalName: 'Grace Hopper', addressLine1: '1 Compiler Lane',
       city: 'Arlington', state: 'VA', postalCode: '22201', taxIdNumber: '123-45-6789',
+      ...formFields,
     }),
   }));
   expect(submitted.response.status).toBe(200);
@@ -130,6 +140,53 @@ describe('1099 e-filing transmission race (#1410)', () => {
     const retried = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
     expect(retried.response.status).toBe(200);
     expect(retried.body.status).toBe('filed');
+  });
+});
+
+// #2939: transmitTax1099Form used to forward the payee's own free-text
+// state/country form input straight into the vendor's real IRS-e-filing
+// Address.State/Address.CountryCd fields -- 2-letter-code fields, not
+// free text. These confirm the normalization fix actually lands in the
+// real transmitted payload, not just that a call happens (the race tests
+// above already cover that).
+describe('1099 e-filing transmission country/state normalization (#2939)', () => {
+  it('normalizes a spelled-out US state to its 2-letter code before e-filing a W-9 payee', async () => {
+    const formId = await approvedFormFor('tax-1099-file-state-name', { state: 'California' });
+
+    const filed = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
+    expect(filed.response.status).toBe(200);
+    expect(lastCreateRequestBody.ReturnData[0].Payee.Address.State).toBe('CA');
+    expect(lastCreateRequestBody.ReturnData[0].Payee.Address.CountryCd).toBe('US');
+  });
+
+  it('normalizes a spelled-out country to its 2-letter code before e-filing a W-8BEN payee', async () => {
+    const formId = await approvedFormFor('tax-1099-file-country-name', {
+      formType: 'w8ben', country: 'France', countryOfCitizenship: 'France', foreignTaxId: 'FR123456789',
+      // w8ben has no state/postalCode/taxIdNumber fields (validateTaxIdForm's
+      // own w8ben branch never collects them) -- clear the w9 defaults so
+      // validateTaxIdForm doesn't see stray fields from an unrelated form type.
+      state: undefined, postalCode: undefined, taxIdNumber: undefined,
+    });
+
+    const filed = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
+    expect(filed.response.status).toBe(200);
+    expect(lastCreateRequestBody.ReturnData[0].Payee.Address.CountryCd).toBe('FR');
+    expect(lastCreateRequestBody.ReturnData[0].Payee.TINType).toBe('FOREIGNTIN');
+  });
+
+  it('rejects filing (without transmitting) when a W-9 state cannot be resolved to a valid code', async () => {
+    const formId = await approvedFormFor('tax-1099-file-bad-state', { state: 'Atlantis' });
+    const before = createCallCount;
+
+    const rejected = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/state/i);
+    // Never reached the vendor at all -- this is a local validation
+    // failure, not the vendor rejecting a bad request.
+    expect(createCallCount).toBe(before);
+
+    const row = await env.DB.prepare('SELECT status FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
+    expect(row.status).toBe('approved');
   });
 });
 
