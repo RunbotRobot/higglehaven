@@ -286,6 +286,7 @@ const authForms = {
 };
 const authStatusEl = document.getElementById('auth-status');
 const authAccountEmailEl = document.getElementById('auth-account-email');
+const authAccountSuspensionEl = document.getElementById('auth-account-suspension');
 const authAccountVerifiedEl = document.getElementById('auth-account-verified');
 const authAccountTrustTierEl = document.getElementById('auth-account-trust-tier');
 const authVerifyIdBtn = document.getElementById('auth-verify-id-btn');
@@ -344,6 +345,16 @@ function refreshAccountAuthUI() {
     authLoggedInEl.hidden = false;
     authModalTitle.textContent = 'Account';
     authAccountEmailEl.textContent = currentAuthUser.email;
+    // #2929: see this element's own HTML comment -- this is the one
+    // reliable place a suspended account can actually read why/until-when/
+    // how-to-dispute, since every other surface that would show it 403s.
+    if (currentAuthUser.suspension) {
+      const untilFormatted = new Date(currentAuthUser.suspension.gracePeriodEndsAt).toLocaleDateString();
+      authAccountSuspensionEl.textContent = `Your account has been suspended. Reason: ${currentAuthUser.suspension.reason}. This suspension is in effect until ${untilFormatted} unless lifted sooner. To dispute this, contact our customer service team — they handle all suspension disputes and appeals.`;
+      authAccountSuspensionEl.hidden = false;
+    } else {
+      authAccountSuspensionEl.hidden = true;
+    }
     authAccountVerifiedEl.textContent = currentAuthUser.emailVerified ? '✓ Email verified' : 'Email not verified yet';
     authAccountVerifiedEl.classList.toggle('verified', currentAuthUser.emailVerified);
     authResendVerifyBtn.hidden = currentAuthUser.emailVerified;
@@ -404,6 +415,21 @@ function closeAuthModal() {
   if (notifyNullOnAuthModalClose) notifyAuthResult(null);
 }
 
+// #2929: a suspended account's own /auth/me response carries a
+// `suspension` field (deliberately -- see worker/lib/auth-routes.js's own
+// handleMe comment), but refreshAccountAuthUI's banner only renders once
+// the Account modal is actually opened. Without this, a suspended visitor
+// who never happens to open it still has no way to learn why every other
+// authenticated action they try is silently failing. alert() rather than
+// auto-opening the modal -- this file's own openAuthModal/closeAuthModal
+// pair drives a login-result-resolution flow (notifyAuthResult/
+// pendingAuthResolvers) that a stray auto-open-then-close here could
+// interfere with; a blocking native alert needs none of that, and this
+// codebase already uses native dialogs for exactly this kind of
+// unmissable-but-simple notice elsewhere (confirm()/prompt() throughout
+// voiceChat.js, productCheckout.js, sell/mode.js, etc.).
+let suspensionAlertShown = false;
+
 async function refreshCurrentUser() {
   // fetchCurrentUser now throws on a genuine backend/network failure
   // instead of returning null for it the same as "really logged out" (the
@@ -418,6 +444,15 @@ async function refreshCurrentUser() {
     console.warn('Could not refresh current user:', err);
   }
   refreshAccountAuthUI();
+  if (currentAuthUser?.suspension) {
+    if (!suspensionAlertShown) {
+      suspensionAlertShown = true;
+      const untilFormatted = new Date(currentAuthUser.suspension.gracePeriodEndsAt).toLocaleDateString();
+      alert(`Your account has been suspended. Reason: ${currentAuthUser.suspension.reason}. This suspension is in effect until ${untilFormatted} unless lifted sooner. To dispute this, contact our customer service team — they handle all suspension disputes and appeals. (You can see this notice again anytime from the Account menu.)`);
+    }
+  } else {
+    suspensionAlertShown = false;
+  }
   return currentAuthUser;
 }
 

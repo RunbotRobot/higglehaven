@@ -3629,6 +3629,17 @@
       #auth-account-verified.verified {
         color: #3f7a1f;
       }
+      #auth-account-suspension {
+        font-size: 13px;
+        line-height: 1.4;
+        color: #c0392b;
+        border: 1px solid #c0392b;
+        border-radius: 8px;
+        padding: 8px 10px;
+      }
+      #auth-account-suspension[hidden] {
+        display: none;
+      }
       #auth-logged-in {
         display: flex;
         flex-direction: column;
@@ -5473,6 +5484,15 @@
 
         <div id="auth-logged-in" hidden>
           <div id="auth-account-email"></div>
+          <!-- #2929: the #2031 suspension notice itself was never actually
+               reachable through this app (every endpoint that would
+               surface it 403s while suspended) -- this is the one place
+               that always renders it, since /auth/me (unlike every other
+               authenticated endpoint) deliberately never throws on
+               suspension. Hidden by default; populated by
+               refreshAccountAuthUI() only when currentAuthUser.suspension
+               is set. -->
+          <div id="auth-account-suspension" hidden></div>
           <div id="auth-account-verified"></div>
           <!-- #1182 (sub-issue of #1126): an in-session way to change
                account email. Collapsed behind its own trigger, same shape
