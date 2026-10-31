@@ -405,6 +405,157 @@ describe('Commission-hold release accounts for a partial refund that landed whil
   });
 });
 
+// #2936: clawBackPurchaseCommission's own pre-read of the active hold used
+// to be a plain SELECT, separate from its later debit -- if a concurrent
+// releaseDueCommissionHolds sweep's own credit+release landed in the gap
+// between that read and the debit, the debit would still only exclude the
+// pre-sweep hold amount, under-clawing-back by exactly what the sweep had
+// just (correctly, on its own) credited. The fix makes the revoke attempt
+// itself the live, atomic read (UPDATE ... RETURNING), so there's no
+// separate stale read left to race. Fired genuinely concurrently, same
+// "assert the invariant holds for either winner, not a forced ordering"
+// shape as the #1061 precedent in seller-payouts-and-tax.test.js -- the
+// release side here is a hand-rolled, correctly-guarded simulated batch
+// (not the real releaseOrRevokeHold/releaseDueCommissionHolds, which as of
+// this writing still carry a separate, unrelated bug of their own -- #2935)
+// so this test's own correctness doesn't depend on that sibling issue.
+describe('Refund clawback racing a concurrent release sweep (#2936)', () => {
+  async function simulateGuardedRelease(holdId, builderId, amountCents) {
+    // Mirrors releaseOrRevokeHold's own release path, but -- unlike that
+    // function as of #2935 -- gates ALL three effects (not just the final
+    // released_at flip) on a single atomic guarded UPDATE...RETURNING, so
+    // this simulated release can never double-credit regardless of how it
+    // interleaves with a concurrent clawback.
+    const won = await env.DB.prepare(`
+      UPDATE commission_holds SET released_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE hold_id = ? AND released_at IS NULL AND revoked_at IS NULL
+      RETURNING hold_id
+    `).bind(holdId).first();
+    if (!won) return;
+    await env.DB.batch([
+      env.DB.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?').bind(amountCents, builderId),
+      env.DB.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)').bind(`earnings-${crypto.randomUUID()}`, builderId, amountCents),
+    ]);
+  }
+
+  it('leaves the builder balance at exactly the pre-purchase baseline regardless of which side wins', async () => {
+    const seller = await setUpSeller('clawback-sweep-race', 1000);
+    for (let i = 0; i < MIN_ESTABLISHED_COUNTERPARTIES; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const buyer = await signupAdmin(`clawback-sweep-race-history-${i}`);
+      // eslint-disable-next-line no-await-in-loop
+      await purchase('clawback-sweep-race-instance', buyer);
+    }
+    await createTemplate('clawback-sweep-race-big-template', 100000);
+    await placeInstance('clawback-sweep-race-big-instance', 'clawback-sweep-race-landlet', 'clawback-sweep-race-big-template', seller);
+    const bigBuyer = await signupAdmin('clawback-sweep-race-big-buyer');
+    const beforeBalance = (await builderRow(seller.builderId)).higgles_balance_cents;
+    const bigPurchase = await purchase('clawback-sweep-race-big-instance', bigBuyer);
+    const hold = await env.DB.prepare('SELECT * FROM commission_holds WHERE purchase_id = ?').bind(bigPurchase.purchaseId).first();
+    expect(hold.amount_cents).toBeGreaterThan(0); // confirms a real hold exists to race over
+
+    const [refunded] = await Promise.all([
+      api(`/purchases/${bigPurchase.purchaseId}/refund`, adminSession({ method: 'POST' })),
+      simulateGuardedRelease(hold.hold_id, seller.builderId, hold.amount_cents),
+    ]);
+    expect(refunded.response.status).toBe(200);
+
+    // Whichever side actually won the race to resolve the hold, the net
+    // effect on the builder's balance must be identical: this purchase was
+    // fully refunded, so nothing from it should remain credited.
+    const afterBalance = (await builderRow(seller.builderId)).higgles_balance_cents;
+    expect(afterBalance).toBe(beforeBalance);
+
+    // The hold itself must land in exactly one terminal state -- never
+    // both released and revoked, and never neither (which would mean the
+    // sweep's own release attempt and the clawback's own revoke attempt
+    // each thought the other had already handled it).
+    const holdAfter = await env.DB.prepare('SELECT released_at, revoked_at FROM commission_holds WHERE hold_id = ?').bind(hold.hold_id).first();
+    expect([holdAfter.released_at !== null, holdAfter.revoked_at !== null].filter(Boolean).length).toBe(1);
+  });
+
+  // Deterministic version of the race just above, targeting the exact
+  // window the bug lived in rather than relying on however this test
+  // harness happens to schedule a genuinely concurrent Promise.all (which,
+  // for this particular pairing, reliably lets each side fully resolve
+  // before the other reaches its own critical statement -- see that test's
+  // own comment -- so it never actually lands inside the narrow window).
+  // clawBackPurchaseCommission's own hold check and its builder-balance
+  // debit have no await between them, so the only place a concurrent
+  // release can actually land "in between" from this test's point of view
+  // is by intercepting the debit's own statement right as it's about to
+  // run and synchronously driving the release to completion first --
+  // reproducing, deterministically, exactly what a sweep's commit landing
+  // in that gap would have done to a caller already holding the pre-sweep
+  // hold-active result.
+  it('still claws back the full share when a concurrent release lands between the hold check and the debit', async () => {
+    const seller = await setUpSeller('clawback-sweep-deterministic', 1000);
+    for (let i = 0; i < MIN_ESTABLISHED_COUNTERPARTIES; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      const buyer = await signupAdmin(`clawback-sweep-deterministic-history-${i}`);
+      // eslint-disable-next-line no-await-in-loop
+      await purchase('clawback-sweep-deterministic-instance', buyer);
+    }
+    await createTemplate('clawback-sweep-deterministic-big-template', 100000);
+    await placeInstance('clawback-sweep-deterministic-big-instance', 'clawback-sweep-deterministic-landlet', 'clawback-sweep-deterministic-big-template', seller);
+    const bigBuyer = await signupAdmin('clawback-sweep-deterministic-big-buyer');
+    const beforeBalance = (await builderRow(seller.builderId)).higgles_balance_cents;
+    const bigPurchase = await purchase('clawback-sweep-deterministic-big-instance', bigBuyer);
+    const hold = await env.DB.prepare('SELECT * FROM commission_holds WHERE purchase_id = ?').bind(bigPurchase.purchaseId).first();
+    expect(hold.amount_cents).toBeGreaterThan(0); // confirms a real hold exists to race over
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      const stmt = originalPrepare(sql);
+      if (armed && sql.includes('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ?')) {
+        armed = false;
+        const originalBind = stmt.bind.bind(stmt);
+        stmt.bind = (...bindArgs) => {
+          const bound = originalBind(...bindArgs);
+          const originalRun = bound.run.bind(bound);
+          bound.run = async () => {
+            // The sweep's own release commits here, in between
+            // clawBackPurchaseCommission's own hold check (already
+            // resolved by this point, "hold still active") and the debit
+            // about to run with that now-stale result.
+            await simulateGuardedRelease(hold.hold_id, seller.builderId, hold.amount_cents);
+            return originalRun();
+          };
+          return bound;
+        };
+      }
+      return stmt;
+    };
+    let refunded;
+    try {
+      refunded = await api(`/purchases/${bigPurchase.purchaseId}/refund`, adminSession({ method: 'POST' }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(refunded.response.status).toBe(200);
+
+    // Without the fix, a stale pre-release read would only debit the
+    // immediate share computed before this intercepted statement ran,
+    // leaving hold.amount_cents -- which the simulated release injected
+    // right here would have just credited -- stuck in the builder's
+    // balance. The fix's atomic revoke-first check already claims the
+    // hold before this debit statement is even reached, so by the time
+    // this intercepted debit (and the simulated release it triggers)
+    // actually runs, the hold is already revoked and the simulated
+    // release's own guard correctly finds nothing left to credit --
+    // either way, the debit below must claw back the full
+    // builder_share_cents, landing exactly back at the pre-purchase
+    // baseline.
+    const afterBalance = (await builderRow(seller.builderId)).higgles_balance_cents;
+    expect(afterBalance).toBe(beforeBalance);
+
+    const holdAfter = await env.DB.prepare('SELECT released_at, revoked_at FROM commission_holds WHERE hold_id = ?').bind(hold.hold_id).first();
+    expect(holdAfter.revoked_at).not.toBeNull();
+    expect(holdAfter.released_at).toBeNull();
+  });
+});
+
 describe('releaseDueCommissionHolds cron sweep (#1109)', () => {
   it('credits a past-due hold and leaves a not-yet-due one alone', async () => {
     const seller = await setUpSeller('release-sweep', 1000);
