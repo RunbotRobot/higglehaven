@@ -351,6 +351,20 @@ function buildStripeAccountParams(input, userEmail, request, productDescription 
   if (!/^\d{4}$/.test(ssnLast4)) throw new HttpError('individual.ssnLast4 must be exactly 4 digits', 400);
   const phone = stringValue(individual.phone, 'individual.phone');
   if (!/^\+?[0-9()\s-]{7,20}$/.test(phone)) throw new HttpError('individual.phone must be a valid phone number', 400);
+  // #2927 (continued): Stripe's requirements can reveal individual.id_number
+  // (a FULL SSN/ITIN, not ssnLast4) as a further currently_due item once the
+  // phone/business_profile/statement_descriptor round above is satisfied --
+  // confirmed via a real e2e run. Unlike that round, this is deliberately
+  // NOT wired into either onboarding form: collecting a full SSN from real
+  // sellers/builders is a genuine privacy/compliance decision needing
+  // explicit owner sign-off (see issue filed alongside this change), not
+  // something to add unilaterally the way a phone number was. Left
+  // optional and accepted only if a caller already supplies it (today,
+  // only this suite's own e2e test does, with a Stripe test-mode-only
+  // value) -- real onboarding submissions are completely unaffected
+  // either way, since the real form never sends this field.
+  const idNumber = individual.idNumber !== undefined ? stringValue(individual.idNumber, 'individual.idNumber') : null;
+  if (idNumber !== null && !/^\d{9}$/.test(idNumber)) throw new HttpError('individual.idNumber must be exactly 9 digits', 400);
 
   const dobMonth = boundedIntegerValue(individual.dobMonth, 'individual.dobMonth', 1, 12);
   const dobYear = boundedIntegerValue(individual.dobYear, 'individual.dobYear', 1900, new Date().getUTCFullYear());
@@ -428,7 +442,7 @@ function buildStripeAccountParams(input, userEmail, request, productDescription 
         routing_number: stringValue(externalAccount.routingNumber, 'externalAccount.routingNumber'),
         account_number: stringValue(externalAccount.accountNumber, 'externalAccount.accountNumber'),
       },
-      individual: { phone },
+      individual: idNumber !== null ? { phone, id_number: idNumber } : { phone },
       business_profile: { mcc: STRIPE_BUSINESS_PROFILE_MCC, url: STRIPE_BUSINESS_PROFILE_URL },
       settings: { payments: { statement_descriptor: STRIPE_STATEMENT_DESCRIPTOR } },
     },

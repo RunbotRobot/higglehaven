@@ -1720,6 +1720,16 @@ Three further fields Stripe also started requiring at the same time —
 not an independent business with its own site/category), not caller-
 supplied, so they aren't in this request body at all.
 
+`individual.idNumber` (optional, not shown above) is accepted but
+deliberately not collected by either real onboarding form — Stripe can
+surface `individual.id_number` (a full SSN/ITIN, not `ssnLast4`) as a
+further `currently_due` item once the fields above are satisfied, but
+whether to actually collect a full SSN from real sellers/builders is a
+privacy/compliance decision left to the owner (see the issue filed
+alongside #2927's own fix), not something this endpoint pushes into
+production on its own. Today only this suite's own real-Stripe e2e test
+supplies it, with a Stripe test-mode-only value.
+
 ### `GET /api/builders/me/stripe-account`
 ### `POST /api/builders/me/stripe-account`
 

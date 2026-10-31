@@ -210,6 +210,16 @@ await fetchJson(sellerPage, '/api/instances', {
 // submission would hit -- only the input values differ. phone (#2927) is
 // a plain test-mode-safe placeholder number, not a documented Stripe
 // fixture value -- any validly-formatted number works for this field.
+// idNumber (#2927, "000000000") is the real seller/builder onboarding
+// form's own deliberate omission -- collecting a full SSN is a genuine
+// privacy/compliance decision left for the owner, not something this
+// suite should push into production by always sending it. buildStripeAccountParams
+// accepts it only because this test supplies it: Stripe's v2 identity
+// model can surface individual.id_number as a further currently_due item
+// even after phone/business_profile/statement_descriptor are satisfied,
+// and this suite needs a real "complete" to validate the actual
+// purchase flow below, so it exercises the (optional, test-only-in-
+// practice) code path rather than skip ever reaching "complete" at all.
 const stripeAccountInput = {
   individual: {
     firstName: 'Test',
@@ -218,6 +228,7 @@ const stripeAccountInput = {
     dobMonth: 1,
     dobYear: 1902,
     ssnLast4: '0000',
+    idNumber: '000000000',
     phone: '+14155550100',
     addressLine1: 'address_full_match',
     addressCity: 'San Francisco',
