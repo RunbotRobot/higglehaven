@@ -8,15 +8,15 @@
 // #1621: a URL-import mode used to exist (the Worker fetching a link
 // server-side) and would have bypassed this pipeline entirely, since the
 // browser never saw the bytes -- but it was removed outright (see
-// worker/index.js's handleModelUpload, "A URL-import mode ... used to
+// worker/lib/models.js's handleModelUpload, "A URL-import mode ... used to
 // live here too, dropped for now") over SSRF exposure and because few
 // real links were directly fetchable anyway. It's gone, not just unused,
 // so there is no longer any model-ingestion path in this codebase that
 // skips this pipeline: every source -- a direct file pick, an .fbx
 // conversion (convertFbxToGlb below), and the video-to-3D generation
-// pipeline (worker/index.js's storeTripoModelOutput, #1619) -- ends up
-// back in the browser as an ordinary fetchable /uploads/... URL and goes
-// through optimizeModelFile the same way a picked file does (see
+// pipeline (worker/lib/video-generation.js's storeTripoModelOutput, #1619)
+// -- ends up back in the browser as an ordinary fetchable /uploads/... URL
+// and goes through optimizeModelFile the same way a picked file does (see
 // src/main.js's handleUploadFileStep, which the video-to-3D entry point
 // feeds a synthetic File the same way) before POST /api/models ever sees
 // it. A raw video-to-3D mesh is exactly the "undecimated photogrammetry
