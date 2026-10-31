@@ -202,10 +202,37 @@ const { landlets } = (await fetchJson(sellerPage, `/api/landlets?status=claimed&
 const landlet = landlets[0];
 
 const instanceId = 'real-stripe-checkout-instance';
+// #2931 (continued): placed at the landlet-local offset that cancels out
+// landlet.center -- i.e. this instance's real WORLD position is always
+// (0, 0, ...), regardless of where the claim-map flow above actually
+// claimed land. Found via a real CI failure: src/shop/mode.js positions
+// each landlet's own content group at `record.center` (confirmed reading
+// that assignment directly), so a plain x:0,y:0 instance sits exactly at
+// landlet.center in world space -- correct in isolation, but this suite's
+// own window.__shopFlightCeilingDebug/__testTeleportShopAvatar
+// (src/shop/flightMovement.js) showed camera.position gets radius-clamped
+// to the shop world's own walkable/render boundary every frame
+// (clampShopRadius + shopMaxRadiusM, positionShopCamera), while a raw
+// teleport (unlike real WASD/joystick movement, see clampShopRadius's own
+// "otherwise only ever called from updateShopMovement, gated on actual
+// movement input" comment) never clamps shopAvatarPosition at all. The
+// claim-map's own candidate-click loop above can land on a landlet further
+// from world origin than that walkable radius -- confirmed live (a real CI
+// run's own window.__lastShopBuyHintDebug logged tappedDistance: ~85m,
+// nowhere close to SIGN_INTERACT_RADIUS_M's 8m) -- in which case the
+// camera parks short of the product no matter how long this waits. World
+// origin is always within the walkable radius, so anchoring there instead
+// of landlet.center sidesteps needing to know that radius's exact value at
+// all. See #2934 for the broader question this surfaced (whether claimable
+// land can legitimately end up outside Shop mode's own walkable radius for
+// a real player too) -- out of scope for this test fix itself.
 await fetchJson(sellerPage, '/api/instances', {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
-  body: JSON.stringify({ instanceId, landletId: landlet.landletId, templateId: template.templateId, x: 0, y: 0 }),
+  body: JSON.stringify({
+    instanceId, landletId: landlet.landletId, templateId: template.templateId,
+    x: -landlet.center.x, y: -landlet.center.y,
+  }),
 });
 
 // Stripe Connect test-mode instant-verification fixture values
@@ -330,10 +357,15 @@ await page.waitForTimeout(100);
 await page.mouse.up();
 await page.waitForTimeout(100);
 
-await page.evaluate(([x, y]) => {
-  window.__testTeleportShopAvatar(x, y);
+// #2931 (continued): teleports to world origin, not landlet.center -- see
+// the product instance's own x/y comment above for why (the instance's
+// x/y offset cancels landlet.center, so its real world position is
+// origin too; keeping both in lockstep is what keeps this within
+// SIGN_INTERACT_RADIUS_M regardless of the camera's own radius clamp).
+await page.evaluate(() => {
+  window.__testTeleportShopAvatar(0, 0);
   window.__testForceShopProximityCheck();
-}, [landlet.center.x, landlet.center.y]);
+});
 
 // Polls until the instance's own landlet has loaded into shopReviews AND
 // the tap succeeds (window.__testTapShopProductByInstanceId's own "always
