@@ -35,7 +35,7 @@ import { handleSellerFeedbackList } from './reputation.js';
 import { handleSellerPayouts } from './seller-payouts-tax.js';
 import {
   sellerFromRow, getOrCreateSellerForUser, stripeAccountStatusJson, stripeConfigured, stripeRequest,
-  deriveStripeOnboardingStatus, requireSessionSeller, integerValue, selectRowsByIdsChunked,
+  stripeRequestV2, deriveStripeOnboardingStatus, requireSessionSeller, integerValue, selectRowsByIdsChunked,
   sellerDeletionStatements,
 } from '../index.js';
 // #1407 (sub-issue of #1404): the AI-made Stripe-reinstatement decision
@@ -294,7 +294,33 @@ function boundedIntegerValue(value, field, min, max) {
 // (business name, EIN, representative/owner info) and is deliberately
 // left for a fast-follow once an actual seller needs it, per #452's own
 // "not in scope" note on document-verification UI.
-function buildStripeIndividualParams(input, userEmail, request, productDescription = 'higglehaven marketplace seller') {
+//
+// #2920 (sub-issue of #2919, Accounts v1 -> v2 migration): returns BOTH
+// the v2 payload for POST /v2/core/accounts[/{id}] (identity/capabilities/
+// responsibilities -- the actual onboarding-model migration this
+// sub-issue is about) and a v1-shaped external_account payload, built
+// from the exact same validated/normalized fields rather than
+// re-validating input twice.
+//
+// Bank-account attachment has no equivalent on the v2 Accounts API
+// itself -- Stripe's own Global Payouts guide
+// (docs.stripe.com/global-payouts/recipient-creation) moves it to a
+// separate, async Money Management flow (OutboundSetupIntent ->
+// PayoutMethod, its own Stripe-Context header, its own capability-
+// activation lifecycle) that's a materially different product surface,
+// out of scope for "account creation/update" alone. v1's own
+// account-update endpoint stays fully interoperable with a v2-created
+// account id by Stripe's own documented design ("you can use the
+// Accounts v1 API with your existing v1 Accounts... Call /v1/accounts
+// endpoints for Accounts created using API v2" --
+// docs.stripe.com/connect/accounts-v2/migrate-integration), so this keeps
+// using it for exactly this one purpose. Its response is also a full
+// v1-shaped Account snapshot (requirements.currently_due,
+// charges_enabled, payouts_enabled), which is what lets
+// deriveStripeOnboardingStatus below stay completely unchanged -- #2921
+// ("onboarding status + webhook -> v2 model") is the sub-issue chartered
+// to replace this v1 read-back with a native v2 status derivation.
+function buildStripeAccountParams(input, userEmail, request, productDescription = 'higglehaven marketplace seller') {
   const individual = input.individual || {};
   const externalAccount = input.externalAccount || {};
   const country = stringValue(individual.addressCountry, 'individual.addressCountry').toUpperCase();
@@ -310,37 +336,114 @@ function buildStripeIndividualParams(input, userEmail, request, productDescripti
   const dobDay = boundedIntegerValue(individual.dobDay, 'individual.dobDay', 1, daysInDobMonth);
 
   return {
-    country,
-    email: userEmail,
-    business_type: 'individual',
-    business_profile: { product_description: productDescription },
-    capabilities: { transfers: { requested: 'true' }, card_payments: { requested: 'true' } },
-    individual: {
-      first_name: stringValue(individual.firstName, 'individual.firstName'),
-      last_name: stringValue(individual.lastName, 'individual.lastName'),
-      email: userEmail,
-      dob: { day: dobDay, month: dobMonth, year: dobYear },
-      ssn_last_4: ssnLast4,
-      address: {
-        line1: stringValue(individual.addressLine1, 'individual.addressLine1'),
-        city: stringValue(individual.addressCity, 'individual.addressCity'),
-        state: stringValue(individual.addressState, 'individual.addressState'),
-        postal_code: stringValue(individual.addressPostalCode, 'individual.addressPostalCode'),
+    v2AccountParams: {
+      contact_email: userEmail,
+      display_name: productDescription,
+      identity: {
         country,
+        entity_type: 'individual',
+        individual: {
+          given_name: stringValue(individual.firstName, 'individual.firstName'),
+          surname: stringValue(individual.lastName, 'individual.lastName'),
+          email: userEmail,
+          date_of_birth: { day: dobDay, month: dobMonth, year: dobYear },
+          // v1's single ssn_last_4 field becomes one of several typed
+          // id_numbers entries in v2 -- us_ssn_last_4 is the documented
+          // enum value for exactly this (4-digit, US-only) case, matching
+          // this function's own pre-existing US-only assumption (ssnLast4
+          // is validated as 4 digits regardless of addressCountry, same
+          // as before this migration -- not a new limitation).
+          id_numbers: [{ type: 'us_ssn_last_4', value: ssnLast4 }],
+          address: {
+            line1: stringValue(individual.addressLine1, 'individual.addressLine1'),
+            city: stringValue(individual.addressCity, 'individual.addressCity'),
+            state: stringValue(individual.addressState, 'individual.addressState'),
+            postal_code: stringValue(individual.addressPostalCode, 'individual.addressPostalCode'),
+            country,
+          },
+        },
+        // v2's replacement for v1's top-level tos_acceptance -- same
+        // date+ip shape, just nested under identity.attestations and
+        // dated as an RFC 3339 string instead of a unix timestamp.
+        attestations: {
+          terms_of_service: {
+            account: {
+              date: new Date().toISOString(),
+              ip: clientIp(request),
+            },
+          },
+        },
+      },
+      configuration: {
+        // v1's capabilities.card_payments -> merchant.capabilities.card_payments.
+        merchant: { capabilities: { card_payments: { requested: true } } },
+        // v1's capabilities.transfers -> recipient.capabilities.stripe_balance.stripe_transfers
+        // (receiving platform Transfers into this account's own Stripe balance).
+        recipient: { capabilities: { stripe_balance: { stripe_transfers: { requested: true } } } },
+      },
+      // v2's explicit replacement for v1's implicit `type: 'custom'` --
+      // application-owned fees/losses plus no Stripe Dashboard access is
+      // Stripe's own documented v2 equivalent of a v1 Custom account
+      // (docs.stripe.com/connect/accounts-v2/connected-account-configuration):
+      // this app collects KYC itself and never redirects anyone to a
+      // Stripe-hosted onboarding flow. Required on the first call that
+      // adds the merchant configuration; Stripe rejects changing it
+      // afterward, so both call sites below strip this out on update.
+      defaults: { responsibilities: { fees_collector: 'application', losses_collector: 'application' } },
+      dashboard: 'none',
+      include: ['identity', 'configuration.merchant', 'configuration.recipient'],
+    },
+    v1ExternalAccountParams: {
+      external_account: {
+        object: 'bank_account',
+        country,
+        currency: stringValue(externalAccount.currency, 'externalAccount.currency').toLowerCase(),
+        routing_number: stringValue(externalAccount.routingNumber, 'externalAccount.routingNumber'),
+        account_number: stringValue(externalAccount.accountNumber, 'externalAccount.accountNumber'),
       },
     },
-    external_account: {
-      object: 'bank_account',
-      country,
-      currency: stringValue(externalAccount.currency, 'externalAccount.currency').toLowerCase(),
-      routing_number: stringValue(externalAccount.routingNumber, 'externalAccount.routingNumber'),
-      account_number: stringValue(externalAccount.accountNumber, 'externalAccount.accountNumber'),
-    },
-    tos_acceptance: {
-      date: Math.floor(Date.now() / 1000),
-      ip: clientIp(request),
-    },
   };
+}
+
+// #2920: country/entity_type/defaults/dashboard are create-only (Stripe
+// rejects changing any of them on an existing account) -- same
+// create-vs-update split v1 already needed for `country` alone.
+function stripeV2AccountUpdateParams(v2AccountParams) {
+  const { identity: { country, entity_type, ...individualIdentity }, defaults, dashboard, ...rest } = v2AccountParams;
+  return { ...rest, identity: individualIdentity };
+}
+
+// #2920: creates (or updates) the v2 Account, then attaches/updates the
+// bank account via the still-interoperable v1 endpoint (see
+// buildStripeAccountParams' own comment for why) -- returns the v1-shaped
+// Account snapshot that call gives back, which deriveStripeOnboardingStatus
+// already knows how to read. If the bank-account step fails right after a
+// brand-new v2 account was just created, best-effort delete it rather than
+// leak an identity-bearing orphan with no DB row pointing at it -- the
+// same failure shape #2304's own comment below already logs for the
+// DB-race cleanup path.
+async function createOrUpdateStripeAccount(env, v2AccountParams, v1ExternalAccountParams, existingAccountId, idempotencyKey) {
+  let accountId = existingAccountId;
+  let createdNewAccount = false;
+  if (existingAccountId) {
+    await stripeRequestV2(env, 'POST', `accounts/${existingAccountId}`, stripeV2AccountUpdateParams(v2AccountParams));
+  } else {
+    const v2Account = await stripeRequestV2(env, 'POST', 'accounts', v2AccountParams, idempotencyKey);
+    accountId = v2Account.id;
+    createdNewAccount = true;
+  }
+
+  try {
+    const account = await stripeRequest(env, 'POST', `accounts/${accountId}`, v1ExternalAccountParams);
+    return { account, createdNewAccount };
+  } catch (error) {
+    if (createdNewAccount) {
+      await stripeRequest(env, 'DELETE', `accounts/${accountId}`).catch((cleanupError) => {
+        console.error('Failed to clean up Stripe account after bank-account attach failed', accountId, cleanupError);
+      });
+    }
+    throw error;
+  }
 }
 
 // GET returns the seller's current onboarding state; POST creates the
@@ -359,7 +462,7 @@ async function handleSellerStripeAccount(request, env, db) {
 
   if (request.method === 'POST') {
     const input = await readJson(request);
-    const params = buildStripeIndividualParams(input, user.email, request);
+    const { v2AccountParams, v1ExternalAccountParams } = buildStripeAccountParams(input, user.email, request);
     // #948: same placement as #839's own precedent (checkRateLimit ahead of
     // the stripeConfigured check) — this is what makes the limiter itself
     // exercisable in a test suite that never configures Stripe at all.
@@ -368,21 +471,15 @@ async function handleSellerStripeAccount(request, env, db) {
       throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
     }
 
-    let account;
-    let createdNewAccount = false;
-    if (sessionSeller.stripe_account_id) {
-      // country can't be changed on an existing Stripe account.
-      const { country, ...updateParams } = params;
-      account = await stripeRequest(env, 'POST', `accounts/${sessionSeller.stripe_account_id}`, updateParams);
-    } else {
-      // #473: keyed on seller_id alone is safe here — this branch only
-      // ever runs while stripe_account_id is still null, and a successful
-      // create (or #474's own DB guard losing a concurrent race) means it
-      // never runs again for this seller, so there's no future "genuine
-      // second create" this key could wrongly dedupe against.
-      account = await stripeRequest(env, 'POST', 'accounts', { type: 'custom', ...params }, `seller-account-create:${sessionSeller.seller_id}`);
-      createdNewAccount = true;
-    }
+    // #473: keyed on seller_id alone is safe here — this branch only
+    // ever runs while stripe_account_id is still null, and a successful
+    // create (or #474's own DB guard losing a concurrent race) means it
+    // never runs again for this seller, so there's no future "genuine
+    // second create" this key could wrongly dedupe against.
+    const { account, createdNewAccount } = await createOrUpdateStripeAccount(
+      env, v2AccountParams, v1ExternalAccountParams, sessionSeller.stripe_account_id,
+      `seller-account-create:${sessionSeller.seller_id}`,
+    );
 
     const status = deriveStripeOnboardingStatus(account);
     const requirementsDue = account.requirements?.currently_due || [];
@@ -454,7 +551,7 @@ async function handleBuilderStripeAccount(request, env, db) {
 
   if (request.method === 'POST') {
     const input = await readJson(request);
-    const params = buildStripeIndividualParams(input, user.email, request, 'higglehaven marketplace builder');
+    const { v2AccountParams, v1ExternalAccountParams } = buildStripeAccountParams(input, user.email, request, 'higglehaven marketplace builder');
     // #948: same placement as #839's own precedent — see the seller-account
     // handler's own comment above.
     await checkRateLimit(db, `stripe-account:${sessionBuilder.builder_id}`, STRIPE_RATE_LIMIT_MAX);
@@ -462,15 +559,10 @@ async function handleBuilderStripeAccount(request, env, db) {
       throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
     }
 
-    let account;
-    let createdNewAccount = false;
-    if (sessionBuilder.stripe_account_id) {
-      const { country, ...updateParams } = params;
-      account = await stripeRequest(env, 'POST', `accounts/${sessionBuilder.stripe_account_id}`, updateParams);
-    } else {
-      account = await stripeRequest(env, 'POST', 'accounts', { type: 'custom', ...params }, `builder-account-create:${sessionBuilder.builder_id}`);
-      createdNewAccount = true;
-    }
+    const { account, createdNewAccount } = await createOrUpdateStripeAccount(
+      env, v2AccountParams, v1ExternalAccountParams, sessionBuilder.stripe_account_id,
+      `builder-account-create:${sessionBuilder.builder_id}`,
+    );
 
     const status = deriveStripeOnboardingStatus(account);
     const requirementsDue = account.requirements?.currently_due || [];
