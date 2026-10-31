@@ -2580,6 +2580,14 @@ describe('Authentication', () => {
       const meWhileSuspended = await api('/auth/me', target.session());
       expect(meWhileSuspended.response.status).toBe(200);
       expect(meWhileSuspended.body.user).toBeTruthy();
+      // #2929: /auth/me is the one endpoint that never 403s for a
+      // suspended account, so it's the one reliable place the #2031
+      // in-app suspension notice (reason/grace-period-date) can actually
+      // reach the client -- every other authenticated endpoint 403s
+      // first, per the `blocked` assertion above.
+      expect(meWhileSuspended.body.user.suspension).toEqual({
+        reason: 'x', gracePeriodEndsAt: expect.any(String),
+      });
 
       // Lifting the suspension restores normal access immediately.
       await api('/auth/unsuspend-account', admin.session({
@@ -2587,6 +2595,11 @@ describe('Authentication', () => {
       }));
       const restored = await api('/builders/me', target.session());
       expect(restored.response.status).toBe(200);
+      // #2929: the suspension field disappears the moment it's lifted --
+      // it's derived live from account_suspensions on every /auth/me call,
+      // never cached/stamped onto the user row itself.
+      const meAfterLift = await api('/auth/me', target.session());
+      expect(meAfterLift.body.user.suspension).toBeUndefined();
 
       // logout never requires authentication at all (it only reads the
       // session cookie directly, deleting it outright), so a suspended

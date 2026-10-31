@@ -355,7 +355,33 @@ export async function handleChangePassword(request, db) {
 
 export async function handleMe(request, db) {
   const user = await currentUser(request, db);
-  return json({ user: user ? userFromRow(user) : null });
+  if (!user) return json({ user: null });
+  // #2929: requireCurrentUser (every OTHER authenticated endpoint) throws
+  // 403 for a suspended account before returning anything, so the #2031
+  // in-app suspension notice (reason/grace-period-date/dispute contact,
+  // fired straight to `notifications` the moment a suspension lands) was
+  // never actually reachable -- not through GET /api/notifications, not
+  // through any of the mode-entry flows that resolve a builder/seller
+  // profile first, all of which hit that same gate before a client could
+  // ever get far enough to read it. This handler is the one exception
+  // (deliberately plain currentUser, not requireCurrentUser, so a
+  // suspended session's own login/session-restore still succeeds --
+  // see this function's own pre-existing behavior/tests) and therefore
+  // the one reliable place to surface it: same field shape as the
+  // admin-only handleSuspensionStatus above, minus the admin-internal
+  // fields (evidenceNote/adminUserId) this isn't the account owner's to see.
+  const activeSuspension = await db.prepare(`
+    SELECT reason, grace_period_ends_at FROM account_suspensions
+    WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+  `).bind(user.user_id).first();
+  return json({
+    user: {
+      ...userFromRow(user),
+      ...(activeSuspension ? {
+        suspension: { reason: activeSuspension.reason, gracePeriodEndsAt: activeSuspension.grace_period_ends_at },
+      } : {}),
+    },
+  });
 }
 
 const AGE_ATTEST_RATE_LIMIT_MAX = 20;
