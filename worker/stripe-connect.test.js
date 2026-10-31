@@ -22,6 +22,7 @@ function validPayload(overrides = {}) {
       dobMonth: 6,
       dobYear: 1990,
       ssnLast4: '1234',
+      phone: '206-555-0100',
       addressLine1: '123 Main St',
       addressCity: 'Seattle',
       addressState: 'WA',
@@ -78,6 +79,13 @@ describe('Seller Stripe Connect account', () => {
       body: JSON.stringify(validPayload({ individual: { ssnLast4: '12' } })),
     }));
     expect(badSsn.response.status).toBe(400);
+
+    // #2927
+    const badPhone = await api('/sellers/me/stripe-account', seller.session({
+      method: 'POST',
+      body: JSON.stringify(validPayload({ individual: { phone: 'nope' } })),
+    }));
+    expect(badPhone.response.status).toBe(400);
 
     const badDob = await api('/sellers/me/stripe-account', seller.session({
       method: 'POST',
@@ -274,8 +282,16 @@ describe('Accounts v2 migration (#2920)', () => {
     expect(v1Params.get('external_account[account_number]')).toBe('000123456789');
     // The bank-account-attach call must never re-send KYC fields Stripe
     // already has from the v2 create call -- it's purely for the bank
-    // account.
+    // account (plus #2927's own additions just below, which v2's own
+    // identity/configuration shape has no equivalent slot for).
     expect(v1Params.get('individual[ssn_last_4]')).toBeNull();
+    // #2927: Stripe's requirements started asking for these once account
+    // creation moved to v2 -- sent via this same v1 call since it's
+    // already proven interoperable with a v2-created account id.
+    expect(v1Params.get('individual[phone]')).toBe('206-555-0100');
+    expect(v1Params.get('business_profile[mcc]')).toBeTruthy();
+    expect(v1Params.get('business_profile[url]')).toBeTruthy();
+    expect(v1Params.get('settings[payments][statement_descriptor]')).toBeTruthy();
 
     const row = await env.DB.prepare('SELECT stripe_account_id FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
     expect(row.stripe_account_id).toBe('acct_v2_shape_test');
@@ -399,6 +415,13 @@ describe('Builder Stripe Connect account (#624)', () => {
       body: JSON.stringify(validPayload({ individual: { ssnLast4: '12' } })),
     }));
     expect(badSsn.response.status).toBe(400);
+
+    // #2927
+    const badPhone = await api('/builders/me/stripe-account', builder.session({
+      method: 'POST',
+      body: JSON.stringify(validPayload({ individual: { phone: 'nope' } })),
+    }));
+    expect(badPhone.response.status).toBe(400);
   });
 
   it('returns 503 once the payload is valid but Stripe is not configured', async () => {

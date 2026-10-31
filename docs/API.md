@@ -1686,6 +1686,7 @@ flow is a fast-follow):
     "dobMonth": 6,
     "dobYear": 1990,
     "ssnLast4": "1234",
+    "phone": "206-555-0100",
     "addressLine1": "123 Main St",
     "addressCity": "Seattle",
     "addressState": "WA",
@@ -1708,6 +1709,16 @@ isn't configured. Creates the seller's Stripe Custom account on first call,
 or updates the existing one (Stripe's own account id, once assigned, is
 never re-created) on every call after — the same shape as `GET`'s response,
 reflecting whatever Stripe just returned.
+
+`individual.phone` (#2927) started being required once account creation
+moved to Stripe Connect Accounts v2 (#2924) — Stripe's own
+`requirements.currently_due` didn't ask for it under the legacy v1 API.
+Three further fields Stripe also started requiring at the same time —
+`business_profile.mcc`/`business_profile.url`/
+`settings.payments.statement_descriptor` — are platform-wide constants
+(every connected account is a seller/builder operating inside higglehaven,
+not an independent business with its own site/category), not caller-
+supplied, so they aren't in this request body at all.
 
 ### `GET /api/builders/me/stripe-account`
 ### `POST /api/builders/me/stripe-account`

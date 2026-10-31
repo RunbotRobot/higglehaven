@@ -205,9 +205,11 @@ await fetchJson(sellerPage, '/api/instances', {
 // documented value for SSN-last-4 verification. routing/account
 // 110000000/000123456789 are Stripe's own documented US test external
 // bank account numbers for a successful payout destination. This is the
-// exact same buildStripeIndividualParams/handleSellerStripeAccount code
+// exact same buildStripeAccountParams/handleSellerStripeAccount code
 // path (worker/lib/seller-profile.js) a real seller's own onboarding form
-// submission would hit -- only the input values differ.
+// submission would hit -- only the input values differ. phone (#2927) is
+// a plain test-mode-safe placeholder number, not a documented Stripe
+// fixture value -- any validly-formatted number works for this field.
 const stripeAccountInput = {
   individual: {
     firstName: 'Test',
@@ -216,6 +218,7 @@ const stripeAccountInput = {
     dobMonth: 1,
     dobYear: 1902,
     ssnLast4: '0000',
+    phone: '+14155550100',
     addressLine1: 'address_full_match',
     addressCity: 'San Francisco',
     addressState: 'CA',
