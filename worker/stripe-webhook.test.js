@@ -235,6 +235,73 @@ describe('Stripe account.updated webhook (#766)', () => {
       .bind(seller.sellerId).first();
     expect(row.stripe_onboarding_status).toBe('complete');
   });
+
+  // #2921 (sub-issue of #2919): confirms this webhook handler needs no
+  // code changes for a v2-created account, not just by inspection but by
+  // actually driving both halves of the real flow -- #2920's own
+  // createOrUpdateStripeAccount (POST /v2/core/accounts, mocked the same
+  // way worker/stripe-connect.test.js's "Accounts v2 migration (#2920)"
+  // suite already does) to create a real v2 account, then this same
+  // signed account.updated webhook against that exact resulting account
+  // id. Per Stripe's own docs
+  // (docs.stripe.com/connect/accounts-v2/migrate-integration), updating a
+  // v2 Account still emits a full v1-shaped account.updated snapshot
+  // (requirements.currently_due/charges_enabled/payouts_enabled), which is
+  // exactly what deriveStripeOnboardingStatus already reads -- this proves
+  // there's no discontinuity between the v2 creation half and the
+  // (unchanged) webhook-update half for one real account, not just that
+  // each half independently accepts v1-shaped input.
+  it('re-derives status from a v1-shaped webhook payload for an account created via the v2 API (#2921)', async () => {
+    const seller = await signupSeller('stripe-webhook-v2-created');
+    const originalFetch = globalThis.fetch;
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.stripe.com/v2/core/accounts' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'acct_v2_webhook_test', object: 'v2.core.account' }), { status: 200 });
+      }
+      if (url === 'https://api.stripe.com/v1/accounts/acct_v2_webhook_test' && init?.method === 'POST') {
+        return new Response(JSON.stringify({
+          id: 'acct_v2_webhook_test', requirements: { currently_due: [] }, charges_enabled: false, payouts_enabled: false,
+        }), { status: 200 });
+      }
+      return originalFetch(input, init);
+    };
+    let created;
+    try {
+      created = await api('/sellers/me/stripe-account', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          individual: {
+            firstName: 'Ada', lastName: 'Seller', dobDay: 12, dobMonth: 6, dobYear: 1990, ssnLast4: '1234',
+            addressLine1: '123 Main St', addressCity: 'Seattle', addressState: 'WA', addressPostalCode: '98101', addressCountry: 'US',
+          },
+          externalAccount: { routingNumber: '110000000', accountNumber: '000123456789', currency: 'usd' },
+        }),
+      }));
+    } finally {
+      globalThis.fetch = originalFetch;
+      env.STRIPE_SECRET_KEY = undefined;
+    }
+    expect(created.response.status).toBe(200);
+    const createdRow = await env.DB.prepare('SELECT stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?')
+      .bind(seller.sellerId).first();
+    expect(createdRow.stripe_account_id).toBe('acct_v2_webhook_test');
+    expect(createdRow.stripe_onboarding_status).toBe('pending');
+
+    // Now Stripe tells us (via the same v1-shaped account.updated event
+    // every other test in this file already exercises) that this exact
+    // v2-created account still has a requirement outstanding.
+    const response = await postStripeWebhook(accountUpdatedEvent('acct_v2_webhook_test', {
+      requirements: { disabled_reason: 'requirements.past_due', currently_due: ['individual.verification.document'] },
+    }));
+    expect(response.status).toBe(200);
+
+    const updatedRow = await env.DB.prepare('SELECT stripe_onboarding_status, stripe_requirements_due FROM sellers WHERE seller_id = ?')
+      .bind(seller.sellerId).first();
+    expect(updatedRow.stripe_onboarding_status).toBe('action_needed');
+    expect(JSON.parse(updatedRow.stripe_requirements_due)).toEqual(['individual.verification.document']);
+  });
 });
 
 // #1086: a charge can be reversed by Stripe's own initiative (a bank
