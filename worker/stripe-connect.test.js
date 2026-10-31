@@ -178,7 +178,12 @@ describe('Seller Stripe Connect account', () => {
     };
     globalThis.fetch = async (input, init) => {
       const url = typeof input === 'string' ? input : input.url;
-      if (url === 'https://api.stripe.com/v1/accounts' && init?.method === 'POST') {
+      // #2920: account creation itself now goes through the v2 endpoint
+      // first; the v1 mock below is for the follow-up bank-account attach.
+      if (url === 'https://api.stripe.com/v2/core/accounts' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'acct_create_delete_race', object: 'v2.core.account' }), { status: 200 });
+      }
+      if (url === 'https://api.stripe.com/v1/accounts/acct_create_delete_race' && init?.method === 'POST') {
         return new Response(JSON.stringify({ id: 'acct_create_delete_race', requirements: { currently_due: [] } }), { status: 200 });
       }
       if (url === 'https://api.stripe.com/v1/accounts/acct_create_delete_race' && init?.method === 'DELETE') {
@@ -201,11 +206,164 @@ describe('Seller Stripe Connect account', () => {
   });
 });
 
+// #2920 (sub-issue of #2919): the Accounts v1 -> v2 migration itself --
+// asserts on the actual request shapes sent to Stripe, not just the HTTP
+// response, since that's the whole point of this sub-issue. Separate from
+// the "Seller Stripe Connect account" suite above (which stays focused on
+// request validation, rate limiting, and the race guards) to keep this
+// migration-specific coverage easy to find on its own.
+describe('Accounts v2 migration (#2920)', () => {
+  it('creates the account via POST /v2/core/accounts with the v2 identity/configuration shape, then attaches the bank account via the still-interoperable v1 endpoint', async () => {
+    const seller = await signupSeller('stripe-v2-create-shape');
+    const originalFetch = globalThis.fetch;
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    const v2Requests = [];
+    const v1Requests = [];
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.stripe.com/v2/core/accounts' && init?.method === 'POST') {
+        v2Requests.push(init);
+        return new Response(JSON.stringify({ id: 'acct_v2_shape_test', object: 'v2.core.account' }), { status: 200 });
+      }
+      if (url === 'https://api.stripe.com/v1/accounts/acct_v2_shape_test' && init?.method === 'POST') {
+        v1Requests.push(init);
+        return new Response(JSON.stringify({ id: 'acct_v2_shape_test', requirements: { currently_due: [] }, charges_enabled: false, payouts_enabled: false }), { status: 200 });
+      }
+      return originalFetch(input, init);
+    };
+    let posted;
+    try {
+      posted = await api('/sellers/me/stripe-account', seller.session({
+        method: 'POST', body: JSON.stringify(validPayload()),
+      }));
+    } finally {
+      globalThis.fetch = originalFetch;
+      env.STRIPE_SECRET_KEY = undefined;
+    }
+    expect(posted.response.status).toBe(200);
+
+    expect(v2Requests).toHaveLength(1);
+    expect(v2Requests[0].headers['content-type']).toBe('application/json');
+    expect(v2Requests[0].headers['stripe-version']).toBeTruthy();
+    expect(v2Requests[0].headers['idempotency-key']).toBe(`seller-account-create:${seller.sellerId}`);
+    const v2Body = JSON.parse(v2Requests[0].body);
+    expect(v2Body.identity.country).toBe('US');
+    expect(v2Body.identity.entity_type).toBe('individual');
+    expect(v2Body.identity.individual.given_name).toBe('Ada');
+    expect(v2Body.identity.individual.surname).toBe('Seller');
+    expect(v2Body.identity.individual.id_numbers).toEqual([{ type: 'us_ssn_last_4', value: '1234' }]);
+    expect(v2Body.identity.individual.date_of_birth).toEqual({ day: 12, month: 6, year: 1990 });
+    expect(v2Body.identity.attestations.terms_of_service.account.ip).toBeTruthy();
+    expect(v2Body.identity.attestations.terms_of_service.account.date).toBeTruthy();
+    expect(v2Body.configuration.merchant.capabilities.card_payments.requested).toBe(true);
+    expect(v2Body.configuration.recipient.capabilities.stripe_balance.stripe_transfers.requested).toBe(true);
+    // #2920: the v2 equivalent of v1's `type: 'custom'` -- the platform
+    // (not Stripe) collects requirements and is liable for losses, with
+    // no Stripe-hosted dashboard access.
+    expect(v2Body.defaults.responsibilities).toEqual({ fees_collector: 'application', losses_collector: 'application' });
+    expect(v2Body.dashboard).toBe('none');
+    // Never sent to Stripe at all -- would have been a real 400 from
+    // Stripe's own v1 API (type:'custom' is a v1-only concept).
+    expect(v2Body.type).toBeUndefined();
+
+    expect(v1Requests).toHaveLength(1);
+    expect(v1Requests[0].headers['content-type']).toBe('application/x-www-form-urlencoded');
+    const v1Params = new URLSearchParams(v1Requests[0].body);
+    expect(v1Params.get('external_account[object]')).toBe('bank_account');
+    expect(v1Params.get('external_account[routing_number]')).toBe('110000000');
+    expect(v1Params.get('external_account[account_number]')).toBe('000123456789');
+    // The bank-account-attach call must never re-send KYC fields Stripe
+    // already has from the v2 create call -- it's purely for the bank
+    // account.
+    expect(v1Params.get('individual[ssn_last_4]')).toBeNull();
+
+    const row = await env.DB.prepare('SELECT stripe_account_id FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
+    expect(row.stripe_account_id).toBe('acct_v2_shape_test');
+  });
+
+  it('updates an existing account by stripping the create-only country/entity_type/defaults/dashboard fields from the v2 payload', async () => {
+    const seller = await signupSeller('stripe-v2-update-shape');
+    await env.DB.prepare("UPDATE sellers SET stripe_account_id = 'acct_v2_update_test' WHERE seller_id = ?").bind(seller.sellerId).run();
+    const originalFetch = globalThis.fetch;
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    let v2Request;
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.stripe.com/v2/core/accounts/acct_v2_update_test' && init?.method === 'POST') {
+        v2Request = init;
+        return new Response(JSON.stringify({ id: 'acct_v2_update_test', object: 'v2.core.account' }), { status: 200 });
+      }
+      if (url === 'https://api.stripe.com/v1/accounts/acct_v2_update_test' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'acct_v2_update_test', requirements: { currently_due: [] } }), { status: 200 });
+      }
+      return originalFetch(input, init);
+    };
+    let posted;
+    try {
+      posted = await api('/sellers/me/stripe-account', seller.session({
+        method: 'POST', body: JSON.stringify(validPayload()),
+      }));
+    } finally {
+      globalThis.fetch = originalFetch;
+      env.STRIPE_SECRET_KEY = undefined;
+    }
+    expect(posted.response.status).toBe(200);
+    expect(v2Request.headers['idempotency-key']).toBeUndefined();
+    const body = JSON.parse(v2Request.body);
+    expect(body.identity.country).toBeUndefined();
+    expect(body.identity.entity_type).toBeUndefined();
+    expect(body.identity.individual.given_name).toBe('Ada');
+    expect(body.defaults).toBeUndefined();
+    expect(body.dashboard).toBeUndefined();
+  });
+
+  // The v2 create call can succeed (Stripe now has a real, identity-bearing
+  // Account) while the follow-up v1 bank-account attach fails (a network
+  // blip, a bad routing number Stripe only validates at that step) --
+  // without cleanup this would leak an orphaned Stripe account with no DB
+  // row ever pointing at it, the same PII-leak shape #2304 already fixed
+  // for the DB-race case.
+  it('deletes the just-created v2 account if attaching its bank account fails, rather than leaking an orphan', async () => {
+    const seller = await signupSeller('stripe-v2-partial-failure');
+    const originalFetch = globalThis.fetch;
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    let deleteCalled = false;
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.stripe.com/v2/core/accounts' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'acct_v2_partial_failure', object: 'v2.core.account' }), { status: 200 });
+      }
+      if (url === 'https://api.stripe.com/v1/accounts/acct_v2_partial_failure' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ error: { message: 'Invalid routing number' } }), { status: 400 });
+      }
+      if (url === 'https://api.stripe.com/v1/accounts/acct_v2_partial_failure' && init?.method === 'DELETE') {
+        deleteCalled = true;
+        return new Response(JSON.stringify({ deleted: true }), { status: 200 });
+      }
+      return originalFetch(input, init);
+    };
+    let posted;
+    try {
+      posted = await api('/sellers/me/stripe-account', seller.session({
+        method: 'POST', body: JSON.stringify(validPayload()),
+      }));
+    } finally {
+      globalThis.fetch = originalFetch;
+      env.STRIPE_SECRET_KEY = undefined;
+    }
+    expect(posted.response.status).toBe(400);
+    expect(deleteCalled).toBe(true);
+
+    const row = await env.DB.prepare('SELECT stripe_account_id FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
+    expect(row.stripe_account_id).toBeNull();
+  });
+});
+
 // #624 (sub-issue of #349/#324): the same Custom-account onboarding flow
 // as above, mirrored for builders — the prerequisite for #625's
 // higgles-to-cash redemption. Same coverage shape, reusing this file's own
 // validPayload() helper since the KYC field validation itself is identical
-// (buildStripeIndividualParams doesn't distinguish builder from seller).
+// (buildStripeAccountParams doesn't distinguish builder from seller).
 describe('Builder Stripe Connect account (#624)', () => {
   it('requires a session for both GET and POST', async () => {
     const got = await api('/builders/me/stripe-account');
@@ -287,7 +445,10 @@ describe('Builder Stripe Connect account (#624)', () => {
     env.STRIPE_SECRET_KEY = 'test-stripe-key';
     globalThis.fetch = async (input, init) => {
       const url = typeof input === 'string' ? input : input.url;
-      if (url === 'https://api.stripe.com/v1/accounts' && init?.method === 'POST') {
+      if (url === 'https://api.stripe.com/v2/core/accounts' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'acct_dual_role_builder', object: 'v2.core.account' }), { status: 200 });
+      }
+      if (url === 'https://api.stripe.com/v1/accounts/acct_dual_role_builder' && init?.method === 'POST') {
         return new Response(JSON.stringify({ id: 'acct_dual_role_builder', requirements: { currently_due: [] } }), { status: 200 });
       }
       return originalFetch(input, init);
@@ -340,7 +501,10 @@ describe('Builder Stripe Connect account (#624)', () => {
     };
     globalThis.fetch = async (input, init) => {
       const url = typeof input === 'string' ? input : input.url;
-      if (url === 'https://api.stripe.com/v1/accounts' && init?.method === 'POST') {
+      if (url === 'https://api.stripe.com/v2/core/accounts' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'acct_create_delete_race_builder', object: 'v2.core.account' }), { status: 200 });
+      }
+      if (url === 'https://api.stripe.com/v1/accounts/acct_create_delete_race_builder' && init?.method === 'POST') {
         return new Response(JSON.stringify({ id: 'acct_create_delete_race_builder', requirements: { currently_due: [] } }), { status: 200 });
       }
       if (url === 'https://api.stripe.com/v1/accounts/acct_create_delete_race_builder' && init?.method === 'DELETE') {

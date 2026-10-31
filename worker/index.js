@@ -2760,6 +2760,35 @@ export async function stripeRequest(env, method, path, params, idempotencyKey, s
   return data;
 }
 
+// #2920 (sub-issue of #2919): v2-aware sibling of stripeRequest above for
+// the Accounts v2 API (POST /v2/core/accounts[/{id}]) -- JSON body instead
+// of v1's form-urlencoded one, and only the response properties named in
+// the request's own `include` array come back non-null (everything else
+// is null regardless of its real value -- see
+// https://docs.stripe.com/api-includable-response-values). Every v2 call
+// pins an explicit Stripe-Version header; v1 calls don't need one since
+// they run against whichever version is configured as this account's own
+// dashboard default.
+const STRIPE_V2_API_VERSION = '2026-10-28.endive';
+export async function stripeRequestV2(env, method, path, params, idempotencyKey) {
+  const headers = {
+    authorization: `Basic ${btoa(`${env.STRIPE_SECRET_KEY}:`)}`,
+    'content-type': 'application/json',
+    'stripe-version': STRIPE_V2_API_VERSION,
+  };
+  if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
+  const response = await fetch(`https://api.stripe.com/v2/core/${path}`, {
+    method,
+    headers,
+    body: params ? JSON.stringify(params) : undefined,
+  });
+  const data = await response.json().catch(() => null);
+  if (!response.ok) {
+    throw new HttpError(data?.error?.message || 'Stripe request failed', response.status >= 500 ? 502 : 400);
+  }
+  return data;
+}
+
 // Stripe's own account.requirements is the source of truth for what's
 // still needed — this just collapses it into one of a few states the
 // frontend can show without re-deriving Stripe's own logic.
