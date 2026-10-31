@@ -388,6 +388,12 @@ try {
   await page.waitForFunction(() => document.getElementById('shop-product-preview-buy-btn').classList.contains('visible'), null, { timeout: 15000 });
 } catch (err) {
   console.log('shop-product-preview-buy-btn never became visible -- last buy-hint debug:', await page.evaluate(() => window.__lastShopBuyHintDebug));
+  // #2934: raw ground truth to settle whether the product's real world
+  // position actually moved after anchoring it at landlet.center's own
+  // negation (this landlet object, its own center, and the avatar's own
+  // position via the existing window.__testShopAvatarPosition hook).
+  console.log('landlet used for placement/teleport:', landlet.landletId, landlet.center);
+  console.log('avatar position at failure:', await page.evaluate(() => window.__testShopAvatarPosition()));
   throw err;
 }
 
