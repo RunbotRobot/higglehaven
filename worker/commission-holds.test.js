@@ -7,7 +7,10 @@
 // full mechanism.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { releaseDueCommissionHolds, MIN_ESTABLISHED_COUNTERPARTIES, NEW_BUILDER_FLAT_CAP_CENTS, ESTABLISHED_CAP_MULTIPLIER } from './lib/commission-caps.js';
+import {
+  releaseDueCommissionHolds, releaseHoldAndCreditStatements,
+  MIN_ESTABLISHED_COUNTERPARTIES, NEW_BUILDER_FLAT_CAP_CENTS, ESTABLISHED_CAP_MULTIPLIER,
+} from './lib/commission-caps.js';
 import { api, signupAdmin } from './test-helpers.js';
 
 let adminSession;
@@ -267,6 +270,63 @@ describe('Refund clawback interaction with an active hold (#1109)', () => {
     expect(afterSweepBalance).toBe(beforeBalance);
     const holdAfterSweep = await env.DB.prepare('SELECT released_at FROM commission_holds WHERE purchase_id = ?').bind(bigPurchase.purchaseId).first();
     expect(holdAfterSweep.released_at).toBeNull();
+  });
+
+  // #2935: regression for a genuine TOCTOU race -- releaseOrRevokeHold's
+  // own purchase.refunded_at re-check is itself a stale pre-read relative
+  // to a concurrent refund's own revoke landing in the gap before the
+  // sweep's batch runs. The real race (two genuinely concurrent requests)
+  // is too narrow a window for Promise.all to land reliably in this
+  // suite's single-process test runner -- confirmed empirically: racing
+  // the real refund endpoint, and even clawBackPurchaseCommission called
+  // directly, against releaseDueCommissionHolds never reproduced it in
+  // several batches of 8 runs each, unlike #2879's own wider-window
+  // concurrent-purchase race above. So this exercises
+  // releaseHoldAndCreditStatements (the exported statement-builder the
+  // fix pulled out of releaseOrRevokeHold for exactly this reason)
+  // directly against a hold a prior statement has already revoked --
+  // deterministically reproducing the exact state a genuinely-losing
+  // sweep would see, without depending on real scheduling.
+  it('releaseHoldAndCreditStatements never credits or releases a hold a concurrent revoke already won', async () => {
+    const seller = await setUpSeller('release-revoke-race', 1000);
+    for (let i = 0; i < MIN_ESTABLISHED_COUNTERPARTIES; i += 1) {
+      // eslint-disable-next-line no-await-in-loop -- sequential fixture setup, order matters for distinct buyers
+      const buyer = await signupAdmin(`release-revoke-race-history-${i}`);
+      // eslint-disable-next-line no-await-in-loop
+      await purchase('release-revoke-race-instance', buyer);
+    }
+    await createTemplate('release-revoke-race-big-template', 100000);
+    await placeInstance('release-revoke-race-big-instance', 'release-revoke-race-landlet', 'release-revoke-race-big-template', seller);
+    const bigBuyer = await signupAdmin('release-revoke-race-big-buyer');
+    const beforeBalance = (await builderRow(seller.builderId)).higgles_balance_cents;
+    const bigPurchase = await purchase('release-revoke-race-big-instance', bigBuyer);
+    const hold = await env.DB.prepare('SELECT * FROM commission_holds WHERE purchase_id = ?').bind(bigPurchase.purchaseId).first();
+    expect(hold).toBeTruthy(); // confirms a hold really was created
+
+    // Simulates a concurrent clawBackPurchaseCommission's revoke already
+    // having committed, in the gap after releaseOrRevokeHold's own
+    // purchase.refunded_at read but before its batch runs below.
+    await env.DB.prepare('UPDATE commission_holds SET revoked_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE hold_id = ?')
+      .bind(hold.hold_id).run();
+
+    const releaseStatement = env.DB.prepare('UPDATE commission_holds SET released_at = strftime(\'%Y-%m-%dT%H:%M:%fZ\', \'now\') WHERE hold_id = ? AND released_at IS NULL AND revoked_at IS NULL')
+      .bind(hold.hold_id);
+    await env.DB.batch(releaseHoldAndCreditStatements(env.DB, { hold, amountCents: hold.amount_cents, releaseStatement }));
+
+    // The already-won revoke must be the only thing that happened -- never
+    // the stale caller's credit on top of it, and never a release either
+    // (both would corrupt the hold's own mutual-exclusion invariant, not
+    // just double the money). Balance should sit exactly where the
+    // purchase itself left it (the immediate, uncapped share only) --
+    // hold.amount_cents must never also land on top.
+    const afterBalance = (await builderRow(seller.builderId)).higgles_balance_cents;
+    expect(afterBalance).toBe(beforeBalance + (bigPurchase.builderShareCents - hold.amount_cents));
+    const earningsEvent = await env.DB.prepare('SELECT 1 FROM higgles_earnings_events WHERE builder_id = ? AND amount_cents = ?')
+      .bind(seller.builderId, hold.amount_cents).first();
+    expect(earningsEvent).toBeNull();
+    const holdAfter = await env.DB.prepare('SELECT released_at, revoked_at FROM commission_holds WHERE hold_id = ?').bind(hold.hold_id).first();
+    expect(holdAfter.released_at).toBeNull();
+    expect(holdAfter.revoked_at).not.toBeNull();
   });
 
   it('claws back the full commission when the hold was already released before the refund', async () => {
