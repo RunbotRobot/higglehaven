@@ -346,7 +346,18 @@ await page.waitForFunction(
   instanceId,
   { timeout: 30000 },
 );
-await page.waitForFunction(() => document.getElementById('shop-product-preview-buy-btn').classList.contains('visible'), null, { timeout: 15000 });
+// #2931 (continued): a real CI failure here timed out with no other way to
+// tell whether tappedInRange/priceCents/isTestModel was the culprit --
+// window.__lastShopBuyHintDebug (src/shop/worldSprites.js's updateReviewFade)
+// is logged on a timeout so the next CI run's own log carries the answer,
+// same "log it so the CI log itself can carry the detail" reasoning the
+// Stripe Connect poll loop above already documents.
+try {
+  await page.waitForFunction(() => document.getElementById('shop-product-preview-buy-btn').classList.contains('visible'), null, { timeout: 15000 });
+} catch (err) {
+  console.log('shop-product-preview-buy-btn never became visible -- last buy-hint debug:', await page.evaluate(() => window.__lastShopBuyHintDebug));
+  throw err;
+}
 
 // handleShopProductBuyClick's own confirm() dialog, and later
 // promptSellerFeedback's confirm()/prompt() pair, are all auto-accepted by

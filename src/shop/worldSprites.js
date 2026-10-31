@@ -410,6 +410,21 @@ export function updateReviewFade() {
     if (review === shopTappedProduct) tappedDistance = distance;
   }
   const tappedInRange = !!shopTappedProduct && tappedDistance <= SIGN_INTERACT_RADIUS_M;
+  // #2931 (continued): e2e-only debug hook, same convention as
+  // window.__lastReviewSpriteDebug above -- added to diagnose a real CI
+  // failure where the buy button's own 'visible' class never appeared
+  // within e2e/purchase-checkout-real-stripe.test.mjs's 15s wait, with no
+  // other way to tell live (from a CI log alone) whether that's because
+  // tappedInRange never went true, the template came back unpriced/
+  // isTestModel, or something else entirely. Always inert -- recomputed
+  // every frame regardless, read only if a test chooses to.
+  window.__lastShopBuyHintDebug = {
+    hasTappedProduct: !!shopTappedProduct,
+    tappedDistance,
+    tappedInRange,
+    priceCents: shopTappedProduct?.mesh.userData.template.priceCents ?? null,
+    isTestModel: shopTappedProduct?.mesh.userData.template.isTestModel ?? null,
+  };
   // #1810: the mesh highlight shares the Buy/Review hints' own range gate —
   // walking out of SIGN_INTERACT_RADIUS_M clears it the same way it hides
   // those buttons, rather than leaving a highlight glowing on a product the
