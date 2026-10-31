@@ -357,13 +357,24 @@ await page.waitForTimeout(100);
 await page.mouse.up();
 await page.waitForTimeout(100);
 
-// #2931 (continued): teleports to world origin, not landlet.center -- see
-// the product instance's own x/y comment above for why (the instance's
-// x/y offset cancels landlet.center, so its real world position is
-// origin too; keeping both in lockstep is what keeps this within
-// SIGN_INTERACT_RADIUS_M regardless of the camera's own radius clamp).
+// #2931/#2934 (continued): teleports to world origin, not landlet.center --
+// see the product instance's own x/y comment above for why (the instance's
+// x/y offset cancels landlet.center, so its real world position is origin
+// too). The real cause of the original 85m tappedDistance turned out to be
+// the THIRD argument omitted here: window.__testTeleportShopAvatar's own
+// comment (src/shop/flightMovement.js) says passing only (x, y) leaves z
+// (and shopFlightState) untouched "same as every existing caller" -- but
+// Shop mode's own spawn sequence starts the shopper airborne, and nothing
+// about a raw x/y teleport ever lands them. window.__lastShopBuyHintDebug's
+// own tappedWorldX/Y (added investigating this) confirmed the x/y
+// anchoring above worked correctly (camera within ~2m of the product
+// horizontally) -- the test's own avatar-position log showed the real
+// gap was entirely vertical (z: 80, not landed). Passing 0 as the third
+// argument here grounds the avatar (and resets shopFlightState to
+// 'grounded', per that hook's own z-handling branch) instead of leaving it
+// at whatever altitude Shop mode's spawn sequence left it at.
 await page.evaluate(() => {
-  window.__testTeleportShopAvatar(0, 0);
+  window.__testTeleportShopAvatar(0, 0, 0);
   window.__testForceShopProximityCheck();
 });
 
