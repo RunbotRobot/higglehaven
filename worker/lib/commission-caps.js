@@ -235,11 +235,38 @@ async function releaseOrRevokeHold(db, hold) {
     await releaseStatement.run();
     return;
   }
-  await db.batch([
-    db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
-      .bind(amountCents, hold.builder_id),
-    db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
-      .bind(`earnings-${crypto.randomUUID()}`, hold.builder_id, amountCents),
+  await db.batch(releaseHoldAndCreditStatements(db, { hold, amountCents, releaseStatement }));
+}
+
+// #2935: the purchase.refunded_at re-check above is itself a pre-read -- a
+// concurrent clawBackPurchaseCommission (worker/lib/purchase-lifecycle.js)
+// could revoke this exact hold (same released_at IS NULL AND revoked_at
+// IS NULL guard releaseStatement uses) in the gap between that read and
+// this batch actually running. Unlike releaseStatement itself, a plain
+// unconditional builder-credit UPDATE/INSERT here would still fire even
+// though the revoke already won, double-crediting this commission.
+// Folding the same live EXISTS guard into both money-moving statements --
+// evaluated fresh at each statement's own execution inside this one
+// atomic batch, never trusting the earlier read -- is the same idiom
+// commissionCreditClaimStatement above already uses for the sibling
+// credit-time race (#2879).
+//
+// Pulled out of releaseOrRevokeHold as its own exported function so a
+// test can exercise it directly against a hold a prior statement has
+// already revoked -- the real race (two genuinely concurrent requests)
+// is too narrow a window for Promise.all to land reliably in this
+// suite's single-process test runner (confirmed empirically: racing the
+// real refund endpoint, and even clawBackPurchaseCommission called
+// directly, against releaseDueCommissionHolds never reproduced it in
+// several batches of 8 runs each), unlike #2879's own wider-window
+// concurrent-purchase race above.
+export function releaseHoldAndCreditStatements(db, { hold, amountCents, releaseStatement }) {
+  const stillClaimable = `EXISTS (SELECT 1 FROM commission_holds WHERE hold_id = ? AND released_at IS NULL AND revoked_at IS NULL)`;
+  return [
+    db.prepare(`UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ? AND ${stillClaimable}`)
+      .bind(amountCents, hold.builder_id, hold.hold_id),
+    db.prepare(`INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) SELECT ?, ?, ? WHERE ${stillClaimable}`)
+      .bind(`earnings-${crypto.randomUUID()}`, hold.builder_id, amountCents, hold.hold_id),
     releaseStatement,
-  ]);
+  ];
 }
