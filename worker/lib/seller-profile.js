@@ -320,12 +320,51 @@ function boundedIntegerValue(value, field, min, max) {
 // deriveStripeOnboardingStatus below stay completely unchanged -- #2921
 // ("onboarding status + webhook -> v2 model") is the sub-issue chartered
 // to replace this v1 read-back with a native v2 status derivation.
+// #2927: after #2924's v1->v2 migration, Stripe's own account.requirements
+// started asking for individual.phone, business_profile.mcc,
+// business_profile.url and settings.payments.statement_descriptor --
+// confirmed via a real e2e run (purchase-checkout-real-stripe.test.mjs,
+// #2861) that got stuck in "action_needed" with exactly these four in
+// currently_due, forever, since neither onboarding form (src/sell/mode.js,
+// src/build/scene.js) nor this function ever collected/sent them.
+// individual.phone is genuinely per-seller/builder, so it's a new form
+// field below; the other three are platform-wide (every connected
+// account is "a seller/builder operating inside higglehaven", not an
+// independent business with its own site), so they're fixed constants
+// here rather than more form fields -- MCC 5969 ("Direct Marketing --
+// Other") is Stripe's own documented generic catch-all for a marketplace
+// that doesn't fit a more specific category; the statement descriptor is
+// the platform's own name (11 chars, well under Stripe's 22-char cap).
+// Sent through the v1 account-update call below (same call that already
+// attaches the bank account) rather than guessing v2's own nested
+// business-profile shape -- v1's account-update endpoint is already
+// proven interoperable with a v2-created account id in this exact flow.
+const STRIPE_BUSINESS_PROFILE_MCC = '5969';
+const STRIPE_BUSINESS_PROFILE_URL = 'https://higglehaven.com';
+const STRIPE_STATEMENT_DESCRIPTOR = 'HIGGLEHAVEN';
+
 function buildStripeAccountParams(input, userEmail, request, productDescription = 'higglehaven marketplace seller') {
   const individual = input.individual || {};
   const externalAccount = input.externalAccount || {};
   const country = stringValue(individual.addressCountry, 'individual.addressCountry').toUpperCase();
   const ssnLast4 = stringValue(individual.ssnLast4, 'individual.ssnLast4');
   if (!/^\d{4}$/.test(ssnLast4)) throw new HttpError('individual.ssnLast4 must be exactly 4 digits', 400);
+  const phone = stringValue(individual.phone, 'individual.phone');
+  if (!/^\+?[0-9()\s-]{7,20}$/.test(phone)) throw new HttpError('individual.phone must be a valid phone number', 400);
+  // #2927 (continued): Stripe's requirements can reveal individual.id_number
+  // (a FULL SSN/ITIN, not ssnLast4) as a further currently_due item once the
+  // phone/business_profile/statement_descriptor round above is satisfied --
+  // confirmed via a real e2e run. Unlike that round, this is deliberately
+  // NOT wired into either onboarding form: collecting a full SSN from real
+  // sellers/builders is a genuine privacy/compliance decision needing
+  // explicit owner sign-off (see issue filed alongside this change), not
+  // something to add unilaterally the way a phone number was. Left
+  // optional and accepted only if a caller already supplies it (today,
+  // only this suite's own e2e test does, with a Stripe test-mode-only
+  // value) -- real onboarding submissions are completely unaffected
+  // either way, since the real form never sends this field.
+  const idNumber = individual.idNumber !== undefined ? stringValue(individual.idNumber, 'individual.idNumber') : null;
+  if (idNumber !== null && !/^\d{9}$/.test(idNumber)) throw new HttpError('individual.idNumber must be exactly 9 digits', 400);
 
   const dobMonth = boundedIntegerValue(individual.dobMonth, 'individual.dobMonth', 1, 12);
   const dobYear = boundedIntegerValue(individual.dobYear, 'individual.dobYear', 1900, new Date().getUTCFullYear());
@@ -393,6 +432,8 @@ function buildStripeAccountParams(input, userEmail, request, productDescription 
       dashboard: 'none',
       include: ['identity', 'configuration.merchant', 'configuration.recipient'],
     },
+    // #2927: individual.phone/business_profile/settings.payments go here,
+    // not v2AccountParams above -- see this function's own comment on why.
     v1ExternalAccountParams: {
       external_account: {
         object: 'bank_account',
@@ -401,6 +442,9 @@ function buildStripeAccountParams(input, userEmail, request, productDescription 
         routing_number: stringValue(externalAccount.routingNumber, 'externalAccount.routingNumber'),
         account_number: stringValue(externalAccount.accountNumber, 'externalAccount.accountNumber'),
       },
+      individual: idNumber !== null ? { phone, id_number: idNumber } : { phone },
+      business_profile: { mcc: STRIPE_BUSINESS_PROFILE_MCC, url: STRIPE_BUSINESS_PROFILE_URL },
+      settings: { payments: { statement_descriptor: STRIPE_STATEMENT_DESCRIPTOR } },
     },
   };
 }

@@ -1458,6 +1458,27 @@ renderer.domElement.addEventListener('click', (event) => {
   else closeShopProductPreviewModal();
 });
 
+// #2861: e2e-only hook that reaches the real product-preview modal (and,
+// from there, a real "Buy" click drives runCheckoutFlow's real Stripe
+// Elements checkout) for a known instanceId, without raycasting a tap onto
+// the right on-screen pixel the way the real click listener just above
+// does -- real camera-driven tap-to-inspect accuracy is deliberately never
+// automated in this suite (see e2e/product-pricing.test.mjs's own comment
+// on why); this only reaches past that specific gap, not around the real
+// Stripe checkout flow itself, which still runs for real once this opens
+// the modal. shopReviews only carries a product once its landlet has
+// loaded (updateShopProximity, src/shop/presenceAndContent.js) -- teleport
+// near it first via window.__testTeleportShopAvatar, same as every other
+// window.__test* hook here. Always inert (returns false) unless a test
+// calls it with a real, currently-in-range instanceId.
+window.__testTapShopProductByInstanceId = (instanceId) => {
+  const review = shopReviews.find((r) => r.mesh.userData.instanceId === instanceId);
+  if (!review) return false;
+  setShopTappedProduct(review);
+  openShopProductPreviewModal(review);
+  return true;
+};
+
 // #1830 (owner correction, 2026-10-13): sign posts used to be genuinely
 // anonymous (a free-text name prompt, no account behind it) — stale since
 // Shop mode's own entry gate (ensureShopperIdentity) started requiring a

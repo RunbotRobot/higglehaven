@@ -22,6 +22,7 @@ function validPayload(overrides = {}) {
       dobMonth: 6,
       dobYear: 1990,
       ssnLast4: '1234',
+      phone: '206-555-0100',
       addressLine1: '123 Main St',
       addressCity: 'Seattle',
       addressState: 'WA',
@@ -78,6 +79,21 @@ describe('Seller Stripe Connect account', () => {
       body: JSON.stringify(validPayload({ individual: { ssnLast4: '12' } })),
     }));
     expect(badSsn.response.status).toBe(400);
+
+    // #2927
+    const badPhone = await api('/sellers/me/stripe-account', seller.session({
+      method: 'POST',
+      body: JSON.stringify(validPayload({ individual: { phone: 'nope' } })),
+    }));
+    expect(badPhone.response.status).toBe(400);
+
+    // #2927: optional (omitted entirely in validPayload's defaults), but
+    // rejected if supplied malformed.
+    const badIdNumber = await api('/sellers/me/stripe-account', seller.session({
+      method: 'POST',
+      body: JSON.stringify(validPayload({ individual: { idNumber: '123' } })),
+    }));
+    expect(badIdNumber.response.status).toBe(400);
 
     const badDob = await api('/sellers/me/stripe-account', seller.session({
       method: 'POST',
@@ -274,11 +290,56 @@ describe('Accounts v2 migration (#2920)', () => {
     expect(v1Params.get('external_account[account_number]')).toBe('000123456789');
     // The bank-account-attach call must never re-send KYC fields Stripe
     // already has from the v2 create call -- it's purely for the bank
-    // account.
+    // account (plus #2927's own additions just below, which v2's own
+    // identity/configuration shape has no equivalent slot for).
     expect(v1Params.get('individual[ssn_last_4]')).toBeNull();
+    // #2927: Stripe's requirements started asking for these once account
+    // creation moved to v2 -- sent via this same v1 call since it's
+    // already proven interoperable with a v2-created account id.
+    expect(v1Params.get('individual[phone]')).toBe('206-555-0100');
+    expect(v1Params.get('business_profile[mcc]')).toBeTruthy();
+    expect(v1Params.get('business_profile[url]')).toBeTruthy();
+    expect(v1Params.get('settings[payments][statement_descriptor]')).toBeTruthy();
+    // #2927: validPayload() never supplies individual.idNumber (the real
+    // onboarding forms never collect one either) -- confirms it's
+    // genuinely optional, not silently defaulted to something.
+    expect(v1Params.get('individual[id_number]')).toBeNull();
 
     const row = await env.DB.prepare('SELECT stripe_account_id FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
     expect(row.stripe_account_id).toBe('acct_v2_shape_test');
+  });
+
+  // #2927: a caller that does supply idNumber (today, only this suite's
+  // own real-Stripe e2e test) gets it forwarded -- this is deliberately
+  // NOT exercised through either real onboarding form.
+  it('forwards individual.idNumber via the v1 update call when a caller supplies it', async () => {
+    const seller = await signupSeller('stripe-v2-id-number');
+    const originalFetch = globalThis.fetch;
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    let v1Request;
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.stripe.com/v2/core/accounts' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'acct_v2_id_number_test', object: 'v2.core.account' }), { status: 200 });
+      }
+      if (url === 'https://api.stripe.com/v1/accounts/acct_v2_id_number_test' && init?.method === 'POST') {
+        v1Request = init;
+        return new Response(JSON.stringify({ id: 'acct_v2_id_number_test', requirements: { currently_due: [] }, charges_enabled: true, payouts_enabled: true }), { status: 200 });
+      }
+      return originalFetch(input, init);
+    };
+    let posted;
+    try {
+      posted = await api('/sellers/me/stripe-account', seller.session({
+        method: 'POST', body: JSON.stringify(validPayload({ individual: { idNumber: '000000000' } })),
+      }));
+    } finally {
+      globalThis.fetch = originalFetch;
+      env.STRIPE_SECRET_KEY = undefined;
+    }
+    expect(posted.response.status).toBe(200);
+    const v1Params = new URLSearchParams(v1Request.body);
+    expect(v1Params.get('individual[id_number]')).toBe('000000000');
   });
 
   it('updates an existing account by stripping the create-only country/entity_type/defaults/dashboard fields from the v2 payload', async () => {
@@ -399,6 +460,13 @@ describe('Builder Stripe Connect account (#624)', () => {
       body: JSON.stringify(validPayload({ individual: { ssnLast4: '12' } })),
     }));
     expect(badSsn.response.status).toBe(400);
+
+    // #2927
+    const badPhone = await api('/builders/me/stripe-account', builder.session({
+      method: 'POST',
+      body: JSON.stringify(validPayload({ individual: { phone: 'nope' } })),
+    }));
+    expect(badPhone.response.status).toBe(400);
   });
 
   it('returns 503 once the payload is valid but Stripe is not configured', async () => {

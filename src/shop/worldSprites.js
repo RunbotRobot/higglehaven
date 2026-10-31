@@ -394,6 +394,8 @@ export function rebuildReviewSprites(review) {
 // a tapped product hides its buttons again without needing a fresh tap.
 export function updateReviewFade() {
   let tappedDistance = Infinity;
+  let tappedWorldX = null;
+  let tappedWorldY = null;
   for (const review of shopReviews) {
     const world = review.mesh.getWorldPosition(scratchSignWorldPos);
     const distance = world.distanceTo(camera.position);
@@ -407,9 +409,41 @@ export function updateReviewFade() {
       )
       : 0;
     for (const sprite of review.sprites) sprite.material.opacity = opacity;
-    if (review === shopTappedProduct) tappedDistance = distance;
+    if (review === shopTappedProduct) {
+      tappedDistance = distance;
+      // #2934: captured here, not re-read from scratchSignWorldPos after the
+      // loop -- that vector is overwritten by every later review's own
+      // getWorldPosition call in the same loop.
+      tappedWorldX = world.x;
+      tappedWorldY = world.y;
+    }
   }
   const tappedInRange = !!shopTappedProduct && tappedDistance <= SIGN_INTERACT_RADIUS_M;
+  // #2931/#2934 (continued): e2e-only debug hook, same convention as
+  // window.__lastReviewSpriteDebug above -- added to diagnose a real CI
+  // failure where the buy button's own 'visible' class never appeared
+  // within e2e/purchase-checkout-real-stripe.test.mjs's 15s wait, with no
+  // other way to tell live (from a CI log alone) whether that's because
+  // tappedInRange never went true, the template came back unpriced/
+  // isTestModel, or something else entirely. tappedWorldX/Y and
+  // cameraX/Y were added after a first round of this hook (tappedDistance
+  // alone) left an *identical* ~85m reading across two different commits
+  // that should have moved the product -- raw positions are what it took
+  // to tell "the product's real world position didn't move" apart from
+  // "the product moved but the camera followed it to the same gap," which
+  // the scalar distance alone couldn't distinguish. Always inert --
+  // recomputed every frame regardless, read only if a test chooses to.
+  window.__lastShopBuyHintDebug = {
+    hasTappedProduct: !!shopTappedProduct,
+    tappedDistance,
+    tappedInRange,
+    tappedWorldX,
+    tappedWorldY,
+    cameraX: camera.position.x,
+    cameraY: camera.position.y,
+    priceCents: shopTappedProduct?.mesh.userData.template.priceCents ?? null,
+    isTestModel: shopTappedProduct?.mesh.userData.template.isTestModel ?? null,
+  };
   // #1810: the mesh highlight shares the Buy/Review hints' own range gate —
   // walking out of SIGN_INTERACT_RADIUS_M clears it the same way it hides
   // those buttons, rather than leaving a highlight glowing on a product the

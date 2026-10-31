@@ -2399,6 +2399,9 @@ export async function renderSellSettingsSection() {
     ['dobMonth', 'Birth month', 'number'],
     ['dobYear', 'Birth year', 'number'],
     ['ssnLast4', 'SSN (last 4 digits)', 'text'],
+    // #2927: Stripe started requiring this once account creation moved to
+    // Accounts v2 (#2924) -- it never asked for it under v1.
+    ['phone', 'Phone number', 'tel'],
     ['addressLine1', 'Street address', 'text'],
     ['addressCity', 'City', 'text'],
     ['addressState', 'State', 'text'],
@@ -2453,6 +2456,7 @@ export async function renderSellSettingsSection() {
           dobMonth: Number(inputs.dobMonth.value),
           dobYear: Number(inputs.dobYear.value),
           ssnLast4: inputs.ssnLast4.value,
+          phone: inputs.phone.value,
           addressLine1: inputs.addressLine1.value,
           addressCity: inputs.addressCity.value,
           addressState: inputs.addressState.value,

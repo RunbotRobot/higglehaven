@@ -83,12 +83,33 @@ jobs:
       # which jq version a runner image happens to ship) — computed at run
       # time from whatever files actually exist, not hardcoded, so a newly
       # added e2e/*.test.mjs file is automatically covered next push.
+      #
+      # purchase-checkout-real-stripe.test.mjs (#2861) is pulled out into
+      # its own dedicated shard before the rest are sliced — PR #2874
+      # hit #2673's wrangler-dev-crash flake 4 times in a row specifically
+      # on the shard this file landed in (frozen mid-migration-dump each
+      # time), a far higher rate than #2673's historical occasional-flake
+      # pattern. This file drives two concurrent real browser sessions
+      # through real Stripe API round-trips (account creation/polling,
+      # Stripe Elements card confirmation) rather than the simulated-
+      # purchase seam every other file in this suite uses — plausibly
+      # heavier than whatever #2673 is actually about, so give it room of
+      # its own rather than let it compound with other files' load.
+      # Falls back to normal sharding if the file is ever renamed/removed
+      # (has_isolated guard below), so this doesn't silently break if that
+      # happens later.
       - id: list
         run: |
           files=$(ls e2e/*.test.mjs | xargs -n1 basename | jq -R -s -c 'split("\n")[:-1]')
-          count=$(echo "$files" | jq 'length')
+          isolated="purchase-checkout-real-stripe.test.mjs"
+          has_isolated=$(echo "$files" | jq --arg f "$isolated" 'any(. == $f)')
+          rest=$(echo "$files" | jq -c --arg f "$isolated" 'map(select(. != $f))')
+          count=$(echo "$rest" | jq 'length')
           size=$(( (count + SHARD_COUNT - 1) / SHARD_COUNT ))
-          shards=$(echo "$files" | jq -c --argjson size "$size" '[range(0; length; $size) as $i | .[$i:$i+$size]]')
+          shards=$(echo "$rest" | jq -c --argjson size "$size" '[range(0; length; $size) as $i | .[$i:$i+$size]]')
+          if [ "$has_isolated" = "true" ]; then
+            shards=$(echo "$shards" | jq -c --arg f "$isolated" '. + [[$f]]')
+          fi
           echo "shards=$shards" >> "$GITHUB_OUTPUT"
 
   e2e-tests:

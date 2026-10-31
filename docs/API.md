@@ -1686,6 +1686,7 @@ flow is a fast-follow):
     "dobMonth": 6,
     "dobYear": 1990,
     "ssnLast4": "1234",
+    "phone": "206-555-0100",
     "addressLine1": "123 Main St",
     "addressCity": "Seattle",
     "addressState": "WA",
@@ -1708,6 +1709,26 @@ isn't configured. Creates the seller's Stripe Custom account on first call,
 or updates the existing one (Stripe's own account id, once assigned, is
 never re-created) on every call after — the same shape as `GET`'s response,
 reflecting whatever Stripe just returned.
+
+`individual.phone` (#2927) started being required once account creation
+moved to Stripe Connect Accounts v2 (#2924) — Stripe's own
+`requirements.currently_due` didn't ask for it under the legacy v1 API.
+Three further fields Stripe also started requiring at the same time —
+`business_profile.mcc`/`business_profile.url`/
+`settings.payments.statement_descriptor` — are platform-wide constants
+(every connected account is a seller/builder operating inside higglehaven,
+not an independent business with its own site/category), not caller-
+supplied, so they aren't in this request body at all.
+
+`individual.idNumber` (optional, not shown above) is accepted but
+deliberately not collected by either real onboarding form — Stripe can
+surface `individual.id_number` (a full SSN/ITIN, not `ssnLast4`) as a
+further `currently_due` item once the fields above are satisfied, but
+whether to actually collect a full SSN from real sellers/builders is a
+privacy/compliance decision left to the owner (see the issue filed
+alongside #2927's own fix), not something this endpoint pushes into
+production on its own. Today only this suite's own real-Stripe e2e test
+supplies it, with a Stripe test-mode-only value.
 
 ### `GET /api/builders/me/stripe-account`
 ### `POST /api/builders/me/stripe-account`
@@ -7947,13 +7968,37 @@ against otherwise. Set via `E2E_STRIPE_SECRET_KEY`/
 `node e2e/run-all.mjs` — absent either way (a fork PR, or before the
 owner provisions the secrets), the test file skips itself (`SKIP:`,
 exit 0) rather than failing the shard.
-Still **not** covered: the purchase-checkout call site
+The other real-Stripe-Elements call site, the purchase-checkout step
 (`src/shop/productCheckout.js`'s `runCheckoutFlow` / `createPurchaseCheckout`
-above) also uses real Stripe.js, but only once a seller has a real,
-capability-enabled Stripe Connect **test** account — provisioning one
-needs Stripe Connect's own test-mode instant-verification fixture
-values, a meaningfully harder and less confidently-automatable problem
-than a card number; tracked separately rather than guessed at here.
+above), also uses real Stripe.js, but only once a seller has a real,
+capability-enabled Stripe Connect **test** account — a meaningfully
+harder, less confidently-automatable problem than a card number, since
+provisioning one needs Stripe Connect's own test-mode instant-verification
+fixture values (https://docs.stripe.com/connect/testing), not just a UI
+flow this suite can drive. `e2e/purchase-checkout-real-stripe.test.mjs`
+(#2861) closes this gap: it drives the app's own real `POST
+/api/sellers/me/stripe-account` endpoint (`handleSellerStripeAccount`
+above) directly via fetch — the same code path a real seller's own
+onboarding form submission would hit — with those documented fixture
+values (dob `1902-01-01`, `ssn_last_4` `0000`, `address.line1`
+`address_full_match`, and the documented `110000000`/`000123456789`
+test external bank account) standing in for a real person's data, which
+in Stripe **test mode only** resolve `charges_enabled`/`payouts_enabled`
+to `true` with no real waiting period. It then drives a real purchase
+through `runCheckoutFlow`'s real Stripe Elements card entry +
+`confirmCardPayment`. Reaching the real "Buy" click itself has the same
+automation gap one level up — Shop mode's tap-to-inspect is a real
+raycast against the product's 3D mesh, and real camera-driven tap
+accuracy is deliberately never automated in this suite (same "verified
+manually instead" convention this section's own "Simulated purchases"
+testing note above already states for product reviews/pricing) — so
+this file instead uses one small e2e-only hook
+(`window.__testTapShopProductByInstanceId`, `src/main.js`) to open the
+real product-preview modal for a known instanceId once it's in range,
+same "always inert unless a test calls it" convention as this suite's
+other `window.__test*` hooks. Everything after that point runs for real.
+Same `REAL_STRIPE_TEST_FILES`-gated credential wiring and `SKIP:`-not-fail
+behavior as `e2e/verify-card-real-stripe.test.mjs` above.
 
 **`E2E_SIMULATE_PAID_PURCHASES` test seam (#1231).** The post-purchase
 shipping/delivery-confirmation flow ("Mark purchase shipped"/"Purchase
