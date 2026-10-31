@@ -77,7 +77,19 @@ async function fetchJson(page, pathAndQuery, options) {
 // Duplicated here (not imported from that file) since this suite's own
 // convention is a self-contained file per test, not a shared real-Stripe
 // helper in e2e/helpers.mjs.
-async function signUpAndVerifyWithRealCard(page, label) {
+//
+// cardNumber must differ between the seller and buyer calls below -- found
+// via a real CI failure (#2931): worker/lib/stripe.js's handleConfirmCard
+// permanently claims the confirmed card's Stripe fingerprint for the
+// confirming account (#1072, "one card, one account, permanently") and 409s
+// any later account that tries to verify with the same fingerprint. Stripe
+// test-mode card numbers map to a fixed, deterministic fingerprint, so
+// reusing 4242424242424242 for both accounts in the same run isn't a
+// harmless shortcut -- the buyer's own confirmCard call 409s for real
+// (the app working as designed) and #verify-modal correctly never closes,
+// which this test previously never reached (the seller's Stripe Connect
+// account never got past 'action_needed' until #2927/#2928's fixes).
+async function signUpAndVerifyWithRealCard(page, label, cardNumber = '4242424242424242') {
   await page.waitForSelector('#auth-modal.visible', { timeout: 15000 });
   await page.click('.auth-tab-btn[data-auth-view="signup"]');
   await page.fill('#auth-signup-username', label);
@@ -103,7 +115,7 @@ async function signUpAndVerifyWithRealCard(page, label) {
   await page.waitForFunction(() => !document.getElementById('verify-continue-btn').disabled, null, { timeout: 30000 });
 
   const stripeFrame = page.frameLocator('iframe[name^="__privateStripeFrame"]').first();
-  await stripeFrame.locator('[name="cardnumber"]').fill('4242424242424242');
+  await stripeFrame.locator('[name="cardnumber"]').fill(cardNumber);
   await stripeFrame.locator('[name="exp-date"]').fill('12/34');
   await stripeFrame.locator('[name="cvc"]').fill('123');
   await stripeFrame.locator('[name="postal"]').fill('42424');
@@ -295,7 +307,12 @@ if ((await page.locator('#auth-modal.visible').count()) === 0) {
   await page.click('.mode-nav-btn[data-mode="shop"]');
   await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 }
-await signUpAndVerifyWithRealCard(page, BUYER_LABEL);
+// Distinct test card from the seller's own verification above -- see
+// signUpAndVerifyWithRealCard's own comment on why reusing one number for
+// both accounts 409s for real. 5555555555554444 is Stripe's own documented
+// Mastercard test number (credit, same as 4242424242424242's Visa) --
+// different brand/fingerprint, same "always accepted in test mode" shape.
+await signUpAndVerifyWithRealCard(page, BUYER_LABEL, '5555555555554444');
 
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
