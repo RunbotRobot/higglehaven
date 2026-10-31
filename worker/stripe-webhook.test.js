@@ -273,7 +273,7 @@ describe('Stripe account.updated webhook (#766)', () => {
         method: 'POST',
         body: JSON.stringify({
           individual: {
-            firstName: 'Ada', lastName: 'Seller', dobDay: 12, dobMonth: 6, dobYear: 1990, ssnLast4: '1234',
+            firstName: 'Ada', lastName: 'Seller', dobDay: 12, dobMonth: 6, dobYear: 1990, ssnLast4: '1234', phone: '206-555-0100',
             addressLine1: '123 Main St', addressCity: 'Seattle', addressState: 'WA', addressPostalCode: '98101', addressCountry: 'US',
           },
           externalAccount: { routingNumber: '110000000', accountNumber: '000123456789', currency: 'usd' },
