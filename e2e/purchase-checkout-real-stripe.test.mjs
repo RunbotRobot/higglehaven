@@ -243,9 +243,23 @@ console.log('Stripe Connect test account created (status should be 200):', strip
 // this file's own header comment, a wrong fixture value here fails with
 // no other way to debug it short of live Stripe API access, so the CI log
 // itself needs to carry that detail.
+//
+// Re-POSTs the same payload each attempt, not a plain GET -- confirmed via
+// a real CI run that GET alone just reads handleSellerStripeAccount's own
+// DB-cached stripe_onboarding_status (stripeAccountStatusJson), never
+// re-fetching Stripe, so it can never observe Stripe finishing async
+// verification on its own. Resubmitting is this app's own intended
+// mechanism for that (the onboarding form's own "action_needed" copy says
+// "resubmit below"), and createOrUpdateStripeAccount's v1 bank-account
+// call always returns Stripe's fresh snapshot, which is what actually
+// re-derives status.
 for (let attempt = 0; attempt < 10 && stripeAccountResult.body.status !== 'complete'; attempt++) {
   await sellerPage.waitForTimeout(2000);
-  stripeAccountResult = await fetchJson(sellerPage, '/api/sellers/me/stripe-account');
+  stripeAccountResult = await fetchJson(sellerPage, '/api/sellers/me/stripe-account', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(stripeAccountInput),
+  });
   console.log(`Stripe Connect account status poll ${attempt + 1} (should eventually be "complete"):`, stripeAccountResult.body.status, stripeAccountResult.body.requirementsCurrentlyDue);
 }
 const stripeAccountComplete = stripeAccountResult.body.status === 'complete';
