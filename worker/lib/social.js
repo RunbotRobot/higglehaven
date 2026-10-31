@@ -545,27 +545,30 @@ async function handleFriendVoiceChannels(request, db, route) {
     // channel just went active unless they happen to have their Friends
     // panel open -- the "notification-only, not permission-gating" default
     // that issue's own text suggests, since any accepted friend opening it
-    // is already the intended, unchanged join model. Checked before the
-    // insert (not via its own row count after) so this reads as "was it
-    // already active", not "did this exact INSERT do anything" -- an
-    // ON CONFLICT DO NOTHING no-op looks identical to a real insert from
-    // the statement's own result.
-    const alreadyActive = ownerBuilderId !== sessionBuilder.builder_id && !!(await db.prepare(
-      'SELECT 1 FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?',
-    ).bind(ownerBuilderId, ownerBuilderId).first());
-    await db.batch([
+    // is already the intended, unchanged join model.
+    const results = await db.batch([
       db.prepare('INSERT INTO friend_voice_channel_members (owner_builder_id, member_builder_id) VALUES (?, ?) ON CONFLICT (owner_builder_id, member_builder_id) DO NOTHING')
         .bind(ownerBuilderId, ownerBuilderId),
       db.prepare('INSERT INTO friend_voice_channel_members (owner_builder_id, member_builder_id) VALUES (?, ?) ON CONFLICT (owner_builder_id, member_builder_id) DO NOTHING')
         .bind(ownerBuilderId, sessionBuilder.builder_id),
     ]);
+    // #2930: a separate pre-check SELECT (the previous shape here) lets two
+    // concurrent joins from different friends both observe "not yet active"
+    // before either's INSERT commits, double-firing this notification --
+    // the same race the friendships PATCH/DELETE branches already guard
+    // against via an atomic UPDATE...WHERE (#353/#1006). Reading
+    // results[0].meta.changes instead is the atomic equivalent here: it's
+    // 1 only for whichever concurrent request's own INSERT actually created
+    // the owner's row (SQLite serializes the conflicting INSERTs), so
+    // exactly one request -- never zero, never both -- ever sees this true.
+    const activatedByThisJoin = ownerBuilderId !== sessionBuilder.builder_id && results[0].meta.changes === 1;
     // Only the activation itself notifies the owner -- a later friend
     // joining an already-active channel doesn't re-notify them, same as a
     // group call's other guests arriving doesn't re-ring the host's phone.
     // Outside the batch above, same reasoning notificationStatement's own
     // comment gives for every other fireNotification call site (a
     // best-effort FYI, never allowed to roll back the real mutation).
-    if (ownerBuilderId !== sessionBuilder.builder_id && !alreadyActive) {
+    if (activatedByThisJoin) {
       await fireNotification(db, ownerBuilderId, `${sessionBuilder.label} is waiting in your voice channel.`);
     }
     return json({ ok: true }, 201);

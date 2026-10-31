@@ -139,6 +139,32 @@ describe('Friend voice channels (#2781)', () => {
       expect(activationNotices[0].message).toBe('voice-channel-notify-noduplicate-bob is waiting in your voice channel.');
     });
 
+    // #2930: fired together, not awaited one at a time -- a separate
+    // pre-check SELECT (the previous shape here) could let both requests
+    // read "not yet active" before either's INSERT committed, double-firing
+    // this notification. Same race shape as reviews-auth.test.js's own
+    // "#200, same race shape as #259's friendships fix" comment.
+    it('notifies the owner only once when two friends join concurrently', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-notify-concurrent-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-notify-concurrent-bob');
+      const carol = await signupIdVerifiedBuilder('voice-channel-notify-concurrent-carol');
+      await becomeFriends(alice, bob);
+      await becomeFriends(alice, carol);
+
+      const [first, second] = await Promise.all([
+        api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' })),
+        api(`/voice/friend-channels/${alice.builderId}/join`, carol.session({ method: 'POST' })),
+      ]);
+      expect([first.response.status, second.response.status]).toEqual([201, 201]);
+
+      const aliceNotices = await api('/notifications', alice.session());
+      const activationNotices = aliceNotices.body.notifications.filter((n) => n.message.endsWith('is waiting in your voice channel.'));
+      expect(activationNotices).toHaveLength(1);
+
+      const view = await api('/voice/friend-channels', alice.session());
+      expect(view.body.channels[0].members.sort()).toEqual([alice.builderId, bob.builderId, carol.builderId].sort());
+    });
+
     it('does not notify a builder who starts (joins) their own channel', async () => {
       const alice = await signupIdVerifiedBuilder('voice-channel-notify-selfjoin-alice');
       await api(`/voice/friend-channels/${alice.builderId}/join`, alice.session({ method: 'POST' }));
