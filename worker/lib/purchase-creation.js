@@ -32,6 +32,7 @@ import { readJson, stringValue, labelValue, positiveInteger } from './validation
 import { requireVerifiedSession, sha256Hex } from './auth.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 import { fireNotification } from './notifications.js';
+import { isUserSuspended } from './account-moderation.js';
 import {
   counterpartyKeyFor, commissionCapPlanFor, commissionCreditClaimStatement, commissionHoldInsertStatement,
   COMMISSION_HOLD_DURATION_DAYS,
@@ -175,8 +176,21 @@ export async function handleInstancePurchase(request, env, instanceId) {
   // fresh install before the platform owner adds it) should still have a
   // working storefront, exactly as before this feature existed.
   const seller = template.seller_id
-    ? await db.prepare('SELECT stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?').bind(template.seller_id).first()
+    ? await db.prepare('SELECT user_id, stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?').bind(template.seller_id).first()
     : null;
+  // #2985 (1/5 of #2305): a suspended seller's existing listings must be
+  // fully blocked from new purchases, not just left purchasable the way
+  // this app's suspension gate otherwise only touches the SUSPENDED
+  // account's own session (requireCurrentUser) -- this is the one purchase
+  // entry point, so it's checked here regardless of which branch below
+  // (real-money checkout vs. the simulated/dev path) ends up handling the
+  // rest of the request. Checked by the seller's own linked user_id, never
+  // the buyer's -- isUserSuspended already treats a null user_id (no
+  // linked account, e.g. a system seller, or one who self-deleted) as not
+  // suspended.
+  if (await isUserSuspended(db, seller?.user_id)) {
+    throw new HttpError('This product is currently unavailable because its seller is suspended.', 400);
+  }
   if (seller?.stripe_account_id && seller.stripe_onboarding_status === 'complete' && stripeConfigured(env)) {
     return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label);
   }
@@ -484,6 +498,30 @@ export async function handlePurchaseFinalize(request, env) {
     // avoid -- so this floors remaining stock at zero and still completes
     // the purchase, rather than the simulated path's reject-outright
     // behavior.
+    //
+    // #2985 (1/5 of #2305): deliberately does NOT re-check the seller's
+    // suspension state here, even though handleInstancePurchase above does
+    // at checkout-creation time. By the time Stripe reports this
+    // PaymentIntent `succeeded` (checked above, before this branch is ever
+    // reached), the buyer has already been charged AND
+    // transfer_data.destination has already paid the seller's connected
+    // account — both happen automatically as part of the PaymentIntent
+    // confirming, driven by the buyer's browser talking to Stripe directly
+    // (stripe.confirmCardPayment), with no request of ours in that path to
+    // gate. Suspending an account doesn't pause its Stripe Connect transfer
+    // capability either (confirmed: handleSuspendAccount touches nothing
+    // Stripe-related) — so even detecting "the seller is suspended NOW"
+    // here can't undo a transfer that already landed, and rejecting the
+    // write would strand that real charge with zero record of it, exactly
+    // the #472/#1948 problem just above. The only point that can actually
+    // prevent a suspended seller's sale is before checkout creates the
+    // PaymentIntent at all (handleInstancePurchase) — closing the
+    // remaining narrow race (suspension landing in the brief window
+    // between checkout-creation and the buyer's own Stripe confirmation)
+    // would need either pausing the seller's Stripe transfer capability at
+    // the moment of suspension, or a refund/reconciliation flow — both
+    // bigger, separate design decisions, not a mechanical finalize-time
+    // check.
     return writePurchaseRow(env, instance, template, { owner_builder_id: checkoutBuilderId }, amounts, paymentIntentId, isDigitalGood, buyerBuilderId, isAvatarCategory, undefined, isAnimationCategory, true);
   }
 
