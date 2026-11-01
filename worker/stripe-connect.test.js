@@ -1028,4 +1028,87 @@ describe('Higgles redemption (#625)', () => {
       .bind(builder.builderId).first();
     expect(count.n).toBe(1);
   });
+
+  // #2944: handleBuilderRedeem used to send its real Stripe transfers/
+  // payouts calls to sessionBuilder.stripe_account_id -- captured at the
+  // very top of the request, before checkRateLimit/readJson/
+  // annualGrossIncome/claimOrResumeBuilderRedemption all await. An admin's
+  // own stripe-account-reset (worker/index.js, builder-side) landing in
+  // that window would null the live stripe_account_id without this
+  // handler ever noticing, misdirecting the transfer to an account this
+  // builder's own record no longer shows as connected. Deterministic,
+  // same "intercept the shared statement and drive the concurrent write
+  // to completion before letting the real one proceed" idiom PR #2945
+  // just established for the sibling half of this same issue.
+  it("re-verifies the live stripe_account_id right before the real Stripe calls, catching an admin's reset that landed mid-request (#2944)", async () => {
+    const builder = await signupBuilder('redeem-stale-account-race');
+    await connectBuilder(builder);
+    await creditHiggles(builder, 5000);
+
+    const originalFetch = globalThis.fetch;
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    let transferCalled = false;
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.stripe.com/v1/transfers' && init?.method === 'POST') {
+        transferCalled = true;
+        return new Response(JSON.stringify({ id: 'tr_should_not_happen' }), { status: 200 });
+      }
+      if (url === 'https://api.stripe.com/v1/payouts' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'po_should_not_happen' }), { status: 200 });
+      }
+      return originalFetch(input, init);
+    };
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      const stmt = originalPrepare(sql);
+      if (armed && sql.includes('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ?')) {
+        armed = false;
+        const originalBind = stmt.bind.bind(stmt);
+        stmt.bind = (...bindArgs) => {
+          const bound = originalBind(...bindArgs);
+          const originalRun = bound.run.bind(bound);
+          bound.run = async () => {
+            // The admin's own reset commits here, in the window between
+            // sessionBuilder's own capture (already resolved by this
+            // point) and the real Stripe calls still to come.
+            await originalPrepare(`
+              UPDATE builders SET stripe_account_id = NULL, stripe_onboarding_status = 'not_started', stripe_requirements_due = NULL
+              WHERE builder_id = ?
+            `).bind(builder.builderId).run();
+            return originalRun();
+          };
+          return bound;
+        };
+      }
+      return stmt;
+    };
+    let redeemed;
+    try {
+      redeemed = await api('/builders/me/redeem', builder.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 2000 }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+      globalThis.fetch = originalFetch;
+      env.STRIPE_SECRET_KEY = undefined;
+    }
+
+    expect(redeemed.response.status).toBe(409);
+    // The stale, now-disconnected account must never actually receive a
+    // transfer -- the whole point of the fix.
+    expect(transferCalled).toBe(false);
+
+    // The balance claim must have been released, not left stranded.
+    const row = await env.DB.prepare('SELECT higgles_balance_cents FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(row.higgles_balance_cents).toBe(5000);
+
+    // No dangling redemption row left behind either.
+    const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM higgles_redemptions WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(count.n).toBe(0);
+  });
 });

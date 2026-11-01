@@ -308,6 +308,26 @@ export async function handleBuilderRedeem(request, env, db) {
 
     let payout;
     try {
+      // #2944: sessionBuilder was captured at the top of this request,
+      // before checkRateLimit/readJson/annualGrossIncome/
+      // claimOrResumeBuilderRedemption all awaited -- an admin's own
+      // stripe-account-reset (worker/index.js, builder-side) can null out
+      // (or the builder could reconnect a different) stripe_account_id
+      // anywhere in that window. Sending the transfer below to the stale
+      // captured destination would misdirect real money to an account
+      // this builder's own record no longer shows as connected. Re-reading
+      // the live value right here, immediately before the first real
+      // Stripe call, narrows that window to the remaining gap inherent in
+      // calling an external API -- the same "evaluate live at the write's
+      // own execution" idiom #2936/#2945 already established for this same
+      // class of race. A mismatch throws here so the catch block below
+      // releases the claim exactly the same way a failed Stripe call
+      // already does.
+      const liveBuilder = await db.prepare('SELECT stripe_account_id FROM builders WHERE builder_id = ?')
+        .bind(sessionBuilder.builder_id).first();
+      if (liveBuilder?.stripe_account_id !== sessionBuilder.stripe_account_id) {
+        throw new HttpError('Your connected Stripe account changed — refetch and retry.', 409);
+      }
       // Two real Stripe calls, unlike a seller's own payout: higgles were
       // never sitting in any per-builder Stripe balance to begin with (a
       // seller's sale proceeds land in their own connected account
