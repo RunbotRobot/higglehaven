@@ -103,6 +103,68 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     expect(notifications.some((n) => /automatically hidden/i.test(n.message))).toBe(true);
   });
 
+  // #2215 (owner decision, 2026-10-31, option 2): migrations/0131's own
+  // UNIQUE(template_id, flagger_builder_id) stops one builder re-flagging
+  // its own target, but does nothing against several distinct, cheaply-
+  // created accounts flagging from the same device/network. Three distinct
+  // builders still reach pendingCount 3 here, but two of them share an IP
+  // (the real-world brigading shape -- one person, several throwaway
+  // accounts, one device), so the signal-weighted sum stays at 2 and
+  // auto-hide correctly never fires, unlike the threshold test just above
+  // (3 genuinely distinct IPs) where it does.
+  it('does not auto-hide when 3 distinct builders flag a listing but two of them share an IP (#2215)', async () => {
+    const seller = await signupSeller('flag-weight-seller');
+    await createTemplate('flag-weight-template', seller);
+    const flaggers = await Promise.all([1, 2, 3].map((n) => signupBuilder(`flag-weight-flagger-${n}`)));
+    const sharedIp = `test-shared-ip-${crypto.randomUUID()}`;
+
+    const first = await api('/catalog/flag-weight-template/flags', flaggers[0].session({
+      method: 'POST', body: JSON.stringify({}), headers: { 'cf-connecting-ip': sharedIp },
+    }));
+    expect(first.body.pendingCount).toBe(1);
+    expect(first.body.pendingWeight).toBe(1);
+
+    // Same IP as the first flagger -- a real distinct account, but counts
+    // for nothing toward the weighted sum.
+    const second = await api('/catalog/flag-weight-template/flags', flaggers[1].session({
+      method: 'POST', body: JSON.stringify({}), headers: { 'cf-connecting-ip': sharedIp },
+    }));
+    expect(second.body.pendingCount).toBe(2);
+    expect(second.body.pendingWeight).toBe(1);
+    expect(second.body.autoHidden).toBe(false);
+
+    // A genuinely different IP -- counts fully.
+    const third = await api('/catalog/flag-weight-template/flags', flaggers[2].session({ method: 'POST', body: JSON.stringify({}) }));
+    expect(third.body.pendingCount).toBe(3);
+    expect(third.body.pendingWeight).toBe(2);
+    expect(third.body.autoHidden).toBe(false);
+
+    const fetched = await api('/catalog/flag-weight-template');
+    expect(fetched.body.template.flaggedHiddenAt).toBeFalsy();
+  });
+
+  // The 'unknown' fallback clientIp() returns with no cf-connecting-ip
+  // header is never a real device/network signal -- every caller with no
+  // header would otherwise collide on that one literal string and get
+  // zeroed out together. Two flags with no header must each weight 1, not
+  // trip the same-IP zeroing the test above exercises.
+  it('never zeroes out flags whose clientIp is the shared "unknown" fallback (#2215)', async () => {
+    const seller = await signupSeller('flag-weight-unknown-seller');
+    await createTemplate('flag-weight-unknown-template', seller);
+    const flaggers = await Promise.all([1, 2].map((n) => signupBuilder(`flag-weight-unknown-flagger-${n}`)));
+
+    const first = await api('/catalog/flag-weight-unknown-template/flags', flaggers[0].session({
+      method: 'POST', body: JSON.stringify({}), headers: { 'cf-connecting-ip': '' },
+    }));
+    expect(first.body.pendingWeight).toBe(1);
+
+    const second = await api('/catalog/flag-weight-unknown-template/flags', flaggers[1].session({
+      method: 'POST', body: JSON.stringify({}), headers: { 'cf-connecting-ip': '' },
+    }));
+    expect(second.body.pendingCount).toBe(2);
+    expect(second.body.pendingWeight).toBe(2);
+  });
+
   it('does not notify the seller on a flag that does not cross the auto-hide threshold', async () => {
     const seller = await signupSeller('flag-no-notify-seller');
     await createTemplate('flag-no-notify-template', seller);

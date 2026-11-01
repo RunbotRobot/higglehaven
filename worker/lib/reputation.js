@@ -384,6 +384,25 @@ const PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX = 20;
 // admin review -- see handleInstancePurchase's own flagged_hidden_at guard.
 const PRODUCT_FLAG_AUTO_HIDE_THRESHOLD = 3;
 
+// #2215 (owner decision, 2026-10-31, option 2): the first pending flag
+// against a listing from a given real IP counts fully toward the
+// auto-hide threshold; any further pending flag sharing that same IP
+// counts for nothing -- the same "first one counts, repeats don't" shape
+// migrations/0131's own UNIQUE(template_id, flagger_builder_id) already
+// gives distinct builder accounts, extended to a signal several cheaply-
+// created accounts on one device/network can't each fake independently.
+// clientIp(request)'s own 'unknown' fallback (no cf-connecting-ip header)
+// is deliberately never treated as a real match here -- every caller with
+// no header would otherwise collide on that one literal string and get
+// zeroed out together, which isn't a same-device signal at all.
+async function computeProductFlagWeight(db, templateId, flaggerIp) {
+  if (flaggerIp === 'unknown') return 1;
+  const sameIpPending = await db.prepare(`
+    SELECT 1 FROM product_flags WHERE template_id = ? AND status = 'pending' AND flagger_ip = ? LIMIT 1
+  `).bind(templateId, flaggerIp).first();
+  return sameIpPending ? 0 : 1;
+}
+
 export async function handleProductFlags(request, db, route) {
   const templateId = route[1];
 
@@ -404,18 +423,24 @@ export async function handleProductFlags(request, db, route) {
     // this file's own top-level databaseHttpError fallback, same as every
     // other unhandled UNIQUE violation in this file.
     const flagId = `product-flag-${crypto.randomUUID()}`;
+    const flaggerIp = clientIp(request);
+    const weight = await computeProductFlagWeight(db, templateId, flaggerIp);
     await db.prepare(`
-      INSERT INTO product_flags (flag_id, template_id, flagger_builder_id, reason)
-      VALUES (?, ?, ?, ?)
-    `).bind(flagId, templateId, sessionBuilder.builder_id, reason).run();
+      INSERT INTO product_flags (flag_id, template_id, flagger_builder_id, reason, flagger_ip, weight)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(flagId, templateId, sessionBuilder.builder_id, reason, flaggerIp, weight).run();
     // Re-checked after the insert (not a cached count from before it) so a
     // concurrent flag from a different builder landing in between is never
-    // silently lost from the threshold decision.
-    const { pendingCount } = await db.prepare(`
-      SELECT COUNT(*) AS pendingCount FROM product_flags WHERE template_id = ? AND status = 'pending'
+    // silently lost from the threshold decision. pendingCount stays the
+    // real, unweighted flag count (what admins see as "how many accounts
+    // flagged this") -- pendingWeight is the separate, signal-adjusted sum
+    // the auto-hide decision actually uses.
+    const { pendingCount, pendingWeight } = await db.prepare(`
+      SELECT COUNT(*) AS pendingCount, COALESCE(SUM(weight), 0) AS pendingWeight
+      FROM product_flags WHERE template_id = ? AND status = 'pending'
     `).bind(templateId).first();
     let autoHidden = false;
-    if (!template.flagged_hidden_at && pendingCount >= PRODUCT_FLAG_AUTO_HIDE_THRESHOLD) {
+    if (!template.flagged_hidden_at && pendingWeight >= PRODUCT_FLAG_AUTO_HIDE_THRESHOLD) {
       const hideResult = await db.prepare(`
         UPDATE catalog_templates SET flagged_hidden_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE template_id = ? AND flagged_hidden_at IS NULL
@@ -453,7 +478,7 @@ export async function handleProductFlags(request, db, route) {
         }
       }
     }
-    return json({ flagId, pendingCount, autoHidden }, 201);
+    return json({ flagId, pendingCount, pendingWeight, autoHidden }, 201);
   }
 
   if (request.method === 'POST' && route.length === 4 && route[3] === 'resolve') {
