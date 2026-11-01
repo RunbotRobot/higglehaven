@@ -273,7 +273,7 @@ describe('Stripe account.updated webhook (#766)', () => {
         method: 'POST',
         body: JSON.stringify({
           individual: {
-            firstName: 'Ada', lastName: 'Seller', dobDay: 12, dobMonth: 6, dobYear: 1990, ssnLast4: '1234',
+            firstName: 'Ada', lastName: 'Seller', dobDay: 12, dobMonth: 6, dobYear: 1990, ssnLast4: '1234', phone: '206-555-0100',
             addressLine1: '123 Main St', addressCity: 'Seattle', addressState: 'WA', addressPostalCode: '98101', addressCountry: 'US',
             // #2942: PR #2874 added individual.phone as a required field
             // (buildStripeAccountParams, worker/lib/seller-profile.js) --

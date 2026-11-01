@@ -109,6 +109,20 @@ async function hasInFlightRealMoney(db, subjectType, subjectId) {
   return !!row;
 }
 
+// #2944: the same subquery hasInFlightRealMoney runs standalone, but
+// embedded directly in performReinstatementReset's own guarded UPDATE
+// below -- see that function's comment for why a separate pre-read isn't
+// enough.
+function inFlightRealMoneyClause(subjectType) {
+  return subjectType === 'builder'
+    ? 'NOT EXISTS (SELECT 1 FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL)'
+    : `NOT EXISTS (
+         SELECT 1 FROM purchases
+         WHERE seller_id = ? AND payment_intent_id IS NOT NULL AND refunded_at IS NULL
+           AND (paid_out_at IS NULL OR stripe_payout_id IS NULL)
+       )`;
+}
+
 const SUBJECT_TABLE = { builder: 'builders', seller: 'sellers' };
 const SUBJECT_ID_COLUMN = { builder: 'builder_id', seller: 'seller_id' };
 
@@ -155,6 +169,19 @@ export async function handleStripeAccountFlag(request, db, subjectType, subjectI
 // here, this is the AI-made decision's own effect, and
 // account_moderation_decisions (written by the caller right after this
 // resolves) is this decision's real audit trail.
+//
+// #2944: the in-flight-real-money check used to be a separate pre-read
+// (hasInFlightRealMoney) run by the caller before this UPDATE, with no
+// await in between the two once the caller reached this call -- but a new
+// redemption/payout could still start in the real gap between the
+// caller's own earlier check and this statement actually reaching the DB
+// (claimOrResumeBuilderRedemption's own balance-claim + higgles_redemptions
+// insert is a separate request entirely, not something either of these
+// awaits serializes against). Folding the identical subquery directly into
+// this UPDATE's own WHERE makes the in-flight check and the reset the same
+// atomic operation, so there's no window left for a redemption/payout to
+// land in between -- same "evaluate live at the write's own execution"
+// idiom #2936/#2879 already established.
 async function performReinstatementReset(db, subjectType, subjectId, currentStripeAccountId) {
   const table = SUBJECT_TABLE[subjectType];
   const idColumn = SUBJECT_ID_COLUMN[subjectType];
@@ -162,8 +189,8 @@ async function performReinstatementReset(db, subjectType, subjectId, currentStri
   const result = await db.prepare(`
     UPDATE ${table}
     SET stripe_account_id = NULL, stripe_onboarding_status = 'not_started', stripe_requirements_due = NULL, stripe_updated_at = ?, updated_at = ?
-    WHERE ${idColumn} = ? AND stripe_account_id = ?
-  `).bind(nowIso, nowIso, subjectId, currentStripeAccountId).run();
+    WHERE ${idColumn} = ? AND stripe_account_id = ? AND ${inFlightRealMoneyClause(subjectType)}
+  `).bind(nowIso, nowIso, subjectId, currentStripeAccountId, subjectId).run();
   return result.meta.changes > 0;
 }
 
@@ -278,15 +305,6 @@ export async function handleStripeReinstatementRequest(request, env, db, subject
   if (outcome === 'approved') {
     const current = await requireSubject(db, subjectType, subjectId);
     if (current.stripe_account_id) {
-      // #2916: the rubric itself is satisfied (recordDecision above already
-      // logged 'approved'), but resetting the Stripe linkage right now would
-      // strand real money that's still mid-flight on the CURRENT connected
-      // account -- see hasInFlightRealMoney's own comment. Refuse the reset
-      // (not the approval) until it clears; the caller can retry once the
-      // in-flight redemption/payout resolves.
-      if (await hasInFlightRealMoney(db, subjectType, subjectId)) {
-        throw new HttpError('Reinstatement is approved, but a redemption/payout is still in flight on this account -- retry once it completes.', 409);
-      }
       // #2740: same concurrency guard (and the same obligation to check its
       // result) as the sibling admin stripe-account-reset endpoint just
       // above this file's own callers in worker/index.js (#1414) -- without
@@ -294,8 +312,20 @@ export async function handleStripeReinstatementRequest(request, env, db, subject
       // above and this UPDATE (another request for the same double-click/
       // multi-tab subject, an admin's own reset, etc.) leaves the reset a
       // silent no-op while this handler still reports success below.
+      //
+      // #2944: the in-flight-real-money check (#2916) now lives inside
+      // performReinstatementReset's own atomic UPDATE, not as a separate
+      // pre-read here -- see that function's comment. A `false` result can
+      // therefore mean either reason, so on failure this re-checks
+      // hasInFlightRealMoney purely to pick the right error message; that
+      // re-check is informational only (the atomic UPDATE already made the
+      // real, race-free decision not to reset) -- it has no bearing on
+      // whether the reset actually happened.
       const reset = await performReinstatementReset(db, subjectType, subjectId, current.stripe_account_id);
       if (!reset) {
+        if (await hasInFlightRealMoney(db, subjectType, subjectId)) {
+          throw new HttpError('Reinstatement is approved, but a redemption/payout is still in flight on this account -- retry once it completes.', 409);
+        }
         throw new HttpError('This account\'s Stripe linkage changed concurrently -- refetch and retry', 409);
       }
     }
