@@ -219,3 +219,45 @@ jobs:
           done
           echo "This shard failed twice — treating as a real failure, not a transient one." >&2
           exit 1
+      # #2965: the step above only ever diagnoses an ordinary test *failure*
+      # -- e2e/run-all.mjs's own wrangler-crash-log capture (see that file's
+      # #2673 comment) runs inside each test file's own try/catch, triggered
+      # by that file's wrangler dev exiting with a bad status. A *hang*
+      # instead gets recovered by cancelling the whole job from outside
+      # (GitHub Actions UI/API, or this account's own tooling) -- confirmed
+      # for real on run 41264803797 / job 124725374350 (2026-11-01): the
+      # in-process mechanism fired correctly earlier in that exact job for
+      # an ordinary failure (a full wrangler-crash-log excerpt was printed
+      # for shop-idle-sit-randomization.test.mjs), but once a later test hung
+      # and the job was cancelled, the log just stops at "The operation was
+      # canceled" with zero diagnostic -- the hanging file's own wrangler
+      # dev process was still alive, so run-all.mjs's per-file catch block,
+      # and its end-of-run summary print (which only runs after every file
+      # in the shard has completed), never got a chance to execute. This
+      # step runs independently of that process's own state, reading
+      # wrangler's on-disk debug log directly from the workflow -- GitHub
+      # still runs steps conditioned on cancelled() after a cancellation
+      # (confirmed by that same job's own "Post job cleanup" steps
+      # completing right after it was cancelled). Limited to the most
+      # recently modified file(s): by the time of a hang this directory can
+      # hold one file per already-finished test in the shard, but the
+      # hanging test's own wrangler dev is always among the newest by mtime
+      # since it's the one still writing when the job gets killed.
+      - name: Capture wrangler dev crash log on hang/cancellation (fallback for #2673)
+        if: failure() || cancelled()
+        run: |
+          LOG_DIR="$HOME/.config/.wrangler/logs"
+          if [ ! -d "$LOG_DIR" ]; then
+            echo "No wrangler log directory found at $LOG_DIR"
+            exit 0
+          fi
+          newest=$(ls -t "$LOG_DIR"/*.log 2>/dev/null | head -n 2)
+          if [ -z "$newest" ]; then
+            echo "wrangler log directory exists but has no .log files"
+            exit 0
+          fi
+          for f in $newest; do
+            echo "::group::wrangler dev log (most recently modified): $f"
+            tail -c 50000 "$f"
+            echo "::endgroup::"
+          done
