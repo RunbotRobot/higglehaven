@@ -280,7 +280,12 @@ describe('Stripe reinstatement request (#1407)', () => {
   // on. Without this guard, a pending payout's eventual retry would target
   // whatever NEW stripe_account_id the seller re-onboards with instead of
   // the account the sale proceeds actually landed in.
-  it('approves (logs the decision) but refuses the reset while a seller payout is still in flight', async () => {
+  // #2983: recordDecision for 'approved' is now deferred until the reset
+  // actually takes effect -- a refused reset (in-flight real money) must
+  // leave NO decision row behind, and the eventual successful retry (once
+  // the blocker clears) must be the only row logged, not a second one on
+  // top of an earlier "approved but didn't happen" entry.
+  it('refuses the reset while a seller payout is in flight, logging no decision until a later unblocked retry succeeds', async () => {
     const seller = await signupSeller('stripe-reinstate-inflight-payout');
     const userId = await userIdFor(seller.email);
     await env.DB.prepare("UPDATE sellers SET stripe_account_id = 'acct_dead_reinstate_inflight', stripe_onboarding_status = 'action_needed' WHERE seller_id = ?")
@@ -301,20 +306,37 @@ describe('Stripe reinstatement request (#1407)', () => {
     expect(result.response.status).toBe(409);
     expect(result.body.error).toMatch(/in flight/i);
 
-    // The rubric's own verdict is still recorded -- only the mechanical
-    // reset is deferred, not the moderation decision itself.
-    const decision = await env.DB.prepare(
+    // Nothing to show for this attempt in the audit trail -- the reset
+    // never actually happened, so there's no decision to stand behind yet.
+    const decisionAfterRefusal = await env.DB.prepare(
       "SELECT * FROM account_moderation_decisions WHERE decision_type = 'stripe_reinstatement' AND subject_ref = ?",
     ).bind(`seller:${seller.sellerId}`).first();
-    expect(decision.outcome).toBe('approved');
+    expect(decisionAfterRefusal).toBeNull();
 
-    const row = await env.DB.prepare('SELECT stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?')
+    const rowAfterRefusal = await env.DB.prepare('SELECT stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?')
       .bind(seller.sellerId).first();
-    expect(row.stripe_account_id).toBe('acct_dead_reinstate_inflight');
-    expect(row.stripe_onboarding_status).toBe('action_needed');
+    expect(rowAfterRefusal.stripe_account_id).toBe('acct_dead_reinstate_inflight');
+    expect(rowAfterRefusal.stripe_onboarding_status).toBe('action_needed');
+
+    // Clear the blocker and retry -- exactly one 'approved' decision row
+    // should land now, not a second one stacked on an earlier phantom entry.
+    await env.DB.prepare("UPDATE purchases SET stripe_payout_id = 'po_inflight_resolved' WHERE purchase_id = 'reinstate-inflight-purchase'").run();
+    const retried = await api('/sellers/me/stripe-reinstatement-request', seller.session({ method: 'POST' }));
+    expect(retried.response.status).toBe(200);
+    expect(retried.body.outcome).toBe('approved');
+
+    const { results: decisions } = await env.DB.prepare(
+      "SELECT * FROM account_moderation_decisions WHERE decision_type = 'stripe_reinstatement' AND subject_ref = ?",
+    ).bind(`seller:${seller.sellerId}`).all();
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].outcome).toBe('approved');
+
+    const rowAfterRetry = await env.DB.prepare('SELECT stripe_account_id FROM sellers WHERE seller_id = ?')
+      .bind(seller.sellerId).first();
+    expect(rowAfterRetry.stripe_account_id).toBeNull();
   });
 
-  it('approves (logs the decision) but refuses the reset while a builder higgles redemption is still in flight', async () => {
+  it('refuses the reset while a builder higgles redemption is in flight, logging no decision until a later unblocked retry succeeds', async () => {
     const builder = await signupBuilder('stripe-reinstate-inflight-redemption');
     const userId = await userIdFor(builder.email);
     await env.DB.prepare("UPDATE builders SET stripe_account_id = 'acct_dead_reinstate_builder_inflight' WHERE builder_id = ?")
@@ -334,14 +356,29 @@ describe('Stripe reinstatement request (#1407)', () => {
     expect(result.response.status).toBe(409);
     expect(result.body.error).toMatch(/in flight/i);
 
-    const decision = await env.DB.prepare(
+    const decisionAfterRefusal = await env.DB.prepare(
       "SELECT * FROM account_moderation_decisions WHERE decision_type = 'stripe_reinstatement' AND subject_ref = ?",
     ).bind(`builder:${builder.builderId}`).first();
-    expect(decision.outcome).toBe('approved');
+    expect(decisionAfterRefusal).toBeNull();
 
-    const row = await env.DB.prepare('SELECT stripe_account_id FROM builders WHERE builder_id = ?')
+    const rowAfterRefusal = await env.DB.prepare('SELECT stripe_account_id FROM builders WHERE builder_id = ?')
       .bind(builder.builderId).first();
-    expect(row.stripe_account_id).toBe('acct_dead_reinstate_builder_inflight');
+    expect(rowAfterRefusal.stripe_account_id).toBe('acct_dead_reinstate_builder_inflight');
+
+    await env.DB.prepare("UPDATE higgles_redemptions SET stripe_payout_id = 'po_inflight_redemption_resolved' WHERE redemption_id = 'reinstate-inflight-redemption'").run();
+    const retried = await api('/builders/me/stripe-reinstatement-request', builder.session({ method: 'POST' }));
+    expect(retried.response.status).toBe(200);
+    expect(retried.body.outcome).toBe('approved');
+
+    const { results: decisions } = await env.DB.prepare(
+      "SELECT * FROM account_moderation_decisions WHERE decision_type = 'stripe_reinstatement' AND subject_ref = ?",
+    ).bind(`builder:${builder.builderId}`).all();
+    expect(decisions).toHaveLength(1);
+    expect(decisions[0].outcome).toBe('approved');
+
+    const rowAfterRetry = await env.DB.prepare('SELECT stripe_account_id FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(rowAfterRetry.stripe_account_id).toBeNull();
   });
 
   // #2944: the in-flight check above used to be a separate pre-read
