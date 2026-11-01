@@ -1318,7 +1318,7 @@ export async function handleLandlets(request, db, route, url) {
       UPDATE landlets
       SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, status = ?, owner_builder_id = ?,
           landlet_class = ?, polygon_json = ?, generated_at = ?, claimable_at = ?, metadata_json = ?,
-          landlet_type = ?, biome = ?, max_world_radius_m = ?,
+          landlet_type = ?, biome = ?, elevation_m = ?, max_world_radius_m = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE landlet_id = ? AND status = ? AND owner_builder_id IS ?
         AND (
@@ -1328,6 +1328,11 @@ export async function handleLandlets(request, db, route, url) {
       landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status,
       landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt,
       landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType, landlet.biome ?? null,
+      // #2967: this column was missing from the SET clause entirely -- a
+      // caller-supplied elevationM silently never persisted, even though
+      // the response (built from the local `landlet` object, not a DB
+      // re-read) reported success with the new value.
+      landlet.elevationM ?? null,
       landletMaxWorldRadius(candidateRowFromLandlet(landlet)), route[1],
       existing.status, existing.owner_builder_id,
       renamingTo, renamingTo, route[1],
