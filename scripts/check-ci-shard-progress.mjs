@@ -5,38 +5,38 @@
 // was making the underlying congestion worse, not better -- on PR #2943, a
 // shard killed as "frozen" after 35 minutes had actually completed 18/53
 // test files (34%), genuinely progressing, just slower than the ~20-25min
-// healthy baseline under fleet-wide CI concurrency contention. Cancelling a
-// shard that's still making progress just adds a fresh job to the same
-// contended Actions pool instead of letting real progress finish.
+// healthy baseline under fleet-wide CI concurrency contention.
 //
-// e2e/run-all.mjs already prints a one-line `PASS: <file>` / `FAIL: <file>`
-// progress indicator to the job log the moment each test file finishes (see
-// that file's own comment above its test loop) -- the data needed to tell
-// "slow" from "actually stuck" already exists, nothing was reading it before
-// deciding to cancel. This script reads a running job's own log and reports
-// how long it's been since the last progress line, instead of just how long
-// the job has been running in total.
+// CORRECTION, same PR (#2979) that introduced this script: the issue's own
+// premise -- that a running shard's live job log can be read for its
+// PASS/FAIL progress lines (e2e/run-all.mjs prints one per file as it
+// finishes) *before* deciding whether to cancel -- does not hold. Verified
+// empirically against several genuinely in-progress jobs, at 8, 31, 52, and
+// 54 minutes elapsed: `GET .../actions/jobs/{id}/logs` returns 404
+// BlobNotFound the entire time a job's status is "in_progress", no matter
+// how long it's been running or how much real output it's already produced.
+// The same endpoint against the *same* jobs once they reached a terminal
+// state (completed -- success, failure, or cancelled) returned the full log
+// immediately, progress lines included. GitHub simply does not serve partial
+// job logs through this endpoint while a job is still running -- there is no
+// live per-file signal available here, full stop. (The #2943 investigation
+// this issue cites as its evidence was itself necessarily retroactive: that
+// shard was already "killed" -- i.e. cancelled, a terminal state -- before
+// its 18/53 progress could be read back at all.)
+//
+// So this script cannot tell you, while a shard is still running, whether
+// it's stuck or just slow -- nothing can, through this API. What it's
+// actually good for: once a job reaches a terminal state (most usefully,
+// the moment right after you've cancelled one), it reports exactly how far
+// that shard had actually gotten. Run it right after cancelling something
+// that looked stuck -- if it turns out to have been well into its file list
+// with no real gap in its progress, that's a concrete signal the cancel was
+// premature, worth noting on the PR/issue so the fleet's own patience
+// threshold keeps getting corrected rather than repeating the same mistake.
 //
 // Usage: node scripts/check-ci-shard-progress.mjs <job_id> [owner/repo]
 // Requires `gh` (Claude Code's own built-in GitHub API client) on PATH --
-// this is a fleet-session dev tool for judging a running job before
-// deciding whether to cancel it, not part of CI itself.
-
-// Mirrors e2e/run-all.mjs's own TEST_FILE_TIMEOUT_MS (10 minutes, the hard
-// per-file execSync timeout a genuinely hung test file self-reports a FAIL
-// at). Not imported directly -- that file runs its whole test suite as a
-// top-level side effect the instant it's imported, so importing it here
-// would start a real e2e run. Kept as a literal with this comment as the
-// cross-reference instead; if that constant ever changes, reconsider this
-// one too.
-export const PER_FILE_HARD_TIMEOUT_MS = 10 * 60 * 1000;
-
-// A single hung file already self-reports a FAIL at PER_FILE_HARD_TIMEOUT_MS,
-// so genuine "no progress line yet" silence should never exceed that by
-// much. The buffer covers a slow-to-start shard (frontend build + D1
-// migrations + wrangler boot, all before the first test even begins) and
-// the time for that FAIL line's own output to actually reach the log.
-export const STUCK_THRESHOLD_MS = PER_FILE_HARD_TIMEOUT_MS + 2 * 60 * 1000;
+// this is a fleet-session dev tool, not part of CI itself.
 
 const PROGRESS_LINE_RE = /^(\S+Z)\s+(PASS|FAIL): (\S+)/gm;
 
@@ -49,15 +49,18 @@ export function parseProgressLines(log) {
   return lines;
 }
 
-// Exported for direct testing. `now`/`jobStartedAt` are injected (rather
-// than read live) so this core judgment is testable without a real clock or
-// a real job.
-export function judgeShardProgress({ progressLines, jobStartedAt, now }) {
+// Exported for direct testing. Summarizes a terminal (completed) job's own
+// progress-line history -- how many files it got through, and (for a
+// cancelled job specifically) how long a gap preceded the cancellation,
+// which is the concrete number worth citing when arguing a cancel was too
+// eager.
+export function summarizeTerminalProgress({ progressLines, startedAt, completedAt }) {
+  const passed = progressLines.filter((l) => l.verdict === 'PASS').length;
+  const failed = progressLines.filter((l) => l.verdict === 'FAIL').length;
   const lastLine = progressLines.length > 0 ? progressLines[progressLines.length - 1] : null;
-  const referenceTimestamp = lastLine ? lastLine.timestamp : jobStartedAt;
-  const sinceMs = now - new Date(referenceTimestamp).getTime();
-  const verdict = sinceMs > STUCK_THRESHOLD_MS ? 'stuck' : 'progressing';
-  return { verdict, referenceTimestamp, sinceMs, lastLine };
+  const referenceTimestamp = lastLine ? lastLine.timestamp : startedAt;
+  const gapBeforeEndMs = new Date(completedAt).getTime() - new Date(referenceTimestamp).getTime();
+  return { passed, failed, total: progressLines.length, lastLine, gapBeforeEndMs };
 }
 
 async function main() {
@@ -81,53 +84,43 @@ async function main() {
   const job = JSON.parse(ghApi(`repos/${owner}/${repo}/actions/jobs/${jobId}`));
   console.log(`Job: ${job.name} (status: ${job.status}${job.conclusion ? `, conclusion: ${job.conclusion}` : ''})`);
 
-  if (job.status === 'completed') {
+  if (job.status !== 'completed') {
+    // Confirmed (see this file's own header comment): the logs endpoint
+    // never returns real content for a job in this state, however long
+    // it's been running. There is no live per-file progress signal to
+    // report here -- only wall-clock, which is exactly the unreliable
+    // signal #2976 exists because of.
+    const sinceStartMin = ((Date.now() - new Date(job.started_at).getTime()) / 60000).toFixed(1);
+    console.log(`Running for ${sinceStartMin} minute(s) so far. No live per-file progress is available for a job in this state --`);
+    console.log("GitHub's own job-logs endpoint only returns content once a job reaches a terminal state (confirmed empirically; see this script's header comment).");
     console.log(
-      'Already completed -- nothing to judge. This tool is only for an ' +
-      'in-progress job you are deciding whether to cancel as stuck.',
+      "Cancelling early just to find out adds a fresh job to the same contended Actions pool -- if you do cancel, re-run this " +
+      'script against the same job_id immediately afterward (it will now be "completed") to see exactly how much real progress was lost.',
     );
     return;
   }
 
-  // A genuinely in-progress job's logs aren't always downloadable yet --
-  // GitHub only materializes the blob this endpoint serves once enough
-  // output has been archived, so a job early in its run (still building/
-  // migrating/booting, before its first log chunk flushes) 404s here. That
-  // 404 means "no progress yet", not an error -- fall back to judging off
-  // job.started_at alone, same as a completed-but-empty log would.
-  let log = '';
-  try {
-    log = ghApi(`repos/${owner}/${repo}/actions/jobs/${jobId}/logs`);
-  } catch (error) {
-    console.log("No log available yet for this job (still early in its run) -- judging by the job's own start time instead.");
-  }
+  const log = ghApi(`repos/${owner}/${repo}/actions/jobs/${jobId}/logs`);
   const progressLines = parseProgressLines(log);
-  const { verdict, referenceTimestamp, sinceMs, lastLine } = judgeShardProgress({
+  const { passed, failed, total, lastLine, gapBeforeEndMs } = summarizeTerminalProgress({
     progressLines,
-    jobStartedAt: job.started_at,
-    now: Date.now(),
+    startedAt: job.started_at,
+    completedAt: job.completed_at,
   });
 
-  if (lastLine) {
-    console.log(`${progressLines.length} file(s) completed so far. Last: ${lastLine.verdict} ${lastLine.file} at ${referenceTimestamp}`);
-  } else {
-    console.log(`No file has completed yet (still building/booting since ${referenceTimestamp}).`);
+  if (total === 0) {
+    console.log('No test file ever completed in this job -- genuinely stuck or failed before the first file ran.');
+    return;
   }
-  console.log(`Time since last progress: ${(sinceMs / 60000).toFixed(1)} minute(s).`);
 
-  if (verdict === 'stuck') {
+  console.log(`${total} file(s) completed (${passed} pass, ${failed} fail). Last: ${lastLine.verdict} ${lastLine.file} at ${lastLine.timestamp}.`);
+  console.log(`Gap between that last progress line and the job ending: ${(gapBeforeEndMs / 60000).toFixed(1)} minute(s).`);
+
+  if (job.conclusion === 'cancelled') {
     console.log(
-      `VERDICT: likely genuinely stuck -- longer than a single hung file's ` +
-      `own ${PER_FILE_HARD_TIMEOUT_MS / 60000}-minute hard timeout would ever ` +
-      `take to self-report. Safe to treat as frozen.`,
+      `This job was cancelled after genuinely completing ${total} file(s) -- if that's a substantial fraction of the shard, ` +
+      'the cancel was likely premature; consider noting this on the relevant PR/issue so the fleet waits longer next time.',
     );
-    process.exitCode = 1;
-  } else {
-    console.log(
-      'VERDICT: still within normal per-file range -- likely just slow ' +
-      "(e.g. fleet-wide CI contention), not stuck. Don't cancel on wall-clock alone.",
-    );
-    process.exitCode = 0;
   }
 }
 

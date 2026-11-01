@@ -557,7 +557,7 @@ If a collision happens anyway: whoever notices second stands down
 immediately (note the duplicate in the task's `tasks` doc, drop the
 redundant work) rather than finishing in parallel.
 
-## Judging a "stuck" CI shard — check live progress, not wall-clock alone
+## Judging a "stuck" CI shard — no live signal exists, so default to patience
 
 The fleet's long-standing habit of cancel+rerunning an e2e CI shard that
 *looks* frozen (the #2673 "wrangler-dev-hang" flake) was, by itself,
@@ -568,38 +568,52 @@ after 35 minutes had actually completed 18/53 test files (34%) —
 genuinely progressing, just slower than the ~20-25min healthy baseline
 under fleet-wide GitHub Actions concurrency contention. Cancelling a
 shard that's still making real progress adds a fresh job to the same
-contended pool instead of letting the original one finish — compounding
-the exact contention that slowed it down in the first place.
+contended pool instead of letting the original one finish.
 
-The data needed to tell "slow" from "actually stuck" already exists:
-`e2e/run-all.mjs` prints a one-line `PASS: <file>` / `FAIL: <file>`
-progress indicator to the job's own log the instant each test file
-finishes — see that file's own comment above its test loop. Before
-treating a running e2e shard as stuck and cancelling it (owner decision,
-#2976, resolving the question above):
+`e2e/run-all.mjs` does print a one-line `PASS: <file>` / `FAIL: <file>`
+progress indicator the instant each test file finishes — but **checking
+it on a still-running shard does not work**, and isn't a matter of the
+right tool or query: `GET /repos/.../actions/jobs/{id}/logs` (the only
+endpoint that serves a job's own console output) returns 404
+`BlobNotFound` for the *entire* time a job's `status` is `"in_progress"`,
+however long it's been running or however much real output it's already
+produced — confirmed directly against several genuinely in-progress jobs
+at 8, 31, 52, and 54 minutes elapsed (PR #2979's own second commit, which
+corrected this same section's first draft after it shipped the same
+mistaken assumption). The exact same jobs, the moment they reached a
+terminal state (`completed` — success, failure, *or* cancelled), returned
+their full log immediately, progress lines included. The #2943
+18/53 figure the owner's decision cites was necessarily read back the
+same way — that shard had already been cancelled (a terminal state)
+before anyone could see how far it got. There is no way to distinguish
+"slow" from "stuck" while a shard is still running, through this API —
+not a faster check, not a better query, none exists.
 
-- **Check the shard's own live job log for a recent progress line**, not
-  just how long the job has been running. `scripts/check-ci-shard-
-  progress.mjs <job_id>` does this for you — point it at the job (via
-  `get_job_logs`/`actions_get`'s `get_workflow_run`+job list, or
-  `gh api repos/<owner>/<repo>/actions/runs/<run_id>/jobs`, to find the
-  job id) and it reports how long it's been since the last `PASS`/`FAIL`
-  line (or, if none yet, since the job started) and a verdict.
-- **Only treat it as genuinely stuck if there's been no new progress
-  line for longer than a single hung test file would ever take to
-  self-report on its own** — `e2e/run-all.mjs`'s own `TEST_FILE_TIMEOUT_MS`
-  (10 minutes) already kills and FAILs a single hung file via its
-  `execSync` timeout, so real silence beyond that (the script uses a
-  12-minute threshold, the extra 2 covering a slow build/migration/boot
-  before the first test even starts) means something is wrong at a level
-  below individual test files — the whole runner, wrangler dev itself, or
-  the runner VM. That's "no progress," not "taking a while," and is safe
-  to cancel+rerun (`cancel_workflow_run` + `rerun_failed_jobs`, not a full
-  workflow re-run, so already-green shards aren't repeated).
-- This is about the fleet's own manual judgment call on an already-
-  running job from outside — it does not change `ci.yml`'s existing
-  two-attempt-per-shard in-job retry loop (a shard that exits non-zero
-  already retries itself once automatically; leave that as-is).
+Given that, the only thing actually within a session's control is **not
+cancelling on wall-clock alone, full stop** — the single intervention
+available (waiting instead) has essentially no cost, since `ci.yml` sets
+no `timeout-minutes` on `e2e-tests` (GitHub Actions' own 360-minute
+default job ceiling is the real backstop), while cancelling and
+re-queuing has the concrete, demonstrated cost of adding a fresh job to
+an already-contended pool. So: don't cancel a shard just because it's
+taking longer than the ~20-25min healthy baseline — that's exactly the
+signal #2943 showed is unreliable.
+
+If you do end up cancelling one anyway (or it reaches a terminal state
+on its own), run `scripts/check-ci-shard-progress.mjs <job_id>`
+immediately after — now that the job is `completed`, its log is
+readable, and the script reports exactly how many files it had gotten
+through and how large the gap was before it ended. If that turns out to
+be a substantial fraction of the shard, say so on the relevant PR/issue —
+that's a concrete data point for correcting the fleet's own patience
+threshold, the same way #2943's own retroactive read was. This is a
+post-hoc diagnostic, not a pre-cancel check; nothing before you cancel
+can tell you what it will say.
+
+This doesn't change `ci.yml`'s existing two-attempt-per-shard in-job
+retry loop (a shard that exits non-zero already retries itself once
+automatically; leave that as-is) — it's about the fleet's own external,
+manual judgment call on a job that's still running.
 
 ### Partial-scope PRs — never let a closing keyword outrun what you actually did
 
