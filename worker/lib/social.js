@@ -356,7 +356,7 @@ export async function handleNearbyChat(request, db, route, url) {
   // the same id_verified-specific bar direct messages enforce above, not
   // presence/avatar-visibility's own looser "any non-'none' tier" gate.
   if (request.method === 'GET' && route.length === 1) {
-    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use nearby chat.');
     await checkRateLimit(db, `nearby-chat-poll:${sessionBuilder.builder_id}`, NEARBY_CHAT_POLL_RATE_LIMIT_MAX);
     const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
     if (landletId === null) {
@@ -400,7 +400,7 @@ export async function handleNearbyChat(request, db, route, url) {
 
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
-    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use nearby chat.');
     await checkRateLimit(db, `nearby-chat-send:${sessionBuilder.builder_id}`, NEARBY_CHAT_SEND_RATE_LIMIT_MAX);
     const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
     if (landletId === null) {
@@ -505,7 +505,7 @@ const FRIEND_VOICE_CHANNEL_POLL_RATE_LIMIT_MAX = PRESENCE_REPORT_RATE_LIMIT_MAX;
 // one they themselves own); POST .../join and .../leave are the only
 // mutations -- see each branch's own comment.
 async function handleFriendVoiceChannels(request, db, route) {
-  const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+  const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
 
   if (request.method === 'GET' && route.length === 2) {
     await checkRateLimit(db, `friend-voice-channel-poll:${sessionBuilder.builder_id}`, FRIEND_VOICE_CHANNEL_POLL_RATE_LIMIT_MAX);
@@ -605,7 +605,7 @@ async function handleFriendVoiceChannels(request, db, route) {
 const VOICE_ICE_CONFIG_RATE_LIMIT_MAX = PRESENCE_NEARBY_RATE_LIMIT_MAX;
 
 async function handleVoiceIceConfig(request, db, env) {
-  const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+  const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
   await checkRateLimit(db, `voice-ice-config:${sessionBuilder.builder_id}`, VOICE_ICE_CONFIG_RATE_LIMIT_MAX);
   const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
   if (env?.TURN_SERVER_URL) {
@@ -635,7 +635,7 @@ async function handleVoiceIceConfig(request, db, env) {
 const VOICE_REPORT_CREATE_RATE_LIMIT_MAX = 20;
 
 async function handleVoiceReportCreate(request, db) {
-  const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+  const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
   await checkRateLimit(db, `voice-report-create:${sessionBuilder.builder_id}`, VOICE_REPORT_CREATE_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const reportedBuilderId = stringValue(input.reportedBuilderId, 'reportedBuilderId');
@@ -707,7 +707,7 @@ export async function handleVoiceSignal(request, db, route, url, env) {
     return json({ error: 'Not found' }, 404);
   }
   if (request.method === 'GET') {
-    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
     await checkRateLimit(db, `voice-signal-poll:${sessionBuilder.builder_id}`, VOICE_SIGNAL_POLL_RATE_LIMIT_MAX);
     const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
     const limit = queryLimit(url.searchParams.get('limit'), VOICE_SIGNAL_POLL_LIMIT);
@@ -751,7 +751,7 @@ export async function handleVoiceSignal(request, db, route, url, env) {
 
   if (request.method === 'POST') {
     const input = await readJson(request);
-    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
+    const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
     await checkRateLimit(db, `voice-signal-send:${sessionBuilder.builder_id}`, VOICE_SIGNAL_SEND_RATE_LIMIT_MAX);
     const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
     if (landletId === null) {
@@ -1120,9 +1120,14 @@ function assertIdVerified(user, message) {
   }
 }
 
-async function requireIdVerifiedSessionBuilder(request, db) {
+// #2954: message defaults to the direct-messages text since that's this
+// function's original/most common caller, but every other feature that
+// shares this same id_verified gate (nearby chat, voice) needs its own
+// text -- assertIdVerified already takes one; this just needed to thread
+// it through instead of hardcoding the DM-specific string for everyone.
+async function requireIdVerifiedSessionBuilder(request, db, message = 'ID verification is required to use direct messages.') {
   const user = await requireCurrentUser(request, db);
-  assertIdVerified(user, 'ID verification is required to use direct messages.');
+  assertIdVerified(user, message);
   return getOrCreateBuilderForUser(db, user);
 }
 
