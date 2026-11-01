@@ -261,7 +261,9 @@ describe('Accounts v2 migration (#2920)', () => {
     expect(v2Requests).toHaveLength(1);
     expect(v2Requests[0].headers['content-type']).toBe('application/json');
     expect(v2Requests[0].headers['stripe-version']).toBeTruthy();
-    expect(v2Requests[0].headers['idempotency-key']).toBe(`seller-account-create:${seller.sellerId}`);
+    // #2958: scoped to the submitted content, not just the seller id --
+    // see stripeAccountCreateIdempotencyKey's own comment.
+    expect(v2Requests[0].headers['idempotency-key']).toMatch(new RegExp(`^seller-account-create:${seller.sellerId}:[0-9a-f]{64}$`));
     const v2Body = JSON.parse(v2Requests[0].body);
     expect(v2Body.identity.country).toBe('US');
     expect(v2Body.identity.entity_type).toBe('individual');
@@ -417,6 +419,59 @@ describe('Accounts v2 migration (#2920)', () => {
 
     const row = await env.DB.prepare('SELECT stripe_account_id FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
     expect(row.stripe_account_id).toBeNull();
+  });
+
+  // #2958: the idempotency key sent on the v2 create call used to be
+  // fixed per seller forever (`seller-account-create:${sellerId}`), so a
+  // resubmission after the bank-attach failure above hit Stripe's own
+  // idempotency cache and replayed the original, already-deleted account
+  // instead of ever sending the corrected routing number to Stripe at
+  // all. Confirms the key now changes when the resubmitted content
+  // changes (a genuine new attempt that needs a fresh key), but stays
+  // the same for a byte-identical resubmit (a genuine network retry,
+  // which still needs Stripe's own idempotency cache to work -- minting
+  // a random key on every call would defeat that entirely).
+  it('mints a fresh idempotency key when a resubmission changes the content, but reuses it for an unchanged resubmit', async () => {
+    const seller = await signupSeller('stripe-v2-idempotency-content-scoped');
+    const originalFetch = globalThis.fetch;
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    const v2RequestKeys = [];
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.stripe.com/v2/core/accounts' && init?.method === 'POST') {
+        v2RequestKeys.push(init.headers['idempotency-key']);
+        return new Response(JSON.stringify({ id: 'acct_v2_idempotency_test', object: 'v2.core.account' }), { status: 200 });
+      }
+      // Bank-attach always fails -- keeps stripe_account_id null so every
+      // submission below takes the same "create" branch instead of one
+      // of them falling through to the update branch (which never uses
+      // an idempotency key at all).
+      if (url === 'https://api.stripe.com/v1/accounts/acct_v2_idempotency_test' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ error: { message: 'Invalid routing number' } }), { status: 400 });
+      }
+      if (url === 'https://api.stripe.com/v1/accounts/acct_v2_idempotency_test' && init?.method === 'DELETE') {
+        return new Response(JSON.stringify({ deleted: true }), { status: 200 });
+      }
+      return originalFetch(input, init);
+    };
+    try {
+      await api('/sellers/me/stripe-account', seller.session({
+        method: 'POST', body: JSON.stringify(validPayload()),
+      }));
+      await api('/sellers/me/stripe-account', seller.session({
+        method: 'POST', body: JSON.stringify(validPayload({ externalAccount: { routingNumber: '990000000' } })),
+      }));
+      await api('/sellers/me/stripe-account', seller.session({
+        method: 'POST', body: JSON.stringify(validPayload({ externalAccount: { routingNumber: '990000000' } })),
+      }));
+    } finally {
+      globalThis.fetch = originalFetch;
+      env.STRIPE_SECRET_KEY = undefined;
+    }
+    expect(v2RequestKeys).toHaveLength(3);
+    const [original, corrected, resubmitOfCorrected] = v2RequestKeys;
+    expect(corrected).not.toBe(original);
+    expect(resubmitOfCorrected).toBe(corrected);
   });
 });
 

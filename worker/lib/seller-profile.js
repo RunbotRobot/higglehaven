@@ -26,7 +26,7 @@ import { adminActionLogStatement } from './admin-log.js';
 import {
   readJson, stringValue, labelValue, queryLimit, decodeCursor, encodeCursor,
 } from './validation.js';
-import { requireCurrentUser, requireAdmin, assertOwner } from './auth.js';
+import { requireCurrentUser, requireAdmin, assertOwner, sha256Hex } from './auth.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 import { handleSellerFeedbackList } from './reputation.js';
 // #2619 landed on main while this PR was in CI and already moved
@@ -466,6 +466,29 @@ function stripeV2AccountUpdateParams(v2AccountParams) {
 // leak an identity-bearing orphan with no DB row pointing at it -- the
 // same failure shape #2304's own comment below already logs for the
 // DB-race cleanup path.
+// #2958: scoped to the actual submitted content (same idiom
+// seller-payouts-tax.js's own purchase-id-hash idempotency key already
+// uses), not just the caller's own id -- a fixed per-seller/-builder key
+// would otherwise get reused forever across a retry after the bank-
+// account-attach step below fails (createOrUpdateStripeAccount's own
+// catch deletes the just-created v2 account but never clears this key),
+// so a corrected resubmission would hit Stripe's idempotency cache and
+// replay the original, now-deleted account instead of creating a fresh
+// one. An unedited resubmit still hashes to the same key, so it's still
+// treated as the genuine network-retry Stripe's own idempotency cache
+// exists to protect against -- only a content change (the likely fix to
+// whatever caused the first failure) mints a fresh key.
+async function stripeAccountCreateIdempotencyKey(prefix, id, v2AccountParams, v1ExternalAccountParams) {
+  // identity.attestations.terms_of_service.account.date is always
+  // `new Date().toISOString()` (set fresh on every call, see
+  // buildStripeAccountParams' own comment) -- hashing it in would make
+  // even a byte-identical resubmit mint a different key every time,
+  // defeating the whole point of scoping to content.
+  const { identity: { attestations, ...identity }, ...restV2 } = v2AccountParams;
+  const contentHash = await sha256Hex(JSON.stringify([{ ...restV2, identity }, v1ExternalAccountParams]));
+  return `${prefix}:${id}:${contentHash}`;
+}
+
 async function createOrUpdateStripeAccount(env, v2AccountParams, v1ExternalAccountParams, existingAccountId, idempotencyKey) {
   let accountId = existingAccountId;
   let createdNewAccount = false;
@@ -515,14 +538,9 @@ async function handleSellerStripeAccount(request, env, db) {
       throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
     }
 
-    // #473: keyed on seller_id alone is safe here — this branch only
-    // ever runs while stripe_account_id is still null, and a successful
-    // create (or #474's own DB guard losing a concurrent race) means it
-    // never runs again for this seller, so there's no future "genuine
-    // second create" this key could wrongly dedupe against.
     const { account, createdNewAccount } = await createOrUpdateStripeAccount(
       env, v2AccountParams, v1ExternalAccountParams, sessionSeller.stripe_account_id,
-      `seller-account-create:${sessionSeller.seller_id}`,
+      await stripeAccountCreateIdempotencyKey('seller-account-create', sessionSeller.seller_id, v2AccountParams, v1ExternalAccountParams),
     );
 
     const status = deriveStripeOnboardingStatus(account);
@@ -605,7 +623,7 @@ async function handleBuilderStripeAccount(request, env, db) {
 
     const { account, createdNewAccount } = await createOrUpdateStripeAccount(
       env, v2AccountParams, v1ExternalAccountParams, sessionBuilder.stripe_account_id,
-      `builder-account-create:${sessionBuilder.builder_id}`,
+      await stripeAccountCreateIdempotencyKey('builder-account-create', sessionBuilder.builder_id, v2AccountParams, v1ExternalAccountParams),
     );
 
     const status = deriveStripeOnboardingStatus(account);
