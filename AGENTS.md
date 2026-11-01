@@ -557,6 +557,50 @@ If a collision happens anyway: whoever notices second stands down
 immediately (note the duplicate in the task's `tasks` doc, drop the
 redundant work) rather than finishing in parallel.
 
+## Judging a "stuck" CI shard — check live progress, not wall-clock alone
+
+The fleet's long-standing habit of cancel+rerunning an e2e CI shard that
+*looks* frozen (the #2673 "wrangler-dev-hang" flake) was, by itself,
+making the underlying congestion worse: `question-ci-concurrency-
+contention-20261101`'s own investigation (enabled by #2965/#2966's
+wrangler-log capture) found that on PR #2943, a shard killed as "frozen"
+after 35 minutes had actually completed 18/53 test files (34%) —
+genuinely progressing, just slower than the ~20-25min healthy baseline
+under fleet-wide GitHub Actions concurrency contention. Cancelling a
+shard that's still making real progress adds a fresh job to the same
+contended pool instead of letting the original one finish — compounding
+the exact contention that slowed it down in the first place.
+
+The data needed to tell "slow" from "actually stuck" already exists:
+`e2e/run-all.mjs` prints a one-line `PASS: <file>` / `FAIL: <file>`
+progress indicator to the job's own log the instant each test file
+finishes — see that file's own comment above its test loop. Before
+treating a running e2e shard as stuck and cancelling it (owner decision,
+#2976, resolving the question above):
+
+- **Check the shard's own live job log for a recent progress line**, not
+  just how long the job has been running. `scripts/check-ci-shard-
+  progress.mjs <job_id>` does this for you — point it at the job (via
+  `get_job_logs`/`actions_get`'s `get_workflow_run`+job list, or
+  `gh api repos/<owner>/<repo>/actions/runs/<run_id>/jobs`, to find the
+  job id) and it reports how long it's been since the last `PASS`/`FAIL`
+  line (or, if none yet, since the job started) and a verdict.
+- **Only treat it as genuinely stuck if there's been no new progress
+  line for longer than a single hung test file would ever take to
+  self-report on its own** — `e2e/run-all.mjs`'s own `TEST_FILE_TIMEOUT_MS`
+  (10 minutes) already kills and FAILs a single hung file via its
+  `execSync` timeout, so real silence beyond that (the script uses a
+  12-minute threshold, the extra 2 covering a slow build/migration/boot
+  before the first test even starts) means something is wrong at a level
+  below individual test files — the whole runner, wrangler dev itself, or
+  the runner VM. That's "no progress," not "taking a while," and is safe
+  to cancel+rerun (`cancel_workflow_run` + `rerun_failed_jobs`, not a full
+  workflow re-run, so already-green shards aren't repeated).
+- This is about the fleet's own manual judgment call on an already-
+  running job from outside — it does not change `ci.yml`'s existing
+  two-attempt-per-shard in-job retry loop (a shard that exits non-zero
+  already retries itself once automatically; leave that as-is).
+
 ### Partial-scope PRs — never let a closing keyword outrun what you actually did
 
 Issue #220 sat invisible to the whole fleet for over a day, not because
