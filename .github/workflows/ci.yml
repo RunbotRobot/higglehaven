@@ -38,7 +38,41 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # #2990: two routine fleet habits push a commit whose SHA `main` has
+  # already tested in full — the merge commit, pushed right back to the
+  # session branch after merging a PR, and a session branch reset to
+  # main's own tip at the start of its next cycle (AGENTS.md's own step
+  # 1). Neither is a push to `main` itself, and neither carries any commit
+  # main hasn't already run the whole suite against, so re-running
+  # unit-tests/discover-e2e-files/e2e-tests for either is pure wasted
+  # runner-pool contention — confirmed via actions_list, ~40% of
+  # concurrently-running jobs at one snapshot were exactly this. Skips by
+  # checking whether the pushed SHA is already reachable from origin/main
+  # (merge-base --is-ancestor), which is true for both habits above and
+  # false for any push that carries real, not-yet-tested work — including
+  # a push to main itself, excluded outright by the ref check so main's
+  # own commits are never skipped (nothing else validates them).
+  already-tested:
+    runs-on: ubuntu-latest
+    outputs:
+      skip: ${{ steps.check.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: check
+        run: |
+          git fetch origin main
+          if [ "${GITHUB_REF}" != "refs/heads/main" ] && git merge-base --is-ancestor "${GITHUB_SHA}" origin/main; then
+            echo "This SHA is already reachable from origin/main -- skipping the redundant re-run."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
   unit-tests:
+    needs: already-tested
+    if: needs.already-tested.outputs.skip != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -71,6 +105,8 @@ jobs:
   # — it's the one number that governs it, no other change needed as
   # e2e/*.test.mjs grows.
   discover-e2e-files:
+    needs: already-tested
+    if: needs.already-tested.outputs.skip != 'true'
     runs-on: ubuntu-latest
     env:
       SHARD_COUNT: 4
@@ -113,6 +149,10 @@ jobs:
           echo "shards=$shards" >> "$GITHUB_OUTPUT"
 
   e2e-tests:
+    # #2990: no explicit already-tested check needed here -- GitHub skips
+    # a job automatically once any of its own needs (discover-e2e-files,
+    # transitively already-tested) is itself skipped rather than
+    # succeeded, since this job's implicit condition is success().
     needs: discover-e2e-files
     runs-on: ubuntu-latest
     # #2859: Stripe test-mode credentials for e2e/verify-card-real-stripe.test.mjs
