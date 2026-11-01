@@ -8500,7 +8500,16 @@ non-`NULL` — see "Bot defense (Turnstile)" above for exactly what sets
 this) has its weight halved on top of whatever the IP factor already
 gave it, so e.g. a genuinely distinct IP from a Turnstile-failed account
 weights `0.5`, not `1`; an IP that's already zeroed by the same-IP rule
-stays `0` regardless (no second query is even made in that case).
+stays `0` regardless.
+
+**`#2980`:** the IP factor above is decided inside the `INSERT`'s own
+`CASE`/`EXISTS` subquery, evaluated atomically as part of the same
+statement, rather than via a separate pre-read `SELECT` beforehand — two
+flags from the same IP landing concurrently could otherwise both see "no
+existing pending flag from this IP" and both land at full weight,
+defeating the "first one counts, repeats don't" cap. The Turnstile
+factor is still a plain pre-read (safe non-atomically, since a single
+user's own `turnstile_failed_at` never changes after signup).
 Returns `{ flagId, pendingCount, pendingWeight, autoHidden }`.
 
 ```

@@ -394,30 +394,13 @@ const PRODUCT_FLAG_AUTO_HIDE_THRESHOLD = 3;
 // failed/missing Turnstile check is a softer signal on its own (the real
 // failure modes #2941 itself calls out -- a privacy-hardened browser, an
 // in-app webview, an aggressive script blocker -- are not bot traffic),
-// so it discounts rather than zeroes a flag outright.
+// so it discounts rather than zeroes a flag outright. Computed via a
+// plain pre-read SELECT (not folded into the INSERT's own CASE below the
+// way the IP factor is) because it's safe non-atomically: a single
+// user's own turnstile_failed_at is fixed at signup time and never
+// updated anywhere else, unlike the per-listing pending-flag count
+// #2980's own atomic EXISTS exists to protect.
 const TURNSTILE_FAILED_FLAG_WEIGHT_MULTIPLIER = 0.5;
-
-// #2215 (owner decision, 2026-10-31, option 2): the first pending flag
-// against a listing from a given real IP counts fully toward the
-// auto-hide threshold; any further pending flag sharing that same IP
-// counts for nothing -- the same "first one counts, repeats don't" shape
-// migrations/0131's own UNIQUE(template_id, flagger_builder_id) already
-// gives distinct builder accounts, extended to a signal several cheaply-
-// created accounts on one device/network can't each fake independently.
-// clientIp(request)'s own 'unknown' fallback (no cf-connecting-ip header)
-// is deliberately never treated as a real match here -- every caller with
-// no header would otherwise collide on that one literal string and get
-// zeroed out together, which isn't a same-device signal at all.
-async function computeProductFlagWeight(db, templateId, flaggerIp, flaggerUserId) {
-  if (flaggerIp === 'unknown') return 1;
-  const sameIpPending = await db.prepare(`
-    SELECT 1 FROM product_flags WHERE template_id = ? AND status = 'pending' AND flagger_ip = ? LIMIT 1
-  `).bind(templateId, flaggerIp).first();
-  const ipWeight = sameIpPending ? 0 : 1;
-  if (ipWeight === 0) return 0;
-  const flagger = await db.prepare('SELECT turnstile_failed_at FROM users WHERE user_id = ?').bind(flaggerUserId).first();
-  return flagger?.turnstile_failed_at ? ipWeight * TURNSTILE_FAILED_FLAG_WEIGHT_MULTIPLIER : ipWeight;
-}
 
 export async function handleProductFlags(request, db, route) {
   const templateId = route[1];
@@ -440,11 +423,46 @@ export async function handleProductFlags(request, db, route) {
     // other unhandled UNIQUE violation in this file.
     const flagId = `product-flag-${crypto.randomUUID()}`;
     const flaggerIp = clientIp(request);
-    const weight = await computeProductFlagWeight(db, templateId, flaggerIp, sessionBuilder.user_id);
+    // #2941: see TURNSTILE_FAILED_FLAG_WEIGHT_MULTIPLIER's own comment on
+    // why this one read is safe outside the atomic INSERT below.
+    const flagger = await db.prepare('SELECT turnstile_failed_at FROM users WHERE user_id = ?').bind(sessionBuilder.user_id).first();
+    const turnstileMultiplier = flagger?.turnstile_failed_at ? TURNSTILE_FAILED_FLAG_WEIGHT_MULTIPLIER : 1;
+    // #2215 (owner decision, 2026-10-31, option 2): the first pending flag
+    // against a listing from a given real IP counts fully toward the
+    // auto-hide threshold; any further pending flag sharing that same IP
+    // counts for nothing -- the same "first one counts, repeats don't"
+    // shape migrations/0131's own UNIQUE(template_id, flagger_builder_id)
+    // already gives distinct builder accounts, extended to a signal
+    // several cheaply-created accounts on one device/network can't each
+    // fake independently. clientIp(request)'s own 'unknown' fallback (no
+    // cf-connecting-ip header) is deliberately never treated as a real
+    // match here -- every caller with no header would otherwise collide
+    // on that one literal string and get zeroed out together, which isn't
+    // a same-device signal at all.
+    //
+    // #2980: the weight decision used to be a separate pre-read SELECT
+    // (computeProductFlagWeight) run before this INSERT -- two flags from
+    // the same IP landing concurrently (exactly the brigading scenario
+    // this weighting exists to catch) could both see "no existing pending
+    // flag from this IP" and both get weight 1, defeating the intended
+    // cap. Folding the check into the INSERT's own VALUES clause as a live
+    // EXISTS subquery makes it part of the same atomic statement -- no
+    // separate read left to go stale against a concurrent insert.
+    // turnstileMultiplier above composes on top of whichever branch below
+    // fires (1 or 0) -- a Turnstile-failed account's flag still lands at
+    // 0 if the IP is also a repeat, never resurrected back up to 0.5.
     await db.prepare(`
       INSERT INTO product_flags (flag_id, template_id, flagger_builder_id, reason, flagger_ip, weight)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(flagId, templateId, sessionBuilder.builder_id, reason, flaggerIp, weight).run();
+      VALUES (?, ?, ?, ?, ?,
+        CASE
+          WHEN ? = 'unknown' THEN ?
+          WHEN EXISTS (SELECT 1 FROM product_flags WHERE template_id = ? AND status = 'pending' AND flagger_ip = ?) THEN 0
+          ELSE ?
+        END)
+    `).bind(
+      flagId, templateId, sessionBuilder.builder_id, reason, flaggerIp,
+      flaggerIp, turnstileMultiplier, templateId, flaggerIp, turnstileMultiplier,
+    ).run();
     // Re-checked after the insert (not a cached count from before it) so a
     // concurrent flag from a different builder landing in between is never
     // silently lost from the threshold decision. pendingCount stays the

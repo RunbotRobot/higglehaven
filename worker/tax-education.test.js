@@ -165,6 +165,61 @@ describe('Tax education content admin API (#2842)', () => {
     const got = await api('/tax-education/tax-edu-does-not-exist', adminSession({ method: 'DELETE' }));
     expect(got.response.status).toBe(404);
   });
+
+  // #2973: create/update/delete previously logged nothing at all -- an
+  // admin-authored-content outlier next to every sibling admin CRUD file
+  // (e.g. world-generation.js's land-candidate handlers), which all log
+  // to admin_action_log for exactly this accountability reason.
+  it('logs create/update/delete to admin_action_log for accountability (#2973)', async () => {
+    const entry = await createEntry();
+    const createLog = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('create_tax_education', entry.id).first();
+    expect(createLog).toBeTruthy();
+
+    await api(`/tax-education/${entry.id}`, adminSession({ method: 'PATCH', body: JSON.stringify({ title: 'Updated' }) }));
+    const updateLog = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('update_tax_education', entry.id).first();
+    expect(updateLog).toBeTruthy();
+
+    await api(`/tax-education/${entry.id}`, adminSession({ method: 'DELETE' }));
+    const deleteLog = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('delete_tax_education', entry.id).first();
+    expect(deleteLog).toBeTruthy();
+  });
+
+  it('does not log an update that 404s because the entry was already gone', async () => {
+    const entry = await createEntry();
+    await api(`/tax-education/${entry.id}`, adminSession({ method: 'DELETE' }));
+    const got = await api(`/tax-education/${entry.id}`, adminSession({
+      method: 'PATCH', body: JSON.stringify({ title: 'too late' }),
+    }));
+    expect(got.response.status).toBe(404);
+    const updateLog = await env.DB.prepare(
+      'SELECT * FROM admin_action_log WHERE action_type = ? AND target_id = ?',
+    ).bind('update_tax_education', entry.id).first();
+    expect(updateLog).toBeNull();
+  });
+
+  // #2973: every other requireAdmin-gated mutation across the codebase
+  // also rate-limits itself; these three handlers were the one outlier.
+  // Fresh admin so this doesn't collide with the create-bucket count every
+  // other test in this file (via createEntry) has already run up against
+  // the shared adminSession.
+  it('rate-limits repeated admin creates of tax-education content (#2973)', async () => {
+    const admin = await signupAdmin('tax-education-ratelimit');
+    let lastStatus;
+    for (let i = 0; i < 35; i++) {
+      const result = await api('/tax-education', admin.session({
+        method: 'POST', body: JSON.stringify({ countryCode: 'US', title: `entry ${i}`, body: 'text' }),
+      }));
+      lastStatus = result.response.status;
+      if (lastStatus === 429) break;
+    }
+    expect(lastStatus).toBe(429);
+  });
 });
 
 async function submitW9(builderSession, state) {

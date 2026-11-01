@@ -145,6 +145,44 @@ console.log('rows shown after removing one via the panel (should be 1):', rowsAf
 const { backups: backupsAfterRemove } = (await fetchJson(`/api/instances/${chairInstance.instanceId}/backups`)).body;
 console.log('backend chain after the panel remove (should be 1 entry, placeholder-table):', backupsAfterRemove.map((b) => b.templateId));
 
+// #2969: a backup the panel is still showing a row for, but that's
+// already gone server-side by the time its remove button is clicked
+// (e.g. a second open copy of this same panel got to it first), used
+// to alert and then just leave that now-dead row in place, clickable
+// forever, instead of refreshing like a successful remove already does.
+await fetchJson(`/api/instances/${chairInstance.instanceId}/backups`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ templateId: 'placeholder-tree' }),
+});
+// A fresh API add doesn't itself push an update into an already-open
+// panel -- close and reopen via the same toggle button used earlier so
+// the panel's own render picks it up.
+await page.click('#backup-chain-close-btn');
+await backupChainBtn().click();
+await page.waitForSelector('#backup-chain-modal.visible', { timeout: 5000 });
+await page.waitForTimeout(300);
+const rowCountBeforeStaleRemove = await page.locator('.backup-chain-row').count();
+
+// Remove it out from under the panel via a direct API call, bypassing
+// the panel's own remove button entirely -- simulates the concurrent-
+// delete race this fix is for.
+const { backups: backupsBeforeStaleRemove } = (await fetchJson(`/api/instances/${chairInstance.instanceId}/backups`)).body;
+const staleBackup = backupsBeforeStaleRemove.find((b) => b.templateId === 'placeholder-tree');
+await fetchJson(`/api/instances/${chairInstance.instanceId}/backups/${staleBackup.backupId}`, { method: 'DELETE' });
+
+// Now click the panel's own remove button for that already-gone row --
+// the server rejects it (404, the backup no longer exists), and the
+// fix means the panel refreshes itself afterward instead of leaving
+// the dead row in place.
+await page.locator('.backup-chain-row').filter({ hasText: 'Tree' }).locator('.backup-chain-row-remove').click();
+await page.waitForFunction(() => document.querySelectorAll('.backup-chain-row').length === 1, null, { timeout: 60000 });
+const rowCountAfterStaleRemove = await page.locator('.backup-chain-row').count();
+const remainingRowTextAfterStaleRemove = await page.locator('.backup-chain-row').first().textContent();
+console.log('rows shown before attempting to remove an already-gone backup (should be 2):', rowCountBeforeStaleRemove);
+console.log('rows shown after that attempt self-heals (should be 1, not stuck at 2 with a dead row):', rowCountAfterStaleRemove);
+console.log('remaining row after self-heal (should mention "Table"):', remainingRowTextAfterStaleRemove);
+
 // Plain cancel: open the picker again, then close it (the × button) without
 // picking anything -- should reopen the backup-chain panel via onDone
 // rather than leaving the picker's own "pick mode" state stuck, and should
@@ -165,6 +203,13 @@ await page.waitForSelector('#backup-chain-modal:not(.visible)', { state: 'attach
 const modalHiddenAfterClose = await page.locator('#backup-chain-modal').evaluate((el) => !el.classList.contains('visible'));
 console.log('#backup-chain-modal closed via its own close button (should be true):', modalHiddenAfterClose);
 
+// #2969: the panel's own failed remove attempt above deliberately hits
+// a 404, which Chromium logs to the console as "Failed to load
+// resource" independent of this suite's own try/catch already handling
+// it -- same idiom saved-layout-paste.test.mjs's own unexpectedErrors
+// uses.
+const unexpectedErrors = errors.filter((e) => !e.includes('Failed to load resource'));
+
 const pass = enabledWhenSelected === false &&
   emptyStateShown === true &&
   backupModalHiddenWhilePicking === 0 &&
@@ -184,8 +229,11 @@ const pass = enabledWhenSelected === false &&
   backupsAfterReorder[1].templateId === 'placeholder-tree' &&
   rowsAfterRemove === 1 &&
   backupsAfterRemove.length === 1 && backupsAfterRemove[0].templateId === 'placeholder-table' &&
+  rowCountBeforeStaleRemove === 2 &&
+  rowCountAfterStaleRemove === 1 &&
+  remainingRowTextAfterStaleRemove.includes('Table') &&
   rowsAfterCancel === 1 &&
   referenceMeshHiddenAfterCancel === false &&
   modalHiddenAfterClose === true &&
-  errors.length === 0;
-await finish(browser, { pass, label: 'Build-mode backup chain panel + catalog-picker reuse + reference mesh + backup API', errors });
+  unexpectedErrors.length === 0;
+await finish(browser, { pass, label: 'Build-mode backup chain panel + catalog-picker reuse + reference mesh + backup API', errors: unexpectedErrors });
