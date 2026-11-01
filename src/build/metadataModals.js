@@ -495,7 +495,13 @@ async function renderBackupChain() {
         await renderBackupChain();
       } catch (err) {
         alert(err.message || 'Could not remove this backup.');
-        removeBtn.disabled = false;
+        // #2969: re-render instead of just re-enabling the button -- a
+        // concurrent delete of this same backup (a second open copy of
+        // this panel) is exactly the kind of failure this alert fires
+        // for, and leaving the stale row in place just repeats the same
+        // dead-end delete on every retry. Same fix #2963/metadataModals.js's
+        // sign-posts/calendar-events handlers already got.
+        await renderBackupChain();
       }
     });
     row.appendChild(removeBtn);
@@ -523,7 +529,13 @@ async function reorderBackupChainRow(backups, fromIndex, toIndex) {
     await renderBackupChain();
   } catch (err) {
     alert(err.message || 'Could not reorder the backup chain.');
-    buttonsToRestore.forEach((btn) => { btn.disabled = false; });
+    // #2969: re-render instead of just re-enabling the buttons -- see
+    // removeBtn's own handler above. A concurrent delete of one of these
+    // backups (a second open copy of this panel) would 409 this full-
+    // replace reorder, and simply re-enabling buttons against the now-
+    // stale `backups` list this closure captured would let every retry
+    // keep targeting a backup_id that no longer exists.
+    await renderBackupChain();
   }
 }
 
