@@ -1,0 +1,35 @@
+-- #2215 (owner decision, 2026-10-31, option 2 of that issue's own list):
+-- the distinct-flagger auto-hide threshold (migrations/0131's own
+-- UNIQUE(template_id, flagger_builder_id)) only guards against one
+-- builder account re-flagging a listing -- it does nothing against
+-- several distinct, cheaply-created accounts (no CAPTCHA/anti-automation
+-- check on signup) brigading the same listing from one device/network to
+-- knock a rival seller's listing out of the marketplace before any admin
+-- reviews it.
+--
+-- flagger_ip records the flag-creation-time IP (same clientIp(request)
+-- convention every rate-limit bucket in this codebase already uses,
+-- including its own 'unknown' fallback when no cf-connecting-ip header is
+-- present -- that fallback value is deliberately never treated as a real
+-- signal match in the weighting code, since every caller with no header
+-- would otherwise collide on it). Nullable because every pre-existing
+-- pending flag predates this column.
+--
+-- weight is the per-flag contribution toward PRODUCT_FLAG_AUTO_HIDE_THRESHOLD
+-- (the 3-distinct-signal threshold handleProductFlags' POST branch checks),
+-- computed once at insert time: 1.0 for the first pending flag seen from a
+-- given real (non-'unknown') IP on a listing, 0 for any further pending
+-- flag sharing that same IP -- the same "first one counts, repeats don't"
+-- shape the existing UNIQUE constraint already gives distinct builder
+-- accounts, just extended to a harder-to-fake signal. pendingCount (the
+-- real, unweighted flag count already shown to admins) is untouched by
+-- this -- weight only ever affects the auto-hide decision, never what an
+-- admin sees as "how many accounts flagged this."
+--
+-- #2941 (Cloudflare Turnstile signup signal, same 2026-10-31 owner
+-- decision) is designed to plug into this same weight column -- a flag
+-- from a Turnstile-unverified account reduces that flag's own weight
+-- independently of the IP check here, composing with it rather than
+-- replacing it.
+ALTER TABLE product_flags ADD COLUMN flagger_ip TEXT;
+ALTER TABLE product_flags ADD COLUMN weight REAL NOT NULL DEFAULT 1;

@@ -8264,7 +8264,7 @@ a second flag from the same builder against the same listing hits that
 constraint and surfaces as a plain `409`, not a second vote.
 
 ```json
-{ "flagId": "product-flag-...", "pendingCount": 1, "autoHidden": false }
+{ "flagId": "product-flag-...", "pendingCount": 1, "pendingWeight": 1, "autoHidden": false }
 ```
 
 Once a listing's distinct pending flags reach 3, it's auto-hidden:
@@ -8409,7 +8409,22 @@ and surfaces as a `409`. Once `PRODUCT_FLAG_AUTO_HIDE_THRESHOLD` (3)
 *distinct* flaggers are pending at once, the listing auto-hides
 (`catalog_templates.flagged_hidden_at`, blocking new purchases) and the
 seller is notified (`#2056`) — all before any admin has reviewed anything.
-Returns `{ flagId, pendingCount, autoHidden }`.
+
+**#2215 (owner decision, 2026-10-31):** the auto-hide decision doesn't use
+the raw flag count — `migrations/0170` adds `flagger_ip`/`weight` to
+`product_flags`. The first pending flag on a listing from a given real IP
+(`clientIp(request)`'s own `'unknown'` fallback is never treated as a
+real match) weights `1`; any further pending flag sharing that same IP
+weights `0` — the same "first one counts, repeats don't" shape the
+`UNIQUE` constraint already gives distinct builder accounts, extended to
+a signal several cheaply-created accounts on one device/network can't
+each fake independently. `pendingCount` in the response stays the real,
+unweighted flag count (what admins see as "how many accounts flagged
+this" via `GET /api/product-flags` below); `pendingWeight` is the
+separate, signal-adjusted sum the auto-hide threshold actually checks.
+`#2941` (Cloudflare Turnstile signup signal) is designed to plug into
+this same `weight` column as an independent, composable reduction.
+Returns `{ flagId, pendingCount, pendingWeight, autoHidden }`.
 
 ```
 GET /api/product-flags
