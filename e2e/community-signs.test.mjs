@@ -118,6 +118,52 @@ console.log('rows shown after deleting one via the panel (should be 1):', rowCou
 const { posts: postsAfterDelete } = (await fetchJson(`/api/instances/${signInstance.instanceId}/posts`)).body;
 console.log(`posts persisted server-side after the panel delete (should be 1, the surviving one authored by "${myBuilder.label}"):`, postsAfterDelete.map((p) => p.authorLabel));
 
+// #2963: a post the panel is still showing a row for, but that's
+// already gone server-side by the time its delete button is clicked
+// (e.g. a second open copy of this same panel, or the author's own
+// composer, got to it first), used to alert and then just leave that
+// now-dead row in place, clickable forever, instead of refreshing like
+// a successful delete already does.
+await fetchJson(`/api/instances/${signInstance.instanceId}/posts`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ text: 'Soon to be stale.' }),
+});
+// A fresh API post doesn't itself push an update into an already-open
+// panel -- close and reopen via the same toggle button used earlier so
+// the panel's own render picks it up.
+await page.click('#sign-posts-close-btn');
+await communitySignBtn().click();
+await page.waitForSelector('#sign-posts-modal.visible', { timeout: 5000 });
+await page.waitForTimeout(300);
+const rowCountBeforeStaleDelete = await page.locator('.sign-post-row').count();
+
+// Delete it out from under the panel via a direct API call, bypassing
+// the panel's own delete button entirely -- simulates the concurrent-
+// delete race this fix is for.
+const { posts: postsBeforeStaleDelete } = (await fetchJson(`/api/instances/${signInstance.instanceId}/posts`)).body;
+const stalePost = postsBeforeStaleDelete.find((p) => p.text === 'Soon to be stale.');
+await fetchJson(`/api/instances/${signInstance.instanceId}/posts/${stalePost.postId}`, {
+  method: 'DELETE',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ category: 'other' }),
+});
+
+// Now click the panel's own delete button for that already-gone row --
+// the server rejects it (the post no longer exists), and the fix means
+// the panel refreshes itself afterward instead of leaving the dead row
+// in place.
+await page.locator('.sign-post-row').filter({ hasText: 'Soon to be stale.' }).locator('.sign-post-row-delete').click();
+await page.waitForSelector('#moderation-category-modal.visible', { timeout: 5000 });
+await page.locator('input[name="moderation-category"][value="other"]').check();
+await page.locator('#moderation-category-delete-btn').click();
+await page.waitForFunction(() => document.querySelectorAll('.sign-post-row').length === 1, null, { timeout: 30000 });
+const rowCountAfterStaleDelete = await page.locator('.sign-post-row').count();
+const remainingRowTextAfterStaleDelete = await page.locator('.sign-post-row').first().textContent();
+console.log('rows shown before attempting to delete an already-gone post (should be 2):', rowCountBeforeStaleDelete);
+console.log('rows shown after that attempt self-heals (should be 1, not stuck at 2 with a dead row):', rowCountAfterStaleDelete);
+console.log('remaining row after self-heal (should mention "Love this place!"):', remainingRowTextAfterStaleDelete);
+
 // "Remove Community Sign," inside the panel, un-flags and closes it.
 await page.click('#sign-posts-unflag-btn');
 await page.waitForTimeout(500);
@@ -131,9 +177,13 @@ console.log('isCommunitySign persisted after unflagging (should be false):', sig
 
 // (The 400 rejection for posting to a non-sign instance is covered by
 // worker/land.test.js's own "Community signs" describe block instead of
-// here — a deliberately-triggered non-2xx fetch logs a "Failed to load
-// resource" console error in the page itself, which this suite's own
-// errors-must-be-empty convention would otherwise misread as a real bug.)
+// here, same reasoning as the #2963 stale-delete attempt above: a
+// deliberately-triggered non-2xx fetch logs a "Failed to load resource"
+// console error in the page itself, which this suite's own
+// errors-must-be-empty convention would otherwise misread as a real
+// bug -- filtered out below, same idiom
+// credit-orb-collect-offline-notice.test.mjs's own unexpectedErrors uses.)
+const unexpectedErrors = errors.filter((e) => !e.includes('Failed to load resource'));
 
 const pass = labelBefore.trim() === 'Community Sign' &&
   labelAfterOn.includes('✓') &&
@@ -145,8 +195,11 @@ const pass = labelBefore.trim() === 'Community Sign' &&
   firstRowText.includes(myBuilder.label) && firstRowText.includes('Love this place!') &&
   rowCountAfterDelete === 1 &&
   postsAfterDelete.length === 1 && postsAfterDelete[0].authorLabel === myBuilder.label &&
+  rowCountBeforeStaleDelete === 2 &&
+  rowCountAfterStaleDelete === 1 &&
+  remainingRowTextAfterStaleDelete.includes('Love this place!') &&
   modalHiddenAfterUnflag &&
   labelAfterOff.trim() === 'Community Sign' &&
   signInstanceAfterOff.isCommunitySign === false &&
-  errors.length === 0;
-await finish(browser, { pass, label: 'Community Sign toggle + Manage Posts panel + sign-posts API', errors });
+  unexpectedErrors.length === 0;
+await finish(browser, { pass, label: 'Community Sign toggle + Manage Posts panel + sign-posts API', errors: unexpectedErrors });

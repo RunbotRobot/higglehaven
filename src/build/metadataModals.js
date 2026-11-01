@@ -141,7 +141,12 @@ async function renderSignPosts() {
         await renderSignPosts();
       } catch (err) {
         alert(err.message || 'Could not delete this post.');
-        deleteRowBtn.disabled = false;
+        // #2963: re-render instead of just re-enabling the button -- a
+        // concurrent delete of this same post (the author's own composer,
+        // or a second open copy of this panel) is exactly the kind of
+        // failure this alert fires for, and leaving the stale row in
+        // place just repeats the same dead-end delete on every retry.
+        await renderSignPosts();
       }
     });
     row.appendChild(deleteRowBtn);
@@ -291,7 +296,9 @@ async function renderCalendarEvents() {
           await renderCalendarEvents();
         } catch (err) {
           alert(err.message || 'Could not update this event.');
-          editRowBtn.disabled = false;
+          // #2963: re-render instead of just re-enabling the button -- see
+          // the sign-posts delete handler's own comment above.
+          await renderCalendarEvents();
         }
       });
       actions.appendChild(editRowBtn);
@@ -313,7 +320,9 @@ async function renderCalendarEvents() {
         await renderCalendarEvents();
       } catch (err) {
         alert(err.message || 'Could not delete this event.');
-        deleteRowBtn.disabled = false;
+        // #2963: re-render instead of just re-enabling the button -- see
+        // the sign-posts delete handler's own comment above.
+        await renderCalendarEvents();
       }
     });
     actions.appendChild(deleteRowBtn);
