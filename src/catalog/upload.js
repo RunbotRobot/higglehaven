@@ -563,10 +563,18 @@ async function handleUploadFileStep() {
     if (/\.fbx$/i.test(file.name)) {
       setUploadStatus('Converting from FBX…');
       try {
-        const glbBlob = await convertFbxToGlb(file, (status) => setUploadStatus(status));
-        uploadable = new File([glbBlob], file.name.replace(/\.fbx$/i, '.glb'), { type: 'model/gltf-binary' });
+        // #2977: this progress callback (and the optimize one below) can
+        // keep firing after Cancel bumps uploadFlowToken, since Cancel only
+        // invalidates the flow -- it doesn't abort convertFbxToGlb's own
+        // still-running work. Guarded the same way every other shared-UI
+        // write in this function already is.
+        const glbBlob = await convertFbxToGlb(file, (status) => {
+          if (myFlowToken === uploadFlowToken) setUploadStatus(status);
+        });
         if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while converting
+        uploadable = new File([glbBlob], file.name.replace(/\.fbx$/i, '.glb'), { type: 'model/gltf-binary' });
       } catch (err) {
+        if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report a stale conversion failure
         console.warn('Client-side FBX conversion failed:', err);
         setUploadStatus(
           `Could not convert this .fbx file (${err.message || 'unknown error'}). ` +
@@ -577,7 +585,10 @@ async function handleUploadFileStep() {
       }
     }
     try {
-      const optimized = await optimizeModelFile(uploadable, (status) => setUploadStatus(status));
+      const optimized = await optimizeModelFile(uploadable, (status) => {
+        if (myFlowToken === uploadFlowToken) setUploadStatus(status);
+      });
+      if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while optimizing
       uploadable = new File([optimized.blob], uploadable.name, { type: 'model/gltf-binary' });
       const trianglePct = optimized.trianglesBefore > 0 ? Math.round((optimized.trianglesAfter / optimized.trianglesBefore) * 100) : 100;
       setUploadStatus(
@@ -585,6 +596,7 @@ async function handleUploadFileStep() {
           `(${trianglePct}%), ${formatBytes(optimized.bytesBefore)} -> ${formatBytes(optimized.bytesAfter)}. Uploading…`,
       );
     } catch (err) {
+      if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report a stale optimize failure
       // Optimization is a nice-to-have, not a requirement — if it fails
       // for any reason (an unusual mesh the simplifier chokes on, etc.)
       // fall back to uploading the original file rather than blocking

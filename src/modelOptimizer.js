@@ -93,6 +93,14 @@ function countTriangles(geometry) {
 // fatal to this upload attempt, not a degrade-gracefully case.
 export async function convertFbxToGlb(file, onProgress) {
   onProgress?.('Reading file…');
+  // #2977: lets an e2e test simulate a slow conversion deterministically,
+  // same reasoning as window.__testUploadPreviewLoadDelayMs (#1465) --
+  // this is real synchronous client-side CPU work, so there's no in-flight
+  // network request here to delay via page.route(). Always undefined
+  // outside of that one test.
+  if (window.__testFbxConvertDelayMs) {
+    await new Promise((resolve) => setTimeout(resolve, window.__testFbxConvertDelayMs));
+  }
   const arrayBuffer = await file.arrayBuffer();
 
   onProgress?.('Converting from FBX…');
