@@ -7,8 +7,21 @@ import { json, HttpError } from './http.js';
 import { readJson, stringValue, labelValue } from './validation.js';
 import { requireAdmin, requireCurrentUser } from './auth.js';
 import { getUserTaxJurisdiction } from './seller-payouts-tax.js';
+import { checkRateLimit } from './rate-limit.js';
+import { adminActionLogStatement } from './admin-log.js';
 
 const TAX_EDUCATION_BODY_MAX_LENGTH = 20000;
+// #2973: every other requireAdmin-gated mutation across the codebase also
+// rate-limits itself (being admin-gated doesn't exempt it -- see e.g.
+// seller-payouts-tax.js's own comment to that effect) and logs to
+// admin_action_log; these three handlers were the one outlier. Split by
+// action, same shape as world-generation.js's land-candidate handlers --
+// create gets a higher ceiling since bulk-authoring many jurisdictions'
+// worth of content in one sitting is a normal admin workflow here, unlike
+// update/delete.
+const TAX_EDUCATION_CREATE_RATE_LIMIT_MAX = 30;
+const TAX_EDUCATION_UPDATE_RATE_LIMIT_MAX = 20;
+const TAX_EDUCATION_DELETE_RATE_LIMIT_MAX = 20;
 
 function taxEducationBodyValue(value, field) {
   const text = stringValue(value, field);
@@ -133,7 +146,8 @@ async function handleTaxEducationGet(request, db, contentId) {
 }
 
 async function handleTaxEducationCreate(request, db) {
-  await requireAdmin(request, db);
+  const admin = await requireAdmin(request, db);
+  await checkRateLimit(db, `tax-education-create:${admin.user_id}`, TAX_EDUCATION_CREATE_RATE_LIMIT_MAX);
   const body = await readJson(request);
   const contentId = `tax-edu-${crypto.randomUUID()}`;
   const countryCode = countryCodeValue(body.countryCode, 'countryCode');
@@ -145,12 +159,14 @@ async function handleTaxEducationCreate(request, db) {
     INSERT INTO tax_education_content (content_id, country_code, state_code, title, body, created_at, updated_at)
     VALUES (?, ?, ?, ?, ?, ?, ?)
   `).bind(contentId, countryCode, stateCode, title, text, now, now).run();
+  await adminActionLogStatement(db, admin.user_id, 'create_tax_education', 'tax_education_content', contentId).run();
   const row = await db.prepare('SELECT * FROM tax_education_content WHERE content_id = ?').bind(contentId).first();
   return json({ entry: taxEducationContentFromRow(row) }, 201);
 }
 
 async function handleTaxEducationUpdate(request, db, contentId) {
   const admin = await requireAdmin(request, db);
+  await checkRateLimit(db, `tax-education-update:${admin.user_id}`, TAX_EDUCATION_UPDATE_RATE_LIMIT_MAX);
   const existing = await db.prepare('SELECT * FROM tax_education_content WHERE content_id = ?').bind(contentId).first();
   if (!existing) return json({ error: 'Entry not found' }, 404);
 
@@ -176,16 +192,23 @@ async function handleTaxEducationUpdate(request, db, contentId) {
 
   const now = new Date().toISOString();
   setIfPresent('updated_at', now);
-  await db.prepare(`UPDATE tax_education_content SET ${fields.join(', ')} WHERE content_id = ?`)
+  const result = await db.prepare(`UPDATE tax_education_content SET ${fields.join(', ')} WHERE content_id = ?`)
     .bind(...values, contentId).run();
+  if (result.meta.changes === 0) return json({ error: 'Entry not found' }, 404);
+  // Logged only after the update is confirmed to have actually happened —
+  // a log row for an action that didn't happen (e.g. a concurrent delete
+  // won the race) would misattribute it to this admin.
+  await adminActionLogStatement(db, admin.user_id, 'update_tax_education', 'tax_education_content', contentId).run();
 
   const row = await db.prepare('SELECT * FROM tax_education_content WHERE content_id = ?').bind(contentId).first();
   return json({ entry: taxEducationContentFromRow(row) });
 }
 
 async function handleTaxEducationDelete(request, db, contentId) {
-  await requireAdmin(request, db);
+  const admin = await requireAdmin(request, db);
+  await checkRateLimit(db, `tax-education-delete:${admin.user_id}`, TAX_EDUCATION_DELETE_RATE_LIMIT_MAX);
   const result = await db.prepare('DELETE FROM tax_education_content WHERE content_id = ?').bind(contentId).run();
   if (result.meta.changes === 0) return json({ error: 'Entry not found' }, 404);
+  await adminActionLogStatement(db, admin.user_id, 'delete_tax_education', 'tax_education_content', contentId).run();
   return json({ deleted: true });
 }
