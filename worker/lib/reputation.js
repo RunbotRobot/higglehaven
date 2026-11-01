@@ -384,6 +384,24 @@ const PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX = 20;
 // admin review -- see handleInstancePurchase's own flagged_hidden_at guard.
 const PRODUCT_FLAG_AUTO_HIDE_THRESHOLD = 3;
 
+// #2941 (owner decision, 2026-10-31, same decision that settled #2215's
+// own option 2): a flag from an account whose signup Turnstile check
+// actively failed (migrations/0171 -- NULL here means either a clean
+// pass OR the feature being off at signup time, never "suspect by
+// default") counts for less, composing with the IP-dedup factor below
+// rather than replacing it, per #2941's own sequencing note. 0.5, not 0:
+// unlike an exact shared IP (a near-certain same-device signal), a single
+// failed/missing Turnstile check is a softer signal on its own (the real
+// failure modes #2941 itself calls out -- a privacy-hardened browser, an
+// in-app webview, an aggressive script blocker -- are not bot traffic),
+// so it discounts rather than zeroes a flag outright. Computed via a
+// plain pre-read SELECT (not folded into the INSERT's own CASE below the
+// way the IP factor is) because it's safe non-atomically: a single
+// user's own turnstile_failed_at is fixed at signup time and never
+// updated anywhere else, unlike the per-listing pending-flag count
+// #2980's own atomic EXISTS exists to protect.
+const TURNSTILE_FAILED_FLAG_WEIGHT_MULTIPLIER = 0.5;
+
 export async function handleProductFlags(request, db, route) {
   const templateId = route[1];
 
@@ -405,6 +423,10 @@ export async function handleProductFlags(request, db, route) {
     // other unhandled UNIQUE violation in this file.
     const flagId = `product-flag-${crypto.randomUUID()}`;
     const flaggerIp = clientIp(request);
+    // #2941: see TURNSTILE_FAILED_FLAG_WEIGHT_MULTIPLIER's own comment on
+    // why this one read is safe outside the atomic INSERT below.
+    const flagger = await db.prepare('SELECT turnstile_failed_at FROM users WHERE user_id = ?').bind(sessionBuilder.user_id).first();
+    const turnstileMultiplier = flagger?.turnstile_failed_at ? TURNSTILE_FAILED_FLAG_WEIGHT_MULTIPLIER : 1;
     // #2215 (owner decision, 2026-10-31, option 2): the first pending flag
     // against a listing from a given real IP counts fully toward the
     // auto-hide threshold; any further pending flag sharing that same IP
@@ -426,15 +448,21 @@ export async function handleProductFlags(request, db, route) {
     // cap. Folding the check into the INSERT's own VALUES clause as a live
     // EXISTS subquery makes it part of the same atomic statement -- no
     // separate read left to go stale against a concurrent insert.
+    // turnstileMultiplier above composes on top of whichever branch below
+    // fires (1 or 0) -- a Turnstile-failed account's flag still lands at
+    // 0 if the IP is also a repeat, never resurrected back up to 0.5.
     await db.prepare(`
       INSERT INTO product_flags (flag_id, template_id, flagger_builder_id, reason, flagger_ip, weight)
       VALUES (?, ?, ?, ?, ?,
         CASE
-          WHEN ? = 'unknown' THEN 1
+          WHEN ? = 'unknown' THEN ?
           WHEN EXISTS (SELECT 1 FROM product_flags WHERE template_id = ? AND status = 'pending' AND flagger_ip = ?) THEN 0
-          ELSE 1
+          ELSE ?
         END)
-    `).bind(flagId, templateId, sessionBuilder.builder_id, reason, flaggerIp, flaggerIp, templateId, flaggerIp).run();
+    `).bind(
+      flagId, templateId, sessionBuilder.builder_id, reason, flaggerIp,
+      flaggerIp, turnstileMultiplier, templateId, flaggerIp, turnstileMultiplier,
+    ).run();
     // Re-checked after the insert (not a cached count from before it) so a
     // concurrent flag from a different builder landing in between is never
     // silently lost from the threshold decision. pendingCount stays the

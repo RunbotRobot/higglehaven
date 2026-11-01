@@ -167,5 +167,6 @@
   "0167_geo_water_cells_fine_seed.sql",
   "0168_moderation_removal_snapshots.sql",
   "0169_purchases_pre_dispute_refunded_amount.sql",
-  "0170_product_flags_weight.sql"
+  "0170_product_flags_weight.sql",
+  "0171_users_turnstile_failed.sql"
 ]

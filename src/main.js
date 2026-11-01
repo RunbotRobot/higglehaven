@@ -1653,6 +1653,22 @@ export function loadStripeJs() {
   return stripeJsPromise;
 }
 
+// #2941: same lazy-load-once shape as loadStripeJs above -- only pulled in
+// once the signup form is actually opened, never on every page load.
+let turnstileJsPromise = null;
+export function loadTurnstileJs() {
+  if (turnstileJsPromise) return turnstileJsPromise;
+  turnstileJsPromise = new Promise((resolve, reject) => {
+    if (window.turnstile) { resolve(window.turnstile); return; }
+    const script = document.createElement('script');
+    script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js';
+    script.onload = () => resolve(window.turnstile);
+    script.onerror = () => { turnstileJsPromise = null; reject(new Error('Could not load Turnstile.')); };
+    document.head.appendChild(script);
+  });
+  return turnstileJsPromise;
+}
+
 shopProductPreviewReturnPolicyBtn.addEventListener('click', handleShopReturnPolicyClick);
 refundPolicyCloseBtn.addEventListener('click', closeRefundPolicyModal);
 

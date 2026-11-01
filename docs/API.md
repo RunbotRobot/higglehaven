@@ -168,11 +168,13 @@ harassment/retry-hammering of one address without needing any per-source
 global counter that a shared IP (or this app's own automated test suite,
 which never sets a real client IP) could trip on unrelated traffic. It
 does **not** stop an attacker spraying signups across many distinct
-addresses from one source — that broader case is already substantially
-covered today by the private-preview access-gate passphrase below (these
-endpoints are unreachable at all without it), and would need something
-like Cloudflare Turnstile/Bot Management if that gate ever comes off, not
-just a bigger version of this.
+addresses from one source on its own — that broader case is already
+substantially covered today by the private-preview access-gate passphrase
+below (these endpoints are unreachable at all without it). **#2941**
+(owner decision, 2026-10-31) adds Cloudflare Turnstile as a second,
+independent layer for exactly this case, invisible/backend-only rather
+than a bigger version of this rate limit — see "Bot defense (Turnstile)"
+below.
 
 The same `checkRateLimit` helper also guards `POST /api/models` (see
 "Custom model uploads" below) — a different unauthenticated/repeatable
@@ -229,11 +231,80 @@ instead of emailing it. This is the same "dev-mode" spirit already used
 throughout this codebase, and it's what keeps the entire signup → verify →
 login → reset flow fully testable without a real email provider.
 
+**Bot defense (Turnstile):** [Cloudflare
+Turnstile](https://developers.cloudflare.com/turnstile/) on signup, in
+invisible/managed mode (`#2941`, owner decision, 2026-10-31, originating
+from `#2215`'s own "option 4" discussion) — the free-tier-compatible,
+Cloudflare-native choice (no new vendor), running silently for the vast
+majority of real users with no visible checkbox or puzzle. Two rules the
+owner was explicit about, both enforced in `worker/lib/turnstile.js`
+rather than left to each caller: it **fails open** (a verify error,
+timeout, or missing/empty token — the widget itself failing to load is a
+real failure mode on privacy-hardened browsers, in-app webviews, some
+VPN/anti-detect setups, and aggressive script blockers — never blocks a
+real signup), and it has **no visible consequence** for a failed/missing
+check, ever (no rate-limit tightening, no degraded UX, nothing a
+legitimate power-user could notice). Configure it with:
+
+```sh
+npx wrangler secret put TURNSTILE_SECRET_KEY
+npx wrangler secret put TURNSTILE_SITE_KEY
+```
+
+(Worker secrets, never committed — the same pattern `RESEND_API_KEY`
+above uses. `TURNSTILE_SITE_KEY` isn't actually sensitive — it's meant to
+be embedded in public page markup, the same as `STRIPE_PUBLISHABLE_KEY` —
+but is still set this way rather than as a plain `vars` entry, since this
+project has no `vars` block in `wrangler.jsonc` at all today.)
+
+**Dev-mode fallback:** whenever `TURNSTILE_SECRET_KEY` isn't configured —
+true for local dev and the entire automated test suite, neither of which
+ever sets it — `turnstileConfigured(env)` is `false` and `handleSignup`
+skips calling Turnstile entirely; the frontend's own
+`GET /api/auth/turnstile-sitekey` (below) returns a null `sitekey` in the
+same case, so the signup form never even renders a widget. Same
+"dev-mode" spirit as Resend above: the signup flow is fully testable
+without a real Turnstile account, and no account created in this state is
+treated as suspect later (see migrations/0171's own comment on why `NULL`
+deliberately means "clean pass or feature off," never "unverified by
+default").
+
+**Feeding the signal forward:** a signup whose check was actually live
+*and* came back negative sets `users.turnstile_failed_at` to that
+moment — an invisible signal that does nothing by itself. `#2215`'s own
+product-flag weighting (`computeProductFlagWeight` in
+`worker/lib/reputation.js`) reads it: a flag from an account with a
+non-`NULL` `turnstile_failed_at` counts for half its usual weight toward
+a listing's auto-hide threshold, composing with that same function's
+existing same-IP discount rather than replacing it — see "Counterfeit/
+policy flags" below for the full mechanism.
+
+### `GET /api/auth/turnstile-sitekey`
+
+Unauthenticated, no rate limit (a plain config lookup, not an
+abuse-shaped action). Returns:
+
+```json
+{ "sitekey": "0x4AAAAAAA..." }
+```
+
+`sitekey` is `null` whenever `TURNSTILE_SITE_KEY` isn't configured — safe
+to hand to the browser by design, the same reasoning
+`createCardSetupIntent`'s own `publishableKey` field already documents
+for Stripe. The signup form's own frontend code treats a `null` sitekey
+as "don't render a widget at all," never as an error.
+
 ### `POST /api/auth/signup`
 
 ```json
-{ "email": "ada@example.com", "password": "correct horse battery staple", "username": "Ada", "ageAttested": true }
+{ "email": "ada@example.com", "password": "correct horse battery staple", "username": "Ada", "ageAttested": true, "turnstileToken": "..." }
 ```
+
+`turnstileToken` is optional and never validated for shape — missing,
+empty, or garbage all behave identically (see "Bot defense (Turnstile)"
+above): the request still succeeds either way, and the only effect is on
+`users.turnstile_failed_at`, never on this endpoint's own response or
+status code.
 
 `ageAttested` must be exactly `true` — `400` otherwise (#556, docs/SPEC.md
 §6's registration gate). A plain attestation checkbox, not a birthdate
@@ -8422,8 +8493,23 @@ each fake independently. `pendingCount` in the response stays the real,
 unweighted flag count (what admins see as "how many accounts flagged
 this" via `GET /api/product-flags` below); `pendingWeight` is the
 separate, signal-adjusted sum the auto-hide threshold actually checks.
-`#2941` (Cloudflare Turnstile signup signal) is designed to plug into
-this same `weight` column as an independent, composable reduction.
+**`#2941` (same owner decision):** composes with the IP factor above
+rather than replacing it. A flag from an account whose signup Turnstile
+check was live and came back negative (`users.turnstile_failed_at` is
+non-`NULL` — see "Bot defense (Turnstile)" above for exactly what sets
+this) has its weight halved on top of whatever the IP factor already
+gave it, so e.g. a genuinely distinct IP from a Turnstile-failed account
+weights `0.5`, not `1`; an IP that's already zeroed by the same-IP rule
+stays `0` regardless.
+
+**`#2980`:** the IP factor above is decided inside the `INSERT`'s own
+`CASE`/`EXISTS` subquery, evaluated atomically as part of the same
+statement, rather than via a separate pre-read `SELECT` beforehand — two
+flags from the same IP landing concurrently could otherwise both see "no
+existing pending flag from this IP" and both land at full weight,
+defeating the "first one counts, repeats don't" cap. The Turnstile
+factor is still a plain pre-read (safe non-atomically, since a single
+user's own `turnstile_failed_at` never changes after signup).
 Returns `{ flagId, pendingCount, pendingWeight, autoHidden }`.
 
 ```
