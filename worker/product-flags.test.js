@@ -165,6 +165,69 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     expect(second.body.pendingWeight).toBe(2);
   });
 
+  // #2980: the weight decision used to be a separate pre-read SELECT
+  // (computeProductFlagWeight) run before the INSERT, with no atomicity
+  // tying the two together -- two flags from the same IP landing
+  // concurrently could both see "no existing pending flag from this IP"
+  // and both get weight 1, defeating the cap the test above already
+  // covers for the *sequential* case. Deterministic version of that race,
+  // same db.prepare monkey-patch idiom this codebase already uses for
+  // this class of bug: intercepts right as the first flag's own INSERT is
+  // about to run and drives a second, same-IP flag's entire create call
+  // to completion first. Verified via git stash that this fails against
+  // the pre-fix code (both flags land with weight 1) and passes against
+  // the fix (the live EXISTS subquery inside the INSERT itself sees the
+  // other flag's row no matter which one's statement actually runs last).
+  it('never lets two same-IP flags race into both weighting 1', async () => {
+    const seller = await signupSeller('flag-weight-race-seller');
+    await createTemplate('flag-weight-race-template', seller);
+    const flaggers = await Promise.all([1, 2].map((n) => signupBuilder(`flag-weight-race-flagger-${n}`)));
+    const sharedIp = `test-race-ip-${crypto.randomUUID()}`;
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      const stmt = originalPrepare(sql);
+      if (armed && sql.includes('INSERT INTO product_flags')) {
+        armed = false;
+        const originalBind = stmt.bind.bind(stmt);
+        stmt.bind = (...bindArgs) => {
+          const bound = originalBind(...bindArgs);
+          const originalRun = bound.run.bind(bound);
+          bound.run = async () => {
+            // The second flag's own full create call -- SELECT/EXISTS
+            // check and INSERT alike -- commits here, in the gap between
+            // the first flag's own (old code: already-stale) weight
+            // decision and its INSERT actually running.
+            await api('/catalog/flag-weight-race-template/flags', flaggers[1].session({
+              method: 'POST', body: JSON.stringify({}), headers: { 'cf-connecting-ip': sharedIp },
+            }));
+            return originalRun();
+          };
+          return bound;
+        };
+      }
+      return stmt;
+    };
+    let first;
+    try {
+      first = await api('/catalog/flag-weight-race-template/flags', flaggers[0].session({
+        method: 'POST', body: JSON.stringify({}), headers: { 'cf-connecting-ip': sharedIp },
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(first.response.status).toBe(201);
+
+    // Exactly one of the two same-IP flags may weight 1, regardless of
+    // which one's own INSERT statement actually executed last.
+    const rows = await env.DB.prepare(
+      'SELECT weight FROM product_flags WHERE template_id = ? AND flagger_ip = ? ORDER BY weight DESC',
+    ).bind('flag-weight-race-template', sharedIp).all();
+    expect(rows.results).toHaveLength(2);
+    expect(rows.results.map((r) => r.weight)).toEqual([1, 0]);
+  });
+
   it('does not notify the seller on a flag that does not cross the auto-hide threshold', async () => {
     const seller = await signupSeller('flag-no-notify-seller');
     await createTemplate('flag-no-notify-template', seller);

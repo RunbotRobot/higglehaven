@@ -384,25 +384,6 @@ const PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX = 20;
 // admin review -- see handleInstancePurchase's own flagged_hidden_at guard.
 const PRODUCT_FLAG_AUTO_HIDE_THRESHOLD = 3;
 
-// #2215 (owner decision, 2026-10-31, option 2): the first pending flag
-// against a listing from a given real IP counts fully toward the
-// auto-hide threshold; any further pending flag sharing that same IP
-// counts for nothing -- the same "first one counts, repeats don't" shape
-// migrations/0131's own UNIQUE(template_id, flagger_builder_id) already
-// gives distinct builder accounts, extended to a signal several cheaply-
-// created accounts on one device/network can't each fake independently.
-// clientIp(request)'s own 'unknown' fallback (no cf-connecting-ip header)
-// is deliberately never treated as a real match here -- every caller with
-// no header would otherwise collide on that one literal string and get
-// zeroed out together, which isn't a same-device signal at all.
-async function computeProductFlagWeight(db, templateId, flaggerIp) {
-  if (flaggerIp === 'unknown') return 1;
-  const sameIpPending = await db.prepare(`
-    SELECT 1 FROM product_flags WHERE template_id = ? AND status = 'pending' AND flagger_ip = ? LIMIT 1
-  `).bind(templateId, flaggerIp).first();
-  return sameIpPending ? 0 : 1;
-}
-
 export async function handleProductFlags(request, db, route) {
   const templateId = route[1];
 
@@ -424,11 +405,36 @@ export async function handleProductFlags(request, db, route) {
     // other unhandled UNIQUE violation in this file.
     const flagId = `product-flag-${crypto.randomUUID()}`;
     const flaggerIp = clientIp(request);
-    const weight = await computeProductFlagWeight(db, templateId, flaggerIp);
+    // #2215 (owner decision, 2026-10-31, option 2): the first pending flag
+    // against a listing from a given real IP counts fully toward the
+    // auto-hide threshold; any further pending flag sharing that same IP
+    // counts for nothing -- the same "first one counts, repeats don't"
+    // shape migrations/0131's own UNIQUE(template_id, flagger_builder_id)
+    // already gives distinct builder accounts, extended to a signal
+    // several cheaply-created accounts on one device/network can't each
+    // fake independently. clientIp(request)'s own 'unknown' fallback (no
+    // cf-connecting-ip header) is deliberately never treated as a real
+    // match here -- every caller with no header would otherwise collide
+    // on that one literal string and get zeroed out together, which isn't
+    // a same-device signal at all.
+    //
+    // #2980: the weight decision used to be a separate pre-read SELECT
+    // (computeProductFlagWeight) run before this INSERT -- two flags from
+    // the same IP landing concurrently (exactly the brigading scenario
+    // this weighting exists to catch) could both see "no existing pending
+    // flag from this IP" and both get weight 1, defeating the intended
+    // cap. Folding the check into the INSERT's own VALUES clause as a live
+    // EXISTS subquery makes it part of the same atomic statement -- no
+    // separate read left to go stale against a concurrent insert.
     await db.prepare(`
       INSERT INTO product_flags (flag_id, template_id, flagger_builder_id, reason, flagger_ip, weight)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(flagId, templateId, sessionBuilder.builder_id, reason, flaggerIp, weight).run();
+      VALUES (?, ?, ?, ?, ?,
+        CASE
+          WHEN ? = 'unknown' THEN 1
+          WHEN EXISTS (SELECT 1 FROM product_flags WHERE template_id = ? AND status = 'pending' AND flagger_ip = ?) THEN 0
+          ELSE 1
+        END)
+    `).bind(flagId, templateId, sessionBuilder.builder_id, reason, flaggerIp, flaggerIp, templateId, flaggerIp).run();
     // Re-checked after the insert (not a cached count from before it) so a
     // concurrent flag from a different builder landing in between is never
     // silently lost from the threshold decision. pendingCount stays the
