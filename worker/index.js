@@ -2233,10 +2233,10 @@ async function resolveAuction(db, auction) {
         `).bind(auction.seller_builder_id, auction.landlet_id),
         db.prepare(`
           INSERT INTO archived_version_instances
-            (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
+            (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id)
           SELECT vi.version_id, vi.source_instance_id, vi.template_id, vi.x_m, vi.y_m, vi.z_m,
                  vi.rotation_x_rad, vi.rotation_y_rad, vi.rotation_z_rad, vi.label, vi.crop_json, vi.scale,
-                 vi.is_community_sign, vi.is_community_calendar
+                 vi.is_community_sign, vi.is_community_calendar, vi.group_id
           FROM version_instances vi
           JOIN landlet_versions v ON v.version_id = vi.version_id
           WHERE v.landlet_id = ?
@@ -4321,6 +4321,10 @@ export function versionInstanceFromRow(row) {
     scale: row.scale,
     isCommunitySign: Boolean(row.is_community_sign),
     isCommunityCalendar: Boolean(row.is_community_calendar),
+    // #2968: version_instances/archived_version_instances both gained
+    // group_id alongside this function's other already-mirrored columns —
+    // see that migration's own comment for why.
+    groupId: row.group_id ?? null,
   };
 }
 

@@ -4207,6 +4207,17 @@ instance are written through on both the insert and the update path — an
 earlier version of this endpoint dropped both back to `false` on every
 save regardless of what a prior `PATCH /api/instances/:id` had set.
 
+`groupId` (#2968) follows the exact same ownership-verified rule `POST`/
+`PUT /api/instances/batch` already documents above: honored only on a
+fresh insert (never on the update path — an existing row's `groupId` stays
+changeable only via `POST /api/instances/group`/`ungroup`, per #2764), and
+only when the caller already owns at least one other instance currently
+carrying that same `groupId`; any other value is silently treated as
+`null`. This is what lets "Restore to Editor" (below) bring back an old
+version's own grouping instead of ungrouping everything on restore,
+without letting a crafted request attach a recreated instance to a group
+it was never part of.
+
 Every successful save creates a version, including a save with an empty array.
 The response contains both the replacement `instances` and new `version`
 metadata. SQLite JSON expansion inserts the validated instance array in one
@@ -4296,7 +4307,11 @@ deletions in the mutable draft do not alter this array. Each instance's
 the two flag columns only to `placed_instances`, so every published/live
 landlet lost its community signs and calendars entirely until this closed
 the gap) — a sign flagged in the draft stays flagged once published, and
-`GET /api/landlets/:landletId/live` (above) reflects it.
+`GET /api/landlets/:landletId/live` (above) reflects it. `groupId` is
+captured the same way (`migrations/0171`) — a version snapshot, and the
+archived-version mirror `0140` established for a reclaimed landlet, now
+remember which instances were grouped together at save time, instead of
+every restore silently ungrouping everything (#2968).
 
 ### `POST /api/landlets/:landletId/versions/:versionId/activate`
 
