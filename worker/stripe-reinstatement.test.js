@@ -344,6 +344,56 @@ describe('Stripe reinstatement request (#1407)', () => {
     expect(row.stripe_account_id).toBe('acct_dead_reinstate_builder_inflight');
   });
 
+  // #2944: the in-flight check above used to be a separate pre-read
+  // (hasInFlightRealMoney), run before performReinstatementReset's own
+  // UPDATE with nothing tying the two together -- so a redemption that
+  // started in the real gap between them (claimOrResumeBuilderRedemption's
+  // own balance-claim + higgles_redemptions insert, a genuinely separate
+  // request) still let the reset proceed, since the check had already
+  // returned "nothing in flight" before that insert landed. Deterministic
+  // reproduction, same db.prepare monkey-patch idiom as the #2740 race
+  // test above: inject the concurrent redemption right as the reset's own
+  // UPDATE statement is about to run (the exact point the in-flight check
+  // now lives inside, post-fix) rather than relying on a genuinely
+  // concurrent Promise.all landing in a window this narrow by chance.
+  it('refuses the reset when a redemption starts in the exact window between the in-flight check and the reset write', async () => {
+    const builder = await signupBuilder('stripe-reinstate-race-redemption');
+    const userId = await userIdFor(builder.email);
+    await env.DB.prepare("UPDATE builders SET stripe_account_id = 'acct_dead_reinstate_race_inflight' WHERE builder_id = ?")
+      .bind(builder.builderId).run();
+    await insertFlag('builder', builder.builderId, { disposition: 'suspected', flaggedAt: NINETY_ONE_DAYS_AGO });
+    await insertApprovedDiditSession(userId, THIRTY_DAYS_AGO);
+    // Deliberately nothing in higgles_redemptions yet -- the race is about
+    // a redemption that starts AFTER the check would have already passed.
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.includes('UPDATE builders') && sql.includes('stripe_account_id = NULL')) {
+        armed = false;
+        originalPrepare(`
+          INSERT INTO higgles_redemptions (redemption_id, builder_id, amount_cents, stripe_transfer_id, stripe_payout_id)
+          VALUES ('reinstate-race-inflight-redemption', ?, 1000, 'tr_race_inflight', NULL)
+        `).bind(builder.builderId).run();
+      }
+      return originalPrepare(sql);
+    };
+    let rejected;
+    try {
+      rejected = await api('/builders/me/stripe-reinstatement-request', builder.session({ method: 'POST' }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(rejected.response.status).toBe(409);
+    expect(rejected.body.error).toMatch(/in flight/i);
+
+    // The reset must not have gone through -- the concurrent redemption's
+    // Transfer is targeting this exact stripe_account_id.
+    const row = await env.DB.prepare('SELECT stripe_account_id FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(row.stripe_account_id).toBe('acct_dead_reinstate_race_inflight');
+  });
+
   it('works identically for a builder subject, logging subject_builder_id', async () => {
     const builder = await signupBuilder('stripe-reinstate-builder-approved');
     const userId = await userIdFor(builder.email);

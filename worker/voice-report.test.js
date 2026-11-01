@@ -36,6 +36,9 @@ describe('Voice conduct reports (#2819)', () => {
     }));
     expect(rejected.response.status).toBe(403);
     expect(rejected.body.idVerificationRequired).toBe(true);
+    // #2954: requireIdVerifiedSessionBuilder used to hardcode direct
+    // messages' own error text for every caller, including this one.
+    expect(rejected.body.error).toBe('ID verification is required to use voice chat.');
   });
 
   it('rejects reporting oneself', async () => {

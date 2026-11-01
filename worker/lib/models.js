@@ -76,16 +76,19 @@ async function handleUploadedAsset(request, env) {
     // #774: model_url and image_url are both content-addressed keys into
     // this same bucket (the latter written by POST .../thumbnail) — an
     // object referenced only as a thumbnail must block deletion here too.
-    // #1644/#1655/#1696: video_generation_jobs.model_url and
-    // control_room_tasks/control_room_replies.image_url are three more
-    // writers into this same bucket/scheme (same five sources
-    // cleanupUnreferencedModels already checks) — without these, this raw
-    // admin delete would succeed on an object still in use by a pending
-    // video-to-3D job or a Control Room screenshot, destroying it out from
-    // under that reference even though the automated sweep would have
-    // correctly protected it.
+    // #1644/#1655/#1696/#2946: video_generation_jobs.model_url,
+    // control_room_tasks/control_room_replies.image_url, and
+    // products.model_url/.image_url are more writers into this same
+    // bucket/scheme (same seven sources cleanupUnreferencedModels already
+    // checks via selectModelUrlReferencesChunked) — without these, this
+    // raw admin delete would succeed on an object still in use by a
+    // pending video-to-3D job, a Control Room screenshot, or a shared
+    // product, destroying it out from under that reference even though
+    // the automated sweep would have correctly protected it.
     const referenced = await env.DB.prepare(`
       SELECT 1 FROM catalog_templates WHERE model_url = ? OR image_url = ?
+      UNION ALL
+      SELECT 1 FROM products WHERE model_url = ? OR image_url = ?
       UNION ALL
       SELECT 1 FROM video_generation_jobs WHERE model_url = ?
       UNION ALL
@@ -93,7 +96,7 @@ async function handleUploadedAsset(request, env) {
       UNION ALL
       SELECT 1 FROM control_room_replies WHERE image_url = ?
       LIMIT 1
-    `).bind(modelUrl, modelUrl, modelUrl, modelUrl, modelUrl).first();
+    `).bind(modelUrl, modelUrl, modelUrl, modelUrl, modelUrl, modelUrl, modelUrl).first();
     if (referenced) throw new HttpError('Uploaded model is still referenced', 409);
     await env.MODELS.delete(key);
     // #829: same missed-audit-trail gap as /api/models/cleanup above — this
@@ -223,6 +226,23 @@ async function handleModelUpload(request, env) {
 const D1_MAX_BOUND_PARAMETERS = 100;
 
 async function selectModelUrlReferencesChunked(db, urls) {
+  // #2946: products.model_url/.image_url (migrations/0153_shared_products.sql)
+  // are their own, permanent references -- nothing ever deletes a
+  // products row (confirmed via grep for "DELETE FROM products" across
+  // worker/ and migrations/, zero hits) -- but this never checked them,
+  // so a model whose only remaining reference was a products row (every
+  // catalog_templates listing backed by it since deleted) read as fully
+  // unreferenced and got swept by cleanupUnreferencedModels.
+  //
+  // A separate second query, not a 6th/7th branch folded into the UNION
+  // above -- D1 enforces a hard cap of 5 terms per compound SELECT
+  // (confirmed empirically: a 6-way UNION ALL throws D1_ERROR "too many
+  // terms in compound SELECT", a 5-way one doesn't), so the existing
+  // 5-branch query is already at that ceiling. Reusing the exact same
+  // chunk/placeholders this call already computed for the first query
+  // keeps both queries' own per-statement bound-parameter count under
+  // D1_MAX_BOUND_PARAMETERS at the same chunkSize (2 branches well under
+  // the 5-branch query's own tighter chunkSize=20 constraint).
   const chunkSize = Math.floor(D1_MAX_BOUND_PARAMETERS / 5);
   const rows = [];
   for (let i = 0; i < urls.length; i += chunkSize) {
@@ -240,6 +260,12 @@ async function selectModelUrlReferencesChunked(db, urls) {
       SELECT 'controlRoom' AS source, reply_id AS id, image_url AS url FROM control_room_replies WHERE image_url IN (${placeholders})
     `).bind(...chunk, ...chunk, ...chunk, ...chunk, ...chunk).all();
     rows.push(...results);
+    const { results: productResults } = await db.prepare(`
+      SELECT 'product' AS source, product_id AS id, model_url AS url FROM products WHERE model_url IN (${placeholders})
+      UNION ALL
+      SELECT 'product' AS source, product_id AS id, image_url AS url FROM products WHERE image_url IN (${placeholders})
+    `).bind(...chunk, ...chunk).all();
+    rows.push(...productResults);
   }
   return rows;
 }
@@ -258,27 +284,35 @@ async function handleModelListing(request, env, url) {
   const listing = await env.MODELS.list({ limit, cursor });
   const modelUrls = listing.objects.map((object) => `/uploads/${object.key}`);
   const templateRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
+  const productRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
   const videoJobRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
   const controlRoomRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
   if (modelUrls.length > 0) {
     // #774: image_url (thumbnails) shares this same bucket/URL scheme as
     // model_url — checking model_url alone marked every live thumbnail
-    // "unreferenced". #1644/#1655/#1696: video_generation_jobs.model_url
-    // and control_room_tasks/control_room_replies.image_url are three more
-    // writers into this same bucket/scheme (same reasoning as
-    // cleanupUnreferencedModels' own two UNION queries, which already check
-    // all five) — a model/image real-but-not-yet-template-referenced in one
-    // of these used to read back here as `deletable: true` with an empty
-    // reference list, a false "safe to delete" signal for this admin view.
+    // "unreferenced". #1644/#1655/#1696/#2946: video_generation_jobs
+    // .model_url, control_room_tasks/control_room_replies.image_url, and
+    // products.model_url/.image_url are more writers into this same
+    // bucket/scheme (same reasoning as cleanupUnreferencedModels' own two
+    // UNION queries, which already check all seven) — a model/image
+    // real-but-not-yet-template-referenced in one of these used to read
+    // back here as `deletable: true` with an empty reference list, a
+    // false "safe to delete" signal for this admin view.
     //
     // #2204: selectModelUrlReferencesChunked (see its own comment) chunks
     // this same query rather than binding the full modelUrls array once
     // per UNION branch in a single call -- this list can be up to 100
     // long (this handler's own `limit` above), which blew D1's 100-bound-
-    // parameter cap once multiplied by 5 branches.
+    // parameter cap once multiplied across branches.
     const referenced = await selectModelUrlReferencesChunked(env.DB, modelUrls);
     for (const row of referenced) {
+      // #2946: explicit per-source branches, not a catch-all else -- a
+      // catch-all silently folded this exact 'product' source into
+      // controlRoomRefs below before this fix, which would have been
+      // wrong (and any future new source would silently repeat the same
+      // mistake) rather than a loud, obvious bug.
       if (row.source === 'template') templateRefs.get(row.url).push(row.id);
+      else if (row.source === 'product') productRefs.get(row.url).push(row.id);
       else if (row.source === 'videoJob') videoJobRefs.get(row.url).push(row.id);
       else controlRoomRefs.get(row.url).push(row.id);
     }
@@ -287,6 +321,7 @@ async function handleModelListing(request, env, url) {
     models: listing.objects.map((object) => {
       const modelUrl = `/uploads/${object.key}`;
       const referencedByTemplateIds = templateRefs.get(modelUrl);
+      const referencedByProductIds = productRefs.get(modelUrl);
       const referencedByVideoJobIds = videoJobRefs.get(modelUrl);
       const referencedByControlRoomIds = controlRoomRefs.get(modelUrl);
       return {
@@ -295,10 +330,11 @@ async function handleModelListing(request, env, url) {
         etag: object.httpEtag,
         uploadedAt: object.uploaded?.toISOString() || null,
         referencedByTemplateIds,
+        referencedByProductIds,
         referencedByVideoJobIds,
         referencedByControlRoomIds,
-        deletable: referencedByTemplateIds.length === 0 && referencedByVideoJobIds.length === 0
-          && referencedByControlRoomIds.length === 0,
+        deletable: referencedByTemplateIds.length === 0 && referencedByProductIds.length === 0
+          && referencedByVideoJobIds.length === 0 && referencedByControlRoomIds.length === 0,
       };
     }),
     nextCursor: listing.truncated ? listing.cursor : null,
@@ -421,11 +457,15 @@ export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAg
       // are a fourth writer into this same bucket/scheme — imageUrlValue
       // explicitly accepts a /uploads/<key> path for these columns, so a
       // Control Room screenshot uploaded that way looked unreferenced too.
+      // #2946: products.model_url/.image_url are a sixth/seventh writer —
+      // a model whose only remaining catalog_templates listing had since
+      // been deleted, but whose products row (permanent, never deleted)
+      // still held the same model_url, read as unreferenced too.
       //
       // #2204: selectModelUrlReferencesChunked (see its own comment) chunks
-      // this same 5-way check rather than binding the full modelUrls array
+      // this same check rather than binding the full modelUrls array
       // once per branch in a single call -- a 100-object R2 page blew D1's
-      // 100-bound-parameter cap once multiplied by 5 branches.
+      // 100-bound-parameter cap once multiplied across branches.
       const referenced = await selectModelUrlReferencesChunked(env.DB, modelUrls);
       for (const row of referenced) referencedUrls.add(row.url);
     }
@@ -462,12 +502,12 @@ export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAg
   // whatever is still genuinely unreferenced.
   let toDelete = targets;
   if (targets.length > 0) {
-    // #774/#1644/#1655: same reference-check gap as the scan above —
+    // #774/#1644/#1655/#2946: same reference-check gap as the scan above —
     // re-checked here too since this query is independent of it.
     //
     // #2204: chunked via selectModelUrlReferencesChunked for the same
     // reason as the scan above — targetUrls can be up to maxDeletes long,
-    // which blew D1's 100-bound-parameter cap once multiplied by 5
+    // which blew D1's 100-bound-parameter cap once multiplied across
     // branches in a single unchunked query.
     const targetUrls = targets.map((object) => `/uploads/${object.key}`);
     const stillReferenced = await selectModelUrlReferencesChunked(env.DB, targetUrls);

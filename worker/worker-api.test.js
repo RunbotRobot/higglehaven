@@ -232,6 +232,20 @@ describe('Worker API', () => {
     expect(await referenced.json()).toEqual({ error: 'Uploaded model is still referenced' });
 
     expect((await api('/catalog/uploaded-delete-test', { method: 'DELETE' })).response.status).toBe(200);
+    // #2748: POST /api/catalog also unconditionally creates a permanent
+    // 1:1 products row (product_id = templateId) for every new template
+    // -- deleting the one catalog_templates listing above does NOT free
+    // this model, since its products row (never deleted by any real code
+    // path) still references the same model_url. #2946 closed the gap
+    // where the reference check didn't know that; confirm it here before
+    // removing the products row directly (there's no real API to delete
+    // one -- same raw-SQL-fixture convention this file's own #1696 tests
+    // already use to simulate a reference from a table with no delete
+    // endpoint) to reach genuinely zero references.
+    const stillReferenced = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }));
+    expect(stillReferenced.status).toBe(409);
+    expect(await stillReferenced.json()).toEqual({ error: 'Uploaded model is still referenced' });
+    await env.DB.prepare('DELETE FROM products WHERE product_id = ?').bind('uploaded-delete-test').run();
     const removed = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }));
     expect(removed.status).toBe(200);
     expect(await removed.json()).toEqual({ deleted: true });
@@ -608,6 +622,39 @@ describe('Worker API', () => {
     const directDelete = await SELF.fetch(`https://higglehaven.test${modelUrl}`, adminSession({ method: 'DELETE' }));
     expect(directDelete.status).toBe(409);
     expect(await directDelete.json()).toEqual({ error: 'Uploaded model is still referenced' });
+    expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(200);
+  });
+
+  // #2946: same gap as the two tests directly above, for the shared
+  // `products` table (migrations/0153_shared_products.sql) -- a model
+  // whose only remaining reference is a products row (every
+  // catalog_templates listing backed by it since deleted; products rows
+  // are never deleted) used to read back as unreferenced/deletable.
+  it('treats a shared product\'s model_url/image_url as still referenced (listing and raw delete)', async () => {
+    const form = new FormData();
+    form.set('file', glbFile({ json: '{"productReference":true}' }));
+    const upload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
+    const { modelUrl } = await upload.json();
+
+    await env.DB.prepare(`
+      INSERT INTO products (product_id, name, category, color, width_m, depth_m, height_m, model_url)
+      VALUES (?, 'Product reference test', 'furniture', '#123456', 1, 1, 1, ?)
+    `).bind('product-reference-product', modelUrl).run();
+
+    const listing = await api('/models?limit=100', adminSession());
+    expect(listing.body.models).toContainEqual(expect.objectContaining({
+      modelUrl,
+      referencedByProductIds: ['product-reference-product'],
+      deletable: false,
+    }));
+
+    const directDelete = await SELF.fetch(`https://higglehaven.test${modelUrl}`, adminSession({ method: 'DELETE' }));
+    expect(directDelete.status).toBe(409);
+    expect(await directDelete.json()).toEqual({ error: 'Uploaded model is still referenced' });
+    expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(200);
+
+    const cleanupResult = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false, minAgeMs: 0 });
+    expect(cleanupResult.targetModelUrls).not.toContain(modelUrl);
     expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(200);
   });
 
@@ -3334,21 +3381,26 @@ describe('Worker API', () => {
     expect(water.body.candidate.landType).toBe('water');
     expect(water.body.landlet).toBeNull();
 
-    // Same "move a pending candidate's center onto the origin to trigger
+    // Same "move a pending candidate's center near the origin to trigger
     // materialization" technique the 'updates only pending land candidates'
     // test above already relies on — confirms the materialization sweep
     // carries the candidate's own landType into the landlets row rather
-    // than falling back to the landlets table's own default.
+    // than falling back to the landlets table's own default. (3, 3) rather
+    // than the literal origin: #2948 made this PATCH enforce the same
+    // overlap check POST always has, and 'inside-candidate' (created
+    // above) is still sitting on the exact origin at this point in the
+    // file -- genuinely overlapping, not just a false-positive this check
+    // needs to tolerate.
     const started = await api('/land-candidates/water-candidate', adminSession({
       method: 'PATCH',
-      body: JSON.stringify({ center: { x: 0, y: 0 } }),
+      body: JSON.stringify({ center: { x: 3, y: 3 } }),
     }));
     expect(started.response.status).toBe(200);
     expect(started.body.candidate.materializedAt).not.toBeNull();
     expect(started.body.landlet).toMatchObject({ landletId: 'water-candidate', landType: 'water' });
 
     // Same reason the overlap test below frees 'inside-candidate': a real
-    // landlet left sitting on the world origin would otherwise block the
+    // landlet left sitting near the world origin would otherwise block the
     // organic-mosaic test's own origin-covering cell later in this file.
     await env.DB.prepare("DELETE FROM landlet_candidates WHERE landlet_id = 'water-candidate'").run();
     await env.DB.prepare("DELETE FROM landlets WHERE landlet_id = 'water-candidate'").run();
@@ -3385,21 +3437,22 @@ describe('Worker API', () => {
     expect(classified.body.candidate.biome).toBe('alpine');
     expect(classified.body.landlet).toBeNull();
 
-    // Same "move a pending candidate's center onto the origin to trigger
+    // Same "move a pending candidate's center near the origin to trigger
     // materialization" technique the landType test above relies on --
     // confirms the materialization sweep carries the candidate's own
     // biome into the landlets row rather than falling back to the
-    // landlets table's own default.
+    // landlets table's own default. (3, 3) rather than the literal origin
+    // for the same #2948 reason the landType test above explains.
     const started = await api('/land-candidates/alpine-biome-candidate', adminSession({
       method: 'PATCH',
-      body: JSON.stringify({ center: { x: 0, y: 0 } }),
+      body: JSON.stringify({ center: { x: 3, y: 3 } }),
     }));
     expect(started.response.status).toBe(200);
     expect(started.body.candidate.materializedAt).not.toBeNull();
     expect(started.body.landlet).toMatchObject({ landletId: 'alpine-biome-candidate', biome: 'alpine' });
 
     // Same reason the water test above frees its own fixture: a real
-    // landlet left sitting on the world origin would otherwise block the
+    // landlet left sitting near the world origin would otherwise block the
     // organic-mosaic test's own origin-covering cell later in this file.
     await env.DB.prepare("DELETE FROM landlet_candidates WHERE landlet_id = 'alpine-biome-candidate'").run();
     await env.DB.prepare("DELETE FROM landlets WHERE landlet_id = 'alpine-biome-candidate'").run();
@@ -3469,6 +3522,64 @@ describe('Worker API', () => {
       }),
     }));
     expect(clear.response.status).toBe(201);
+  });
+
+  // #2948: every other way to give a land candidate new geometry (single
+  // POST, batch POST, generate-mosaic) already enforces #570's overlap
+  // check -- the PUT/PATCH update path never did, letting an admin
+  // correction silently move a pending candidate onto already-materialized
+  // or already-pending land. Deliberately reuses 'overlap-base-candidate'
+  // (materialized) and 'overlap-pending-candidate' (still pending) from
+  // the test just above rather than creating fresh fixtures at a new
+  // distance from the origin -- whether a given distance/area combination
+  // materializes immediately depends on the live world radius this test
+  // file has organically grown to by this point, which the test just
+  // above already proves these two exact candidates straddle correctly.
+  it('rejects a PUT/PATCH land-candidate update that would make it overlap existing land (#2948)', async () => {
+    const subject = await api('/land-candidates', adminSession({
+      method: 'POST',
+      body: JSON.stringify({ landletId: 'patch-overlap-subject', name: 'Patch overlap subject', areaM2: 4, center: { x: 8450, y: 8000 } }),
+    }));
+    expect(subject.response.status).toBe(201);
+    expect(subject.body.candidate.materializedAt).toBeNull();
+
+    // Moving it onto the already-materialized 'overlap-base-candidate' is
+    // rejected, same as a brand-new POST at that position would be.
+    const ontoMaterialized = await api('/land-candidates/patch-overlap-subject', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ center: { x: 8000, y: 8000 } }),
+    }));
+    expect(ontoMaterialized.response.status).toBe(409);
+    expect(ontoMaterialized.body).toEqual({ error: 'Candidate would overlap existing land' });
+    // The rejected update left the candidate exactly where it was.
+    const afterRejectedMove = await api('/land-candidates/patch-overlap-subject', adminSession());
+    expect(afterRejectedMove.body.candidate.center).toEqual({ x: 8450, y: 8000 });
+
+    // Moving it onto the still-pending 'overlap-pending-candidate' is
+    // rejected the same way.
+    const ontoPending = await api('/land-candidates/patch-overlap-subject', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ center: { x: 8100, y: 8000 } }),
+    }));
+    expect(ontoPending.response.status).toBe(409);
+
+    // An update that doesn't move the candidate at all must not spuriously
+    // conflict with its own pre-update self -- confirms the overlap check
+    // correctly excludes the row's own previous row from the comparison.
+    const noOpMove = await api('/land-candidates/patch-overlap-subject', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ center: { x: 8450, y: 8000 } }),
+    }));
+    expect(noOpMove.response.status).toBe(200);
+    expect(noOpMove.body.candidate.center).toEqual({ x: 8450, y: 8000 });
+
+    // A real move to genuinely clear ground still succeeds.
+    const clearMove = await api('/land-candidates/patch-overlap-subject', adminSession({
+      method: 'PATCH',
+      body: JSON.stringify({ center: { x: 8450, y: 8100 } }),
+    }));
+    expect(clearMove.response.status).toBe(200);
+    expect(clearMove.body.candidate.center).toEqual({ x: 8450, y: 8100 });
   });
 
   it('deletes only pending land candidates', async () => {

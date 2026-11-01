@@ -261,7 +261,9 @@ describe('Accounts v2 migration (#2920)', () => {
     expect(v2Requests).toHaveLength(1);
     expect(v2Requests[0].headers['content-type']).toBe('application/json');
     expect(v2Requests[0].headers['stripe-version']).toBeTruthy();
-    expect(v2Requests[0].headers['idempotency-key']).toBe(`seller-account-create:${seller.sellerId}`);
+    // #2958: scoped to the submitted content, not just the seller id --
+    // see stripeAccountCreateIdempotencyKey's own comment.
+    expect(v2Requests[0].headers['idempotency-key']).toMatch(new RegExp(`^seller-account-create:${seller.sellerId}:[0-9a-f]{64}$`));
     const v2Body = JSON.parse(v2Requests[0].body);
     expect(v2Body.identity.country).toBe('US');
     expect(v2Body.identity.entity_type).toBe('individual');
@@ -417,6 +419,59 @@ describe('Accounts v2 migration (#2920)', () => {
 
     const row = await env.DB.prepare('SELECT stripe_account_id FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
     expect(row.stripe_account_id).toBeNull();
+  });
+
+  // #2958: the idempotency key sent on the v2 create call used to be
+  // fixed per seller forever (`seller-account-create:${sellerId}`), so a
+  // resubmission after the bank-attach failure above hit Stripe's own
+  // idempotency cache and replayed the original, already-deleted account
+  // instead of ever sending the corrected routing number to Stripe at
+  // all. Confirms the key now changes when the resubmitted content
+  // changes (a genuine new attempt that needs a fresh key), but stays
+  // the same for a byte-identical resubmit (a genuine network retry,
+  // which still needs Stripe's own idempotency cache to work -- minting
+  // a random key on every call would defeat that entirely).
+  it('mints a fresh idempotency key when a resubmission changes the content, but reuses it for an unchanged resubmit', async () => {
+    const seller = await signupSeller('stripe-v2-idempotency-content-scoped');
+    const originalFetch = globalThis.fetch;
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    const v2RequestKeys = [];
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.stripe.com/v2/core/accounts' && init?.method === 'POST') {
+        v2RequestKeys.push(init.headers['idempotency-key']);
+        return new Response(JSON.stringify({ id: 'acct_v2_idempotency_test', object: 'v2.core.account' }), { status: 200 });
+      }
+      // Bank-attach always fails -- keeps stripe_account_id null so every
+      // submission below takes the same "create" branch instead of one
+      // of them falling through to the update branch (which never uses
+      // an idempotency key at all).
+      if (url === 'https://api.stripe.com/v1/accounts/acct_v2_idempotency_test' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ error: { message: 'Invalid routing number' } }), { status: 400 });
+      }
+      if (url === 'https://api.stripe.com/v1/accounts/acct_v2_idempotency_test' && init?.method === 'DELETE') {
+        return new Response(JSON.stringify({ deleted: true }), { status: 200 });
+      }
+      return originalFetch(input, init);
+    };
+    try {
+      await api('/sellers/me/stripe-account', seller.session({
+        method: 'POST', body: JSON.stringify(validPayload()),
+      }));
+      await api('/sellers/me/stripe-account', seller.session({
+        method: 'POST', body: JSON.stringify(validPayload({ externalAccount: { routingNumber: '990000000' } })),
+      }));
+      await api('/sellers/me/stripe-account', seller.session({
+        method: 'POST', body: JSON.stringify(validPayload({ externalAccount: { routingNumber: '990000000' } })),
+      }));
+    } finally {
+      globalThis.fetch = originalFetch;
+      env.STRIPE_SECRET_KEY = undefined;
+    }
+    expect(v2RequestKeys).toHaveLength(3);
+    const [original, corrected, resubmitOfCorrected] = v2RequestKeys;
+    expect(corrected).not.toBe(original);
+    expect(resubmitOfCorrected).toBe(corrected);
   });
 });
 
@@ -1027,5 +1082,88 @@ describe('Higgles redemption (#625)', () => {
     const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM higgles_redemptions WHERE builder_id = ?')
       .bind(builder.builderId).first();
     expect(count.n).toBe(1);
+  });
+
+  // #2944: handleBuilderRedeem used to send its real Stripe transfers/
+  // payouts calls to sessionBuilder.stripe_account_id -- captured at the
+  // very top of the request, before checkRateLimit/readJson/
+  // annualGrossIncome/claimOrResumeBuilderRedemption all await. An admin's
+  // own stripe-account-reset (worker/index.js, builder-side) landing in
+  // that window would null the live stripe_account_id without this
+  // handler ever noticing, misdirecting the transfer to an account this
+  // builder's own record no longer shows as connected. Deterministic,
+  // same "intercept the shared statement and drive the concurrent write
+  // to completion before letting the real one proceed" idiom PR #2945
+  // just established for the sibling half of this same issue.
+  it("re-verifies the live stripe_account_id right before the real Stripe calls, catching an admin's reset that landed mid-request (#2944)", async () => {
+    const builder = await signupBuilder('redeem-stale-account-race');
+    await connectBuilder(builder);
+    await creditHiggles(builder, 5000);
+
+    const originalFetch = globalThis.fetch;
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    let transferCalled = false;
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.stripe.com/v1/transfers' && init?.method === 'POST') {
+        transferCalled = true;
+        return new Response(JSON.stringify({ id: 'tr_should_not_happen' }), { status: 200 });
+      }
+      if (url === 'https://api.stripe.com/v1/payouts' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'po_should_not_happen' }), { status: 200 });
+      }
+      return originalFetch(input, init);
+    };
+
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      const stmt = originalPrepare(sql);
+      if (armed && sql.includes('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ?')) {
+        armed = false;
+        const originalBind = stmt.bind.bind(stmt);
+        stmt.bind = (...bindArgs) => {
+          const bound = originalBind(...bindArgs);
+          const originalRun = bound.run.bind(bound);
+          bound.run = async () => {
+            // The admin's own reset commits here, in the window between
+            // sessionBuilder's own capture (already resolved by this
+            // point) and the real Stripe calls still to come.
+            await originalPrepare(`
+              UPDATE builders SET stripe_account_id = NULL, stripe_onboarding_status = 'not_started', stripe_requirements_due = NULL
+              WHERE builder_id = ?
+            `).bind(builder.builderId).run();
+            return originalRun();
+          };
+          return bound;
+        };
+      }
+      return stmt;
+    };
+    let redeemed;
+    try {
+      redeemed = await api('/builders/me/redeem', builder.session({
+        method: 'POST', body: JSON.stringify({ amountCents: 2000 }),
+      }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+      globalThis.fetch = originalFetch;
+      env.STRIPE_SECRET_KEY = undefined;
+    }
+
+    expect(redeemed.response.status).toBe(409);
+    // The stale, now-disconnected account must never actually receive a
+    // transfer -- the whole point of the fix.
+    expect(transferCalled).toBe(false);
+
+    // The balance claim must have been released, not left stranded.
+    const row = await env.DB.prepare('SELECT higgles_balance_cents FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(row.higgles_balance_cents).toBe(5000);
+
+    // No dangling redemption row left behind either.
+    const count = await env.DB.prepare('SELECT COUNT(*) AS n FROM higgles_redemptions WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(count.n).toBe(0);
   });
 });

@@ -83,10 +83,16 @@ function footprintsOverlap(a, b) {
     pointToSegmentDistance(circle, point, polygon[(index + 1) % polygon.length]) < circle.radius);
 }
 
-async function assertLandCandidatesDontOverlapExisting(db, newRows, message) {
+// #2948: excludeLandletId lets the PUT/PATCH update path (the one caller
+// that's re-checking a candidate already present in landlet_candidates)
+// check against every OTHER existing candidate without the row's own
+// pre-update self always trivially "overlapping" itself.
+async function assertLandCandidatesDontOverlapExisting(db, newRows, message, excludeLandletId = null) {
   const [existingLandlets, existingCandidates] = await Promise.all([
     db.prepare("SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlets WHERE landlet_id <> 'starter-landlet'").all(),
-    db.prepare('SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlet_candidates').all(),
+    excludeLandletId
+      ? db.prepare('SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlet_candidates WHERE landlet_id <> ?').bind(excludeLandletId).all()
+      : db.prepare('SELECT center_x_m, center_y_m, area_m2, polygon_json FROM landlet_candidates').all(),
   ]);
   // Only a landlet with a real polygon represents genuinely-positioned land
   // here -- landletWorldPolygon's own comment already treats a polygon-less
@@ -656,6 +662,12 @@ async function handleLandCandidates(request, db, route, url) {
     }, route[1]);
     const row = candidateRowFromLandlet(landlet);
     row.ring_id = existing.ring_id;
+    // #2948: every other way to give a candidate new geometry (single POST,
+    // batch POST, generate-mosaic) enforces this; this update path never
+    // did, so an admin correction could silently move a candidate onto
+    // already-claimed/already-rendered land -- see issue-570's comment
+    // above for why this invariant exists at all.
+    await assertLandCandidatesDontOverlapExisting(db, [row], 'Candidate would overlap existing land', route[1]);
     const update = db.prepare(`
       UPDATE landlet_candidates
       SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, landlet_class = ?, landlet_type = ?, biome = ?,

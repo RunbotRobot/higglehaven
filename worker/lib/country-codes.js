@@ -72,8 +72,13 @@ export function countryNameToCode(name) {
 
 // Same free-text problem as country above, for the W-9 form's own `state`
 // field (worker/lib/seller-payouts-tax.js's w9Fields) -- "California" vs.
-// "CA". US states + DC only (the only jurisdiction this form's state
-// field is ever for, since w9 implies country = 'US').
+// "CA". US states + DC, plus the inhabited US territories (#2951) -- a W-9
+// is the correct form for a US person resident in Puerto Rico, Guam, the
+// U.S. Virgin Islands, American Samoa, or the Northern Mariana Islands
+// too, and transmitTax1099Form (#2939) now fails closed on an unresolved
+// state rather than just degrading a soft jurisdiction-content lookup, so
+// this table being incomplete would permanently block a real filing for
+// one of these filers.
 const US_STATE_NAME_TO_CODE = {
   'alabama': 'AL', 'alaska': 'AK', 'arizona': 'AZ', 'arkansas': 'AR', 'california': 'CA',
   'colorado': 'CO', 'connecticut': 'CT', 'delaware': 'DE', 'district of columbia': 'DC',
@@ -86,6 +91,8 @@ const US_STATE_NAME_TO_CODE = {
   'pennsylvania': 'PA', 'rhode island': 'RI', 'south carolina': 'SC', 'south dakota': 'SD',
   'tennessee': 'TN', 'texas': 'TX', 'utah': 'UT', 'vermont': 'VT', 'virginia': 'VA',
   'washington': 'WA', 'west virginia': 'WV', 'wisconsin': 'WI', 'wyoming': 'WY',
+  'puerto rico': 'PR', 'guam': 'GU', 'u.s. virgin islands': 'VI', 'virgin islands': 'VI',
+  'american samoa': 'AS', 'northern mariana islands': 'MP',
 };
 
 export function usStateNameToCode(name) {

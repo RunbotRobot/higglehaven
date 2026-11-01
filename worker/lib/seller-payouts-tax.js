@@ -308,6 +308,26 @@ export async function handleBuilderRedeem(request, env, db) {
 
     let payout;
     try {
+      // #2944: sessionBuilder was captured at the top of this request,
+      // before checkRateLimit/readJson/annualGrossIncome/
+      // claimOrResumeBuilderRedemption all awaited -- an admin's own
+      // stripe-account-reset (worker/index.js, builder-side) can null out
+      // (or the builder could reconnect a different) stripe_account_id
+      // anywhere in that window. Sending the transfer below to the stale
+      // captured destination would misdirect real money to an account
+      // this builder's own record no longer shows as connected. Re-reading
+      // the live value right here, immediately before the first real
+      // Stripe call, narrows that window to the remaining gap inherent in
+      // calling an external API -- the same "evaluate live at the write's
+      // own execution" idiom #2936/#2945 already established for this same
+      // class of race. A mismatch throws here so the catch block below
+      // releases the claim exactly the same way a failed Stripe call
+      // already does.
+      const liveBuilder = await db.prepare('SELECT stripe_account_id FROM builders WHERE builder_id = ?')
+        .bind(sessionBuilder.builder_id).first();
+      if (liveBuilder?.stripe_account_id !== sessionBuilder.stripe_account_id) {
+        throw new HttpError('Your connected Stripe account changed — refetch and retry.', 409);
+      }
       // Two real Stripe calls, unlike a seller's own payout: higgles were
       // never sitting in any per-builder Stripe balance to begin with (a
       // seller's sale proceeds land in their own connected account
@@ -1108,6 +1128,24 @@ async function fetchTax1099EfilingToken(env) {
 async function transmitTax1099Form(env, { form, payeeEmail, payeeTaxId }) {
   const accessToken = await fetchTax1099EfilingToken(env);
   const endpoint = form.form_type === '1099-nec' ? 'Form1099NEC' : 'Form1099K';
+  // #2939: payeeTaxId.state/.country are the payee's own free-text form
+  // input (no code-picker -- see country-codes.js's own header comment),
+  // but Address.State/.CountryCd below are the vendor's real IRS-e-filing
+  // 2-letter-code fields. getUserTaxJurisdiction (this file, above)
+  // already normalizes these exact raw fields for the tax-education
+  // jurisdiction lookup; this is that same normalization, just also
+  // applied where it actually matters -- a real outbound federal filing.
+  // Fails closed (never silently sends unmapped free text) since an
+  // unresolvable value here means the stored form itself can't be
+  // correctly filed, not a transient vendor-side problem.
+  const stateCode = payeeTaxId.formType === 'w9' ? usStateNameToCode(payeeTaxId.state) : undefined;
+  if (payeeTaxId.formType === 'w9' && !stateCode) {
+    throw new HttpError(`This payee's W-9 state ("${payeeTaxId.state}") could not be resolved to a valid US state code for e-filing`, 400);
+  }
+  const countryCode = payeeTaxId.formType === 'w8ben' ? countryNameToCode(payeeTaxId.country) : 'US';
+  if (!countryCode) {
+    throw new HttpError(`This payee's W-8BEN country ("${payeeTaxId.country}") could not be resolved to a valid country code for e-filing`, 400);
+  }
   const body = {
     SubmissionManifest: { TaxYear: String(form.tax_year), IsFederalFiling: true },
     ReturnHeader: {
@@ -1125,9 +1163,9 @@ async function transmitTax1099Form(env, { form, payeeEmail, payeeTaxId }) {
         Address: {
           Line1: payeeTaxId.addressLine1,
           City: payeeTaxId.city,
-          State: payeeTaxId.state,
+          State: stateCode,
           ZipCd: payeeTaxId.postalCode,
-          CountryCd: payeeTaxId.country || 'US',
+          CountryCd: countryCode,
         },
       },
       NonEmployeeCompensation: form.form_type === '1099-nec' ? (form.gross_income_cents / 100) : undefined,
