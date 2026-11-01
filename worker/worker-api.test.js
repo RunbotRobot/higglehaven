@@ -232,6 +232,20 @@ describe('Worker API', () => {
     expect(await referenced.json()).toEqual({ error: 'Uploaded model is still referenced' });
 
     expect((await api('/catalog/uploaded-delete-test', { method: 'DELETE' })).response.status).toBe(200);
+    // #2748: POST /api/catalog also unconditionally creates a permanent
+    // 1:1 products row (product_id = templateId) for every new template
+    // -- deleting the one catalog_templates listing above does NOT free
+    // this model, since its products row (never deleted by any real code
+    // path) still references the same model_url. #2946 closed the gap
+    // where the reference check didn't know that; confirm it here before
+    // removing the products row directly (there's no real API to delete
+    // one -- same raw-SQL-fixture convention this file's own #1696 tests
+    // already use to simulate a reference from a table with no delete
+    // endpoint) to reach genuinely zero references.
+    const stillReferenced = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }));
+    expect(stillReferenced.status).toBe(409);
+    expect(await stillReferenced.json()).toEqual({ error: 'Uploaded model is still referenced' });
+    await env.DB.prepare('DELETE FROM products WHERE product_id = ?').bind('uploaded-delete-test').run();
     const removed = await SELF.fetch(`https://higglehaven.test${uploaded.modelUrl}`, adminSession({ method: 'DELETE' }));
     expect(removed.status).toBe(200);
     expect(await removed.json()).toEqual({ deleted: true });
@@ -608,6 +622,39 @@ describe('Worker API', () => {
     const directDelete = await SELF.fetch(`https://higglehaven.test${modelUrl}`, adminSession({ method: 'DELETE' }));
     expect(directDelete.status).toBe(409);
     expect(await directDelete.json()).toEqual({ error: 'Uploaded model is still referenced' });
+    expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(200);
+  });
+
+  // #2946: same gap as the two tests directly above, for the shared
+  // `products` table (migrations/0153_shared_products.sql) -- a model
+  // whose only remaining reference is a products row (every
+  // catalog_templates listing backed by it since deleted; products rows
+  // are never deleted) used to read back as unreferenced/deletable.
+  it('treats a shared product\'s model_url/image_url as still referenced (listing and raw delete)', async () => {
+    const form = new FormData();
+    form.set('file', glbFile({ json: '{"productReference":true}' }));
+    const upload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
+    const { modelUrl } = await upload.json();
+
+    await env.DB.prepare(`
+      INSERT INTO products (product_id, name, category, color, width_m, depth_m, height_m, model_url)
+      VALUES (?, 'Product reference test', 'furniture', '#123456', 1, 1, 1, ?)
+    `).bind('product-reference-product', modelUrl).run();
+
+    const listing = await api('/models?limit=100', adminSession());
+    expect(listing.body.models).toContainEqual(expect.objectContaining({
+      modelUrl,
+      referencedByProductIds: ['product-reference-product'],
+      deletable: false,
+    }));
+
+    const directDelete = await SELF.fetch(`https://higglehaven.test${modelUrl}`, adminSession({ method: 'DELETE' }));
+    expect(directDelete.status).toBe(409);
+    expect(await directDelete.json()).toEqual({ error: 'Uploaded model is still referenced' });
+    expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(200);
+
+    const cleanupResult = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false, minAgeMs: 0 });
+    expect(cleanupResult.targetModelUrls).not.toContain(modelUrl);
     expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(200);
   });
 
