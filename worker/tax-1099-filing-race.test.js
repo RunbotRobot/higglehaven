@@ -159,6 +159,21 @@ describe('1099 e-filing transmission country/state normalization (#2939)', () =>
     expect(lastCreateRequestBody.ReturnData[0].Payee.Address.CountryCd).toBe('US');
   });
 
+  // #2951: usStateNameToCode was originally written only for
+  // getUserTaxJurisdiction's soft tax-education lookup (US states + DC
+  // only, by its own old header comment) -- #2939 reused it for this
+  // strict, fail-closed real filing without checking whether a real W-9
+  // filer's address could fall outside that domain. A US-territory
+  // resident (Puerto Rico, Guam, etc.) is a legitimate W-9 filer with no
+  // state, and would have been permanently rejected here before #2951.
+  it('normalizes a US territory name to its own 2-letter code before e-filing a W-9 payee', async () => {
+    const formId = await approvedFormFor('tax-1099-file-territory-name', { state: 'Puerto Rico' });
+
+    const filed = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
+    expect(filed.response.status).toBe(200);
+    expect(lastCreateRequestBody.ReturnData[0].Payee.Address.State).toBe('PR');
+  });
+
   it('normalizes a spelled-out country to its 2-letter code before e-filing a W-8BEN payee', async () => {
     const formId = await approvedFormFor('tax-1099-file-country-name', {
       formType: 'w8ben', country: 'France', countryOfCitizenship: 'France', foreignTaxId: 'FR123456789',
