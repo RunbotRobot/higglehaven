@@ -4049,6 +4049,13 @@ export function validateInstance(input, fallbackId) {
     // docs/API.md's "Community calendar" — same per-instance opt-in
     // reasoning as isCommunitySign, independent of it.
     isCommunityCalendar: input.isCommunityCalendar === true,
+    // #2959: round-tripped through purely so a Delete+Undo cycle (which
+    // recreates the instance via POST /instances/batch) can restore the
+    // groupId it had before the delete — worker/lib/world-objects.js's
+    // batch handler is what actually gates whether a create honors this
+    // value (only when it names a group the caller already owns a member
+    // of), not this function.
+    groupId: input.groupId ? stringValue(input.groupId, 'groupId') : null,
   };
 }
 

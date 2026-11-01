@@ -269,6 +269,32 @@ export async function handleInstances(request, env, route, url) {
     const landletIdsToCheck = new Set(instances.map((instance) => instance.landletId));
     for (const existing of existingInstances.values()) landletIdsToCheck.add(existing.landletId);
     await requireOwnedLandlets(db, landletIdsToCheck, sessionBuilder.builder_id);
+    // #2959: a client-supplied groupId is only ever honored here (never on
+    // the ON CONFLICT UPDATE below, which still never touches group_id —
+    // the #2764 rule that only /instances/group and /instances/ungroup
+    // change this column stays true for every *existing* row) when it
+    // already names a group this caller verifiably owns at least one
+    // member of. group_id values are visible to anyone via the unauthenticated
+    // GET /api/instances (instanceFromRow), so trusting an unverified
+    // client-supplied value on a fresh INSERT would let a crafted create
+    // silently attach a brand new instance to any other builder's group,
+    // griefing their later /instances/ungroup (which would then 409 on an
+    // instanceId whose landlet this caller never owned). Restricting it to
+    // groups the caller already has a member of closes that off while still
+    // letting restoreSnapshot's undo-recreate (src/build/scene.js, the only
+    // real caller that ever sends a non-null groupId) restore an instance's
+    // own group membership after a Delete+Undo cycle.
+    const candidateGroupIds = [...new Set(instances.map((instance) => instance.groupId).filter(Boolean))];
+    let verifiedGroupIds = new Set();
+    if (candidateGroupIds.length > 0) {
+      const placeholders = candidateGroupIds.map(() => '?').join(', ');
+      const { results: ownedGroups } = await db.prepare(`
+        SELECT DISTINCT group_id FROM placed_instances
+        WHERE group_id IN (${placeholders})
+          AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = placed_instances.landlet_id AND owner_builder_id = ?)
+      `).bind(...candidateGroupIds, sessionBuilder.builder_id).all();
+      verifiedGroupIds = new Set(ownedGroups.map((row) => row.group_id));
+    }
     const conflictClause = request.method === 'PUT' ? `
       ON CONFLICT(instance_id) DO UPDATE SET
         landlet_id = excluded.landlet_id, template_id = excluded.template_id,
@@ -284,11 +310,11 @@ export async function handleInstances(request, env, route, url) {
     // point-in-time requireOwnedLandlets check above alone.
     const batchResults = await db.batch(instances.map((instance) => db.prepare(`
       INSERT INTO placed_instances
-        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       WHERE EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
       ${conflictClause}
-    `).bind(...instanceParams(instance), instance.landletId, sessionBuilder.builder_id)));
+    `).bind(...instanceParams(instance), verifiedGroupIds.has(instance.groupId) ? instance.groupId : null, instance.landletId, sessionBuilder.builder_id)));
     // #1772: a batch can span multiple landlets (requireOwnedLandlets above
     // explicitly supports that), and db.batch() has no atomic rollback on a
     // WHERE-guard mismatch (same D1 semantics the single-instance PATCH

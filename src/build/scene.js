@@ -1255,6 +1255,12 @@ function instanceFromMesh(mesh) {
     scale: mesh.userData.scale ?? 1,
     isCommunitySign: mesh.userData.isCommunitySign ?? false,
     isCommunityCalendar: mesh.userData.isCommunityCalendar ?? false,
+    // #2959: restoreSnapshot's recreate branch (undoing a Delete) rebuilds a
+    // mesh from a captured snapshot with no other way to know its prior
+    // groupId -- carrying it through here is what lets that recreated
+    // mesh's own instanceFromMesh call (inside syncBatchCreate) ask the
+    // server to restore it, instead of coming back permanently ungrouped.
+    groupId: mesh.userData.groupId ?? null,
   };
 }
 
