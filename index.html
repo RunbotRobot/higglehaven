@@ -5465,6 +5465,14 @@
               <input type="checkbox" id="auth-signup-age-attest" required />
               I confirm I am at least 18 years old
             </label>
+            <!-- #2941: invisible/managed Turnstile widget -- renders nothing
+                 visible (that's what "invisible mode" on the Cloudflare
+                 dashboard's sitekey config means), populated by
+                 src/account/auth.js only once the signup form is actually
+                 opened (see src/main.js's loadTurnstileJs, same lazy-load
+                 shape as Stripe.js). Absent entirely, not just empty, when
+                 GET /api/auth/turnstile-sitekey returns no sitekey. -->
+            <div id="auth-signup-turnstile"></div>
             <button type="submit">Sign Up</button>
           </form>
 

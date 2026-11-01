@@ -52,6 +52,7 @@ import { HttpError, json, clientIp } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue } from './validation.js';
 import { timingSafeEqual, bytesToHex, hexToBytes } from './crypto.js';
+import { turnstileConfigured, verifyTurnstileToken } from './turnstile.js';
 import {
   SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser,
 } from './auth.js';
@@ -182,16 +183,24 @@ export async function handleSignup(request, env, db, url) {
     throw new HttpError('You must confirm you meet the age requirement to sign up.', 400);
   }
 
+  // #2941: never gates the signup itself -- see turnstile.js's own
+  // comment and migrations/0171's for why turnstileFailedAt stays NULL
+  // (rather than recording a failure) whenever the feature is off here,
+  // not just when it actually passed.
+  const turnstileFailedAt = turnstileConfigured(env) && !(await verifyTurnstileToken(env, input.turnstileToken, clientIp(request)))
+    ? new Date().toISOString()
+    : null;
+
   const emailCanonical = canonicalizeEmail(email);
   const userId = `user-${crypto.randomUUID()}`;
   const passwordHash = await hashPassword(password);
   const ageAttestedAt = new Date().toISOString();
   const inserted = await db.prepare(`
-    INSERT INTO users (user_id, email, password_hash, username, email_canonical, age_attested_at)
-    SELECT ?, ?, ?, ?, ?, ?
+    INSERT INTO users (user_id, email, password_hash, username, email_canonical, age_attested_at, turnstile_failed_at)
+    SELECT ?, ?, ?, ?, ?, ?, ?
     WHERE NOT EXISTS (SELECT 1 FROM users WHERE email = ? OR email_canonical = ? OR username = ?)
   `).bind(
-    userId, email, passwordHash, username, emailCanonical, ageAttestedAt,
+    userId, email, passwordHash, username, emailCanonical, ageAttestedAt, turnstileFailedAt,
     email, emailCanonical, username,
   ).run();
   if (inserted.meta.changes === 0) {

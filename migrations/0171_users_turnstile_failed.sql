@@ -1,0 +1,28 @@
+-- #2941 (owner decision, 2026-10-31, originating from #2215's own "option
+-- 4" discussion): adds Cloudflare Turnstile (invisible/managed mode) to
+-- signup as a backend-only, invisible signal -- never a visible gate, per
+-- the owner's explicit "fail open, no visible consequence ever" rule.
+--
+-- turnstile_failed_at is nullable and stays NULL in two very different
+-- cases that must NOT be told apart by the flag-weighting code that reads
+-- it (worker/lib/reputation.js's computeProductFlagWeight): (1) the
+-- account passed Turnstile cleanly, or (2) TURNSTILE_SECRET_KEY was never
+-- configured on this deployment at signup time (true for local dev, the
+-- whole automated test suite, and every account created before this
+-- feature shipped), so verification was never attempted at all. Only a
+-- signup where the secret WAS configured AND the check came back as
+-- anything other than a clean success (challenge failure, missing/empty
+-- token from a widget that failed to load, a Cloudflare API error or
+-- timeout) sets this to the signup-time timestamp. This asymmetry is
+-- deliberate: if it instead meant "did not pass OR was never checked,"
+-- every account ever created in this test suite (which never sets the
+-- secret) would read as suspect, discounting every flag from every test
+-- builder uniformly and silently breaking #2215's own just-shipped
+-- same-IP-weighting tests (which assert pendingWeight reflects full
+-- weight-1-per-distinct-IP with no other discount in play). Restricting
+-- the negative signal to "verification was live and actually failed"
+-- means an environment where the feature is off behaves exactly as if
+-- this column didn't exist, and #2215's weighting composes with this one
+-- independently (migrations/0170's own comment) rather than the two
+-- fighting over the same bit.
+ALTER TABLE users ADD COLUMN turnstile_failed_at TEXT;

@@ -32,12 +32,27 @@ async function requestJson(path, options) {
 // Returns the full response body, not just `user` — verificationEmailSent/
 // devVerifyUrl (see docs/API.md's "Authentication") matter to the signup
 // UI too, unlike logIn below where nothing but the user is ever relevant.
-export async function signUp({ email, password, username, ageAttested }) {
+export async function signUp({ email, password, username, ageAttested, turnstileToken }) {
   return requestJson('/auth/signup', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ email, password, username, ageAttested }),
+    body: JSON.stringify({ email, password, username, ageAttested, turnstileToken }),
   });
+}
+
+// #2941: null sitekey (including on a fetch failure, never thrown to the
+// caller) means either TURNSTILE_SITE_KEY isn't configured on this
+// deployment or the lookup itself failed -- src/account/auth.js's own
+// caller treats both identically, by just not rendering a widget at all.
+// Same fail-open spirit as the backend check itself: this lookup is never
+// allowed to block opening the signup form.
+export async function getTurnstileSitekey() {
+  try {
+    const { sitekey } = await requestJson('/auth/turnstile-sitekey');
+    return sitekey;
+  } catch {
+    return null;
+  }
 }
 
 export async function logIn({ email, password }) {

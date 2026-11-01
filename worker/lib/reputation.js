@@ -384,6 +384,19 @@ const PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX = 20;
 // admin review -- see handleInstancePurchase's own flagged_hidden_at guard.
 const PRODUCT_FLAG_AUTO_HIDE_THRESHOLD = 3;
 
+// #2941 (owner decision, 2026-10-31, same decision that settled #2215's
+// own option 2): a flag from an account whose signup Turnstile check
+// actively failed (migrations/0171 -- NULL here means either a clean
+// pass OR the feature being off at signup time, never "suspect by
+// default") counts for less, composing with the IP-dedup factor below
+// rather than replacing it, per #2941's own sequencing note. 0.5, not 0:
+// unlike an exact shared IP (a near-certain same-device signal), a single
+// failed/missing Turnstile check is a softer signal on its own (the real
+// failure modes #2941 itself calls out -- a privacy-hardened browser, an
+// in-app webview, an aggressive script blocker -- are not bot traffic),
+// so it discounts rather than zeroes a flag outright.
+const TURNSTILE_FAILED_FLAG_WEIGHT_MULTIPLIER = 0.5;
+
 // #2215 (owner decision, 2026-10-31, option 2): the first pending flag
 // against a listing from a given real IP counts fully toward the
 // auto-hide threshold; any further pending flag sharing that same IP
@@ -395,12 +408,15 @@ const PRODUCT_FLAG_AUTO_HIDE_THRESHOLD = 3;
 // is deliberately never treated as a real match here -- every caller with
 // no header would otherwise collide on that one literal string and get
 // zeroed out together, which isn't a same-device signal at all.
-async function computeProductFlagWeight(db, templateId, flaggerIp) {
+async function computeProductFlagWeight(db, templateId, flaggerIp, flaggerUserId) {
   if (flaggerIp === 'unknown') return 1;
   const sameIpPending = await db.prepare(`
     SELECT 1 FROM product_flags WHERE template_id = ? AND status = 'pending' AND flagger_ip = ? LIMIT 1
   `).bind(templateId, flaggerIp).first();
-  return sameIpPending ? 0 : 1;
+  const ipWeight = sameIpPending ? 0 : 1;
+  if (ipWeight === 0) return 0;
+  const flagger = await db.prepare('SELECT turnstile_failed_at FROM users WHERE user_id = ?').bind(flaggerUserId).first();
+  return flagger?.turnstile_failed_at ? ipWeight * TURNSTILE_FAILED_FLAG_WEIGHT_MULTIPLIER : ipWeight;
 }
 
 export async function handleProductFlags(request, db, route) {
@@ -424,7 +440,7 @@ export async function handleProductFlags(request, db, route) {
     // other unhandled UNIQUE violation in this file.
     const flagId = `product-flag-${crypto.randomUUID()}`;
     const flaggerIp = clientIp(request);
-    const weight = await computeProductFlagWeight(db, templateId, flaggerIp);
+    const weight = await computeProductFlagWeight(db, templateId, flaggerIp, sessionBuilder.user_id);
     await db.prepare(`
       INSERT INTO product_flags (flag_id, template_id, flagger_builder_id, reason, flagger_ip, weight)
       VALUES (?, ?, ?, ?, ?, ?)

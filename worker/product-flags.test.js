@@ -165,6 +165,50 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     expect(second.body.pendingWeight).toBe(2);
   });
 
+  // #2941: TURNSTILE_SECRET_KEY is never configured in this suite (see
+  // turnstile.js's own comment), so every signup's own turnstile_failed_at
+  // stays NULL via the ordinary signup path -- there's no way to exercise
+  // a real failed-verification account without a live Turnstile call this
+  // suite deliberately never makes. Writing turnstile_failed_at directly
+  // (the same shortcut signup()'s own trust_tier backfill in
+  // test-helpers.js already uses for an equivalent "can't drive this
+  // through the real third-party flow in tests" gap) isolates the
+  // *weighting* logic under test from the *verification* call, which
+  // reviews-auth.test.js's own signup tests already cover separately.
+  it('discounts, but does not zero, a flag from an account whose Turnstile check failed (#2941)', async () => {
+    const seller = await signupSeller('flag-weight-turnstile-seller');
+    await createTemplate('flag-weight-turnstile-template', seller);
+    const [cleanFlagger, failedFlagger, thirdFlagger] = await Promise.all(
+      [1, 2, 3].map((n) => signupBuilder(`flag-weight-turnstile-flagger-${n}`)),
+    );
+    await env.DB.prepare("UPDATE users SET turnstile_failed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE email = ?")
+      .bind(failedFlagger.email).run();
+
+    const first = await api('/catalog/flag-weight-turnstile-template/flags', cleanFlagger.session({ method: 'POST', body: JSON.stringify({}) }));
+    expect(first.body.pendingWeight).toBe(1);
+
+    // Distinct IP (the ordinary per-call random synthetic IP from
+    // test-helpers.js's own api() default), but a failed Turnstile check
+    // halves this flag's own contribution -- composes with the IP factor
+    // (migrations/0170) rather than replacing it.
+    const second = await api('/catalog/flag-weight-turnstile-template/flags', failedFlagger.session({ method: 'POST', body: JSON.stringify({}) }));
+    expect(second.body.pendingCount).toBe(2);
+    expect(second.body.pendingWeight).toBe(1.5);
+    expect(second.body.autoHidden).toBe(false);
+
+    // A third, ordinary (Turnstile-clean) distinct-IP flag pushes the
+    // weighted sum to 2.5 -- still under the threshold of 3, confirming
+    // the discount, not just the undiscounted IP factor, is what's being
+    // summed.
+    const third = await api('/catalog/flag-weight-turnstile-template/flags', thirdFlagger.session({ method: 'POST', body: JSON.stringify({}) }));
+    expect(third.body.pendingCount).toBe(3);
+    expect(third.body.pendingWeight).toBe(2.5);
+    expect(third.body.autoHidden).toBe(false);
+
+    const fetched = await api('/catalog/flag-weight-turnstile-template');
+    expect(fetched.body.template.flaggedHiddenAt).toBeFalsy();
+  });
+
   it('does not notify the seller on a flag that does not cross the auto-hide threshold', async () => {
     const seller = await signupSeller('flag-no-notify-seller');
     await createTemplate('flag-no-notify-template', seller);
