@@ -258,4 +258,120 @@ describe('Group/Ungroup (#2764)', () => {
     expect(second.body.instance.groupId).toBe(priorGroupId);
     expect(third.body.instance.groupId).toBe(null);
   });
+
+  // #2959: Build mode's Delete+Undo cycle recreates a deleted instance via
+  // a fresh POST /api/instances/batch call (src/build/scene.js's
+  // restoreSnapshot) -- the client knows the instance's own pre-delete
+  // groupId (captured in its undo snapshot) and now sends it along, but the
+  // server must still independently decide whether to trust it.
+  it('restores groupId on a batch-create that supplies a groupId the caller already owns a member of (undo-recreate)', async () => {
+    // Own local instancePlacer() rather than the shared, suite-wide
+    // placeInstance -- see the PUT-update test below's own comment on why.
+    const placeHere = instancePlacer();
+    await placeHere(builder.session, { instanceId: 'group-j-1', landletId });
+    await placeHere(builder.session, { instanceId: 'group-j-2', landletId });
+    const grouped = await api('/instances/group', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceIds: ['group-j-1', 'group-j-2'] }),
+    }));
+    expect(grouped.response.status).toBe(201);
+    const groupId = grouped.body.groupId;
+
+    // Simulates a Delete+Undo cycle: group-j-2 is hard-deleted, then
+    // recreated with the same instanceId via the batch create endpoint,
+    // carrying the groupId its own undo snapshot captured before the
+    // delete.
+    const deleted = await api('/instances/batch', builder.session({
+      method: 'DELETE',
+      body: JSON.stringify({ instanceIds: ['group-j-2'] }),
+    }));
+    expect(deleted.response.status).toBe(200);
+
+    const recreated = await api('/instances/batch', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instances: [{ instanceId: 'group-j-2', landletId, templateId: 'placeholder-tree', x: 5, y: 0, groupId }],
+      }),
+    }));
+    expect(recreated.response.status).toBe(201);
+    expect(recreated.body.instances[0].groupId).toBe(groupId);
+
+    const refetched = await api('/instances/group-j-2');
+    expect(refetched.body.instance.groupId).toBe(groupId);
+    // group-j-1 (never deleted) is unaffected either way.
+    const stillGrouped = await api('/instances/group-j-1');
+    expect(stillGrouped.body.instance.groupId).toBe(groupId);
+  });
+
+  // Sibling of the test above: a groupId the caller has no member of at all
+  // (someone else's real group, here) must be silently ignored rather than
+  // trusted, closing the griefing path docs/API.md's own #2959 note
+  // describes (a crafted create attaching a new instance to a victim's
+  // group, breaking their later ungroup).
+  it("ignores a batch-create's groupId naming a group the caller has no member of", async () => {
+    const otherBuilder = await signupBuilder('groups-foreign-group-builder');
+    const otherLandletId = 'instance-groups-foreign-landlet';
+    await createGreenbeltLandlet(otherLandletId);
+    const otherClaimed = await api(`/landlets/${otherLandletId}/claim`, otherBuilder.session({ method: 'POST' }));
+    expect(otherClaimed.response.status).toBe(200);
+    const placeOnOtherLandlet = instancePlacer();
+    await placeOnOtherLandlet(otherBuilder.session, { instanceId: 'group-k-1', landletId: otherLandletId });
+    await placeOnOtherLandlet(otherBuilder.session, { instanceId: 'group-k-2', landletId: otherLandletId });
+    const foreignGroup = await api('/instances/group', otherBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceIds: ['group-k-1', 'group-k-2'] }),
+    }));
+    expect(foreignGroup.response.status).toBe(201);
+
+    const created = await api('/instances/batch', builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instances: [{
+          instanceId: 'group-l-1', landletId, templateId: 'placeholder-tree', x: 6, y: 0, groupId: foreignGroup.body.groupId,
+        }],
+      }),
+    }));
+    expect(created.response.status).toBe(201);
+    expect(created.body.instances[0].groupId).toBe(null);
+
+    const refetched = await api('/instances/group-l-1');
+    expect(refetched.body.instance.groupId).toBe(null);
+    // The foreign group itself is untouched -- still exactly its own 2 members.
+    const firstForeign = await api('/instances/group-k-1');
+    const secondForeign = await api('/instances/group-k-2');
+    expect(firstForeign.body.instance.groupId).toBe(foreignGroup.body.groupId);
+    expect(secondForeign.body.instance.groupId).toBe(foreignGroup.body.groupId);
+  });
+
+  // Sibling of the ordinary-PATCH test above (#2764's own note): an
+  // ordinary PUT /instances/batch *update* (an instanceId that already
+  // exists) must not let a client-supplied groupId touch the stored value
+  // either -- #2959's new INSERT-time-only carve-out must not widen to
+  // cover updates.
+  it('ignores a groupId on an ordinary PUT /instances/batch update of an already-existing instance', async () => {
+    // Own local instancePlacer() (same shape the "otherLandlet" fixtures
+    // above already use) rather than the shared, suite-wide placeInstance
+    // -- its x keeps growing across every test in this file and group-m's
+    // two placements alone would otherwise push a later test's x past the
+    // landlet's own walkable bound. No overlap/collision check exists
+    // between placed instances (#846), so reusing x=0 here is safe.
+    const placeHere = instancePlacer();
+    await placeHere(builder.session, { instanceId: 'group-m-1', landletId });
+    await placeHere(builder.session, { instanceId: 'group-m-2', landletId });
+    const grouped = await api('/instances/group', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceIds: ['group-m-1', 'group-m-2'] }),
+    }));
+    expect(grouped.response.status).toBe(201);
+    const groupId = grouped.body.groupId;
+
+    const moved = await api('/instances/batch', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [{ instanceId: 'group-m-1', landletId, templateId: 'placeholder-tree', x: 7, y: 0, groupId: null }],
+      }),
+    }));
+    expect(moved.response.status).toBe(200);
+    expect(moved.body.instances[0].groupId).toBe(groupId);
+  });
 });

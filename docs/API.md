@@ -4372,12 +4372,26 @@ are independent, and an instance can be both at once.
 `groupId` (#2764) is `null` for an ordinary, independent instance, or a
 shared opaque string for every instance that was grouped together via
 `POST /api/instances/group` — see that endpoint below. It's read-only from
-every ordinary write: `POST`/`PUT`/`PATCH .../batch`, `POST /api/instances`,
-and `PUT`/`PATCH /api/instances/:instanceId` all ignore a `groupId` in the
-request body, the same "not ordinary-self-service-settable" treatment
-catalog templates' own `isTestModel`/`flaggedHiddenAt` get — only
-`POST /api/instances/group` and `POST /api/instances/ungroup` ever change
-it.
+every *update*: a `groupId` in the request body is always ignored for an
+instance that already exists, whether via `PUT`/`PATCH /api/instances/batch`
+or `PUT`/`PATCH /api/instances/:instanceId` — the same "not ordinary-
+self-service-settable" treatment catalog templates' own
+`isTestModel`/`flaggedHiddenAt` get. Normally `POST /api/instances/group`
+and `POST /api/instances/ungroup` are the only way to change it.
+
+The one exception (#2959): creating a brand-new instance — `POST
+/api/instances` or `POST`/`PUT /api/instances/batch` for an `instanceId`
+that doesn't already exist — *does* accept a client-supplied `groupId`, but
+only honors it when the caller already owns at least one other instance
+currently carrying that same `groupId` (checked server-side against
+`placed_instances`/`landlets`, not trusted as-is); any other value
+(including one naming a group the caller has no member of) is silently
+treated as `null`. This exists purely so a Delete+Undo cycle in Build mode
+(which recreates a deleted instance via a fresh `POST /api/instances/batch`
+call) can restore the `groupId` it had before the delete, without letting a
+crafted create attach a new instance to a group it was never part of —
+`groupId` is visible on any `GET /api/instances`/`GET
+/api/instances/:instanceId` response, so it can't be trusted unverified.
 
 ### `GET /api/instances`
 
