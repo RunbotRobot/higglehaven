@@ -48,6 +48,9 @@ describe('Friend voice channels (#2781)', () => {
       const alice = await signupBuilder('voice-channel-join-unverified-alice');
       const rejected = await api(`/voice/friend-channels/${alice.builderId}/join`, alice.session({ method: 'POST' }));
       expect(rejected.response.status).toBe(403);
+      // #2954: requireIdVerifiedSessionBuilder used to hardcode direct
+      // messages' own error text for every caller, including this one.
+      expect(rejected.body.error).toBe('ID verification is required to use voice chat.');
     });
 
     it('lets a builder start (join) their own channel with no friendship required', async () => {
