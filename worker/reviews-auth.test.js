@@ -2727,6 +2727,24 @@ describe('Authentication', () => {
     expect(attested.body.user).toMatchObject({ ageAttested: true, trustTier: 'none', cardFunding: null });
   });
 
+  // #2941: TURNSTILE_SECRET_KEY is never configured in this suite (same as
+  // every other third-party secret here -- see turnstile.js's own
+  // comment), so turnstileConfigured(env) is false and handleSignup must
+  // never even attempt verification, let alone reject a real signup over
+  // a missing/garbage token. The owner's "fail open, never block a real
+  // signup" rule holds trivially when the feature is off; this just
+  // confirms handleSignup's own gate actually skips the check rather than
+  // happening to pass it some other way.
+  it('completes signup normally with no turnstileToken field at all, and with a garbage one', async () => {
+    const noToken = await signup(`auth-turnstile-none-${crypto.randomUUID()}@example.com`, 'a fine long password');
+    expect(noToken.response.status).toBe(201);
+
+    const garbageToken = await signup(`auth-turnstile-garbage-${crypto.randomUUID()}@example.com`, 'a fine long password', {
+      turnstileToken: 'not-a-real-token',
+    });
+    expect(garbageToken.response.status).toBe(201);
+  });
+
   // #556: now that assertVerified actually gates real activity on
   // trust_tier, card-setup-intent/confirm-card simulate success when
   // Stripe isn't configured (same silent fallback this file already uses

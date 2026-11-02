@@ -2878,6 +2878,16 @@ export function stripeAccountStatusJson(env, row) {
 
 async function handleAuth(request, env, db, route, url, ctx) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'signup') return handleSignup(request, env, db, url);
+  // #2941: a plain, unauthenticated site-key lookup -- same "safe to hand
+  // to the browser by design" reasoning as STRIPE_PUBLISHABLE_KEY (see
+  // worker/lib/purchase-creation.js's own comment on that one): a
+  // Turnstile *site* key is meant to be embedded in public page markup,
+  // unlike TURNSTILE_SECRET_KEY. null (not a 503) when unconfigured, so
+  // the signup form's own widget-loading code can just skip rendering a
+  // widget at all rather than branching on an error.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'turnstile-sitekey') {
+    return json({ sitekey: env.TURNSTILE_SITE_KEY || null });
+  }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'login') return handleLogin(request, db, url);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'logout') return handleLogout(request, db, url);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'delete-account') {

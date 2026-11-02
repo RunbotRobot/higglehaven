@@ -19,10 +19,11 @@ import {
   fetchCurrentUser, requestPasswordReset, resetPassword, verifyEmail,
   resendVerificationEmail, changeEmail, ageAttest, cardSetupIntent,
   confirmCard, startDiditVerification, fetchDiditVerificationStatus,
+  getTurnstileSitekey,
 } from '../api.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { currentMode, setBuilderId, setSellerId } from '../world/state.js';
-import { loadStripeJs, START_MODE_KEY } from '../main.js';
+import { loadStripeJs, loadTurnstileJs, START_MODE_KEY } from '../main.js';
 import { setAccountSessionEnding } from '../shop/presenceAndContent.js';
 import { resetIdentityFlowPromises } from './identity.js';
 
@@ -324,6 +325,51 @@ function showAuthView(view) {
   // read as plain-text on a later visit despite being empty again.
   setPasswordToggleState(authSignupPasswordInput, authSignupPasswordToggleBtn, false);
   setPasswordToggleState(authLoginPasswordInput, authLoginPasswordToggleBtn, false);
+  // #2941: fire-and-forget, never awaited here -- entering the signup view
+  // must never be delayed by a slow/failed Turnstile load, matching the
+  // backend's own fail-open rule. ensureTurnstileWidget swallows its own
+  // errors for exactly this reason.
+  if (view === 'signup') ensureTurnstileWidget();
+}
+
+// #2941: sitekey is fetched once and cached (null means either not
+// configured on this deployment or the lookup itself failed -- treated
+// identically, per getTurnstileSitekey's own comment) rather than
+// re-fetched every time the signup view is opened.
+let turnstileSitekeyPromise = null;
+let turnstileWidgetId = null;
+async function ensureTurnstileWidget() {
+  if (turnstileWidgetId !== null) {
+    // #2941: a token expires a few minutes after it's issued (Cloudflare's
+    // own documented behavior) -- resetting on every re-entry to this view
+    // means a signup attempt long after the modal was first opened isn't
+    // silently submitted with a stale, already-expired token.
+    window.turnstile?.reset(turnstileWidgetId);
+    return;
+  }
+  if (!turnstileSitekeyPromise) turnstileSitekeyPromise = getTurnstileSitekey();
+  const sitekey = await turnstileSitekeyPromise;
+  if (!sitekey) return;
+  try {
+    const turnstile = await loadTurnstileJs();
+    turnstileWidgetId = turnstile.render('#auth-signup-turnstile', { sitekey });
+  } catch (error) {
+    // #2941: a widget that never renders at all is exactly the "fails to
+    // load" case the backend's own fail-open rule already covers --
+    // getTurnstileToken() below just returns '' when there's no widget id,
+    // same as an unresolved/expired one, so signup proceeds normally.
+    console.error('Turnstile widget failed to load', error);
+  }
+}
+
+// #2941: reads whatever the widget currently has, however incomplete --
+// never awaited, never blocks the submit button on the challenge
+// resolving. '' (not a resolved-but-empty token) when there's no widget
+// at all (not configured, or failed to load) or it hasn't produced a
+// token yet; the backend's own verifyTurnstileToken treats an empty
+// token as "unverified," never as an error to surface to the user.
+function getTurnstileToken() {
+  return turnstileWidgetId !== null ? (window.turnstile?.getResponse(turnstileWidgetId) ?? '') : '';
 }
 
 // Found via backlog audit (#373): refreshAccountAuthUI's own async fetches
@@ -546,9 +592,10 @@ authForms.signup.addEventListener('submit', async (event) => {
   const password = document.getElementById('auth-signup-password').value;
   const username = document.getElementById('auth-signup-username').value.trim();
   const ageAttested = document.getElementById('auth-signup-age-attest').checked;
+  const turnstileToken = getTurnstileToken();
   setAuthStatus('');
   try {
-    const result = await signUp({ email, password, username, ageAttested });
+    const result = await signUp({ email, password, username, ageAttested, turnstileToken });
     currentAuthUser = result.user;
     refreshAccountAuthUI();
     authForms.signup.reset();
