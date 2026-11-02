@@ -434,6 +434,35 @@ export async function handleNearbyChat(request, db, route, url) {
 // this is its own table rather than reusing voice_conduct_reports.
 const NEARBY_CHAT_REPORT_CREATE_RATE_LIMIT_MAX = 20;
 
+// #2953: conduct-report triage context for the admin's Control Room card.
+// "Hasn't been near the reported builder" is a probabilistic signal, not a
+// confirmed violation, so per the standing "anti-abuse signals never degrade
+// a legitimate user's visible experience" decision it is only ever recorded
+// here, invisibly -- never a gate on filing and never shown to the reporter.
+// Best-effort for the same reason: if the lookup fails, the report is still
+// filed, just without the annotation. The records are short-lived (signaling
+// and chat rows are pruned within minutes, presence is only fresh for
+// seconds), so the card says outright that a "no" is weak evidence.
+async function reportEvidenceLines(db, reporterBuilderId, reportedBuilderId, surfaceActivityLine) {
+  try {
+    const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
+    const coPresent = await db.prepare(`
+      SELECT 1 AS present FROM avatar_presence reporter
+      JOIN avatar_presence reported ON reported.landlet_id = reporter.landlet_id
+      WHERE reporter.builder_id = ? AND reported.builder_id = ?
+        AND reporter.updated_at >= ? AND reported.updated_at >= ?
+    `).bind(reporterBuilderId, reportedBuilderId, staleBefore, staleBefore).first();
+    return [
+      'Interaction evidence (admin triage only; these records are short-lived, so "no" is weak evidence):',
+      `- ${await surfaceActivityLine()}`,
+      `- Both in the same landlet right now: ${coPresent ? 'yes' : 'no'}`,
+    ];
+  } catch (error) {
+    console.error('report interaction evidence lookup failed', error);
+    return [];
+  }
+}
+
 async function handleNearbyChatReportCreate(request, db) {
   const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use nearby chat.');
   await checkRateLimit(db, `nearby-chat-report-create:${sessionBuilder.builder_id}`, NEARBY_CHAT_REPORT_CREATE_RATE_LIMIT_MAX);
@@ -457,6 +486,14 @@ async function handleNearbyChatReportCreate(request, db) {
   const controlRoomTitle = `Nearby chat conduct report against "${reportedLabel}"`;
   const controlRoomNoteLines = [`Reported builder: "${reportedLabel}" (${reportedBuilderId})`];
   if (reason) controlRoomNoteLines.push(`Reason: ${reason}`);
+  controlRoomNoteLines.push(...await reportEvidenceLines(db, sessionBuilder.builder_id, reportedBuilderId, async () => {
+    const message = await db.prepare(`
+      SELECT 1 AS present FROM nearby_chat_messages
+      WHERE builder_id = ? AND landlet_id = (SELECT landlet_id FROM avatar_presence WHERE builder_id = ?)
+      LIMIT 1
+    `).bind(reportedBuilderId, sessionBuilder.builder_id).first();
+    return `Reported builder has a chat message still on record in the reporter's landlet: ${message ? 'yes' : 'no'}`;
+  }));
   await db.batch([
     db.prepare(`
       INSERT INTO nearby_chat_reports (report_id, reporter_builder_id, reported_builder_id, reason)
@@ -726,6 +763,14 @@ async function handleVoiceReportCreate(request, db) {
   const controlRoomTitle = `Voice chat conduct report against "${reportedLabel}"`;
   const controlRoomNoteLines = [`Reported builder: "${reportedLabel}" (${reportedBuilderId})`];
   if (reason) controlRoomNoteLines.push(`Reason: ${reason}`);
+  controlRoomNoteLines.push(...await reportEvidenceLines(db, sessionBuilder.builder_id, reportedBuilderId, async () => {
+    const signal = await db.prepare(`
+      SELECT 1 AS present FROM voice_signaling_messages
+      WHERE (from_builder_id = ? AND to_builder_id = ?) OR (from_builder_id = ? AND to_builder_id = ?)
+      LIMIT 1
+    `).bind(sessionBuilder.builder_id, reportedBuilderId, reportedBuilderId, sessionBuilder.builder_id).first();
+    return `Shared voice signaling still on record: ${signal ? 'yes' : 'no'}`;
+  }));
   await db.batch([
     db.prepare(`
       INSERT INTO voice_conduct_reports (report_id, reporter_builder_id, reported_builder_id, reason)
