@@ -34,11 +34,27 @@
 // case) rather than B's own name -- still a fully concrete assertion that
 // the record actually refreshed and stopped crediting A, just not B's own
 // name specifically.
+//
+// #3004: the label was never the only symptom. reassign-owner's own cleanup
+// batch (land.js) deletes the previous owner's placed_instances server-side,
+// but refreshShopLandletRecordsNow's unload trigger originally only fired on
+// a `status` change -- reassign-owner leaves `status` at 'claimed' on both
+// sides, only ownerBuilderId moves, so entry.loaded never reset and the
+// shopper kept seeing A's now-server-deleted placed instance rendered
+// indefinitely. This now also places a real instance on A's landlet before
+// entering Shop mode, and tracks window.__testShopInstanceLodBand(instanceId)
+// (null once not currently loaded, 'none' for a loaded box-fallback instance
+// -- no model upload needed just to tell "loaded" from "not") through the
+// same three checkpoints the label already uses: loaded while still owned by
+// A, still (wrongly) loaded right after reassignment with no refresh yet,
+// then unloaded once the forced refresh runs.
 import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const LABEL_A = 'Record Refresh Suite Owner A';
 const LABEL_B = 'Record Refresh Suite Owner B';
+const TEMPLATE_ID = `record-refresh-suite-box-${Date.now()}`;
+const INSTANCE_ID = `record-refresh-suite-instance-${Date.now()}`;
 
 async function adminFetch(pathAndQuery, cookie, options = {}) {
   const response = await fetch(`${BASE_URL}/api${pathAndQuery}`, {
@@ -67,6 +83,53 @@ async function pageFetchJson(pathAndQuery, options) {
   }, [pathAndQuery, options]);
 }
 
+const { body: buildersBodyEarly } = await pageFetchJson('/api/builders');
+const builderA = buildersBodyEarly.builders.find((b) => b.label === LABEL_A);
+console.log('builder A found:', !!builderA);
+
+const { body: landletsBody } = await pageFetchJson(
+  `/api/landlets?status=claimed&ownerBuilderId=${builderA.builderId}&limit=100`,
+);
+const landlet = landletsBody.landlets[0];
+console.log('A\'s claimed landlet found:', !!landlet);
+
+// #3004: A becomes a seller and places a real (box-fallback, no model
+// upload needed -- see window.__testShopInstanceLodBand's own 'none' vs
+// null distinction above) instance on their own landlet, still on the same
+// page/session as the claim above. This is exactly the content
+// reassign-owner's own cleanup batch (land.js) deletes server-side; placing
+// it here is what lets the checkpoints below actually exercise the unload
+// path, not just the "built by" label.
+await chooseIdentity(page, { mode: 'sell', label: LABEL_A, isNew: true });
+if (await page.locator('#seller-modal.visible').count()) {
+  await page.waitForTimeout(300);
+  await page.click('#seller-close-btn');
+  await page.waitForTimeout(300);
+}
+const { body: sellerMeBody } = await pageFetchJson('/api/sellers/me');
+const sellerId = sellerMeBody.seller.sellerId;
+const templateCreated = await pageFetchJson('/api/catalog', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    templateId: TEMPLATE_ID,
+    name: 'Record Refresh Suite Box',
+    color: '#aa8866',
+    dimensions: { width: 1, depth: 1, height: 1 },
+    sellerId,
+    priceCents: 500,
+  }),
+});
+console.log('box template created (status should be 201):', templateCreated.status);
+const instancePlaced = await pageFetchJson('/api/instances', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({
+    instanceId: INSTANCE_ID, landletId: landlet.landletId, templateId: TEMPLATE_ID, x: 0, y: 0,
+  }),
+});
+console.log('box instance placed on A\'s landlet (status should be 201):', instancePlaced.status, instancePlaced.body);
+
 // Builder B, claimed on a second page in the same browser/session storage
 // (chooseIdentity's own signup flow needs its own page-level auth-modal
 // interaction, but reassign-owner only needs B's builderId afterward --
@@ -82,15 +145,8 @@ await chooseIdentity(page2, { mode: 'build', label: LABEL_B, isNew: true });
 await page2.close();
 
 const { body: buildersBody } = await pageFetchJson('/api/builders');
-const builderA = buildersBody.builders.find((b) => b.label === LABEL_A);
 const builderB = buildersBody.builders.find((b) => b.label === LABEL_B);
-console.log('builder A found:', !!builderA, '-- builder B found:', !!builderB);
-
-const { body: landletsBody } = await pageFetchJson(
-  `/api/landlets?status=claimed&ownerBuilderId=${builderA.builderId}&limit=100`,
-);
-const landlet = landletsBody.landlets[0];
-console.log('A\'s claimed landlet found:', !!landlet);
+console.log('builder B found:', !!builderB);
 
 // Now actually enter Shop mode and stand on A's own landlet, same
 // teleport-and-force-tick idiom e2e/shop-landlet-instance-leak.test.mjs
@@ -129,9 +185,21 @@ async function teleportOntoLandletAndTick() {
   await page.waitForTimeout(600);
 }
 
+// null once the instance isn't currently loaded for this id at all (never
+// loaded, or torn down by unloadShopLandletInstances); 'none' for a loaded
+// box-fallback instance (no lodProxy) -- see window.__testShopInstanceLodBand's
+// own comment in main.js. Either non-null value is enough to tell "loaded"
+// from "not" here; this test never puts the avatar far enough away to reach
+// the middle-LOD band.
+async function instanceLodBand() {
+  return page.evaluate((id) => window.__testShopInstanceLodBand(id), INSTANCE_ID);
+}
+
 await teleportOntoLandletAndTick();
 const labelBeforeReassign = await page.textContent('#account-menu-landlet-info');
+const lodBandBeforeReassign = await instanceLodBand();
 console.log('landlet-info label while still owned by A (should mention A):', labelBeforeReassign);
+console.log('instance LOD band while still owned by A (should be loaded, non-null):', lodBandBeforeReassign);
 
 // The reassignment itself happens entirely server-side, out from under the
 // already-open Shop-mode session above -- nothing on this page's own
@@ -150,7 +218,14 @@ if (reassign.response.status !== 200) {
 // would keep reading this exact stale value indefinitely).
 await teleportOntoLandletAndTick();
 const labelStillStale = await page.textContent('#account-menu-landlet-info');
+const lodBandStillStale = await instanceLodBand();
 console.log('landlet-info label right after reassignment, before any refresh (should still mention A):', labelStillStale);
+console.log(
+  '#3004: instance LOD band right after reassignment, before any refresh (still loaded, non-null -- the '
+  + 'server already deleted this placed_instances row via reassign-owner\'s own cleanup batch, but nothing '
+  + 'client-side has noticed yet; this is the bug, still reachable without the fix below):',
+  lodBandStillStale,
+);
 
 // The #2996 fix: force refreshShopLandletRecordsIfNeeded's own periodic
 // re-sync to run immediately rather than waiting on its real
@@ -160,10 +235,17 @@ console.log('landlet-info label right after reassignment, before any refresh (sh
 await page.evaluate(() => window.__testForceShopLandletRecordRefresh());
 await teleportOntoLandletAndTick();
 const labelAfterRefresh = await page.textContent('#account-menu-landlet-info');
+const lodBandAfterRefresh = await instanceLodBand();
 console.log(
   'landlet-info label after the forced record refresh (should no longer mention A -- B has no pre-fetched '
   + 'label, so this reads the "an unknown builder" fallback):',
   labelAfterRefresh,
+);
+console.log(
+  '#3004: instance LOD band after the forced record refresh (should now be null -- the #3004 fix unloads '
+  + 'A\'s stale instance on the same-status ownerBuilderId-changed branch, and the landlet has nothing else '
+  + 'to reload since the server already deleted it):',
+  lodBandAfterRefresh,
 );
 
 const pass = !!landlet && !!builderA && !!builderB
@@ -171,9 +253,13 @@ const pass = !!landlet && !!builderA && !!builderB
   && !!labelStillStale?.includes(LABEL_A)
   && !labelAfterRefresh?.includes(LABEL_A)
   && !!labelAfterRefresh?.includes('unknown builder')
+  && lodBandBeforeReassign !== null
+  && lodBandStillStale !== null
+  && lodBandAfterRefresh === null
   && errors.length === 0;
 await finish(browser, {
   pass,
-  label: '#2996: Shop mode\'s landlet-info "built by" label stops showing a previous owner once refreshShopLandletRecordsIfNeeded re-syncs the record after an ownership change',
+  label: '#2996/#3004: Shop mode\'s landlet-info "built by" label and the previous owner\'s placed instance both '
+    + 'stop showing once refreshShopLandletRecordsIfNeeded re-syncs the record after an ownership change',
   errors,
 });

@@ -447,6 +447,34 @@ export function refreshShopLandletRecordsNow() {
         if (oldRecord.status !== freshRecord.status) {
           if (oldRecord.status === 'claimed' && entry.loaded) unloadShopLandletInstances(entry);
           else if (oldRecord.status === 'greenbelt' && entry.orbsLoaded) unloadCreditOrbsForLandlet(entry);
+        } else if (
+          // #3004: an admin reassign-owner (POST .../reassign-owner) leaves
+          // `status` at 'claimed' on both sides of the change -- only
+          // ownerBuilderId moves -- but still wipes the previous owner's
+          // placed_instances/landlet_versions/landlet_levels server-side
+          // (land.js's own #1280 cleanup batch). Without this branch,
+          // entry.loaded never resets, so updateShopProximity (which only
+          // reloads on a false -> true transition) never notices and a
+          // shopper who already loaded this landlet keeps seeing the old
+          // owner's now-deleted content indefinitely.
+          oldRecord.status === 'claimed' && entry.loaded
+          && oldRecord.ownerBuilderId !== freshRecord.ownerBuilderId
+        ) {
+          unloadShopLandletInstances(entry);
+        }
+        // #3005: status alone doesn't catch a suspension -- a suspended
+        // builder's landlet stays 'claimed' on both sides of the change,
+        // only ownerSuspended flips. #2993 already hides this landlet's
+        // instances from GET /instances for everyone but the owner once
+        // suspended, but a shopper who already had it loaded keeps
+        // rendering the stale content until something tears it down.
+        // Unloading on either direction of the flip is enough: going
+        // suspended clears the now-hidden content, and going unsuspended
+        // resets entry.loaded to false so the next proximity tick reloads
+        // it (auto-restored server-side per #2986) the same way any other
+        // false -> true load already works.
+        if (oldRecord.ownerSuspended !== freshRecord.ownerSuspended && entry.loaded) {
+          unloadShopLandletInstances(entry);
         }
         // The ground mesh's color/texture (plotColorKeyForLandlet) and
         // shape (shapeForLandlet, keyed off polygon/areaM2) are baked into
