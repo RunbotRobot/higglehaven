@@ -53,6 +53,26 @@ describe('Control Room access (#N31)', () => {
     const got = await api('/control-room/tasks', keySession());
     expect(got.response.status).toBe(200);
   });
+
+  // #3000: requireControlRoomAccess's admin-session branch used to call
+  // currentUser() directly instead of requireCurrentUser/requireAdmin, so
+  // it never checked account_suspensions -- a suspended admin (still
+  // is_admin=1, still holding a valid session per auth.js's own comment)
+  // kept full Control Room API access even though handleControlRoomAdminPage
+  // (requireAdmin-gated) would already 403 them from the page itself.
+  it('rejects a suspended admin even though they are still is_admin', async () => {
+    const otherAdmin = await signupAdmin('control-room-other-admin');
+    const suspendedAdmin = await signupAdmin('control-room-suspended-admin');
+    const suspend = await api('/auth/suspend-account', otherAdmin.session({
+      method: 'POST',
+      body: JSON.stringify({ email: suspendedAdmin.email, reason: 'control-room test suspension' }),
+    }));
+    expect(suspend.response.status).toBe(200);
+
+    const got = await api('/control-room/tasks', suspendedAdmin.session());
+    expect(got.response.status).toBe(403);
+    expect(got.body.suspended).toBe(true);
+  });
 });
 
 describe('Control Room tasks (#N31)', () => {
