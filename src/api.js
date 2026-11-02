@@ -1475,6 +1475,18 @@ export async function deleteInstanceBackup(instanceId, backupId) {
   await requestJson(`/instances/${encodeURIComponent(instanceId)}/backups/${encodeURIComponent(backupId)}`, { method: 'DELETE' });
 }
 
+// #2987 (3/5 of #2305): the signed-in builder's own pending-restoration
+// slots -- placed products removed from their land because the seller was
+// suspended (#2986) -- and the permanent-clear action that discards one.
+export async function fetchPendingRestorations() {
+  const { pendingRestorations } = await requestJson('/instances/pending-restoration');
+  return pendingRestorations;
+}
+
+export async function clearPendingRestoration(snapshotId) {
+  await requestJson(`/instances/pending-restoration/${encodeURIComponent(snapshotId)}`, { method: 'DELETE' });
+}
+
 // Product reviews (see migrations/0048_product_reviews_on_template.sql) —
 // nested under the catalog *template* (the product itself), not under any
 // one placed instance of it, so the same review list is shared by every

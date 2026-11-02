@@ -4378,6 +4378,94 @@
         color: var(--pill-text);
         font: 13px/1.4 sans-serif;
       }
+      /* #2987: the builder-facing "Removed Items" list (src/build/
+         pendingRestoration.js) -- products taken off this builder's land
+         because their seller was suspended. Same modal shell as
+         #backup-chain-modal above. */
+      #pending-restoration-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #pending-restoration-modal.visible {
+        display: flex;
+      }
+      #pending-restoration-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 400px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #pending-restoration-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #pending-restoration-intro {
+        margin: 0;
+        font-size: 13px;
+        color: var(--pill-text-soft);
+      }
+      #pending-restoration-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .pending-restoration-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.9);
+      }
+      .pending-restoration-row-image {
+        flex-shrink: 0;
+        width: 40px;
+        height: 40px;
+        border-radius: 6px;
+        object-fit: cover;
+      }
+      .pending-restoration-row-text {
+        flex: 1;
+        min-width: 0;
+      }
+      .pending-restoration-row-name {
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+      .pending-restoration-row-detail {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      .pending-restoration-row-clear {
+        flex-shrink: 0;
+        padding: 6px 12px;
+        border: none;
+        border-radius: 999px;
+        background: var(--danger);
+        color: #fff;
+        font: 13px/1.4 sans-serif;
+      }
+      #pending-restoration-empty {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
       /* #1811 (sub-issue of #1809): isolated 3D preview + item info for a
          tapped product, same modal shell/reasoning as #sign-posts-modal
          above — replacing the old #shop-product-info/#shop-buy-hint/
@@ -4893,6 +4981,7 @@
     <div id="undo-redo-panel">
       <button id="undo-btn" type="button" disabled>Undo</button>
       <button id="redo-btn" type="button" disabled>Redo</button>
+      <button id="pending-restoration-btn" type="button" hidden>Removed Items</button>
     </div>
     <div id="compass-panel" title="Facing direction">
       <div id="compass-dial">
@@ -5402,6 +5491,15 @@
         <div id="backup-chain-list"></div>
         <div id="backup-chain-empty">No backups configured yet.</div>
         <button id="backup-chain-add-btn" type="button">+ Add Backup</button>
+      </div>
+    </div>
+    <div id="pending-restoration-modal" role="dialog" aria-modal="true" tabindex="-1">
+      <div id="pending-restoration-modal-content">
+        <button id="pending-restoration-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2>Removed Items</h2>
+        <p id="pending-restoration-intro">These were taken off your land because their seller was suspended. They come back automatically if the suspension is lifted, or you can clear one for good to free up the spot.</p>
+        <div id="pending-restoration-list"></div>
+        <div id="pending-restoration-empty">Nothing is waiting to be restored.</div>
       </div>
     </div>
     <div id="shop-product-preview-modal" role="dialog" aria-modal="true" tabindex="-1">

@@ -7808,6 +7808,13 @@ restored.
   `404` for an unknown, foreign, already-restored, or already-cleared id —
   indistinguishable by design. Returns `{ clearedSnapshotId }`.
 
+In Build mode (`src/build/pendingRestoration.js`, #2987) this surfaces as a
+"Removed Items (N)" button in the top-right panel next to Undo/Redo, shown
+only while at least one slot is pending; it opens a list naming each removed
+product (name, category, image, position, whether the seller is still
+suspended) with a per-row "Clear" action behind a confirm prompt. Covered by
+`e2e/build-pending-restoration.test.mjs`.
+
 ### Group/Ungroup (#2764)
 
 The base layer of #2763 (owner-requested, tracking issue for the full
