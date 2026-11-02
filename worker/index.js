@@ -4229,6 +4229,16 @@ export function landletFromRow(row) {
     metadata: JSON.parse(row.metadata_json || '{}'),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    // #3005: only accurate when the caller's own SELECT joined
+    // account_suspensions and aliased the result as owner_suspended (today
+    // just GET /api/landlets' list branch, for Shop mode's periodic
+    // record re-sync) -- every other call site's plain `SELECT * FROM
+    // landlets` leaves row.owner_suspended undefined, which reads as
+    // false here. That's fine: nothing outside the one accurate call site
+    // reads this field, and those call sites already use
+    // builderHasActiveSuspension directly where a suspension check
+    // actually matters to them.
+    ownerSuspended: !!row.owner_suspended,
   };
 }
 

@@ -448,6 +448,20 @@ export function refreshShopLandletRecordsNow() {
           if (oldRecord.status === 'claimed' && entry.loaded) unloadShopLandletInstances(entry);
           else if (oldRecord.status === 'greenbelt' && entry.orbsLoaded) unloadCreditOrbsForLandlet(entry);
         }
+        // #3005: status alone doesn't catch a suspension -- a suspended
+        // builder's landlet stays 'claimed' on both sides of the change,
+        // only ownerSuspended flips. #2993 already hides this landlet's
+        // instances from GET /instances for everyone but the owner once
+        // suspended, but a shopper who already had it loaded keeps
+        // rendering the stale content until something tears it down.
+        // Unloading on either direction of the flip is enough: going
+        // suspended clears the now-hidden content, and going unsuspended
+        // resets entry.loaded to false so the next proximity tick reloads
+        // it (auto-restored server-side per #2986) the same way any other
+        // false -> true load already works.
+        if (oldRecord.ownerSuspended !== freshRecord.ownerSuspended && entry.loaded) {
+          unloadShopLandletInstances(entry);
+        }
         // The ground mesh's color/texture (plotColorKeyForLandlet) and
         // shape (shapeForLandlet, keyed off polygon/areaM2) are baked into
         // geometry/materials at construction time — nothing rebuilds them
