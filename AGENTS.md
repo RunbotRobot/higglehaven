@@ -147,6 +147,161 @@ session that happened to write it was itself named `higglehaven2`. The
 actual, current convention is the one above: each session's own fixed
 name is its one branch, always.
 
+## Standing owner decisions — apply these before filing `[owner judgment needed]`
+
+The owner said directly (2026-11-02, live conversation) that the fleet
+keeps filing `[owner judgment needed]` issues for calls they have
+already made in some other form — about 30 such issues were open that
+day, several since September, and every one of them costs a live
+conversation to unblock. This section is the fix. The decisions below
+are settled. When an issue or a design question is covered by one of
+them, decide it yourself, cite the decision by its bold title in the
+issue/PR, and move on — do not file it as owner-gated and do not set
+`waitingOn: "owner"` for it. Reserve `[owner judgment needed]` for a
+call that none of these covers, or one where applying a decision would
+clearly stretch it past what the owner meant — and then say which
+decision and why it doesn't quite fit, because that is the useful part
+of the question.
+
+Whichever session is in live conversation with the owner (higglehaven1
+as of writing) adds to this list whenever the owner makes a new call, in
+the same cycle as acting on it: one bullet, the decision, the date, and
+the issue it came from. A decision that has been applied once is the one
+most likely to come up again.
+
+### Decided — direct owner statements
+
+- **Anti-abuse signals never degrade a legitimate user's visible
+  experience.** (2026-10-31/11-01, #2215 → #2941.) A probabilistic
+  signal — a failed or missing CAPTCHA, a shared IP/device, a brand-new
+  account — may only feed *invisible* backend weighting (e.g.
+  down-weighting that user's flags against other people's content).
+  Never rate-limit, hide, delay, or otherwise change what a user sees or
+  can do on the strength of such a signal: the owner specifically ruled
+  out anything "that could affect a legitimate power-user" without their
+  knowing why. Hard blocks are for confirmed violations (a suspension, a
+  moderation decision), not for suspicion.
+
+- **Verification and anti-abuse checks fail open.** (#2941.) If the
+  check itself can't run — the widget didn't load, the verifier timed
+  out, the provider is down — the user proceeds exactly as if it had
+  passed. Record that it was inconclusive if that's useful as a signal;
+  never block on it.
+
+- **Minimise signup friction.** (#2941.) Invisible/managed challenge
+  modes only; no new mandatory signup step without an owner call.
+
+- **Weight by signal; don't count raw events.** (#2215, the owner's
+  "option 2".) Any threshold over user-submitted events — flags,
+  reports, votes — counts them by independent-signal weight (a repeat
+  flagger from the same IP/device adds zero, not one) and composes any
+  further signal as a multiplicative reduction on the *same* weight
+  column, not as a second parallel mechanism. Admins still see the raw,
+  unweighted count alongside.
+
+- **One model, not a hybrid.** (2026-10-31, #2923: "I'm more comfortable
+  going fully v2. It seems like we could get tripped up at some point
+  having the hybrid setup.") When moving between two versions of a
+  provider API or two internal designs, cut over fully rather than
+  running both; the owner would rather pay the migration cost once than
+  carry two code paths.
+
+- **Nothing that isn't actively for sale is visible to shoppers *or*
+  builders.** (2026-11-01, #2305.) A suspended seller's listings are
+  blocked for purchase — including purchases already in flight — and
+  hidden from browsing and from the builder catalog, exactly as if the
+  seller had deleted them. This applies symmetrically to a suspended
+  builder's own placed content. The one deliberate exception is a
+  *placed* out-of-stock product on a builder's own landlet: it stays
+  visibly placed for that builder (never for shoppers) so it can come
+  back into stock — #1947's primary/backup pattern.
+
+- **Suspension is a hard removal from the world, with a snapshot that
+  restores on unsuspension.** (#2305 → #2986–#2988.) Out-of-stock is
+  soft (stays placed, greyed out); suspension is not — placed instances
+  leave the world immediately, but are snapshotted so that lifting the
+  suspension puts them back exactly as they were.
+
+- **The builder has full information and full autonomy over anything
+  that happens on their landlet.** (#2305.) Default to "saved, pending
+  restoration"; let the builder permanently clear it themselves if
+  they'd rather move on to a less volatile product; tell them if the
+  suspension becomes permanent; and keep enough product-identifying
+  information, indefinitely, that they are never left wondering "what
+  did I used to have here?" The owner's words: "our code deleting the
+  product from their lándlet permanently leaves them wondering."
+
+- **Spend: a small fixed subscription that removes a real bottleneck is
+  fine; anything usage-metered, or in the hundreds of dollars a month,
+  is the owner's call.** (2026-11-01.) GitHub Pro at $4/month was
+  approved on the spot; larger GitHub runners (roughly $1.6k–$15k/month
+  at fleet CI volume) and GitHub Enterprise were declined — "I can't
+  afford anything like thousands of dollars per month." Cloudflare's
+  free tier stays the design constraint (top of this file). Corollary:
+  never make this repo private without an owner decision — public repos
+  get standard Actions runners free; private would bill the fleet's
+  ~450k e2e job-minutes a month.
+
+- **Don't throttle fleet throughput to protect CI; remove waste
+  instead.** (2026-11-01, #2673/#2976/#2990.) The owner does not want a
+  cap on concurrent PRs. A slow CI shard is left to finish (see "Judging
+  a 'stuck' CI shard" below); what gets cut is load that produces no
+  information — re-testing a SHA `main` already tested, cancel-and-rerun
+  loops on wall-clock alone.
+
+- **Claude usage is the binding constraint, not GitHub.** (2026-11-01.)
+  The fleet runs close to the Ultra plan's weekly limit by design, so
+  don't spend turns on zero-information output: routine "no change"
+  notes (see "Routine periodic work summaries are retired" below),
+  re-reading the whole open-issue backlog every cycle when nothing has
+  changed (filter by `since`/`updated_at` instead), or re-running CI "to
+  see if it passes this time." A second Ultra subscription is planned
+  for roughly December 2026; the GitHub-concurrency question is
+  revisited then, not before.
+
+- **Owner items are surfaced in conversation, one at a time — never as
+  an email digest.** (2026-10-25; "Surfacing items waiting on the owner"
+  above.) Proactive email is for genuine emergencies only.
+
+### Defaults derived from those decisions — apply and cite; flag if it stretches
+
+Generalised by higglehaven1 on 2026-11-02 from the decisions above and
+shown to the owner in the same conversation. Apply them the same way; if
+a case makes one of them feel like a stretch, that is exactly the case
+to file as `[owner judgment needed]`, naming the default and why.
+
+- **No silent loss.** When the system removes, consumes, fails, or bills
+  something a user owns or paid for, the user is told, and nothing of
+  theirs disappears without a path back — restore it, or retain enough
+  to recover or replace it. (From #2305's snapshot/restore/inform
+  requirements and #1756's own "not a silent loss" promise.) Whether the
+  platform absorbs a third-party provider's failure cost — e.g.
+  refunding a video-to-3D credit when Tripo itself fails, #2970 — is a
+  separate, genuinely owner-gated money call (#1618); the "tell the
+  user" half is not.
+
+- **Parity across sibling surfaces.** Where two features serve the same
+  role — two chat channels, two admin mutation endpoints, two moderation
+  flows — a protection present on one (report/mute, rate-limiting, audit
+  logging, idempotency, an overlap check) belongs on the other unless
+  there is a stated reason it doesn't. (From the owner approving #2215
+  and #2941 as one composed mechanism, and the fleet's own
+  never-challenged pattern in #2950/#2973/#2995.) This resolves most "X
+  has no rate limit, unlike its siblings" and "Y has no report
+  mechanism, unlike Z" findings without an owner call; a sibling with a
+  stated reason (#2670's heavily-used test fixture) is the case to flag.
+
+- **Moderation actions key on confirmed violations and never count one
+  violation twice.** (From the flag-weighting and suspension decisions.)
+  A repeat flag batch on content already removed for the same violation
+  does not climb the strike ladder again (#2468); a decision log records
+  one row per real decision (#2983).
+
+- **Prefer an invisible fix over a new user-facing step.** When a
+  problem can be solved either by asking the user to do something extra
+  or by the backend doing it silently and correctly, do the latter.
+  (From the signup-friction and fail-open decisions.)
+
 ## The control room — status, direction, and questions
 
 **Issue #25 and Issue #157 are retired as of 2026-09-06.** Their history
@@ -263,10 +418,50 @@ the Control Room and GitHub backlog on your own hourly cron (see
 "Continuing without a prompt" below) — just stop posting a new
 `control_room_tasks` row every cycle to report "no change" or "nothing
 to self-assign." Only post when there's something the owner actually
-needs to see: a genuine question, a reply that hands a decision back to
-them (see "Set `waitingOn` back to `"owner"`" above), or a one-line note
-on a completed/self-assigned piece of work. The original 2026-09-09
-instruction, for context only:
+needs to see: a genuine question, or a reply that hands a decision back
+to them (see "Set `waitingOn` back to `"owner"`" above).
+
+**Tightened 2026-11-02 (owner, live): the retired summary had come back
+under new titles, and it is gone again.** By 2026-11-02 there were 65
+queued `kind: "feedback"` rows titled "Completed this cycle: ...",
+"Informational (no action needed): ... exploration exhausted", "Cycle
+check: backlog confirmed exhausted again", and "Second-review pass ...
+clean" — each a paragraph, from five sessions, with nobody ever marking
+one done: the September backlog in miniature, and real Claude usage
+spent writing prose nobody reads (the owner doesn't open the board
+unprompted — see "Surfacing items waiting on the owner" above).
+higglehaven1 bulk-marked all 65 `done` under the owner's standing
+authorisation ("You can also always bulk-remove anything you feel is
+done in the control room"). The rules from here:
+
+- **A completed piece of work is recorded on its own card, not in a new
+  row.** Flip the `issue-N`/`pr-N` card to `done` and set its `note` to
+  one or two lines — what shipped and the PR number, nothing else. The
+  detail belongs in the PR description and the issue thread, which is
+  where anyone who cares will read it. Do not also create a "Completed
+  this cycle" feedback row.
+
+- **Never post a no-change note, whatever it's titled.** "Nothing
+  unclaimed," "backlog exhausted," "cycle check," "second-review found
+  nothing," "explored X, no bugs found" — these are the 2026-09-28
+  retired summary with the word changed. The record that a cycle found
+  nothing is that nothing was filed.
+
+- **Coverage, if you want to leave it, is one line and already `done`.**
+  If an exploration pass genuinely covered an area another session would
+  otherwise re-cover, a single-line row ("explored
+  `worker/lib/didit.js`, `src/shop/mode.js` — clean", nothing more)
+  created with `status: "done"` from the start is acceptable: it's a log
+  entry for the next session's D1 query, not an open item for the owner.
+  Anything you would write beyond that line belongs in a filed issue
+  instead.
+
+- **Anything still worth a paragraph is an issue.** If a finding or a
+  question needs more than two lines to state, it is either a GitHub
+  issue (file it; link it from a one-line card) or a `kind: "question"`
+  row with the question itself as the title.
+
+The original 2026-09-09 instruction, for context only:
 
 > "provide the hourly summaries each as their new task that is 'WAITING
 > ON OWNER'. I should be able to mark tasks as done myself, then you
