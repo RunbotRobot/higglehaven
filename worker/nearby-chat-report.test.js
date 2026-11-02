@@ -86,6 +86,46 @@ describe('Nearby chat conduct reports (#2956)', () => {
     expect(task.note).toContain('Said something inappropriate');
   });
 
+  // #2953 (parity with voice-report.test.js): interaction evidence is an
+  // admin-side triage annotation only -- never a gate on filing.
+  it('files a report with no recorded interaction and says so on the card', async () => {
+    const alice = await signupIdVerifiedBuilder('nearby-report-evidence-none-alice');
+    const bob = await signupIdVerifiedBuilder('nearby-report-evidence-none-bob');
+    const created = await api('/nearby-chat/report', alice.session({
+      method: 'POST', body: JSON.stringify({ reportedBuilderId: bob.builderId }),
+    }));
+    expect(created.response.status).toBe(201);
+    expect(Object.keys(created.body)).toEqual(['reportId']);
+    const taskId = `nearby-chat-report-${created.body.reportId.slice('nearby-chat-report-'.length)}`;
+    const { note } = await env.DB.prepare('SELECT note FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
+    expect(note).toContain("Reported builder has a chat message still on record in the reporter's landlet: no");
+    expect(note).toContain('Both in the same landlet right now: no');
+  });
+
+  it('records a chat message in the reporter\'s landlet and co-presence when both exist', async () => {
+    const alice = await signupIdVerifiedBuilder('nearby-report-evidence-yes-alice');
+    const bob = await signupIdVerifiedBuilder('nearby-report-evidence-yes-bob');
+    const now = new Date().toISOString();
+    for (const builder of [alice, bob]) {
+      await env.DB.prepare(`
+        INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
+        VALUES (?, 'landlet-nearby-evidence', 0, 0, 0, 0, 0, ?)
+      `).bind(builder.builderId, now).run();
+    }
+    await env.DB.prepare(`
+      INSERT INTO nearby_chat_messages (message_id, builder_id, landlet_id, text)
+      VALUES (?, ?, 'landlet-nearby-evidence', 'hello there')
+    `).bind(`nearby-chat-${crypto.randomUUID()}`, bob.builderId).run();
+    const created = await api('/nearby-chat/report', alice.session({
+      method: 'POST', body: JSON.stringify({ reportedBuilderId: bob.builderId }),
+    }));
+    expect(created.response.status).toBe(201);
+    const taskId = `nearby-chat-report-${created.body.reportId.slice('nearby-chat-report-'.length)}`;
+    const { note } = await env.DB.prepare('SELECT note FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
+    expect(note).toContain("Reported builder has a chat message still on record in the reporter's landlet: yes");
+    expect(note).toContain('Both in the same landlet right now: yes');
+  });
+
   it('creates a report with no reason', async () => {
     const alice = await signupIdVerifiedBuilder('nearby-report-noreason-alice');
     const bob = await signupIdVerifiedBuilder('nearby-report-noreason-bob');

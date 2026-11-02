@@ -88,6 +88,71 @@ describe('Voice conduct reports (#2819)', () => {
     expect(task.note).toContain('Said something inappropriate');
   });
 
+  // #2953: interaction evidence is an admin-side triage annotation only --
+  // never a gate on filing (a probabilistic signal must not change what a
+  // legitimate reporter can do) and never echoed back to the reporter.
+  describe('interaction evidence annotation (#2953)', () => {
+    async function noteFor(reportId) {
+      const taskId = `voice-report-${reportId.slice('voice-report-'.length)}`;
+      return (await env.DB.prepare('SELECT note FROM control_room_tasks WHERE task_id = ?').bind(taskId).first()).note;
+    }
+
+    it('still files a report from someone with no recorded interaction, and says so on the card', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-report-evidence-none-alice');
+      const bob = await signupIdVerifiedBuilder('voice-report-evidence-none-bob');
+      const created = await api('/voice/report', alice.session({
+        method: 'POST', body: JSON.stringify({ reportedBuilderId: bob.builderId }),
+      }));
+      expect(created.response.status).toBe(201);
+      const note = await noteFor(created.body.reportId);
+      expect(note).toContain('Shared voice signaling still on record: no');
+      expect(note).toContain('Both in the same landlet right now: no');
+      expect(note).toContain('"no" is weak evidence');
+      // Invisible to the reporter: the response carries nothing but the id.
+      expect(Object.keys(created.body)).toEqual(['reportId']);
+    });
+
+    it('records shared signaling and co-presence when both exist', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-report-evidence-yes-alice');
+      const bob = await signupIdVerifiedBuilder('voice-report-evidence-yes-bob');
+      await env.DB.prepare(`
+        INSERT INTO voice_signaling_messages (message_id, from_builder_id, to_builder_id, landlet_id, kind, payload)
+        VALUES (?, ?, ?, 'landlet-evidence', 'offer', '{}')
+      `).bind(`voice-signal-${crypto.randomUUID()}`, bob.builderId, alice.builderId).run();
+      const now = new Date().toISOString();
+      for (const builder of [alice, bob]) {
+        await env.DB.prepare(`
+          INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
+          VALUES (?, 'landlet-evidence', 0, 0, 0, 0, 0, ?)
+        `).bind(builder.builderId, now).run();
+      }
+      const created = await api('/voice/report', alice.session({
+        method: 'POST', body: JSON.stringify({ reportedBuilderId: bob.builderId }),
+      }));
+      expect(created.response.status).toBe(201);
+      const note = await noteFor(created.body.reportId);
+      expect(note).toContain('Shared voice signaling still on record: yes');
+      expect(note).toContain('Both in the same landlet right now: yes');
+    });
+
+    it('does not count stale presence as co-presence', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-report-evidence-stale-alice');
+      const bob = await signupIdVerifiedBuilder('voice-report-evidence-stale-bob');
+      const longAgo = new Date(Date.now() - 60_000).toISOString();
+      for (const builder of [alice, bob]) {
+        await env.DB.prepare(`
+          INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
+          VALUES (?, 'landlet-evidence-stale', 0, 0, 0, 0, 0, ?)
+        `).bind(builder.builderId, longAgo).run();
+      }
+      const created = await api('/voice/report', alice.session({
+        method: 'POST', body: JSON.stringify({ reportedBuilderId: bob.builderId }),
+      }));
+      expect(created.response.status).toBe(201);
+      expect(await noteFor(created.body.reportId)).toContain('Both in the same landlet right now: no');
+    });
+  });
+
   it('creates a report with no reason', async () => {
     const alice = await signupIdVerifiedBuilder('voice-report-noreason-alice');
     const bob = await signupIdVerifiedBuilder('voice-report-noreason-bob');
