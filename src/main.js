@@ -1495,6 +1495,19 @@ window.__testTapShopProductByInstanceId = (instanceId) => {
 // skips that gate — createSignPost/editSignPost/deleteSignPost below just
 // 401 in that edge case, same as any other authenticated action attempted
 // mid-recovery.
+// #2962: sign.posts is fetched once and deliberately not re-fetched (see
+// registerShopSign), so a moderator deleting this shopper's note leaves a
+// stale myPost behind. The server already 404s the edit/delete (#2354); this
+// is the recovery half -- drop the now-gone post locally on that failure
+// only, so the next click offers "leave a note" instead of the same dead
+// end. Failure-triggered, so the accepted staleness tradeoff is untouched.
+function dropStaleSignPost(sign, postId, err) {
+  if (err?.status !== 404 || !shopSigns.includes(sign)) return false;
+  sign.posts = sign.posts.filter((post) => post.postId !== postId);
+  rebuildSignSprites(sign);
+  return true;
+}
+
 shopSignHintEl.addEventListener('click', async () => {
   const sign = nearestActiveSign;
   if (!sign) return;
@@ -1518,7 +1531,9 @@ shopSignHintEl.addEventListener('click', async () => {
         sign.posts = sign.posts.filter((post) => post.postId !== myPost.postId);
         rebuildSignSprites(sign);
       } catch (err) {
-        alert(err.message || 'Could not delete this note.');
+        alert(dropStaleSignPost(sign, myPost.postId, err)
+          ? 'This note was already removed.'
+          : (err.message || 'Could not delete this note.'));
       } finally {
         shopSignHintEl.disabled = false;
       }
@@ -1541,7 +1556,9 @@ shopSignHintEl.addEventListener('click', async () => {
         if (index !== -1) sign.posts[index] = updated;
         rebuildSignSprites(sign);
       } catch (err) {
-        alert(err.message || 'Could not update this note.');
+        alert(dropStaleSignPost(sign, myPost.postId, err)
+          ? 'This note was already removed, so your edit was not saved. Tap the sign again to leave a new one.'
+          : (err.message || 'Could not update this note.'));
       } finally {
         shopSignHintEl.disabled = false;
       }
