@@ -26,9 +26,13 @@ function formatMeters(value) {
 function describeSlot(slot) {
   const name = slot.templateName || 'A product that is no longer listed';
   const where = `at ${formatMeters(slot.position.x)}, ${formatMeters(slot.position.y)} m`;
-  const status = slot.sellerSuspended
-    ? 'Removed while its seller is suspended. It returns automatically if the suspension is lifted.'
-    : 'Could not be put back automatically.';
+  // #2988: a permanently closed seller's items are never coming back, but
+  // stay listed (with their name/image kept) so the builder still knows
+  // what used to be here and can find a replacement.
+  let status;
+  if (slot.permanentAt) status = 'Its seller\'s account has been permanently closed, so it will not come back. Clear it whenever you like to free up the spot.';
+  else if (slot.sellerSuspended) status = 'Removed while its seller is suspended. It returns automatically if the suspension is lifted.';
+  else status = 'Could not be put back automatically.';
   return { name, where, status };
 }
 
@@ -65,7 +69,7 @@ function renderSlots(slots) {
     clearBtn.textContent = 'Clear';
     clearBtn.setAttribute('aria-label', `Clear ${name} for good`);
     clearBtn.addEventListener('click', async () => {
-      if (!confirm('Clear this for good? It will not come back even if the seller is reinstated, and the spot is free for something else.')) return;
+      if (!confirm('Clear this for good? It will not come back, and the spot is free for something else.')) return;
       clearBtn.disabled = true;
       try {
         await clearPendingRestoration(slot.snapshotId);

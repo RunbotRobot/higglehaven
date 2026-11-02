@@ -8,6 +8,10 @@
 //   - GET /api/instances/pending-restoration -- what used to be on their
 //     land and is waiting on a possible restoration (their own records only,
 //     never visible to shoppers or other builders);
+//   - (#2988) a slot whose seller's suspension escalated to a permanent
+//     closure stays listed, flagged `permanentAt`, with its product info
+//     retained on the snapshot itself rather than read from a template
+//     that may by then be gone;
 //   - DELETE /api/instances/pending-restoration/:snapshotId -- the
 //     "permanently clear" action: discard the pending slot themselves
 //     instead of waiting indefinitely. #2986's restore skips any snapshot
@@ -38,12 +42,14 @@ export function pendingRestorationFromRow(row) {
     snapshotId: row.snapshot_id,
     landletId: row.landlet_id,
     templateId: row.template_id,
-    // Template fields come from a LEFT JOIN: a deleted template leaves
-    // these null rather than hiding the slot (the builder still sees that
-    // *something* used to be here; #2988 hardens what's retained).
-    templateName: row.template_name ?? null,
-    category: row.template_category ?? null,
-    imageUrl: row.template_image_url ?? null,
+    // #2988: the live template wins while it still exists (so a rename is
+    // reflected), but the snapshot's own retained copy (taken at removal
+    // time) backs it up indefinitely -- the builder is never left wondering
+    // what used to be here once the template, or the seller's whole
+    // account, is gone.
+    templateName: row.live_template_name ?? row.template_name ?? null,
+    category: row.live_template_category ?? row.template_category ?? null,
+    imageUrl: row.live_template_image_url ?? row.template_image_url ?? null,
     position: {
       x: instance.x_m ?? null,
       y: instance.y_m ?? null,
@@ -54,6 +60,9 @@ export function pendingRestorationFromRow(row) {
     // restored (e.g. its template was deleted meanwhile) -- it stays
     // listed so the builder can clear it rather than waiting forever.
     sellerSuspended: Boolean(row.seller_suspended),
+    // #2988: the seller's suspension escalated into a permanent account
+    // closure -- restoration is no longer coming. ISO timestamp, or null.
+    permanentAt: row.permanent_at ?? null,
   };
 }
 
@@ -64,7 +73,8 @@ export async function handlePendingRestoration(request, db, route) {
   if (request.method === 'GET' && route.length === 2) {
     const { results } = await db.prepare(`
       SELECT s.snapshot_id, s.landlet_id, s.template_id, s.instance_json, s.removed_at,
-             t.name AS template_name, t.category AS template_category, t.image_url AS template_image_url,
+             s.template_name, s.template_category, s.template_image_url, s.permanent_at,
+             t.name AS live_template_name, t.category AS live_template_category, t.image_url AS live_template_image_url,
              EXISTS (
                SELECT 1 FROM account_suspensions a
                WHERE a.user_id = sel.user_id AND a.lifted_at IS NULL AND a.escalated_at IS NULL
