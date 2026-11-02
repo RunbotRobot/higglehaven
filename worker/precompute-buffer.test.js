@@ -122,6 +122,31 @@ describe('maintainPrecomputeBuffer (#2807)', () => {
     expect(results.every((row) => row.min_world_radius_m > before.radius_m - RING_INNER_EDGE_BOW_TOLERANCE_M)).toBe(true);
   });
 
+  // #3011: a precomputed ring that starts exactly where its predecessor ends
+  // but has a different boundary_signature (differing water coverage) used to
+  // abort the whole top-up with "generated ring boundary mismatch".
+  it('keeps growing past a neighbour whose seam signature cannot match, via a tiny radial gap', async () => {
+    await maintainPrecomputeBuffer(env.DB);
+    const builtRadii = await autoRingOuterRadii();
+    const previousOuter = builtRadii.at(-1);
+    await env.DB.prepare(
+      "UPDATE landlet_candidate_rings SET boundary_signature = 'different-water-seam' WHERE ring_id LIKE 'auto-ring-%' AND outer_radius_m = ?",
+    ).bind(previousOuter).run();
+    await env.DB.prepare(
+      "UPDATE world_settings SET radius_m = ? WHERE world_id = 'default-world'",
+    ).bind(previousOuter).run();
+
+    await maintainPrecomputeBuffer(env.DB);
+
+    const radii = await autoRingOuterRadii();
+    expect(radii.at(-1)).toBeGreaterThan(previousOuter);
+    const next = await env.DB.prepare(
+      'SELECT inner_radius_m FROM landlet_candidate_rings WHERE outer_radius_m > ? ORDER BY outer_radius_m LIMIT 1',
+    ).bind(previousOuter).first();
+    expect(next.inner_radius_m - previousOuter).toBeGreaterThan(0.000001);
+    expect(next.inner_radius_m - previousOuter).toBeLessThan(0.1);
+  });
+
   // #2894: the widen above is supposed to apply once per genuine catch-up,
   // not compound every tick a stall persists -- distinguished here by
   // planting a candidate that conflicts with every possible ring position
