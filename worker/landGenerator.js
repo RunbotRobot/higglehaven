@@ -6,9 +6,29 @@ const TAU = Math.PI * 2;
 export function generateLandletRing({ prefix, count, innerRadiusM, startAngleRad = 0, areaM2 = 1000, plots }) {
   const arcSegments = 4;
   const definitions = plots || Array.from({ length: count }, () => ({ areaM2, landClass: 1, landType: 'buildable' }));
-  const areaScale = ringAreaScale(definitions.map((plot) => plot.areaM2), arcSegments);
-  const angles = definitions.map((plot) => arcSegments * Math.asin(plot.areaM2 / (areaScale * arcSegments)));
+  const areas = definitions.map((plot) => plot.areaM2);
+  const areaScale = ringAreaScale(areas, arcSegments);
   const outerRadiusM = Math.sqrt(innerRadiusM ** 2 + 2 * areaScale);
+  // #3011: an adjacentToRingId reuse call (worker/lib/world-generation.js)
+  // passes back each of the parent ring's own stored plots, including each
+  // one's own exact original angular width (metadata.widthRad, set below)
+  // -- using it here directly, instead of re-deriving the angle from area
+  // via asin, is what makes the new ring's inner seam reproduce the
+  // parent's outer one exactly. Re-deriving only coincidentally matched
+  // before this fix, and only for a water-free parent: every plot there
+  // shares one uniform full-TAU budget, so the SAME asin formula run
+  // against the SAME areas independently re-solves the SAME angles either
+  // way. A water-containing parent (generateWaterAwareLandletRing) split
+  // its own angular budget unevenly per plot, and a water-arc entry's own
+  // "area" is a back-computed real polygon area, not an asin-invertible
+  // target at all -- re-deriving silently diverges from the real seam for
+  // either kind of entry. Falls back to the asin formula wherever a
+  // definition carries no stored width (every ordinary, non-reused call).
+  const angles = definitions.map((definition, index) => (
+    typeof definition.widthRad === 'number'
+      ? definition.widthRad
+      : arcSegments * Math.asin(areas[index] / (areaScale * arcSegments))
+  ));
   const normalizedStart = ((startAngleRad % TAU) + TAU) % TAU;
   const boundarySignature = JSON.stringify([
     Number(normalizedStart.toPrecision(15)),
@@ -36,7 +56,13 @@ export function generateLandletRing({ prefix, count, innerRadiusM, startAngleRad
       landClass: definition.landClass,
       landType: definition.landType || 'buildable',
       polygon: worldPolygon.map((point) => ({ x: point.x - center.x, y: point.y - center.y })),
-      metadata: { generated: true, generator: 'annular-ring-v1', ringIndex: index, ...definition.metadata },
+      // #3011: widthRad lets a LATER adjacentToRingId reuse of THIS ring
+      // (worker/lib/world-generation.js) carry this exact angle forward
+      // instead of re-deriving it from areaM2 -- see this function's own
+      // comment above on angles.
+      metadata: {
+        generated: true, generator: 'annular-ring-v1', ringIndex: index, ...definition.metadata, widthRad: angle,
+      },
     };
   });
 
