@@ -375,7 +375,16 @@ export async function generateWaterAwareLandletRing(db, {
       landClass: shape.landClass,
       landType: shape.landType,
       polygon: polygon.map((point) => ({ x: point.x - center.x, y: point.y - center.y })),
-      metadata: shape.metadata,
+      // #3011: widthRad is this shape's own exact angular width -- land
+      // fragment or water arc alike. An adjacentToRingId reuse call
+      // (worker/lib/world-generation.js) reads it straight back and feeds
+      // it to generateLandletRing (worker/landGenerator.js) verbatim,
+      // instead of that function re-deriving an angle from areaM2 via the
+      // asin formula -- re-deriving can't reproduce this ring's own real
+      // angular budget (reduced by whatever water actually occupied), and
+      // a water-arc shape's own areaM2 (a back-computed real polygon area,
+      // set above) was never asin-invertible to begin with.
+      metadata: { ...shape.metadata, widthRad: shape.endAngle - shape.startAngle },
     };
   });
 

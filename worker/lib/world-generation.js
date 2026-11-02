@@ -566,10 +566,26 @@ async function handleLandCandidates(request, db, route, url) {
       innerRadiusM = adjacentRing.outer_radius_m;
       startAngleRad = adjacentRing.start_angle_rad;
       distribution = adjacentRing.distribution;
+      // #3011: widthRad (set by whichever generator produced the parent's
+      // own candidates -- generateLandletRing or generateWaterAwareLandletRing,
+      // both of which now stamp it into every landlet's metadata) is each
+      // entry's own exact original angular width. Reading it back here and
+      // passing it straight through to generateLandletRing below is what
+      // makes this ring's inner seam reproduce the parent's outer one
+      // exactly -- re-deriving an angle from areaM2 alone (the only thing
+      // this code read back before this fix) silently diverges the moment
+      // the parent's own angular budget wasn't a uniform full circle
+      // (any water-containing parent), since a water-split land fragment's
+      // or water-arc entry's own areaM2 was never asin-invertible to begin
+      // with. Undefined (not read from metadata) for a legacy row from
+      // before this fix landed -- generateLandletRing's own fallback to
+      // the asin formula in that case exactly reproduces this code's prior
+      // behavior, so an old ring stays reusable without a backfill.
       plots = adjacentCandidates.results.map((row) => ({
         areaM2: row.area_m2,
         landClass: row.landlet_class,
         landType: row.landlet_type,
+        widthRad: JSON.parse(row.metadata_json || '{}').widthRad,
         metadata: distribution ? { sizeDistribution: 'power-law-v1' } : {},
       }));
     } else if (distribution === 'power-law') {
@@ -1019,6 +1035,22 @@ async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, 
   const landlets = generated.landlets.map((candidate) =>
     validateLandlet({ ...candidate, status: 'generating', ownerBuilderId: null }, candidate.landletId));
   const rows = landlets.map((landlet) => ({ ...candidateRowFromLandlet(landlet), ring_id: prefix }));
+  // #3011: candidate_count must be the ring's own ACTUAL stored row count
+  // (rows.length), not the `count` land-plot-definitions parameter the
+  // caller requested -- the two coincide for every water-free ring
+  // (generateLandletRing never produces more or fewer rows than
+  // `count`), but generateWaterAwareLandletRing can and does produce MORE
+  // rows than `count` the moment real water actually intersects the ring
+  // (a water-arc entry, or a land plot split into 2+ fragments, each
+  // becomes its own row). Both of this column's own real consumers --
+  // completeRingGenerationInternal's membership check just below in this
+  // file, and this very function's own adjacentToRingId reuse validation
+  // above -- already compare it directly against a real COUNT(*) of
+  // landlet_candidates rows, so storing the land-plot count here (as
+  // before this fix) made both checks permanently fail for any
+  // water-touching ring: completion would 409 "must be materialized"
+  // forever even once every row genuinely was, and reuse would 409
+  // "membership is incomplete" even with every row present and correct.
   await db.batch([
     db.prepare(`
       INSERT INTO landlet_candidate_rings
@@ -1026,7 +1058,7 @@ async function generateLandletRingCandidates(db, { prefix, count, innerRadiusM, 
          boundary_signature, adjacent_to_ring_id)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
-      prefix, innerRadiusM, generated.outerRadiusM, count, distribution, startAngleRad,
+      prefix, innerRadiusM, generated.outerRadiusM, rows.length, distribution, startAngleRad,
       generated.boundarySignature, adjacentToRingId,
     ),
     ...rows.map((row) => candidateInsertStatement(db, row)),
