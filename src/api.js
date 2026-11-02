@@ -1833,6 +1833,17 @@ export async function fetchNearbyChatMessages({ cursor = null } = {}) {
   return requestJson(`/nearby-chat?${query.toString()}`);
 }
 
+// #2956: parity with sendVoiceReport below -- mute itself is purely local/
+// client-side (src/shop/nearbyChat.js) and never calls the server at all.
+export async function sendNearbyChatReport({ reportedBuilderId, reason }) {
+  const { reportId } = await requestJson('/nearby-chat/report', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ reportedBuilderId, reason }),
+  });
+  return reportId;
+}
+
 // #2817/#2818 (sub-issues of #2780, proximity voice chat): the WebRTC
 // signaling relay — point-to-point, unlike fetchNearbyChatMessages' own
 // landlet-wide broadcast above. src/shop/voiceChat.js is the only caller.
