@@ -135,3 +135,25 @@ export async function requireVerifiedSession(request, db) {
   assertVerified(user);
   return user;
 }
+
+// #2989 (sub-issue of #2305, "suspended-seller content" tracking): a
+// standalone, non-throwing counterpart to requireCurrentUser's own
+// account_suspensions lookup, for checking a THIRD PARTY's (a landlet
+// owner's) standing rather than the calling session's own -- a suspended
+// builder's own placed content needs to stop being interactable for
+// everyone else, but the builder still needs full access to their own
+// land (per #2989's own text), so this can never be folded into
+// requireCurrentUser/requireSessionBuilder, both of which only ever check
+// the caller. Joins through builders rather than taking a user_id
+// directly since every call site below (handleInstancePurchase's landlet
+// lookup, handleInstances' GET-by-landletId listing) only ever has a
+// builder_id (landlets.owner_builder_id) in hand.
+export async function builderHasActiveSuspension(db, builderId) {
+  if (!builderId) return false;
+  const row = await db.prepare(`
+    SELECT 1 FROM builders
+    JOIN account_suspensions ON account_suspensions.user_id = builders.user_id
+    WHERE builders.builder_id = ? AND account_suspensions.lifted_at IS NULL AND account_suspensions.escalated_at IS NULL
+  `).bind(builderId).first();
+  return !!row;
+}
