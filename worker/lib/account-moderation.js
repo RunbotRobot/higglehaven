@@ -252,7 +252,11 @@ async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
   const seller = await db.prepare('SELECT seller_id FROM sellers WHERE user_id = ?').bind(suspendedUserId).first();
   if (!seller) return { instancesRemoved: 0 };
   const { results: instances } = await db.prepare(`
-    SELECT placed_instances.* FROM placed_instances
+    SELECT placed_instances.*,
+           catalog_templates.name AS retained_template_name,
+           catalog_templates.category AS retained_template_category,
+           catalog_templates.image_url AS retained_template_image_url
+    FROM placed_instances
     JOIN catalog_templates ON catalog_templates.template_id = placed_instances.template_id
     WHERE catalog_templates.seller_id = ?
   `).bind(seller.seller_id).all();
@@ -279,11 +283,25 @@ async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
     // already took this row with it, so there's nothing left to delete
     // either.
     if (!builderId) continue;
+    // #2988: the product's name/category/image are copied onto the
+    // snapshot itself (kept out of instance_json, which stays a pure
+    // placed_instances row) so the builder can still see what used to be
+    // here after the template, or the seller's whole account, is gone.
+    const {
+      retained_template_name: templateName,
+      retained_template_category: templateCategory,
+      retained_template_image_url: templateImageUrl,
+      ...placedRow
+    } = instance;
     statements.push(db.prepare(`
       INSERT INTO suspended_seller_instance_snapshots
-        (snapshot_id, seller_id, builder_id, landlet_id, template_id, instance_json)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(`sss-${crypto.randomUUID()}`, seller.seller_id, builderId, instance.landlet_id, instance.template_id, JSON.stringify(instance)));
+        (snapshot_id, seller_id, builder_id, landlet_id, template_id, instance_json,
+         template_name, template_category, template_image_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+      `sss-${crypto.randomUUID()}`, seller.seller_id, builderId, instance.landlet_id, instance.template_id,
+      JSON.stringify(placedRow), templateName, templateCategory, templateImageUrl,
+    ));
     statements.push(db.prepare('DELETE FROM placed_instances WHERE instance_id = ?').bind(instance.instance_id));
   }
   if (statements.length > 0) await db.batch(statements);
@@ -306,7 +324,7 @@ async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
 async function restoreSuspendedSellerPlacedInstances(db, sellerId) {
   const { results: snapshots } = await db.prepare(`
     SELECT * FROM suspended_seller_instance_snapshots
-    WHERE seller_id = ? AND restored_at IS NULL AND cleared_at IS NULL
+    WHERE seller_id = ? AND restored_at IS NULL AND cleared_at IS NULL AND permanent_at IS NULL
   `).bind(sellerId).all();
   if (snapshots.length === 0) return { instancesRestored: 0 };
 
@@ -345,6 +363,59 @@ async function restoreSuspendedSellerPlacedInstances(db, sellerId) {
   }
   if (statements.length > 0) await db.batch(statements);
   return { instancesRestored: statements.length / 2 };
+}
+
+// #2988 (sub-issue 4/5 of #2305): when a suspended seller's suspension
+// escalates into a permanent account closure (escalateExpiredSuspensions),
+// every builder still holding a pending slot for that seller's products
+// (#2986/#2987) is told restoration is no longer coming -- and, per the
+// standing "builder is never left wondering what used to be here" owner
+// decision, the slot itself is NOT purged: it stays listed with the
+// product's retained name/category/image until the builder clears it.
+//
+// Two-phase on purpose, around the account deletion it belongs to:
+// prepare (before the cascade) marks the slots permanent and captures who
+// to tell; commit (after the cascade succeeded) sends the notices;
+// rollback (cascade failed and will be retried) un-marks them. Notices
+// only go out once the closure is real, so a retried cascade can't notify
+// twice or announce a closure that didn't happen. Returns null when this
+// account has no seller profile or no pending slots at all.
+export async function prepareSellerPermanentClosure(db, userId) {
+  const seller = await db.prepare('SELECT seller_id FROM sellers WHERE user_id = ?').bind(userId).first();
+  if (!seller) return null;
+  const { results: marked } = await db.prepare(`
+    UPDATE suspended_seller_instance_snapshots
+    SET permanent_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE seller_id = ? AND restored_at IS NULL AND cleared_at IS NULL AND permanent_at IS NULL
+    RETURNING snapshot_id, builder_id, template_name
+  `).bind(seller.seller_id).run();
+  if (marked.length === 0) return null;
+  return {
+    async commit() {
+      const namesByBuilder = new Map();
+      for (const row of marked) {
+        const names = namesByBuilder.get(row.builder_id) || [];
+        names.push(row.template_name || 'an item that is no longer listed');
+        namesByBuilder.set(row.builder_id, names);
+      }
+      for (const [builderId, names] of namesByBuilder) {
+        const unique = [...new Set(names)];
+        const shown = unique.slice(0, 3).map((name) => `"${name}"`).join(', ');
+        const more = unique.length > 3 ? ` and ${unique.length - 3} more` : '';
+        // Plain, unparsed text client-side (see the #2351 note on the
+        // suspension notice above) -- and it describes what the builder
+        // sees, nothing internal.
+        await fireNotification(db, builderId,
+          `A seller whose products were removed from your land has had their account permanently closed, so ${shown}${more} will not be coming back. They stay listed under Removed Items so you can see what used to be there -- clear them whenever you like to free up the spot.`);
+      }
+    },
+    async rollback() {
+      const ids = marked.map((row) => row.snapshot_id);
+      await db.batch(ids.map((id) => db.prepare(
+        'UPDATE suspended_seller_instance_snapshots SET permanent_at = NULL WHERE snapshot_id = ?',
+      ).bind(id)));
+    },
+  };
 }
 
 // #2029 (sub-issue of #1201): the foundational primitive for admin-

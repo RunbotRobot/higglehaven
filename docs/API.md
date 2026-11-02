@@ -7799,9 +7799,17 @@ restored.
   session; never another builder's, never visible to shoppers). Returns
   `{ pendingRestorations: [...] }`, newest removal first, each
   `{ snapshotId, landletId, templateId, templateName, category, imageUrl,
-  position: { x, y, z }, removedAt, sellerSuspended }`. The template fields
-  are `null` if the template has since been deleted. `sellerSuspended` is
-  `false` for a slot that outlived its suspension without being restored.
+  position: { x, y, z }, removedAt, sellerSuspended, permanentAt }`. The
+  template fields come from the live template while it exists and otherwise
+  from a copy taken on the snapshot at removal time (#2988), so they
+  survive the template — or the seller's whole account — being deleted.
+  `sellerSuspended` is `false` for a slot that outlived its suspension
+  without being restored. `permanentAt` is set once the seller's suspension
+  escalated into a permanent account closure (`escalateExpiredSuspensions`,
+  #2988): restoration is no longer coming, every affected builder gets an
+  in-app notification (one per builder, naming up to three products), and
+  the slot is never auto-restored — but it stays listed, with its product
+  info, until the builder clears it themselves.
 - `DELETE /api/instances/pending-restoration/:snapshotId` — the builder
   permanently clears one slot (soft: `cleared_at` is set and the row, with
   its product-identifying info, is retained). Rate-limited per builder.

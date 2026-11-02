@@ -171,5 +171,6 @@
   "0171_version_instances_group_id.sql",
   "0172_nearby_chat_reports.sql",
   "0173_users_turnstile_failed.sql",
-  "0174_suspended_seller_instance_snapshots.sql"
+  "0174_suspended_seller_instance_snapshots.sql",
+  "0175_suspended_seller_snapshot_retained_info.sql"
 ]
