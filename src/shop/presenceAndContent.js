@@ -59,21 +59,21 @@ import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { isNetworkError } from '../build/scene.js';
 import { currentAuthUser } from '../account/auth.js';
 import {
-  fetchLandlet, fetchLandletVersion, fetchInstances,
+  fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
   fetchCreditOrbs, collectCreditOrb, reportPresence, fetchNearbyPresence,
 } from '../api.js';
 import { createShopAvatar } from './avatar.js';
 import { shopMaxRadiusM, shopFlightState, shopFlightAltitudeM } from './flightMovement.js';
 import { growShopDomeIfNeeded } from './sky.js';
 import {
-  shopAvatarPosition, shopAvatarFacing, pointInPolygonXY,
+  shopAvatarPosition, shopAvatarFacing, pointInPolygonXY, plotColorKeyForLandlet,
 } from '../main.js';
 // #2629: disposeObject3D/unloadShopLandletInstances now live in
 // src/shop/mode.js (a sibling-module, not reverse-, import) -- mode.js's
 // own enterShopMode in turn imports shopLandlets/pickShopSpawnLocation/etc.
 // from this module, same mutually-dependent shape flightMovement.js's own
 // header comment already documents for shop/avatar.js and itself.
-import { disposeObject3D, unloadShopLandletInstances } from './mode.js';
+import { disposeObject3D, unloadShopLandletInstances, buildShopGroundMesh } from './mode.js';
 import { registerShopSign, registerShopCalendar, registerShopReview } from './worldSprites.js';
 
 const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
@@ -393,6 +393,101 @@ export function shopTerrainHeightAtM(worldX, worldY) {
     if (landletContainsPoint(entry.record, worldX, worldY)) return entry.record.elevationM ?? 0;
   }
   return 0;
+}
+
+// #2996: enterShopMode (mode.js) fetches every landlet's own record
+// exactly once, at Shop-mode bootstrap — status/ownerBuilderId/polygon/
+// areaM2/elevationM/name never change again for the rest of the session,
+// even though claims, auctions, and admin reassignment are real, frequent
+// mutations on the very same landlets this snapshot came from. The one
+// existing per-landlet refresh (loadShopLandletInstances' own
+// activeVersionId re-fetch, #1282) deliberately left everything else
+// stale — see that fix's own comment. This re-syncs the rest, on its own
+// much slower interval since (unlike that one, scoped to a single landlet
+// already being loaded) it means a real network round-trip over every
+// landlet in the world.
+const SHOP_RECORD_REFRESH_INTERVAL_MS = 20000;
+let shopLastRecordRefreshAt = 0;
+let shopRecordRefreshInFlight = false; // guards against overlapping fetches if one runs long
+
+export function refreshShopLandletRecordsIfNeeded(now) {
+  if (now - shopLastRecordRefreshAt < SHOP_RECORD_REFRESH_INTERVAL_MS) return;
+  shopLastRecordRefreshAt = now;
+  refreshShopLandletRecordsNow();
+}
+
+// Split out of refreshShopLandletRecordsIfNeeded above so a test can force
+// this to run right now regardless of SHOP_RECORD_REFRESH_INTERVAL_MS —
+// window.__testForceShopLandletRecordRefresh (main.js) calls this directly.
+// Returns the in-flight promise so a test can await it rather than polling
+// for completion.
+export function refreshShopLandletRecordsNow() {
+  if (shopRecordRefreshInFlight) return Promise.resolve();
+  shopRecordRefreshInFlight = true;
+  return fetchAllLandlets()
+    .then((freshRecords) => {
+      let currentEntryChanged = false;
+      for (const freshRecord of freshRecords) {
+        const entry = shopLandlets.get(freshRecord.landletId);
+        // A landlet shopLandlets doesn't already know about is outside this
+        // session's own world-radius cull (enterShopMode's own
+        // distanceFromOrigin check) or materialized after bootstrap --
+        // backfilling either is outside this issue's own scope; this only
+        // keeps already-visible landlets' own fields current.
+        if (!entry) continue;
+        const oldRecord = entry.record;
+        // #1995/#2378: leaving a status this entry had something loaded
+        // for needs an explicit unload here — updateShopProximity only
+        // ever *loads* based on whatever entry.record.status reads on its
+        // next tick (so just swapping entry.record below already makes a
+        // fresh load pick up a new 'claimed'/'greenbelt' status on its
+        // own), but its branch for the status being *left* never runs
+        // again once that swap happens, so nothing else would ever tear
+        // down what it already loaded.
+        if (oldRecord.status !== freshRecord.status) {
+          if (oldRecord.status === 'claimed' && entry.loaded) unloadShopLandletInstances(entry);
+          else if (oldRecord.status === 'greenbelt' && entry.orbsLoaded) unloadCreditOrbsForLandlet(entry);
+        }
+        // The ground mesh's color/texture (plotColorKeyForLandlet) and
+        // shape (shapeForLandlet, keyed off polygon/areaM2) are baked into
+        // geometry/materials at construction time — nothing rebuilds them
+        // on their own the way entry.record's plain fields just get
+        // overwritten below. Only pay for a rebuild when one of their
+        // actual inputs changed.
+        if (
+          plotColorKeyForLandlet(oldRecord) !== plotColorKeyForLandlet(freshRecord)
+          || oldRecord.biome !== freshRecord.biome
+          || oldRecord.areaM2 !== freshRecord.areaM2
+          || JSON.stringify(oldRecord.polygon) !== JSON.stringify(freshRecord.polygon)
+        ) {
+          entry.group.remove(entry.groundMesh);
+          disposeObject3D(entry.groundMesh);
+          entry.groundMesh = buildShopGroundMesh(freshRecord);
+          entry.group.add(entry.groundMesh);
+        }
+        // #2871: group.position already carries the real elevationM lift
+        // (and the landlet's own center) so every placed instance/orb
+        // riding on it moves too — updating it here is enough to pick up
+        // an elevationM or center edit (both reachable via #2967's PUT/
+        // PATCH endpoint) with no extra per-child work.
+        entry.group.position.set(freshRecord.center.x, freshRecord.center.y, freshRecord.elevationM ?? 0);
+        entry.record = freshRecord;
+        if (entry === shopCurrentLandletEntry) currentEntryChanged = true;
+      }
+      // updateShopLandletInfo only re-renders on an actual landlet
+      // *transition* (found === shopCurrentLandletEntry short-circuits
+      // otherwise) — so if the shopper's own current landlet is the one
+      // whose record just changed in place (e.g. its ownerBuilderId after
+      // an auction win), force a recompute the same way enterShopMode's
+      // own bootstrap already does for the equivalent "labels just became
+      // current" case, rather than leaving the "built by" label showing
+      // stale data for the rest of the session.
+      if (currentEntryChanged) resetShopCurrentLandletEntry();
+    })
+    .catch(() => {}) // best-effort, same as every other background refresh in this file
+    .finally(() => {
+      shopRecordRefreshInFlight = false;
+    });
 }
 
 // Same "logged in AND actually verified" check assertVerified enforces

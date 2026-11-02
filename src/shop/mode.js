@@ -350,6 +350,39 @@ export function unloadShopLandletInstances(entry) {
   }
 }
 
+// Builds (or rebuilds, for #2996's refreshShopLandletRecords) a landlet's
+// own ground plane — extracted out of enterShopMode's own construction loop
+// unchanged so both call sites share the exact same shape/color logic. The
+// caller owns adding/removing the result from its own group; this never
+// touches the scene graph itself.
+export function buildShopGroundMesh(record) {
+  // #220/#2371: only an unclaimed 'greenbelt' plot gets the textured
+  // ground — claimed/generating/water keep their own flat
+  // SHOP_PLOT_COLORS fill, since those are ownership-status indicators,
+  // not a ground biome, and need to stay instantly readable as a single
+  // solid color at a glance across the whole world. A greenbelt plot's
+  // own texture now varies by its real biome (#2370's ingested data),
+  // falling back to the same default/unclassified look #220 originally
+  // shipped when no real classification exists at its location yet.
+  const plotColorKey = plotColorKeyForLandlet(record);
+  const groundMaterial = plotColorKey === 'greenbelt'
+    ? new THREE.MeshStandardMaterial({ map: createGroundTexture(record.biome) })
+    : new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[plotColorKey] ?? 0x4caf50 });
+  const groundGeometry = new THREE.ShapeGeometry(shapeForLandlet(record));
+  if (plotColorKey === 'greenbelt') normalizeGroundShapeUVs(groundGeometry);
+  const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
+  // #2851: Shop mode's own ground mesh never called curveGroundGeometry
+  // (world-curvature *between* landlets is a separate, unaddressed
+  // problem here -- see applyLandletShape's own comment on this) --
+  // this plot-level real elevation offset is independent of that, just
+  // a uniform z lift for this one landlet's own real terrain height.
+  // #2871: the lift itself lives on the caller's own group.position.z (so
+  // instances/orbs get it too) -- this is just the pre-existing small
+  // anti-z-fighting epsilon, unrelated to elevation.
+  groundMesh.position.z = 0.02;
+  return groundMesh;
+}
+
 export async function enterShopMode() {
   // Safe regardless of whether the identity gate just below passes — Build
   // UI has nothing to do with an identity check, and hiding it before that
@@ -678,34 +711,11 @@ export async function enterShopMode() {
     // elevation term of its own, so putting the offset here is what makes
     // them move with the ground instead of staying at the old baseline.
     group.position.set(record.center.x, record.center.y, record.elevationM ?? 0);
-    // #220/#2371: only an unclaimed 'greenbelt' plot gets the textured
-    // ground — claimed/generating/water keep their own flat
-    // SHOP_PLOT_COLORS fill, since those are ownership-status indicators,
-    // not a ground biome, and need to stay instantly readable as a single
-    // solid color at a glance across the whole world. A greenbelt plot's
-    // own texture now varies by its real biome (#2370's ingested data),
-    // falling back to the same default/unclassified look #220 originally
-    // shipped when no real classification exists at its location yet.
-    const plotColorKey = plotColorKeyForLandlet(record);
-    const groundMaterial = plotColorKey === 'greenbelt'
-      ? new THREE.MeshStandardMaterial({ map: createGroundTexture(record.biome) })
-      : new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[plotColorKey] ?? 0x4caf50 });
-    const groundGeometry = new THREE.ShapeGeometry(shapeForLandlet(record));
-    if (plotColorKey === 'greenbelt') normalizeGroundShapeUVs(groundGeometry);
-    const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
-    // #2851: Shop mode's own ground mesh never called curveGroundGeometry
-    // (world-curvature *between* landlets is a separate, unaddressed
-    // problem here -- see applyLandletShape's own comment on this) --
-    // this plot-level real elevation offset is independent of that, just
-    // a uniform z lift for this one landlet's own real terrain height.
-    // #2871: the lift itself now lives on `group.position.z` above (so
-    // instances/orbs get it too) -- this is just the pre-existing small
-    // anti-z-fighting epsilon, unrelated to elevation.
-    groundMesh.position.z = 0.02;
+    const groundMesh = buildShopGroundMesh(record);
     group.add(groundMesh);
     scene.add(group);
     shopLandlets.set(record.landletId, {
-      record, group, loaded: false, loadToken: 0, objects: [],
+      record, group, groundMesh, loaded: false, loadToken: 0, objects: [],
       // #2378: 'near' (full detail) or 'middle' (simplified proxy) — only
       // meaningful while loaded is true; see updateShopProximity.
       lod: 'near',

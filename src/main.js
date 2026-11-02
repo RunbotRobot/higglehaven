@@ -275,7 +275,7 @@ import {
 import {
   shopLandlets, updateShopProximity, updateShopLandletInfo, pickShopSpawnLocation,
   setShopBuilderLabel, setShopBuilderLabels, resetShopCurrentLandletEntry,
-  accountMenuLandletInfoEl, SHOP_LOAD_RADIUS_M,
+  accountMenuLandletInfoEl, SHOP_LOAD_RADIUS_M, refreshShopLandletRecordsNow,
 } from './shop/presenceAndContent.js';
 // #2627 (leaf of #2563/#2504/#2500, depends on #2626 above): Shop mode's
 // proximity-faded sign-post/calendar-event/product-review sprite
@@ -1269,6 +1269,13 @@ window.__testForceShopProximityCheck = () => {
   positionShopCamera();
   updateShopProximity();
 };
+// #2996: forces refreshShopLandletRecordsIfNeeded's own periodic landlet
+// re-sync to run right now rather than waiting on its real
+// SHOP_RECORD_REFRESH_INTERVAL_MS gate — same "always inert unless a test
+// calls it" convention as every other window.__test* hook here. Returns the
+// underlying promise so a test can await it instead of polling for
+// completion.
+window.__testForceShopLandletRecordRefresh = () => refreshShopLandletRecordsNow();
 // #2716: see setShopSkyElapsedSecondsForTest's own comment. Always inert
 // unless a test calls it, same convention as every other window.__test* hook.
 window.__testSetShopSkyElapsedSeconds = (seconds) => {
