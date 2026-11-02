@@ -598,6 +598,15 @@ export function setShopAvatarAnimationState(shopAvatar, state) {
 // controls. moveMagnitude itself is no longer needed by this function;
 // the walk-cycle pose that actually depends on it lives in
 // updateShopAvatarPose instead.
+// #3016: test-only. Runs the real idle state machine forward by `seconds` of
+// simulated time with no input, in fixed `stepS` slices (same clamp the
+// per-frame dt gets in flightMovement.js), so an e2e test doesn't depend on
+// how many frames software-rendered CI manages to draw.
+export function advanceShopIdleForTest(seconds, stepS = 0.1) {
+  const steps = Math.ceil(seconds / stepS - 1e-9);
+  for (let i = 0; i < steps; i++) updateShopAvatarIdle(false, stepS);
+}
+
 export function updateShopAvatarIdle(hasActiveInput, dt) {
   if (hasActiveInput) {
     shopIdleElapsedS = 0;
