@@ -38,6 +38,7 @@ const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
 const LABEL_A = 'Suspended Owner Content Suite Tester';
+const LABEL_B = 'Suspended Owner Content Suite Shopper';
 const PRODUCT_NAME = 'Suite Suspended Owner Content Product';
 
 async function adminFetch(pathAndQuery, cookie, options = {}) {
@@ -117,34 +118,40 @@ await pageFetchJson('/api/instances', {
   body: JSON.stringify({ instanceId, landletId: landlet.landletId, templateId: template.templateId, x: 0, y: 0 }),
 });
 
-await chooseIdentity(page, { mode: 'shop', label: LABEL_A, isNew: false });
-await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
-await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
+// The shopper must be a different account from the landlet's owner:
+// GET /instances?landletId= (#2989/#2993) always shows a suspended owner
+// their own content, so an owner-as-shopper can never observe the hiding.
+// A second browser gets its own cookie jar, so B's session is independent
+// of A's (which is suspended below).
+const { browser: browserB, page: pageB, errors: errorsB } = await launchPage({ promptAnswer: LABEL_B });
+await chooseIdentity(pageB, { mode: 'shop', label: LABEL_B, isNew: true });
+await pageB.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
+await pageB.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
 
 // Same spawn-rotation-release gesture e2e/shop-landlet-instance-leak.test.mjs
 // and e2e/shop-landlet-record-refresh.test.mjs both use -- a fresh Shop-mode
 // spawn otherwise keeps overwriting shopAvatarPosition every frame via its
 // own hands-off orbit until real navigation input first arrives.
-const moveJoystickBox = await page.locator('#shop-move-joystick').boundingBox();
+const moveJoystickBox = await pageB.locator('#shop-move-joystick').boundingBox();
 const moveCenterX = moveJoystickBox.x + moveJoystickBox.width / 2;
 const moveCenterY = moveJoystickBox.y + moveJoystickBox.height / 2;
-await page.mouse.move(moveCenterX, moveCenterY);
-await page.mouse.down();
-await page.mouse.move(moveCenterX + 25, moveCenterY, { steps: 5 });
-await page.waitForTimeout(100);
-await page.mouse.up();
-await page.waitForTimeout(100);
+await pageB.mouse.move(moveCenterX, moveCenterY);
+await pageB.mouse.down();
+await pageB.mouse.move(moveCenterX + 25, moveCenterY, { steps: 5 });
+await pageB.waitForTimeout(100);
+await pageB.mouse.up();
+await pageB.waitForTimeout(100);
 
 async function teleportOntoLandletAndTick() {
-  await page.evaluate(([x, y]) => {
+  await pageB.evaluate(([x, y]) => {
     window.__testTeleportShopAvatar(x, y);
     window.__testForceShopProximityCheck();
   }, [landlet.center.x, landlet.center.y]);
-  await page.waitForTimeout(600);
+  await pageB.waitForTimeout(600);
 }
 
 async function instanceLodBand() {
-  return page.evaluate((id) => window.__testShopInstanceLodBand(id), instanceId);
+  return pageB.evaluate((id) => window.__testShopInstanceLodBand(id), instanceId);
 }
 
 await teleportOntoLandletAndTick();
@@ -170,7 +177,7 @@ console.log('instance LOD band right after suspension, before any refresh (shoul
 // The #3005 fix: force refreshShopLandletRecordsIfNeeded's own periodic
 // re-sync to run immediately, then let an ordinary proximity tick pick up
 // the now-current ownerSuspended flag.
-await page.evaluate(() => window.__testForceShopLandletRecordRefresh());
+await pageB.evaluate(() => window.__testForceShopLandletRecordRefresh());
 await teleportOntoLandletAndTick();
 const bandAfterRefresh = await instanceLodBand();
 console.log('instance LOD band after the forced record refresh while suspended (should be null -- content hidden):', bandAfterRefresh);
@@ -187,7 +194,7 @@ if (unsuspend.response.status !== 200) {
 // placed_instances (that's #2986, not yet built) -- GET /instances just
 // stops filtering it out, so the very same refresh+tick cycle should bring
 // the instance back without a reload or walk-off-and-back either.
-await page.evaluate(() => window.__testForceShopLandletRecordRefresh());
+await pageB.evaluate(() => window.__testForceShopLandletRecordRefresh());
 await teleportOntoLandletAndTick();
 const bandAfterUnsuspendRefresh = await instanceLodBand();
 console.log('instance LOD band after unsuspending and refreshing again (should NOT be null again):', bandAfterUnsuspendRefresh);
@@ -198,8 +205,9 @@ const pass = !!landlet && !!builderA
   && bandAfterRefresh === null
   && bandAfterUnsuspendRefresh !== null
   && errors.length === 0;
+await browserB.close();
 await finish(browser, {
   pass,
   label: '#3005: Shop mode\'s periodic landlet-record re-sync unloads (and later reloads) a landlet\'s placed content when its owner\'s suspension status changes mid-session',
-  errors,
+  errors: [...errors, ...errorsB],
 });
