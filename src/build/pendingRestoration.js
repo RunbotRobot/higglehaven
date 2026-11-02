@@ -9,7 +9,6 @@
 // it only ever returns the signed-in builder's own records.
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { fetchPendingRestorations, clearPendingRestoration } from '../api.js';
-import { authInitPromise, currentAuthUser } from '../account/auth.js';
 
 const buttonEl = document.getElementById('pending-restoration-btn');
 const modalEl = document.getElementById('pending-restoration-modal');
@@ -109,7 +108,3 @@ function closeModal() {
 }
 buttonEl.addEventListener('click', openModal);
 closeBtn.addEventListener('click', closeModal);
-
-authInitPromise.then(() => {
-  if (currentAuthUser) refresh();
-});

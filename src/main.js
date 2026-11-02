@@ -338,8 +338,8 @@ import {
   removeLowStockHighlight, landletElevationGroup,
 } from './build/scene.js';
 // #2987: builder-facing "Removed Items" view of suspended-seller removals
-// (side-effect module: wires its own button/modal and loads on sign-in).
-import './build/pendingRestoration.js';
+// (wires its own button/modal; enterBuildMode below triggers its load).
+import { refresh as refreshPendingRestorations } from './build/pendingRestoration.js';
 
 // Exported for src/catalog/picker.js (#2558) -- its own renderBundlePicker/
 // currentBundleTabList/bundle-tab-click handler need this same state; a
@@ -2164,6 +2164,11 @@ async function bootstrap() {
   refreshNotificationsBadge();
   refreshFriendsBadge();
   refreshDmBadge();
+  // #2987: only here -- Build mode past its sign-in + verification gate --
+  // never at page load: an unverified account's request would 403, which
+  // the browser logs as a console error (e2e/auth.test.mjs caught exactly
+  // that on its first version of this).
+  refreshPendingRestorations();
   let instances;
   try {
     setCurrentLandletId(await resolveLandletId());
