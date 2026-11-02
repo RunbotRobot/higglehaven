@@ -168,5 +168,6 @@
   "0168_moderation_removal_snapshots.sql",
   "0169_purchases_pre_dispute_refunded_amount.sql",
   "0170_product_flags_weight.sql",
-  "0171_version_instances_group_id.sql"
+  "0171_version_instances_group_id.sql",
+  "0172_nearby_chat_reports.sql"
 ]
