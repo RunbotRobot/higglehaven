@@ -615,3 +615,43 @@ describe('Refund revokes avatar ownership (#754)', () => {
     expect(indexes.some((idx) => idx.name === 'idx_owned_avatars_purchase_id')).toBe(false);
   });
 });
+
+// #1291 (decided under AGENTS.md's "No silent loss" default): deleting an
+// avatar/animation template used to tell nobody. It still proceeds (notify,
+// don't block), but equipped builders are unequipped and every owner is told,
+// and the owned_* record is kept as the path back.
+describe('Deleting an owned/equipped avatar template (#1291)', () => {
+  it('unequips, notifies equipped and merely-owning builders, and keeps the ownership record', async () => {
+    await createAvatarTemplate('avatar-delete-notify-template');
+    const equipper = await signupBuilder('avatar-delete-notify-equipper');
+    const owner = await signupBuilder('avatar-delete-notify-owner');
+    for (const b of [equipper, owner]) {
+      await env.DB.prepare(
+        'INSERT INTO owned_avatars (builder_id, template_id, purchased_at) VALUES (?, ?, ?)',
+      ).bind(b.builderId, 'avatar-delete-notify-template', '2026-11-02T00:00:00Z').run();
+    }
+    await env.DB.prepare(
+      'UPDATE builders SET equipped_avatar_template_id = ? WHERE builder_id = ?',
+    ).bind('avatar-delete-notify-template', equipper.builderId).run();
+
+    const deleted = await api('/catalog/avatar-delete-notify-template', { method: 'DELETE' });
+    expect(deleted.response.status).toBe(200);
+
+    const row = await env.DB.prepare(
+      'SELECT equipped_avatar_template_id AS e FROM builders WHERE builder_id = ?',
+    ).bind(equipper.builderId).first();
+    expect(row.e).toBeNull();
+    const kept = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM owned_avatars WHERE template_id = ?',
+    ).bind('avatar-delete-notify-template').first();
+    expect(kept.n).toBe(2);
+
+    const equipperNotices = await api('/notifications', equipper.session());
+    expect(equipperNotices.body.notifications).toHaveLength(1);
+    expect(equipperNotices.body.notifications[0].message).toContain('was removed from the catalog');
+    expect(equipperNotices.body.notifications[0].message).toContain('equipped avatar');
+    const ownerNotices = await api('/notifications', owner.session());
+    expect(ownerNotices.body.notifications).toHaveLength(1);
+    expect(ownerNotices.body.notifications[0].message).toContain('purchase record is kept');
+  });
+});

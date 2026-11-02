@@ -2749,6 +2749,13 @@ isn't visible to the caller at all — see #729) or a `version_instances` row
 snapshot tables, kept on `ON DELETE RESTRICT` deliberately, so the template
 can't be deleted out from under them even after every live instance is gone.
 
+#1291: deleting an avatar/animation template is never blocked by builders
+owning or having it equipped (`owned_avatars`/`owned_animations` and
+`builders.equipped_*_template_id` aren't foreign keys). Instead, anyone who had
+it equipped is unequipped, every owner gets a notification (no `templateId`
+attached -- it's gone), and the `owned_*` rows are kept as their purchase
+record. `DELETE /api/catalog/batch` does the same.
+
 Response:
 
 ```json

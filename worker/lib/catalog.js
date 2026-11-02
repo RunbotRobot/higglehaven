@@ -804,6 +804,57 @@ async function notifyBundleOwnersOfTemplateDeletion(db, templates) {
   }));
 }
 
+// #1291 (decided under AGENTS.md's "No silent loss" and "Prefer an invisible
+// fix" defaults, not filed as owner-gated): deleting an avatar/animation
+// template used to leave every builder who owned or had it equipped with no
+// word at all -- owned_avatars/owned_animations and
+// builders.equipped_*_template_id are deliberately not real FKs, so the
+// delete always succeeded and the equipped lookups just quietly started
+// returning null. Same "tell them, don't block them" precedent as
+// notifyBundleOwnersOfTemplateDeletion above: the delete proceeds, any
+// builder who had it equipped is unequipped (clearing the now-dangling
+// pointer), and every builder who owned it is told. The owned_* rows are
+// left in place on purpose -- they're the builder's purchase record, and
+// keep enough (template id + purchase) to recover or replace the item.
+// Like the bundle sibling, notifications leave templateId null (the
+// template is already gone, so an FK to it would fail at insert time).
+async function notifyOwnersOfAvatarOrAnimationDeletion(db, templates) {
+  if (templates.length === 0) return;
+  const templateIds = templates.map(({ templateId }) => templateId);
+  const placeholders = templateIds.map(() => '?').join(', ');
+  const nameByTemplateId = new Map(templates.map(({ templateId, name }) => [templateId, name]));
+  const { results } = await db.prepare(`
+    SELECT builder_id AS builderId, template_id AS templateId, 'avatar' AS kind, 0 AS equipped FROM owned_avatars WHERE template_id IN (${placeholders})
+    UNION ALL
+    SELECT builder_id, equipped_avatar_template_id, 'avatar', 1 FROM builders WHERE equipped_avatar_template_id IN (${placeholders})
+    UNION ALL
+    SELECT builder_id, template_id, 'animation', 0 FROM owned_animations WHERE template_id IN (${placeholders})
+    UNION ALL
+    SELECT builder_id, equipped_animation_template_id, 'animation', 1 FROM builders WHERE equipped_animation_template_id IN (${placeholders})
+  `).bind(...templateIds, ...templateIds, ...templateIds, ...templateIds).all();
+  if (results.length === 0) return;
+
+  await db.batch([
+    db.prepare(`UPDATE builders SET equipped_avatar_template_id = NULL WHERE equipped_avatar_template_id IN (${placeholders})`).bind(...templateIds),
+    db.prepare(`UPDATE builders SET equipped_animation_template_id = NULL WHERE equipped_animation_template_id IN (${placeholders})`).bind(...templateIds),
+  ]);
+
+  const byBuilderAndTemplate = new Map();
+  for (const row of results) {
+    const key = `${row.builderId}\u0000${row.templateId}`;
+    const entry = byBuilderAndTemplate.get(key) ?? { builderId: row.builderId, templateId: row.templateId, kind: row.kind, equipped: false };
+    if (row.equipped) entry.equipped = true;
+    byBuilderAndTemplate.set(key, entry);
+  }
+  await fireNotifications(db, [...byBuilderAndTemplate.values()].map(({ builderId, templateId, kind, equipped }) => {
+    const name = nameByTemplateId.get(templateId);
+    const tail = equipped
+      ? ` It was your equipped ${kind}, so you're back to the default -- pick another any time.`
+      : ' Your purchase record is kept.';
+    return { builderId, message: `The ${kind} "${name}" you own was removed from the catalog by its seller.${tail}` };
+  }));
+}
+
 async function assertUploadedModelExists(bucket, modelUrl) {
   if (!modelUrl?.startsWith('/uploads/')) return;
   if (!bucket) throw new HttpError('R2 binding MODELS is not configured', 500);
@@ -971,10 +1022,9 @@ export async function handleCatalog(request, db, route, url, models, env) {
     ).bind(templateId)));
     // #792: fired after the batch commits, not inside it -- same
     // reasoning as the single-item DELETE handler's own identical call.
-    await notifyBundleOwnersOfTemplateDeletion(
-      db,
-      existing.results.map((row) => ({ templateId: row.template_id, name: row.name })),
-    );
+    const deletedTemplates = existing.results.map((row) => ({ templateId: row.template_id, name: row.name }));
+    await notifyBundleOwnersOfTemplateDeletion(db, deletedTemplates);
+    await notifyOwnersOfAvatarOrAnimationDeletion(db, deletedTemplates);
     return json({ deletedTemplateIds: templateIds });
   }
 
@@ -1770,6 +1820,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
     // placement as every other post-batch fireNotification(s) call in
     // this codebase.
     await notifyBundleOwnersOfTemplateDeletion(db, [{ templateId: route[1], name: existing.name }]);
+    await notifyOwnersOfAvatarOrAnimationDeletion(db, [{ templateId: route[1], name: existing.name }]);
     return json({ deleted: true });
   }
 
