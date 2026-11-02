@@ -10,6 +10,7 @@ import {
 } from './validation.js';
 import { currentUser, requireSessionBuilder, requireVerifiedSession, builderHasActiveSuspension } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
+import { handlePendingRestoration } from './pending-restoration.js';
 import { moderationRemovalCategory, recordModerationRemovalSnapshot } from './content-moderation.js';
 // #2535 (see its own module's comment for the general shape): these
 // haven't been extracted from worker/index.js yet -- requireOwnedLandlet(s)
@@ -53,6 +54,13 @@ const INSTANCE_WRITE_RATE_LIMIT_MAX = 500;
 
 export async function handleInstances(request, env, route, url) {
   const db = env.DB;
+  // #2987: builder-facing view of (and permanent-clear action for) #2986's
+  // suspended-seller snapshots -- worker/lib/pending-restoration.js. Must
+  // sit before every `/:instanceId` route below, which would otherwise
+  // read this fixed segment as an instance id.
+  if (route[1] === 'pending-restoration') {
+    return handlePendingRestoration(request, db, route);
+  }
   if (request.method === 'DELETE' && route.length === 2 && route[1] === 'batch') {
     const input = await readJson(request);
     if (!Array.isArray(input.instanceIds)) throw new HttpError('instanceIds must be an array', 400);
