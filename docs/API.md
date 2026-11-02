@@ -7779,6 +7779,35 @@ See "Sold-out templates" above for how `sweepSoldOutTemplateInstances`
 consults this chain the moment a template it's placed against hits zero
 stock.
 
+### Suspended-seller placements: removal, snapshot, restore, and the builder's pending-restoration view (#2986, #2987)
+
+Part of #2305's owner decision that suspension is a hard removal from the
+world with a snapshot that restores on unsuspension. `POST
+/api/auth/suspend-account` removes every placed instance of the suspended
+account's seller products from every builder's landlet and snapshots each
+into `suspended_seller_instance_snapshots`; its response gains
+`instancesRemoved` (a count, `0` for an account with no seller profile).
+`POST /api/auth/unsuspend-account` restores every still-pending snapshot
+(fresh `instanceId`, otherwise identical placement including `groupId`) and
+its response gains `instancesRestored`. A snapshot whose landlet has since
+changed owner, or whose template has since been deleted, is left pending
+rather than restored; a snapshot the builder has cleared (below) is never
+restored.
+
+- `GET /api/instances/pending-restoration` — the signed-in builder's own
+  still-pending slots on land they currently own (`401` without a builder
+  session; never another builder's, never visible to shoppers). Returns
+  `{ pendingRestorations: [...] }`, newest removal first, each
+  `{ snapshotId, landletId, templateId, templateName, category, imageUrl,
+  position: { x, y, z }, removedAt, sellerSuspended }`. The template fields
+  are `null` if the template has since been deleted. `sellerSuspended` is
+  `false` for a slot that outlived its suspension without being restored.
+- `DELETE /api/instances/pending-restoration/:snapshotId` — the builder
+  permanently clears one slot (soft: `cleared_at` is set and the row, with
+  its product-identifying info, is retained). Rate-limited per builder.
+  `404` for an unknown, foreign, already-restored, or already-cleared id —
+  indistinguishable by design. Returns `{ clearedSnapshotId }`.
+
 ### Group/Ungroup (#2764)
 
 The base layer of #2763 (owner-requested, tracking issue for the full
