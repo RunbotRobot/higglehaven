@@ -337,6 +337,9 @@ import {
   syncUpdate, footprintsOverlap, footprintCorners,
   removeLowStockHighlight, landletElevationGroup,
 } from './build/scene.js';
+// #2987: builder-facing "Removed Items" view of suspended-seller removals
+// (side-effect module: wires its own button/modal and loads on sign-in).
+import './build/pendingRestoration.js';
 
 // Exported for src/catalog/picker.js (#2558) -- its own renderBundlePicker/
 // currentBundleTabList/bundle-tab-click handler need this same state; a
