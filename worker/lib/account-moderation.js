@@ -229,6 +229,124 @@ async function removeSuspendedUserPostedContent(db, adminUserId, suspendedUserId
   return { signPostsRemoved: posts.length, calendarEventsRemoved: events.length };
 }
 
+// #2986 (sub-issue 2/5 of #2305): a suspended seller's existing
+// placements don't just become unpurchasable (#2985, the catalog-hide +
+// purchase-block sub-issue) -- the owner's own decision is a harder
+// "removed, but snapshotted" treatment: every already-placed instance of
+// one of their listed products, across every builder's own landlet,
+// comes out of the world immediately, with enough kept to restore it
+// exactly if the seller is later unsuspended. Unlike removeContent above
+// (an admin's own opt-in judgment call on the SUSPENDED user's own
+// authored content), this always runs -- it's a structural consequence
+// of the owner's explicit, unconditional decision for this specific
+// feature, not a severity call per suspension.
+//
+// Synchronous, not a background sweep (one of #2986's own open
+// questions) -- same reasoning #3004's own reassign-owner cleanup batch
+// already runs its similarly fan-out, across-many-rows deletes
+// synchronously inside the admin request rather than deferring to a cron
+// sweep: this app's scale doesn't need one, and "in-flight purchases
+// blocked too" elsewhere in #2305 already values the effect landing
+// immediately, not on the next scheduled tick.
+async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
+  const seller = await db.prepare('SELECT seller_id FROM sellers WHERE user_id = ?').bind(suspendedUserId).first();
+  if (!seller) return { instancesRemoved: 0 };
+  const { results: instances } = await db.prepare(`
+    SELECT placed_instances.* FROM placed_instances
+    JOIN catalog_templates ON catalog_templates.template_id = placed_instances.template_id
+    WHERE catalog_templates.seller_id = ?
+  `).bind(seller.seller_id).all();
+  if (instances.length === 0) return { instancesRemoved: 0 };
+
+  // #2764: no special group-membership handling needed here -- deleting
+  // one member of a group never touches any other member's own group_id
+  // (a group is just a shared opaque value, not a resource of its own),
+  // and the full-row snapshot below (instance_json) already preserves
+  // this instance's own group_id for restoreSuspendedSellerPlacedInstances
+  // to reuse verbatim later.
+  const landletIds = [...new Set(instances.map((instance) => instance.landlet_id))];
+  const { results: landletRows } = await db.prepare(`
+    SELECT landlet_id, owner_builder_id FROM landlets WHERE landlet_id IN (${landletIds.map(() => '?').join(', ')})
+  `).bind(...landletIds).all();
+  const ownerByLandletId = new Map(landletRows.map((row) => [row.landlet_id, row.owner_builder_id]));
+
+  const statements = [];
+  for (const instance of instances) {
+    const builderId = ownerByLandletId.get(instance.landlet_id);
+    // The landlet itself vanished (greenbelt again, or deleted) in the gap
+    // between the SELECT above and here -- nothing to snapshot a builder
+    // against, and placed_instances' own ON DELETE CASCADE from landlets
+    // already took this row with it, so there's nothing left to delete
+    // either.
+    if (!builderId) continue;
+    statements.push(db.prepare(`
+      INSERT INTO suspended_seller_instance_snapshots
+        (snapshot_id, seller_id, builder_id, landlet_id, template_id, instance_json)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).bind(`sss-${crypto.randomUUID()}`, seller.seller_id, builderId, instance.landlet_id, instance.template_id, JSON.stringify(instance)));
+    statements.push(db.prepare('DELETE FROM placed_instances WHERE instance_id = ?').bind(instance.instance_id));
+  }
+  if (statements.length > 0) await db.batch(statements);
+  return { instancesRemoved: statements.length / 2 };
+}
+
+// The inverse of removeSuspendedSellerPlacedInstances above -- called
+// once a seller's suspension is actually lifted, restoring every still-
+// pending snapshot (cleared_at IS NULL -- sub-issue 3, #2987, is the only
+// thing that ever sets it) exactly as it was removed. Skips (leaves
+// un-restored, available to try again on a future unsuspend) a snapshot
+// whose landlet no longer exists or has since changed owner --
+// reassign-owner's own cleanup (#3004) already wipes a landlet's
+// placed_instances on transfer, and restoring a since-suspended seller's
+// old instance there would silently reintroduce exactly the "new owner
+// inherits the previous owner's build content" bug #1280/#2508 exist to
+// prevent -- or whose template has since been deleted entirely (as
+// opposed to merely hidden/suspended -- nothing left to restore a
+// reference to).
+async function restoreSuspendedSellerPlacedInstances(db, sellerId) {
+  const { results: snapshots } = await db.prepare(`
+    SELECT * FROM suspended_seller_instance_snapshots
+    WHERE seller_id = ? AND restored_at IS NULL AND cleared_at IS NULL
+  `).bind(sellerId).all();
+  if (snapshots.length === 0) return { instancesRestored: 0 };
+
+  const now = new Date().toISOString();
+  const statements = [];
+  for (const snapshot of snapshots) {
+    const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(snapshot.landlet_id).first();
+    if (!landlet || landlet.owner_builder_id !== snapshot.builder_id) continue;
+    const templateExists = await db.prepare('SELECT 1 FROM catalog_templates WHERE template_id = ?').bind(snapshot.template_id).first();
+    if (!templateExists) continue;
+    const saved = JSON.parse(snapshot.instance_json);
+    const instanceId = `instance-${crypto.randomUUID()}`;
+    // Re-checks the same owner match inside the write itself (#929/#960
+    // idiom) -- the plain reads above are a point-in-time check, and a
+    // landlet transfer landing in the gap since then must not let this
+    // restore onto what's now a different owner's land.
+    statements.push(db.prepare(`
+      INSERT INTO placed_instances
+        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id = ?)
+    `).bind(
+      instanceId, snapshot.landlet_id, snapshot.template_id,
+      saved.x_m, saved.y_m, saved.z_m, saved.rotation_x_rad, saved.rotation_y_rad, saved.rotation_z_rad,
+      saved.label, saved.crop_json, saved.scale, saved.is_community_sign, saved.is_community_calendar, saved.group_id,
+      snapshot.landlet_id, snapshot.builder_id,
+    ));
+    // Only marks this snapshot restored if the INSERT just above actually
+    // landed a row -- D1 serializes statements within one batch() in
+    // order, so this subquery only ever runs after that INSERT has
+    // already committed (or no-opped on the owner-match guard failing).
+    statements.push(db.prepare(`
+      UPDATE suspended_seller_instance_snapshots SET restored_at = ?
+      WHERE snapshot_id = ? AND EXISTS (SELECT 1 FROM placed_instances WHERE instance_id = ?)
+    `).bind(now, snapshot.snapshot_id, instanceId));
+  }
+  if (statements.length > 0) await db.batch(statements);
+  return { instancesRestored: statements.length / 2 };
+}
+
 // #2029 (sub-issue of #1201): the foundational primitive for admin-
 // initiated account suspension -- email-addressed and admin_action_log-
 // recorded the same way grant-admin/revoke-admin above already are, since
@@ -357,6 +475,9 @@ export async function handleSuspendAccount(request, db) {
   const removedContent = removeContent
     ? await removeSuspendedUserPostedContent(db, admin.user_id, row.user_id)
     : null;
+  // #2986: unconditional, unlike removedContent above -- see that
+  // function's own comment for why.
+  const { instancesRemoved } = await removeSuspendedSellerPlacedInstances(db, row.user_id);
 
   return json({
     suspension: {
@@ -364,6 +485,7 @@ export async function handleSuspendAccount(request, db) {
       suspendedAt: new Date().toISOString(), gracePeriodEndsAt,
     },
     ...(removedContent ? { removedContent } : {}),
+    instancesRemoved,
   });
 }
 
@@ -406,7 +528,14 @@ export async function handleUnsuspendAccount(request, db) {
       'Your account suspension has been lifted. You can use higglehaven again.');
   }
 
-  return json({ suspension: { suspensionId: suspension.suspension_id, userId: row.user_id, liftedAt } });
+  // #2986: restores every pending suspended-seller-content snapshot for
+  // this account, if it has a seller profile at all.
+  const unsuspendedSeller = await db.prepare('SELECT seller_id FROM sellers WHERE user_id = ?').bind(row.user_id).first();
+  const { instancesRestored } = unsuspendedSeller
+    ? await restoreSuspendedSellerPlacedInstances(db, unsuspendedSeller.seller_id)
+    : { instancesRestored: 0 };
+
+  return json({ suspension: { suspensionId: suspension.suspension_id, userId: row.user_id, liftedAt }, instancesRestored });
 }
 
 // #2985: a reusable version of the same "is this account currently
