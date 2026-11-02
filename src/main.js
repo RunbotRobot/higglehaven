@@ -225,7 +225,7 @@ import { enterLayoutPreviewMode } from './build/layoutPreview.js';
 import {
   createShopAvatar, createCustomShopAvatar, shopAvatar, setShopAvatar,
   shopAvatarCollisionHalfM, shopAvatarHeightM, shopCameraAnchorHeightM, refreshEquippedShopAvatar,
-  updateShopAvatarPose, setShopAvatarAnimationState, updateShopAvatarIdle,
+  updateShopAvatarPose, setShopAvatarAnimationState, updateShopAvatarIdle, advanceShopIdleForTest,
   shopIdleSwayYawOffset, addShopIdleSwayYawOffset, resetShopAvatarIdleState,
   shopIdleInteractionTarget, shopSitBlend, shopSitYawOffset, shopSitHeightOffset,
   shopSitSettleDelayS, shopSitSettleElapsedS,
@@ -1394,6 +1394,8 @@ export function setShopLastLocation(value) {
 // episode (null if not idle, or idle with nothing in range) -- see
 // shopIdleInteractionTarget's own declaration above.
 window.__testShopIdleInteractionTarget = () => shopIdleInteractionTarget;
+// #3016: advance the idle timer by simulated seconds instead of waiting on rendered frames.
+window.__testAdvanceShopIdle = (seconds) => advanceShopIdleForTest(seconds);
 // #2478: same "expose computed state purely for verification" convention
 // as window.__shopAvatarOrientation/__testShopIdleInteractionTarget above
 // -- lets an e2e test confirm the seated pose actually engages (the blend
