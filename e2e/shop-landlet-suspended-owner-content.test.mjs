@@ -9,9 +9,9 @@
 // for it server-side.
 //
 // Drives the real sequence end to end: builder A claims a landlet, places
-// a real catalog-template instance on it, and a shopper (A itself, same
-// idiom e2e/shop-landlet-record-refresh.test.mjs already uses) stands on
-// it with the instance loaded; an admin suspends A; confirms the instance
+// a real catalog-template instance on it, and a separate shopper B (the
+// owner always sees their own content, so A itself could never observe
+// the hiding) stands on it with the instance loaded; an admin suspends A; confirms the instance
 // is STILL rendered on the very next ordinary proximity tick alone (the
 // bug, still reachable without the fix below); then forces
 // refreshShopLandletRecordsIfNeeded's own periodic re-sync via
