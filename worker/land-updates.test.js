@@ -190,6 +190,43 @@ describe('Landlet updates', () => {
     expect(refetched.body.landlet.elevationM).toBe(42.5);
   });
 
+  // #3005: Shop mode's periodic landlet-record re-sync (fetchAllLandlets,
+  // this list endpoint) needs to tell a mid-session owner suspension apart
+  // from an ordinary unchanged record, so it knows to drop that landlet's
+  // now-hidden content client-side (#2993 already hides it server-side via
+  // GET /instances; the client never knew to react). Confirms the new
+  // ownerSuspended field this endpoint now computes is accurate in both
+  // directions, and that it's false for every other landlet (no collateral
+  // flag from the correlated subquery).
+  it('reports ownerSuspended on GET /landlets (list) once the owner is suspended, and clears it once lifted (#3005)', async () => {
+    const owner = await signupBuilder('ownersuspended-list-owner');
+    const other = await signupBuilder('ownersuspended-list-other');
+    await createGreenbeltLandlet('ownersuspended-list-landlet');
+    await createGreenbeltLandlet('ownersuspended-list-other-landlet');
+    await api('/landlets/ownersuspended-list-landlet/claim', owner.session({ method: 'POST' }));
+    await api('/landlets/ownersuspended-list-other-landlet/claim', other.session({ method: 'POST' }));
+
+    const beforeSuspend = await api(`/landlets?ownerBuilderId=${owner.builderId}`);
+    expect(beforeSuspend.body.landlets[0].ownerSuspended).toBe(false);
+    const otherBefore = await api(`/landlets?ownerBuilderId=${other.builderId}`);
+    expect(otherBefore.body.landlets[0].ownerSuspended).toBe(false);
+
+    await api('/auth/suspend-account', adminSession({
+      method: 'POST', body: JSON.stringify({ email: owner.email, reason: 'test for #3005' }),
+    }));
+    const duringSuspend = await api(`/landlets?ownerBuilderId=${owner.builderId}`);
+    expect(duringSuspend.body.landlets[0].ownerSuspended).toBe(true);
+    // The other builder's own landlet is unaffected -- not a global flag.
+    const otherDuringSuspend = await api(`/landlets?ownerBuilderId=${other.builderId}`);
+    expect(otherDuringSuspend.body.landlets[0].ownerSuspended).toBe(false);
+
+    await api('/auth/unsuspend-account', adminSession({
+      method: 'POST', body: JSON.stringify({ email: owner.email }),
+    }));
+    const afterLift = await api(`/landlets?ownerBuilderId=${owner.builderId}`);
+    expect(afterLift.body.landlets[0].ownerSuspended).toBe(false);
+  });
+
   // #1150: a rename that collides with a *different* landlet's name
   // (including a same-letters-different-case collision) must be rejected
   // with a message that actually explains why, not databaseHttpError's

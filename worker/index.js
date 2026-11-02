@@ -2878,6 +2878,16 @@ export function stripeAccountStatusJson(env, row) {
 
 async function handleAuth(request, env, db, route, url, ctx) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'signup') return handleSignup(request, env, db, url);
+  // #2941: a plain, unauthenticated site-key lookup -- same "safe to hand
+  // to the browser by design" reasoning as STRIPE_PUBLISHABLE_KEY (see
+  // worker/lib/purchase-creation.js's own comment on that one): a
+  // Turnstile *site* key is meant to be embedded in public page markup,
+  // unlike TURNSTILE_SECRET_KEY. null (not a 503) when unconfigured, so
+  // the signup form's own widget-loading code can just skip rendering a
+  // widget at all rather than branching on an error.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'turnstile-sitekey') {
+    return json({ sitekey: env.TURNSTILE_SITE_KEY || null });
+  }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'login') return handleLogin(request, db, url);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'logout') return handleLogout(request, db, url);
   if (request.method === 'POST' && route.length === 2 && route[1] === 'delete-account') {
@@ -4229,6 +4239,16 @@ export function landletFromRow(row) {
     metadata: JSON.parse(row.metadata_json || '{}'),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    // #3005: only accurate when the caller's own SELECT joined
+    // account_suspensions and aliased the result as owner_suspended (today
+    // just GET /api/landlets' list branch, for Shop mode's periodic
+    // record re-sync) -- every other call site's plain `SELECT * FROM
+    // landlets` leaves row.owner_suspended undefined, which reads as
+    // false here. That's fine: nothing outside the one accurate call site
+    // reads this field, and those call sites already use
+    // builderHasActiveSuspension directly where a suspension check
+    // actually matters to them.
+    ownerSuspended: !!row.owner_suspended,
   };
 }
 

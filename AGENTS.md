@@ -149,6 +149,16 @@ name is its one branch, always.
 
 ## Standing owner decisions — apply these before filing `[owner judgment needed]`
 
+The owner's framing (2026-11-02, live): "I would like every decision to
+function as an example from which to extend decision-making on other
+types of issues in the future. This enables me to remain the sole human
+developer despite an increasingly complex, growing business." So each
+entry below records the *principle* behind the ruling, not just the
+ruling, and the fleet applies it by analogy to the next case of the same
+shape. The only thing to bring back to the owner is a case where the
+analogy visibly stretches — and when the owner does rule on one of
+those, the new principle gets added here in the same cycle.
+
 The owner said directly (2026-11-02, live conversation) that the fleet
 keeps filing `[owner judgment needed]` issues for calls they have
 already made in some other form — about 30 such issues were open that
@@ -262,6 +272,23 @@ most likely to come up again.
 - **Owner items are surfaced in conversation, one at a time — never as
   an email digest.** (2026-10-25; "Surfacing items waiting on the owner"
   above.) Proactive email is for genuine emergencies only.
+
+- **Review effort scales with blast radius.** (2026-11-02.) A
+  second-review pass over another session's already-merged PR is not a
+  routine step: every routine pass to date found nothing, and each one
+  is a full PR read on the fleet's scarcest resource. Do one only when
+  the PR touches Stripe money movement, auth/session handling, or
+  moderation enforcement; if it finds something, file an issue; if it
+  finds nothing, post nothing. The same scaling applies to how much test
+  and verification effort a change gets — proportional to what it can
+  break, not uniform.
+
+- **Public-facing copy describes what the user sees, never internals.**
+  (2026-11-02, #3017.) No string a user can read references
+  docs/SPEC.md, docs/API.md, an issue number, internal vocabulary
+  ("seller identity"), or implementation history ("plus any custom
+  upload nobody's claimed yet"). Internal context belongs in a code
+  comment next to the string, not in the string.
 
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
