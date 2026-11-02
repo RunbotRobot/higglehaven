@@ -272,8 +272,8 @@ export async function handleLandletVersions(request, db, route, url) {
       `).bind(versionId, landletId, name, JSON.stringify(metadata), landletId, landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO version_instances
-          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
-        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar
+          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id)
+        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id
         FROM placed_instances WHERE landlet_id = ?
           AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
       `).bind(versionId, landletId, landletId, landlet.owner_builder_id),
@@ -1318,7 +1318,7 @@ export async function handleLandlets(request, db, route, url) {
       UPDATE landlets
       SET name = ?, area_m2 = ?, center_x_m = ?, center_y_m = ?, status = ?, owner_builder_id = ?,
           landlet_class = ?, polygon_json = ?, generated_at = ?, claimable_at = ?, metadata_json = ?,
-          landlet_type = ?, biome = ?, max_world_radius_m = ?,
+          landlet_type = ?, biome = ?, elevation_m = ?, max_world_radius_m = ?,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE landlet_id = ? AND status = ? AND owner_builder_id IS ?
         AND (
@@ -1328,6 +1328,11 @@ export async function handleLandlets(request, db, route, url) {
       landlet.name, landlet.areaM2, landlet.center.x, landlet.center.y, landlet.status,
       landlet.ownerBuilderId, landlet.landClass, JSON.stringify(landlet.polygon), landlet.generatedAt,
       landlet.claimableAt, JSON.stringify(landlet.metadata), landlet.landType, landlet.biome ?? null,
+      // #2967: this column was missing from the SET clause entirely -- a
+      // caller-supplied elevationM silently never persisted, even though
+      // the response (built from the local `landlet` object, not a DB
+      // re-read) reported success with the new value.
+      landlet.elevationM ?? null,
       landletMaxWorldRadius(candidateRowFromLandlet(landlet)), route[1],
       existing.status, existing.owner_builder_id,
       renamingTo, renamingTo, route[1],
@@ -1478,6 +1483,32 @@ export async function handleLandletDraft(request, db, landletId) {
     });
     await assertInstanceXYWithinLandlet(db, instancesNeedingXYCheck);
 
+    // #2968: same ownership-verification rule #2959/#2961 already applies
+    // to a fresh instance created via POST/PUT /instances/batch -- this
+    // endpoint accepts the identical client-supplied instances shape, most
+    // reachably via "Restore to Editor" (src/build/scene.js) resending an
+    // old version's own snapshot, which can now carry a groupId once
+    // #2968's version_instances column exists. An unverified value here
+    // has the exact same griefing risk #2959 closed for batch-create:
+    // silently attaching a (re-created) instance to another builder's
+    // group. Only honor a groupId the caller already owns at least one
+    // other member of; anything else is treated as null, same as #2959.
+    const candidateGroupIds = [...new Set(instances.map((instance) => instance.groupId).filter(Boolean))];
+    let verifiedGroupIds = new Set();
+    if (candidateGroupIds.length > 0) {
+      const placeholders = candidateGroupIds.map(() => '?').join(', ');
+      const { results: ownedGroups } = await db.prepare(`
+        SELECT DISTINCT group_id FROM placed_instances
+        WHERE group_id IN (${placeholders})
+          AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = placed_instances.landlet_id AND owner_builder_id = ?)
+      `).bind(...candidateGroupIds, sessionBuilder.builder_id).all();
+      verifiedGroupIds = new Set(ownedGroups.map((row) => row.group_id));
+    }
+    const instancesForInsert = instances.map((instance) => ({
+      ...instance,
+      groupId: verifiedGroupIds.has(instance.groupId) ? instance.groupId : null,
+    }));
+
     // #1726: a deterministic versionId (from the client's own idempotency
     // key, when present and valid) lets a retry's INSERT below no-op via
     // ON CONFLICT instead of minting a second, fully duplicate version.
@@ -1541,13 +1572,13 @@ export async function handleLandletDraft(request, db, landletId) {
       `).bind(landletId, JSON.stringify(instances), landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO placed_instances
-          (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
+          (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id)
         SELECT
           json_extract(value, '$.instanceId'), ?, json_extract(value, '$.templateId'),
           json_extract(value, '$.x'), json_extract(value, '$.y'), json_extract(value, '$.z'),
           json_extract(value, '$.rotationX'), json_extract(value, '$.rotationY'), json_extract(value, '$.rotationZ'),
           json_extract(value, '$.label'), json_extract(value, '$.crop'), json_extract(value, '$.scale'),
-          json_extract(value, '$.isCommunitySign'), json_extract(value, '$.isCommunityCalendar')
+          json_extract(value, '$.isCommunitySign'), json_extract(value, '$.isCommunityCalendar'), json_extract(value, '$.groupId')
         FROM json_each(?)
         -- Doubles as the ownership guard and as the non-trivial WHERE
         -- SQLite's upsert grammar requires here (a bare "ON" after
@@ -1564,7 +1595,7 @@ export async function handleLandletDraft(request, db, landletId) {
           scale = excluded.scale, is_community_sign = excluded.is_community_sign,
           is_community_calendar = excluded.is_community_calendar,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      `).bind(landletId, JSON.stringify(instances), landletId, landlet.owner_builder_id),
+      `).bind(landletId, JSON.stringify(instancesForInsert), landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO landlet_versions (version_id, landlet_id, version_number, name, metadata_json)
         SELECT ?, ?, next_version_number,
@@ -1580,8 +1611,8 @@ export async function handleLandletDraft(request, db, landletId) {
       `).bind(versionId, landletId, versionName, JSON.stringify(versionMetadata), landletId, landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO version_instances
-          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar)
-        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar
+          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id)
+        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id
         FROM placed_instances WHERE landlet_id = ?
           AND ${ownerGuard}
         -- #1726: same no-op-on-retry reasoning as the INSERT above — this
