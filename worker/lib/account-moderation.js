@@ -409,6 +409,23 @@ export async function handleUnsuspendAccount(request, db) {
   return json({ suspension: { suspensionId: suspension.suspension_id, userId: row.user_id, liftedAt } });
 }
 
+// #2985: a reusable version of the same "is this account currently
+// suspended" check requireCurrentUser/handleSuspensionStatus/reputation.js
+// each already inline their own copy of, for callers that need to check a
+// THIRD PARTY's standing (a listing's seller, not the calling session) --
+// e.g. blocking a purchase from, or hiding the catalog listings of, a
+// suspended seller. userId may be null (a seller/builder row with no
+// linked user, e.g. ON DELETE SET NULL after the account self-deleted, or
+// a system/placeholder seller that was never a real account) -- that's
+// never itself a suspension.
+export async function isUserSuspended(db, userId) {
+  if (!userId) return false;
+  const active = await db.prepare(`
+    SELECT 1 FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+  `).bind(userId).first();
+  return !!active;
+}
+
 // Lets an admin check an account's current suspension state before acting
 // on it (or before #2030/#2031/#2032/#2033 each need to read it back for
 // their own purposes) without direct D1 access.
