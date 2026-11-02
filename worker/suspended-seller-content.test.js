@@ -2,9 +2,20 @@
 // be fully blocked from new purchases and hidden from browsing -- both
 // shoppers and the builder-facing placement picker, which turn out to
 // share the one GET /api/catalog list endpoint (see that endpoint's own
-// #2985 comment in worker/lib/catalog.js). Does NOT cover removing
-// already-placed instances from landlets or the snapshot/restoration
-// mechanism -- that's sub-issue 2 (#2986).
+// #2985 comment in worker/lib/catalog.js).
+//
+// #2986 (sub-issue 2/5, landed after this file) now removes an already-
+// placed instance of a suspended seller's product outright (snapshotted
+// for restoration, worker/suspended-seller-instance-snapshots.test.js
+// covers that mechanism itself) -- so this file's own purchase-block
+// test below can no longer exercise it against an instance that existed
+// BEFORE the suspension landed (#2986 already deletes that one). The
+// test instead places a FRESH instance of the already-suspended seller's
+// template directly via the API (bypassing GET /api/catalog's own hide,
+// the same way a stale client-side cache or a direct call could) --
+// #2986's removal sweep only runs at the moment suspension lands, so this
+// one is never swept, and purchasing it is still exactly the scenario
+// this sub-issue's own purchase-time check exists for.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import {
@@ -89,12 +100,30 @@ describe('Suspended seller content: purchase block + catalog hide (#2985)', () =
     expect(beforeSuspend.response.status).toBe(201);
 
     await suspend(seller.email);
-    const afterSuspend = await api('/instances/suspended-purchase-instance/purchase', buyer.session({ method: 'POST' }));
+    // #2986: this exact instance already existed at the moment suspension
+    // landed, so it's now been removed+snapshotted outright -- 404, not a
+    // purchase-time 400 (see this file's own top comment).
+    const afterSuspendOriginal = await api('/instances/suspended-purchase-instance/purchase', buyer.session({ method: 'POST' }));
+    expect(afterSuspendOriginal.response.status).toBe(404);
+
+    // A fresh instance of the same (already-suspended) seller's template,
+    // placed directly via the API -- never swept by #2986's removal,
+    // since that only runs at the moment suspension lands -- is exactly
+    // the scenario this sub-issue's own purchase-time check exists for.
+    const placedWhileSuspended = await api('/instances', buyer.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'suspended-purchase-instance-2', landletId: 'suspended-purchase-landlet', templateId, x: 1, y: 1,
+      }),
+    }));
+    expect(placedWhileSuspended.response.status).toBe(201);
+    const afterSuspend = await api('/instances/suspended-purchase-instance-2/purchase', buyer.session({ method: 'POST' }));
     expect(afterSuspend.response.status).toBe(400);
     expect(afterSuspend.body.error).toMatch(/suspended/i);
 
     await unsuspend(seller.email);
-    const afterUnsuspend = await api('/instances/suspended-purchase-instance/purchase', buyer.session({ method: 'POST' }));
+    // Unaffected by suspension once lifted -- never blocked, never removed.
+    const afterUnsuspend = await api('/instances/suspended-purchase-instance-2/purchase', buyer.session({ method: 'POST' }));
     expect(afterUnsuspend.response.status).toBe(201);
   });
 

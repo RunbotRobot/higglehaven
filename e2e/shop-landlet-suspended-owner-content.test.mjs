@@ -18,9 +18,13 @@
 // window.__testForceShopLandletRecordRefresh (the fix) and confirms the
 // instance disappears with no reload and no walk-off-and-back needed.
 // Then lifts the suspension and confirms the same refresh+tick cycle
-// brings the instance back, since #2993's own gate is purely a live read
-// of account_suspensions, not a destructive removal (#2986, not yet
-// built) -- the underlying placed_instances row never went anywhere.
+// brings the instance back. Two mechanisms are at play here: #2993's own
+// gate is a live read of account_suspensions (hides an owner's content
+// from shoppers), and, because this owner is also the seller of the
+// template they placed, #2986 removes that placed_instances row outright
+// on suspension and restores it on unsuspension under a FRESH instance id
+// -- so the post-unsuspend probe below looks the restored instance up by
+// its template rather than reusing the original id.
 //
 // window.__testShopInstanceLodBand(instanceId) (src/main.js, #2378) is
 // reused as the "is this instance's mesh actually present right now"
@@ -150,8 +154,8 @@ async function teleportOntoLandletAndTick() {
   await pageB.waitForTimeout(600);
 }
 
-async function instanceLodBand() {
-  return pageB.evaluate((id) => window.__testShopInstanceLodBand(id), instanceId);
+async function instanceLodBand(id = instanceId) {
+  return pageB.evaluate((probeId) => window.__testShopInstanceLodBand(probeId), id);
 }
 
 await teleportOntoLandletAndTick();
@@ -190,13 +194,17 @@ if (unsuspend.response.status !== 200) {
   throw new Error(`unsuspend-account failed (${unsuspend.response.status}): ${JSON.stringify(unsuspend.body)}`);
 }
 
-// The round trip: lifting the suspension doesn't destructively touch
-// placed_instances (that's #2986, not yet built) -- GET /instances just
-// stops filtering it out, so the very same refresh+tick cycle should bring
-// the instance back without a reload or walk-off-and-back either.
+// The round trip: lifting the suspension restores the instance (#2986) --
+// under a fresh instance id, since the original row was deleted on
+// suspension -- and GET /instances stops filtering the owner's content, so
+// the very same refresh+tick cycle should bring it back without a reload
+// or walk-off-and-back either.
+const { body: restoredBody } = await pageFetchJson(`/api/instances?landletId=${landlet.landletId}`);
+const restoredInstance = (restoredBody.instances || []).find((i) => i.templateId === template.templateId);
+console.log('restored instance found after unsuspension (fresh id expected):', !!restoredInstance);
 await pageB.evaluate(() => window.__testForceShopLandletRecordRefresh());
 await teleportOntoLandletAndTick();
-const bandAfterUnsuspendRefresh = await instanceLodBand();
+const bandAfterUnsuspendRefresh = restoredInstance ? await instanceLodBand(restoredInstance.instanceId) : null;
 console.log('instance LOD band after unsuspending and refreshing again (should NOT be null again):', bandAfterUnsuspendRefresh);
 
 const pass = !!landlet && !!builderA
