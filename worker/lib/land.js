@@ -814,8 +814,23 @@ export async function handleLandlets(request, db, route, url) {
       bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
     }
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    // #3005: Shop mode's periodic landlet record re-sync (fetchAllLandlets,
+    // this endpoint) needs to detect a mid-session owner suspension to
+    // unload a now-hidden builder's content (#2993's own purchasability/
+    // instance-listing gate already hides it server-side; the client just
+    // never knew to drop what it had already rendered). A correlated EXISTS,
+    // same shape builderHasActiveSuspension (worker/lib/auth.js) already
+    // queries, computed once per page here instead of N+1 calls from the
+    // client.
     const { results } = await db.prepare(`
-      SELECT * FROM landlets ${where}
+      SELECT landlets.*, EXISTS (
+        SELECT 1 FROM builders
+        JOIN account_suspensions ON account_suspensions.user_id = builders.user_id
+        WHERE builders.builder_id = landlets.owner_builder_id
+          AND account_suspensions.lifted_at IS NULL
+          AND account_suspensions.escalated_at IS NULL
+      ) AS owner_suspended
+      FROM landlets ${where}
       ORDER BY created_at, landlet_id LIMIT ?
     `).bind(...bindings, limit + 1).all();
     const hasMore = results.length > limit;
