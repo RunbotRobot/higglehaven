@@ -417,7 +417,61 @@ export async function handleNearbyChat(request, db, route, url) {
     return json({ message: nearbyChatMessageFromRow(row) }, 201);
   }
 
+  if (route.length === 2 && route[1] === 'report' && request.method === 'POST') {
+    return handleNearbyChatReportCreate(request, db);
+  }
+
   return json({ error: 'Not found' }, 404);
+}
+
+// #2956: parity with proximity voice chat's own report path
+// (handleVoiceReportCreate below) -- resolved directly by AGENTS.md's
+// "Standing owner decisions" -> "Parity across sibling surfaces" default
+// (2026-11-02) rather than left owner-gated. Mute itself is purely local/
+// client-side (src/shop/nearbyChat.js) and never reaches this file at
+// all; this is only the report path, which does need a durable,
+// admin-reviewable record -- see migrations/0172's own comment for why
+// this is its own table rather than reusing voice_conduct_reports.
+const NEARBY_CHAT_REPORT_CREATE_RATE_LIMIT_MAX = 20;
+
+async function handleNearbyChatReportCreate(request, db) {
+  const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use nearby chat.');
+  await checkRateLimit(db, `nearby-chat-report-create:${sessionBuilder.builder_id}`, NEARBY_CHAT_REPORT_CREATE_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const reportedBuilderId = stringValue(input.reportedBuilderId, 'reportedBuilderId');
+  if (reportedBuilderId === sessionBuilder.builder_id) {
+    throw new HttpError('reportedBuilderId cannot be the caller themselves', 400);
+  }
+  const reason = input.reason === undefined || input.reason === null || input.reason === ''
+    ? null
+    : stringValue(input.reason, 'reason');
+  if (reason && reason.length > 280) throw new HttpError('reason must be 280 characters or fewer', 400);
+  const labelsById = await labelsByBuilderId(db, [reportedBuilderId]);
+  const reportedLabel = labelsById.get(reportedBuilderId);
+  if (reportedLabel === undefined) {
+    throw new HttpError('reportedBuilderId does not name a real builder', 400);
+  }
+  const reportId = `nearby-chat-report-${crypto.randomUUID()}`;
+  const now = new Date().toISOString();
+  const controlRoomTaskId = `nearby-chat-report-${reportId.slice('nearby-chat-report-'.length)}`;
+  const controlRoomTitle = `Nearby chat conduct report against "${reportedLabel}"`;
+  const controlRoomNoteLines = [`Reported builder: "${reportedLabel}" (${reportedBuilderId})`];
+  if (reason) controlRoomNoteLines.push(`Reason: ${reason}`);
+  await db.batch([
+    db.prepare(`
+      INSERT INTO nearby_chat_reports (report_id, reporter_builder_id, reported_builder_id, reason)
+      VALUES (?, ?, ?, ?)
+    `).bind(reportId, sessionBuilder.builder_id, reportedBuilderId, reason),
+    db.prepare(`
+      INSERT INTO control_room_tasks (
+        task_id, kind, note_number, title, status, session, posted_by,
+        note, note_updated_at, note_author, created_at, updated_at
+      ) VALUES (?, 'nearby-chat-report', (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', 'nearby-chat-report', ?, ?, 'nearby-chat-report', ?, ?)
+    `).bind(
+      controlRoomTaskId, controlRoomTitle, controlRoomNoteLines.join('\n'), now, now, now,
+    ),
+  ]);
+  return json({ reportId }, 201);
 }
 
 // #2817 (sub-issue of #2780, itself sub-issue of #2777, proximity voice

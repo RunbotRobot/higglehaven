@@ -300,38 +300,49 @@ export async function handleStripeReinstatementRequest(request, env, db, subject
   await checkRateLimit(db, `stripe-reinstatement-request:${subjectType}:${subjectId}`, STRIPE_REINSTATEMENT_REQUEST_RATE_LIMIT_MAX);
 
   const { outcome, reasoning } = await evaluateReinstatement(db, subjectType, subjectId, sessionSubject.user_id);
-  await recordDecision(db, { subjectType, subjectId, outcome, reasoning });
 
-  if (outcome === 'approved') {
-    const current = await requireSubject(db, subjectType, subjectId);
-    if (current.stripe_account_id) {
-      // #2740: same concurrency guard (and the same obligation to check its
-      // result) as the sibling admin stripe-account-reset endpoint just
-      // above this file's own callers in worker/index.js (#1414) -- without
-      // checking this, a stripe_account_id that changed between the read
-      // above and this UPDATE (another request for the same double-click/
-      // multi-tab subject, an admin's own reset, etc.) leaves the reset a
-      // silent no-op while this handler still reports success below.
-      //
-      // #2944: the in-flight-real-money check (#2916) now lives inside
-      // performReinstatementReset's own atomic UPDATE, not as a separate
-      // pre-read here -- see that function's comment. A `false` result can
-      // therefore mean either reason, so on failure this re-checks
-      // hasInFlightRealMoney purely to pick the right error message; that
-      // re-check is informational only (the atomic UPDATE already made the
-      // real, race-free decision not to reset) -- it has no bearing on
-      // whether the reset actually happened.
-      const reset = await performReinstatementReset(db, subjectType, subjectId, current.stripe_account_id);
-      if (!reset) {
-        if (await hasInFlightRealMoney(db, subjectType, subjectId)) {
-          throw new HttpError('Reinstatement is approved, but a redemption/payout is still in flight on this account -- retry once it completes.', 409);
-        }
-        throw new HttpError('This account\'s Stripe linkage changed concurrently -- refetch and retry', 409);
-      }
-    }
-    const updated = await requireSubject(db, subjectType, subjectId);
-    return json({ outcome, message: OUTCOME_MESSAGES[outcome], stripeAccount: stripeAccountStatusJson(env, updated) }, 200);
+  if (outcome !== 'approved') {
+    await recordDecision(db, { subjectType, subjectId, outcome, reasoning });
+    return json({ outcome, message: OUTCOME_MESSAGES[outcome] }, 200);
   }
 
-  return json({ outcome, message: OUTCOME_MESSAGES[outcome] }, 200);
+  // #2983: recordDecision for 'approved' is deferred until the reset below
+  // is confirmed to have actually taken effect (or was already in effect
+  // from an earlier attempt) -- logging it unconditionally up front, before
+  // the reset even ran, left a permanent 'approved' row in the mandatory
+  // audit trail (#1404) behind a reset that could still fail for either of
+  // its two documented reasons (#2740: a concurrent stripe_account_id
+  // change; #2944: in-flight real money) -- and a caller retrying per this
+  // handler's own guidance below would then log a SECOND 'approved' row
+  // once the retry actually succeeded, overcounting against the rubric's
+  // own lifetime cap of 2 approvals (evaluateReinstatement's own comment).
+  const current = await requireSubject(db, subjectType, subjectId);
+  if (current.stripe_account_id) {
+    // #2740: same concurrency guard (and the same obligation to check its
+    // result) as the sibling admin stripe-account-reset endpoint just
+    // above this file's own callers in worker/index.js (#1414) -- without
+    // checking this, a stripe_account_id that changed between the read
+    // above and this UPDATE (another request for the same double-click/
+    // multi-tab subject, an admin's own reset, etc.) leaves the reset a
+    // silent no-op while this handler still reports success below.
+    //
+    // #2944: the in-flight-real-money check (#2916) now lives inside
+    // performReinstatementReset's own atomic UPDATE, not as a separate
+    // pre-read here -- see that function's comment. A `false` result can
+    // therefore mean either reason, so on failure this re-checks
+    // hasInFlightRealMoney purely to pick the right error message; that
+    // re-check is informational only (the atomic UPDATE already made the
+    // real, race-free decision not to reset) -- it has no bearing on
+    // whether the reset actually happened.
+    const reset = await performReinstatementReset(db, subjectType, subjectId, current.stripe_account_id);
+    if (!reset) {
+      if (await hasInFlightRealMoney(db, subjectType, subjectId)) {
+        throw new HttpError('Reinstatement is approved, but a redemption/payout is still in flight on this account -- retry once it completes.', 409);
+      }
+      throw new HttpError('This account\'s Stripe linkage changed concurrently -- refetch and retry', 409);
+    }
+  }
+  await recordDecision(db, { subjectType, subjectId, outcome, reasoning });
+  const updated = await requireSubject(db, subjectType, subjectId);
+  return json({ outcome, message: OUTCOME_MESSAGES[outcome], stripeAccount: stripeAccountStatusJson(env, updated) }, 200);
 }

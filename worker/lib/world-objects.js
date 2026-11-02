@@ -8,7 +8,7 @@ import { checkRateLimit } from './rate-limit.js';
 import {
   readJson, stringValue, queryLimit, decodeCursor, encodeCursor, assertReferencesExist,
 } from './validation.js';
-import { currentUser, requireSessionBuilder, requireVerifiedSession } from './auth.js';
+import { currentUser, requireSessionBuilder, requireVerifiedSession, builderHasActiveSuspension } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { moderationRemovalCategory, recordModerationRemovalSnapshot } from './content-moderation.js';
 // #2535 (see its own module's comment for the general shape): these
@@ -368,6 +368,26 @@ export async function handleInstances(request, env, route, url) {
     const templateId = templateIdParam === null ? null : stringValue(templateIdParam, 'templateId');
     const limit = queryLimit(url.searchParams.get('limit'), 100);
     const cursor = decodeCursor(url.searchParams.get('cursor'));
+
+    // #2989 (sub-issue of #2305): a suspended builder's own placed content
+    // stops being visible to anyone else browsing/visiting their landlet --
+    // but the builder still needs full access to their own land to manage
+    // it (per that issue's own text), so this only hides the listing from a
+    // DIFFERENT session, never the owner's own. Resolved per-request
+    // (rather than once elsewhere) since this is the one place any visitor
+    // -- not just the owner -- loads a landlet's placed content from.
+    const landletOwner = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(landletId).first();
+    if (await builderHasActiveSuspension(db, landletOwner?.owner_builder_id)) {
+      const requester = await currentUser(request, db);
+      const isOwnerViewing = requester
+        ? await db.prepare('SELECT 1 FROM builders WHERE builder_id = ? AND user_id = ?')
+            .bind(landletOwner.owner_builder_id, requester.user_id).first()
+        : null;
+      if (!isOwnerViewing) {
+        return json({ instances: [], nextCursor: null });
+      }
+    }
+
     const conditions = ['landlet_id = ?'];
     const bindings = [landletId];
     if (templateId) {

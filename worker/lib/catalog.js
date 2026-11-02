@@ -1285,6 +1285,25 @@ export async function handleCatalog(request, db, route, url, models, env) {
       bindings.push(`%${query.replaceAll('\\', '\\\\').replaceAll('%', '\\%').replaceAll('_', '\\_')}%`);
     }
     if (sort !== 'name') conditions.push('price_cents IS NOT NULL');
+    // #2985 (1/5 of #2305): unlike flagged_hidden_at (deliberately left
+    // visible here -- see that column's own comment a few lines below, and
+    // handleInstancePurchase's purchase-time guard for where it IS
+    // enforced), a suspended seller's listings must be fully hidden from
+    // this list per the owner's explicit decision -- this is the one
+    // endpoint every consumer (Build mode's own Add Item picker via
+    // fetchCatalog/picker.js, Shop mode's client-side template lookup, and
+    // src/build/layoutPreview.js) shares, so filtering it here covers both
+    // "browse" surfaces the issue calls out with one change. NOT EXISTS
+    // rather than a JOIN so a NULL seller_id (a system/placeholder
+    // template with no real seller at all) is never excluded -- NULL = NULL
+    // is never true in SQL, so the subquery simply finds no matching
+    // sellers row for one and the exclusion never fires.
+    conditions.push(`NOT EXISTS (
+      SELECT 1 FROM sellers
+      JOIN account_suspensions ON account_suspensions.user_id = sellers.user_id
+        AND account_suspensions.lifted_at IS NULL AND account_suspensions.escalated_at IS NULL
+      WHERE sellers.seller_id = catalog_templates.seller_id
+    )`);
     // #1946: is_test_model deliberately does NOT filter this list -- see
     // that migration's own comment. This is the one endpoint Build mode's
     // own "Add Item" picker (buildCatalogPickerButtons/fetchCatalog) uses

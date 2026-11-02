@@ -173,6 +173,23 @@ describe('Landlet updates', () => {
     expect(renamed.body.landlet.status).toBe('greenbelt');
   });
 
+  // #2967: elevation_m was missing entirely from this endpoint's own
+  // UPDATE SET clause -- the response reported the requested elevationM
+  // back (built from the merged input, not a DB re-read), but the row's
+  // real elevation_m column was never written. Confirmed via a fresh GET,
+  // not just the PATCH response, same as worker-api.test.js's own
+  // create-path elevationM round-trip test.
+  it('persists elevationM through PATCH, confirmed via a fresh GET (#2967)', async () => {
+    await createGreenbeltLandlet('unowned-elevation-landlet');
+    const patched = await api('/landlets/unowned-elevation-landlet', {
+      method: 'PATCH', body: JSON.stringify({ elevationM: 42.5 }),
+    });
+    expect(patched.response.status).toBe(200);
+    expect(patched.body.landlet.elevationM).toBe(42.5);
+    const refetched = await api('/landlets/unowned-elevation-landlet');
+    expect(refetched.body.landlet.elevationM).toBe(42.5);
+  });
+
   // #1150: a rename that collides with a *different* landlet's name
   // (including a same-letters-different-case collision) must be rejected
   // with a message that actually explains why, not databaseHttpError's

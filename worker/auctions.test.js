@@ -223,6 +223,27 @@ describe('Auctions', () => {
     expect(limited.response.status).toBe(429);
   });
 
+  // #2995: handleAuctionBids' own GET branch (bid history) had no rate
+  // limit at all, unlike every other unauthenticated GET in this file —
+  // shares the list endpoint's own bucket/limit above (auction-bids-list,
+  // sized the same as auction-list) since it's hit by the same
+  // renderAuctionSection redraw idiom. The rate-limit check runs before
+  // requireAuction, so a nonexistent auctionId still exercises it.
+  it('rate-limits repeated GET .../bids calls from the same IP', async () => {
+    const ip = `test-${crypto.randomUUID()}`;
+    const bucketKey = `auction-bids-list:${ip}`;
+    const now = Date.now();
+    await env.DB.batch(Array.from({ length: 199 }, () => env.DB.prepare(
+      'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
+    ).bind(bucketKey, now)));
+
+    const atLimit = await api('/auctions/does-not-exist/bids', { headers: { 'cf-connecting-ip': ip } });
+    expect(atLimit.response.status).toBe(404);
+
+    const limited = await api('/auctions/does-not-exist/bids', { headers: { 'cf-connecting-ip': ip } });
+    expect(limited.response.status).toBe(429);
+  });
+
   it('accepts only one of two concurrent auction-start requests for the same landlet, not both', async () => {
     const owner = await signupBuilder('auction-start-race-owner');
     await createGreenbeltLandlet('auction-start-race-landlet');

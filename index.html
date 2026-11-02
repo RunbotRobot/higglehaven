@@ -995,6 +995,12 @@
       }
       .shop-nearby-chat-message {
         word-break: break-word;
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+      }
+      .shop-nearby-chat-message-text {
+        flex: 1 1 auto;
       }
       /* Right-aligned/dimmed for the sender's own sent messages -- same
          "which side is mine" convention a chat UI almost always uses,
@@ -1004,6 +1010,22 @@
       .shop-nearby-chat-message.own {
         opacity: 0.75;
         text-align: right;
+      }
+      /* #2956: parity with .shop-voice-peer-row button's own compact pill
+         shape above -- never rendered on the sender's own messages. */
+      .shop-nearby-chat-message-actions {
+        display: flex;
+        gap: 3px;
+        flex: 0 0 auto;
+      }
+      .shop-nearby-chat-message-actions button {
+        padding: 1px 5px;
+        border-radius: 5px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        font: 10px/1.4 sans-serif;
+        cursor: pointer;
       }
       /* #2796: same minimal text+error-class shape #dm-status already
          uses for the structurally identical DM-send failure case. */

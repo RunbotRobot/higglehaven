@@ -88,6 +88,7 @@ import {
   reportOwnPresenceIfNeeded, pollNearbyPresenceIfNeeded, updateOtherShopAvatars,
   updateCreditOrbs, updateCreditOrbPopEffects,
   updateShopProximity, updateShopLandletInfo, shopTerrainHeightAtM,
+  refreshShopLandletRecordsIfNeeded,
 } from './presenceAndContent.js';
 // #2779 (sub-issue of #2777): nearby-avatars-only text chat, a fully
 // self-contained leaf with no main.js/presenceAndContent.js legacy to
@@ -1776,6 +1777,10 @@ export function updateShopMovement(now) {
   // avatars to ask for) below see the current one.
   reportOwnPresenceIfNeeded(now);
   pollNearbyPresenceIfNeeded(now);
+  // #2996: its own much slower internal interval gate, same shape as the
+  // two calls just above — called every tick, but only actually fetches
+  // once SHOP_RECORD_REFRESH_INTERVAL_MS has passed.
+  refreshShopLandletRecordsIfNeeded(now);
   pollNearbyChatIfNeeded(now);
   updateOtherShopAvatars(now);
   // #2818: after updateOtherShopAvatars above, so this frame's distance

@@ -184,7 +184,7 @@ export async function handleSignup(request, env, db, url) {
   }
 
   // #2941: never gates the signup itself -- see turnstile.js's own
-  // comment and migrations/0171's for why turnstileFailedAt stays NULL
+  // comment and migrations/0173's for why turnstileFailedAt stays NULL
   // (rather than recording a failure) whenever the feature is off here,
   // not just when it actually passed.
   const turnstileFailedAt = turnstileConfigured(env) && !(await verifyTurnstileToken(env, input.turnstileToken, clientIp(request)))

@@ -374,4 +374,101 @@ describe('Group/Ungroup (#2764)', () => {
     expect(moved.response.status).toBe(200);
     expect(moved.body.instances[0].groupId).toBe(groupId);
   });
+
+  // #2968: version_instances never carried group_id at all, so a version
+  // snapshot (POST .../versions) and "Restore to Editor" (PUT .../draft
+  // with that version's own instances, src/build/scene.js) silently
+  // ungrouped everything. Uses its own fresh builder/landlet rather than
+  // the describe block's shared one — a builder can only ever own one
+  // claimed landlet at a time ("Builder already owns a claimed landlet",
+  // worker/lib/land.js), and PUT .../draft atomically replaces the
+  // *entire* draft, so reusing the shared landlet would also wipe every
+  // other test's fixtures on it.
+  it('restores groupId via "Restore to Editor" (PUT .../draft) for a deleted-then-recreated member (#2968)', async () => {
+    const draftBuilder = await signupBuilder('groups-draft-restore-builder');
+    const draftLandletId = 'instance-groups-draft-restore-landlet';
+    await createGreenbeltLandlet(draftLandletId);
+    const claimed = await api(`/landlets/${draftLandletId}/claim`, draftBuilder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+    const placeHere = instancePlacer();
+    await placeHere(draftBuilder.session, { instanceId: 'group-o-1', landletId: draftLandletId });
+    await placeHere(draftBuilder.session, { instanceId: 'group-o-2', landletId: draftLandletId });
+    const grouped = await api('/instances/group', draftBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceIds: ['group-o-1', 'group-o-2'] }),
+    }));
+    expect(grouped.response.status).toBe(201);
+    const groupId = grouped.body.groupId;
+
+    const saved = await api(`/landlets/${draftLandletId}/versions`, draftBuilder.session({ method: 'POST', body: JSON.stringify({}) }));
+    expect(saved.response.status).toBe(201);
+    const fetchedVersion = await api(`/landlets/${draftLandletId}/versions/${saved.body.version.versionId}`);
+    const snapshotInstances = fetchedVersion.body.version.instances;
+    expect(snapshotInstances.find((instance) => instance.instanceId === 'group-o-2').groupId).toBe(groupId);
+
+    // Only group-o-2 is deleted from the live draft -- group-o-1 stays, so
+    // it can still vouch for the caller's ownership of this groupId when
+    // group-o-2 comes back via a fresh INSERT below, same shape as the
+    // batch-create undo-recreate test earlier in this file.
+    const deleted = await api('/instances/batch', draftBuilder.session({
+      method: 'DELETE',
+      body: JSON.stringify({ instanceIds: ['group-o-2'] }),
+    }));
+    expect(deleted.response.status).toBe(200);
+
+    // Simulates "Restore to Editor" exactly: the client fetches a
+    // version's own instances, then resends all of them verbatim as the
+    // replacement draft. group-o-1 goes through the ON CONFLICT update
+    // path (unaffected either way); group-o-2 no longer exists and goes
+    // through a fresh INSERT, the exact path this fix's own ownership
+    // verification runs.
+    const restored = await api(`/landlets/${draftLandletId}/draft`, draftBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({ instances: snapshotInstances }),
+    }));
+    expect(restored.response.status).toBe(200);
+    const byId = new Map(restored.body.instances.map((instance) => [instance.instanceId, instance]));
+    expect(byId.get('group-o-1').groupId).toBe(groupId);
+    expect(byId.get('group-o-2').groupId).toBe(groupId);
+  });
+
+  // Sibling of the test above: a groupId the caller has no member of at
+  // all must be silently ignored on a draft-restore's fresh insert too,
+  // the same carve-out #2959 already established for batch-create.
+  it("ignores a draft-restore instance's groupId naming a group the caller has no member of (#2968)", async () => {
+    const otherBuilder = await signupBuilder('groups-foreign-draft-builder');
+    const otherLandletId = 'instance-groups-foreign-draft-landlet';
+    await createGreenbeltLandlet(otherLandletId);
+    const otherClaimed = await api(`/landlets/${otherLandletId}/claim`, otherBuilder.session({ method: 'POST' }));
+    expect(otherClaimed.response.status).toBe(200);
+    const placeOnOtherLandlet = instancePlacer();
+    await placeOnOtherLandlet(otherBuilder.session, { instanceId: 'group-p-1', landletId: otherLandletId });
+    await placeOnOtherLandlet(otherBuilder.session, { instanceId: 'group-p-2', landletId: otherLandletId });
+    const foreignGroup = await api('/instances/group', otherBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceIds: ['group-p-1', 'group-p-2'] }),
+    }));
+    expect(foreignGroup.response.status).toBe(201);
+
+    const draftBuilder = await signupBuilder('groups-draft-restore-foreign-builder');
+    const draftLandletId = 'instance-groups-draft-restore-foreign-landlet';
+    await createGreenbeltLandlet(draftLandletId);
+    const claimed = await api(`/landlets/${draftLandletId}/claim`, draftBuilder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+
+    const restored = await api(`/landlets/${draftLandletId}/draft`, draftBuilder.session({
+      method: 'PUT',
+      body: JSON.stringify({
+        instances: [{
+          instanceId: 'group-q-1', landletId: draftLandletId, templateId: 'placeholder-tree', x: 0, y: 0, groupId: foreignGroup.body.groupId,
+        }],
+      }),
+    }));
+    expect(restored.response.status).toBe(200);
+    expect(restored.body.instances.find((instance) => instance.instanceId === 'group-q-1').groupId).toBe(null);
+
+    // The foreign group itself is untouched.
+    const firstForeign = await api('/instances/group-p-1');
+    expect(firstForeign.body.instance.groupId).toBe(foreignGroup.body.groupId);
+  });
 });
