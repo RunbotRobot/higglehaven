@@ -507,10 +507,15 @@ export async function handleProductFlags(request, db, route) {
     // matching the owner's own "approve = remove listing" framing (one
     // decision per listing, not one per flag).
     const resolvedStatus = action === 'approve' ? 'approved' : 'rejected';
+    // Bound once in JS, not left to SQLite's own strftime('now') re-evaluated
+    // per statement, so the strike-skip check below can compare against this
+    // exact value (see #2468's own comment there for why that distinction
+    // matters).
+    const now = new Date().toISOString();
     const resolved = await db.prepare(`
-      UPDATE product_flags SET status = ?, resolved_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), resolved_by_admin_user_id = ?
+      UPDATE product_flags SET status = ?, resolved_at = ?, resolved_by_admin_user_id = ?
       WHERE template_id = ? AND status = 'pending'
-    `).bind(resolvedStatus, admin.user_id, templateId).run();
+    `).bind(resolvedStatus, now, admin.user_id, templateId).run();
     if (resolved.meta.changes === 0) {
       throw new HttpError('No pending flags on this listing to resolve', 400);
     }
@@ -584,24 +589,43 @@ export async function handleProductFlags(request, db, route) {
         }
       }
       if (template.seller_id) {
-        await db.prepare('UPDATE sellers SET strike_count = strike_count + 1 WHERE seller_id = ?').bind(template.seller_id).run();
-        // Best-effort notification, same seller-resolved-via-shared-user_id
-        // join handleSellerFeedbackCreate's own notification already uses.
-        const owner = await db.prepare(`
-          SELECT b.builder_id AS builder_id FROM sellers s
-          JOIN builders b ON b.user_id = s.user_id
-          WHERE s.seller_id = ?
-        `).bind(template.seller_id).first();
-        if (owner) {
-          await fireNotification(db, owner.builder_id,
-            'A product listing of yours was removed after an admin-confirmed counterfeit/policy-violation flag. A strike was added to your account.');
+        // #2468 (resolved per AGENTS.md's 2026-11-02 standing decision,
+        // "moderation actions key on confirmed violations and never count
+        // one violation twice"): nothing blocks a new flag batch from
+        // landing on a listing that's already been approve-removed, and
+        // resolving that later batch used to strike the seller again for
+        // the same underlying violation. `resolved_at < ?` (bound to this
+        // request's own `now`, captured above) matches only an approved
+        // flag from a strictly *earlier* resolve call -- the batch this
+        // very request just approved above shares that same `now` value,
+        // so it never counts as its own "already approved" precedent, but
+        // a real prior approval on this template does, and skips the
+        // strike here.
+        const strikeResult = await db.prepare(`
+          UPDATE sellers SET strike_count = strike_count + 1
+          WHERE seller_id = ? AND NOT EXISTS (
+            SELECT 1 FROM product_flags WHERE template_id = ? AND status = 'approved' AND resolved_at < ?
+          )
+        `).bind(template.seller_id, templateId, now).run();
+        if (strikeResult.meta.changes === 1) {
+          // Best-effort notification, same seller-resolved-via-shared-user_id
+          // join handleSellerFeedbackCreate's own notification already uses.
+          const owner = await db.prepare(`
+            SELECT b.builder_id AS builder_id FROM sellers s
+            JOIN builders b ON b.user_id = s.user_id
+            WHERE s.seller_id = ?
+          `).bind(template.seller_id).first();
+          if (owner) {
+            await fireNotification(db, owner.builder_id,
+              'A product listing of yours was removed after an admin-confirmed counterfeit/policy-violation flag. A strike was added to your account.');
+          }
+          // #2018: the strike ladder itself -- reads the just-incremented
+          // count fresh, so it always acts on the real post-increment total.
+          await applyStrikeLadderConsequence(db, {
+            sellerId: template.seller_id, ownerBuilderId: owner?.builder_id ?? null,
+            adminUserId: admin.user_id, severe, templateId,
+          });
         }
-        // #2018: the strike ladder itself -- reads the just-incremented
-        // count fresh, so it always acts on the real post-increment total.
-        await applyStrikeLadderConsequence(db, {
-          sellerId: template.seller_id, ownerBuilderId: owner?.builder_id ?? null,
-          adminUserId: admin.user_id, severe, templateId,
-        });
       }
     } else {
       // Reject restores purchasability if auto-hide had already kicked in
