@@ -29,7 +29,7 @@
 import { json, HttpError, clientIp } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue, labelValue, positiveInteger } from './validation.js';
-import { requireVerifiedSession, sha256Hex } from './auth.js';
+import { requireVerifiedSession, sha256Hex, builderHasActiveSuspension } from './auth.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 import { fireNotification } from './notifications.js';
 import {
@@ -147,6 +147,14 @@ export async function handleInstancePurchase(request, env, instanceId) {
   const landlet = await db.prepare('SELECT owner_builder_id FROM landlets WHERE landlet_id = ?').bind(instance.landlet_id).first();
   if (!landlet?.owner_builder_id) {
     throw new HttpError('This instance is not on a claimed landlet, so there is no builder to credit', 400);
+  }
+  // #2989 (sub-issue of #2305): mirrors #2017's flagged_hidden_at check
+  // above, but at the landlet-owner level rather than the template level --
+  // a suspended builder's own land stops being interactable for everyone
+  // else, independent of whether the product's own seller is in good
+  // standing (that's #2985's separate, already-enforced gate).
+  if (await builderHasActiveSuspension(db, landlet.owner_builder_id)) {
+    throw new HttpError('This listing is temporarily unavailable — its landlet owner is suspended', 400);
   }
 
   // quantity/buyerLabel are both genuinely optional, and this endpoint has
