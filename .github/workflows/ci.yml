@@ -114,38 +114,31 @@ jobs:
       shards: ${{ steps.list.outputs.shards }}
     steps:
       - uses: actions/checkout@v4
-      # Groups e2e/*.test.mjs into SHARD_COUNT roughly-even chunks (plain
-      # array slicing, not a jq builtin, so this doesn't depend on exactly
-      # which jq version a runner image happens to ship) — computed at run
-      # time from whatever files actually exist, not hardcoded, so a newly
-      # added e2e/*.test.mjs file is automatically covered next push.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # #3003: groups e2e/*.test.mjs into SHARD_COUNT shards balanced by
+      # measured per-file duration (scripts/bin-pack-e2e-shards.mjs's own
+      # LPT bin-packing, reading e2e/shard-weights.json), not by plain
+      # alphabetical file count — equal count != equal time, and the
+      # previous equal-count split put every admin-dashboard suite
+      # (alphabetically first, also the heaviest files in the repo) in one
+      # shard that ran ~2x longer than its siblings, past every patience
+      # threshold the fleet had been using, so it kept getting killed and
+      # re-queued into the same already-contended pool. See that script's
+      # own header comment for the full design (LPT heuristic, median
+      # fallback for an unmeasured file, uniform-weight/count-based
+      # fallback when the snapshot has no data at all) and
+      # scripts/update-shard-weights.mjs for how the snapshot itself gets
+      # refreshed from a real run's job logs.
       #
-      # purchase-checkout-real-stripe.test.mjs (#2861) is pulled out into
-      # its own dedicated shard before the rest are sliced — PR #2874
-      # hit #2673's wrangler-dev-crash flake 4 times in a row specifically
-      # on the shard this file landed in (frozen mid-migration-dump each
-      # time), a far higher rate than #2673's historical occasional-flake
-      # pattern. This file drives two concurrent real browser sessions
-      # through real Stripe API round-trips (account creation/polling,
-      # Stripe Elements card confirmation) rather than the simulated-
-      # purchase seam every other file in this suite uses — plausibly
-      # heavier than whatever #2673 is actually about, so give it room of
-      # its own rather than let it compound with other files' load.
-      # Falls back to normal sharding if the file is ever renamed/removed
-      # (has_isolated guard below), so this doesn't silently break if that
-      # happens later.
+      # purchase-checkout-real-stripe.test.mjs (#2861) still gets pulled
+      # out into its own dedicated shard regardless of weight — see that
+      # script's own ISOLATED_FILE comment for why (PR #2874's own
+      # #2673-flake-rate finding).
       - id: list
         run: |
-          files=$(ls e2e/*.test.mjs | xargs -n1 basename | jq -R -s -c 'split("\n")[:-1]')
-          isolated="purchase-checkout-real-stripe.test.mjs"
-          has_isolated=$(echo "$files" | jq --arg f "$isolated" 'any(. == $f)')
-          rest=$(echo "$files" | jq -c --arg f "$isolated" 'map(select(. != $f))')
-          count=$(echo "$rest" | jq 'length')
-          size=$(( (count + SHARD_COUNT - 1) / SHARD_COUNT ))
-          shards=$(echo "$rest" | jq -c --argjson size "$size" '[range(0; length; $size) as $i | .[$i:$i+$size]]')
-          if [ "$has_isolated" = "true" ]; then
-            shards=$(echo "$shards" | jq -c --arg f "$isolated" '. + [[$f]]')
-          fi
+          shards=$(node scripts/bin-pack-e2e-shards.mjs)
           echo "shards=$shards" >> "$GITHUB_OUTPUT"
 
   e2e-tests:

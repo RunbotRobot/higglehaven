@@ -794,6 +794,35 @@ an already-contended pool. So: don't cancel a shard just because it's
 taking longer than the ~20-25min healthy baseline — that's exactly the
 signal #2943 showed is unreliable.
 
+**Update (#3003, 2026-11-02): the ~20-25min baseline above was itself
+wrong for one shard, not a universal healthy figure.** `ci.yml`'s
+`discover-e2e-files` used to slice `e2e/*.test.mjs` into `SHARD_COUNT`
+chunks of *equal file count*, alphabetically — chunk 1
+(`admin-action-log-page.test.mjs` … `change-password.test.mjs`) happens
+to be every admin-dashboard suite, the heaviest files in the repo, so it
+legitimately needs **~109-122 min** under real fleet load (measured
+across PR #2969's 13 attempts and PR #2991's 2) against **53-81 min**
+for its siblings — `seller-size-price-save-race…` alone has run as long
+as **~175 min** under especially heavy load (PR #2978). Every patience
+threshold the fleet had actually been using (60 min, 109-110 min, even
+the old 12-min "no progress" one) sat below shard 1's real runtime, so
+it was never "stuck," just correctly measured against the wrong
+baseline — PR #2969 attempt 13 finished clean at 121 min the one time it
+was finally left alone long enough. #3003 fixed the root cause
+(`scripts/bin-pack-e2e-shards.mjs` now bin-packs shards by measured
+per-file duration via `e2e/shard-weights.json`, not plain alphabetical
+count, so no shard should run radically longer than its siblings going
+forward) — but the standing rule doesn't change: **nothing short of
+GitHub Actions' own 360-minute job ceiling is evidence of a hang**, and
+cancelling a shard "just to inspect" (per PR #2978, at 142 min, found to
+already be 81% done) is still a cancel with the same re-queuing cost as
+any other. If a shard ever again runs dramatically longer than its
+siblings well past these figures, that's a signal `e2e/shard-weights.json`
+has drifted stale (a slow file grew heavier, or a new file landed in the
+wrong shard) — refresh it via `scripts/update-shard-weights.mjs <run_id>`
+against a recent green run, not a reason to start cancelling on
+wall-clock alone again.
+
 If you do end up cancelling one anyway (or it reaches a terminal state
 on its own), run `scripts/check-ci-shard-progress.mjs <job_id>`
 immediately after — now that the job is `completed`, its log is
