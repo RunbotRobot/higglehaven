@@ -447,6 +447,20 @@ export function refreshShopLandletRecordsNow() {
         if (oldRecord.status !== freshRecord.status) {
           if (oldRecord.status === 'claimed' && entry.loaded) unloadShopLandletInstances(entry);
           else if (oldRecord.status === 'greenbelt' && entry.orbsLoaded) unloadCreditOrbsForLandlet(entry);
+        } else if (
+          // #3004: an admin reassign-owner (POST .../reassign-owner) leaves
+          // `status` at 'claimed' on both sides of the change -- only
+          // ownerBuilderId moves -- but still wipes the previous owner's
+          // placed_instances/landlet_versions/landlet_levels server-side
+          // (land.js's own #1280 cleanup batch). Without this branch,
+          // entry.loaded never resets, so updateShopProximity (which only
+          // reloads on a false -> true transition) never notices and a
+          // shopper who already loaded this landlet keeps seeing the old
+          // owner's now-deleted content indefinitely.
+          oldRecord.status === 'claimed' && entry.loaded
+          && oldRecord.ownerBuilderId !== freshRecord.ownerBuilderId
+        ) {
+          unloadShopLandletInstances(entry);
         }
         // The ground mesh's color/texture (plotColorKeyForLandlet) and
         // shape (shapeForLandlet, keyed off polygon/areaM2) are baked into
