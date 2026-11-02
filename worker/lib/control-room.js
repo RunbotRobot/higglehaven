@@ -41,7 +41,19 @@ export async function requireControlRoomAccess(request, env, db) {
     return { via: 'api-key' };
   }
   const user = await currentUser(request, db);
-  if (user?.is_admin) return { via: 'admin-session', user };
+  if (user?.is_admin) {
+    // #3000: currentUser() alone doesn't know about suspension -- only
+    // requireCurrentUser does (worker/lib/auth.js) -- so a bare is_admin
+    // check here let a suspended admin (still is_admin=1, still holding a
+    // valid session per auth.js's own comment) keep full Control Room API
+    // access after handleControlRoomAdminPage would already 403 them from
+    // the page itself. Same query/error shape requireCurrentUser uses.
+    const activeSuspension = await db.prepare(`
+      SELECT 1 FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+    `).bind(user.user_id).first();
+    if (activeSuspension) throw new HttpError('Your account is suspended', 403, { suspended: true });
+    return { via: 'admin-session', user };
+  }
   throw new HttpError('Control Room access required', 401);
 }
 
