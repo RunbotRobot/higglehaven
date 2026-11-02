@@ -13,7 +13,7 @@
 // up and wires its own listeners here at module scope, rather than
 // routing through main.js/mode.js the way the older shop/*.js leaves do.
 import { currentAuthUser } from '../account/auth.js';
-import { fetchNearbyChatMessages, sendNearbyChatMessage } from '../api.js';
+import { fetchNearbyChatMessages, sendNearbyChatMessage, sendNearbyChatReport } from '../api.js';
 
 const NEARBY_CHAT_POLL_INTERVAL_MS = 2000;
 
@@ -38,6 +38,16 @@ let chatLastKnownLandletId;
 let chatPollToken = 0;
 const seenMessageIds = new Set();
 const ownMessageIds = new Set();
+// #2956: parity with proximity voice chat's own mutedPeers (voiceChat.js)
+// -- a sender muted this way is scoped to this page session only (reset on
+// reload, never sent to the server), same "mute is scoped to this
+// connection's own lifetime" precedent #2819 established. Unlike voice's
+// persistent peer-list row, a muted sender's messages here are fully
+// removed from the flat chat log (not just silenced) and never re-rendered
+// -- there's no "unmute" affordance, since there's no row left to show one
+// on once the messages are gone; muting is a one-way "stop showing me this
+// person" action for the rest of this session.
+const mutedBuilderIds = new Set();
 
 // #1637's own DM gate requires trust_tier === 'id_verified' specifically --
 // docs/SPEC.md §6: "Full social features (voice, messaging, direct
@@ -51,12 +61,67 @@ function hasIdVerifiedSession() {
 function appendMessage(message) {
   if (seenMessageIds.has(message.messageId)) return;
   seenMessageIds.add(message.messageId);
+  if (mutedBuilderIds.has(message.builderId)) return; // #2956: suppress a muted sender's messages
+  const isOwn = ownMessageIds.has(message.messageId);
   const line = document.createElement('div');
   line.className = 'shop-nearby-chat-message';
-  line.classList.toggle('own', ownMessageIds.has(message.messageId));
-  line.textContent = message.text;
+  line.classList.toggle('own', isOwn);
+  line.dataset.builderId = message.builderId;
+  const textEl = document.createElement('span');
+  textEl.className = 'shop-nearby-chat-message-text';
+  textEl.textContent = message.text;
+  line.appendChild(textEl);
+  // #2956: parity with proximity voice chat's own per-peer mute+report
+  // pair (#2819) -- can't mute or report yourself.
+  if (!isOwn) {
+    const actionsEl = document.createElement('span');
+    actionsEl.className = 'shop-nearby-chat-message-actions';
+    actionsEl.innerHTML = '<button type="button" data-action="mute" title="Mute this sender">Mute</button>'
+      + '<button type="button" data-action="report" title="Report this sender">Report</button>';
+    line.appendChild(actionsEl);
+  }
   chatLogEl.appendChild(line);
   chatLogEl.scrollTop = chatLogEl.scrollHeight;
+}
+
+// #2956: removes any of this builder's messages already rendered in the
+// log -- muting should take effect on what's already visible, not just
+// future messages, same as voice's own gainNode.gain.value=0 applies
+// immediately to an already-connected peer.
+function removeMessagesFromBuilder(builderId) {
+  chatLogEl.querySelectorAll(`.shop-nearby-chat-message[data-builder-id="${builderId}"]`)
+    .forEach((el) => el.remove());
+}
+
+// Same prompt()-based lightweight text-input convention voiceChat.js's own
+// reportVoicePeer already uses for this exact action -- see that module's
+// comment for why a bespoke modal isn't used here either.
+async function reportNearbyChatSender(builderId) {
+  const reason = window.prompt(
+    'Report this nearby chat sender for inappropriate conduct? Optionally describe why (up to 280 characters), or leave blank:', '',
+  );
+  if (reason === null) return; // cancelled
+  try {
+    await sendNearbyChatReport({ reportedBuilderId: builderId, reason: reason.trim() || undefined });
+    window.alert('Report submitted. Thank you.');
+  } catch {
+    window.alert('Could not submit the report -- please try again.');
+  }
+}
+
+if (chatLogEl) {
+  chatLogEl.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-action]');
+    const row = event.target.closest('[data-builder-id]');
+    if (!button || !row) return;
+    const builderId = row.dataset.builderId;
+    if (button.dataset.action === 'mute') {
+      mutedBuilderIds.add(builderId);
+      removeMessagesFromBuilder(builderId);
+    } else if (button.dataset.action === 'report') {
+      reportNearbyChatSender(builderId);
+    }
+  });
 }
 
 if (chatBtnEl) {

@@ -331,6 +331,15 @@ const AUCTION_RESOLVE_RATE_LIMIT_MAX = 20;
 // sweep protection without that false positive.
 const AUCTION_LIST_RATE_LIMIT_MAX = 200;
 
+// #2995: handleAuctionBids' own GET branch (bid history) had no rate limit
+// at all, unlike every other unauthenticated GET in this file — it's hit by
+// the same renderAuctionSection redraw idiom as the list endpoint above, so
+// it shares that endpoint's own, more generous budget rather than
+// AUCTION_RESOLVE_RATE_LIMIT_MAX's tight one (this branch never calls
+// resolveAuctionIfDue/resolveDueAuctions, so it isn't guarding a settlement
+// trigger the way that budget exists for).
+const AUCTION_BIDS_LIST_RATE_LIMIT_MAX = AUCTION_LIST_RATE_LIMIT_MAX;
+
 export async function handleStartAuction(request, db, landletId) {
   if (request.method !== 'POST') return json({ error: 'Not found' }, 404);
   const landlet = await requireLandlet(db, landletId);
@@ -474,6 +483,7 @@ export async function handleAuctionBids(request, db, route) {
   const auctionId = route[1];
 
   if (request.method === 'GET') {
+    await checkRateLimit(db, `auction-bids-list:${clientIp(request)}`, AUCTION_BIDS_LIST_RATE_LIMIT_MAX);
     await requireAuction(db, auctionId);
     const { results } = await db.prepare(`
       SELECT * FROM auction_bids WHERE auction_id = ? ORDER BY amount_cents DESC, created_at LIMIT 200

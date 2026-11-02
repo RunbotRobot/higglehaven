@@ -598,6 +598,55 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
       const sellerRow = await env.DB.prepare('SELECT strike_count FROM sellers WHERE seller_id = ?').bind(danglingSellerId).first();
       expect(sellerRow.strike_count).toBe(1);
     });
+
+    // #2468: nothing blocks a brand-new flag batch from landing on a listing
+    // that's already been approve-removed -- resolving that later batch must
+    // not strike the seller again for what's really the same violation
+    // resurfacing, or three repeat approvals of one original violation could
+    // walk the seller all the way to permanent removal.
+    it('a second flag batch approved against an already-approved listing does not strike the seller again', async () => {
+      // A dedicated admin, not the file-shared `adminSession` -- this test's
+      // own 2 resolve calls would otherwise eat into the shared admin's
+      // product-flag-resolve rate-limit budget that later tests in this
+      // file depend on.
+      const admin = await signupAdmin('strike-ladder-repeat-admin');
+      const seller = await signupSeller('strike-ladder-repeat-seller');
+      const ownerBuilderId = (await api('/builders/me', seller.session())).body.builder.builderId;
+      await createTemplate('strike-ladder-repeat-1', seller);
+
+      const flagger1 = await signupBuilder('sl-repeat-flagger-1');
+      await api('/catalog/strike-ladder-repeat-1/flags', flagger1.session({ method: 'POST', body: JSON.stringify({}) }));
+      const firstResolve = await api('/catalog/strike-ladder-repeat-1/flags/resolve', admin.session({
+        method: 'POST',
+        body: JSON.stringify({ action: 'approve' }),
+      }));
+      expect(firstResolve.response.status).toBe(200);
+
+      const userId = await sellerUserId(seller);
+      expect((await env.DB.prepare('SELECT strike_count FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first()).strike_count).toBe(1);
+      expect(await activeSuspension(userId)).toBeFalsy();
+
+      // Nothing blocks a fresh flag against a listing that's already hidden
+      // -- a second, independent builder files a new one.
+      const flagger2 = await signupBuilder('sl-repeat-flagger-2');
+      const secondFlag = await api('/catalog/strike-ladder-repeat-1/flags', flagger2.session({ method: 'POST', body: JSON.stringify({}) }));
+      expect(secondFlag.response.status).toBe(201);
+      const secondResolve = await api('/catalog/strike-ladder-repeat-1/flags/resolve', admin.session({
+        method: 'POST',
+        body: JSON.stringify({ action: 'approve' }),
+      }));
+      expect(secondResolve.response.status).toBe(200);
+
+      // Still 1 -- the repeat approval didn't add a second strike.
+      const sellerRow = await env.DB.prepare('SELECT strike_count FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
+      expect(sellerRow.strike_count).toBe(1);
+      // A real 2nd strike would suspend for 7 days -- confirming none fired.
+      expect(await activeSuspension(userId)).toBeFalsy();
+
+      const { results: notifications } = await env.DB.prepare('SELECT message FROM notifications WHERE builder_id = ?')
+        .bind(ownerBuilderId).all();
+      expect(notifications.filter((n) => /strike was added/i.test(n.message)).length).toBe(1);
+    });
   });
 
   // #2749 (leaf of #2745): migrations/0153 lets more than one seller's own
