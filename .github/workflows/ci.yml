@@ -229,7 +229,8 @@ jobs:
           # that only ever does anything when STRIPE_SECRET_KEY is also
           # unset, which is already always true in this job.
           echo "E2E_SIMULATE_PAID_PURCHASES=true" >> .dev.vars
-      # Retries the whole shard once on failure. Confirmed (via captured
+      # Retries once on failure, re-running only the files that failed
+      # (#3022). Confirmed (via captured
       # wrangler dev server output — see e2e/run-all.mjs's own comment on
       # that capture) that occasional failures here are GitHub's shared
       # runners themselves stalling under load: a request that normally
@@ -237,17 +238,28 @@ jobs:
       # own internal error and a dead connection for everything after.
       # Real bugs this suite has caught (a real regression, a genuine test
       # race) have always reproduced identically on retry; this transient
-      # class hasn't reproduced once when simply run again. A retry here
-      # re-runs every file in the shard, not just whichever one hit it —
-      # run-all.mjs doesn't track that distinction, and with only a
-      # handful of files per shard the redundant re-runs cost is small
-      # next to what per-file granularity would cost in job count.
+      # class hasn't reproduced once when simply run again. This used to
+      # re-run every file in the shard, which was cheap when shards held a
+      # handful of files but not at ~50: one flaky file doubled a ~80 min
+      # shard to ~170 min. run-all.mjs now writes the files that failed to
+      # E2E_FAILED_FILES_OUT, and attempt 2 runs just those. A missing or
+      # empty file (a build failure, a crash before any file finished)
+      # keeps the full file list, so the retry is never narrower than what
+      # actually failed. A real regression still fails both attempts.
       - run: |
+          files="${{ join(matrix.files, ' ') }}"
+          failed_list="$RUNNER_TEMP/e2e-failed-files.txt"
           for attempt in 1 2; do
-            if node e2e/run-all.mjs ${{ join(matrix.files, ' ') }}; then
+            rm -f "$failed_list"
+            if E2E_FAILED_FILES_OUT="$failed_list" node e2e/run-all.mjs $files; then
               exit 0
             fi
-            echo "Attempt $attempt of this shard failed — retrying after a short pause in case it was runner-load-related..." >&2
+            if [ -s "$failed_list" ]; then
+              files="$(tr '\n' ' ' < "$failed_list")"
+              echo "Attempt $attempt failed — retrying only: $files" >&2
+            else
+              echo "Attempt $attempt of this shard failed before reporting which files — retrying the whole shard..." >&2
+            fi
             sleep 10
           done
           echo "This shard failed twice — treating as a real failure, not a transient one." >&2

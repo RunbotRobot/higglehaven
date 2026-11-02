@@ -28,7 +28,7 @@
 // detail last, in a run whose own total output this suite's current shard
 // sizes keep well under that ceiling, guarantees it survives instead.
 import { execSync, spawn } from 'node:child_process';
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -358,6 +358,15 @@ console.log('\n=== e2e summary ===');
 console.log(`${testsToRun.length - failures.length}/${testsToRun.length} passed`);
 if (failures.length > 0) {
   console.log('Failed:', failures.join(', '));
+  // #3022: lets ci.yml's in-job retry re-run only the files that failed
+  // instead of the whole shard (a single flaky file otherwise doubled a
+  // ~80 min shard to ~170 min). A file list rather than scraping the
+  // PASS:/FAIL: lines out of this script's stdout from shell. Not written
+  // at all if this process dies before reaching here (a build failure, a
+  // crash) -- ci.yml treats a missing/empty file as "retry everything".
+  if (process.env.E2E_FAILED_FILES_OUT) {
+    writeFileSync(process.env.E2E_FAILED_FILES_OUT, `${failures.join('\n')}\n`);
+  }
   console.log('\n=== full diagnostics for the failing file(s) above, printed last so CI\'s log-truncation keeps them (#2134) ===');
   for (const { testFile, log } of failureLogs) {
     console.log(log);
