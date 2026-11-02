@@ -241,6 +241,7 @@ async function waitForServer(timeoutMs = 30000) {
 }
 
 async function runOneTest(testFile) {
+  const startedAt = Date.now();
   let log = `\n=== ${testFile} ===\n`;
   killWranglerFamily();
   await new Promise((resolve) => setTimeout(resolve, 1000));
@@ -249,7 +250,7 @@ async function runOneTest(testFile) {
   log += migrationResult.output;
   if (migrationResult.failed) {
     log += `\nFAILED: ${testFile} (migration apply itself failed, before the test ever ran)\n`;
-    return { passed: false, log };
+    return { passed: false, log, elapsedMs: Date.now() - startedAt };
   }
 
   const wranglerLogFilesBefore = listWranglerLogFiles();
@@ -314,7 +315,7 @@ async function runOneTest(testFile) {
   } catch { /* already gone */ }
   killWranglerFamily();
   await new Promise((resolve) => setTimeout(resolve, 1000));
-  return { passed, log };
+  return { passed, log, elapsedMs: Date.now() - startedAt };
 }
 
 const args = process.argv.slice(2);
@@ -336,11 +337,17 @@ console.log(`\nRunning ${testsToRun.length} e2e test file(s), fresh D1 per file:
 const failures = [];
 const failureLogs = [];
 for (const testFile of testsToRun) {
-  const { passed, log } = await runOneTest(testFile);
+  const { passed, log, elapsedMs } = await runOneTest(testFile);
   // A one-line progress indicator per file, printed live — the full
   // diagnostics (buffered above, not streamed) only get printed for a
   // failing file, and only at the very end of the whole run (#2134).
-  console.log(passed ? `PASS: ${testFile}` : `FAIL: ${testFile} (full output printed at the end of this run)`);
+  // #3003: elapsedMs is what scripts/update-shard-weights.mjs scrapes back
+  // out of a green run's own job log to rebuild e2e/shard-weights.json —
+  // per-file duration is the one thing count-based alphabetical sharding
+  // (discover-e2e-files in ci.yml) had no way to see.
+  console.log(passed
+    ? `PASS: ${testFile} (${elapsedMs}ms)`
+    : `FAIL: ${testFile} (${elapsedMs}ms) (full output printed at the end of this run)`);
   if (!passed) {
     failures.push(testFile);
     failureLogs.push({ testFile, log });
