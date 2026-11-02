@@ -864,7 +864,11 @@ can tell you what it will say.
 This doesn't change `ci.yml`'s existing two-attempt-per-shard in-job
 retry loop (a shard that exits non-zero already retries itself once
 automatically; leave that as-is) — it's about the fleet's own external,
-manual judgment call on a job that's still running.
+manual judgment call on a job that's still running. Since #3022 that
+retry re-runs only the files that failed on attempt 1, not the whole
+shard, so one flaky file costs about one file's runtime rather than
+doubling the shard; a shard that fails before reporting which files
+failed (a build error, a crash) still retries in full.
 
 ### Partial-scope PRs — never let a closing keyword outrun what you actually did
 
