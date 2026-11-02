@@ -41,7 +41,7 @@ import { defaultMosaicBoundaryRadiusM, generateWaterAwareMosaic } from './water-
 import { generateWaterAwareLandletRing } from './water-aware-ring.js';
 import { discBoundary } from '../weightedVoronoiGenerator.js';
 import {
-  readJson, stringValue, finiteNumber, queryLimit, decodeCursor, encodeCursor, positiveInteger,
+  readJson, stringValue, finiteNumber, queryLimit, decodeCursor, encodeCursor, positiveInteger, errorMessages,
 } from './validation.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { requireAdmin } from './auth.js';
@@ -1326,6 +1326,8 @@ const WORLD_GROWTH_MAX_STEPS = 20;
 // — no reason for the automatic version to generate a differently-shaped
 // world than the one already tuned by hand.
 const AUTO_RING_CANDIDATE_COUNT = 12;
+// #3011: see generateNextAutoRing's seam-mismatch retry.
+const AUTO_RING_SEAM_GAP_M = 0.01;
 
 async function worldNeedsGrowth(db) {
   const settings = await getWorldSettings(db);
@@ -1409,6 +1411,7 @@ async function generateAutoMosaicIfFreshWorld(db) {
 async function generateNextAutoRing(db, startingInnerRadiusM, { skipMaterializationSweep } = {}) {
   const settings = await getWorldSettings(db);
   let innerRadiusM = startingInnerRadiusM;
+  let seamGapM = 0;
   for (let attempt = 0; attempt < WORLD_GROWTH_MAX_STEPS; attempt++) {
     // Radius-derived, not random/sequential — naturally unique per call
     // (radius only ever grows) the same way the old frontend flow's own
@@ -1437,14 +1440,28 @@ async function generateNextAutoRing(db, startingInnerRadiusM, { skipMaterializat
 
     try {
       const result = await generateLandletRingCandidates(db, {
-        prefix, count: AUTO_RING_CANDIDATE_COUNT, innerRadiusM, startAngleRad: 0, distribution: null,
-        adjacentToRingId: null, skipMaterializationSweep,
+        prefix, count: AUTO_RING_CANDIDATE_COUNT, innerRadiusM: innerRadiusM + seamGapM, startAngleRad: 0,
+        distribution: null, adjacentToRingId: null, skipMaterializationSweep,
       });
       return { ringId: prefix, outerRadiusM: result.outerRadiusM };
     } catch (err) {
-      if (!(err instanceof HttpError)) throw err;
+      // The seam trigger's abort comes straight out of db.batch as a raw D1
+      // error (not yet mapped to an HttpError), so match it by message too.
+      const seamMismatch = errorMessages(err).includes('generated ring boundary mismatch');
+      if (!(err instanceof HttpError) && !seamMismatch) throw err;
       if (err.message === 'Generated ring would overlap existing land candidates') {
         innerRadiusM += settings.expansion_increment_m;
+        seamGapM = 0;
+      } else if (seamMismatch && seamGapM === 0) {
+        // #3011: this ring starts exactly where an existing ring ends, but a
+        // water-aware ring's seam depends on where its own water falls, so
+        // two such rings with different water coverage can never share one
+        // boundary_signature -- the schema's blanket adjacency trigger
+        // rejects the pair. Retry once with the inner edge nudged just clear
+        // of the neighbour (past the trigger's 1e-7m touching tolerance): a
+        // 1cm radial sliver nobody can walk into or see, instead of the
+        // buffer/growth loop aborting on the same ring forever.
+        seamGapM = AUTO_RING_SEAM_GAP_M;
       } else {
         throw err;
       }
