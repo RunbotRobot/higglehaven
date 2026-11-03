@@ -238,3 +238,35 @@ describe('Suspended seller content: remove + snapshot + auto-restore placed inst
     expect(stillThere.body.instances.map((i) => i.templateId)).toContain('sss-no-seller-template');
   });
 });
+
+// #3033: shoppers read a landlet's published version (frozen
+// version_instances), which #2986's removal of placed_instances never
+// touched.
+describe('Suspended seller content in a landlet\'s published version (#3033)', () => {
+  it('hides a suspended seller\'s product from /live but keeps it in the builder\'s own version, and shows it again on unsuspend', async () => {
+    const seller = await signupSeller('sss-live-seller');
+    const builder = await signupAdmin('sss-live-builder');
+    await createGreenbeltLandlet('sss-live-landlet');
+    await claim('sss-live-landlet', builder);
+    const templateId = await createSellerTemplate(seller, 'sss-live-template');
+    await placeInstance('sss-live-instance', 'sss-live-landlet', templateId, builder);
+    const saved = await api('/landlets/sss-live-landlet/versions', builder.session({ method: 'POST', body: JSON.stringify({ name: 'v1' }) }));
+    const versionId = saved.body.version.versionId;
+    const activated = await api(`/landlets/sss-live-landlet/versions/${versionId}/activate`, builder.session({ method: 'POST' }));
+    expect(activated.response.status).toBe(200);
+
+    const before = await api('/landlets/sss-live-landlet/live');
+    expect(before.body.instances.map((i) => i.templateId)).toEqual([templateId]);
+
+    await suspend(seller.email);
+    const during = await api('/landlets/sss-live-landlet/live');
+    expect(during.body.published).toBe(true);
+    expect(during.body.instances).toEqual([]);
+    const ownVersion = await api(`/landlets/sss-live-landlet/versions/${versionId}`, builder.session());
+    expect(ownVersion.body.version.instances.map((i) => i.templateId)).toEqual([templateId]);
+
+    await unsuspend(seller.email);
+    const after = await api('/landlets/sss-live-landlet/live');
+    expect(after.body.instances.map((i) => i.templateId)).toEqual([templateId]);
+  });
+});

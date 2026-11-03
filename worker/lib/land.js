@@ -1406,8 +1406,26 @@ export async function handleLiveLandlet(db, landletId) {
 
   const version = await getVersion(db, landletId, landlet.activeVersionId);
   if (!version) throw new HttpError('Active landlet version not found', 500);
+  // #3033: this is the shopper-facing read, and a published version is a
+  // frozen copy that #2986's removal of a suspended seller's placed
+  // instances never touches (it only deletes the builder's draft rows) --
+  // so the suspended seller's products are filtered out here, with the
+  // same seller/suspension match #2985 uses on the catalog list. The
+  // version rows themselves are left alone, so unsuspending makes the
+  // products reappear with no restore step, and the builder's own
+  // GET .../versions/:id keeps returning the full snapshot. A NULL
+  // seller_id (system/placeholder template) never matches, so is kept.
   const { results } = await db.prepare(`
-    SELECT * FROM version_instances WHERE version_id = ? ORDER BY source_instance_id
+    SELECT * FROM version_instances
+    WHERE version_id = ?
+      AND NOT EXISTS (
+        SELECT 1 FROM catalog_templates
+        JOIN sellers ON sellers.seller_id = catalog_templates.seller_id
+        JOIN account_suspensions ON account_suspensions.user_id = sellers.user_id
+          AND account_suspensions.lifted_at IS NULL AND account_suspensions.escalated_at IS NULL
+        WHERE catalog_templates.template_id = version_instances.template_id
+      )
+    ORDER BY source_instance_id
   `).bind(landlet.activeVersionId).all();
   return json({
     landlet,
