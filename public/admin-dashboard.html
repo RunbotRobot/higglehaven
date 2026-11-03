@@ -44,6 +44,7 @@
      between these admin pages" convention that file and admin-control-
      room.html already both follow. */
   .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+  .toolbar[hidden] { display: none; }
   input, button {
     font: inherit; border-radius: 8px; border: 1px solid #c7d3bd; padding: 8px 10px;
     background: #fff; color: #16240a;
@@ -418,6 +419,36 @@
       <button id="suspensionStatusBtn">Look up</button>
     </div>
     <div id="suspensionStatusResult"></div>
+
+    <h2>Report to NCMEC</h2>
+    <p class="sub">Records that a confirmed moderation decision is being reported. This only creates a permanent record that cannot be edited or deleted; it does not submit anything anywhere. The reported account is not notified. Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/3040" target="_blank" rel="noopener">#3040</a>.</p>
+    <p class="err" id="ncmecReportErr" hidden></p>
+    <p class="ok" id="ncmecReportOk" hidden></p>
+    <form id="ncmecReportForm">
+      <div class="toolbar">
+        <select name="decisionType" aria-label="Decision type">
+          <option value="account_suspension">Account suspension</option>
+          <option value="content_removal">Content removal</option>
+        </select>
+        <input name="note" placeholder="Note (admin-only, optional)" aria-label="Note" maxlength="500" style="flex: 1 1 260px;" />
+      </div>
+      <div class="toolbar" id="ncmecSuspensionFields">
+        <input name="suspensionId" placeholder="Suspension ID (use a row's Report button in Find user)" aria-label="Suspension ID" style="flex: 1 1 320px;" />
+        <input name="contentRefs" placeholder="Related content, optional: table:id, table:id" aria-label="Related content" style="flex: 1 1 260px;" />
+      </div>
+      <div class="toolbar" id="ncmecRemovalFields" hidden>
+        <input name="sourceTable" placeholder="Removed content table, e.g. sign_posts" aria-label="Removed content table" style="flex: 1 1 200px;" />
+        <input name="sourceId" placeholder="Removed content ID" aria-label="Removed content ID" style="flex: 1 1 200px;" />
+        <input name="reportedUserId" placeholder="Reported account user ID" aria-label="Reported account user ID" style="flex: 1 1 260px;" />
+      </div>
+      <button type="submit">Record report</button>
+    </form>
+    <h3>Recent reports</h3>
+    <p class="err" id="ncmecReportsListErr" hidden></p>
+    <div class="toolbar">
+      <button class="secondary" id="ncmecReportsRefreshBtn" type="button">Refresh</button>
+    </div>
+    <div id="ncmecReportsWrap"></div>
   </section>
   <section class="panel fixtures-panel" id="panel-fixtures">
     <p class="sub">Part of <a href="https://github.com/RunbotRobot/higglehaven/issues/1817" target="_blank" rel="noopener">#1817</a></p>
@@ -1845,6 +1876,15 @@
     const userSearchErr = document.getElementById('userSearchErr');
     const userSearchResultsWrap = document.getElementById('userSearchResultsWrap');
     const userDetailWrap = document.getElementById('userDetailWrap');
+    // #3040: admin-initiated NCMEC report record (POST/GET /api/ncmec-reports).
+    const ncmecForm = document.getElementById('ncmecReportForm');
+    const ncmecErr = document.getElementById('ncmecReportErr');
+    const ncmecOk = document.getElementById('ncmecReportOk');
+    const ncmecSuspensionFields = document.getElementById('ncmecSuspensionFields');
+    const ncmecRemovalFields = document.getElementById('ncmecRemovalFields');
+    const ncmecListErr = document.getElementById('ncmecReportsListErr');
+    const ncmecRefreshBtn = document.getElementById('ncmecReportsRefreshBtn');
+    const ncmecWrap = document.getElementById('ncmecReportsWrap');
 
     function clearMsg(errEl, okEl) {
       errEl.hidden = true; errEl.textContent = '';
@@ -1863,6 +1903,63 @@
       suspendForm.elements.reason.focus();
     }
 
+    // #3040: shows the fields that apply to the chosen decision type.
+    function syncNcmecFields() {
+      const isRemoval = ncmecForm.elements.decisionType.value === 'content_removal';
+      ncmecSuspensionFields.hidden = isRemoval;
+      ncmecRemovalFields.hidden = !isRemoval;
+    }
+
+    // The Find-user suspension history is the only place an admin can see a
+    // suspensionId, so its Report button fills the form from there.
+    function useSuspensionForNcmecReport(suspensionId) {
+      ncmecForm.elements.decisionType.value = 'account_suspension';
+      syncNcmecFields();
+      ncmecForm.elements.suspensionId.value = suspensionId;
+      ncmecForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      ncmecForm.elements.note.focus();
+    }
+
+    // "table:id, table:id" -> [{ sourceTable, sourceId }]; identifiers only.
+    function parseContentRefs(text) {
+      return text.split(',').map((part) => part.trim()).filter(Boolean).map((part) => {
+        const colon = part.indexOf(':');
+        if (colon < 1 || colon === part.length - 1) throw new Error('Related content must look like table:id, table:id');
+        return { sourceTable: part.slice(0, colon).trim(), sourceId: part.slice(colon + 1).trim() };
+      });
+    }
+
+    function renderNcmecReports(reports) {
+      if (!reports.length) {
+        ncmecWrap.innerHTML = '<p class="empty">No reports recorded.</p>';
+        return;
+      }
+      ncmecWrap.innerHTML = `
+        <table>
+          <thead><tr><th>Recorded</th><th>Decision</th><th>Reported account</th><th>Content</th><th>Note</th></tr></thead>
+          <tbody>${reports.map((r) => `
+            <tr>
+              <td>${escapeHtml(r.createdAt)}</td>
+              <td>${escapeHtml(r.decisionType)}<br><small>${escapeHtml(r.decisionId)}</small></td>
+              <td>${escapeHtml(r.reportedUserId)}</td>
+              <td>${r.contentRefs.length ? r.contentRefs.map((c) => escapeHtml(c.sourceTable + ':' + c.sourceId)).join('<br>') : '—'}</td>
+              <td>${escapeHtml(r.note || '')}</td>
+            </tr>
+          `).join('')}</tbody>
+        </table>
+      `;
+    }
+
+    async function loadNcmecReports() {
+      clearMsg(ncmecListErr);
+      try {
+        const body = await fetchJson('/api/ncmec-reports');
+        renderNcmecReports(body.reports);
+      } catch (error) {
+        showErr(ncmecListErr, error.message);
+      }
+    }
+
     function renderUserDetail(detail) {
       const user = detail.user;
       const suspensions = detail.suspensions || [];
@@ -1873,9 +1970,10 @@
             <td>${escapeHtml(s.reason)}</td>
             <td>${escapeHtml(s.gracePeriodEndsAt)}</td>
             <td>${s.escalatedAt ? 'Escalated ' + escapeHtml(s.escalatedAt) : (s.liftedAt ? 'Lifted ' + escapeHtml(s.liftedAt) : 'Active')}</td>
+            <td><button class="secondary use-for-ncmec-btn" type="button" data-suspension-id="${escapeHtml(s.suspensionId)}">Report</button></td>
           </tr>
         `).join('')
-        : '<tr><td colspan="4"><p class="empty">No suspension history.</p></td></tr>';
+        : '<tr><td colspan="5"><p class="empty">No suspension history.</p></td></tr>';
       userDetailWrap.innerHTML = `
         <div class="stat-grid">
           <div class="stat"><div class="n">${escapeHtml(user.username)}</div><div class="l">Username</div></div>
@@ -1888,11 +1986,14 @@
         <button class="secondary use-for-suspend-btn" type="button">Suspend this account</button>
         <h3>Suspension history</h3>
         <table>
-          <thead><tr><th>Suspended at</th><th>Reason</th><th>Grace period ends</th><th>Status</th></tr></thead>
+          <thead><tr><th>Suspended at</th><th>Reason</th><th>Grace period ends</th><th>Status</th><th></th></tr></thead>
           <tbody>${suspensionRows}</tbody>
         </table>
       `;
       userDetailWrap.querySelector('.use-for-suspend-btn').addEventListener('click', () => useAccountForSuspend(user.email));
+      userDetailWrap.querySelectorAll('.use-for-ncmec-btn').forEach((btn) => {
+        btn.addEventListener('click', () => useSuspensionForNcmecReport(btn.dataset.suspensionId));
+      });
     }
 
     async function loadUserDetail(userId) {
@@ -2029,6 +2130,59 @@
         statusBtn.disabled = false;
       }
     });
+
+    ncmecForm.elements.decisionType.addEventListener('change', syncNcmecFields);
+    ncmecRefreshBtn.addEventListener('click', loadNcmecReports);
+    ncmecForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearMsg(ncmecErr, ncmecOk);
+      const decisionType = ncmecForm.elements.decisionType.value;
+      const note = ncmecForm.elements.note.value.trim();
+      let payload;
+      try {
+        if (decisionType === 'account_suspension') {
+          const contentRefsText = ncmecForm.elements.contentRefs.value.trim();
+          payload = {
+            decisionType,
+            suspensionId: ncmecForm.elements.suspensionId.value.trim(),
+            ...(contentRefsText ? { contentRefs: parseContentRefs(contentRefsText) } : {}),
+          };
+        } else {
+          payload = {
+            decisionType,
+            sourceTable: ncmecForm.elements.sourceTable.value.trim(),
+            sourceId: ncmecForm.elements.sourceId.value.trim(),
+            reportedUserId: ncmecForm.elements.reportedUserId.value.trim(),
+          };
+        }
+      } catch (error) {
+        showErr(ncmecErr, error.message);
+        return;
+      }
+      if (note) payload.note = note;
+      // Permanent by design (the table rejects any later change), so make
+      // the admin confirm before it is written.
+      if (!window.confirm('Record this report? It is permanent and cannot be edited or deleted.')) return;
+      const submitBtn = ncmecForm.querySelector('button[type="submit"]');
+      submitBtn.disabled = true;
+      try {
+        const body = await fetchJson('/api/ncmec-reports', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        showOk(ncmecOk, 'Report recorded (' + body.report.reportId + ').');
+        ncmecForm.reset();
+        syncNcmecFields();
+        loadNcmecReports();
+      } catch (error) {
+        showErr(ncmecErr, error.message);
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    loadNcmecReports();
   };
 })();
 </script>

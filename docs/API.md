@@ -11394,6 +11394,71 @@ through any API — same internal-record-only posture `admin_action_log` had
 before #996 gave it a browse endpoint — the practical way to query it today
 is directly against D1, the same `(source_table, source_id, removed_at)`
 index shape `user_content_edit_history`'s own lookup index already uses.
+(The one exception is `POST /api/ncmec-reports` below, which reads a row
+here server-side to confirm a removal really happened; it exposes nothing
+from it.)
+
+## NCMEC report records (#3040, sub-issue 1/3 of #3031)
+
+docs/SPEC.md §6 requires mandatory CSAM/CSEM reporting to NCMEC's
+CyberTipline. Owner approved building it 2026-11-03 in three steps; this is
+step 1 only: an **admin-initiated record** that a confirmed moderation
+decision is being reported. It makes **no external submission** (that is
+#3042, blocked on registering with NCMEC) and preserves no evidence (#3041).
+Everything here is `requireAdmin`-gated (a suspended admin gets `403` like
+anywhere else) and invisible to the reported account: no notification is
+sent, nothing in the account's own data export mentions it, and the
+reported user sees only whatever ordinary moderation outcome already
+applied to them.
+
+`ncmec_reports` (`migrations/0176_ncmec_reports.sql`) is **insert-only**,
+enforced in the schema: two triggers abort any `UPDATE` or `DELETE`, so
+neither a later code path nor a console session can quietly alter or drop a
+row. There is deliberately no API route to change or remove one (`PUT`,
+`PATCH`, `DELETE` all `404`). Rows have no foreign keys, so a report
+outlives the reported account, the initiating admin, and the content. A
+report is created only from an **existing, confirmed** admin decision, never
+from raw flag counts, and there is **one report per decision**
+(`UNIQUE(decision_type, decision_id)`).
+
+### `POST /api/ncmec-reports`
+
+Rate-limited per acting admin (20 per 15 minutes, same shape as
+`grant-admin`; every request counts, including invalid ones). Body, by
+`decisionType`:
+
+- `"account_suspension"`: `suspensionId` (an `account_suspensions` row;
+  `404` if none). The reported account is **derived** from that row; a
+  `reportedUserId` that disagrees with it is a `400`. Optional
+  `contentRefs`: up to 20 `{ "sourceTable", "sourceId" }` pairs
+  (`sourceTable` a lowercase table name, `sourceId` at most 200 characters).
+- `"content_removal"`: `sourceTable` + `sourceId` of an item a moderator
+  removed (the most recent matching `moderation_removal_snapshots` row is
+  the decision; `404` if there is none), and `reportedUserId`, which the
+  admin must supply because that table deliberately retains no author for
+  `sexual_content` removals (`404` if no such account). `contentRefs` is
+  not accepted here (`400`); the removed item is the single reference.
+- Both: optional `note`, at most 500 characters, admin-only.
+
+`contentRefs` hold **identifiers only**, never content, so the owner's
+2026-10-20 `sexual_content` rule (nothing retained, not even a text
+fragment) is unchanged. Returns `201 { report }`, where `report` is
+`{ reportId, decisionType, decisionId, reportedUserId, contentRefs, note,
+reportedByAdminId, createdAt }`. A second report for the same decision (by
+anyone) is `409 { error, reportId }` naming the existing one. Each created
+report also writes one `admin_action_log` entry (`ncmec_report_create`,
+`targetType: "user"`, `targetId` the reported account, `detail` the
+`reportId`/`decisionType`/`decisionId`); a refused duplicate logs nothing.
+
+### `GET /api/ncmec-reports`
+
+Newest first. Optional `limit` (1 to 100, default 50) and `reportedUserId`
+filter. Returns `{ reports: [...] }` in the same shape.
+
+### Admin Dashboard
+
+The Accounts panel has a "Report to NCMEC" form over the create endpoint
+and a recent-reports table over the list endpoint.
 
 ## Admin action log (#996, sub-issue-in-spirit of #813/#814)
 

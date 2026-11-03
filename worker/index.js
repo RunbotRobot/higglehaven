@@ -38,6 +38,8 @@ import { handleFeedback } from './lib/feedback.js';
 // #2842 (sub-issue of #2841): jurisdiction-keyed tax education content,
 // storage + admin UI only.
 import { handleTaxEducation } from './lib/tax-education.js';
+// #3040: admin-initiated NCMEC report records (insert-only).
+import { handleNcmecReports } from './lib/ncmec-reports.js';
 import {
   handleAdminBootstrap, handleGrantAdmin, handleRevokeAdmin, handleListAdmins, handleSuspendAccount,
   handleUnsuspendAccount, handleSuspensionStatus, handleAdminUserSearch, handleAdminUserDetail,
@@ -762,6 +764,11 @@ async function handleApi(request, env, url, ctx) {
 
   if (request.method === 'GET' && route.length === 1 && route[0] === 'admin-action-log') {
     return handleAdminActionLogList(request, env.DB, url);
+  }
+
+  // #3040: admin-initiated, insert-only NCMEC report records.
+  if (route[0] === 'ncmec-reports') {
+    return handleNcmecReports(request, env.DB, route, url);
   }
 
   if (request.method === 'GET' && route.length === 1 && route[0] === 'product-flags') {
