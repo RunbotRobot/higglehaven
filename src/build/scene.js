@@ -4366,11 +4366,18 @@ export function renderBuildSettingsSection() {
         const versionName = wrappedVersionName.length > 100
           ? `${wrappedVersionName.slice(0, 99)}…`
           : wrappedVersionName;
-        await replaceLandletDraft(landletId, {
+        const restoredDraft = await replaceLandletDraft(landletId, {
           instances: full.instances,
           versionName,
         });
         clearDraftIdempotencyKey(landletId);
+        // #3034: the server leaves out any product whose seller is
+        // currently suspended -- say so before the reload below, instead
+        // of the builder wondering where those items went.
+        const skippedCount = restoredDraft?.skippedInstances?.length ?? 0;
+        if (skippedCount > 0) {
+          alert(`${skippedCount} ${skippedCount === 1 ? 'item was' : 'items were'} not restored because ${skippedCount === 1 ? 'its seller is' : 'their sellers are'} currently suspended.`);
+        }
         // Simplest correct way to get the live scene back in sync with
         // whatever the server now holds — the same "something changed
         // server-side, reload" pattern claimBackBtn already uses

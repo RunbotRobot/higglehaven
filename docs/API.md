@@ -4267,6 +4267,16 @@ version snapshot as a side effect (see "Landlet versions" below), the same
 per-owner ceiling `POST .../versions` itself uses, since both write paths
 share one `landlet-version:<builderId>` bucket.
 
+**Suspended sellers' products (#3034):** an instance that is new to the draft
+(or switches template) and whose template belongs to a seller under an active
+suspension is skipped rather than failing the whole save, so "Restore to
+Editor" of an older version still works. Skipped items are not written to the
+draft or the version snapshot, and are listed in the response's
+`skippedInstances` (`[{ instanceId, templateId }]`, empty when none) so the
+client can tell the builder. `POST /api/instances`, `POST/PUT
+/api/instances/batch`, and a template swap via `PUT/PATCH /api/instances/:id`
+reject the same case with `400` ("...its seller is suspended.").
+
 **Upsert, not delete-then-recreate:** the replacement is an upsert keyed on
 `instanceId` (an `INSERT ... ON CONFLICT(instance_id) DO UPDATE`), with a
 real `DELETE` only for instance IDs genuinely absent from the new array —

@@ -106,17 +106,15 @@ describe('Suspended seller content: purchase block + catalog hide (#2985)', () =
     const afterSuspendOriginal = await api('/instances/suspended-purchase-instance/purchase', buyer.session({ method: 'POST' }));
     expect(afterSuspendOriginal.response.status).toBe(404);
 
-    // A fresh instance of the same (already-suspended) seller's template,
-    // placed directly via the API -- never swept by #2986's removal,
-    // since that only runs at the moment suspension lands -- is exactly
-    // the scenario this sub-issue's own purchase-time check exists for.
-    const placedWhileSuspended = await api('/instances', buyer.session({
-      method: 'POST',
-      body: JSON.stringify({
-        instanceId: 'suspended-purchase-instance-2', landletId: 'suspended-purchase-landlet', templateId, x: 1, y: 1,
-      }),
-    }));
-    expect(placedWhileSuspended.response.status).toBe(201);
+    // An instance of the same (already-suspended) seller's template that
+    // slipped past #2986's one-time removal (e.g. placed in the instant
+    // before suspension landed) -- inserted directly, since #3034 now
+    // rejects placing one through the API -- is exactly the scenario this
+    // sub-issue's own purchase-time check exists for.
+    await env.DB.prepare(`
+      INSERT INTO placed_instances (instance_id, landlet_id, template_id, x_m, y_m)
+      VALUES ('suspended-purchase-instance-2', 'suspended-purchase-landlet', ?, 1, 1)
+    `).bind(templateId).run();
     const afterSuspend = await api('/instances/suspended-purchase-instance-2/purchase', buyer.session({ method: 'POST' }));
     expect(afterSuspend.response.status).toBe(400);
     expect(afterSuspend.body.error).toMatch(/suspended/i);

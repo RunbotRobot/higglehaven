@@ -39,7 +39,7 @@ import { checkRateLimit } from './rate-limit.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { readJson, stringValue, queryLimit, decodeCursor, encodeCursor } from './validation.js';
 import { fireNotifications } from './notifications.js';
-import { requireSessionBuilder, assertOwner, requireAdmin } from './auth.js';
+import { requireSessionBuilder, assertOwner, requireAdmin, suspendedSellerTemplateIds } from './auth.js';
 import { requireBuilder } from './builder-profile.js';
 import { candidateRowFromLandlet } from './world-generation.js';
 import { handleSoldOutMarkers } from './purchases-admin.js';
@@ -1450,7 +1450,7 @@ export async function handleLandletDraft(request, db, landletId) {
     if (!Array.isArray(input.instances)) throw new HttpError('instances must be an array', 400);
     if (input.instances.length > 250) throw new HttpError('instances must contain at most 250 items', 400);
 
-    const instances = input.instances.map((item) => validateInstance({ ...item, landletId }, crypto.randomUUID()));
+    let instances = input.instances.map((item) => validateInstance({ ...item, landletId }, crypto.randomUUID()));
     const ids = new Set();
     for (const instance of instances) {
       if (ids.has(instance.instanceId)) throw new HttpError('instanceId values must be unique', 400);
@@ -1465,6 +1465,28 @@ export async function handleLandletDraft(request, db, landletId) {
     // — not just an edit to the affected instance — the moment a template
     // shrinks or a level/bound tightens under an already-placed instance.
     const existingInstances = await getInstancesById(db, [...ids]);
+    // #3034: "Restore to Editor" resends an old version's instances
+    // verbatim, which can include a product whose seller has since been
+    // suspended (and #2986 already removed from the world). Skip -- don't
+    // fail the whole restore over one item -- any new or template-changing
+    // instance of a suspended seller's product, and report what was left
+    // out so the client can tell the builder (no silent loss). Per
+    // AGENTS.md's "Nothing that isn't actively for sale is visible to
+    // shoppers or builders" / "Suspension is a hard removal".
+    const suspendedTemplateIds = await suspendedSellerTemplateIds(db, instances
+      .filter((instance) => {
+        const existing = existingInstances.get(instance.instanceId);
+        return !existing || instance.templateId !== existing.templateId;
+      })
+      .map((instance) => instance.templateId));
+    const skippedInstances = instances
+      .filter((instance) => suspendedTemplateIds.has(instance.templateId)
+        && existingInstances.get(instance.instanceId)?.templateId !== instance.templateId)
+      .map((instance) => ({ instanceId: instance.instanceId, templateId: instance.templateId }));
+    if (skippedInstances.length > 0) {
+      const skippedIds = new Set(skippedInstances.map((s) => s.instanceId));
+      instances = instances.filter((instance) => !skippedIds.has(instance.instanceId));
+    }
     const instancesNeedingCropCheck = instances.filter((instance) => {
       const existing = existingInstances.get(instance.instanceId);
       return !existing || instance.templateId !== existing.templateId || !cropsEqual(instance.crop, existing.crop);
@@ -1655,7 +1677,7 @@ export async function handleLandletDraft(request, db, landletId) {
 
     const { results } = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? ORDER BY created_at').bind(landletId).all();
     const version = await getVersion(db, landletId, versionId);
-    return json({ instances: results.map(instanceFromRow), version });
+    return json({ instances: results.map(instanceFromRow), version, skippedInstances });
   }
 
   return json({ error: 'Not found' }, 404);

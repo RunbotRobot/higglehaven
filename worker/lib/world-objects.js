@@ -8,7 +8,10 @@ import { checkRateLimit } from './rate-limit.js';
 import {
   readJson, stringValue, queryLimit, decodeCursor, encodeCursor, assertReferencesExist,
 } from './validation.js';
-import { currentUser, requireSessionBuilder, requireVerifiedSession, builderHasActiveSuspension } from './auth.js';
+import {
+  currentUser, requireSessionBuilder, requireVerifiedSession, builderHasActiveSuspension,
+  suspendedSellerTemplateIds, SUSPENDED_SELLER_PLACEMENT_ERROR,
+} from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { handlePendingRestoration } from './pending-restoration.js';
 import { moderationRemovalCategory, recordModerationRemovalSnapshot } from './content-moderation.js';
@@ -51,6 +54,19 @@ import { handleInstancePurchase } from './purchase-creation.js';
 // every other batch endpoint in this file) still bounds a genuine flood
 // while leaving generous headroom for real interactive editing.
 const INSTANCE_WRITE_RATE_LIMIT_MAX = 500;
+
+// #3034: "nothing that isn't actively for sale is visible to shoppers or
+// builders" / "suspension is a hard removal" (AGENTS.md standing owner
+// decisions) -- #2986 removes a suspended seller's already-placed
+// instances, so a placement write must not put one back. Callers pass only
+// the instances that are new or changing template; an unchanged existing
+// row is never re-checked (same "only re-check what changed" idiom as the
+// crop/z/XY checks), so it can't brick an unrelated move.
+async function assertTemplatesFromActiveSellers(db, instances) {
+  if (instances.length === 0) return;
+  const suspended = await suspendedSellerTemplateIds(db, instances.map((instance) => instance.templateId));
+  if (suspended.size > 0) throw new HttpError(SUSPENDED_SELLER_PLACEMENT_ERROR, 400);
+}
 
 export async function handleInstances(request, env, route, url) {
   const db = env.DB;
@@ -228,6 +244,10 @@ export async function handleInstances(request, env, route, url) {
     await assertReferencesExist(db, 'catalog_templates', 'template_id', instances.map((instance) => instance.templateId), 'templateId');
     await assertReferencesExist(db, 'landlets', 'landlet_id', instances.map((instance) => instance.landletId), 'landletId');
     const existingInstances = await getInstancesById(db, instanceIds);
+    await assertTemplatesFromActiveSellers(db, instances.filter((instance) => {
+      const existing = existingInstances.get(instance.instanceId);
+      return !existing || instance.templateId !== existing.templateId;
+    }));
     // Found via backlog audit: this batch endpoint re-validated crop/z
     // unconditionally for every instance, even ones already stored
     // unchanged — exactly the bug #338 already fixed for the single-
@@ -432,6 +452,7 @@ export async function handleInstances(request, env, route, url) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
     await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
+    await assertTemplatesFromActiveSellers(db, [instance]);
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
     await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
     await assertCropWithinTemplateBounds(db, [instance]);
@@ -472,6 +493,9 @@ export async function handleInstances(request, env, route, url) {
     const sessionBuilder = await requireSessionBuilder(request, db);
     await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
     await assertReferenceExists(db, 'catalog_templates', 'template_id', instance.templateId, 'templateId');
+    if (instance.templateId !== existing.template_id) {
+      await assertTemplatesFromActiveSellers(db, [instance]);
+    }
     await assertReferenceExists(db, 'landlets', 'landlet_id', instance.landletId, 'landletId');
     await requireOwnedLandlet(db, existing.landlet_id, sessionBuilder.builder_id);
     if (instance.landletId !== existing.landlet_id) {
