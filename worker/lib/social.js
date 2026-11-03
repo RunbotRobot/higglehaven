@@ -684,27 +684,48 @@ async function handleFriendVoiceChannels(request, db, route) {
   return json({ error: 'Not found' }, 404);
 }
 
-// #2818 (sub-issue of #2780): the owner is self-hosting a TURN relay (GCP
-// e2-micro + LiveKit's embedded TURN, per #2778's resolution) — its address/
-// credentials are a Worker secret (TURN_SERVER_URL/TURN_SERVER_USERNAME/
-// TURN_SERVER_CREDENTIAL), never committed. STUN is always included so this
-// works today, before that secret is ever set, and picks up the real TURN
-// relay the moment it's configured with no client-side code change. A
-// public STUN server (no account/credentials needed) — Cloudflare's own
-// free tier doesn't run one, same reasoning #2778 gave for why TURN needs
-// its own answer.
+// #2818 (sub-issue of #2780): the owner is self-hosting a TURN relay (a GCP
+// VM running coturn, per #2778's resolution and #3010's confirmation) --
+// its address/credentials are Worker secrets, never committed. STUN is
+// always included so this works today, before any TURN secret is ever set,
+// and picks up the real TURN relay the moment it's configured with no
+// client-side code change. A public STUN server (no account/credentials
+// needed) -- Cloudflare's own free tier doesn't run one, same reasoning
+// #2778 gave for why TURN needs its own answer.
+//
+// #3039 (resolving #3010): when TURN_SHARED_SECRET is set (coturn's
+// `use-auth-secret` / the TURN REST API convention), every request mints a
+// short-lived credential instead of handing out one static pair to every
+// caller. TURN_SERVER_USERNAME/TURN_SERVER_CREDENTIAL remain only as the
+// fallback until the relay is switched over.
 const VOICE_ICE_CONFIG_RATE_LIMIT_MAX = PRESENCE_NEARBY_RATE_LIMIT_MAX;
+export const TURN_CREDENTIAL_TTL_SECONDS = 3600;
+
+export async function mintTurnCredential(sharedSecret, builderId, nowMs = Date.now()) {
+  const username = `${Math.floor(nowMs / 1000) + TURN_CREDENTIAL_TTL_SECONDS}:${builderId}`;
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey('raw', encoder.encode(sharedSecret), { name: 'HMAC', hash: 'SHA-1' }, false, ['sign']);
+  const signature = new Uint8Array(await crypto.subtle.sign('HMAC', key, encoder.encode(username)));
+  let binary = '';
+  for (const byte of signature) binary += String.fromCharCode(byte);
+  return { username, credential: btoa(binary) };
+}
 
 async function handleVoiceIceConfig(request, db, env) {
   const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
   await checkRateLimit(db, `voice-ice-config:${sessionBuilder.builder_id}`, VOICE_ICE_CONFIG_RATE_LIMIT_MAX);
   const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
   if (env?.TURN_SERVER_URL) {
-    iceServers.push({
-      urls: env.TURN_SERVER_URL,
-      username: env.TURN_SERVER_USERNAME,
-      credential: env.TURN_SERVER_CREDENTIAL,
-    });
+    if (env.TURN_SHARED_SECRET) {
+      const { username, credential } = await mintTurnCredential(env.TURN_SHARED_SECRET, sessionBuilder.builder_id);
+      iceServers.push({ urls: env.TURN_SERVER_URL, username, credential });
+    } else {
+      iceServers.push({
+        urls: env.TURN_SERVER_URL,
+        username: env.TURN_SERVER_USERNAME,
+        credential: env.TURN_SERVER_CREDENTIAL,
+      });
+    }
   }
   return json({ iceServers });
 }

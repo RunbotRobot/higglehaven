@@ -1895,7 +1895,7 @@ export async function fetchVoiceSignals({ cursor = null } = {}) {
 
 // #2818: STUN always; TURN only once the owner's self-hosted relay secret
 // is actually configured server-side (worker/lib/social.js's
-// handleVoiceIceConfig) — fetched once and cached by the caller, not
+// handleVoiceIceConfig) — cached by the caller (src/shop/voiceChat.js, re-fetched before the TURN credential expires -- #3039), not
 // polled, since this almost never changes mid-session.
 export async function fetchVoiceIceConfig() {
   const { iceServers } = await requestJson('/voice/ice-config');

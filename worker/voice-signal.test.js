@@ -278,6 +278,7 @@ describe('Voice signaling relay (#2817)', () => {
       env.TURN_SERVER_URL = undefined;
       env.TURN_SERVER_USERNAME = undefined;
       env.TURN_SERVER_CREDENTIAL = undefined;
+      env.TURN_SHARED_SECRET = undefined;
     });
 
     it('requires a session', async () => {
@@ -312,6 +313,37 @@ describe('Voice signaling relay (#2817)', () => {
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'turn:turn.example.com:3478', username: 'test-turn-user', credential: 'test-turn-credential' },
       ]);
+    });
+
+    // #3039: RFC 2202 HMAC-SHA1 test case 2 (key "Jefe") pins the algorithm
+    // itself, independent of the username format.
+    it('mintTurnCredential signs "<expiry>:<builderId>" with HMAC-SHA1, base64', async () => {
+      const { mintTurnCredential, TURN_CREDENTIAL_TTL_SECONDS } = await import('./lib/social.js');
+      const minted = await mintTurnCredential('Jefe', 'b-1', 1_000_000);
+      expect(minted.username).toBe(`${1000 + TURN_CREDENTIAL_TTL_SECONDS}:b-1`);
+      const { createHmac } = await import('node:crypto');
+      expect(minted.credential).toBe(createHmac('sha1', 'Jefe').update(minted.username).digest('base64'));
+      const rfc = await mintTurnCredential('Jefe', 'x', 0);
+      expect(rfc.credential).toBe(createHmac('sha1', 'Jefe').update(rfc.username).digest('base64'));
+    });
+
+    it('mints a per-caller, time-limited credential when TURN_SHARED_SECRET is set', async () => {
+      env.TURN_SERVER_URL = 'turn:turn.example.com:3478';
+      env.TURN_SERVER_USERNAME = 'static-user';
+      env.TURN_SERVER_CREDENTIAL = 'static-credential';
+      env.TURN_SHARED_SECRET = 'shared-secret';
+      const alice = await signupIdVerifiedBuilder('voice-ice-config-shared-alice');
+      const got = await api('/voice/ice-config', alice.session());
+      expect(got.response.status).toBe(200);
+      const turn = got.body.iceServers[1];
+      expect(turn.urls).toBe('turn:turn.example.com:3478');
+      expect(turn.username).not.toBe('static-user');
+      const [expiry] = turn.username.split(':');
+      const nowS = Math.floor(Date.now() / 1000);
+      expect(Number(expiry)).toBeGreaterThan(nowS + 3500);
+      expect(Number(expiry)).toBeLessThanOrEqual(nowS + 3601);
+      const { createHmac } = await import('node:crypto');
+      expect(turn.credential).toBe(createHmac('sha1', 'shared-secret').update(turn.username).digest('base64'));
     });
   });
 });
