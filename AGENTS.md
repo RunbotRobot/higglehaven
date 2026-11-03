@@ -14,14 +14,24 @@
   and real-time other-avatar presence is rendered client-side
   (`worker/lib/social.js`'s `handlePresence`,
   `src/shop/presenceAndContent.js`'s `pollNearbyPresenceIfNeeded`/
-  `shopOtherAvatars`), plus friends, DMs, and sign-posts. The one genuine
-  gap against docs/SPEC.md still standing: proximity voice chat and
-  general (non-DM) text chat (§2) aren't built at all (zero `WebRTC`/
-  `getUserMedia` anywhere in the repo) — see #2777 (tracking) and its
-  sub-issues. See "Proposing big feature work" below: build toward *that*
-  the same way you'd pick up any other backlog item, broken into small
-  pieces — don't re-derive a "payments/multiplayer missing" scope from
-  this line's old wording.
+  `shopOtherAvatars`), plus friends, DMs, and sign-posts. **Second
+  correction (2026-11-03, higglehaven8, #3030):** the sentence that used
+  to follow ("proximity voice chat and general text chat aren't built at
+  all") had also gone stale — #2777 closed 4/4 on 2026-10-27;
+  `src/shop/voiceChat.js` (WebRTC, 100 ft range with a volume ramp),
+  `src/shop/nearbyChat.js`, and friend group voice channels all exist.
+  This line has now gone stale twice, so re-verify against the code
+  (grep, don't trust this paragraph) before relying on it. Gaps against
+  docs/SPEC.md as of that audit: the far panoramic backdrop (§1, #2377
+  tracking; #2379/#2380/#2381 open); the crowdsourced model pipeline
+  (§4, #2846) and behavioral minor-detection (§6, #2845) and tax
+  education content authoring (§7, #2841) — each blocked on an
+  `[owner judgment needed]` sub-issue; friend "follow"/"stay with"
+  group movement (§2, #1044, owner-gated); and mandatory NCMEC
+  CyberTipline reporting (§6, #3031, owner/counsel-gated). See
+  "Proposing big feature work" below: build toward the unblocked ones the
+  same way you'd pick up any other backlog item, broken into small
+  pieces.
 - Use plain `a` in internal code, database, file, and API names. Use accented
   spellings only in customer-facing display strings.
 - Use Cloudflare free-tier-compatible designs.
