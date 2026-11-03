@@ -120,6 +120,31 @@ The cycle, every time you're asked to make a change:
 4. When asked for the next change, repeat from step 1 — update your
    branch to match `main` again before starting.
 
+**Resetting your branch never requires a force-push — and a force-push
+prompt means you took a wrong turn (#3036).** `main` is squash-merged, so
+the commits your branch pushed last cycle are *not* ancestors of `main`'s
+tip; after `git checkout -B <your-branch> origin/main` the remote branch
+still holds that old tip, and a plain push is rejected as non-fast-forward.
+Force-push is blocked by both this project's safety baseline and the
+permission system, and a session left waiting on that prompt is invisible
+to the rest of the fleet (higglehaven7 sat blocked ~2h on one; nobody
+watches another session's prompts). So never ask for it. The force-free
+sequence that works every time, after you've committed on the fresh branch:
+
+```
+git fetch origin <your-branch>
+git merge origin/<your-branch> -s ours -m "Merge stale remote tip (squash-merged earlier)"
+git push -u origin <your-branch>
+```
+
+`-s ours` keeps your tree exactly as it is and only records the old remote
+tip as a parent, so the push is an ordinary fast-forward and the PR diff
+against `main` is still just your new change. If you'd rather not reset at
+all, `git merge origin/main` onto the existing branch and a normal push
+also works. If a push is rejected for any other reason, fetch and merge —
+do not force. More generally, a session sitting in `need_input` is dead
+capacity: prefer any path that never asks.
+
 `main` is the durable, ever-growing version history — every merge into
 it is permanent, and nothing is ever lost from it. Your session-name
 branch is a reusable staging branch, not a growing log of its own: it
