@@ -157,3 +157,29 @@ export async function builderHasActiveSuspension(db, builderId) {
   `).bind(builderId).first();
   return !!row;
 }
+
+// #3034 (found via #3029): which of these templates belong to a seller under
+// an active suspension -- the same predicate #2985 hides from the catalog
+// (catalog.js) and #2986 snapshots+removes on suspend. Instance write paths
+// use it so a builder can't place (POST /instances, /instances/batch) or
+// re-place (PUT /landlets/:id/draft, "Restore to Editor") a suspended
+// seller's product after the removal already happened.
+export async function suspendedSellerTemplateIds(db, templateIds) {
+  const unique = [...new Set(templateIds)];
+  const suspended = new Set();
+  for (let i = 0; i < unique.length; i += 100) {
+    const chunk = unique.slice(i, i + 100);
+    const placeholders = chunk.map(() => '?').join(', ');
+    const { results } = await db.prepare(`
+      SELECT catalog_templates.template_id AS template_id FROM catalog_templates
+      JOIN sellers ON sellers.seller_id = catalog_templates.seller_id
+      JOIN account_suspensions ON account_suspensions.user_id = sellers.user_id
+        AND account_suspensions.lifted_at IS NULL AND account_suspensions.escalated_at IS NULL
+      WHERE catalog_templates.template_id IN (${placeholders})
+    `).bind(...chunk).all();
+    for (const row of results) suspended.add(row.template_id);
+  }
+  return suspended;
+}
+
+export const SUSPENDED_SELLER_PLACEMENT_ERROR = 'This product is currently unavailable because its seller is suspended.';
