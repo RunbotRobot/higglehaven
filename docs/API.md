@@ -5260,7 +5260,7 @@ is a further sub-issue (#2819) on top of that. #2778's owner resolution
 (closed 2026-10-27) settled the three judgment calls these sub-issues
 depend on: mic muted by default every session (no auto-activate), a
 report+mute mechanism beyond the trust-tier gate is required, and TURN
-relay is self-hosted (GCP e2-micro + LiveKit's embedded TURN) — the
+relay is self-hosted (a GCP VM running coturn) — the
 signaling relay below is agnostic to which TURN server backs it.
 
 **Gating**: requires `trust_tier === 'id_verified'`
@@ -5298,6 +5298,22 @@ useful for the few seconds a connection is actually being negotiated).
 opaque JSON value (an SDP string/object or an ICE candidate object) — the
 server stores and relays it verbatim without inspecting its shape; the
 client-side WebRTC stack is the actual producer/consumer.
+
+### `GET /api/voice/ice-config`
+
+Same `id_verified` gate and a per-builder rate limit. Returns
+`{ iceServers }`: a public STUN entry always, plus a TURN entry once
+`TURN_SERVER_URL` is set. The TURN secrets are Worker secrets, never
+committed:
+
+- `TURN_SERVER_URL` — the relay's `turn:` URL.
+- `TURN_SHARED_SECRET` — coturn's `static-auth-secret` (`use-auth-secret`).
+  When set, each response carries a fresh credential with a one-hour
+  lifetime: `username = "<expiryUnixSeconds>:<builderId>"`,
+  `credential = base64(HMAC-SHA1(TURN_SHARED_SECRET, username))`. The client
+  re-fetches it before it expires (`src/shop/voiceChat.js`).
+- `TURN_SERVER_USERNAME` / `TURN_SERVER_CREDENTIAL` — a single static pair,
+  used only while `TURN_SHARED_SECRET` is unset.
 
 ### `GET /api/voice/signal`
 

@@ -109,6 +109,10 @@ let isSpeaking = false;
 let myBuilderId = null;
 let myBuilderIdPromise = null;
 let iceServersPromise = null;
+let iceServersFetchedAt = 0;
+// #3039: TURN credentials are minted with a 1-hour lifetime server-side, so
+// a session-long cache would hand out an expired pair to later connections.
+const ICE_SERVERS_MAX_AGE_MS = 40 * 60 * 1000;
 let audioCtx = null;
 
 // builderId -> { pc, polite, makingOffer, ignoreOffer, sourceNode, gainNode,
@@ -162,7 +166,8 @@ function ensureMyBuilderId() {
 }
 
 function ensureIceServers() {
-  if (iceServersPromise) return iceServersPromise;
+  if (iceServersPromise && Date.now() - iceServersFetchedAt < ICE_SERVERS_MAX_AGE_MS) return iceServersPromise;
+  iceServersFetchedAt = Date.now();
   iceServersPromise = fetchVoiceIceConfig().catch((err) => {
     iceServersPromise = null; // allow a retry on the next call
     throw err;
