@@ -196,6 +196,12 @@ export async function handleInstancePurchase(request, env, instanceId) {
   // the buyer's -- isUserSuspended already treats a null user_id (no
   // linked account, e.g. a system seller, or one who self-deleted) as not
   // suspended.
+  // #3057: a permanently closed seller has no sellers row left, so the
+  // user_id lookup above comes back null and the suspension check below
+  // would pass -- check the closure record directly.
+  if (template.seller_id && await db.prepare('SELECT 1 AS closed FROM closed_sellers WHERE seller_id = ?').bind(template.seller_id).first()) {
+    throw new HttpError('This product is currently unavailable because its seller is suspended.', 400);
+  }
   if (await isUserSuspended(db, seller?.user_id)) {
     throw new HttpError('This product is currently unavailable because its seller is suspended.', 400);
   }

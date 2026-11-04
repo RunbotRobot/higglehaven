@@ -10032,8 +10032,11 @@ the built-in catalog:
   `referencedByVideoJobIds` and `referencedByControlRoomIds` (#1644/#1655/
   #1696), cover the same bucket/URL scheme being written by
   `video_generation_jobs.model_url` and `control_room_tasks`/
-  `control_room_replies.image_url` respectively — `deletable` is `true`
-  only when all three reference lists are empty, not just
+  `control_room_replies.image_url` respectively; `referencedBySuspendedSnapshotIds`
+  (#3058) lists still-pending suspended-seller snapshots (neither restored
+  nor cleared) whose retained `template_image_url` is this image —
+  `deletable` is `true`
+  only when all of these reference lists are empty, not just
   `referencedByTemplateIds`.
   Listings use a `limit` from 1 to 100, and return the R2-backed opaque
   `nextCursor` for the next page. This is a dev inventory for finding
@@ -10086,7 +10089,8 @@ the built-in catalog:
   `referencedByControlRoomIds` fields, also `video_generation_jobs.model_url`
   and `control_room_tasks`/`control_room_replies.image_url` (#1644/#1655/
   #1696); any of these five matching also returns `409`, not just a
-  catalog-template reference. `GET`/`HEAD` above
+  catalog-template reference, and so does a pending suspended-seller
+  snapshot's retained image (#3058). `GET`/`HEAD` above
   stay unauthenticated — serving an
   immutable, content-addressed model back out is not a mutation. Rate-limited
   to 20 calls per 15 minutes per admin (`uploaded-asset-delete:<adminUserId>`,

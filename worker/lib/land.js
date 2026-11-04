@@ -1437,6 +1437,12 @@ export async function handleLiveLandlet(db, landletId) {
           AND account_suspensions.lifted_at IS NULL AND account_suspensions.escalated_at IS NULL
         WHERE catalog_templates.template_id = version_instances.template_id
       )
+      -- #3057: a permanently closed seller (sellers row already deleted).
+      AND NOT EXISTS (
+        SELECT 1 FROM catalog_templates
+        JOIN closed_sellers ON closed_sellers.seller_id = catalog_templates.seller_id
+        WHERE catalog_templates.template_id = version_instances.template_id
+      )
     ORDER BY source_instance_id
   `).bind(landlet.activeVersionId).all();
   return json({
