@@ -214,6 +214,42 @@ describe('Stripe account.updated webhook (#766)', () => {
     expect(row.stripe_onboarding_status).toBe('complete');
   });
 
+  it('ignores an account.updated older than the newest one already applied, for sellers and builders (#3071)', async () => {
+    const seller = await signupSeller('stripe-webhook-order-seller');
+    const builder = await signupBuilder('stripe-webhook-order-builder');
+    await env.DB.prepare("UPDATE sellers SET stripe_account_id = 'acct_order_s' WHERE seller_id = ?").bind(seller.sellerId).run();
+    await env.DB.prepare("UPDATE builders SET stripe_account_id = 'acct_order_b' WHERE builder_id = ?").bind(builder.builderId).run();
+    const read = async () => ({
+      s: (await env.DB.prepare('SELECT stripe_onboarding_status AS st FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first()).st,
+      b: (await env.DB.prepare('SELECT stripe_onboarding_status AS st FROM builders WHERE builder_id = ?').bind(builder.builderId).first()).st,
+    });
+    const disabled = { requirements: { disabled_reason: 'rejected.fraud', currently_due: [] } };
+    const complete = { charges_enabled: true, payouts_enabled: true };
+
+    // Newer (disabled, t=2000) lands first; the older "complete" (t=1000) is late.
+    for (const [id, over, created] of [
+      ['acct_order_s', disabled, 2000], ['acct_order_b', disabled, 2000],
+      ['acct_order_s', complete, 1000], ['acct_order_b', complete, 1000],
+    ]) {
+      const res = await postStripeWebhook({ ...accountUpdatedEvent(id, over), created });
+      expect(res.status).toBe(200);
+    }
+    expect(await read()).toEqual({ s: 'action_needed', b: 'action_needed' });
+
+    // Equal and newer events still apply.
+    for (const created of [2000, 3000]) {
+      await postStripeWebhook({ ...accountUpdatedEvent('acct_order_s', complete), created });
+      await postStripeWebhook({ ...accountUpdatedEvent('acct_order_b', complete), created });
+      expect(await read()).toEqual({ s: 'complete', b: 'complete' });
+      await postStripeWebhook({ ...accountUpdatedEvent('acct_order_s', disabled), created: created + 1 });
+      await postStripeWebhook({ ...accountUpdatedEvent('acct_order_b', disabled), created: created + 1 });
+    }
+
+    // An event with no `created` keeps the old unconditional behaviour.
+    await postStripeWebhook(accountUpdatedEvent('acct_order_s', complete));
+    expect((await read()).s).toBe('complete');
+  });
+
   it('is a safe no-op for an account id that matches no seller or builder', async () => {
     const response = await postStripeWebhook(accountUpdatedEvent('acct_does_not_exist'));
     expect(response.status).toBe(200);
