@@ -72,6 +72,18 @@ const LANDLET_AREA_M2 = 1000;
 // next level purchased just to fit.
 const HALF_LEVEL_HEIGHT_M = LEVEL_HEIGHT_M / 2;
 
+// #3045: the z-range a landlet's purchased levels cover, the same formula
+// the level-removal sweep (handleLandletLevels' DELETE branch, #928/#2470)
+// uses to decide what is out of range. Exported so the suspended-seller
+// restore path (account-moderation.js) can refuse to put an instance back
+// at a z where no level exists any more.
+export function landletLevelZRange(levelIndices) {
+  return {
+    minZ: Math.min(0, ...levelIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M,
+    maxZ: Math.max(0, ...levelIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M,
+  };
+}
+
 const LANDLET_RELEASED_VIA_AUCTION_SQL = `EXISTS (
   SELECT 1 FROM auctions
   WHERE auctions.landlet_id = owned.landlet_id AND auctions.status = 'active'

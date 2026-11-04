@@ -10,6 +10,7 @@ import { requireCurrentUser, requireAdmin } from './auth.js';
 import { checkRateLimit } from './rate-limit.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { fireNotification } from './notifications.js';
+import { landletLevelZRange } from './land.js';
 // #2542 (landed on main while this leaf's PR was in flight): normalizeEmail/
 // userFromRow stay defined in worker/index.js itself (re-exported for
 // worker/lib/auth-routes.js and worker/lib/stripe.js too) rather than
@@ -336,6 +337,15 @@ async function restoreSuspendedSellerPlacedInstances(db, sellerId) {
     const templateExists = await db.prepare('SELECT 1 FROM catalog_templates WHERE template_id = ?').bind(snapshot.template_id).first();
     if (!templateExists) continue;
     const saved = JSON.parse(snapshot.instance_json);
+    // #3045: the builder may have removed the level this was on while it
+    // was pending. The level-removal sweep only sees live placed_instances
+    // rows, so it never touched this snapshot; restoring it verbatim would
+    // put an instance at a z with no level, the exact state #928/#2470 exist
+    // to prevent. Skip it (it stays pending, listed under Removed Items,
+    // and the builder can still Clear it) rather than restore it there.
+    const { results: levelRows } = await db.prepare('SELECT level_index FROM landlet_levels WHERE landlet_id = ?').bind(snapshot.landlet_id).all();
+    const { minZ, maxZ } = landletLevelZRange(levelRows.map((row) => row.level_index));
+    if (saved.z_m < minZ || saved.z_m > maxZ) continue;
     const instanceId = `instance-${crypto.randomUUID()}`;
     // Re-checks the same owner match inside the write itself (#929/#960
     // idiom) -- the plain reads above are a point-in-time check, and a
