@@ -1979,6 +1979,11 @@ table is a safe no-op `200`, not an error — a normal outcome for events on
 Stripe accounts this app never created (a test event in the dashboard, a
 webhook still configured after an account was deleted, etc).
 
+Ordering (#3071): Stripe doesn't guarantee delivery order, so the newest
+applied event's `created` time is stored in `stripe_event_created_at` and an
+`account.updated` older than it is ignored (a `200` no-op). An event with no
+numeric `created` is applied unconditionally, as before.
+
 **#1086/#2419**: `charge.refunded`, `charge.dispute.funds_withdrawn`, and
 `charge.dispute.funds_reinstated` — a charge can be reversed by Stripe's
 own initiative (a bank chargeback, or a dashboard-initiated refund)

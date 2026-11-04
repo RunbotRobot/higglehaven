@@ -392,7 +392,7 @@ export async function handleBuilderRedeem(request, env, db) {
       // reasoning resumeBuilderRedemption's own catch block gives for
       // leaving the claim alone. The row (transfer id set, payout id still
       // NULL) also keeps blocking builder deletion via the same guard.
-      if (transferred) throw err;
+      if (transferred || stripeOutcomeIsAmbiguous(err)) throw err;
       // Nothing moved: release the claim so a failed Stripe call never
       // strands real higgles the builder still has, the same undo-on-failure
       // pattern releasePurchaseClaim uses, and drop the claim row since
@@ -408,6 +408,18 @@ export async function handleBuilderRedeem(request, env, db) {
   }
 
   return json({ error: 'Not found' }, 404);
+}
+
+// #3070: stripeRequest (worker/index.js) throws for more than a definite
+// "Stripe rejected this": a fetch network error / timeout surfaces as a plain
+// non-HttpError, and a 5xx is mapped to an HttpError 502 -- in both cases
+// Stripe may well have executed the call and only the response was lost. Only
+// a 4xx Stripe rejection (HttpError 400) or one of our own pre-call guards
+// (e.g. the 409 above) proves nothing moved, so only those may release the
+// claim; anything else keeps the debit and row so the retry resumes under the
+// same idempotency key instead of minting a new one and paying twice.
+function stripeOutcomeIsAmbiguous(err) {
+  return !(err instanceof HttpError) || err.status === 502;
 }
 
 // #869: completes a redemption a prior request already claimed and
@@ -473,7 +485,7 @@ const PHYSICAL_GOOD_HOLD_DAYS = 7;
 // total_cents <= 0 purely for safety (free/simulated purchases never carry
 // a real refunded_amount_cents, so this branch shouldn't be reachable with
 // a non-zero one in practice) -- a 0/0 division would otherwise be NaN.
-function purchaseSellerShareCents(purchase) {
+export function purchaseSellerShareCents(purchase) {
   const grossShareCents = purchase.total_cents - purchase.commission_cents;
   if (!purchase.refunded_amount_cents || purchase.total_cents <= 0) return grossShareCents;
   return Math.round((grossShareCents * (purchase.total_cents - purchase.refunded_amount_cents)) / purchase.total_cents);
