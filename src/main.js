@@ -335,7 +335,7 @@ import {
   cancelPlacementMode, updateTrimLengthInput,
   measurePointA, measurePointB, updateMeasureResultText,
   syncUpdate, footprintsOverlap, footprintCorners,
-  removeLowStockHighlight, landletElevationGroup,
+  removeLowStockHighlight, landletElevationGroup, markBuildSceneReady,
 } from './build/scene.js';
 // #2987: builder-facing "Removed Items" view of suspended-seller removals
 // (wires its own button/modal; enterBuildMode below triggers its load).
@@ -2233,7 +2233,8 @@ async function bootstrap() {
   // most placed instances share just a handful of cached model URLs), so
   // there's no reason to load them one at a time.
   await Promise.all(instances.map((instance) => addInstanceToScene(instance)));
-
+  // #3101: only now may a tab refocus reconcile against the server.
+  markBuildSceneReady();
 }
 // Captured so openSellerModal() (see its own comment) can await whichever
 // bootstrap this page load is running before trusting activeCatalog. #540
