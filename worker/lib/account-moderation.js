@@ -249,6 +249,19 @@ async function removeSuspendedUserPostedContent(db, adminUserId, suspendedUserId
 // sweep: this app's scale doesn't need one, and "in-flight purchases
 // blocked too" elsewhere in #2305 already values the effect landing
 // immediately, not on the next scheduled tick.
+// #3046: one grouped notice per (builder, suspension) -- not per instance --
+// so a builder with many affected items gets a single message. Best-effort
+// (fireNotification already swallows a builder self-delete race) and always
+// called after the batch it describes has committed. Copy describes only
+// what the builder sees; a builder with nothing affected is never told.
+async function notifyBuildersOfSuspendedSellerItems(db, countByBuilder, messageFor) {
+  for (const [builderId, count] of countByBuilder) {
+    if (count > 0) await fireNotification(db, builderId, messageFor(count));
+  }
+}
+
+const itemPhrase = (count) => (count === 1 ? '1 item' : `${count} items`);
+
 async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
   const seller = await db.prepare('SELECT seller_id FROM sellers WHERE user_id = ?').bind(suspendedUserId).first();
   if (!seller) return { instancesRemoved: 0 };
@@ -276,6 +289,7 @@ async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
   const ownerByLandletId = new Map(landletRows.map((row) => [row.landlet_id, row.owner_builder_id]));
 
   const statements = [];
+  const removedByBuilder = new Map();
   for (const instance of instances) {
     const builderId = ownerByLandletId.get(instance.landlet_id);
     // The landlet itself vanished (greenbelt again, or deleted) in the gap
@@ -304,8 +318,11 @@ async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
       JSON.stringify(placedRow), templateName, templateCategory, templateImageUrl,
     ));
     statements.push(db.prepare('DELETE FROM placed_instances WHERE instance_id = ?').bind(instance.instance_id));
+    removedByBuilder.set(builderId, (removedByBuilder.get(builderId) || 0) + 1);
   }
   if (statements.length > 0) await db.batch(statements);
+  await notifyBuildersOfSuspendedSellerItems(db, removedByBuilder, (count) =>
+    `${itemPhrase(count)} from a seller who is currently suspended ${count === 1 ? 'was' : 'were'} taken off your land. ${count === 1 ? 'It is' : 'They are'} saved under Removed Items and will return if the suspension is lifted.`);
   return { instancesRemoved: statements.length / 2 };
 }
 
@@ -372,6 +389,16 @@ async function restoreSuspendedSellerPlacedInstances(db, sellerId) {
     `).bind(now, snapshot.snapshot_id, instanceId));
   }
   if (statements.length > 0) await db.batch(statements);
+  // Counted from what the batch actually marked restored, not from the
+  // statements attempted: an INSERT that no-opped on its owner-match guard
+  // leaves its snapshot un-restored and must not be announced.
+  const { results: restoredRows } = await db.prepare(`
+    SELECT builder_id, COUNT(*) AS restored FROM suspended_seller_instance_snapshots
+    WHERE seller_id = ? AND restored_at = ? GROUP BY builder_id
+  `).bind(sellerId, now).all();
+  await notifyBuildersOfSuspendedSellerItems(db,
+    new Map(restoredRows.map((row) => [row.builder_id, row.restored])),
+    (count) => `${itemPhrase(count)} from a seller whose suspension was lifted ${count === 1 ? 'is' : 'are'} back on your land.`);
   return { instancesRestored: statements.length / 2 };
 }
 
