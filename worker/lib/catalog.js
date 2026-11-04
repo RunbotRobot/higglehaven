@@ -1577,22 +1577,39 @@ export async function handleCatalog(request, db, route, url, models, env) {
     // seller-uploaded one), and must insert before catalog_templates'
     // own INSERT just below since its product_id is a real FK against
     // this table.
-    await db.prepare(`
-      INSERT INTO products
-        (product_id, name, category, subcategory, color, width_m, depth_m, height_m,
-         model_url, metadata_json, model_size_bytes, skeleton_signature, original_seller_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-      template.templateId, template.name, template.category, template.subcategory, template.color,
-      template.dimensions.width, template.dimensions.depth, template.dimensions.height,
-      template.modelUrl, JSON.stringify(template.metadata), template.modelSizeBytes, template.skeletonSignature,
-      template.sellerId,
-    ).run();
-    await db.prepare(`
-      INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity, product_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(...templateParams(template), template.templateId).run();
+    //
+    // #3109: one batch, so the products row and its first listing commit or
+    // fail together -- as two awaited statements, a failure on the second
+    // left a products row behind, and every retry with the same
+    // (idempotency-derived) template id then hit a primary-key conflict on
+    // the first INSERT. The upsert also heals a row orphaned that way before
+    // this fix: a products row with no listing attached is refreshed to this
+    // attempt's content; one that already has a listing is left untouched.
+    await db.batch([
+      db.prepare(`
+        INSERT INTO products
+          (product_id, name, category, subcategory, color, width_m, depth_m, height_m,
+           model_url, metadata_json, model_size_bytes, skeleton_signature, original_seller_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(product_id) DO UPDATE SET
+          name = excluded.name, category = excluded.category, subcategory = excluded.subcategory,
+          color = excluded.color, width_m = excluded.width_m, depth_m = excluded.depth_m,
+          height_m = excluded.height_m, model_url = excluded.model_url,
+          metadata_json = excluded.metadata_json, model_size_bytes = excluded.model_size_bytes,
+          skeleton_signature = excluded.skeleton_signature, original_seller_id = excluded.original_seller_id
+        WHERE NOT EXISTS (SELECT 1 FROM catalog_templates WHERE product_id = excluded.product_id)
+      `).bind(
+        template.templateId, template.name, template.category, template.subcategory, template.color,
+        template.dimensions.width, template.dimensions.depth, template.dimensions.height,
+        template.modelUrl, JSON.stringify(template.metadata), template.modelSizeBytes, template.skeletonSignature,
+        template.sellerId,
+      ),
+      db.prepare(`
+        INSERT INTO catalog_templates
+          (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity, product_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(...templateParams(template), template.templateId),
+    ]);
     // #976: re-select and map through templateFromRow rather than handing
     // back the locally-constructed `template` object -- validateTemplate's
     // own return literal never carries imageUrl/imageEmbedding/createdAt/

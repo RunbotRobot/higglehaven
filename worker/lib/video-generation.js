@@ -217,10 +217,26 @@ function isStaleVideoGenerationReservation(row) {
 // client-side model optimizer pipeline (the pipeline-wiring sub-issue)
 // gets an identical `/uploads/models/<hash>.glb` URL regardless of
 // whether a model came from a direct upload or a video-to-3D job.
+//
+// #3108: Tripo already succeeded and the credit is spent, so a failure here
+// that is our own side's and one-off (network blip, a 5xx from the provider's
+// CDN, a D1 or R2 error, storage momentarily full) must not strand a good
+// result. Only a failure that retrying cannot fix throws
+// TripoStoreFatalError (an expired/denied output URL, an oversized or
+// malformed file); anything else propagates as-is and applyTripoTaskResult
+// treats it as retryable.
+class TripoStoreFatalError extends Error {}
+
 async function storeTripoModelOutput(env, tripoModelUrl) {
   const response = await fetch(tripoModelUrl);
   if (!response.ok) {
-    throw new HttpError('Failed to download the generated model from the video-to-3D provider', 502);
+    const message = 'Failed to download the generated model from the video-to-3D provider';
+    // 4xx other than 429: the output URL expired or is refused; asking again
+    // returns the same answer.
+    if (response.status >= 400 && response.status < 500 && response.status !== 429) {
+      throw new TripoStoreFatalError(message);
+    }
+    throw new HttpError(message, 502);
   }
   const bytes = await response.arrayBuffer();
   // #1755: every other writer into MODELS enforces this same per-file cap
@@ -231,9 +247,13 @@ async function storeTripoModelOutput(env, tripoModelUrl) {
   // under, with only the unrelated aggregate MAX_TOTAL_STORAGE_BYTES
   // budget below ever checked.
   if (bytes.byteLength > MAX_MODEL_BYTES) {
-    throw new HttpError(`Generated model is ${formatBytes(bytes.byteLength)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`, 502);
+    throw new TripoStoreFatalError(`Generated model is ${formatBytes(bytes.byteLength)}, over the ${formatBytes(MAX_MODEL_BYTES)} limit`);
   }
-  validateGlb(bytes);
+  try {
+    validateGlb(bytes);
+  } catch (err) {
+    throw new TripoStoreFatalError(err instanceof Error ? err.message : 'Generated model is not a valid GLB');
+  }
 
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
   const hash = bytesToHex(digest);
@@ -277,6 +297,13 @@ const TRIPO_FAILURE_MESSAGES = {
   expired: 'The finished model expired before we could save it. The credit for this attempt was used; please start a new generation.',
 };
 
+// #3108: how many times a transient failure to store a finished model is
+// retried (once per status poll or webhook delivery) before the job is given
+// up on. Bounded so a persistent fault, e.g. storage genuinely full, doesn't
+// re-download the model on every poll until the 15-minute expiry sweep; kept
+// small because Tripo's output URL is time-limited.
+const TRIPO_STORE_MAX_ATTEMPTS = 5;
+
 // Shared by the webhook and the status-poll fallback below, so "a job
 // finishes but the webhook is slow or never arrives" doesn't leave it
 // stuck. The atomic `processed_at IS NULL` guard is the same idiom
@@ -317,7 +344,21 @@ async function applyTripoTaskResult(db, env, jobId, task) {
     let stored;
     try {
       stored = await storeTripoModelOutput(env, task.output.model_url);
-    } catch {
+    } catch (err) {
+      // #3108: a transient failure leaves the job 'processing' (processed_at
+      // unset) so the next poll or webhook retries the store from Tripo's
+      // still-valid result -- the credit was spent at job creation and the
+      // one-pending-job-per-builder index keeps the builder from starting a
+      // second billed generation meanwhile. Counted atomically so concurrent
+      // callers can't each think they're on attempt one.
+      if (!(err instanceof TripoStoreFatalError)) {
+        const attempt = await db.prepare(`
+          UPDATE video_generation_jobs SET store_attempts = store_attempts + 1
+          WHERE job_id = ? AND processed_at IS NULL
+          RETURNING store_attempts
+        `).bind(jobId).first();
+        if (!attempt || attempt.store_attempts < TRIPO_STORE_MAX_ATTEMPTS) return;
+      }
       await db.prepare(`
         UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE job_id = ? AND processed_at IS NULL

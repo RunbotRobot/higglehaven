@@ -1,7 +1,7 @@
 import {
   applyD1Migrations, env, SELF, createExecutionContext, createScheduledController, waitOnExecutionContext,
 } from 'cloudflare:test';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import worker from './index.js';
 import { cleanupUnreferencedModels, scheduledModelCleanup } from './lib/models.js';
 import {
@@ -405,6 +405,44 @@ describe('Worker API', () => {
     expect(manualCleanup.response.status).toBe(200);
     expect(manualCleanup.body.targetModelUrls).toContain(fresh.modelUrl);
     expect((await SELF.fetch(`https://higglehaven.test${fresh.modelUrl}`)).status).toBe(404);
+  });
+
+  // #3107: the wizard's form has no deadline, so the sweep's grace must
+  // outlast a slow form, not just a slow upload; and re-uploading an old
+  // identical unreferenced file must refresh it rather than hand back an
+  // object that is about to be swept.
+  it('scheduled sweep keeps an unreferenced upload for a day and a dedup re-upload refreshes it (#3107)', async () => {
+    const ipHeaders = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    const form = new FormData();
+    form.set('file', glbFile({ json: '{"slowFormSeller3107":true}' }));
+    const upload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form, headers: ipHeaders });
+    const { modelUrl } = await upload.json();
+    const key = modelUrl.replace('/uploads/', '');
+
+    const realNow = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(realNow + 2 * 60 * 60 * 1000);
+    try {
+      await scheduledModelCleanup(env);
+      expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(200);
+      nowSpy.mockReturnValue(realNow + 25 * 60 * 60 * 1000);
+      await scheduledModelCleanup(env);
+      expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(404);
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const form2 = new FormData();
+    form2.set('file', glbFile({ json: '{"dedupRefresh3107":true}' }));
+    const first = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form2, headers: ipHeaders });
+    const firstKey = (await first.json()).modelUrl.replace('/uploads/', '');
+    const before = (await env.MODELS.head(firstKey)).uploaded.getTime();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const form3 = new FormData();
+    form3.set('file', glbFile({ json: '{"dedupRefresh3107":true}' }));
+    const again = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form3, headers: ipHeaders });
+    expect((await again.json()).deduplicated).toBe(true);
+    expect((await env.MODELS.head(firstKey)).uploaded.getTime()).toBeGreaterThan(before);
+    expect(key).not.toBe(firstKey);
   });
 
   // Companion to the grace-period test above: proves minAgeMs's own
@@ -1726,24 +1764,16 @@ describe('Worker API', () => {
   // id can genuinely land in this window. Same wrap-the-triggering-
   // statement's-own-run() technique as the #2364 test above.
   it('returns 404, not a raw 500, when the template is deleted in the gap between its own INSERT and re-fetch', async () => {
+    // #3109: the create path's two INSERTs now go through one db.batch(), so
+    // the race window is opened by wrapping batch() rather than the
+    // INSERT statement's own run().
+    const originalBatch = env.DB.batch.bind(env.DB);
     const originalPrepare = env.DB.prepare.bind(env.DB);
-    env.DB.prepare = (sql) => {
-      const stmt = originalPrepare(sql);
-      if (sql.includes('INSERT INTO catalog_templates')) {
-        const originalBind = stmt.bind.bind(stmt);
-        stmt.bind = (...args) => {
-          const bound = originalBind(...args);
-          const originalRun = bound.run.bind(bound);
-          bound.run = async () => {
-            const result = await originalRun();
-            await originalPrepare('DELETE FROM catalog_templates WHERE template_id = ?')
-              .bind('catalog-post-insert-delete-race-template').run();
-            return result;
-          };
-          return bound;
-        };
-      }
-      return stmt;
+    env.DB.batch = async (statements) => {
+      const result = await originalBatch(statements);
+      await originalPrepare('DELETE FROM catalog_templates WHERE template_id = ?')
+        .bind('catalog-post-insert-delete-race-template').run();
+      return result;
     };
     let created;
     try {
@@ -1755,7 +1785,7 @@ describe('Worker API', () => {
         }),
       });
     } finally {
-      env.DB.prepare = originalPrepare;
+      env.DB.batch = originalBatch;
     }
 
     expect(created.response.status).toBe(404);

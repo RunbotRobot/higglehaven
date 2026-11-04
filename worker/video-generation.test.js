@@ -28,6 +28,15 @@ const BROKEN_MODEL_DOWNLOAD_URL = 'https://fake-tripo-cdn.test/output/expired.gl
 // exercises the download-failure path above.
 const OVERSIZED_MODEL_DOWNLOAD_URL = 'https://fake-tripo-cdn.test/output/oversized.glb';
 const MAX_MODEL_BYTES_FOR_TEST = 20 * 1024 * 1024;
+// #3108: a download URL whose first N responses are a provider-side 503, then
+// a valid model -- a transient failure Tripo's CDN recovers from. Padded so
+// its content hash is its own (the storage step really runs rather than
+// dedup-returning on a model another test already stored).
+const FLAKY_MODEL_DOWNLOAD_URL = 'https://fake-tripo-cdn.test/output/flaky.glb';
+let flakyDownloadFailuresRemaining = 0;
+// Each test that needs the storage step to really run picks its own size, so
+// its content hash isn't one a previous test already stored.
+let flakyModelMinSize = 4096;
 let nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
 const originalFetch = globalThis.fetch;
 
@@ -97,6 +106,13 @@ beforeAll(async () => {
     }
     if (url === FAKE_MODEL_DOWNLOAD_URL) {
       return new Response(minimalGlbBytes(), { status: 200 });
+    }
+    if (url === FLAKY_MODEL_DOWNLOAD_URL) {
+      if (flakyDownloadFailuresRemaining > 0) {
+        flakyDownloadFailuresRemaining -= 1;
+        return new Response('Service Unavailable', { status: 503 });
+      }
+      return new Response(glbBytesOfAtLeast(flakyModelMinSize), { status: 200 });
     }
     if (url === BROKEN_MODEL_DOWNLOAD_URL) {
       return new Response('Gone', { status: 404 });
@@ -378,6 +394,95 @@ describe('Video-to-3D job creation (#1619)', () => {
       expect(row.processed_at).not.toBeNull();
     } finally {
       nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
+    }
+  });
+
+  // #3108: Tripo already succeeded and the credit is spent -- a one-off
+  // failure on our side of fetching/storing the result must not strand it.
+  it('#3108: keeps the job processing through a transient download failure, then completes it on the next poll with no extra credit', async () => {
+    const builder = await signupBuilderWithCredits('video-gen-transient-download', 5);
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    const createdBody = await created.json();
+    const creditsAfterCreate = await videoGenerationCredits(builder.builderId);
+
+    nextTaskStatus = 'success';
+    nextModelDownloadUrl = FLAKY_MODEL_DOWNLOAD_URL;
+    flakyDownloadFailuresRemaining = 2;
+    try {
+      const first = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
+      expect(first.body.status).toBe('processing');
+      expect(first.body.error ?? null).toBeNull();
+      const pending = await env.DB.prepare('SELECT status, processed_at FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
+      expect(pending.status).toBe('processing');
+      expect(pending.processed_at).toBeNull();
+
+      const second = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
+      expect(second.body.status).toBe('processing');
+
+      const third = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
+      expect(third.body.status).toBe('complete');
+      expect(third.body.modelUrl).toMatch(/^\/uploads\/models\/[0-9a-f]{64}\.glb$/);
+      expect(await videoGenerationCredits(builder.builderId)).toBe(creditsAfterCreate);
+    } finally {
+      nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
+      flakyDownloadFailuresRemaining = 0;
+    }
+  });
+
+  it('#3108: keeps the job processing through a transient R2 write failure, then completes it on the next poll', async () => {
+    const builder = await signupBuilderWithCredits('video-gen-transient-r2', 5);
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    const createdBody = await created.json();
+
+    nextTaskStatus = 'success';
+    nextModelDownloadUrl = FLAKY_MODEL_DOWNLOAD_URL;
+    flakyDownloadFailuresRemaining = 0;
+    flakyModelMinSize = 8192;
+    const originalPut = env.MODELS.put;
+    let putCalls = 0;
+    env.MODELS.put = async (...args) => {
+      putCalls += 1;
+      if (putCalls === 1) throw new Error('simulated transient R2 put failure');
+      return originalPut.apply(env.MODELS, args);
+    };
+    try {
+      const first = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
+      expect(first.body.status).toBe('processing');
+
+      const second = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
+      expect(second.body.status).toBe('complete');
+      expect(second.body.modelUrl).toMatch(/^\/uploads\/models\/[0-9a-f]{64}\.glb$/);
+      expect(putCalls).toBe(2);
+    } finally {
+      env.MODELS.put = originalPut;
+      flakyModelMinSize = 4096;
+      nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
+    }
+  });
+
+  it('#3108: gives up and fails the job once a persistent store failure has used up its retries', async () => {
+    const builder = await signupBuilderWithCredits('video-gen-persistent-store-failure', 5);
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    const createdBody = await created.json();
+
+    nextTaskStatus = 'success';
+    nextModelDownloadUrl = FLAKY_MODEL_DOWNLOAD_URL;
+    flakyDownloadFailuresRemaining = 1000;
+    try {
+      for (let attempt = 1; attempt <= 4; attempt++) {
+        const poll = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
+        expect(poll.body.status).toBe('processing');
+      }
+      const last = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
+      expect(last.body.status).toBe('failed');
+      expect(last.body.error).toMatch(/retrieve the generated model/);
+      const row = await env.DB.prepare('SELECT status, processed_at, store_attempts FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
+      expect(row.status).toBe('failed');
+      expect(row.processed_at).not.toBeNull();
+      expect(row.store_attempts).toBe(5);
+    } finally {
+      nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
+      flakyDownloadFailuresRemaining = 0;
     }
   });
 
