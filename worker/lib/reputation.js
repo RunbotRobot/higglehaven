@@ -23,7 +23,9 @@ import { json, HttpError, clientIp } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue } from './validation.js';
 import { fireNotification } from './notifications.js';
-import { currentUser, requireAdmin, assertOwner, requireSessionBuilder } from './auth.js';
+import {
+  currentUser, requireAdmin, assertOwner, requireSessionBuilder, adminInGoodStanding,
+} from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { removeSuspendedSellerPlacedInstances } from './account-moderation.js';
 import { moderationRemovalCategory, recordModerationRemovalSnapshot } from './content-moderation.js';
@@ -301,7 +303,7 @@ export async function handleProductReviews(request, db, route) {
     // non-throwing currentUser lookup, since an admin isn't necessarily
     // that seller and shouldn't be forced through the ownership check below.
     const requester = await currentUser(request, db);
-    const admin = requester && requester.is_admin ? requester : null;
+    const admin = await adminInGoodStanding(db, requester);
     // #1975: the review's own author can remove it directly, alongside the
     // existing admin/seller moderation paths below -- same "either should be
     // able to remove it" shape sign_posts' own DELETE (#1830) already
@@ -1020,7 +1022,7 @@ export async function handleSellerFeedbackDelete(request, env, purchaseId) {
   const existing = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
   if (!existing) return json({ error: 'Feedback not found' }, 404);
   const requester = await currentUser(request, db);
-  const admin = requester && requester.is_admin ? requester : null;
+  const admin = await adminInGoodStanding(db, requester);
   if (!admin && requester && existing.buyer_user_id !== null && existing.buyer_user_id === requester.user_id) {
     await checkRateLimit(db, `seller-feedback-delete:${requester.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
     const deletedByAuthor = await db.prepare(`
