@@ -25,7 +25,7 @@ import { readJson, stringValue } from './validation.js';
 import { fireNotification } from './notifications.js';
 import { currentUser, requireAdmin, assertOwner, requireSessionBuilder } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
-import { removeSuspendedSellerPlacedInstances } from './account-moderation.js';
+import { removeSuspendedSellerPlacedInstances, SUSPENSION_SPARES_LAST_ADMIN_SQL } from './account-moderation.js';
 import { moderationRemovalCategory, recordModerationRemovalSnapshot } from './content-moderation.js';
 import {
   requireSessionSeller, sellerExists, recordContentEditHistory,
@@ -541,6 +541,7 @@ export async function handleProductFlags(request, db, route) {
     // exact value (see #2468's own comment there for why that distinction
     // matters).
     const now = new Date().toISOString();
+    let suspensionBlockedLastAdmin = false;
     const resolved = await db.prepare(`
       UPDATE product_flags SET status = ?, resolved_at = ?, resolved_by_admin_user_id = ?
       WHERE template_id = ? AND status = 'pending'
@@ -650,10 +651,11 @@ export async function handleProductFlags(request, db, route) {
           }
           // #2018: the strike ladder itself -- reads the just-incremented
           // count fresh, so it always acts on the real post-increment total.
-          await applyStrikeLadderConsequence(db, {
+          const consequence = await applyStrikeLadderConsequence(db, {
             sellerId: template.seller_id, ownerBuilderId: owner?.builder_id ?? null,
             adminUserId: admin.user_id, severe, templateId,
           });
+          suspensionBlockedLastAdmin = Boolean(consequence?.suspensionBlockedLastAdmin);
         }
       }
     } else {
@@ -695,7 +697,10 @@ export async function handleProductFlags(request, db, route) {
     await adminActionLogStatement(db, admin.user_id, `${resolvedStatus}_product_flags`, 'catalog_template', templateId, {
       flagsResolved: resolved.meta.changes,
     }).run();
-    return json({ resolvedStatus, flagsResolved: resolved.meta.changes });
+    return json({
+      resolvedStatus, flagsResolved: resolved.meta.changes,
+      ...(suspensionBlockedLastAdmin ? { suspensionBlockedLastAdmin: true } : {}),
+    });
   }
 
   return json({ error: 'Not found' }, 404);
@@ -732,7 +737,10 @@ async function applyStrikeLadderConsequence(db, { sellerId, ownerBuilderId, admi
   const reason = permanent
     ? `Strike ladder: permanent removal (${severe ? 'severe violation' : `strike ${seller.strike_count}`}) -- template ${templateId}`
     : `Strike ladder: temporary suspension (strike ${seller.strike_count}) -- template ${templateId}`;
-  await applySuspensionLadderRung(db, { userId: seller.user_id, adminUserId, reason, graceDays });
+  const rung = await applySuspensionLadderRung(db, { userId: seller.user_id, adminUserId, reason, graceDays });
+  // #3085: the account was spared as the last operational admin, so it was
+  // not suspended and must not be told it was.
+  if (rung.blockedLastAdmin) return { suspensionBlockedLastAdmin: true };
   if (ownerBuilderId) {
     await fireNotification(db, ownerBuilderId, permanent
       ? 'Your account has been suspended indefinitely after a confirmed counterfeit/policy violation. This suspension will not be lifted.'
@@ -757,7 +765,8 @@ async function applySuspensionLadderRung(db, { userId, adminUserId, reason, grac
     WHERE NOT EXISTS (
       SELECT 1 FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
     )
-  `).bind(suspensionId, userId, adminUserId, reason, gracePeriodEndsAt, userId).run();
+    AND ${SUSPENSION_SPARES_LAST_ADMIN_SQL}
+  `).bind(suspensionId, userId, adminUserId, reason, gracePeriodEndsAt, userId, userId, userId).run();
   if (inserted.meta.changes === 1) {
     await adminActionLogStatement(db, adminUserId, 'suspend_account', 'user', userId, {
       suspensionId, reason, gracePeriodEndsAt,
@@ -765,12 +774,22 @@ async function applySuspensionLadderRung(db, { userId, adminUserId, reason, grac
     // Same unconditional removal + snapshot handleSuspendAccount runs, so the
     // two ways a seller becomes suspended can't diverge (#3049).
     await removeSuspendedSellerPlacedInstances(db, userId);
-    return;
+    return { blockedLastAdmin: false };
   }
   const active = await db.prepare(`
     SELECT * FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
   `).bind(userId).first();
-  if (!active || active.grace_period_ends_at >= gracePeriodEndsAt) return;
+  if (!active) {
+    // No active suspension and nothing inserted: the shared last-admin guard
+    // (#3085, same condition as handleSuspendAccount's #2268 guard) refused.
+    // The strike stays recorded; the situation is logged for the admins
+    // rather than locking the project out of its admin tools.
+    await adminActionLogStatement(db, adminUserId, 'strike_ladder_suspension_blocked_last_admin', 'user', userId, {
+      reason, graceDays,
+    }).run();
+    return { blockedLastAdmin: true };
+  }
+  if (active.grace_period_ends_at >= gracePeriodEndsAt) return { blockedLastAdmin: false };
   const updated = await db.prepare(`
     UPDATE account_suspensions SET grace_period_ends_at = ?
     WHERE suspension_id = ? AND grace_period_ends_at < ?
@@ -780,6 +799,7 @@ async function applySuspensionLadderRung(db, { userId, adminUserId, reason, grac
       suspensionId: active.suspension_id, reason, newGracePeriodEndsAt: gracePeriodEndsAt,
     }).run();
   }
+  return { blockedLastAdmin: false };
 }
 
 export async function handleProductFlagsList(request, db, url) {
