@@ -32,7 +32,10 @@ function describeSlot(slot) {
   let status;
   if (slot.permanentAt) status = 'Its seller\'s account has been permanently closed, so it will not come back. Clear it whenever you like to free up the spot.';
   else if (slot.sellerSuspended) status = 'Removed while its seller is suspended. It returns automatically if the suspension is lifted.';
-  else status = 'Could not be put back automatically.';
+  // #3094: this is every other restore-skip (its level was removed while it
+  // was pending, #3047; its template was deleted; the land changed hands).
+  // The bare "could not be put back" gave no reason and no next step.
+  else status = 'It could not be put back where it was (for example, the level it was on has since been removed). Clear it to free up the spot.';
   return { name, where, status };
 }
 
