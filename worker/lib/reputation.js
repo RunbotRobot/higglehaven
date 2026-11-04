@@ -23,7 +23,9 @@ import { json, HttpError, clientIp } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue } from './validation.js';
 import { fireNotification } from './notifications.js';
-import { currentUser, requireAdmin, assertOwner, requireSessionBuilder } from './auth.js';
+import {
+  currentUser, requireAdmin, assertOwner, requireSessionBuilder, adminInGoodStanding,
+} from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { removeSuspendedSellerPlacedInstances } from './account-moderation.js';
 import { moderationRemovalCategory, recordModerationRemovalSnapshot } from './content-moderation.js';
@@ -301,7 +303,7 @@ export async function handleProductReviews(request, db, route) {
     // non-throwing currentUser lookup, since an admin isn't necessarily
     // that seller and shouldn't be forced through the ownership check below.
     const requester = await currentUser(request, db);
-    const admin = requester && requester.is_admin ? requester : null;
+    const admin = await adminInGoodStanding(db, requester);
     // #1975: the review's own author can remove it directly, alongside the
     // existing admin/seller moderation paths below -- same "either should be
     // able to remove it" shape sign_posts' own DELETE (#1830) already
@@ -738,8 +740,12 @@ async function applyStrikeLadderConsequence(db, { sellerId, ownerBuilderId, admi
   const reason = permanent
     ? `Strike ladder: permanent removal (${severe ? 'severe violation' : `strike ${seller.strike_count}`}) -- template ${templateId}`
     : `Strike ladder: temporary suspension (strike ${seller.strike_count}) -- template ${templateId}`;
-  await applySuspensionLadderRung(db, { userId: seller.user_id, adminUserId, reason, graceDays });
-  if (ownerBuilderId) {
+  const outcome = await applySuspensionLadderRung(db, { userId: seller.user_id, adminUserId, reason, graceDays });
+  // #3086: a rung that changed nothing (the seller already holds a suspension
+  // that ends at or after this one's end) must not announce a suspension the
+  // seller isn't actually under -- the message would state a duration their
+  // real suspension doesn't have, with no admin_action_log row behind it.
+  if (outcome !== 'noop' && ownerBuilderId) {
     await fireNotification(db, ownerBuilderId, permanent
       ? 'Your account has been suspended indefinitely after a confirmed counterfeit/policy violation. This suspension will not be lifted.'
       : `Your account has been temporarily suspended for ${STRIKE_LADDER_TEMPORARY_GRACE_DAYS} days after a confirmed counterfeit/policy violation.`);
@@ -771,21 +777,21 @@ async function applySuspensionLadderRung(db, { userId, adminUserId, reason, grac
     // Same unconditional removal + snapshot handleSuspendAccount runs, so the
     // two ways a seller becomes suspended can't diverge (#3049).
     await removeSuspendedSellerPlacedInstances(db, userId);
-    return;
+    return 'inserted';
   }
   const active = await db.prepare(`
     SELECT * FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
   `).bind(userId).first();
-  if (!active || active.grace_period_ends_at >= gracePeriodEndsAt) return;
+  if (!active || active.grace_period_ends_at >= gracePeriodEndsAt) return 'noop';
   const updated = await db.prepare(`
     UPDATE account_suspensions SET grace_period_ends_at = ?
     WHERE suspension_id = ? AND grace_period_ends_at < ?
   `).bind(gracePeriodEndsAt, active.suspension_id, gracePeriodEndsAt).run();
-  if (updated.meta.changes === 1) {
-    await adminActionLogStatement(db, adminUserId, 'escalate_suspension', 'user', userId, {
-      suspensionId: active.suspension_id, reason, newGracePeriodEndsAt: gracePeriodEndsAt,
-    }).run();
-  }
+  if (updated.meta.changes !== 1) return 'noop';
+  await adminActionLogStatement(db, adminUserId, 'escalate_suspension', 'user', userId, {
+    suspensionId: active.suspension_id, reason, newGracePeriodEndsAt: gracePeriodEndsAt,
+  }).run();
+  return 'extended';
 }
 
 export async function handleProductFlagsList(request, db, url) {
@@ -1020,7 +1026,7 @@ export async function handleSellerFeedbackDelete(request, env, purchaseId) {
   const existing = await db.prepare(`${SELLER_FEEDBACK_SELECT_WITH_BUYER} WHERE f.purchase_id = ?`).bind(purchaseId).first();
   if (!existing) return json({ error: 'Feedback not found' }, 404);
   const requester = await currentUser(request, db);
-  const admin = requester && requester.is_admin ? requester : null;
+  const admin = await adminInGoodStanding(db, requester);
   if (!admin && requester && existing.buyer_user_id !== null && existing.buyer_user_id === requester.user_id) {
     await checkRateLimit(db, `seller-feedback-delete:${requester.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
     const deletedByAuthor = await db.prepare(`
