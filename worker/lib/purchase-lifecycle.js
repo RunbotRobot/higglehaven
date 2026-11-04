@@ -19,6 +19,7 @@ import { requireSessionBuilder, requireAdmin, assertOwner, sha256Hex } from './a
 import { adminActionLogStatement } from './admin-log.js';
 import { fireNotification } from './notifications.js';
 import { handlePurchaseFinalize, purchaseFromRow } from './purchase-creation.js';
+import { purchaseSellerShareCents } from './seller-payouts-tax.js';
 import { handleSellerFeedbackCreate, handleSellerFeedbackEdit, handleSellerFeedbackDelete } from './reputation.js';
 import {
   stripeConfigured, stripeRequest, sellerExists, requireSessionSeller, formatCents,
@@ -327,6 +328,41 @@ export function refundIdempotencyKey(purchaseId) {
   return `refund:${purchaseId}`;
 }
 
+// #3072: every path that reverses a sale reduces the *seller's* earnings, but
+// only the hosting builder was ever told. Resolves the seller's builder the
+// same way handlePurchaseConfirmDelivery does (sellers.user_id ->
+// builders.user_id) and fires one notice. Callers invoke it only on the
+// branch that performed the first real state change (never on a no-op
+// replay), and only after that write has committed. Best-effort: a missing
+// seller, a seller with no builder, or a failed notification never affects
+// the reversal itself.
+export async function notifySellerOfSaleChange(db, purchase, messageFor) {
+  try {
+    if (!purchase.seller_id) return;
+    const owner = await db.prepare(`
+      SELECT b.builder_id AS builder_id FROM sellers s
+      JOIN builders b ON b.user_id = s.user_id
+      WHERE s.seller_id = ?
+    `).bind(purchase.seller_id).first();
+    if (!owner) return;
+    const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
+      .bind(purchase.template_id).first();
+    const message = messageFor(template?.name || 'A product');
+    if (message) await fireNotification(db, owner.builder_id, message);
+  } catch (err) {
+    console.error('notifySellerOfSaleChange failed', purchase.purchase_id, err);
+  }
+}
+
+// The seller's earnings a full reversal removes: whatever their share still
+// was after any earlier partial refund (purchaseSellerShareCents is the same
+// math the payout and 1099-K figures use).
+export function sellerReversalNotice(purchase) {
+  const lostCents = purchaseSellerShareCents(purchase);
+  if (lostCents <= 0) return null;
+  return (name) => `A sale of "${name}" was refunded or disputed, so ${formatCents(lostCents)} will no longer be part of your earnings from it.`;
+}
+
 // #1086: the builder-commission clawback a reversed purchase needs —
 // debit the host builder's higgles_balance_cents by the full
 // builder_share_cents (allowed to go negative, per the 2026-09-10
@@ -410,6 +446,10 @@ export async function clawBackPurchaseCommission(db, purchase, templateName) {
     await fireNotification(db, purchase.builder_id,
       `"${templateName}" purchase refunded — ${formatCents(clawbackAmountCents)} commission clawed back.`);
   }
+
+  // #3072: the seller's side of the same reversal -- see notifySellerOfSaleChange.
+  const sellerNotice = sellerReversalNotice(purchase);
+  if (sellerNotice) await notifySellerOfSaleChange(db, purchase, sellerNotice);
 
   // #754: without this, a refunded avatar purchase left the buyer holding
   // (and able to keep equipped) an item they were just refunded for,

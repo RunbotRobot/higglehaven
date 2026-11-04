@@ -462,7 +462,7 @@ const PHYSICAL_GOOD_HOLD_DAYS = 7;
 // total_cents <= 0 purely for safety (free/simulated purchases never carry
 // a real refunded_amount_cents, so this branch shouldn't be reachable with
 // a non-zero one in practice) -- a 0/0 division would otherwise be NaN.
-function purchaseSellerShareCents(purchase) {
+export function purchaseSellerShareCents(purchase) {
   const grossShareCents = purchase.total_cents - purchase.commission_cents;
   if (!purchase.refunded_amount_cents || purchase.total_cents <= 0) return grossShareCents;
   return Math.round((grossShareCents * (purchase.total_cents - purchase.refunded_amount_cents)) / purchase.total_cents);
