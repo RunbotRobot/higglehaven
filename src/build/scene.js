@@ -1724,7 +1724,13 @@ levelRemoveBtn.addEventListener('click', async () => {
     if (selectionChanged) updateSelectionUI();
     currentLandletLevels = currentLandletLevels.filter((level) => level.levelIndex !== currentLevelIndex);
     currentLevelIndex += currentLevelIndex > 0 ? -1 : 1;
-    setLevelStatus('');
+    // #3099: the server archives whatever was on the level into a saved
+    // layout before deleting it, but nothing on screen said so -- the items
+    // just vanished. Say what happened and where they went.
+    const sweptCount = (sweptInstanceIds || []).length;
+    setLevelStatus(sweptCount > 0
+      ? `${sweptCount} item${sweptCount === 1 ? '' : 's'} on that level ${sweptCount === 1 ? 'was' : 'were'} taken off your land. ${sweptCount === 1 ? 'It is' : 'They are'} saved in Saved Layouts (Settings) if you want ${sweptCount === 1 ? 'it' : 'them'} back.`
+      : '');
     renderLevelControls();
   } catch (err) {
     setLevelStatus(err.message || 'Could not remove this level.', { isError: true });
