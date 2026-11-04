@@ -7838,7 +7838,10 @@ restored.
   session; never another builder's, never visible to shoppers). Returns
   `{ pendingRestorations: [...] }`, newest removal first, each
   `{ snapshotId, landletId, templateId, templateName, category, imageUrl,
-  position: { x, y, z }, removedAt, sellerSuspended, permanentAt }`. The
+  position: { x, y, z }, removedAt, removedInstanceId, sellerSuspended,
+  permanentAt }`. `removedInstanceId` is the placement's original id (#3095): a
+  Build tab that was open during the removal drops exactly those meshes when
+  it regains focus, never an item the builder just placed. The
   template fields come from the live template while it exists and otherwise
   from a copy taken on the snapshot at removal time (#2988), so they
   survive the template — or the seller's whole account — being deleted.

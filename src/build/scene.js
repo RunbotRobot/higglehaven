@@ -1405,6 +1405,35 @@ async function reconcileAfterSellerSuspension(meshes) {
   return { removed: gone.length, remaining };
 }
 
+// #3095 (second half): the tab-focus counterpart to the failed-save
+// reconcile above. A Build tab that is merely left open (no save attempted)
+// would otherwise keep showing a suspended seller's removed products
+// indefinitely. When the tab becomes visible again, ask the server which
+// placements it removed for this builder (pending-restoration records carry
+// each one's original instance id) and drop exactly those meshes. Matching on
+// the removed id -- not "anything the server doesn't list" -- is what keeps
+// an item the builder just placed, and that hasn't reached the server yet,
+// safe. Throttled (focus can fire in bursts) and failure-silent: it is a
+// nicety, never a reason to interrupt the builder or touch their work.
+const TAB_FOCUS_RECONCILE_MIN_INTERVAL_MS = 30000;
+let lastTabFocusReconcileAt = 0;
+async function reconcileOpenTabOnFocus() {
+  if (currentMode !== 'build' || !currentLandletId || document.visibilityState !== 'visible') return;
+  const now = Date.now();
+  if (now - lastTabFocusReconcileAt < TAB_FOCUS_RECONCILE_MIN_INTERVAL_MS) return;
+  lastTabFocusReconcileAt = now;
+  const slots = await refreshPendingRestorations();
+  if (!slots || slots.length === 0) return;
+  const removedIds = new Set(slots.map((slot) => slot.removedInstanceId).filter(Boolean));
+  const gone = productMeshes.filter((mesh) => removedIds.has(mesh.userData.instanceId));
+  if (gone.length === 0) return;
+  clearSelection();
+  updateSelectionUI();
+  for (const mesh of gone) deleteInstance(mesh, { sync: false });
+  alert(`${gone.length} item(s) were taken off your land because their seller is suspended. They're saved under Removed Items and will return if the suspension is lifted.`);
+}
+document.addEventListener('visibilitychange', reconcileOpenTabOnFocus);
+
 async function syncBatchCreate(meshes) {
   if (meshes.length === 0) return;
   const attemptId = nextSyncAttempt();
