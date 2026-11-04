@@ -224,10 +224,13 @@ export async function claimOrResumeBuilderRedemption(db, builderId, amountCents)
   // builder_id's FK, and the catch block's own refund below silently
   // no-op (0 rows) against a builder that no longer exists.
   const redemptionId = `redemption-${crypto.randomUUID()}`;
+  // #3079: the Transfer's destination is recorded with the claim, so a resume
+  // (resumeBuilderRedemption) targets the account the first attempt may
+  // already have paid rather than whatever the builder has connected later.
   await db.prepare(`
-    INSERT INTO higgles_redemptions (redemption_id, builder_id, amount_cents, stripe_transfer_id, stripe_payout_id)
-    VALUES (?, ?, ?, NULL, NULL)
-  `).bind(redemptionId, builderId, amountCents).run();
+    INSERT INTO higgles_redemptions (redemption_id, builder_id, amount_cents, stripe_transfer_id, stripe_payout_id, destination_account_id)
+    VALUES (?, ?, ?, NULL, NULL, (SELECT stripe_account_id FROM builders WHERE builder_id = ?))
+  `).bind(redemptionId, builderId, amountCents, builderId).run();
   const redemption = await db.prepare('SELECT * FROM higgles_redemptions WHERE redemption_id = ?')
     .bind(redemptionId).first();
   return { redemption, resumed: false };
@@ -339,6 +342,11 @@ export async function handleBuilderRedeem(request, env, db) {
     // else can throw -- the catch block below must know whether real money
     // already moved into the builder's connected account.
     let transferred = false;
+    // #3079: set only once nothing but the Stripe call itself can still
+    // throw. An error from our own code before this point (a D1 read, the
+    // live-account check) proves nothing reached Stripe, so it releases the
+    // claim like any other definite failure instead of stranding the debit.
+    let stripeCallStarted = false;
     try {
       // #2944: sessionBuilder was captured at the top of this request,
       // before checkRateLimit/readJson/annualGrossIncome/
@@ -368,6 +376,7 @@ export async function handleBuilderRedeem(request, env, db) {
       // builder's connected account first, before a Payout can send that
       // balance out to their bank the same way handleSellerPayouts already
       // does.
+      stripeCallStarted = true;
       const transfer = await stripeRequest(
         env, 'POST', 'transfers',
         { amount: amountCents, currency: 'usd', destination: sessionBuilder.stripe_account_id },
@@ -392,7 +401,7 @@ export async function handleBuilderRedeem(request, env, db) {
       // reasoning resumeBuilderRedemption's own catch block gives for
       // leaving the claim alone. The row (transfer id set, payout id still
       // NULL) also keeps blocking builder deletion via the same guard.
-      if (transferred || stripeOutcomeIsAmbiguous(err)) throw err;
+      if (transferred || (stripeCallStarted && stripeOutcomeIsAmbiguous(err))) throw err;
       // Nothing moved: release the claim so a failed Stripe call never
       // strands real higgles the builder still has, the same undo-on-failure
       // pattern releasePurchaseClaim uses, and drop the claim row since
@@ -431,13 +440,27 @@ function stripeOutcomeIsAmbiguous(err) {
 // so Stripe recognizes it as the same request instead of processing a
 // second real payout.
 async function resumeBuilderRedemption(env, db, sessionBuilder, pending) {
+  // #3079: resume against the account the redemption was claimed for. If the
+  // builder's connected account has since been reset or replaced, the first
+  // attempt may already have paid the old one, a retry to the new one would
+  // reuse the idempotency key with different parameters, and an admin reset
+  // may have been deliberate -- so settle it explicitly instead of retrying
+  // (or looping on a Stripe rejection). Rows that predate the column keep
+  // using the builder's current account.
+  const destination = pending.destination_account_id || sessionBuilder.stripe_account_id;
+  if (pending.destination_account_id && pending.destination_account_id !== sessionBuilder.stripe_account_id) {
+    throw new HttpError(
+      'A redemption you started earlier is still waiting on a Stripe account that is no longer connected. Reconnect that account or contact support to finish it.',
+      409,
+    );
+  }
   let payout;
   try {
     let transferId = pending.stripe_transfer_id;
     if (!transferId) {
       const transfer = await stripeRequest(
         env, 'POST', 'transfers',
-        { amount: pending.amount_cents, currency: 'usd', destination: sessionBuilder.stripe_account_id },
+        { amount: pending.amount_cents, currency: 'usd', destination },
         `builder-redeem-transfer:${pending.redemption_id}`,
       );
       transferId = transfer.id;
@@ -446,7 +469,7 @@ async function resumeBuilderRedemption(env, db, sessionBuilder, pending) {
     }
     payout = await stripeRequest(
       env, 'POST', 'payouts', { amount: pending.amount_cents, currency: 'usd' },
-      `builder-redeem-payout:${pending.redemption_id}`, sessionBuilder.stripe_account_id,
+      `builder-redeem-payout:${pending.redemption_id}`, destination,
     );
     await db.prepare('UPDATE higgles_redemptions SET stripe_payout_id = ? WHERE redemption_id = ?')
       .bind(payout.id, pending.redemption_id).run();

@@ -176,5 +176,6 @@
   "0176_ncmec_reports.sql",
   "0177_closed_sellers.sql",
   "0178_purchases_last_dispute_event_at.sql",
-  "0179_stripe_event_created_at.sql"
+  "0179_stripe_event_created_at.sql",
+  "0180_redemption_destination_account.sql"
 ]
