@@ -195,6 +195,10 @@ export async function claimOrResumeBuilderRedemption(db, builderId, amountCents)
   if (pending) {
     return { redemption: pending, resumed: true };
   }
+  // #3067: a non-positive amount only reaches here when the caller expected
+  // to resume a pending redemption that has since been completed; never
+  // claim (or insert a row for) nothing.
+  if (!(amountCents > 0)) return { redemption: null, resumed: false };
 
   // Atomically claims the balance before ever calling Stripe, guarded on
   // the balance still covering this amount at commit time — the same
@@ -260,16 +264,29 @@ export async function handleBuilderRedeem(request, env, db) {
     // real deployment) need the identical guard, same placement precedent
     // as #948.
     await checkRateLimit(db, `builder-redeem:${sessionBuilder.builder_id}`, STRIPE_RATE_LIMIT_MAX);
-    if (availableCents <= 0) {
-      throw new HttpError('Nothing is available to redeem yet.', 400);
-    }
-    // An empty {} body means "redeem everything available" — amountCents
-    // only needs specifying to redeem a smaller amount.
-    const input = await readJson(request);
-    const amountCents = input.amountCents === undefined ? availableCents : nonnegativeInteger(input.amountCents, 'amountCents');
-    if (amountCents <= 0) throw new HttpError('amountCents must be greater than 0', 400);
-    if (amountCents > availableCents) {
-      throw new HttpError(`Only ${formatCents(availableCents)} is available to redeem.`, 400);
+    // #3067: a redemption this builder already claimed (balance debited, Stripe
+    // call(s) started, payout not yet confirmed) is finished by
+    // resumeBuilderRedemption, which uses its own stored amount and never
+    // debits again -- so the availability/amount checks below, which are about
+    // a NEW redemption, must not stand in its way. They used to, which left a
+    // builder who had redeemed their whole balance unable to ever retry a
+    // redemption stuck mid-flight ("Nothing is available to redeem yet").
+    const hasPendingRedemption = !!(await db.prepare(
+      'SELECT 1 FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL LIMIT 1',
+    ).bind(sessionBuilder.builder_id).first());
+    let amountCents = 0;
+    if (!hasPendingRedemption) {
+      if (availableCents <= 0) {
+        throw new HttpError('Nothing is available to redeem yet.', 400);
+      }
+      // An empty {} body means "redeem everything available" — amountCents
+      // only needs specifying to redeem a smaller amount.
+      const input = await readJson(request);
+      amountCents = input.amountCents === undefined ? availableCents : nonnegativeInteger(input.amountCents, 'amountCents');
+      if (amountCents <= 0) throw new HttpError('amountCents must be greater than 0', 400);
+      if (amountCents > availableCents) {
+        throw new HttpError(`Only ${formatCents(availableCents)} is available to redeem.`, 400);
+      }
     }
 
     const sessionSeller = await db.prepare('SELECT * FROM sellers WHERE user_id = ?').bind(user.user_id).first();
@@ -307,6 +324,10 @@ export async function handleBuilderRedeem(request, env, db) {
     const redemptionId = redemption.redemption_id;
 
     let payout;
+    // #3067: set the moment Stripe confirms the Transfer, before anything
+    // else can throw -- the catch block below must know whether real money
+    // already moved into the builder's connected account.
+    let transferred = false;
     try {
       // #2944: sessionBuilder was captured at the top of this request,
       // before checkRateLimit/readJson/annualGrossIncome/
@@ -341,6 +362,7 @@ export async function handleBuilderRedeem(request, env, db) {
         { amount: amountCents, currency: 'usd', destination: sessionBuilder.stripe_account_id },
         `builder-redeem-transfer:${redemptionId}`,
       );
+      transferred = true;
       await db.prepare('UPDATE higgles_redemptions SET stripe_transfer_id = ? WHERE redemption_id = ?')
         .bind(transfer.id, redemptionId).run();
       payout = await stripeRequest(
@@ -350,18 +372,22 @@ export async function handleBuilderRedeem(request, env, db) {
       await db.prepare('UPDATE higgles_redemptions SET stripe_payout_id = ? WHERE redemption_id = ?')
         .bind(payout.id, redemptionId).run();
     } catch (err) {
-      // The claim above already debited the balance — release it so a
-      // failed Stripe call never strands real higgles the builder still
-      // has, the same undo-on-failure pattern releasePurchaseClaim uses.
+      // #3067: if the Transfer already went through, real money is sitting
+      // in the builder's connected account, so the debit must stand and the
+      // row must stay. The next redeem request finds that row and resumes
+      // it (resumeBuilderRedemption, which completes the Payout and never
+      // debits again) -- refunding the balance here, as this used to, let
+      // that resumed payout hand out the cash a second time for free. Same
+      // reasoning resumeBuilderRedemption's own catch block gives for
+      // leaving the claim alone. The row (transfer id set, payout id still
+      // NULL) also keeps blocking builder deletion via the same guard.
+      if (transferred) throw err;
+      // Nothing moved: release the claim so a failed Stripe call never
+      // strands real higgles the builder still has, the same undo-on-failure
+      // pattern releasePurchaseClaim uses, and drop the claim row since
+      // there is nothing to keep a record of.
       await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(amountCents, sessionBuilder.builder_id).run();
-      // Only delete the claim row if the transfer itself never went
-      // through — nothing happened, so there's nothing to keep a record
-      // of. If the transfer succeeded but the payout failed, real money
-      // already moved into the builder's connected account; leave the row
-      // (transfer id set, payout id still NULL) as the one trace of that
-      // rather than erasing it, and it keeps blocking builder deletion via
-      // the same guard until someone follows up.
       await db.prepare('DELETE FROM higgles_redemptions WHERE redemption_id = ? AND stripe_transfer_id IS NULL')
         .bind(redemptionId).run();
       throw err;
