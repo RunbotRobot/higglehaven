@@ -521,13 +521,16 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     // will flag across a multi-violation test must exist *before* the
     // first resolve that could suspend its creator, not be created lazily
     // violation-by-violation.
-    async function approveFlag(templateId, { severe } = {}) {
+    async function approveFlag(templateId, { severe, admin } = {}) {
       // username caps at 40 chars (usernameValue) -- strip the common
       // "strike-ladder-" prefix so a flagger label built from a longer
       // templateId (e.g. the dangling-seller fixture's) doesn't exceed it.
       const flagger = await signupBuilder(`sl-flagger-${templateId.replace('strike-ladder-', '')}`);
       await api(`/catalog/${templateId}/flags`, flagger.session({ method: 'POST', body: JSON.stringify({}) }));
-      const resolved = await api(`/catalog/${templateId}/flags/resolve`, adminSession({
+      // An optional dedicated admin, for tests that resolve several flags --
+      // the shared adminSession's product-flag-resolve rate-limit budget is
+      // finite and later tests in this file depend on it.
+      const resolved = await api(`/catalog/${templateId}/flags/resolve`, (admin ? (init) => admin.session(init) : adminSession)({
         method: 'POST',
         body: JSON.stringify({ action: 'approve', ...(severe !== undefined ? { severe } : {}) }),
       }));
@@ -611,6 +614,114 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
       const { results: notifications } = await env.DB.prepare('SELECT message FROM notifications WHERE builder_id = ?')
         .bind(ownerBuilderId).all();
       expect(notifications.some((n) => /suspended indefinitely/i.test(n.message))).toBe(true);
+    });
+
+    // #3086: the ladder only announces a suspension its rung actually changed.
+    // The seed is a direct insert standing in for an admin-issued suspension
+    // (handleSuspendAccount) of an arbitrary length.
+    async function seedAdminSuspension(userId, days) {
+      const suspensionId = `suspension-seed-${crypto.randomUUID()}`;
+      await env.DB.prepare(`
+        INSERT INTO account_suspensions (suspension_id, user_id, admin_user_id, reason, grace_period_ends_at)
+        VALUES (?, ?, 'admin-seed', 'admin-issued suspension', ?)
+      `).bind(suspensionId, userId, new Date(Date.now() + days * 24 * 60 * 60 * 1000).toISOString()).run();
+      return suspensionId;
+    }
+
+    async function ladderLogCount(userId) {
+      const row = await env.DB.prepare(`
+        SELECT COUNT(*) AS count FROM admin_action_log
+        WHERE target_id = ? AND action_type IN ('suspend_account', 'escalate_suspension')
+      `).bind(userId).first();
+      return row.count;
+    }
+
+    async function notificationMessages(ownerBuilderId) {
+      const { results } = await env.DB.prepare('SELECT message FROM notifications WHERE builder_id = ?').bind(ownerBuilderId).all();
+      return results.map((n) => n.message);
+    }
+
+    it('a temporary rung that changes nothing (a longer admin suspension already holds) sends no "7 days" message and logs nothing (#3086)', async () => {
+      const admin = await signupAdmin('sl-noop-temp-admin');
+      const seller = await signupSeller('strike-ladder-noop-temp-seller');
+      const ownerBuilderId = (await api('/builders/me', seller.session())).body.builder.builderId;
+      await createTemplate('strike-ladder-noop-temp-1', seller);
+      await createTemplate('strike-ladder-noop-temp-2', seller);
+      await approveFlag('strike-ladder-noop-temp-1', { admin }); // strike 1: warning only
+      const userId = await sellerUserId(seller);
+      const suspensionId = await seedAdminSuspension(userId, 30);
+      const before = await activeSuspension(userId);
+
+      await approveFlag('strike-ladder-noop-temp-2', { admin }); // strike 2: the 7-day rung, a no-op against 30 days
+
+      const after = await activeSuspension(userId);
+      expect(after.suspension_id).toBe(suspensionId);
+      expect(after.grace_period_ends_at).toBe(before.grace_period_ends_at);
+      expect(await ladderLogCount(userId)).toBe(0);
+      const messages = await notificationMessages(ownerBuilderId);
+      expect(messages.some((m) => /temporarily suspended for 7 days/i.test(m))).toBe(false);
+      // The strike itself still lands and is still announced -- only the
+      // suspension message is withheld.
+      expect(messages.some((m) => /strike was added/i.test(m))).toBe(true);
+    });
+
+    it('a permanent rung that changes nothing (a longer suspension already holds) sends no "suspended indefinitely" message and logs nothing (#3086)', async () => {
+      const admin = await signupAdmin('sl-noop-perm-admin');
+      const seller = await signupSeller('strike-ladder-noop-perm-seller');
+      const ownerBuilderId = (await api('/builders/me', seller.session())).body.builder.builderId;
+      await createTemplate('strike-ladder-noop-perm-1', seller);
+      const userId = await sellerUserId(seller);
+      const suspensionId = await seedAdminSuspension(userId, 400);
+
+      await approveFlag('strike-ladder-noop-perm-1', { severe: true, admin }); // permanent rung = 365 days, shorter than 400
+
+      const after = await activeSuspension(userId);
+      expect(after.suspension_id).toBe(suspensionId);
+      const daysUntilGrace = (new Date(after.grace_period_ends_at) - Date.now()) / (24 * 60 * 60 * 1000);
+      expect(daysUntilGrace).toBeGreaterThan(399);
+      expect(await ladderLogCount(userId)).toBe(0);
+      const messages = await notificationMessages(ownerBuilderId);
+      expect(messages.some((m) => /suspended indefinitely/i.test(m))).toBe(false);
+    });
+
+    it('a temporary rung that extends a shorter admin suspension still announces it and logs escalate_suspension (#3086)', async () => {
+      const admin = await signupAdmin('sl-extend-admin');
+      const seller = await signupSeller('strike-ladder-extend-seller');
+      const ownerBuilderId = (await api('/builders/me', seller.session())).body.builder.builderId;
+      await createTemplate('strike-ladder-extend-1', seller);
+      await createTemplate('strike-ladder-extend-2', seller);
+      await approveFlag('strike-ladder-extend-1', { admin });
+      const userId = await sellerUserId(seller);
+      const suspensionId = await seedAdminSuspension(userId, 2);
+
+      await approveFlag('strike-ladder-extend-2', { admin }); // 7 days beats the 2-day suspension
+
+      const after = await activeSuspension(userId);
+      expect(after.suspension_id).toBe(suspensionId);
+      const daysUntilGrace = (new Date(after.grace_period_ends_at) - Date.now()) / (24 * 60 * 60 * 1000);
+      expect(daysUntilGrace).toBeGreaterThan(6.9);
+      expect(daysUntilGrace).toBeLessThan(7.1);
+      const { results: logEntries } = await env.DB.prepare(
+        "SELECT * FROM admin_action_log WHERE target_id = ? AND action_type = 'escalate_suspension'",
+      ).bind(userId).all();
+      expect(logEntries.length).toBe(1);
+      expect((await notificationMessages(ownerBuilderId)).some((m) => /temporarily suspended for 7 days/i.test(m))).toBe(true);
+    });
+
+    it('a rung that inserts a fresh suspension still announces it and logs suspend_account (#3086)', async () => {
+      const admin = await signupAdmin('sl-fresh-admin');
+      const seller = await signupSeller('strike-ladder-fresh-seller');
+      const ownerBuilderId = (await api('/builders/me', seller.session())).body.builder.builderId;
+      await createTemplate('strike-ladder-fresh-1', seller);
+      await approveFlag('strike-ladder-fresh-1', { severe: true, admin });
+
+      const userId = await sellerUserId(seller);
+      expect(await activeSuspension(userId)).toBeTruthy();
+      const { results: logEntries } = await env.DB.prepare(
+        "SELECT * FROM admin_action_log WHERE target_id = ? AND action_type = 'suspend_account'",
+      ).bind(userId).all();
+      expect(logEntries.length).toBe(1);
+      expect((await notificationMessages(ownerBuilderId)).some((m) => /suspended indefinitely/i.test(m))).toBe(true);
     });
 
     it('a single severe violation skips straight to permanent, even as the seller\'s 1st strike', async () => {
