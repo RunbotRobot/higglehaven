@@ -29,7 +29,7 @@
 import { json, HttpError, clientIp } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue, labelValue, positiveInteger } from './validation.js';
-import { requireVerifiedSession, sha256Hex, builderHasActiveSuspension } from './auth.js';
+import { requireVerifiedSession, sha256Hex, builderHasActiveSuspension, suspendedSellerTemplateIds } from './auth.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 import { fireNotification } from './notifications.js';
 import { isUserSuspended } from './account-moderation.js';
@@ -1081,13 +1081,20 @@ async function sweepSoldOutTemplateInstances(env, db, template) {
     }
   }
 
+  // #3050: a backup whose seller is suspended is not viable either --
+  // activating it would put a removed product back on the builder's land
+  // (suspension is a hard removal, #2986). Skipped like an out-of-stock one.
+  const suspendedBackupTemplateIds = await suspendedSellerTemplateIds(
+    db, [...chainsByInstance.values()].flat().map((entry) => entry.templateId),
+  );
+
   const deletedCountByBuilder = new Map();
   for (const { instanceId, landletId, xM, yM, zM, builderId } of affectedInstances) {
     const chain = chainsByInstance.get(instanceId) || [];
     const consumedBackupIds = [];
     const viable = chain.find((entry) => {
       consumedBackupIds.push(entry.backupId);
-      return entry.stockQuantity !== 0;
+      return entry.stockQuantity !== 0 && !suspendedBackupTemplateIds.has(entry.templateId);
     });
     if (viable) {
       await db.batch([

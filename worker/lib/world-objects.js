@@ -683,6 +683,10 @@ export async function handleInstanceBackups(request, db, route) {
     const input = await readJson(request);
     const templateId = stringValue(input.templateId, 'templateId');
     await assertReferenceExists(db, 'catalog_templates', 'template_id', templateId, 'templateId');
+    // #3050: a backup is a deferred placement -- sell-out activation puts it
+    // on the land -- so it gets the same suspended-seller gate as every
+    // other placement path (#3034).
+    await assertTemplatesFromActiveSellers(db, [{ templateId }]);
     // An early, best-effort cap check -- not itself race-free (two
     // concurrent appends can both read a count one below the max and both
     // pass), but that only risks the chain briefly exceeding
