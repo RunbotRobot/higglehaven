@@ -22,7 +22,8 @@ import { readJson, stringValue } from './validation.js';
 // #2615 moved clawBackPurchaseCommission out of worker/index.js into
 // worker/lib/purchase-lifecycle.js -- this webhook's own chargeback path
 // still needs it, just from its new home.
-import { clawBackPurchaseCommission } from './purchase-lifecycle.js';
+import { clawBackPurchaseCommission, notifySellerOfSaleChange } from './purchase-lifecycle.js';
+import { purchaseSellerShareCents } from './seller-payouts-tax.js';
 import { fireNotification } from './notifications.js';
 import {
   stripeConfigured, stripeRequest, deriveStripeOnboardingStatus, userFromRow, formatCents,
@@ -280,6 +281,13 @@ async function handleDisputeFundsReinstatedWebhookEvent(db, purchase) {
   ).bind(preDisputeRefundedCents, purchase.purchase_id).run();
   if (guard.meta.changes === 0) return;
 
+  // #3072: the sale counts toward the seller's earnings again.
+  const restoredCents = purchaseSellerShareCents({ ...purchase, refunded_amount_cents: preDisputeRefundedCents });
+  if (restoredCents > 0) {
+    await notifySellerOfSaleChange(db, purchase, (name) =>
+      `A dispute over a sale of "${name}" was resolved in your favor, so ${formatCents(restoredCents)} counts toward your earnings from it again.`);
+  }
+
   if (!purchase.builder_id) return;
   // Same credited-amount math clawBackPurchaseCommission used when it
   // originally debited this -- a hold this purchase's own clawback
@@ -340,6 +348,15 @@ async function handlePartialRefundWebhookEvent(db, purchase, charge) {
     'UPDATE purchases SET refunded_amount_cents = ? WHERE purchase_id = ? AND refunded_at IS NULL AND refunded_amount_cents = ?',
   ).bind(newRefundedCents, purchase.purchase_id, purchase.refunded_amount_cents).run();
   if (guard.meta.changes === 0) return;
+
+  // #3072: the seller's share shrinks by the same refunded fraction the
+  // payout and 1099-K math use -- tell them, whether or not a hosting builder exists.
+  const reducedCents = purchaseSellerShareCents(purchase)
+    - purchaseSellerShareCents({ ...purchase, refunded_amount_cents: newRefundedCents });
+  if (reducedCents > 0) {
+    await notifySellerOfSaleChange(db, purchase, (name) =>
+      `A sale of "${name}" was partially refunded, so your earnings from it are reduced by ${formatCents(reducedCents)}.`);
+  }
 
   // builder_id can be null (migrations/0062 -- SET NULL on the host
   // builder's self-delete), same guard clawBackPurchaseCommission's own
