@@ -1764,24 +1764,16 @@ describe('Worker API', () => {
   // id can genuinely land in this window. Same wrap-the-triggering-
   // statement's-own-run() technique as the #2364 test above.
   it('returns 404, not a raw 500, when the template is deleted in the gap between its own INSERT and re-fetch', async () => {
+    // #3109: the create path's two INSERTs now go through one db.batch(), so
+    // the race window is opened by wrapping batch() rather than the
+    // INSERT statement's own run().
+    const originalBatch = env.DB.batch.bind(env.DB);
     const originalPrepare = env.DB.prepare.bind(env.DB);
-    env.DB.prepare = (sql) => {
-      const stmt = originalPrepare(sql);
-      if (sql.includes('INSERT INTO catalog_templates')) {
-        const originalBind = stmt.bind.bind(stmt);
-        stmt.bind = (...args) => {
-          const bound = originalBind(...args);
-          const originalRun = bound.run.bind(bound);
-          bound.run = async () => {
-            const result = await originalRun();
-            await originalPrepare('DELETE FROM catalog_templates WHERE template_id = ?')
-              .bind('catalog-post-insert-delete-race-template').run();
-            return result;
-          };
-          return bound;
-        };
-      }
-      return stmt;
+    env.DB.batch = async (statements) => {
+      const result = await originalBatch(statements);
+      await originalPrepare('DELETE FROM catalog_templates WHERE template_id = ?')
+        .bind('catalog-post-insert-delete-race-template').run();
+      return result;
     };
     let created;
     try {
@@ -1793,7 +1785,7 @@ describe('Worker API', () => {
         }),
       });
     } finally {
-      env.DB.prepare = originalPrepare;
+      env.DB.batch = originalBatch;
     }
 
     expect(created.response.status).toBe(404);
