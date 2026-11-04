@@ -1185,6 +1185,9 @@ describe('Product-image thumbnail (#327)', () => {
       body: JSON.stringify({ imageDataUrl: uniqueImageDataUrl }),
     }));
     expect(rejected.response.status).toBe(507);
+    // #3111: an uploader is never told the platform's own storage figures.
+    expect(rejected.body.error).toMatch(/temporarily unavailable/);
+    expect(rejected.body.error).not.toMatch(/\d+(\.\d+)?\s?(GB|MB|KB|bytes)|cap|headroom/i);
 
     // The rejected attempt's own reservation must not linger — only the
     // fake row seeded above should remain.

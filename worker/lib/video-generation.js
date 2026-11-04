@@ -261,6 +261,22 @@ async function storeTripoModelOutput(env, tripoModelUrl) {
 // leave the row as-is, handled by callers as "nothing to resolve yet".
 const TRIPO_TERMINAL_FAILURE_STATUSES = new Set(['failed', 'cancelled', 'banned', 'expired']);
 
+// #3111: what the builder reads when Tripo ends a task without a model. The
+// raw provider status ("banned", "expired") used to be pasted into the
+// message, and every case said "try a different video", which is wrong for a
+// provider-side failure and for an expired result. Each one also says what
+// happened to the credit: it is spent when the job starts (see
+// handleVideoGenerationJobCreate) and a post-Tripo failure does not return it
+// -- whether the platform should absorb that cost is the owner-gated #1618 /
+// #2970, so if that policy changes, these four strings and the timeout one
+// below are what to update.
+const TRIPO_FAILURE_MESSAGES = {
+  failed: 'We couldn\'t turn this video into a 3D model. The credit for this attempt was used. You can try again, ideally with a different video.',
+  cancelled: 'This generation was cancelled before it finished. The credit for this attempt was used.',
+  banned: 'This video can\'t be turned into a 3D model. The credit for this attempt was used; please try a different video.',
+  expired: 'The finished model expired before we could save it. The credit for this attempt was used; please start a new generation.',
+};
+
 // Shared by the webhook and the status-poll fallback below, so "a job
 // finishes but the webhook is slow or never arrives" doesn't leave it
 // stuck. The atomic `processed_at IS NULL` guard is the same idiom
@@ -280,7 +296,7 @@ async function applyTripoTaskResult(db, env, jobId, task) {
       await db.prepare(`
         UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
         WHERE job_id = ? AND processed_at IS NULL
-      `).bind('Video-to-3D provider reported success with no output file', jobId).run();
+      `).bind('We couldn\'t retrieve the finished model. The credit for this attempt was used; please start a new generation.', jobId).run();
       return;
     }
     // Fetching/storing happens before the atomic claim below (unlike
@@ -318,7 +334,7 @@ async function applyTripoTaskResult(db, env, jobId, task) {
     await db.prepare(`
       UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE job_id = ? AND processed_at IS NULL
-    `).bind(`Video generation ${task.status} — please try a different video`, jobId).run();
+    `).bind(TRIPO_FAILURE_MESSAGES[task.status], jobId).run();
   }
 }
 
@@ -345,7 +361,7 @@ export async function expireStaleVideoGenerationJobs(db) {
   const cutoff = new Date(Date.now() - VIDEO_GENERATION_PROCESSING_TIMEOUT_MS).toISOString();
   await db.prepare(`
     UPDATE video_generation_jobs
-    SET status = 'failed', error_message = 'Video generation timed out — please try again', processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    SET status = 'failed', error_message = 'This generation timed out. The credit for this attempt was used; please try again.', processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
     WHERE status = 'processing' AND processed_at IS NULL AND created_at < ?
   `).bind(cutoff).run();
 }

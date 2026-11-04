@@ -279,9 +279,42 @@ describe('Video-to-3D job creation (#1619)', () => {
     nextTaskStatus = 'banned';
     const status = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
     expect(status.body.status).toBe('failed');
-    expect(status.body.error).toMatch(/banned/);
+    // #3111: plain words and the credit outcome, never the provider's raw
+    // status word.
+    expect(status.body.error).toMatch(/can't be turned into a 3D model/);
+    expect(status.body.error).toMatch(/credit/);
+    expect(status.body.error).not.toMatch(/banned/i);
     nextTaskStatus = 'success';
   });
+
+  // #3111: every terminal Tripo status maps to its own plain wording; none
+  // leaks the provider word, and none tells the builder to change their video
+  // when the video was not the problem (expired, cancelled).
+  for (const [tripoStatus, expectation] of [
+    ['failed', /couldn't turn this video/],
+    ['cancelled', /cancelled before it finished/],
+    ['expired', /expired before we could save it/],
+  ]) {
+    it(`words a ${tripoStatus} Tripo task in plain language and says what happened to the credit (#3111)`, async () => {
+      const builder = await signupBuilderWithCredits(`video-gen-plain-${tripoStatus}`);
+      const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+      const createdBody = await created.json();
+
+      nextTaskStatus = tripoStatus;
+      try {
+        const status = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
+        expect(status.body.status).toBe('failed');
+        expect(status.body.error).toMatch(expectation);
+        expect(status.body.error).toMatch(/credit/);
+        expect(status.body.error).not.toMatch(/Video generation (failed|cancelled|expired|banned)/);
+        if (tripoStatus === 'expired' || tripoStatus === 'cancelled') {
+          expect(status.body.error).not.toMatch(/different video/);
+        }
+      } finally {
+        nextTaskStatus = 'success';
+      }
+    });
+  }
 
   it('#1673: fails the job immediately (not stuck processing) when Tripo reports success but the model download fails', async () => {
     const builder = await signupBuilderWithCredits('video-gen-broken-download');
@@ -312,7 +345,8 @@ describe('Video-to-3D job creation (#1619)', () => {
     try {
       const status = await api(`/video-generation-jobs/${createdBody.jobId}`, builder.session());
       expect(status.body.status).toBe('failed');
-      expect(status.body.error).toMatch(/no output file/);
+      expect(status.body.error).toMatch(/couldn't retrieve the finished model/);
+      expect(status.body.error).not.toMatch(/provider/i);
 
       const row = await env.DB.prepare('SELECT status, processed_at FROM video_generation_jobs WHERE job_id = ?').bind(createdBody.jobId).first();
       expect(row.status).toBe('failed');

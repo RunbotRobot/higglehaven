@@ -591,38 +591,46 @@ async function assertCatalogTemplatesDeletable(db, templateIds) {
   const blockedByVersion = new Set(inVersions.results.map((row) => row.template_id));
   const blockedByBackup = new Set(inBackups.results.map((row) => row.template_id));
   const blockedByArchivedVersion = new Set(inArchivedVersions.results.map((row) => row.template_id));
+  // #3111: these 409s used to embed the raw template id ("template-<uuid>"),
+  // which means nothing to the seller reading it. Looked up only once a
+  // template is actually about to be refused, so the normal path costs
+  // nothing extra; falls back to a neutral phrase if the row is somehow gone.
+  const productLabel = async (templateId) => {
+    const row = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
+    return row?.name ? `"${row.name}"` : 'This product';
+  };
   for (const templateId of uniqueValues) {
     if (blockedByPlacedInstance.has(templateId)) {
       throw new HttpError(
-        `Catalog template "${templateId}" cannot be deleted: it is still placed on a landlet `
+        `${await productLabel(templateId)} cannot be deleted: it is still placed on a landlet `
         + '(remove every placed instance of it first)',
         409,
       );
     }
     if (blockedBySavedLayout.has(templateId)) {
       throw new HttpError(
-        `Catalog template "${templateId}" cannot be deleted: it is still referenced by a saved layout `
+        `${await productLabel(templateId)} cannot be deleted: it is still referenced by a saved layout `
         + '(a builder has it saved for reuse, even if nothing placed uses it right now)',
         409,
       );
     }
     if (blockedByVersion.has(templateId)) {
       throw new HttpError(
-        `Catalog template "${templateId}" cannot be deleted: it is still referenced by a landlet's version history `
+        `${await productLabel(templateId)} cannot be deleted: it is still referenced by a landlet's version history `
         + '(a past published version snapshot used it, even if the current layout does not)',
         409,
       );
     }
     if (blockedByBackup.has(templateId)) {
       throw new HttpError(
-        `Catalog template "${templateId}" cannot be deleted: it is still configured as a placed instance's backup `
+        `${await productLabel(templateId)} cannot be deleted: it is still configured as a placed instance's backup `
         + '(remove it from every backup chain first)',
         409,
       );
     }
     if (blockedByArchivedVersion.has(templateId)) {
       throw new HttpError(
-        `Catalog template "${templateId}" cannot be deleted: it is still referenced by an archived version snapshot `
+        `${await productLabel(templateId)} cannot be deleted: it is still referenced by an archived version snapshot `
         + '(a reclaimed landlet\'s preserved version history used it)',
         409,
       );
