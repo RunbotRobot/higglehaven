@@ -1969,12 +1969,26 @@ describe('Worker API', () => {
     expect((await api('/instances/update-only-kept')).body.instance.x).toBe(7);
     expect((await api('/instances/update-only-gone')).response.status).toBe(404);
 
+    // A missing id that a seller suspension removed (a still-pending snapshot)
+    // is reported separately so the client can say so rather than blame another tab.
+    await env.DB.prepare(`
+      INSERT INTO suspended_seller_instance_snapshots (snapshot_id, seller_id, builder_id, landlet_id, template_id, instance_json)
+      VALUES ('update-only-snapshot', 'update-only-seller', ?, 'instance-batch-update-only-landlet', 'placeholder-chair', ?)
+    `).bind(builder.builderId, JSON.stringify({ instance_id: 'update-only-suspended' })).run();
+    const mixedMissing = await api('/instances/batch', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({ updateOnly: true, instances: [item('update-only-kept', 7), item('update-only-gone', 8), item('update-only-suspended', 9)] }),
+    }));
+    expect(mixedMissing.body.missingInstanceIds).toEqual(['update-only-gone', 'update-only-suspended']);
+    expect(mixedMissing.body.suspendedSellerInstanceIds).toEqual(['update-only-suspended']);
+    expect((await api('/instances/update-only-suspended')).response.status).toBe(404);
+
     // Everything missing: nothing written, still a clean 200.
     const allGone = await api('/instances/batch', builder.session({
       method: 'PUT', body: JSON.stringify({ updateOnly: true, instances: [item('update-only-gone', 9)] }),
     }));
     expect(allGone.response.status).toBe(200);
-    expect(allGone.body).toEqual({ instances: [], rejectedInstanceIds: [], missingInstanceIds: ['update-only-gone'] });
+    expect(allGone.body).toEqual({ instances: [], rejectedInstanceIds: [], missingInstanceIds: ['update-only-gone'], suspendedSellerInstanceIds: [] });
     expect((await api('/instances/update-only-gone')).response.status).toBe(404);
 
     // Without the flag PUT keeps its documented create-or-replace behavior.

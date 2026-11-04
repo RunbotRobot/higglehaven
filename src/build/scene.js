@@ -1497,15 +1497,23 @@ async function syncBatchUpdate(meshes) {
     reportSyncResult(attemptId, true);
     const missing = new Set(result.missingInstanceIds ?? []);
     if (missing.size > 0) {
+      const suspended = new Set(result.suspendedSellerInstanceIds ?? []);
       const gone = meshes.filter((mesh) => missing.has(mesh.userData.instanceId) && productMeshes.includes(mesh));
       clearSelection();
       updateSelectionUI();
       for (const mesh of gone) deleteInstance(mesh, { sync: false });
-      // Undo/Redo history that mentions what was just removed elsewhere would
-      // recreate it; the layout it describes no longer exists.
+      // Undo/Redo history that mentions what was just removed would recreate
+      // it; the layout it describes no longer exists.
       undoStack.length = 0;
       redoStack.length = 0;
-      alert(`${missing.size} item(s) you changed here had already been removed from your land in another tab or window, so they were not put back.`);
+      const sentences = [];
+      if (suspended.size > 0) {
+        refreshPendingRestorations();
+        sentences.push(`${suspended.size} item(s) were taken off your land because their seller is suspended. They're saved under Removed Items and will return if the suspension is lifted.`);
+      }
+      const elsewhere = missing.size - suspended.size;
+      if (elsewhere > 0) sentences.push(`${elsewhere} item(s) you changed here had already been removed from your land in another tab or window, so they were not put back.`);
+      alert(sentences.join(' '));
     }
   } catch (err) {
     console.warn('Failed to sync instance updates to backend:', err);

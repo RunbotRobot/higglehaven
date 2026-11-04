@@ -651,15 +651,17 @@ export async function createInstancesRemote(instances) {
 export async function upsertInstancesRemote(instances, { updateOnly = false } = {}) {
   const updated = [];
   const missingInstanceIds = [];
+  const suspendedSellerInstanceIds = [];
   for (const batch of chunk(instances, INSTANCE_BATCH_CHUNK_SIZE)) {
     try {
-      const { instances: stored, rejectedInstanceIds, missingInstanceIds: missingInChunk } = await requestJson('/instances/batch', {
+      const { instances: stored, rejectedInstanceIds, missingInstanceIds: missingInChunk, suspendedSellerInstanceIds: suspendedInChunk } = await requestJson('/instances/batch', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(updateOnly ? { instances: batch, updateOnly: true } : { instances: batch }),
       });
       updated.push(...stored);
       if (missingInChunk?.length) missingInstanceIds.push(...missingInChunk);
+      if (suspendedInChunk?.length) suspendedSellerInstanceIds.push(...suspendedInChunk);
       // #1772: same reasoning as createInstancesRemote's own fix above.
       if (rejectedInstanceIds?.length) {
         throw new Error(`${rejectedInstanceIds.length} item(s) were rejected — the landlet they're on may have changed owner.`);
@@ -671,7 +673,10 @@ export async function upsertInstancesRemote(instances, { updateOnly = false } = 
       throw err;
     }
   }
-  if (missingInstanceIds.length > 0) updated.missingInstanceIds = missingInstanceIds;
+  if (missingInstanceIds.length > 0) {
+    updated.missingInstanceIds = missingInstanceIds;
+    updated.suspendedSellerInstanceIds = suspendedSellerInstanceIds;
+  }
   return updated;
 }
 

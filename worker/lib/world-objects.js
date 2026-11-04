@@ -256,11 +256,23 @@ export async function handleInstances(request, env, route, url) {
     const missingInstanceIds = updateOnly
       ? instanceIds.filter((instanceId) => !existingInstances.has(instanceId))
       : [];
+    // Of the missing ids, the ones a seller suspension removed from this
+    // builder's land (a still-pending #2986 snapshot): the client says so in
+    // its own words and refreshes Removed Items, rather than blaming another tab.
+    let suspendedSellerInstanceIds = [];
     if (missingInstanceIds.length > 0) {
+      const placeholders = missingInstanceIds.map(() => '?').join(', ');
+      const { results: pending } = await db.prepare(`
+        SELECT json_extract(instance_json, '$.instance_id') AS instance_id
+        FROM suspended_seller_instance_snapshots
+        WHERE builder_id = ? AND restored_at IS NULL AND cleared_at IS NULL
+          AND json_extract(instance_json, '$.instance_id') IN (${placeholders})
+      `).bind(sessionBuilder.builder_id, ...missingInstanceIds).all();
+      suspendedSellerInstanceIds = pending.map((row) => row.instance_id);
       const missingSet = new Set(missingInstanceIds);
       instances = instances.filter((instance) => !missingSet.has(instance.instanceId));
       instanceIds = instances.map((instance) => instance.instanceId);
-      if (instances.length === 0) return json({ instances: [], rejectedInstanceIds: [], missingInstanceIds });
+      if (instances.length === 0) return json({ instances: [], rejectedInstanceIds: [], missingInstanceIds, suspendedSellerInstanceIds });
     }
     await assertTemplatesFromActiveSellers(db, instances.filter((instance) => {
       const existing = existingInstances.get(instance.instanceId);
@@ -404,7 +416,7 @@ export async function handleInstances(request, env, route, url) {
     return json({
       instances: succeededInstanceIds.map((instanceId) => stored.get(instanceId)),
       rejectedInstanceIds,
-      ...(updateOnly ? { missingInstanceIds } : {}),
+      ...(updateOnly ? { missingInstanceIds, suspendedSellerInstanceIds } : {}),
     }, request.method === 'POST' ? 201 : 200);
   }
 
