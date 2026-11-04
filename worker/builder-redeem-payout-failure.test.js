@@ -82,3 +82,53 @@ describe('Higgle redemption when the Stripe payout fails after the transfer succ
     expect(leftover.n).toBe(0);
   });
 });
+
+// #3070: a Transfer whose outcome is unknown (network error, or a 5xx after
+// Stripe may have executed it) must not release the claim, or the retry mints
+// a new redemption id / idempotency key and can move the cash a second time.
+describe('Higgle redemption when the Transfer outcome is ambiguous (#3070)', () => {
+  for (const [label, fail] of [
+    ['a network error', () => { throw new TypeError('fetch failed'); }],
+    ['a 5xx', () => new Response(JSON.stringify({ error: { message: 'upstream' } }), { status: 500 })],
+  ]) {
+    it(`keeps the debit and row on ${label}, and the retry transfers once under the same idempotency key`, async () => {
+      const builder = await signupBuilder(`redeem-ambiguous-${label.replace(/\W+/g, '-')}`);
+      await env.DB.prepare(`
+        UPDATE builders SET stripe_account_id = 'acct_redeem_amb', stripe_onboarding_status = 'complete',
+          higgles_balance_cents = 5000 WHERE builder_id = ?
+      `).bind(builder.builderId).run();
+      const balance = async () => (await env.DB.prepare('SELECT higgles_balance_cents FROM builders WHERE builder_id = ?')
+        .bind(builder.builderId).first()).higgles_balance_cents;
+
+      env.STRIPE_SECRET_KEY = 'test-stripe-key';
+      const transferKeys = [];
+      let transferAttempts = 0;
+      globalThis.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (url === 'https://api.stripe.com/v1/transfers' && init?.method === 'POST') {
+          transferAttempts += 1;
+          transferKeys.push(init.headers['idempotency-key']);
+          if (transferAttempts === 1) return fail();
+          return new Response(JSON.stringify({ id: 'tr_amb_1' }), { status: 200 });
+        }
+        if (url === 'https://api.stripe.com/v1/payouts' && init?.method === 'POST') {
+          return new Response(JSON.stringify({ id: 'po_amb_1' }), { status: 200 });
+        }
+        return originalFetch(input, init);
+      };
+
+      const first = await api('/builders/me/redeem', builder.session({ method: 'POST', body: JSON.stringify({}) }));
+      expect(first.response.status).toBeGreaterThanOrEqual(400);
+      expect(await balance()).toBe(0);
+      const rows = await env.DB.prepare('SELECT COUNT(*) AS n FROM higgles_redemptions WHERE builder_id = ?')
+        .bind(builder.builderId).first();
+      expect(rows.n).toBe(1);
+
+      const second = await api('/builders/me/redeem', builder.session({ method: 'POST', body: JSON.stringify({}) }));
+      expect(second.response.status).toBe(200);
+      expect(await balance()).toBe(0);
+      expect(transferKeys).toHaveLength(2);
+      expect(transferKeys[1]).toBe(transferKeys[0]);
+    });
+  }
+});
