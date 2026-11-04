@@ -643,16 +643,23 @@ export async function createInstancesRemote(instances) {
   return created;
 }
 
-export async function upsertInstancesRemote(instances) {
+// #3101: updateOnly asks the server not to create any id it has no row for
+// (an item another tab deleted); those come back as missingInstanceIds and
+// are reported on the result (updated.missingInstanceIds) instead of being
+// silently recreated. Only for callers that are updating items the scene
+// believes exist -- a deliberate recreate must keep using POST.
+export async function upsertInstancesRemote(instances, { updateOnly = false } = {}) {
   const updated = [];
+  const missingInstanceIds = [];
   for (const batch of chunk(instances, INSTANCE_BATCH_CHUNK_SIZE)) {
     try {
-      const { instances: stored, rejectedInstanceIds } = await requestJson('/instances/batch', {
+      const { instances: stored, rejectedInstanceIds, missingInstanceIds: missingInChunk } = await requestJson('/instances/batch', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ instances: batch }),
+        body: JSON.stringify(updateOnly ? { instances: batch, updateOnly: true } : { instances: batch }),
       });
       updated.push(...stored);
+      if (missingInChunk?.length) missingInstanceIds.push(...missingInChunk);
       // #1772: same reasoning as createInstancesRemote's own fix above.
       if (rejectedInstanceIds?.length) {
         throw new Error(`${rejectedInstanceIds.length} item(s) were rejected — the landlet they're on may have changed owner.`);
@@ -664,6 +671,7 @@ export async function upsertInstancesRemote(instances) {
       throw err;
     }
   }
+  if (missingInstanceIds.length > 0) updated.missingInstanceIds = missingInstanceIds;
   return updated;
 }
 

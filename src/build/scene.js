@@ -1491,8 +1491,22 @@ async function syncBatchUpdate(meshes) {
   if (meshes.length === 0) return;
   const attemptId = nextSyncAttempt();
   try {
-    await upsertInstancesRemote(meshes.map(instanceFromMesh));
+    // #3101: updateOnly -- a mesh the server no longer has was deleted from
+    // another tab/window; saving this tab's copy must not bring it back.
+    const result = await upsertInstancesRemote(meshes.map(instanceFromMesh), { updateOnly: true });
     reportSyncResult(attemptId, true);
+    const missing = new Set(result.missingInstanceIds ?? []);
+    if (missing.size > 0) {
+      const gone = meshes.filter((mesh) => missing.has(mesh.userData.instanceId) && productMeshes.includes(mesh));
+      clearSelection();
+      updateSelectionUI();
+      for (const mesh of gone) deleteInstance(mesh, { sync: false });
+      // Undo/Redo history that mentions what was just removed elsewhere would
+      // recreate it; the layout it describes no longer exists.
+      undoStack.length = 0;
+      redoStack.length = 0;
+      alert(`${missing.size} item(s) you changed here had already been removed from your land in another tab or window, so they were not put back.`);
+    }
   } catch (err) {
     console.warn('Failed to sync instance updates to backend:', err);
     if (isNetworkError(err)) reportSyncResult(attemptId, false);
@@ -3561,6 +3575,13 @@ function addEverythingInBrushAtClientPos(x, y) {
 // real value, not the click coordinates, to build a reliable brush-radius
 // assertion. Same "inert unless a test calls it" convention as this file's
 // other window.__test* hooks.
+// #3101: drives the real syncBatchUpdate (what a group move or Undo/Redo calls)
+// for the named instances, so a test can exercise a stale tab's save without
+// having to mouse-drag the 3D gizmo. Same "inert unless a test calls it" convention.
+window.__testSyncBatchUpdate = (instanceIds) => syncBatchUpdate(
+  productMeshes.filter((mesh) => instanceIds.includes(mesh.userData.instanceId)),
+);
+
 window.__testProductScreenPositions = () => productMeshes.map((mesh) => ({
   instanceId: mesh.userData.instanceId,
   ...projectMeshToScreen(mesh),
