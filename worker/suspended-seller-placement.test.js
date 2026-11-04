@@ -181,4 +181,53 @@ describe('A builder cannot place a suspended seller\'s product (#3034)', () => {
     expect(saved.response.status).toBe(200);
     expect(saved.body.skippedInstances).toEqual([]);
   });
+  // #3050: the #1947 backup chain is a deferred placement -- adding a
+  // suspended seller's product to it, or letting a sell-out activate one
+  // already in it, would put a removed product back on the builder's land.
+  it('refuses a suspended seller\'s product as a backup-chain entry', async () => {
+    const s = await setup('ssp-backup-add');
+    const placed = await api('/instances', s.builder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId: 'ssp-backup-add-inst', landletId: s.landletId, templateId: s.activeTemplate, x: 1, y: 1 }),
+    }));
+    expect(placed.response.status).toBe(201);
+    await suspend(s.suspendedSeller.email);
+
+    const added = await api('/instances/ssp-backup-add-inst/backups', s.builder.session({
+      method: 'POST', body: JSON.stringify({ templateId: s.suspendedTemplate }),
+    }));
+    expect(added.response.status).toBe(400);
+    const listed = await api('/instances/ssp-backup-add-inst/backups', s.builder.session());
+    expect(listed.body.backups).toEqual([]);
+  });
+
+  it('a sell-out skips a backup whose seller became suspended instead of activating it', async () => {
+    const s = await setup('ssp-backup-sweep');
+    const primary = await api('/catalog', s.builder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'ssp-backup-sweep-primary', name: 'Primary', color: '#123456',
+        dimensions: { width: 1, depth: 1, height: 1 }, priceCents: 500, stockQuantity: 1,
+      }),
+    }));
+    expect(primary.response.status).toBe(201);
+    const placed = await api('/instances', s.builder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId: 'ssp-backup-sweep-inst', landletId: s.landletId, templateId: 'ssp-backup-sweep-primary', x: 1, y: 1 }),
+    }));
+    expect(placed.response.status).toBe(201);
+    // Added while the seller is still active, then suspended afterwards.
+    const added = await api('/instances/ssp-backup-sweep-inst/backups', s.builder.session({
+      method: 'POST', body: JSON.stringify({ templateId: s.suspendedTemplate }),
+    }));
+    expect(added.response.status).toBe(201);
+    await suspend(s.suspendedSeller.email);
+
+    const sale = await api('/instances/ssp-backup-sweep-inst/purchase', s.builder.session({ method: 'POST' }));
+    expect(sale.response.status).toBe(201);
+
+    const after = await api('/instances/ssp-backup-sweep-inst');
+    expect(after.response.status).toBe(404);
+    expect(await placedIds(s.landletId, s.builder)).not.toContain('ssp-backup-sweep-inst');
+  });
 });

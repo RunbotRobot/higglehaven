@@ -9,6 +9,7 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { escalateExpiredSuspensions } from './index.js';
+import { recordSellerClosure } from './lib/account-moderation.js';
 import {
   api, signupAdmin, signupSeller,
 } from './test-helpers.js';
@@ -157,5 +158,50 @@ describe('Permanent closure of a suspended seller (#2988)', () => {
 
     const notices = await api('/notifications', bystander.session());
     expect(notices.body.notifications.some((n) => n.message.includes('permanently closed'))).toBe(false);
+  });
+
+  // #3057: closing the account deletes the sellers row every suspended-seller
+  // predicate reaches the seller through, so without a closure record the
+  // products came straight back for sale the moment the closure completed.
+  it('keeps a permanently closed seller\'s products hidden and unplaceable after the account is gone', async () => {
+    const seller = await signupSeller('spc-hide-seller');
+    const builder = await signupAdmin('spc-hide-builder');
+    await createGreenbeltLandlet('spc-hide-landlet');
+    await claim('spc-hide-landlet', builder);
+    const templateId = await createSellerTemplate(seller, 'spc-hide-template');
+
+    await suspend(seller.email);
+    await expireGracePeriod(seller.email);
+    await escalateExpiredSuspensions(env.DB);
+
+    const sellerRow = await env.DB.prepare('SELECT seller_id FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
+    expect(sellerRow).toBeNull();
+
+    const catalog = await api('/catalog?limit=100', builder.session());
+    expect(catalog.response.status).toBe(200);
+    expect(catalog.body.templates.map((t) => t.templateId)).not.toContain(templateId);
+
+    const placed = await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId: 'spc-hide-instance', landletId: 'spc-hide-landlet', templateId, x: 1, y: 1 }),
+    }));
+    expect(placed.response.status).toBe(400);
+    expect(placed.body.error).toMatch(/seller is suspended/);
+  });
+
+  it('only forgets the closure record when the seller row still exists (a failed cascade that will be retried)', async () => {
+    const seller = await signupSeller('spc-rb-seller');
+    const row = await env.DB.prepare('SELECT user_id FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
+
+    const record = await recordSellerClosure(env.DB, row.user_id);
+    expect(await env.DB.prepare('SELECT 1 FROM closed_sellers WHERE seller_id = ?').bind(seller.sellerId).first()).toBeTruthy();
+    await record.rollback();
+    expect(await env.DB.prepare('SELECT 1 FROM closed_sellers WHERE seller_id = ?').bind(seller.sellerId).first()).toBeNull();
+
+    // Once the seller row is gone (cascade got that far), the record must stay.
+    const again = await recordSellerClosure(env.DB, row.user_id);
+    await env.DB.prepare('DELETE FROM sellers WHERE seller_id = ?').bind(seller.sellerId).run();
+    await again.rollback();
+    expect(await env.DB.prepare('SELECT 1 FROM closed_sellers WHERE seller_id = ?').bind(seller.sellerId).first()).toBeTruthy();
   });
 });

@@ -10,6 +10,7 @@ import { requireCurrentUser, requireAdmin } from './auth.js';
 import { checkRateLimit } from './rate-limit.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { fireNotification } from './notifications.js';
+import { landletLevelZRange } from './land.js';
 // #2542 (landed on main while this leaf's PR was in flight): normalizeEmail/
 // userFromRow stay defined in worker/index.js itself (re-exported for
 // worker/lib/auth-routes.js and worker/lib/stripe.js too) rather than
@@ -248,6 +249,19 @@ async function removeSuspendedUserPostedContent(db, adminUserId, suspendedUserId
 // sweep: this app's scale doesn't need one, and "in-flight purchases
 // blocked too" elsewhere in #2305 already values the effect landing
 // immediately, not on the next scheduled tick.
+// #3046: one grouped notice per (builder, suspension) -- not per instance --
+// so a builder with many affected items gets a single message. Best-effort
+// (fireNotification already swallows a builder self-delete race) and always
+// called after the batch it describes has committed. Copy describes only
+// what the builder sees; a builder with nothing affected is never told.
+async function notifyBuildersOfSuspendedSellerItems(db, countByBuilder, messageFor) {
+  for (const [builderId, count] of countByBuilder) {
+    if (count > 0) await fireNotification(db, builderId, messageFor(count));
+  }
+}
+
+const itemPhrase = (count) => (count === 1 ? '1 item' : `${count} items`);
+
 export async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
   const seller = await db.prepare('SELECT seller_id FROM sellers WHERE user_id = ?').bind(suspendedUserId).first();
   if (!seller) return { instancesRemoved: 0 };
@@ -275,6 +289,7 @@ export async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) 
   const ownerByLandletId = new Map(landletRows.map((row) => [row.landlet_id, row.owner_builder_id]));
 
   const statements = [];
+  const removedByBuilder = new Map();
   for (const instance of instances) {
     const builderId = ownerByLandletId.get(instance.landlet_id);
     // The landlet itself vanished (greenbelt again, or deleted) in the gap
@@ -303,8 +318,11 @@ export async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) 
       JSON.stringify(placedRow), templateName, templateCategory, templateImageUrl,
     ));
     statements.push(db.prepare('DELETE FROM placed_instances WHERE instance_id = ?').bind(instance.instance_id));
+    removedByBuilder.set(builderId, (removedByBuilder.get(builderId) || 0) + 1);
   }
   if (statements.length > 0) await db.batch(statements);
+  await notifyBuildersOfSuspendedSellerItems(db, removedByBuilder, (count) =>
+    `${itemPhrase(count)} from a seller who is currently suspended ${count === 1 ? 'was' : 'were'} taken off your land. ${count === 1 ? 'It is' : 'They are'} saved under Removed Items and will return if the suspension is lifted.`);
   return { instancesRemoved: statements.length / 2 };
 }
 
@@ -336,6 +354,15 @@ async function restoreSuspendedSellerPlacedInstances(db, sellerId) {
     const templateExists = await db.prepare('SELECT 1 FROM catalog_templates WHERE template_id = ?').bind(snapshot.template_id).first();
     if (!templateExists) continue;
     const saved = JSON.parse(snapshot.instance_json);
+    // #3045: the builder may have removed the level this was on while it
+    // was pending. The level-removal sweep only sees live placed_instances
+    // rows, so it never touched this snapshot; restoring it verbatim would
+    // put an instance at a z with no level, the exact state #928/#2470 exist
+    // to prevent. Skip it (it stays pending, listed under Removed Items,
+    // and the builder can still Clear it) rather than restore it there.
+    const { results: levelRows } = await db.prepare('SELECT level_index FROM landlet_levels WHERE landlet_id = ?').bind(snapshot.landlet_id).all();
+    const { minZ, maxZ } = landletLevelZRange(levelRows.map((row) => row.level_index));
+    if (saved.z_m < minZ || saved.z_m > maxZ) continue;
     const instanceId = `instance-${crypto.randomUUID()}`;
     // Re-checks the same owner match inside the write itself (#929/#960
     // idiom) -- the plain reads above are a point-in-time check, and a
@@ -362,7 +389,41 @@ async function restoreSuspendedSellerPlacedInstances(db, sellerId) {
     `).bind(now, snapshot.snapshot_id, instanceId));
   }
   if (statements.length > 0) await db.batch(statements);
+  // Counted from what the batch actually marked restored, not from the
+  // statements attempted: an INSERT that no-opped on its owner-match guard
+  // leaves its snapshot un-restored and must not be announced.
+  const { results: restoredRows } = await db.prepare(`
+    SELECT builder_id, COUNT(*) AS restored FROM suspended_seller_instance_snapshots
+    WHERE seller_id = ? AND restored_at = ? GROUP BY builder_id
+  `).bind(sellerId, now).all();
+  await notifyBuildersOfSuspendedSellerItems(db,
+    new Map(restoredRows.map((row) => [row.builder_id, row.restored])),
+    (count) => `${itemPhrase(count)} from a seller whose suspension was lifted ${count === 1 ? 'is' : 'are'} back on your land.`);
   return { instancesRestored: statements.length / 2 };
+}
+
+// #3057: remember a seller whose suspension is about to escalate into a
+// permanent account closure, BEFORE the cascade deletes their `sellers` row --
+// every suspended-seller predicate (catalog hide, placement block, published
+// version filter, purchase block) reaches the seller through that row, so
+// without this record the closed seller's products would reappear for sale
+// the moment the closure completes. Returns a rollback for a cascade that
+// failed and will be retried: it removes the record only while the seller row
+// still exists (a half-completed cascade that already deleted it must keep
+// the record, or the products would reappear on the retry).
+export async function recordSellerClosure(db, userId) {
+  const seller = await db.prepare('SELECT seller_id FROM sellers WHERE user_id = ?').bind(userId).first();
+  if (!seller) return null;
+  await db.prepare(
+    'INSERT OR IGNORE INTO closed_sellers (seller_id, user_id) VALUES (?, ?)',
+  ).bind(seller.seller_id, userId).run();
+  return {
+    async rollback() {
+      await db.prepare(
+        'DELETE FROM closed_sellers WHERE seller_id = ? AND EXISTS (SELECT 1 FROM sellers WHERE seller_id = ?)',
+      ).bind(seller.seller_id, seller.seller_id).run();
+    },
+  };
 }
 
 // #2988 (sub-issue 4/5 of #2305): when a suspended seller's suspension

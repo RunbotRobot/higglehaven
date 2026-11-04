@@ -72,6 +72,18 @@ const LANDLET_AREA_M2 = 1000;
 // next level purchased just to fit.
 const HALF_LEVEL_HEIGHT_M = LEVEL_HEIGHT_M / 2;
 
+// #3045: the z-range a landlet's purchased levels cover, the same formula
+// the level-removal sweep (handleLandletLevels' DELETE branch, #928/#2470)
+// uses to decide what is out of range. Exported so the suspended-seller
+// restore path (account-moderation.js) can refuse to put an instance back
+// at a z where no level exists any more.
+export function landletLevelZRange(levelIndices) {
+  return {
+    minZ: Math.min(0, ...levelIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M,
+    maxZ: Math.max(0, ...levelIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M,
+  };
+}
+
 const LANDLET_RELEASED_VIA_AUCTION_SQL = `EXISTS (
   SELECT 1 FROM auctions
   WHERE auctions.landlet_id = owned.landlet_id AND auctions.status = 'active'
@@ -1423,6 +1435,12 @@ export async function handleLiveLandlet(db, landletId) {
         JOIN sellers ON sellers.seller_id = catalog_templates.seller_id
         JOIN account_suspensions ON account_suspensions.user_id = sellers.user_id
           AND account_suspensions.lifted_at IS NULL AND account_suspensions.escalated_at IS NULL
+        WHERE catalog_templates.template_id = version_instances.template_id
+      )
+      -- #3057: a permanently closed seller (sellers row already deleted).
+      AND NOT EXISTS (
+        SELECT 1 FROM catalog_templates
+        JOIN closed_sellers ON closed_sellers.seller_id = catalog_templates.seller_id
         WHERE catalog_templates.template_id = version_instances.template_id
       )
     ORDER BY source_instance_id

@@ -176,7 +176,12 @@ export async function suspendedSellerTemplateIds(db, templateIds) {
       JOIN account_suspensions ON account_suspensions.user_id = sellers.user_id
         AND account_suspensions.lifted_at IS NULL AND account_suspensions.escalated_at IS NULL
       WHERE catalog_templates.template_id IN (${placeholders})
-    `).bind(...chunk).all();
+      UNION
+      -- #3057: a permanently closed seller (sellers row already deleted).
+      SELECT catalog_templates.template_id AS template_id FROM catalog_templates
+      JOIN closed_sellers ON closed_sellers.seller_id = catalog_templates.seller_id
+      WHERE catalog_templates.template_id IN (${placeholders})
+    `).bind(...chunk, ...chunk).all();
     for (const row of results) suspended.add(row.template_id);
   }
   return suspended;

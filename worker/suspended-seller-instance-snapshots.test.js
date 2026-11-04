@@ -270,3 +270,104 @@ describe('Suspended seller content in a landlet\'s published version (#3033)', (
     expect(after.body.instances.map((i) => i.templateId)).toEqual([templateId]);
   });
 });
+
+// #3045: a level removed while a product is pending must not get that
+// product restored onto it -- the level-removal sweep only sees live rows.
+describe('Restore after the builder removed the product\'s level (#3045)', () => {
+  it('leaves the snapshot pending instead of restoring an instance at a z with no level, and restores a ground-level one normally', async () => {
+    const seller = await signupSeller('sss-level-seller');
+    const builder = await signupAdmin('sss-level-builder');
+    await createGreenbeltLandlet('sss-level-landlet');
+    await claim('sss-level-landlet', builder);
+    await env.DB.prepare(
+      'INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)',
+    ).bind('sss-level-headroom', builder.builderId, 100000000).run();
+    await api('/builders'); // ratchets land_cap_m2 up so a level can be added
+    const up = await api('/landlets/sss-level-landlet/levels', builder.session({
+      method: 'POST', body: JSON.stringify({ direction: 'up' }),
+    }));
+    expect(up.response.status).toBe(201);
+    const templateId = await createSellerTemplate(seller, 'sss-level-template');
+    const upper = await api('/instances', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceId: 'sss-level-upper', landletId: 'sss-level-landlet', templateId, x: 1, y: 1, z: 15 }),
+    }));
+    expect(upper.response.status).toBe(201);
+    await placeInstance('sss-level-ground', 'sss-level-landlet', templateId, builder, { x: 4, y: 4 });
+
+    await suspend(seller.email);
+    const removed = await api('/landlets/sss-level-landlet/levels/1', builder.session({ method: 'DELETE' }));
+    expect(removed.response.status).toBe(200);
+    const lifted = await unsuspend(seller.email);
+    expect(lifted.instancesRestored).toBe(1);
+
+    const instances = await api('/instances?landletId=sss-level-landlet', builder.session());
+    expect(instances.body.instances.map((i) => i.z ?? 0)).toEqual([0]);
+    const pending = await env.DB.prepare(
+      'SELECT COUNT(*) AS n FROM suspended_seller_instance_snapshots WHERE landlet_id = ? AND restored_at IS NULL AND cleared_at IS NULL',
+    ).bind('sss-level-landlet').first();
+    expect(pending.n).toBe(1);
+  });
+});
+
+describe('Builders are told when a suspended seller\'s items leave or return (#3046)', () => {
+  async function messagesFor(builder) {
+    const { results } = await env.DB.prepare(
+      'SELECT message FROM notifications WHERE builder_id = ? ORDER BY created_at, notification_id',
+    ).bind(builder.builder.builderId).all();
+    return results.map((row) => row.message);
+  }
+
+  it('sends each affected builder one grouped notice on removal and one on restore, with the right counts', async () => {
+    const seller = await signupSeller('sss-notify-seller');
+    const builderA = await signupAdmin('sss-notify-builder-a');
+    const builderB = await signupAdmin('sss-notify-builder-b');
+    await createGreenbeltLandlet('sss-notify-landlet-a');
+    await createGreenbeltLandlet('sss-notify-landlet-b');
+    await claim('sss-notify-landlet-a', builderA);
+    await claim('sss-notify-landlet-b', builderB);
+    const templateId = await createSellerTemplate(seller, 'sss-notify-template');
+    await placeInstance('sss-notify-a1', 'sss-notify-landlet-a', templateId, builderA, { x: 1, y: 1 });
+    await placeInstance('sss-notify-a2', 'sss-notify-landlet-a', templateId, builderA, { x: 5, y: 5 });
+    await placeInstance('sss-notify-b1', 'sss-notify-landlet-b', templateId, builderB, { x: 2, y: 2 });
+
+    await suspend(seller.email);
+    const afterRemoval = await messagesFor(builderA);
+    expect(afterRemoval.filter((m) => m.includes('currently suspended'))).toEqual([
+      '2 items from a seller who is currently suspended were taken off your land. They are saved under Removed Items and will return if the suspension is lifted.',
+    ]);
+    expect((await messagesFor(builderB)).filter((m) => m.includes('currently suspended'))).toEqual([
+      '1 item from a seller who is currently suspended was taken off your land. It is saved under Removed Items and will return if the suspension is lifted.',
+    ]);
+
+    await unsuspend(seller.email);
+    expect((await messagesFor(builderA)).filter((m) => m.includes('suspension was lifted'))).toEqual([
+      '2 items from a seller whose suspension was lifted are back on your land.',
+    ]);
+    expect((await messagesFor(builderB)).filter((m) => m.includes('suspension was lifted'))).toEqual([
+      '1 item from a seller whose suspension was lifted is back on your land.',
+    ]);
+  });
+
+  it('does not announce a restore for a snapshot that was skipped or already cleared, and tells nobody when nothing was affected', async () => {
+    const seller = await signupSeller('sss-notify-skip-seller');
+    const builder = await signupAdmin('sss-notify-skip-builder');
+    await createGreenbeltLandlet('sss-notify-skip-landlet');
+    await claim('sss-notify-skip-landlet', builder);
+    const templateId = await createSellerTemplate(seller, 'sss-notify-skip-template');
+    await placeInstance('sss-notify-skip-1', 'sss-notify-skip-landlet', templateId, builder);
+
+    await suspend(seller.email);
+    await env.DB.prepare(
+      "UPDATE suspended_seller_instance_snapshots SET cleared_at = strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE landlet_id = ?",
+    ).bind('sss-notify-skip-landlet').run();
+    await unsuspend(seller.email);
+    expect((await messagesFor(builder)).filter((m) => m.includes('suspension was lifted'))).toEqual([]);
+
+    const idleSeller = await signupSeller('sss-notify-idle-seller');
+    const before = (await messagesFor(builder)).length;
+    await suspend(idleSeller.email);
+    await unsuspend(idleSeller.email);
+    expect((await messagesFor(builder)).length).toBe(before);
+  });
+});

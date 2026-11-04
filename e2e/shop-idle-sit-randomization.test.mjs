@@ -179,8 +179,20 @@ try {
     // not real elapsed time, so advance the real idle state machine by
     // simulated seconds instead. The sibling idle tests keep a real-frames
     // episode as the check that the actual timer works.
-    await page.evaluate((s) => window.__testAdvanceShopIdle(s), 3.05);
-    await page.waitForFunction(() => window.__testShopIdleInteractionTarget()?.kind === 'sit', null, { timeout: 30000 });
+    // #3053: under CI load a real frame still carrying the old joystick input
+    // can land after the advance and reset the idle state (and the deflect can
+    // drift the avatar out of chair range), so a single advance can be
+    // stranded. Re-park the avatar, then keep re-applying the simulated advance
+    // on every poll until the sit target appears.
+    await page.evaluate(([x, y]) => {
+      window.__testTeleportShopAvatar(x, y, 0);
+      window.__testForceShopProximityCheck();
+    }, [AVATAR_X, AVATAR_Y]);
+    await page.waitForFunction(() => {
+      if (window.__testShopIdleInteractionTarget()?.kind === 'sit') return true;
+      window.__testAdvanceShopIdle(3.05);
+      return false;
+    }, null, { timeout: 30000, polling: 250 });
     const rightAfterSelection = await page.evaluate(() => window.__testShopSitPose());
     settleDelays.add(Math.round(rightAfterSelection.settleDelayS * 1000)); // ms, so float noise doesn't fracture the set
     if (rightAfterSelection.settleElapsedS < rightAfterSelection.settleDelayS && rightAfterSelection.blend === 0) {
