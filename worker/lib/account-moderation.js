@@ -262,7 +262,7 @@ async function notifyBuildersOfSuspendedSellerItems(db, countByBuilder, messageF
 
 const itemPhrase = (count) => (count === 1 ? '1 item' : `${count} items`);
 
-async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
+export async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
   const seller = await db.prepare('SELECT seller_id FROM sellers WHERE user_id = ?').bind(suspendedUserId).first();
   if (!seller) return { instancesRemoved: 0 };
   const { removedByBuilder, removed } = await snapshotAndRemoveSellerInstances(db, seller.seller_id, { permanent: false });
