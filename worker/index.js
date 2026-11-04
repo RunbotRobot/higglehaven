@@ -43,7 +43,7 @@ import { handleNcmecReports } from './lib/ncmec-reports.js';
 import {
   handleAdminBootstrap, handleGrantAdmin, handleRevokeAdmin, handleListAdmins, handleSuspendAccount,
   handleUnsuspendAccount, handleSuspensionStatus, handleAdminUserSearch, handleAdminUserDetail,
-  prepareSellerPermanentClosure,
+  prepareSellerPermanentClosure, recordSellerClosure,
 } from './lib/account-moderation.js';
 // #1407 (sub-issue of #1404): the AI-made Stripe-reinstatement decision
 // flow -- see that module's own header comment for the full rubric and the
@@ -3165,8 +3165,11 @@ export async function escalateExpiredSuspensions(db) {
     // looks the account's pending slots up through); see that function's
     // own comment for the prepare/commit/rollback shape.
     let closure = null;
+    let closedRecord = null;
     let cascaded = false;
     try {
+      // #3057: before the cascade deletes the sellers row.
+      closedRecord = await recordSellerClosure(db, row.user_id);
       closure = await prepareSellerPermanentClosure(db, row.user_id);
       await cascadeDeleteAccount(db, row.user_id);
       cascaded = true;
@@ -3179,6 +3182,7 @@ export async function escalateExpiredSuspensions(db) {
     } catch (error) {
       // Only when the deletion itself did not complete: once it has, the
       // closure is real and the marks must stay.
+      if (closedRecord && !cascaded) await closedRecord.rollback().catch((rollbackError) => console.error('escalateExpiredSuspensions: failed to roll back closed-seller record', row.suspension_id, rollbackError));
       if (closure && !cascaded) await closure.rollback().catch((rollbackError) => console.error('escalateExpiredSuspensions: failed to roll back permanent-closure marks', row.suspension_id, rollbackError));
       console.error('escalateExpiredSuspensions: failed to escalate suspension, re-arming for a future retry', row.suspension_id, error);
       await db.prepare(

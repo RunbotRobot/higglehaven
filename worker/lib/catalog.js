@@ -1354,6 +1354,9 @@ export async function handleCatalog(request, db, route, url, models, env) {
         AND account_suspensions.lifted_at IS NULL AND account_suspensions.escalated_at IS NULL
       WHERE sellers.seller_id = catalog_templates.seller_id
     )`);
+    // #3057: and a seller whose suspension escalated into a permanent closure
+    // (their sellers row is gone by then, so the match above can't see them).
+    conditions.push('NOT EXISTS (SELECT 1 FROM closed_sellers WHERE closed_sellers.seller_id = catalog_templates.seller_id)');
     // #1946: is_test_model deliberately does NOT filter this list -- see
     // that migration's own comment. This is the one endpoint Build mode's
     // own "Add Item" picker (buildCatalogPickerButtons/fetchCatalog) uses

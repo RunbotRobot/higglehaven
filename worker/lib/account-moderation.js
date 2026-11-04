@@ -402,6 +402,30 @@ async function restoreSuspendedSellerPlacedInstances(db, sellerId) {
   return { instancesRestored: statements.length / 2 };
 }
 
+// #3057: remember a seller whose suspension is about to escalate into a
+// permanent account closure, BEFORE the cascade deletes their `sellers` row --
+// every suspended-seller predicate (catalog hide, placement block, published
+// version filter, purchase block) reaches the seller through that row, so
+// without this record the closed seller's products would reappear for sale
+// the moment the closure completes. Returns a rollback for a cascade that
+// failed and will be retried: it removes the record only while the seller row
+// still exists (a half-completed cascade that already deleted it must keep
+// the record, or the products would reappear on the retry).
+export async function recordSellerClosure(db, userId) {
+  const seller = await db.prepare('SELECT seller_id FROM sellers WHERE user_id = ?').bind(userId).first();
+  if (!seller) return null;
+  await db.prepare(
+    'INSERT OR IGNORE INTO closed_sellers (seller_id, user_id) VALUES (?, ?)',
+  ).bind(seller.seller_id, userId).run();
+  return {
+    async rollback() {
+      await db.prepare(
+        'DELETE FROM closed_sellers WHERE seller_id = ? AND EXISTS (SELECT 1 FROM sellers WHERE seller_id = ?)',
+      ).bind(seller.seller_id, seller.seller_id).run();
+    },
+  };
+}
+
 // #2988 (sub-issue 4/5 of #2305): when a suspended seller's suspension
 // escalates into a permanent account closure (escalateExpiredSuspensions),
 // every builder still holding a pending slot for that seller's products
