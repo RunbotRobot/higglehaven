@@ -9,7 +9,7 @@ import {
   readJson, stringValue, queryLimit, decodeCursor, encodeCursor, assertReferencesExist,
 } from './validation.js';
 import {
-  currentUser, requireSessionBuilder, requireVerifiedSession, builderHasActiveSuspension,
+  currentUser, requireSessionBuilder, requireVerifiedSession, builderHasActiveSuspension, adminInGoodStanding,
   suspendedSellerTemplateIds, SUSPENDED_SELLER_PLACEMENT_ERROR,
 } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
@@ -1036,7 +1036,7 @@ export async function handleSignPosts(request, db, route) {
     // currentUser lookup" shape as #1712's product-review admin override,
     // since an admin isn't necessarily the post's author or the landlet owner.
     const requester = await currentUser(request, db);
-    const admin = requester && requester.is_admin ? requester : null;
+    const admin = await adminInGoodStanding(db, requester);
     if (admin) {
       await checkRateLimit(db, `sign-post-delete:${admin.user_id}`, SIGN_POST_DELETE_RATE_LIMIT_MAX);
       // #2388: required on every moderation delete now -- see
@@ -1323,7 +1323,7 @@ export async function handleCalendarEvents(request, db, route) {
     // #781: an admin can remove any calendar event outright, same reasoning
     // and shape as the sign-posts admin override above.
     const requester = await currentUser(request, db);
-    const admin = requester && requester.is_admin ? requester : null;
+    const admin = await adminInGoodStanding(db, requester);
     if (admin) {
       await checkRateLimit(db, `calendar-event-delete:${admin.user_id}`, CALENDAR_EVENT_DELETE_RATE_LIMIT_MAX);
       // #2388: same requirement as handleSignPosts' own admin-override
