@@ -1302,8 +1302,23 @@ function setServerReachable(reachable) {
 // straggler is silently dropped instead of overwriting fresher info.
 let syncAttemptSeq = 0;
 let lastAppliedSyncAttempt = 0;
+// #3101: reconcileOnRefocus (below) must never run over work this tab hasn't
+// finished saving, so every sync* function counts itself in flight from the
+// moment it issues its attempt id until it settles, and remembers whether
+// any save has failed. A 404 doesn't count as a failure: it means the item
+// is already gone server-side (the very thing a reconcile fixes), not that
+// the builder has an edit the server never took.
+let syncsInFlight = 0;
+let syncFailedSinceLoad = false;
 function nextSyncAttempt() {
+  syncsInFlight += 1;
   return ++syncAttemptSeq;
+}
+function syncSettled() {
+  syncsInFlight -= 1;
+}
+function noteSyncFailure(err) {
+  if (err?.status !== 404) syncFailedSinceLoad = true;
 }
 function reportSyncResult(attemptId, reachable) {
   if (attemptId < lastAppliedSyncAttempt) return;
@@ -1334,6 +1349,9 @@ async function syncCreate(mesh) {
   } catch (err) {
     console.warn('Failed to sync new instance to backend:', err);
     if (isNetworkError(err)) reportSyncResult(attemptId, false);
+    noteSyncFailure(err);
+  } finally {
+    syncSettled();
   }
 }
 
@@ -1346,6 +1364,9 @@ export async function syncUpdate(mesh) {
   } catch (err) {
     console.warn('Failed to sync instance update to backend:', err);
     if (isNetworkError(err)) reportSyncResult(attemptId, false);
+    noteSyncFailure(err);
+  } finally {
+    syncSettled();
   }
 }
 
@@ -1357,6 +1378,9 @@ async function syncDelete(instanceId) {
   } catch (err) {
     console.warn('Failed to sync instance delete to backend:', err);
     if (isNetworkError(err)) reportSyncResult(attemptId, false);
+    noteSyncFailure(err);
+  } finally {
+    syncSettled();
   }
 }
 
@@ -1451,12 +1475,15 @@ async function syncBatchCreate(meshes) {
         return;
       }
     }
+    noteSyncFailure(err);
     // #903: a chunked create can fail partway through with earlier chunks
     // already saved — err.succeededCount (set by createInstancesRemote)
     // says how many, so this doesn't claim the whole placement failed when
     // most of it actually made it to the server.
     const failedCount = meshes.length - (err.succeededCount ?? 0);
     alert(`Couldn't save ${failedCount} placed item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
+  } finally {
+    syncSettled();
   }
 }
 
@@ -1478,12 +1505,15 @@ async function syncBatchUpdate(meshes) {
         return;
       }
     }
+    noteSyncFailure(err);
     // #1380: same reasoning as syncBatchCreate's own #903 fix above —
     // err.succeededCount (set by upsertInstancesRemote) says how many of a
     // large group-move/undo-redo batch already landed before the chunk
     // that failed, so this doesn't overstate how much was actually lost.
     const failedCount = meshes.length - (err.succeededCount ?? 0);
     alert(`Couldn't save ${failedCount} moved item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
+  } finally {
+    syncSettled();
   }
 }
 
@@ -1496,12 +1526,15 @@ async function syncBatchDelete(instanceIds) {
   } catch (err) {
     console.warn('Failed to sync instance deletes to backend:', err);
     if (isNetworkError(err)) reportSyncResult(attemptId, false);
+    noteSyncFailure(err);
     // #1380: same reasoning as syncBatchCreate's own #903 fix above —
     // err.succeededCount (set by deleteInstancesRemote) says how many of a
     // large multi-delete/undo-redo batch already landed before the chunk
     // that failed, so this doesn't overstate how much was actually lost.
     const failedCount = instanceIds.length - (err.succeededCount ?? 0);
     alert(`Couldn't save the deletion of ${failedCount} item(s) to the server — they may reappear on reload. ${err.message || ''}`.trim());
+  } finally {
+    syncSettled();
   }
 }
 
@@ -1852,6 +1885,10 @@ function captureSnapshot() {
 // such entry point now goes through instead of touching this flag
 // directly — see their own comment.
 let sceneMutationBusy = false;
+// #3101: bumped by pushUndoSnapshot, i.e. by every local edit to the layout.
+// reconcileOnRefocus compares it before and after its fetch to tell whether
+// the builder did anything while the request was out.
+let layoutEditSeq = 0;
 
 // Claims the mutation gate for an action with an async body that mutates
 // productMeshes (a real await, not just a synchronous splice) — returns
@@ -1879,6 +1916,7 @@ function updateUndoRedoButtons() {
 // delete, and the start of a move/rotate drag) — capturing the state as it
 // was going into that action, so undoing it restores exactly that.
 function pushUndoSnapshot() {
+  layoutEditSeq += 1; // #3101: see reconcileOnRefocus -- any local edit invalidates an in-progress reconcile
   undoStack.push(captureSnapshot());
   if (undoStack.length > UNDO_HISTORY_LIMIT) undoStack.shift();
   redoStack.length = 0; // a new action invalidates whatever redo history existed
@@ -1894,6 +1932,26 @@ function pushUndoSnapshot() {
 // Undoing a move/rotate is the common case and never touches this loop at
 // all: nothing was added or removed, so nothing here needs to change.
 async function restoreSnapshot(snapshot) {
+  const { deletedIds, updatedMeshes, createdMeshes } = await applySnapshotLocally(snapshot);
+  updateSelectionUI();
+  persistLayout();
+  // A jump that touches many instances at once (e.g. undoing a big paste)
+  // is exactly the case syncBatchCreate/Update/Delete exist for — see their
+  // doc comment. The three don't overlap (disjoint instance IDs), so
+  // there's no ordering to get wrong running them together.
+  await Promise.all([
+    syncBatchDelete(deletedIds),
+    syncBatchUpdate(updatedMeshes),
+    syncBatchCreate(createdMeshes),
+  ]);
+}
+
+// The local half of restoreSnapshot: reshapes the live scene to match
+// `snapshot` and reports which meshes were removed/updated/created, without
+// touching the server. #3101's reconcileOnRefocus reuses it with the server's
+// own instance list as the target, where syncing the result straight back
+// would be pointless.
+async function applySnapshotLocally(snapshot) {
   const targetIds = new Set(snapshot.map((inst) => inst.instanceId));
   const deletedIds = [];
   for (const mesh of [...productMeshes]) {
@@ -1944,17 +2002,7 @@ async function restoreSnapshot(snapshot) {
       if (newMesh) createdMeshes.push(newMesh);
     }
   }
-  updateSelectionUI();
-  persistLayout();
-  // A jump that touches many instances at once (e.g. undoing a big paste)
-  // is exactly the case syncBatchCreate/Update/Delete exist for — see their
-  // doc comment. The three don't overlap (disjoint instance IDs), so
-  // there's no ordering to get wrong running them together.
-  await Promise.all([
-    syncBatchDelete(deletedIds),
-    syncBatchUpdate(updatedMeshes),
-    syncBatchCreate(createdMeshes),
-  ]);
+  return { deletedIds, updatedMeshes, createdMeshes };
 }
 
 async function undo() {
@@ -1981,6 +2029,115 @@ async function redo() {
 
 undoBtn.addEventListener('click', undo);
 redoBtn.addEventListener('click', redo);
+
+// #3101 (found walking #3083): two Build tabs open on one landlet drift
+// apart. A tab never learns another tab deleted an item, and its next
+// Undo/Redo re-saves every mesh in the snapshot through PUT
+// /api/instances/batch, which creates any stored id that is missing --
+// quietly recreating the item the other tab deleted. (A single-item move
+// uses PATCH, a 404 on a deleted item, so it can't; Undo/Redo and group
+// moves are the real paths.) Fix: when the tab becomes visible again and
+// nothing local is unsaved or in flight, refetch the landlet's instances
+// and bring the scene in line with them. Triggered by the tab coming back,
+// not polled, to stay cheap on the free tier. Standing decisions: *No
+// silent loss* (an edit or deletion the builder made elsewhere is no longer
+// undone behind their back) and *Prefer an invisible fix over a new
+// user-facing step* (the scene just ends up correct, nothing new to click).
+const RECONCILE_MIN_INTERVAL_MS = 1000; // visibilitychange and focus fire together on a real tab switch
+let buildSceneReady = false;
+let reconcileRunning = false;
+let lastReconcileAt = 0;
+
+// main.js calls this once Build mode's initial instances have all loaded; a
+// focus event during bootstrap would otherwise reconcile an empty scene and
+// race the initial load into duplicates.
+export function markBuildSceneReady() {
+  buildSceneReady = true;
+}
+
+// Never reconcile over work this tab hasn't finished saving: an action in
+// flight, a drag in progress, a save still out, or any save that failed (the
+// builder was already told it "may not survive a reload"; silently reverting
+// it to the server's copy would be worse). A failed save stays blocking until
+// the tab is reloaded.
+function canReconcileNow() {
+  return buildSceneReady
+    && currentMode === 'build' && !!currentLandletId
+    && !sceneMutationBusy
+    && syncsInFlight === 0
+    && !syncFailedSinceLoad
+    && !translateControls.dragging && !rotateControls.dragging && !trimControls.dragging;
+}
+
+const RECONCILE_EPSILON = 1e-3;
+function meshDiffersFromInstance(mesh, inst) {
+  const near = (a, b) => Math.abs(a - b) <= RECONCILE_EPSILON;
+  return !near(mesh.position.x, inst.x) || !near(mesh.position.y, inst.y) || !near(mesh.position.z, inst.z)
+    || !near(mesh.rotation.x, inst.rotationX ?? 0) || !near(mesh.rotation.y, inst.rotationY ?? 0) || !near(mesh.rotation.z, inst.rotationZ ?? 0)
+    || !near(mesh.userData.scale ?? 1, inst.scale ?? 1)
+    || (mesh.userData.groupId ?? null) !== (inst.groupId ?? null);
+}
+
+async function reconcileOnRefocus() {
+  if (document.visibilityState !== 'visible') return;
+  if (reconcileRunning || Date.now() - lastReconcileAt < RECONCILE_MIN_INTERVAL_MS) return;
+  if (!canReconcileNow()) return;
+  reconcileRunning = true;
+  lastReconcileAt = Date.now();
+  const landletId = currentLandletId;
+  const editSeqAtStart = layoutEditSeq;
+  const syncSeqAtStart = syncAttemptSeq;
+  try {
+    let serverInstances;
+    try {
+      serverInstances = await fetchInstances(landletId);
+    } catch (err) {
+      // Can't compare, so change nothing (never drop a builder's work on a guess).
+      console.warn('Could not reconcile with the server on refocus:', err);
+      return;
+    }
+    // Anything the builder started while that request was out means what we
+    // fetched may already be stale relative to their edit: skip this round.
+    if (landletId !== currentLandletId || editSeqAtStart !== layoutEditSeq || syncSeqAtStart !== syncAttemptSeq || !canReconcileNow()) return;
+
+    const serverById = new Map(serverInstances.map((inst) => [inst.instanceId, inst]));
+    const localIds = new Set(productMeshes.map((mesh) => mesh.userData.instanceId));
+    const membershipChanged = serverInstances.some((inst) => !localIds.has(inst.instanceId))
+      || productMeshes.some((mesh) => !serverById.has(mesh.userData.instanceId));
+    const anyChanged = membershipChanged
+      || productMeshes.some((mesh) => meshDiffersFromInstance(mesh, serverById.get(mesh.userData.instanceId)));
+    if (!anyChanged) return;
+
+    if (!beginSceneMutation()) return;
+    try {
+      const { deletedIds } = await applySnapshotLocally(serverInstances);
+      // applySnapshotLocally reshapes position/rotation/scale/crop/flags but
+      // not group membership, which only the server's group/ungroup endpoints change.
+      for (const mesh of productMeshes) {
+        const inst = serverById.get(mesh.userData.instanceId);
+        if (inst) mesh.userData.groupId = inst.groupId ?? null;
+      }
+      updateSelectionUI();
+      persistLayout();
+      // Undo/Redo history describes a layout that no longer exists once items
+      // were added or removed elsewhere: replaying it would delete what the
+      // other tab added and recreate what it deleted.
+      if (membershipChanged) {
+        undoStack.length = 0;
+        redoStack.length = 0;
+      }
+      if (deletedIds.length > 0) refreshPendingRestorations();
+    } finally {
+      endSceneMutation();
+    }
+  } catch (err) {
+    console.warn('Reconciling with the server on refocus failed:', err);
+  } finally {
+    reconcileRunning = false;
+  }
+}
+document.addEventListener('visibilitychange', reconcileOnRefocus);
+window.addEventListener('focus', reconcileOnRefocus);
 
 // Every axis a template declares extensible (see extensibleAxes) gets its
 // own Trim handle shown at once — a template like a wall resizable in
@@ -2950,6 +3107,7 @@ groupBtn.addEventListener('click', async () => {
   const meshes = [...selectedMeshes];
   const instanceIds = meshes.map((mesh) => mesh.userData.instanceId);
   groupBtn.disabled = true;
+  syncsInFlight += 1; // #3101: a refocus reconcile must not land mid-request
   try {
     const { groupId } = await groupInstancesRemote(instanceIds);
     for (const mesh of meshes) mesh.userData.groupId = groupId;
@@ -2959,6 +3117,7 @@ groupBtn.addEventListener('click', async () => {
     console.error('Could not group selection:', err);
     setProductInfo(err.message || 'Could not group selection.');
   } finally {
+    syncSettled();
     updateSelectionUI();
   }
 });
@@ -2968,6 +3127,7 @@ ungroupBtn.addEventListener('click', async () => {
   if (!groupedMesh || sceneMutationBusy) return;
   const groupId = groupedMesh.userData.groupId;
   ungroupBtn.disabled = true;
+  syncsInFlight += 1; // #3101: a refocus reconcile must not land mid-request
   try {
     const { ungroupedInstanceIds } = await ungroupInstancesRemote(groupId);
     const ungroupedSet = new Set(ungroupedInstanceIds);
@@ -2982,6 +3142,7 @@ ungroupBtn.addEventListener('click', async () => {
     console.error('Could not ungroup selection:', err);
     setProductInfo(err.message || 'Could not ungroup selection.');
   } finally {
+    syncSettled();
     updateSelectionUI();
   }
 });
