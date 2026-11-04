@@ -5406,6 +5406,19 @@ reusing `product_flags`: that table's unit is a listing with a seller
 strike-ladder consequence, the wrong shape for "a builder said something
 inappropriate over voice chat."
 
+One report per (reporter, reported) pair (#3122): a repeat from the same
+reporter against the same builder is collapsed rather than rejected. It
+returns the same `201` and the same `reportId` as the first report, so
+the reporter never learns it was a repeat, and instead of a new row and a
+new card it appends a dated line (with the repeat's `reason`, if any) to
+the existing card, re-queuing that card if an admin had already marked it
+done. A card stops accepting appended lines once its note passes 4000
+characters. The same rule applies to `POST /api/nearby-chat/report`
+(`nearby_chat_reports`, `kind: "nearby-chat-report"`), which otherwise
+mirrors this endpoint; both go through `fileConductReport` in
+`worker/lib/social.js`. `worker/conduct-report-dedupe.test.js` owns that
+contract.
+
 ### Testing note
 
 `worker/voice-signal.test.js` owns the signaling-relay backend contract:
