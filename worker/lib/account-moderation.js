@@ -248,7 +248,7 @@ async function removeSuspendedUserPostedContent(db, adminUserId, suspendedUserId
 // sweep: this app's scale doesn't need one, and "in-flight purchases
 // blocked too" elsewhere in #2305 already values the effect landing
 // immediately, not on the next scheduled tick.
-async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
+export async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
   const seller = await db.prepare('SELECT seller_id FROM sellers WHERE user_id = ?').bind(suspendedUserId).first();
   if (!seller) return { instancesRemoved: 0 };
   const { results: instances } = await db.prepare(`
