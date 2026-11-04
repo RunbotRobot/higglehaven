@@ -3187,28 +3187,34 @@ export async function escalateExpiredSuspensions(db) {
     // own comment for the prepare/commit/rollback shape.
     let closure = null;
     let closedRecord = null;
-    let cascaded = false;
     try {
       // #3057: before the cascade deletes the sellers row.
       closedRecord = await recordSellerClosure(db, row.user_id);
       closure = await prepareSellerPermanentClosure(db, row.user_id);
       await cascadeDeleteAccount(db, row.user_id);
-      cascaded = true;
-      await adminActionLogStatement(db, null, 'auto_escalate_suspension', 'user', row.user_id, {
-        suspensionId: row.suspension_id, originalAdminUserId: row.admin_user_id,
-      }).run();
-      // Best-effort after the closure is real: a notification failure must
-      // not re-arm (and so repeat) an escalation that already committed.
-      if (closure) await closure.commit().catch((error) => console.error('escalateExpiredSuspensions: failed to notify builders of a permanent closure', row.suspension_id, error));
     } catch (error) {
-      // Only when the deletion itself did not complete: once it has, the
-      // closure is real and the marks must stay.
-      if (closedRecord && !cascaded) await closedRecord.rollback().catch((rollbackError) => console.error('escalateExpiredSuspensions: failed to roll back closed-seller record', row.suspension_id, rollbackError));
-      if (closure && !cascaded) await closure.rollback().catch((rollbackError) => console.error('escalateExpiredSuspensions: failed to roll back permanent-closure marks', row.suspension_id, rollbackError));
+      // The deletion itself did not complete, so the closure is not real:
+      // undo its marks and re-arm.
+      if (closedRecord) await closedRecord.rollback().catch((rollbackError) => console.error('escalateExpiredSuspensions: failed to roll back closed-seller record', row.suspension_id, rollbackError));
+      if (closure) await closure.rollback().catch((rollbackError) => console.error('escalateExpiredSuspensions: failed to roll back permanent-closure marks', row.suspension_id, rollbackError));
       console.error('escalateExpiredSuspensions: failed to escalate suspension, re-arming for a future retry', row.suspension_id, error);
       await db.prepare(
         'UPDATE account_suspensions SET escalated_at = NULL WHERE suspension_id = ?',
       ).bind(row.suspension_id).run();
+      continue;
+    }
+    // #3059: the closure is real from here on, so nothing below may re-arm
+    // the escalation (the seller row is gone, so a retry would find no
+    // closure to notify). The notice goes first and the audit-log insert is
+    // best-effort: a transient log failure used to skip the commit and lose
+    // the builders' permanent-closure notice (#2988, "No silent loss").
+    if (closure) await closure.commit().catch((error) => console.error('escalateExpiredSuspensions: failed to notify builders of a permanent closure', row.suspension_id, error));
+    try {
+      await adminActionLogStatement(db, null, 'auto_escalate_suspension', 'user', row.user_id, {
+        suspensionId: row.suspension_id, originalAdminUserId: row.admin_user_id,
+      }).run();
+    } catch (error) {
+      console.error('escalateExpiredSuspensions: failed to log an auto-escalation that already committed', row.suspension_id, error);
     }
   }
 }
