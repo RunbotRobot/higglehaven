@@ -132,3 +132,91 @@ describe('Higgle redemption when the Transfer outcome is ambiguous (#3070)', () 
     });
   }
 });
+
+// #3079: follow-ups from the second review of #3073.
+describe('Higgle redemption destination and pre-call failures (#3079)', () => {
+  it('releases the claim when our own code throws before the Transfer is attempted', async () => {
+    const builder = await signupBuilder('redeem-precall-error');
+    await env.DB.prepare(`
+      UPDATE builders SET stripe_account_id = 'acct_redeem_pre', stripe_onboarding_status = 'complete',
+        higgles_balance_cents = 5000 WHERE builder_id = ?
+    `).bind(builder.builderId).run();
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    let stripeCalls = 0;
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url.startsWith('https://api.stripe.com/')) { stripeCalls += 1; return new Response('{}', { status: 200 }); }
+      return originalFetch(input, init);
+    };
+    const originalPrepare = env.DB.prepare.bind(env.DB);
+    let armed = true;
+    env.DB.prepare = (sql) => {
+      if (armed && sql.trim().startsWith('SELECT stripe_account_id FROM builders WHERE builder_id = ?')) {
+        armed = false;
+        throw new Error('simulated D1 read failure');
+      }
+      return originalPrepare(sql);
+    };
+    let result;
+    try {
+      result = await api('/builders/me/redeem', builder.session({ method: 'POST', body: JSON.stringify({}) }));
+    } finally {
+      env.DB.prepare = originalPrepare;
+    }
+    expect(result.response.status).toBeGreaterThanOrEqual(400);
+    expect(stripeCalls).toBe(0);
+    const row = await env.DB.prepare('SELECT higgles_balance_cents FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(row.higgles_balance_cents).toBe(5000);
+    const leftover = await env.DB.prepare('SELECT COUNT(*) AS n FROM higgles_redemptions WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(leftover.n).toBe(0);
+  });
+
+  it('resumes against the account the redemption was claimed for, and refuses once that account is no longer connected', async () => {
+    const builder = await signupBuilder('redeem-destination-pinned');
+    await env.DB.prepare(`
+      UPDATE builders SET stripe_account_id = 'acct_redeem_orig', stripe_onboarding_status = 'complete',
+        higgles_balance_cents = 5000 WHERE builder_id = ?
+    `).bind(builder.builderId).run();
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    const transfers = [];
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.stripe.com/v1/transfers' && init?.method === 'POST') {
+        transfers.push({ body: String(init.body), key: init.headers['idempotency-key'] });
+        if (transfers.length === 1) throw new TypeError('fetch failed');
+        return new Response(JSON.stringify({ id: 'tr_dest_1' }), { status: 200 });
+      }
+      if (url === 'https://api.stripe.com/v1/payouts' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: 'po_dest_1' }), { status: 200 });
+      }
+      return originalFetch(input, init);
+    };
+    const redeem = () => api('/builders/me/redeem', builder.session({ method: 'POST', body: JSON.stringify({}) }));
+
+    expect((await redeem()).response.status).toBeGreaterThanOrEqual(400);
+    const claimed = await env.DB.prepare('SELECT destination_account_id FROM higgles_redemptions WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(claimed.destination_account_id).toBe('acct_redeem_orig');
+
+    // The builder's account is reset and a different one connected.
+    await env.DB.prepare("UPDATE builders SET stripe_account_id = 'acct_redeem_other' WHERE builder_id = ?")
+      .bind(builder.builderId).run();
+    const refused = await redeem();
+    expect(refused.response.status).toBe(409);
+    expect(transfers).toHaveLength(1); // nothing was sent to either account
+    const stillClaimed = await env.DB.prepare('SELECT higgles_balance_cents FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(stillClaimed.higgles_balance_cents).toBe(0);
+
+    // Reconnecting the original account lets the same redemption finish under the same key.
+    await env.DB.prepare("UPDATE builders SET stripe_account_id = 'acct_redeem_orig' WHERE builder_id = ?")
+      .bind(builder.builderId).run();
+    const resumed = await redeem();
+    expect(resumed.response.status).toBe(200);
+    expect(transfers).toHaveLength(2);
+    expect(transfers[1].key).toBe(transfers[0].key);
+    expect(transfers[1].body).toContain('acct_redeem_orig');
+  });
+});

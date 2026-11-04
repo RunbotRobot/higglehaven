@@ -549,6 +549,10 @@ async function handleSellerStripeAccount(request, env, db) {
 
     const status = deriveStripeOnboardingStatus(account);
     const requirementsDue = account.requirements?.currently_due || [];
+    // #3079: stamp the ordering floor (migration 0179) with this fetch's own
+    // time, only ever forward, so an older delayed account.updated webhook
+    // can't overwrite the fresher status just written here.
+    const fetchedAtS = Math.floor(Date.now() / 1000);
     const nowIso = new Date().toISOString();
     // Found via backlog audit (#474): two concurrent first-time submissions
     // (double-click, a retried request) both read stripe_account_id as
@@ -560,9 +564,10 @@ async function handleSellerStripeAccount(request, env, db) {
     // account both target the same id, so there's no orphaning risk there.
     const result = await db.prepare(`
       UPDATE sellers
-      SET stripe_account_id = ?, stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
+      SET stripe_account_id = ?, stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?,
+          stripe_event_created_at = MAX(COALESCE(stripe_event_created_at, 0), ?)
       WHERE seller_id = ?${createdNewAccount ? ' AND stripe_account_id IS NULL' : ''}
-    `).bind(account.id, status, JSON.stringify(requirementsDue), nowIso, nowIso, sessionSeller.seller_id).run();
+    `).bind(account.id, status, JSON.stringify(requirementsDue), nowIso, nowIso, fetchedAtS, sessionSeller.seller_id).run();
 
     if (createdNewAccount && result.meta.changes === 0) {
       // Lost the race — another request's account already won. Don't leave
@@ -632,12 +637,17 @@ async function handleBuilderStripeAccount(request, env, db) {
 
     const status = deriveStripeOnboardingStatus(account);
     const requirementsDue = account.requirements?.currently_due || [];
+    // #3079: stamp the ordering floor (migration 0179) with this fetch's own
+    // time, only ever forward, so an older delayed account.updated webhook
+    // can't overwrite the fresher status just written here.
+    const fetchedAtS = Math.floor(Date.now() / 1000);
     const nowIso = new Date().toISOString();
     const result = await db.prepare(`
       UPDATE builders
-      SET stripe_account_id = ?, stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?
+      SET stripe_account_id = ?, stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?,
+          stripe_event_created_at = MAX(COALESCE(stripe_event_created_at, 0), ?)
       WHERE builder_id = ?${createdNewAccount ? ' AND stripe_account_id IS NULL' : ''}
-    `).bind(account.id, status, JSON.stringify(requirementsDue), nowIso, nowIso, sessionBuilder.builder_id).run();
+    `).bind(account.id, status, JSON.stringify(requirementsDue), nowIso, nowIso, fetchedAtS, sessionBuilder.builder_id).run();
 
     if (createdNewAccount && result.meta.changes === 0) {
       // #2304: same logging gap as the seller sibling above.

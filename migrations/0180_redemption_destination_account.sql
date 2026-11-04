@@ -1,0 +1,11 @@
+-- #3079: a pending higgles redemption (Transfer possibly executed, Payout not
+-- yet completed) is resumed under the same idempotency keys (#869/#3070), but
+-- resumeBuilderRedemption sent the Transfer to the builder's *current*
+-- stripe_account_id. If that account was reset and reconnected in between, the
+-- retry carried the same key with different parameters (Stripe rejects it) or,
+-- worse, would have sent cash to an account an admin reset on purpose.
+--
+-- destination_account_id records the Stripe account the redemption's Transfer
+-- targets, captured when the claim is created. NULL on rows that predate this
+-- column; those keep resuming against the builder's current account.
+ALTER TABLE higgles_redemptions ADD COLUMN destination_account_id TEXT;

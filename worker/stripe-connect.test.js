@@ -1167,3 +1167,56 @@ describe('Higgles redemption (#625)', () => {
     expect(count.n).toBe(0);
   });
 });
+
+// #3079 (follow-up to #3071/#3074): the in-app onboarding writers stamp the
+// ordering floor (migrations/0179) with their own fetch time, so an older
+// delayed account.updated webhook can't overwrite the fresher status they
+// just wrote.
+describe('In-app Stripe onboarding stamps the account.updated ordering floor (#3079)', () => {
+  async function postWithMockedStripe(path, session, accountId) {
+    const originalFetch = globalThis.fetch;
+    env.STRIPE_SECRET_KEY = 'test-stripe-key';
+    globalThis.fetch = async (input, init) => {
+      const url = typeof input === 'string' ? input : input.url;
+      if (url === 'https://api.stripe.com/v2/core/accounts' && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: accountId, object: 'v2.core.account' }), { status: 200 });
+      }
+      if (url === `https://api.stripe.com/v1/accounts/${accountId}` && init?.method === 'POST') {
+        return new Response(JSON.stringify({ id: accountId, requirements: { currently_due: [] } }), { status: 200 });
+      }
+      return originalFetch(input, init);
+    };
+    try {
+      return await api(path, session({ method: 'POST', body: JSON.stringify(validPayload()) }));
+    } finally {
+      globalThis.fetch = originalFetch;
+      env.STRIPE_SECRET_KEY = undefined;
+    }
+  }
+
+  it('stamps stripe_event_created_at on a seller and a builder submission, and only moves it forward', async () => {
+    const before = Math.floor(Date.now() / 1000);
+    const seller = await signupSeller('stripe-floor-seller');
+    const builder = await signupBuilder('stripe-floor-builder');
+
+    const sellerResult = await postWithMockedStripe('/sellers/me/stripe-account', seller.session, 'acct_floor_seller');
+    expect(sellerResult.response.status).toBe(200);
+    const builderResult = await postWithMockedStripe('/builders/me/stripe-account', builder.session, 'acct_floor_builder');
+    expect(builderResult.response.status).toBe(200);
+
+    const sellerRow = await env.DB.prepare('SELECT stripe_event_created_at AS floor FROM sellers WHERE seller_id = ?')
+      .bind(seller.sellerId).first();
+    const builderRow = await env.DB.prepare('SELECT stripe_event_created_at AS floor FROM builders WHERE builder_id = ?')
+      .bind(builder.builderId).first();
+    expect(sellerRow.floor).toBeGreaterThanOrEqual(before);
+    expect(builderRow.floor).toBeGreaterThanOrEqual(before);
+
+    // A floor already ahead of this fetch (a newer webhook was applied) is kept.
+    const ahead = before + 100000;
+    await env.DB.prepare('UPDATE sellers SET stripe_event_created_at = ? WHERE seller_id = ?').bind(ahead, seller.sellerId).run();
+    await postWithMockedStripe('/sellers/me/stripe-account', seller.session, 'acct_floor_seller');
+    const kept = await env.DB.prepare('SELECT stripe_event_created_at AS floor FROM sellers WHERE seller_id = ?')
+      .bind(seller.sellerId).first();
+    expect(kept.floor).toBe(ahead);
+  });
+});
