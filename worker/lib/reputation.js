@@ -636,7 +636,13 @@ export async function handleProductFlags(request, db, route) {
             SELECT 1 FROM product_flags WHERE template_id = ? AND status = 'approved' AND resolved_at < ?
           )
         `).bind(template.seller_id, templateId, now).run();
-        if (strikeResult.meta.changes === 1) {
+        // #3084: the no-double-strike rule is about not climbing the ladder
+        // twice for the same violation. A `severe` determination is new
+        // information about it and jumps straight to the permanent rung
+        // regardless of strike count, so it must still reach the ladder when
+        // the strike itself was skipped (second batch approved as severe).
+        const strikeAdded = strikeResult.meta.changes === 1;
+        if (strikeAdded || severe) {
           // Best-effort notification, same seller-resolved-via-shared-user_id
           // join handleSellerFeedbackCreate's own notification already uses.
           const owner = await db.prepare(`
@@ -644,7 +650,7 @@ export async function handleProductFlags(request, db, route) {
             JOIN builders b ON b.user_id = s.user_id
             WHERE s.seller_id = ?
           `).bind(template.seller_id).first();
-          if (owner) {
+          if (strikeAdded && owner) {
             await fireNotification(db, owner.builder_id,
               'A product listing of yours was removed after an admin-confirmed counterfeit/policy-violation flag. A strike was added to your account.');
           }

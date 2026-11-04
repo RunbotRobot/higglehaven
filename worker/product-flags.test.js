@@ -691,6 +691,40 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
         .bind(ownerBuilderId).all();
       expect(notifications.filter((n) => /strike was added/i.test(n.message)).length).toBe(1);
     });
+
+    // #3084: skipping the strike for a repeat batch (#2468) must not also
+    // skip the severe override, which jumps to the permanent rung whatever
+    // the strike count is.
+    it('a second flag batch approved as severe still permanently suspends the seller, without a second strike', async () => {
+      const admin = await signupAdmin('strike-ladder-severe-repeat-admin');
+      const seller = await signupSeller('strike-ladder-severe-repeat-seller');
+      await createTemplate('strike-ladder-severe-repeat-1', seller);
+
+      const flagger1 = await signupBuilder('sl-severe-repeat-flagger-1');
+      await api('/catalog/strike-ladder-severe-repeat-1/flags', flagger1.session({ method: 'POST', body: JSON.stringify({}) }));
+      const firstResolve = await api('/catalog/strike-ladder-severe-repeat-1/flags/resolve', admin.session({
+        method: 'POST', body: JSON.stringify({ action: 'approve' }),
+      }));
+      expect(firstResolve.response.status).toBe(200);
+      const userId = await sellerUserId(seller);
+      expect(await activeSuspension(userId)).toBeFalsy();
+
+      const flagger2 = await signupBuilder('sl-severe-repeat-flagger-2');
+      await api('/catalog/strike-ladder-severe-repeat-1/flags', flagger2.session({ method: 'POST', body: JSON.stringify({}) }));
+      const secondResolve = await api('/catalog/strike-ladder-severe-repeat-1/flags/resolve', admin.session({
+        method: 'POST', body: JSON.stringify({ action: 'approve', severe: true }),
+      }));
+      expect(secondResolve.response.status).toBe(200);
+
+      const suspension = await activeSuspension(userId);
+      expect(suspension).toBeTruthy();
+      const daysUntilGrace = (new Date(suspension.grace_period_ends_at) - Date.now()) / (24 * 60 * 60 * 1000);
+      expect(daysUntilGrace).toBeGreaterThan(364.9);
+      expect(daysUntilGrace).toBeLessThan(365.1);
+      // Still one strike: the repeat batch is the same violation.
+      const sellerRow = await env.DB.prepare('SELECT strike_count FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
+      expect(sellerRow.strike_count).toBe(1);
+    });
   });
 
   // #2749 (leaf of #2745): migrations/0153 lets more than one seller's own
