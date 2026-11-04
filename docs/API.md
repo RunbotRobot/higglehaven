@@ -2177,6 +2177,14 @@ transfer/payout ids) for reconciliation. Response:
 { "redeemedCents": 2000, "stripePayoutId": "po_..." }
 ```
 
+**`pendingRedemption` (#3077):** the `GET` response also carries
+`pendingRedemption: { amountCents }` when the caller has a redemption whose
+debit stands but whose payout has not completed (#3068 keeps the debit when
+the transfer succeeded and the payout then failed), otherwise `null`. Such a
+redemption leaves `availableCents` at 0, so this is what lets the UI offer
+"Finish pending redemption" instead of showing a zero balance with no way
+forward; a `POST` resumes it.
+
 ### Frontend wiring (#723)
 
 `#624`/`#625` shipped this backend, but nothing in `src/main.js` ever

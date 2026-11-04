@@ -253,7 +253,18 @@ export async function handleBuilderRedeem(request, env, db) {
   const availableCents = Math.max(sessionBuilder.higgles_balance_cents - heldByActiveBids.higglesCents, 0);
 
   if (request.method === 'GET') {
-    return json({ ...stripeAccountStatusJson(env, sessionBuilder), availableCents });
+    // #3077: a redemption whose debit stands but whose payout has not
+    // completed (#3068) leaves availableCents at 0, so without this the UI
+    // has no way to tell the builder that money is still on its way and
+    // that a retry will finish it.
+    const pending = await db.prepare(
+      'SELECT amount_cents FROM higgles_redemptions WHERE builder_id = ? AND stripe_payout_id IS NULL ORDER BY created_at DESC LIMIT 1',
+    ).bind(sessionBuilder.builder_id).first();
+    return json({
+      ...stripeAccountStatusJson(env, sessionBuilder),
+      availableCents,
+      pendingRedemption: pending ? { amountCents: pending.amount_cents } : null,
+    });
   }
 
   if (request.method === 'POST') {
