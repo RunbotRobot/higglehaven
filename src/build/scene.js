@@ -69,8 +69,9 @@ import {
   fetchLowStock, fetchSoldOutMarkers, dismissSoldOutMarker,
   fetchLandletVersions, saveLandletVersion, clearVersionIdempotencyKey,
   fetchLandletVersion, activateLandletVersion, replaceLandletDraft, clearDraftIdempotencyKey,
-  fetchSavedLayouts, deleteSavedLayout,
+  fetchSavedLayouts, deleteSavedLayout, fetchInstances,
 } from '../api.js';
+import { refresh as refreshPendingRestorations } from './pendingRestoration.js';
 import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
 import { toDisplayLength, fromDisplayLength, formatLength, formatArea } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
@@ -1370,6 +1371,40 @@ async function syncDelete(instanceId) {
 // pattern that let some quietly never reach the server while everything
 // still looked right locally — discovered only much later, when a reload
 // came back with items missing and no record of what or why.
+// #3095 (found walking #3083): a seller suspended while this tab was open
+// removes their products server-side, but nothing tells the tab -- the
+// meshes stay on screen and the next batch save is rejected with the
+// suspended-seller placement error, which used to surface as a misleading
+// "couldn't save moved item(s) ... may not survive a reload". Recognise that
+// rejection (and only that one) so the caller can reconcile instead.
+function isSuspendedSellerSyncError(err) {
+  return err?.status === 400 && /seller is suspended/.test(err.message || '');
+}
+
+// Drops, from the given meshes, every one the server no longer has (the
+// suspended seller's products), refreshes the Removed Items button, and
+// returns { removed, remaining }. Triggered on failure rather than polled, to
+// stay cheap on the free tier. If the server can't be reached to compare,
+// nothing is removed locally (never drop a builder's unsaved work on a guess).
+async function reconcileAfterSellerSuspension(meshes) {
+  let serverIds;
+  try {
+    serverIds = new Set((await fetchInstances(currentLandletId)).map((instance) => instance.instanceId));
+  } catch (err) {
+    console.warn('Could not reconcile with the server after a suspended-seller rejection:', err);
+    return { removed: 0, remaining: meshes };
+  }
+  const gone = meshes.filter((mesh) => !serverIds.has(mesh.userData.instanceId));
+  const remaining = meshes.filter((mesh) => serverIds.has(mesh.userData.instanceId));
+  if (gone.length > 0) {
+    clearSelection();
+    updateSelectionUI();
+    for (const mesh of gone) deleteInstance(mesh, { sync: false });
+  }
+  refreshPendingRestorations();
+  return { removed: gone.length, remaining };
+}
+
 async function syncBatchCreate(meshes) {
   if (meshes.length === 0) return;
   const attemptId = nextSyncAttempt();
@@ -1379,6 +1414,14 @@ async function syncBatchCreate(meshes) {
   } catch (err) {
     console.warn('Failed to sync new instances to backend:', err);
     if (isNetworkError(err)) reportSyncResult(attemptId, false);
+    if (isSuspendedSellerSyncError(err)) {
+      const { removed, remaining } = await reconcileAfterSellerSuspension(meshes);
+      if (removed > 0) {
+        alert(`${removed} item(s) were taken off your land because their seller is suspended. They're saved under Removed Items and will return if the suspension is lifted.`);
+        if (remaining.length > 0) await syncBatchCreate(remaining);
+        return;
+      }
+    }
     // #903: a chunked create can fail partway through with earlier chunks
     // already saved — err.succeededCount (set by createInstancesRemote)
     // says how many, so this doesn't claim the whole placement failed when
@@ -1397,6 +1440,15 @@ async function syncBatchUpdate(meshes) {
   } catch (err) {
     console.warn('Failed to sync instance updates to backend:', err);
     if (isNetworkError(err)) reportSyncResult(attemptId, false);
+    if (isSuspendedSellerSyncError(err)) {
+      const { removed, remaining } = await reconcileAfterSellerSuspension(meshes);
+      if (removed > 0) {
+        alert(`${removed} item(s) were taken off your land because their seller is suspended. They're saved under Removed Items and will return if the suspension is lifted.`);
+        // The rejected batch also held items that are fine; save those now.
+        if (remaining.length > 0) await syncBatchUpdate(remaining);
+        return;
+      }
+    }
     // #1380: same reasoning as syncBatchCreate's own #903 fix above —
     // err.succeededCount (set by upsertInstancesRemote) says how many of a
     // large group-move/undo-redo batch already landed before the chunk
