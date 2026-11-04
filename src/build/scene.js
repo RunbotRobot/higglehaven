@@ -3964,7 +3964,12 @@ async function renderRedeemHigglesField() {
   }
 
   function refreshStatusNote() {
-    statusNote.textContent = `Available to redeem: ${formatHiggles(redeemStatus.availableCents)} — ${describeAccountStatus()}`;
+    // added for #3077 -- a redemption left pending leaves nothing "available",
+    // so say plainly that money is still on its way and how to finish it.
+    const pendingNote = redeemStatus.pendingRedemption
+      ? ` You have a redemption of ${formatHiggles(redeemStatus.pendingRedemption.amountCents)} that has not been sent to your bank yet. Press the button below to finish it.`
+      : '';
+    statusNote.textContent = `Available to redeem: ${formatHiggles(redeemStatus.availableCents)} — ${describeAccountStatus()}${pendingNote}`;
     statusNote.classList.remove('error');
   }
   refreshStatusNote();
@@ -4069,11 +4074,13 @@ async function renderRedeemHigglesField() {
 
   formField.appendChild(form);
 
-  if (redeemStatus.availableCents > 0) {
+  if (redeemStatus.availableCents > 0 || redeemStatus.pendingRedemption) {
     const redeemBtn = document.createElement('button');
     redeemBtn.type = 'button';
     redeemBtn.className = 'version-action-btn';
-    redeemBtn.textContent = 'Redeem';
+    redeemBtn.textContent = redeemStatus.pendingRedemption
+      ? `Finish pending redemption of ${formatHiggles(redeemStatus.pendingRedemption.amountCents)}`
+      : 'Redeem';
     formField.appendChild(redeemBtn);
     const redeemStatusNote = document.createElement('div');
     redeemStatusNote.className = 'settings-empty-note';
@@ -4084,8 +4091,15 @@ async function renderRedeemHigglesField() {
       redeemStatusNote.textContent = '';
       redeemStatusNote.classList.remove('error');
       try {
+        const wasPending = !!redeemStatus.pendingRedemption;
         const result = await redeemHiggles();
         redeemStatusNote.textContent = `Redeemed ${formatHiggles(result.redeemedCents)}.`;
+        if (wasPending) {
+          // #3077: the pending redemption is finished; nothing left to retry.
+          redeemStatus = { ...redeemStatus, pendingRedemption: null };
+          redeemBtn.hidden = true;
+          refreshStatusNote();
+        }
       } catch (err) {
         // Currently always hits here — #653 pauses every redemption
         // pending a fraud-provenance design, and the server's own error
