@@ -71,6 +71,22 @@ export async function requireCurrentUser(request, db) {
   return user;
 }
 
+// #3088: the admin "override" branches of the moderation-delete endpoints
+// (reviews, seller feedback, sign posts, calendar events) identify the
+// requester through the NON-throwing currentUser(), which does not know about
+// suspension -- so a suspended admin (still is_admin = 1, still holding a
+// valid session) kept the override. Returns the user only when they are an
+// admin in good standing; a suspended one gets null and falls through to the
+// ordinary author/owner paths, which do go through requireCurrentUser. Same
+// predicate requireCurrentUser and requireControlRoomAccess (#3000) use.
+export async function adminInGoodStanding(db, user) {
+  if (!user?.is_admin) return null;
+  const activeSuspension = await db.prepare(`
+    SELECT 1 FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
+  `).bind(user.user_id).first();
+  return activeSuspension ? null : user;
+}
+
 // Gates world-generation tooling (see migrations/0055_admin_role.sql) —
 // manual /api/world settings edits and the land-candidate/ring endpoints.
 // Deliberately NOT applied to the endpoints that actually grow the world
