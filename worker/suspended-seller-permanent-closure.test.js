@@ -158,4 +158,43 @@ describe('Permanent closure of a suspended seller (#2988)', () => {
     const notices = await api('/notifications', bystander.session());
     expect(notices.body.notifications.some((n) => n.message.includes('permanently closed'))).toBe(false);
   });
+
+  // #3059: the audit-log insert used to sit between the cascade and the
+  // notice commit, so a transient failure there lost the notice for good (the
+  // seller row is gone, so the re-armed retry finds no closure to notify).
+  it('still tells the builder when the audit-log insert fails after the account is deleted', async () => {
+    const seller = await signupSeller('spc-log-seller');
+    const builder = await signupAdmin('spc-log-builder');
+    await createGreenbeltLandlet('spc-log-landlet');
+    await claim('spc-log-landlet', builder);
+    const templateId = await createSellerTemplate(seller, 'spc-log-template');
+    await place('spc-log-instance', 'spc-log-landlet', templateId, builder);
+    await suspend(seller.email);
+    await expireGracePeriod(seller.email);
+    const sellerUserId = (await env.DB.prepare('SELECT user_id FROM users WHERE email = ?').bind(seller.email).first()).user_id;
+
+    const failingLogDb = new Proxy(env.DB, {
+      get(target, prop) {
+        if (prop === 'prepare') {
+          return (sql) => {
+            if (sql.includes('INSERT INTO admin_action_log')) throw new Error('simulated transient D1 failure');
+            return target.prepare(sql);
+          };
+        }
+        const value = target[prop];
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    await escalateExpiredSuspensions(failingLogDb);
+
+    const sellerRow = await env.DB.prepare('SELECT seller_id FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
+    expect(sellerRow).toBeNull();
+    const notices = await api('/notifications', builder.session());
+    expect(notices.body.notifications.filter((n) => n.message.includes('permanently closed'))).toHaveLength(1);
+    // Not re-armed: the escalation stays marked as done.
+    const suspension = await env.DB.prepare(
+      'SELECT escalated_at FROM account_suspensions WHERE user_id = ?',
+    ).bind(sellerUserId).first();
+    expect(suspension.escalated_at).toBeTruthy();
+  });
 });
