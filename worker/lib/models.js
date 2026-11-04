@@ -98,6 +98,14 @@ async function handleUploadedAsset(request, env) {
       LIMIT 1
     `).bind(modelUrl, modelUrl, modelUrl, modelUrl, modelUrl, modelUrl, modelUrl).first();
     if (referenced) throw new HttpError('Uploaded model is still referenced', 409);
+    // #3058: a separate query because the one above is already at D1's
+    // 5-term compound-SELECT cap.
+    const retainedBySnapshot = await env.DB.prepare(`
+      SELECT 1 FROM suspended_seller_instance_snapshots
+      WHERE template_image_url = ? AND restored_at IS NULL AND cleared_at IS NULL
+      LIMIT 1
+    `).bind(modelUrl).first();
+    if (retainedBySnapshot) throw new HttpError('Uploaded model is still referenced', 409);
     await env.MODELS.delete(key);
     // #829: same missed-audit-trail gap as /api/models/cleanup above — this
     // single-object delete never recorded which admin ran it.
@@ -243,6 +251,12 @@ async function selectModelUrlReferencesChunked(db, urls) {
   // keeps both queries' own per-statement bound-parameter count under
   // D1_MAX_BOUND_PARAMETERS at the same chunkSize (2 branches well under
   // the 5-branch query's own tighter chunkSize=20 constraint).
+  //
+  // #3058: that second query also checks the retained product image of a
+  // still-pending suspended-seller snapshot (migrations/0175) -- the image a
+  // builder is promised in their Removed Items view can outlive every live
+  // row that held the same URL, and a snapshot the builder has cleared or
+  // that has been restored no longer needs it.
   const chunkSize = Math.floor(D1_MAX_BOUND_PARAMETERS / 5);
   const rows = [];
   for (let i = 0; i < urls.length; i += chunkSize) {
@@ -264,7 +278,10 @@ async function selectModelUrlReferencesChunked(db, urls) {
       SELECT 'product' AS source, product_id AS id, model_url AS url FROM products WHERE model_url IN (${placeholders})
       UNION ALL
       SELECT 'product' AS source, product_id AS id, image_url AS url FROM products WHERE image_url IN (${placeholders})
-    `).bind(...chunk, ...chunk).all();
+      UNION ALL
+      SELECT 'suspendedSnapshot' AS source, snapshot_id AS id, template_image_url AS url FROM suspended_seller_instance_snapshots
+      WHERE template_image_url IN (${placeholders}) AND restored_at IS NULL AND cleared_at IS NULL
+    `).bind(...chunk, ...chunk, ...chunk).all();
     rows.push(...productResults);
   }
   return rows;
@@ -287,6 +304,7 @@ async function handleModelListing(request, env, url) {
   const productRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
   const videoJobRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
   const controlRoomRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
+  const snapshotRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
   if (modelUrls.length > 0) {
     // #774: image_url (thumbnails) shares this same bucket/URL scheme as
     // model_url — checking model_url alone marked every live thumbnail
@@ -314,6 +332,7 @@ async function handleModelListing(request, env, url) {
       if (row.source === 'template') templateRefs.get(row.url).push(row.id);
       else if (row.source === 'product') productRefs.get(row.url).push(row.id);
       else if (row.source === 'videoJob') videoJobRefs.get(row.url).push(row.id);
+      else if (row.source === 'suspendedSnapshot') snapshotRefs.get(row.url).push(row.id);
       else controlRoomRefs.get(row.url).push(row.id);
     }
   }
@@ -324,6 +343,7 @@ async function handleModelListing(request, env, url) {
       const referencedByProductIds = productRefs.get(modelUrl);
       const referencedByVideoJobIds = videoJobRefs.get(modelUrl);
       const referencedByControlRoomIds = controlRoomRefs.get(modelUrl);
+      const referencedBySuspendedSnapshotIds = snapshotRefs.get(modelUrl);
       return {
         modelUrl,
         sizeBytes: object.size,
@@ -333,8 +353,10 @@ async function handleModelListing(request, env, url) {
         referencedByProductIds,
         referencedByVideoJobIds,
         referencedByControlRoomIds,
+        referencedBySuspendedSnapshotIds,
         deletable: referencedByTemplateIds.length === 0 && referencedByProductIds.length === 0
-          && referencedByVideoJobIds.length === 0 && referencedByControlRoomIds.length === 0,
+          && referencedByVideoJobIds.length === 0 && referencedByControlRoomIds.length === 0
+          && referencedBySuspendedSnapshotIds.length === 0,
       };
     }),
     nextCursor: listing.truncated ? listing.cursor : null,
