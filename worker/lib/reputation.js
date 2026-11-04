@@ -25,6 +25,7 @@ import { readJson, stringValue } from './validation.js';
 import { fireNotification } from './notifications.js';
 import { currentUser, requireAdmin, assertOwner, requireSessionBuilder } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
+import { removeSuspendedSellerPlacedInstances } from './account-moderation.js';
 import { moderationRemovalCategory, recordModerationRemovalSnapshot } from './content-moderation.js';
 import {
   requireSessionSeller, sellerExists, recordContentEditHistory,
@@ -761,6 +762,9 @@ async function applySuspensionLadderRung(db, { userId, adminUserId, reason, grac
     await adminActionLogStatement(db, adminUserId, 'suspend_account', 'user', userId, {
       suspensionId, reason, gracePeriodEndsAt,
     }).run();
+    // Same unconditional removal + snapshot handleSuspendAccount runs, so the
+    // two ways a seller becomes suspended can't diverge (#3049).
+    await removeSuspendedSellerPlacedInstances(db, userId);
     return;
   }
   const active = await db.prepare(`
