@@ -463,6 +463,16 @@ async function reportEvidenceLines(db, reporterBuilderId, reportedBuilderId, sur
   }
 }
 
+// #3121: suspension is by user_id, and the reported builder's row can be
+// deleted by the reported party themselves (Reset your builder profile), so a
+// report records the reported account's user_id at filing time -- on the
+// report row and in the Control Room card -- rather than relying on a
+// builder id that may stop resolving.
+async function reportedUserIdOf(db, builderId) {
+  const row = await db.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(builderId).first();
+  return row?.user_id ?? null;
+}
+
 async function handleNearbyChatReportCreate(request, db) {
   const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use nearby chat.');
   await checkRateLimit(db, `nearby-chat-report-create:${sessionBuilder.builder_id}`, NEARBY_CHAT_REPORT_CREATE_RATE_LIMIT_MAX);
@@ -484,7 +494,9 @@ async function handleNearbyChatReportCreate(request, db) {
   const now = new Date().toISOString();
   const controlRoomTaskId = `nearby-chat-report-${reportId.slice('nearby-chat-report-'.length)}`;
   const controlRoomTitle = `Nearby chat conduct report against "${reportedLabel}"`;
+  const reportedUserId = await reportedUserIdOf(db, reportedBuilderId);
   const controlRoomNoteLines = [`Reported builder: "${reportedLabel}" (${reportedBuilderId})`];
+  if (reportedUserId) controlRoomNoteLines.push(`Reported account: ${reportedUserId}`);
   if (reason) controlRoomNoteLines.push(`Reason: ${reason}`);
   controlRoomNoteLines.push(...await reportEvidenceLines(db, sessionBuilder.builder_id, reportedBuilderId, async () => {
     const message = await db.prepare(`
@@ -496,9 +508,9 @@ async function handleNearbyChatReportCreate(request, db) {
   }));
   await db.batch([
     db.prepare(`
-      INSERT INTO nearby_chat_reports (report_id, reporter_builder_id, reported_builder_id, reason)
-      VALUES (?, ?, ?, ?)
-    `).bind(reportId, sessionBuilder.builder_id, reportedBuilderId, reason),
+      INSERT INTO nearby_chat_reports (report_id, reporter_builder_id, reported_builder_id, reported_user_id, reason)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(reportId, sessionBuilder.builder_id, reportedBuilderId, reportedUserId, reason),
     db.prepare(`
       INSERT INTO control_room_tasks (
         task_id, kind, note_number, title, status, session, posted_by,
@@ -782,7 +794,9 @@ async function handleVoiceReportCreate(request, db) {
   // establishes.
   const controlRoomTaskId = `voice-report-${reportId.slice('voice-report-'.length)}`;
   const controlRoomTitle = `Voice chat conduct report against "${reportedLabel}"`;
+  const reportedUserId = await reportedUserIdOf(db, reportedBuilderId);
   const controlRoomNoteLines = [`Reported builder: "${reportedLabel}" (${reportedBuilderId})`];
+  if (reportedUserId) controlRoomNoteLines.push(`Reported account: ${reportedUserId}`);
   if (reason) controlRoomNoteLines.push(`Reason: ${reason}`);
   controlRoomNoteLines.push(...await reportEvidenceLines(db, sessionBuilder.builder_id, reportedBuilderId, async () => {
     const signal = await db.prepare(`
@@ -794,9 +808,9 @@ async function handleVoiceReportCreate(request, db) {
   }));
   await db.batch([
     db.prepare(`
-      INSERT INTO voice_conduct_reports (report_id, reporter_builder_id, reported_builder_id, reason)
-      VALUES (?, ?, ?, ?)
-    `).bind(reportId, sessionBuilder.builder_id, reportedBuilderId, reason),
+      INSERT INTO voice_conduct_reports (report_id, reporter_builder_id, reported_builder_id, reported_user_id, reason)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(reportId, sessionBuilder.builder_id, reportedBuilderId, reportedUserId, reason),
     db.prepare(`
       INSERT INTO control_room_tasks (
         task_id, kind, note_number, title, status, session, posted_by,
