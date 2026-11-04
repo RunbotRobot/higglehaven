@@ -31,6 +31,18 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     return created.body.template;
   }
 
+  // #3087: weights and raw counts are admin-only; the flagger's own POST
+  // response carries just the flag id.
+  async function adminQueueEntry(templateId) {
+    const listed = await api('/product-flags', adminSession());
+    return listed.body.listings.find((l) => l.templateId === templateId);
+  }
+
+  async function isAutoHidden(templateId) {
+    const fetched = await api(`/catalog/${templateId}`);
+    return Boolean(fetched.body.template.flaggedHiddenAt);
+  }
+
   it('requires a session to flag a listing', async () => {
     await createTemplate('flag-auth-template');
     const result = await api('/catalog/flag-auth-template/flags', { method: 'POST', body: JSON.stringify({}) });
@@ -43,7 +55,7 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     expect(result.response.status).toBe(404);
   });
 
-  it('records a flag and reports pendingCount, not yet auto-hidden', async () => {
+  it('records a flag, answers the flagger with only its id, and does not auto-hide', async () => {
     await createTemplate('flag-single-template');
     const flagger = await signupBuilder('flag-single-builder');
     const result = await api('/catalog/flag-single-template/flags', flagger.session({
@@ -51,8 +63,9 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
       body: JSON.stringify({ reason: 'Looks like a counterfeit' }),
     }));
     expect(result.response.status).toBe(201);
-    expect(result.body.pendingCount).toBe(1);
-    expect(result.body.autoHidden).toBe(false);
+    expect(result.body).toEqual({ flagId: expect.any(String) });
+    expect((await adminQueueEntry('flag-single-template')).pendingCount).toBe(1);
+    expect(await isAutoHidden('flag-single-template')).toBe(false);
   });
 
   it('rejects a second flag from the same builder on the same listing', async () => {
@@ -86,8 +99,8 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     for (const flagger of flaggers) {
       lastResult = await api('/catalog/flag-threshold-template/flags', flagger.session({ method: 'POST', body: JSON.stringify({}) }));
     }
-    expect(lastResult.body.pendingCount).toBe(3);
-    expect(lastResult.body.autoHidden).toBe(true);
+    expect(lastResult.body).toEqual({ flagId: expect.any(String) });
+    expect((await adminQueueEntry('flag-threshold-template')).pendingCount).toBe(3);
 
     const purchase = await api('/instances/flag-threshold-instance/purchase', builder.session({ method: 'POST' }));
     expect(purchase.response.status).toBe(400);
@@ -121,26 +134,21 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     const first = await api('/catalog/flag-weight-template/flags', flaggers[0].session({
       method: 'POST', body: JSON.stringify({}), headers: { 'cf-connecting-ip': sharedIp },
     }));
-    expect(first.body.pendingCount).toBe(1);
-    expect(first.body.pendingWeight).toBe(1);
+    expect(first.body).toEqual({ flagId: expect.any(String) });
+    expect(await adminQueueEntry('flag-weight-template')).toMatchObject({ pendingCount: 1, pendingWeight: 1 });
 
     // Same IP as the first flagger -- a real distinct account, but counts
     // for nothing toward the weighted sum.
     const second = await api('/catalog/flag-weight-template/flags', flaggers[1].session({
       method: 'POST', body: JSON.stringify({}), headers: { 'cf-connecting-ip': sharedIp },
     }));
-    expect(second.body.pendingCount).toBe(2);
-    expect(second.body.pendingWeight).toBe(1);
-    expect(second.body.autoHidden).toBe(false);
+    expect(await adminQueueEntry('flag-weight-template')).toMatchObject({ pendingCount: 2, pendingWeight: 1 });
+    expect(await isAutoHidden('flag-weight-template')).toBe(false);
 
     // A genuinely different IP -- counts fully.
     const third = await api('/catalog/flag-weight-template/flags', flaggers[2].session({ method: 'POST', body: JSON.stringify({}) }));
-    expect(third.body.pendingCount).toBe(3);
-    expect(third.body.pendingWeight).toBe(2);
-    expect(third.body.autoHidden).toBe(false);
-
-    const fetched = await api('/catalog/flag-weight-template');
-    expect(fetched.body.template.flaggedHiddenAt).toBeFalsy();
+    expect(await adminQueueEntry('flag-weight-template')).toMatchObject({ pendingCount: 3, pendingWeight: 2 });
+    expect(await isAutoHidden('flag-weight-template')).toBe(false);
   });
 
   // The 'unknown' fallback clientIp() returns with no cf-connecting-ip
@@ -156,13 +164,12 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     const first = await api('/catalog/flag-weight-unknown-template/flags', flaggers[0].session({
       method: 'POST', body: JSON.stringify({}), headers: { 'cf-connecting-ip': '' },
     }));
-    expect(first.body.pendingWeight).toBe(1);
+    expect(await adminQueueEntry('flag-weight-unknown-template')).toMatchObject({ pendingWeight: 1 });
 
     const second = await api('/catalog/flag-weight-unknown-template/flags', flaggers[1].session({
       method: 'POST', body: JSON.stringify({}), headers: { 'cf-connecting-ip': '' },
     }));
-    expect(second.body.pendingCount).toBe(2);
-    expect(second.body.pendingWeight).toBe(2);
+    expect(await adminQueueEntry('flag-weight-unknown-template')).toMatchObject({ pendingCount: 2, pendingWeight: 2 });
   });
 
   // #2941: TURNSTILE_SECRET_KEY is never configured in this suite (see
@@ -185,28 +192,23 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
       .bind(failedFlagger.email).run();
 
     const first = await api('/catalog/flag-weight-turnstile-template/flags', cleanFlagger.session({ method: 'POST', body: JSON.stringify({}) }));
-    expect(first.body.pendingWeight).toBe(1);
+    expect(await adminQueueEntry('flag-weight-turnstile-template')).toMatchObject({ pendingWeight: 1 });
 
     // Distinct IP (the ordinary per-call random synthetic IP from
     // test-helpers.js's own api() default), but a failed Turnstile check
     // halves this flag's own contribution -- composes with the IP factor
     // (migrations/0170) rather than replacing it.
     const second = await api('/catalog/flag-weight-turnstile-template/flags', failedFlagger.session({ method: 'POST', body: JSON.stringify({}) }));
-    expect(second.body.pendingCount).toBe(2);
-    expect(second.body.pendingWeight).toBe(1.5);
-    expect(second.body.autoHidden).toBe(false);
+    expect(await adminQueueEntry('flag-weight-turnstile-template')).toMatchObject({ pendingCount: 2, pendingWeight: 1.5 });
+    expect(await isAutoHidden('flag-weight-turnstile-template')).toBe(false);
 
     // A third, ordinary (Turnstile-clean) distinct-IP flag pushes the
     // weighted sum to 2.5 -- still under the threshold of 3, confirming
     // the discount, not just the undiscounted IP factor, is what's being
     // summed.
     const third = await api('/catalog/flag-weight-turnstile-template/flags', thirdFlagger.session({ method: 'POST', body: JSON.stringify({}) }));
-    expect(third.body.pendingCount).toBe(3);
-    expect(third.body.pendingWeight).toBe(2.5);
-    expect(third.body.autoHidden).toBe(false);
-
-    const fetched = await api('/catalog/flag-weight-turnstile-template');
-    expect(fetched.body.template.flaggedHiddenAt).toBeFalsy();
+    expect(await adminQueueEntry('flag-weight-turnstile-template')).toMatchObject({ pendingCount: 3, pendingWeight: 2.5 });
+    expect(await isAutoHidden('flag-weight-turnstile-template')).toBe(false);
   });
 
   // #2980: the weight decision used to be a separate pre-read SELECT
@@ -277,7 +279,7 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
     await createTemplate('flag-no-notify-template', seller);
     const flagger = await signupBuilder('flag-no-notify-flagger');
     const result = await api('/catalog/flag-no-notify-template/flags', flagger.session({ method: 'POST', body: JSON.stringify({}) }));
-    expect(result.body.autoHidden).toBe(false);
+    expect(await isAutoHidden('flag-no-notify-template')).toBe(false);
 
     const ownerBuilder = await api('/builders/me', seller.session());
     const { results: notifications } = await env.DB.prepare('SELECT message FROM notifications WHERE builder_id = ?')
@@ -818,11 +820,10 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
       await linkToProduct('auto-hide-cascade-listing-a', 'auto-hide-cascade-product-1');
 
       const flaggers = await Promise.all([1, 2, 3].map((n) => signupBuilder(`auto-hide-cascade-flagger-${n}`)));
-      let lastResult;
       for (const flagger of flaggers) {
-        lastResult = await api('/catalog/auto-hide-cascade-listing-a/flags', flagger.session({ method: 'POST', body: JSON.stringify({}) }));
+        await api('/catalog/auto-hide-cascade-listing-a/flags', flagger.session({ method: 'POST', body: JSON.stringify({}) }));
       }
-      expect(lastResult.body.autoHidden).toBe(true);
+      expect(await isAutoHidden('auto-hide-cascade-listing-a')).toBe(true);
 
       const product = await env.DB.prepare('SELECT flagged_hidden_at FROM products WHERE product_id = ?')
         .bind('auto-hide-cascade-product-1').first();
@@ -848,11 +849,10 @@ describe('Counterfeit-flag endpoint and admin review queue (#2017)', () => {
       await linkToProduct('reject-clears-product-listing-a', 'reject-clears-product-1');
 
       const flaggers = await Promise.all([1, 2, 3].map((n) => signupBuilder(`reject-clears-product-flagger-${n}`)));
-      let lastResult;
       for (const flagger of flaggers) {
-        lastResult = await api('/catalog/reject-clears-product-listing-a/flags', flagger.session({ method: 'POST', body: JSON.stringify({}) }));
+        await api('/catalog/reject-clears-product-listing-a/flags', flagger.session({ method: 'POST', body: JSON.stringify({}) }));
       }
-      expect(lastResult.body.autoHidden).toBe(true);
+      expect(await isAutoHidden('reject-clears-product-listing-a')).toBe(true);
       const hiddenProduct = await env.DB.prepare('SELECT flagged_hidden_at FROM products WHERE product_id = ?')
         .bind('reject-clears-product-1').first();
       expect(hiddenProduct.flagged_hidden_at).toBeTruthy();
