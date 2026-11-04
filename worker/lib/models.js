@@ -176,6 +176,11 @@ async function handleModelUpload(request, env) {
   const key = `models/${hash}.glb`;
   const existing = await env.MODELS.head(key);
   if (existing) {
+    // #3107: re-putting identical bytes refreshes R2's `uploaded` time, so an
+    // old still-unreferenced copy gets a fresh sweep grace period instead of
+    // being swept right after this response. No storage-budget reservation:
+    // the object is replaced in place, net size unchanged.
+    await env.MODELS.put(key, bytes, { httpMetadata: { contentType: 'model/gltf-binary' } });
     return json({
       modelUrl: `/uploads/${key}`,
       sourceName: file.name || 'model.glb',
@@ -430,6 +435,8 @@ async function handleModelCleanup(request, env) {
 // exist for a cron-triggered action) — admin_action_log.admin_user_id
 // already allows NULL for exactly this "no longer identifiable/no admin
 // acted" shape (migrations/0087's own ON DELETE SET NULL reasoning).
+export const UNREFERENCED_MODEL_GRACE_MS = 24 * 60 * 60 * 1000;
+
 export async function scheduledModelCleanup(env) {
   if (!env.MODELS) return;
   // #890: an unattended sweep — unlike the admin-triggered POST endpoint
@@ -439,7 +446,12 @@ export async function scheduledModelCleanup(env) {
   // MODEL_UPLOAD_RESERVATION_TIMEOUT_MS: the same "comfortably above how
   // long even a slow connection needs" reasoning already applied to the
   // storage-budget-reservation side of this identical upload flow.
-  const result = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false, minAgeMs: MODEL_UPLOAD_RESERVATION_TIMEOUT_MS });
+  // #3107: the grace must cover how long a seller takes to fill in the
+  // wizard's form after the file step (no deadline, minutes to hours), not
+  // how long an upload takes -- 5 minutes silently deleted a seller's model
+  // mid-form (*No silent loss*). A day of abandoned uploads is small
+  // against the storage cap.
+  const result = await cleanupUnreferencedModels(env, { maxDeletes: 100, dryRun: false, minAgeMs: UNREFERENCED_MODEL_GRACE_MS });
   if (result.targetCount > 0) {
     // #1202: same "record which objects, not just how many" fix as
     // handleModelCleanup's own call site above -- matters even more here
