@@ -230,6 +230,25 @@ async function removeSuspendedUserPostedContent(db, adminUserId, suspendedUserId
   return { signPostsRemoved: posts.length, calendarEventsRemoved: events.length };
 }
 
+// #2268 / #3085: the "never suspend the last operational admin" condition,
+// shared by every path that inserts an account_suspensions row (the admin
+// suspend endpoint and the strike ladder) so they can't diverge. Binds two
+// placeholders, both the target user_id, in order: the is_admin lookup,
+// then the "another admin" exclusion.
+export const SUSPENSION_SPARES_LAST_ADMIN_SQL = `(
+      (SELECT is_admin FROM users WHERE user_id = ?) = 0
+      OR EXISTS (
+        SELECT 1 FROM users AS other_admin
+        WHERE other_admin.is_admin = 1
+          AND other_admin.user_id != ?
+          AND NOT EXISTS (
+            SELECT 1 FROM account_suspensions
+            WHERE account_suspensions.user_id = other_admin.user_id
+              AND lifted_at IS NULL AND escalated_at IS NULL
+          )
+      )
+    )`;
+
 // #2986 (sub-issue 2/5 of #2305): a suspended seller's existing
 // placements don't just become unpurchasable (#2985, the catalog-hide +
 // purchase-block sub-issue) -- the owner's own decision is a harder
@@ -583,19 +602,7 @@ export async function handleSuspendAccount(request, db) {
       SELECT 1 FROM account_suspensions
       WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
     )
-    AND (
-      (SELECT is_admin FROM users WHERE user_id = ?) = 0
-      OR EXISTS (
-        SELECT 1 FROM users AS other_admin
-        WHERE other_admin.is_admin = 1
-          AND other_admin.user_id != ?
-          AND NOT EXISTS (
-            SELECT 1 FROM account_suspensions
-            WHERE account_suspensions.user_id = other_admin.user_id
-              AND lifted_at IS NULL AND escalated_at IS NULL
-          )
-      )
-    )
+    AND ${SUSPENSION_SPARES_LAST_ADMIN_SQL}
   `).bind(suspensionId, row.user_id, admin.user_id, reason, evidenceNote, gracePeriodEndsAt, row.user_id, row.user_id, row.user_id).run();
   if (result.meta.changes === 0) {
     const current = await db.prepare('SELECT is_admin FROM users WHERE user_id = ?').bind(row.user_id).first();
