@@ -8440,8 +8440,14 @@ a second flag from the same builder against the same listing hits that
 constraint and surfaces as a plain `409`, not a second vote.
 
 ```json
-{ "flagId": "product-flag-...", "pendingCount": 1, "pendingWeight": 1, "autoHidden": false }
+{ "flagId": "product-flag-..." }
 ```
+
+**#3087:** the response carries only the flag id. It deliberately omits the
+raw pending count, the signal-adjusted `pendingWeight` and whether this flag
+tipped the auto-hide: any of them would let a flagger read their own
+anti-abuse weighting and probe the IP/device dedup. Admins see the numbers
+via `GET /api/product-flags` below.
 
 Once a listing's distinct pending flags reach 3, it's auto-hidden:
 `catalog_templates.flagged_hidden_at` is set, which blocks any *new*
@@ -8481,6 +8487,7 @@ flagged first (capped at 200):
       "templateName": "...",
       "sellerId": "...",
       "pendingCount": 2,
+      "pendingWeight": 1.5,
       "firstFlaggedAt": "...",
       "lastFlaggedAt": "..."
     }
@@ -8594,10 +8601,10 @@ real match) weights `1`; any further pending flag sharing that same IP
 weights `0` — the same "first one counts, repeats don't" shape the
 `UNIQUE` constraint already gives distinct builder accounts, extended to
 a signal several cheaply-created accounts on one device/network can't
-each fake independently. `pendingCount` in the response stays the real,
-unweighted flag count (what admins see as "how many accounts flagged
-this" via `GET /api/product-flags` below); `pendingWeight` is the
-separate, signal-adjusted sum the auto-hide threshold actually checks.
+each fake independently. `pendingCount` is the real, unweighted flag count
+(what admins see as "how many accounts flagged this" via
+`GET /api/product-flags` below); `pendingWeight` (also admin-only, #3087) is
+the separate, signal-adjusted sum the auto-hide threshold actually checks.
 **`#2941` (same owner decision):** composes with the IP factor above
 rather than replacing it. A flag from an account whose signup Turnstile
 check was live and came back negative (`users.turnstile_failed_at` is
@@ -8615,14 +8622,14 @@ existing pending flag from this IP" and both land at full weight,
 defeating the "first one counts, repeats don't" cap. The Turnstile
 factor is still a plain pre-read (safe non-atomically, since a single
 user's own `turnstile_failed_at` never changes after signup).
-Returns `{ flagId, pendingCount, pendingWeight, autoHidden }`.
+Returns `{ flagId }`.
 
 ```
 GET /api/product-flags
 ```
 
 Admin-only. One row per listing with pending flags (not one per flag) —
-`{ templateId, templateName, sellerId, pendingCount }` — since an admin
+`{ templateId, templateName, sellerId, pendingCount, pendingWeight, ... }` — since an admin
 resolves a listing's whole pending set in one action, not flag-by-flag.
 
 ```
