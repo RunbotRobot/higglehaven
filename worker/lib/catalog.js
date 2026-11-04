@@ -1472,6 +1472,16 @@ export async function handleCatalog(request, db, route, url, models, env) {
     // UPDATE matching 0 rows while the handler still returned a fabricated
     // 200, with the freshly-uploaded R2 object now orphaned.
     if (result.meta.changes === 0) return json({ error: 'Catalog template not found' }, 404);
+    // #3110: nothing ever wrote products.image_url, so a listing attached to
+    // an existing product (POST /catalog/listings) started with no thumbnail.
+    // Fill the backing product's image the first time any listing gets one;
+    // never overwrite it, so one seller's re-render cannot swap the picture
+    // every other seller's attached listing was copied from.
+    await db.prepare(`
+      UPDATE products SET image_url = ?, image_embedding = ?
+      WHERE image_url IS NULL
+        AND product_id = (SELECT product_id FROM catalog_templates WHERE template_id = ?)
+    `).bind(imageUrl, embedding ? JSON.stringify(embedding) : null, route[1]).run();
     return json({ imageUrl });
   }
 
@@ -1646,6 +1656,18 @@ export async function handleCatalog(request, db, route, url, models, env) {
     // could already be gone from R2 by the time an old productId gets
     // reused here.
     await assertUploadedModelExists(models, product.model_url);
+    // #3110: a product row created before thumbnails were written through to
+    // it has no image of its own; fall back to the earliest existing listing
+    // of it that does, so the new listing starts with a thumbnail too.
+    let { image_url: imageUrl, image_embedding: imageEmbedding } = product;
+    if (!imageUrl) {
+      const sibling = await db.prepare(`
+        SELECT image_url, image_embedding FROM catalog_templates
+        WHERE product_id = ? AND image_url IS NOT NULL
+        ORDER BY created_at, template_id LIMIT 1
+      `).bind(productId).first();
+      if (sibling) ({ image_url: imageUrl, image_embedding: imageEmbedding } = sibling);
+    }
     const templateId = `template-${crypto.randomUUID()}`;
     await db.prepare(`
       INSERT INTO catalog_templates
@@ -1657,7 +1679,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
       templateId, product.name, product.category, product.subcategory, product.color,
       product.width_m, product.depth_m, product.height_m,
       priceCents, sessionSeller.seller_id, product.model_url, product.model_size_bytes, product.skeleton_signature,
-      product.image_url, product.image_embedding, product.is_test_model, product.metadata_json, stockQuantity, productId,
+      imageUrl, imageEmbedding, product.is_test_model, product.metadata_json, stockQuantity, productId,
     ).run();
     const stored = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     return json({ template: templateFromRow(stored) }, 201);
