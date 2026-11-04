@@ -43,7 +43,7 @@ import { handleNcmecReports } from './lib/ncmec-reports.js';
 import {
   handleAdminBootstrap, handleGrantAdmin, handleRevokeAdmin, handleListAdmins, handleSuspendAccount,
   handleUnsuspendAccount, handleSuspensionStatus, handleAdminUserSearch, handleAdminUserDetail,
-  prepareSellerPermanentClosure, recordSellerClosure,
+  prepareSellerPermanentClosure, recordSellerClosure, removeClosedSellerPlacedInstances,
 } from './lib/account-moderation.js';
 // #1407 (sub-issue of #1404): the AI-made Stripe-reinstatement decision
 // flow -- see that module's own header comment for the full rubric and the
@@ -1572,7 +1572,7 @@ export async function sellerExists(db, sellerId) {
 // reused unchanged by cascadeDeleteAccount (real account deletion).
 export async function sellerDeletionStatements(db, sellerId) {
   const seller = await db.prepare(
-    'SELECT stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?',
+    'SELECT user_id, stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?',
   ).bind(sellerId).first();
   // #732: getOrCreateSellerForUser looks up by user_id, not seller_id — if
   // this seller_id is deleted with real-money proceeds still unpaid, a
@@ -1611,6 +1611,18 @@ export async function sellerDeletionStatements(db, sellerId) {
         )
     `).bind(sellerId, sellerId),
   ];
+  // #3065: every "seller is gone" predicate (catalog hide, placement block,
+  // published-version filter, purchase block) reaches the seller through
+  // the row just deleted -- the same gap #3057 closed for a suspension-
+  // ladder closure. Recorded in the same batch, guarded on the DELETE
+  // having actually happened, so a deletion blocked by unpaid proceeds
+  // records nothing and the products stay listed.
+  if (seller?.user_id) {
+    statements.push(db.prepare(`
+      INSERT OR IGNORE INTO closed_sellers (seller_id, user_id)
+      SELECT ?, ? WHERE ${sellerGone}
+    `).bind(sellerId, seller.user_id, sellerId));
+  }
   // #1003: same snapshot-before-losing-the-live-row shape as the builder
   // DELETE handler above -- see that handler's own comment for why the
   // Stripe account itself is left untouched here.
@@ -3128,6 +3140,15 @@ export async function cascadeDeleteAccount(db, userId) {
     // deleted by another in-flight request). Retry-safe, same posture as
     // the builder/seller endpoints' own "concurrent delete" case.
     throw new HttpError('Account deletion did not complete -- please retry', 409);
+  }
+  // #3065: the seller (if any) is really gone now -- take their products off
+  // builders' land and tell the builders. Best-effort: the account is
+  // already deleted and cannot be retried, and closed_sellers (written in
+  // the same batch above) already keeps the products hidden and
+  // unpurchasable everywhere shoppers look even if this step fails.
+  if (sellerId) {
+    await removeClosedSellerPlacedInstances(db, sellerId)
+      .catch((error) => console.error('cascadeDeleteAccount: failed to remove a closed seller\'s placed products', sellerId, error));
   }
   return {
     releasedLandletIds: landletsReleasedIndex >= 0

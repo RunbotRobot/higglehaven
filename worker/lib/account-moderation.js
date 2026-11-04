@@ -265,6 +265,36 @@ const itemPhrase = (count) => (count === 1 ? '1 item' : `${count} items`);
 async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
   const seller = await db.prepare('SELECT seller_id FROM sellers WHERE user_id = ?').bind(suspendedUserId).first();
   if (!seller) return { instancesRemoved: 0 };
+  const { removedByBuilder, removed } = await snapshotAndRemoveSellerInstances(db, seller.seller_id, { permanent: false });
+  await notifyBuildersOfSuspendedSellerItems(db, removedByBuilder, (count) =>
+    `${itemPhrase(count)} from a seller who is currently suspended ${count === 1 ? 'was' : 'were'} taken off your land. ${count === 1 ? 'It is' : 'They are'} saved under Removed Items and will return if the suspension is lifted.`);
+  return { instancesRemoved: removed };
+}
+
+// #3065: a seller who deletes their own seller profile or account (no
+// suspension involved) leaves their products placed on builders' land with
+// nobody to pay. Called by both self-deletion paths AFTER the deletion
+// batch has committed (a blocked deletion -- unpaid proceeds -- must leave
+// every placement untouched). The sellers row is already gone by then, so
+// this takes the seller_id directly. Same snapshot + Removed Items
+// mechanism as a suspension, except the slots are born permanent (nothing
+// can come back) and the builder is told so plainly.
+export async function removeClosedSellerPlacedInstances(db, sellerId) {
+  const { removedByBuilder, namesByBuilder, removed } = await snapshotAndRemoveSellerInstances(db, sellerId, { permanent: true });
+  for (const [builderId, names] of namesByBuilder) {
+    const unique = [...new Set(names)];
+    const shown = unique.slice(0, 3).map((name) => `"${name}"`).join(', ');
+    const more = unique.length > 3 ? ` and ${unique.length - 3} more` : '';
+    const one = removedByBuilder.get(builderId) === 1;
+    await fireNotification(db, builderId,
+      `A seller has stopped selling, so ${shown}${more} ${one ? 'was' : 'were'} taken off your land and will not be coming back. ${one ? 'It stays' : 'They stay'} listed under Removed Items so you can see what used to be there -- clear ${one ? 'it' : 'them'} whenever you like to free up the spot.`);
+  }
+  return { instancesRemoved: removed };
+}
+
+async function snapshotAndRemoveSellerInstances(db, sellerId, { permanent }) {
+  const seller = { seller_id: sellerId };
+  const empty = { removedByBuilder: new Map(), namesByBuilder: new Map(), removed: 0 };
   const { results: instances } = await db.prepare(`
     SELECT placed_instances.*,
            catalog_templates.name AS retained_template_name,
@@ -274,7 +304,7 @@ async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
     JOIN catalog_templates ON catalog_templates.template_id = placed_instances.template_id
     WHERE catalog_templates.seller_id = ?
   `).bind(seller.seller_id).all();
-  if (instances.length === 0) return { instancesRemoved: 0 };
+  if (instances.length === 0) return empty;
 
   // #2764: no special group-membership handling needed here -- deleting
   // one member of a group never touches any other member's own group_id
@@ -290,6 +320,7 @@ async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
 
   const statements = [];
   const removedByBuilder = new Map();
+  const namesByBuilder = new Map();
   for (const instance of instances) {
     const builderId = ownerByLandletId.get(instance.landlet_id);
     // The landlet itself vanished (greenbelt again, or deleted) in the gap
@@ -311,19 +342,20 @@ async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) {
     statements.push(db.prepare(`
       INSERT INTO suspended_seller_instance_snapshots
         (snapshot_id, seller_id, builder_id, landlet_id, template_id, instance_json,
-         template_name, template_category, template_image_url)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         template_name, template_category, template_image_url, permanent_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ${permanent ? "strftime('%Y-%m-%dT%H:%M:%fZ', 'now')" : 'NULL'})
     `).bind(
       `sss-${crypto.randomUUID()}`, seller.seller_id, builderId, instance.landlet_id, instance.template_id,
       JSON.stringify(placedRow), templateName, templateCategory, templateImageUrl,
     ));
     statements.push(db.prepare('DELETE FROM placed_instances WHERE instance_id = ?').bind(instance.instance_id));
     removedByBuilder.set(builderId, (removedByBuilder.get(builderId) || 0) + 1);
+    const names = namesByBuilder.get(builderId) || [];
+    names.push(templateName || 'an item that is no longer listed');
+    namesByBuilder.set(builderId, names);
   }
   if (statements.length > 0) await db.batch(statements);
-  await notifyBuildersOfSuspendedSellerItems(db, removedByBuilder, (count) =>
-    `${itemPhrase(count)} from a seller who is currently suspended ${count === 1 ? 'was' : 'were'} taken off your land. ${count === 1 ? 'It is' : 'They are'} saved under Removed Items and will return if the suspension is lifted.`);
-  return { instancesRemoved: statements.length / 2 };
+  return { removedByBuilder, namesByBuilder, removed: statements.length / 2 };
 }
 
 // The inverse of removeSuspendedSellerPlacedInstances above -- called

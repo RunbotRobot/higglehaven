@@ -42,6 +42,7 @@ import {
 // flow, shared verbatim between the builder and seller sides -- see that
 // module's own header comment for the full rubric and design decisions.
 import { handleStripeAccountFlag, handleStripeReinstatementRequest } from './stripe-reinstatement.js';
+import { removeClosedSellerPlacedInstances } from './account-moderation.js';
 
 const SELLER_CREATE_RATE_LIMIT_MAX = 20;
 const SELLER_RENAME_RATE_LIMIT_MAX = 20;
@@ -226,6 +227,9 @@ async function handleSellers(request, env, db, route, url) {
       if (!stillExists) throw new HttpError('Seller not found', 404);
       throw new HttpError("Cannot delete this seller while a real-money purchase's proceeds are still unpaid — request a payout first", 409);
     }
+    // #3065: same post-commit step as cascadeDeleteAccount -- see there.
+    await removeClosedSellerPlacedInstances(db, route[1])
+      .catch((error) => console.error('DELETE /sellers/:id: failed to remove a closed seller\'s placed products', route[1], error));
     return json({ deleted: true });
   }
 

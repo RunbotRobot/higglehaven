@@ -205,6 +205,17 @@ export async function handleInstancePurchase(request, env, instanceId) {
   if (await isUserSuspended(db, seller?.user_id)) {
     throw new HttpError('This product is currently unavailable because its seller is suspended.', 400);
   }
+  // #3065: a template that names a seller_id whose sellers row no longer
+  // exists belongs to a seller who deleted their profile or account (every
+  // existing seller_id was backfilled into `sellers` by migration 0037, so a
+  // dangling one can only mean deletion). It used to fall through as if it
+  // were a system/placeholder template and the sale went ahead with nobody
+  // to pay. Genuine system templates have a NULL seller_id and are
+  // unaffected. Covers listings from before closed_sellers recorded
+  // self-deletions, which the closed_sellers check above cannot see.
+  if (template.seller_id && !seller) {
+    throw new HttpError('This product is no longer available.', 400);
+  }
   if (seller?.stripe_account_id && seller.stripe_onboarding_status === 'complete' && stripeConfigured(env)) {
     return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label);
   }
