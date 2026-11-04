@@ -1,7 +1,7 @@
 import {
   applyD1Migrations, env, SELF, createExecutionContext, createScheduledController, waitOnExecutionContext,
 } from 'cloudflare:test';
-import { beforeAll, describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import worker from './index.js';
 import { cleanupUnreferencedModels, scheduledModelCleanup } from './lib/models.js';
 import {
@@ -405,6 +405,44 @@ describe('Worker API', () => {
     expect(manualCleanup.response.status).toBe(200);
     expect(manualCleanup.body.targetModelUrls).toContain(fresh.modelUrl);
     expect((await SELF.fetch(`https://higglehaven.test${fresh.modelUrl}`)).status).toBe(404);
+  });
+
+  // #3107: the wizard's form has no deadline, so the sweep's grace must
+  // outlast a slow form, not just a slow upload; and re-uploading an old
+  // identical unreferenced file must refresh it rather than hand back an
+  // object that is about to be swept.
+  it('scheduled sweep keeps an unreferenced upload for a day and a dedup re-upload refreshes it (#3107)', async () => {
+    const ipHeaders = { 'cf-connecting-ip': `test-${crypto.randomUUID()}` };
+    const form = new FormData();
+    form.set('file', glbFile({ json: '{"slowFormSeller3107":true}' }));
+    const upload = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form, headers: ipHeaders });
+    const { modelUrl } = await upload.json();
+    const key = modelUrl.replace('/uploads/', '');
+
+    const realNow = Date.now();
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(realNow + 2 * 60 * 60 * 1000);
+    try {
+      await scheduledModelCleanup(env);
+      expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(200);
+      nowSpy.mockReturnValue(realNow + 25 * 60 * 60 * 1000);
+      await scheduledModelCleanup(env);
+      expect((await SELF.fetch(`https://higglehaven.test${modelUrl}`)).status).toBe(404);
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    const form2 = new FormData();
+    form2.set('file', glbFile({ json: '{"dedupRefresh3107":true}' }));
+    const first = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form2, headers: ipHeaders });
+    const firstKey = (await first.json()).modelUrl.replace('/uploads/', '');
+    const before = (await env.MODELS.head(firstKey)).uploaded.getTime();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const form3 = new FormData();
+    form3.set('file', glbFile({ json: '{"dedupRefresh3107":true}' }));
+    const again = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form3, headers: ipHeaders });
+    expect((await again.json()).deduplicated).toBe(true);
+    expect((await env.MODELS.head(firstKey)).uploaded.getTime()).toBeGreaterThan(before);
+    expect(key).not.toBe(firstKey);
   });
 
   // Companion to the grace-period test above: proves minAgeMs's own
