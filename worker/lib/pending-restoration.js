@@ -56,6 +56,11 @@ export function pendingRestorationFromRow(row) {
       z: instance.z_m ?? null,
     },
     removedAt: row.removed_at,
+    // #3095: the id the removed placement had, so a Build tab that was open
+    // when the removal happened can drop exactly those meshes (and nothing
+    // else -- never an item the builder just placed that hasn't reached the
+    // server yet). A restore gets a fresh id, so this one never comes back.
+    removedInstanceId: instance.instance_id ?? null,
     // False once the suspension has been lifted but this slot could not be
     // restored (e.g. its template was deleted meanwhile) -- it stays
     // listed so the builder can clear it rather than waiting forever.

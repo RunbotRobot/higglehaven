@@ -89,6 +89,9 @@ function renderSlots(slots) {
   }
 }
 
+// Returns the fetched slots (so a caller that needs them, such as the Build
+// tab-focus reconcile in scene.js, doesn't fetch twice), or null when the
+// fetch failed or a newer refresh superseded this one.
 export async function refresh() {
   const myLoadToken = ++loadToken;
   let slots;
@@ -98,10 +101,11 @@ export async function refresh() {
     // Signed out, no builder profile, or a transient failure: nothing to
     // show, and nothing here is worth interrupting Build mode for.
     if (myLoadToken === loadToken) renderSlots([]);
-    return;
+    return null;
   }
-  if (myLoadToken !== loadToken) return; // superseded by a newer refresh
+  if (myLoadToken !== loadToken) return null; // superseded by a newer refresh
   renderSlots(slots);
+  return slots;
 }
 
 function openModal() {

@@ -97,6 +97,9 @@ describe('Builder-facing pending restoration (#2987)', () => {
       templateName: `Pending fixture ${templateId}`,
       position: { x: 3, y: 5 },
       sellerSuspended: true,
+      // #3095: the removed placement's original id, so an open Build tab can
+      // drop exactly that mesh.
+      removedInstanceId: 'pr-list-instance',
     });
     expect(pending[0].snapshotId).toBeTruthy();
     expect(pending[0].removedAt).toBeTruthy();
