@@ -468,12 +468,11 @@ export async function handleProductFlags(request, db, route) {
     ).run();
     // Re-checked after the insert (not a cached count from before it) so a
     // concurrent flag from a different builder landing in between is never
-    // silently lost from the threshold decision. pendingCount stays the
-    // real, unweighted flag count (what admins see as "how many accounts
-    // flagged this") -- pendingWeight is the separate, signal-adjusted sum
-    // the auto-hide decision actually uses.
-    const { pendingCount, pendingWeight } = await db.prepare(`
-      SELECT COUNT(*) AS pendingCount, COALESCE(SUM(weight), 0) AS pendingWeight
+    // silently lost from the threshold decision. pendingWeight is the
+    // signal-adjusted sum the auto-hide decision uses (admins see it next to
+    // the raw count in GET /api/product-flags).
+    const { pendingWeight } = await db.prepare(`
+      SELECT COALESCE(SUM(weight), 0) AS pendingWeight
       FROM product_flags WHERE template_id = ? AND status = 'pending'
     `).bind(templateId).first();
     let autoHidden = false;
@@ -515,7 +514,11 @@ export async function handleProductFlags(request, db, route) {
         }
       }
     }
-    return json({ flagId, pendingCount, pendingWeight, autoHidden }, 201);
+    // #3087: the flagger gets nothing but their own flag id back. pendingCount
+    // / pendingWeight / autoHidden would let a brigading actor read their own
+    // anti-abuse weighting (1, 0.5 or 0) and probe the IP/device dedup, so
+    // admins see the numbers (GET /api/product-flags) and flaggers never do.
+    return json({ flagId }, 201);
   }
 
   if (request.method === 'POST' && route.length === 4 && route[3] === 'resolve') {
@@ -808,6 +811,7 @@ export async function handleProductFlagsList(request, db, url) {
       ct.name AS templateName,
       ct.seller_id AS sellerId,
       COUNT(*) AS pendingCount,
+      COALESCE(SUM(pf.weight), 0) AS pendingWeight,
       MIN(pf.created_at) AS firstFlaggedAt,
       MAX(pf.created_at) AS lastFlaggedAt
     FROM product_flags pf
