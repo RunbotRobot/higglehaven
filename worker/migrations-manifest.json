@@ -174,5 +174,6 @@
   "0174_suspended_seller_instance_snapshots.sql",
   "0175_suspended_seller_snapshot_retained_info.sql",
   "0176_ncmec_reports.sql",
-  "0177_purchases_last_dispute_event_at.sql"
+  "0177_closed_sellers.sql",
+  "0178_purchases_last_dispute_event_at.sql"
 ]
