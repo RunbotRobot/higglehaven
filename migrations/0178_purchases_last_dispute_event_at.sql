@@ -1,0 +1,15 @@
+-- #3060: the dispute-reversal webhook (worker/lib/stripe.js's
+-- handlePurchaseReversalWebhookEvent) used to treat charge.dispute.funds_withdrawn
+-- and charge.dispute.funds_reinstated as independent events. Stripe does not
+-- guarantee delivery order, and a failed delivery is retried for days, so a
+-- funds_withdrawn (emitted first) could land AFTER the funds_reinstated that
+-- followed it (dispute won): the early funds_reinstated found nothing to
+-- reinstate and did nothing, then the late funds_withdrawn reversed the sale
+-- for good, and Stripe never sends the reinstatement again.
+--
+-- last_dispute_event_at is the Stripe `created` time (unix seconds) of the
+-- newest funds_withdrawn/funds_reinstated event applied OR seen for this
+-- purchase, so an older event arriving later can be recognised as stale and
+-- ignored. NULL until the first such event, which is also what an event with
+-- no `created` field leaves it as (those keep the pre-#3060 behaviour).
+ALTER TABLE purchases ADD COLUMN last_dispute_event_at INTEGER;

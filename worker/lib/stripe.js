@@ -167,6 +167,28 @@ async function handlePurchaseReversalWebhookEvent(db, event) {
   const purchase = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
   if (!purchase) return;
 
+  // #3060: Stripe does not guarantee webhook delivery order, and a failed
+  // delivery is retried for days. funds_withdrawn and funds_reinstated are
+  // two states of one dispute, so the newest by Stripe's own `created` time
+  // must win: a funds_withdrawn delivered after the funds_reinstated that
+  // followed it would otherwise reverse a dispute the merchant already won,
+  // for good (funds_reinstated only acts on an already-reversed purchase, so
+  // an early one is a no-op, and Stripe never resends it). Recording the
+  // time even when the event itself changes nothing is what lets the late,
+  // older one be recognised as stale. An event with no numeric `created`
+  // skips this and behaves as before. charge.refunded is a different,
+  // monotonic signal (money only goes out) and is deliberately not ordered.
+  if (
+    (event.type === 'charge.dispute.funds_withdrawn' || event.type === 'charge.dispute.funds_reinstated')
+    && Number.isFinite(event.created)
+  ) {
+    const recorded = await db.prepare(
+      `UPDATE purchases SET last_dispute_event_at = ?
+       WHERE purchase_id = ? AND (last_dispute_event_at IS NULL OR last_dispute_event_at <= ?)`,
+    ).bind(event.created, purchase.purchase_id, event.created).run();
+    if (recorded.meta.changes === 0) return;
+  }
+
   // #2419 (owner decision 2026-10-25): charge.dispute.funds_reinstated is
   // the real-money counterpart to funds_withdrawn below -- the card
   // network returned the previously-withheld funds because the dispute
