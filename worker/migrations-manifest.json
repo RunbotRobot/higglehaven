@@ -188,5 +188,6 @@
   "0188_user_blocks.sql",
   "0189_earnings_events_purchase_id.sql",
   "0190_purchases_seller_user_id.sql",
-  "0191_direct_messages_user_id.sql"
+  "0191_direct_messages_user_id.sql",
+  "0192_saved_layout_sign_calendar_content.sql"
 ]

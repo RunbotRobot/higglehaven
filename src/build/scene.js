@@ -1837,7 +1837,7 @@ levelRemoveBtn.addEventListener('click', async () => {
   levelActionBusy = true;
   setLevelButtonsDisabled(true);
   try {
-    const sweptInstanceIds = await deleteLandletLevel(currentLandletId, currentLevelIndex);
+    const { sweptInstanceIds, savedSignPostCount, savedCalendarEventCount } = await deleteLandletLevel(currentLandletId, currentLevelIndex);
     // #901: the server already deleted these instances (archiving them into
     // a saved layout first) — without pruning them here too, their meshes
     // stay selectable/draggable in the scene and can later get swept into
@@ -1864,9 +1864,18 @@ levelRemoveBtn.addEventListener('click', async () => {
     // #3099: the server archives whatever was on the level into a saved
     // layout before deleting it, but nothing on screen said so -- the items
     // just vanished. Say what happened and where they went.
+    // #1756: signs and calendars keep their posts/events in the saved layout
+    // too, and pasting it back restores them -- say so, since that is the
+    // part a builder would otherwise assume was lost.
     const sweptCount = (sweptInstanceIds || []).length;
+    const keptContentNote = savedSignPostCount + savedCalendarEventCount > 0
+      ? ` Their ${[
+        savedSignPostCount > 0 ? `${savedSignPostCount} sign post${savedSignPostCount === 1 ? '' : 's'}` : '',
+        savedCalendarEventCount > 0 ? `${savedCalendarEventCount} calendar event${savedCalendarEventCount === 1 ? '' : 's'}` : '',
+      ].filter(Boolean).join(' and ')} come back with them.`
+      : '';
     setLevelStatus(sweptCount > 0
-      ? `${sweptCount} item${sweptCount === 1 ? '' : 's'} on that level ${sweptCount === 1 ? 'was' : 'were'} taken off your land. ${sweptCount === 1 ? 'It is' : 'They are'} saved in Saved Layouts (Settings) if you want ${sweptCount === 1 ? 'it' : 'them'} back.`
+      ? `${sweptCount} item${sweptCount === 1 ? '' : 's'} on that level ${sweptCount === 1 ? 'was' : 'were'} taken off your land. ${sweptCount === 1 ? 'It is' : 'They are'} saved in Saved Layouts (Settings) if you want ${sweptCount === 1 ? 'it' : 'them'} back.${keptContentNote}`
       : '');
     renderLevelControls();
   } catch (err) {

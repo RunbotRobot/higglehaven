@@ -292,7 +292,20 @@ describe('deleteLandletLevel', () => {
       ok: true,
       json: () => Promise.resolve({ deleted: true, sweptInstanceIds: ['a', 'b'] }),
     })));
-    await expect(deleteLandletLevel('landlet-1', 2)).resolves.toEqual(['a', 'b']);
+    // #1756: an older server omits the kept-content counts; they read as 0.
+    await expect(deleteLandletLevel('landlet-1', 2)).resolves.toEqual({
+      sweptInstanceIds: ['a', 'b'], savedSignPostCount: 0, savedCalendarEventCount: 0,
+    });
+  });
+
+  it('returns how many sign posts and calendar events the saved layout kept (#1756)', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ deleted: true, sweptInstanceIds: ['a'], savedSignPostCount: 3, savedCalendarEventCount: 1 }),
+    })));
+    await expect(deleteLandletLevel('landlet-1', 2)).resolves.toEqual({
+      sweptInstanceIds: ['a'], savedSignPostCount: 3, savedCalendarEventCount: 1,
+    });
   });
 });
 

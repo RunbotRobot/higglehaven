@@ -412,6 +412,44 @@ export async function handleInstances(request, env, route, url) {
         await db.prepare('DELETE FROM calendar_events WHERE instance_id = ?').bind(instance.instanceId).run();
       }
     }
+    // #1756 (*No silent loss*): pasting a saved layout (POST only -- a PUT
+    // never creates through this path for content) puts back the posts/events
+    // that were snapshotted when the level was removed. Each statement
+    // re-checks everything live: the saved layout must be the caller's own,
+    // the new instance must really carry the matching community flag, and a
+    // sign/calendar that already has content is left alone (a retried paste
+    // must not double it).
+    if (request.method === 'POST') {
+      const restoreStatements = [];
+      instances.forEach((instance, index) => {
+        if (rejectedSet.has(instance.instanceId)) return;
+        const from = input.instances[index]?.restoreContentFrom;
+        if (!from || typeof from.savedLayoutId !== 'string' || typeof from.sourceInstanceId !== 'string') return;
+        if (instance.isCommunitySign) {
+          restoreStatements.push(db.prepare(`
+            INSERT INTO sign_posts (post_id, instance_id, author_label, text, created_at, user_id)
+            SELECT 'post-' || lower(hex(randomblob(16))), ?, s.author_label, s.text, s.created_at, s.user_id
+            FROM saved_layout_sign_posts s
+            WHERE s.saved_layout_id = ? AND s.source_instance_id = ?
+              AND EXISTS (SELECT 1 FROM saved_level_layouts l WHERE l.saved_layout_id = s.saved_layout_id AND l.builder_id = ?)
+              AND EXISTS (SELECT 1 FROM placed_instances p WHERE p.instance_id = ? AND p.is_community_sign = 1)
+              AND NOT EXISTS (SELECT 1 FROM sign_posts WHERE instance_id = ?)
+          `).bind(instance.instanceId, from.savedLayoutId, from.sourceInstanceId, sessionBuilder.builder_id, instance.instanceId, instance.instanceId));
+        }
+        if (instance.isCommunityCalendar) {
+          restoreStatements.push(db.prepare(`
+            INSERT INTO calendar_events (event_id, instance_id, author_label, text, created_at, scheduled_at, triggered_at, user_id)
+            SELECT 'event-' || lower(hex(randomblob(16))), ?, s.author_label, s.text, s.created_at, s.scheduled_at, s.triggered_at, s.user_id
+            FROM saved_layout_calendar_events s
+            WHERE s.saved_layout_id = ? AND s.source_instance_id = ?
+              AND EXISTS (SELECT 1 FROM saved_level_layouts l WHERE l.saved_layout_id = s.saved_layout_id AND l.builder_id = ?)
+              AND EXISTS (SELECT 1 FROM placed_instances p WHERE p.instance_id = ? AND p.is_community_calendar = 1)
+              AND NOT EXISTS (SELECT 1 FROM calendar_events WHERE instance_id = ?)
+          `).bind(instance.instanceId, from.savedLayoutId, from.sourceInstanceId, sessionBuilder.builder_id, instance.instanceId, instance.instanceId));
+        }
+      });
+      if (restoreStatements.length > 0) await db.batch(restoreStatements);
+    }
     const stored = await getInstancesById(db, succeededInstanceIds);
     return json({
       instances: succeededInstanceIds.map((instanceId) => stored.get(instanceId)),

@@ -633,6 +633,13 @@ export function savedLayoutInstanceFromRow(row) {
     scale: row.scale,
     isCommunitySign: Boolean(row.is_community_sign),
     isCommunityCalendar: Boolean(row.is_community_calendar),
+    // #1756: the paste (POST /instances/batch, the client spreads each saved
+    // instance straight into its payload) names where to copy a swept sign's
+    // posts or calendar's events back from. Only meaningful on a flagged
+    // instance; the server ignores it otherwise.
+    ...(row.is_community_sign || row.is_community_calendar
+      ? { restoreContentFrom: { savedLayoutId: row.saved_layout_id, sourceInstanceId: row.source_instance_id } }
+      : {}),
   };
 }
 
