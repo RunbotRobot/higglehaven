@@ -1750,9 +1750,18 @@ and a derived onboarding status are kept.
   "connected": false,
   "status": "not_started",
   "requirementsCurrentlyDue": [],
+  "stripeStepRequirements": [],
   "updatedAt": null
 }
 ```
+
+`stripeStepRequirements` (#2928) is the part of `requirementsCurrentlyDue`
+that our own forms never collect and Stripe must, such as
+`individual.id_number` (a full SSN/ITIN) or `individual.verification.*`
+(ID documents); it is empty when everything due is a field our forms
+already send. The platform never collects those itself, not even in
+transit, so a non-empty list means the person needs Stripe's own
+onboarding step (the hand-off is a separate change).
 
 `configured` is `false` whenever this server has no `STRIPE_SECRET_KEY`
 Worker secret set (e.g. local dev, the automated test suite) — same
