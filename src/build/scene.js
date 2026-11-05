@@ -57,6 +57,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { createCoalescingSaveQueue } from '../coalescingSaveQueue.js';
 import {
   createInstanceRemote, updateInstanceRemote, deleteInstanceRemote,
   createInstancesRemote, upsertInstancesRemote, deleteInstancesRemote,
@@ -1342,6 +1343,72 @@ export function isNetworkError(err) {
   return err instanceof TypeError;
 }
 
+// #1576: the single-item syncs above deliberately stay quiet about network
+// blips (the connectivity icon covers those), but a request the server
+// actually answered and refused -- a concurrent edit from another tab, an
+// out-of-range position, a suspended seller's product -- used to vanish into
+// console.warn: the item stayed where it was dropped, saved only on this
+// device, and silently reverted on a later reload (No silent loss; the
+// builder has full information). Now the builder is told, in plain words,
+// and the scene is put back to what the server has -- the same reshaping the
+// refocus reconcile uses. A 404 stays silent (the item is already gone
+// server-side, which is what a reconcile would conclude anyway).
+function isServerRejection(err) {
+  // A definitive "no" (400-499) -- not a 404 (already gone), 408 or 429 (the
+  // request is fine, the server was just busy), nor a 5xx (a transient fault):
+  // reverting the builder's edit on those would throw away a change that may
+  // simply need another try.
+  const status = err?.status;
+  return typeof status === 'number' && status >= 400 && status < 500
+    && status !== 404 && status !== 408 && status !== 429 && !isNetworkError(err);
+}
+
+async function revertSceneToServer() {
+  // Only when this is the one save in flight and nothing else is being edited:
+  // a snapshot of the server taken now would otherwise overwrite work that
+  // has not finished saving.
+  if (syncsInFlight !== 1 || sceneMutationBusy
+    || translateControls.dragging || rotateControls.dragging || trimControls.dragging) return false;
+  const landletId = currentLandletId;
+  const editSeqAtStart = layoutEditSeq;
+  let serverInstances;
+  try {
+    serverInstances = await fetchInstances(landletId);
+  } catch (error) {
+    console.warn('Could not reconcile with the server after a rejected save:', error);
+    return false;
+  }
+  if (landletId !== currentLandletId || editSeqAtStart !== layoutEditSeq || syncsInFlight !== 1) return false;
+  try {
+    await applyServerInstances(serverInstances);
+  } catch (error) {
+    console.warn('Reconciling with the server after a rejected save failed:', error);
+    return false;
+  }
+  return true;
+}
+
+async function handleRejectedSingleSync(err, action) {
+  // A 5xx/429/408 is still worth telling the builder about, but the edit
+  // stays on screen for another try.
+  const answered = typeof err?.status === 'number' && err.status !== 404 && !isNetworkError(err);
+  if (!answered) {
+    noteSyncFailure(err);
+    return;
+  }
+  const reverted = isServerRejection(err) && await revertSceneToServer();
+  if (!reverted) noteSyncFailure(err);
+  if (isSuspendedSellerSyncError(err)) {
+    alert("That item was taken off your land because its seller is suspended. It's saved under Removed Items and will return if the suspension is lifted.");
+    return;
+  }
+  const what = action === 'delete' ? "Couldn't delete that item" : action === 'create' ? "Couldn't save that new item" : "Couldn't save that change";
+  const outcome = reverted
+    ? 'It has been put back the way it is saved.'
+    : 'It may not survive a reload.';
+  alert(`${what} to the server. ${outcome} ${err.message || ''}`.trim());
+}
+
 async function syncCreate(mesh) {
   const attemptId = nextSyncAttempt();
   try {
@@ -1350,14 +1417,28 @@ async function syncCreate(mesh) {
   } catch (err) {
     console.warn('Failed to sync new instance to backend:', err);
     if (isNetworkError(err)) reportSyncResult(attemptId, false);
-    noteSyncFailure(err);
+    await handleRejectedSingleSync(err, 'create');
   } finally {
     syncSettled();
   }
 }
 
-export async function syncUpdate(mesh) {
-  const attemptId = nextSyncAttempt();
+// #1062: two quick drags of one instance used to fire two PATCHes that could
+// land out of order, so the earlier position silently overwrote the later one
+// server-side. Saves for one instance now run one at a time through
+// src/coalescingSaveQueue.js, which reads the mesh's state only when a save
+// actually starts.
+const updateQueue = createCoalescingSaveQueue(sendInstanceUpdate);
+
+export function syncUpdate(mesh) {
+  // Counted from queueing, not only from sending (see #3101 above).
+  return updateQueue.request(mesh.userData.instanceId, mesh, () => { syncsInFlight += 1; });
+}
+
+// Never rejects: every failure is reported through the connectivity
+// indicator / noteSyncFailure, same as before.
+async function sendInstanceUpdate(mesh) {
+  const attemptId = ++syncAttemptSeq;
   try {
     const { instanceId, ...patch } = instanceFromMesh(mesh);
     await updateInstanceRemote(instanceId, patch);
@@ -1365,7 +1446,7 @@ export async function syncUpdate(mesh) {
   } catch (err) {
     console.warn('Failed to sync instance update to backend:', err);
     if (isNetworkError(err)) reportSyncResult(attemptId, false);
-    noteSyncFailure(err);
+    await handleRejectedSingleSync(err, 'update');
   } finally {
     syncSettled();
   }
@@ -1379,7 +1460,7 @@ async function syncDelete(instanceId) {
   } catch (err) {
     console.warn('Failed to sync instance delete to backend:', err);
     if (isNetworkError(err)) reportSyncResult(attemptId, false);
-    noteSyncFailure(err);
+    await handleRejectedSingleSync(err, 'delete');
   } finally {
     syncSettled();
   }
@@ -2101,6 +2182,43 @@ function meshDiffersFromInstance(mesh, inst) {
     || (mesh.userData.groupId ?? null) !== (inst.groupId ?? null);
 }
 
+// Makes the live scene match the server's instance list (the same reshaping
+// undo/redo uses), and reports whether anything had to change. Shared by the
+// refocus reconcile below and by the rejected-save recovery (#1576).
+async function applyServerInstances(serverInstances) {
+  const serverById = new Map(serverInstances.map((inst) => [inst.instanceId, inst]));
+  const localIds = new Set(productMeshes.map((mesh) => mesh.userData.instanceId));
+  const membershipChanged = serverInstances.some((inst) => !localIds.has(inst.instanceId))
+    || productMeshes.some((mesh) => !serverById.has(mesh.userData.instanceId));
+  const anyChanged = membershipChanged
+    || productMeshes.some((mesh) => meshDiffersFromInstance(mesh, serverById.get(mesh.userData.instanceId)));
+  if (!anyChanged) return false;
+
+  if (!beginSceneMutation()) return false;
+  try {
+    const { deletedIds } = await applySnapshotLocally(serverInstances);
+    // applySnapshotLocally reshapes position/rotation/scale/crop/flags but
+    // not group membership, which only the server's group/ungroup endpoints change.
+    for (const mesh of productMeshes) {
+      const inst = serverById.get(mesh.userData.instanceId);
+      if (inst) mesh.userData.groupId = inst.groupId ?? null;
+    }
+    updateSelectionUI();
+    persistLayout();
+    // Undo/Redo history describes a layout that no longer exists once items
+    // were added or removed elsewhere: replaying it would delete what the
+    // other tab added and recreate what it deleted.
+    if (membershipChanged) {
+      undoStack.length = 0;
+      redoStack.length = 0;
+    }
+    if (deletedIds.length > 0) refreshPendingRestorations();
+  } finally {
+    endSceneMutation();
+  }
+  return true;
+}
+
 async function reconcileOnRefocus() {
   if (document.visibilityState !== 'visible') return;
   if (reconcileRunning || Date.now() - lastReconcileAt < RECONCILE_MIN_INTERVAL_MS) return;
@@ -2123,36 +2241,7 @@ async function reconcileOnRefocus() {
     // fetched may already be stale relative to their edit: skip this round.
     if (landletId !== currentLandletId || editSeqAtStart !== layoutEditSeq || syncSeqAtStart !== syncAttemptSeq || !canReconcileNow()) return;
 
-    const serverById = new Map(serverInstances.map((inst) => [inst.instanceId, inst]));
-    const localIds = new Set(productMeshes.map((mesh) => mesh.userData.instanceId));
-    const membershipChanged = serverInstances.some((inst) => !localIds.has(inst.instanceId))
-      || productMeshes.some((mesh) => !serverById.has(mesh.userData.instanceId));
-    const anyChanged = membershipChanged
-      || productMeshes.some((mesh) => meshDiffersFromInstance(mesh, serverById.get(mesh.userData.instanceId)));
-    if (!anyChanged) return;
-
-    if (!beginSceneMutation()) return;
-    try {
-      const { deletedIds } = await applySnapshotLocally(serverInstances);
-      // applySnapshotLocally reshapes position/rotation/scale/crop/flags but
-      // not group membership, which only the server's group/ungroup endpoints change.
-      for (const mesh of productMeshes) {
-        const inst = serverById.get(mesh.userData.instanceId);
-        if (inst) mesh.userData.groupId = inst.groupId ?? null;
-      }
-      updateSelectionUI();
-      persistLayout();
-      // Undo/Redo history describes a layout that no longer exists once items
-      // were added or removed elsewhere: replaying it would delete what the
-      // other tab added and recreate what it deleted.
-      if (membershipChanged) {
-        undoStack.length = 0;
-        redoStack.length = 0;
-      }
-      if (deletedIds.length > 0) refreshPendingRestorations();
-    } finally {
-      endSceneMutation();
-    }
+    await applyServerInstances(serverInstances);
   } catch (err) {
     console.warn('Reconciling with the server on refocus failed:', err);
   } finally {
@@ -4811,7 +4900,7 @@ async function renderAuctionSection() {
   if (!builderId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
-    note.textContent = 'Choose a builder identity to start or bid on an auction.';
+    note.textContent = 'Set up your profile to start or bid on an auction.';
     settingsSectionEl.appendChild(note);
     return;
   }
@@ -5248,7 +5337,7 @@ async function renderLowStockSection() {
   if (!builderId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
-    note.textContent = 'Choose a builder identity to see which of your placed products are low on stock.';
+    note.textContent = 'Set up your profile to see which of your placed products are low on stock.';
     settingsSectionEl.appendChild(note);
     return;
   }

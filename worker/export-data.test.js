@@ -402,16 +402,24 @@ describe('GET /auth/export-data -- social section (#1986)', () => {
 
   it('does not exceed D1\'s bound-parameter cap when a builder has more than 100 distinct friendships (#2703)', async () => {
     const alice = await signupBuilder('export-social-many-friends-alice');
+    // #3145: friendships key on the account, so each friend is a real user
+    // with a builder profile; Alice's own user id comes from hers.
+    const aliceUserId = (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?')
+      .bind(alice.builderId).first()).user_id;
     const otherIds = [];
     for (let i = 0; i < 101; i++) {
       const otherId = `export-social-many-friends-other-${i}`;
+      const otherUserId = `export-social-many-friends-user-${i}`;
       otherIds.push(otherId);
       await env.DB.prepare(
-        'INSERT INTO builders (builder_id, label) VALUES (?, ?)',
-      ).bind(otherId, `export-social-many-friends-other-${i}`).run();
+        'INSERT INTO users (user_id, email, username, password_hash) VALUES (?, ?, ?, ?)',
+      ).bind(otherUserId, `export-many-friends-${i}@example.test`, `export-many-friends-${i}`, 'x').run();
       await env.DB.prepare(
-        "INSERT INTO friendships (friendship_id, requester_builder_id, recipient_builder_id, status) VALUES (?, ?, ?, 'accepted')",
-      ).bind(`export-social-many-friends-${i}`, alice.builderId, otherId).run();
+        'INSERT INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)',
+      ).bind(otherId, `export-social-many-friends-other-${i}`, otherUserId).run();
+      await env.DB.prepare(
+        "INSERT INTO friendships (friendship_id, requester_user_id, recipient_user_id, status) VALUES (?, ?, ?, 'accepted')",
+      ).bind(`export-social-many-friends-${i}`, aliceUserId, otherUserId).run();
     }
 
     const aliceExport = await api('/auth/export-data', alice.session());

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { LANDLET_SIDE_M } from './state.js';
+import { watchMainRendererContext } from './contextLoss.js';
 
 // #2552 (part of #2504/#2500's src/main.js module split, see #2503's design
 // comment for the full dependency map): the Three.js engine primitives
@@ -38,6 +39,8 @@ camera.lookAt(0, 0, 0);
 export const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
 renderer.setSize(window.innerWidth, window.innerHeight);
+// #1318: tell the user if the browser takes the WebGL context away.
+watchMainRendererContext(renderer);
 
 export function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;

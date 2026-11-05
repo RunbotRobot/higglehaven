@@ -72,19 +72,16 @@ export async function handleBlocks(request, db, route) {
     if (!targetUserId) throw new HttpError('That person could not be found', 404);
     if (targetUserId === user.user_id) throw new HttpError("You can't block yourself", 400);
     // One atomic batch: the block row, and the silent severing of any
-    // friendship or pending request between the two people. Friendships are
-    // still keyed on builder ids (#3141 migrates them), so both directions
-    // are matched through each account's builder profile. No notification
+    // friendship or pending request between the two people. Friendships key on
+    // user ids (#3145), so both directions are matched directly. No notification
     // is written for either side: a block is silent.
     await db.batch([
       db.prepare('INSERT OR IGNORE INTO user_blocks (blocker_user_id, blocked_user_id) VALUES (?, ?)')
         .bind(user.user_id, targetUserId),
       db.prepare(`
         DELETE FROM friendships
-        WHERE (requester_builder_id IN (SELECT builder_id FROM builders WHERE user_id = ?)
-               AND recipient_builder_id IN (SELECT builder_id FROM builders WHERE user_id = ?))
-           OR (requester_builder_id IN (SELECT builder_id FROM builders WHERE user_id = ?)
-               AND recipient_builder_id IN (SELECT builder_id FROM builders WHERE user_id = ?))
+        WHERE (requester_user_id = ? AND recipient_user_id = ?)
+           OR (requester_user_id = ? AND recipient_user_id = ?)
       `).bind(user.user_id, targetUserId, targetUserId, user.user_id),
       // #3143: a block severs friend voice channel membership the same way it
       // severs the friendship -- the blocked person leaves the blocker's

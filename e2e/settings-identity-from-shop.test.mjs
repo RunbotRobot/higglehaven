@@ -74,8 +74,8 @@ console.log('Land Cap field text for a fresh, already-logged-in visitor (should 
 // though this visitor is logged in — should now reach the real
 // "claim a lándlet first" copy instead.
 const auctionSectionText = await waitForText(page, '#settings-section', 'Claim a lándlet first to auction it off.');
-const stillShowsIdentityPrompt = auctionSectionText.includes('Choose a builder identity');
-console.log('Settings > Build section text (should mention "Claim a lándlet first", must NOT still say "Choose a builder identity"):', auctionSectionText);
+const stillShowsIdentityPrompt = auctionSectionText.includes('Set up your profile');
+console.log('Settings > Build section text (should mention "Claim a lándlet first", must NOT still say "Set up your profile"):', auctionSectionText);
 
 // formatArea comma-groups thousands by default (owner feedback) — see
 // land-cap.test.mjs's own comment on this — so a 1000m² cap reads "1,000m²".
