@@ -1,6 +1,4 @@
 // #3140 (sub-issue 1/2 of #3124): durable, silent blocks keyed on user_id.
-// Covers the table's API only; the per-surface filters that make a block
-// take effect are #3143.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { api, signupBuilder } from './test-helpers.js';
