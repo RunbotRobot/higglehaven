@@ -25,6 +25,7 @@ import { readJson, stringValue } from './validation.js';
 import { clawBackPurchaseCommission, notifySellerOfSaleChange } from './purchase-lifecycle.js';
 import { purchaseSellerShareCents } from './seller-payouts-tax.js';
 import { fireNotification } from './notifications.js';
+import { finalizeSucceededPaymentIntent } from './purchase-creation.js';
 import {
   stripeConfigured, stripeRequest, deriveStripeOnboardingStatus, userFromRow, formatCents,
 } from '../index.js';
@@ -135,6 +136,18 @@ export async function handleStripeWebhook(request, env, db) {
       ...(hasCreated ? [event.created, account.id, event.created] : [account.id]),
     );
     await db.batch([mk('sellers'), mk('builders')]);
+    return json({ received: true });
+  }
+  if (event.type === 'payment_intent.succeeded') {
+    // #782: backstop for a charge that succeeded while the buyer's finalize
+    // call never landed. Only intents our own checkout created (it stamps
+    // instanceId/templateId into metadata); anything else is ignored. The
+    // event object is the PaymentIntent itself and the signature above
+    // already authenticated it. A failure throws so Stripe redelivers.
+    const paymentIntent = event.data?.object;
+    if (paymentIntent?.id && paymentIntent.metadata?.instanceId && paymentIntent.metadata?.templateId) {
+      await finalizeSucceededPaymentIntent(env, paymentIntent);
+    }
     return json({ received: true });
   }
   if (STRIPE_PURCHASE_REVERSAL_EVENT_TYPES.includes(event.type)) {
