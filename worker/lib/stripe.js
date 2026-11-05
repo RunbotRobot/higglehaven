@@ -22,7 +22,7 @@ import { readJson, stringValue } from './validation.js';
 // #2615 moved clawBackPurchaseCommission out of worker/index.js into
 // worker/lib/purchase-lifecycle.js -- this webhook's own chargeback path
 // still needs it, just from its new home.
-import { clawBackPurchaseCommission, notifySellerOfSaleChange } from './purchase-lifecycle.js';
+import { clawBackPurchaseCommission, notifyBuyerOfRefund, notifySellerOfSaleChange } from './purchase-lifecycle.js';
 import { purchaseSellerShareCents } from './seller-payouts-tax.js';
 import { fireNotification } from './notifications.js';
 import {
@@ -352,6 +352,9 @@ async function handlePartialRefundWebhookEvent(db, purchase, charge) {
     'UPDATE purchases SET refunded_amount_cents = ? WHERE purchase_id = ? AND refunded_at IS NULL AND refunded_amount_cents = ?',
   ).bind(newRefundedCents, purchase.purchase_id, purchase.refunded_amount_cents).run();
   if (guard.meta.changes === 0) return;
+
+  // #1304: the buyer is told the newly refunded amount.
+  await notifyBuyerOfRefund(db, purchase, newRefundedCents - purchase.refunded_amount_cents, { partial: true });
 
   // #3072: the seller's share shrinks by the same refunded fraction the
   // payout and 1099-K math use -- tell them, whether or not a hosting builder exists.

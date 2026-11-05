@@ -62,12 +62,18 @@ async function createSellerPurchase(label, paymentIntentId) {
   const { purchaseId } = purchased.body.purchase;
   await env.DB.prepare('UPDATE purchases SET payment_intent_id = ? WHERE purchase_id = ?')
     .bind(paymentIntentId, purchaseId).run();
-  const row = await env.DB.prepare('SELECT total_cents, commission_cents FROM purchases WHERE purchase_id = ?')
+  const row = await env.DB.prepare('SELECT total_cents, commission_cents, buyer_builder_id FROM purchases WHERE purchase_id = ?')
     .bind(purchaseId).first();
   return {
-    seller, sellerBuilderId: sellerBuilder.body.builder.builderId, purchaseId,
+    seller, sellerBuilderId: sellerBuilder.body.builder.builderId, buyerBuilderId: row.buyer_builder_id, purchaseId,
     shareCents: row.total_cents - row.commission_cents, totalCents: row.total_cents,
   };
+}
+
+// In these fixtures the buyer is also the hosting builder, so their inbox
+// holds the commission notices too; buyer-side tests filter to the refund copy.
+async function buyerRefundNotices(builderId) {
+  return (await sellerNotices(builderId)).filter((m) => /^(Your|Part of your) payment for/.test(m));
 }
 
 async function sellerNotices(builderId) {
@@ -141,5 +147,39 @@ describe('The seller is told when a sale they earned is reversed (#3072)', () =>
     const row = await env.DB.prepare('SELECT refunded_at FROM purchases WHERE purchase_id = ?').bind(ctx.purchaseId).first();
     expect(row.refunded_at).not.toBeNull();
     expect(await sellerNotices(ctx.sellerBuilderId)).toEqual([]);
+  });
+});
+
+// #1304: No silent loss -- the buyer whose money comes back is told too.
+describe('The buyer is told when their payment is refunded (#1304)', () => {
+  it('a full refund webhook notifies the buyer once, with the amount', async () => {
+    const ctx = await createSellerPurchase('buyfull', 'pi_buyer_full');
+    expect(ctx.buyerBuilderId).toBeTruthy();
+    const event = chargeRefunded('pi_buyer_full', { refunded: true, amount_refunded: ctx.totalCents });
+    await postStripeWebhook(event);
+    await postStripeWebhook(event);
+    expect(await buyerRefundNotices(ctx.buyerBuilderId)).toEqual([
+      `Your payment for "Product buyfull" was refunded: ${dollars(ctx.totalCents)} is on its way back to your original payment method.`,
+    ]);
+  });
+
+  it('a partial refund notifies the buyer of the newly refunded amount', async () => {
+    const ctx = await createSellerPurchase('buypart', 'pi_buyer_part');
+    await postStripeWebhook(chargeRefunded('pi_buyer_part', { refunded: false, amount_refunded: 2000 }));
+    await postStripeWebhook(chargeRefunded('pi_buyer_part', { refunded: false, amount_refunded: 3000 }));
+    expect(await buyerRefundNotices(ctx.buyerBuilderId)).toEqual([
+      `Part of your payment for "Product buypart" was refunded: ${dollars(2000)} is on its way back to your original payment method.`,
+      `Part of your payment for "Product buypart" was refunded: ${dollars(1000)} is on its way back to your original payment method.`,
+    ]);
+  });
+
+  it('an in-app refund notifies the buyer once', async () => {
+    const ctx = await createSellerPurchase('buyinapp', 'pi_buyer_inapp');
+    await env.DB.prepare('UPDATE purchases SET payment_intent_id = NULL WHERE purchase_id = ?').bind(ctx.purchaseId).run();
+    await api(`/purchases/${ctx.purchaseId}/refund`, ctx.seller.session({ method: 'POST' }));
+    await api(`/purchases/${ctx.purchaseId}/refund`, ctx.seller.session({ method: 'POST' }));
+    const notices = await buyerRefundNotices(ctx.buyerBuilderId);
+    expect(notices).toHaveLength(1);
+    expect(notices[0]).toContain('Your payment for "Product buyinapp" was refunded');
   });
 });
