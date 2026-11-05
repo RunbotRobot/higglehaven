@@ -501,7 +501,11 @@ cadence rather than this file's usual one-shot-mutation ~20.
 of a verification result — unauthenticated (no session cookie to check),
 verified instead via an HMAC-SHA256 signature over the raw request body
 (`x-signature` header, keyed by `DIDIT_WEBHOOK_SECRET`), `401` on a
-missing or wrong signature. `503` if `DIDIT_WEBHOOK_SECRET` isn't
+missing or wrong signature. `401` too when the body's own signed `timestamp`
+(Unix seconds) is more than 5 minutes from now, the same replay window the
+Stripe and Tripo webhooks use (Didit's `X-Timestamp` header is not covered by
+its signatures, so it is not trusted); a body with no numeric `timestamp` is
+processed as before. `503` if `DIDIT_WEBHOOK_SECRET` isn't
 configured. Idempotent against a repeat delivery for the same session —
 only the first delivery (webhook or a status poll, whichever gets there
 first) applies the resulting `trustTier` change.
@@ -5510,7 +5514,11 @@ Requires an ID-verified session. Same forward-cursor poll shape as `GET
 "..." }`, `created_at ASC, message_id ASC`, same-cursor-echoed-back when
 quiet, `landletId` reflecting whichever landlet the response was computed
 for) — except `messages` here is only ever the caller's own inbox
-(`to_builder_id = caller`), not a landlet-wide feed. `landletId` is `null`
+(`to_builder_id = caller`), not a landlet-wide feed. **A proximity row is
+delivered to its addressee wherever they stand now (`#2955`)**: it was
+authorized when sent (sender and recipient in the same landlet), so two
+avatars walking across a landlet boundary mid-negotiation don't lose the
+signals already in flight. `landletId` is `null`
 when the caller has no recent-enough presence row — but unlike `GET
 /api/nearby-chat` (which really does return nothing in that case,
 `nearby-chat` being inherently landlet-scoped), this still returns any
@@ -9295,6 +9303,12 @@ notice (see its own comment on why):
   threshold's own second leg (200 transactions) and any lower state
   thresholds are **not** modeled yet — a known gap, not a silent
   miscalculation, flagged in #645's own GitHub issue.
+  The payee is the account: each purchase records its seller's `user_id`
+  (`purchases.seller_user_id`, #835) when it is written, so income still
+  counts after the seller deletes their profile and re-creates one. Sales
+  made before that column existed are matched through the seller row
+  while it exists; any whose seller was already deleted then cannot be
+  recovered.
 - **`1099-nec`**: a builder profile's own `builderHigglesCents` crossing
   `$600` for the year — 1099-NEC's standard nonemployee-compensation
   threshold, much lower than 1099-K's and a genuinely different number

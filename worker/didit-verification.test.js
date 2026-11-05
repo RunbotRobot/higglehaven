@@ -66,6 +66,32 @@ describe('Didit verification webhook (#589)', () => {
     expect(user.trust_tier).toBe('credit_card');
   });
 
+  it('rejects a correctly signed webhook whose signed timestamp is stale, and accepts a fresh one (#1792)', async () => {
+    const builder = await signupBuilder('didit-webhook-replay');
+    const sessionId = await insertPendingSession(builder.email);
+    const now = Math.floor(Date.now() / 1000);
+
+    const stale = await postDiditWebhook({ session_id: sessionId, status: 'Approved', timestamp: now - 3600 });
+    expect(stale.status).toBe(401);
+    const future = await postDiditWebhook({ session_id: sessionId, status: 'Approved', timestamp: now + 3600 });
+    expect(future.status).toBe(401);
+    const pending = await env.DB.prepare('SELECT status, processed_at FROM didit_verification_sessions WHERE session_id = ?').bind(sessionId).first();
+    expect(pending.status).toBe('pending');
+    expect(pending.processed_at).toBeNull();
+
+    const fresh = await postDiditWebhook({ session_id: sessionId, status: 'Approved', timestamp: now - 30 });
+    expect(fresh.status).toBe(200);
+    const done = await env.DB.prepare('SELECT status FROM didit_verification_sessions WHERE session_id = ?').bind(sessionId).first();
+    expect(done.status).toBe('approved');
+  });
+
+  it('still processes a signed webhook that carries no timestamp (check cannot run, fails open) (#1792)', async () => {
+    const builder = await signupBuilder('didit-webhook-notimestamp');
+    const sessionId = await insertPendingSession(builder.email);
+    const response = await postDiditWebhook({ session_id: sessionId, status: 'Declined' });
+    expect(response.status).toBe(200);
+  });
+
   it('raises trust_tier to id_verified on an Approved decision with a valid signature', async () => {
     const builder = await signupBuilder('didit-webhook-approved');
     const sessionId = await insertPendingSession(builder.email);
