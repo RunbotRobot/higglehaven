@@ -1430,6 +1430,13 @@ async function reconcileAfterSellerSuspension(meshes) {
   return { removed: gone.length, remaining };
 }
 
+// One wording for every place a Build tab tells the builder that a suspended
+// seller's items left their land (failed save, batch update, tab focus, and
+// the general refocus reconcile).
+function suspendedSellerRemovalNotice(count) {
+  return `${count} item(s) were taken off your land because their seller is suspended. They're saved under Removed Items and will return if the suspension is lifted.`;
+}
+
 // #3095 (second half): the tab-focus counterpart to the failed-save
 // reconcile above. A Build tab that is merely left open (no save attempted)
 // would otherwise keep showing a suspended seller's removed products
@@ -1455,7 +1462,7 @@ async function reconcileOpenTabOnFocus() {
   clearSelection();
   updateSelectionUI();
   for (const mesh of gone) deleteInstance(mesh, { sync: false });
-  alert(`${gone.length} item(s) were taken off your land because their seller is suspended. They're saved under Removed Items and will return if the suspension is lifted.`);
+  alert(suspendedSellerRemovalNotice(gone.length));
 }
 document.addEventListener('visibilitychange', reconcileOpenTabOnFocus);
 
@@ -1471,7 +1478,7 @@ async function syncBatchCreate(meshes) {
     if (isSuspendedSellerSyncError(err)) {
       const { removed, remaining } = await reconcileAfterSellerSuspension(meshes);
       if (removed > 0) {
-        alert(`${removed} item(s) were taken off your land because their seller is suspended. They're saved under Removed Items and will return if the suspension is lifted.`);
+        alert(suspendedSellerRemovalNotice(removed));
         if (remaining.length > 0) await syncBatchCreate(remaining);
         return;
       }
@@ -1510,7 +1517,7 @@ async function syncBatchUpdate(meshes) {
       const sentences = [];
       if (suspended.size > 0) {
         refreshPendingRestorations();
-        sentences.push(`${suspended.size} item(s) were taken off your land because their seller is suspended. They're saved under Removed Items and will return if the suspension is lifted.`);
+        sentences.push(suspendedSellerRemovalNotice(suspended.size));
       }
       const elsewhere = missing.size - suspended.size;
       if (elsewhere > 0) sentences.push(`${elsewhere} item(s) you changed here had already been removed from your land in another tab or window, so they were not put back.`);
@@ -1522,7 +1529,7 @@ async function syncBatchUpdate(meshes) {
     if (isSuspendedSellerSyncError(err)) {
       const { removed, remaining } = await reconcileAfterSellerSuspension(meshes);
       if (removed > 0) {
-        alert(`${removed} item(s) were taken off your land because their seller is suspended. They're saved under Removed Items and will return if the suspension is lifted.`);
+        alert(suspendedSellerRemovalNotice(removed));
         // The rejected batch also held items that are fine; save those now.
         if (remaining.length > 0) await syncBatchUpdate(remaining);
         return;
@@ -2132,8 +2139,10 @@ async function reconcileOnRefocus() {
     if (!anyChanged) return;
 
     if (!beginSceneMutation()) return;
+    let removedByReconcile = [];
     try {
       const { deletedIds } = await applySnapshotLocally(serverInstances);
+      removedByReconcile = deletedIds;
       // applySnapshotLocally reshapes position/rotation/scale/crop/flags but
       // not group membership, which only the server's group/ungroup endpoints change.
       for (const mesh of productMeshes) {
@@ -2149,9 +2158,20 @@ async function reconcileOnRefocus() {
         undoStack.length = 0;
         redoStack.length = 0;
       }
-      if (deletedIds.length > 0) refreshPendingRestorations();
     } finally {
       endSceneMutation();
+    }
+    // #3192: this handler and reconcileOpenTabOnFocus (#3095) both run on a
+    // tab refocus, and whichever drops a suspended seller's product first
+    // leaves the other nothing to announce. Without this, when this one won
+    // the builder saw the product vanish with no explanation. Anything it
+    // removed that the server holds as a pending restoration is one of
+    // those; other removals (deleted in another tab) stay silent as before.
+    if (removedByReconcile.length > 0) {
+      const slots = await refreshPendingRestorations();
+      const restorable = new Set((slots || []).map((slot) => slot.removedInstanceId).filter(Boolean));
+      const suspendedCount = removedByReconcile.filter((id) => restorable.has(id)).length;
+      if (suspendedCount > 0) alert(suspendedSellerRemovalNotice(suspendedCount));
     }
   } catch (err) {
     console.warn('Reconciling with the server on refocus failed:', err);
