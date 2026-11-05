@@ -565,6 +565,14 @@ describe('Community signs', () => {
 
     const listed = await api('/instances/sign-author-delete-instance/posts');
     expect(listed.body.posts).toEqual([]);
+
+    // #2041: the author's own delete retains a snapshot, same as reviews.
+    const history = await env.DB.prepare(
+      'SELECT action, snapshot_json FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+    ).bind('sign_posts', posted.body.post.postId).all();
+    expect(history.results).toHaveLength(1);
+    expect(history.results[0].action).toBe('delete');
+    expect(JSON.parse(history.results[0].snapshot_json).post_id).toBe(posted.body.post.postId);
   });
 
   // #781: an admin can remove any sign post outright, regardless of who
@@ -674,6 +682,14 @@ describe('Community signs', () => {
 
     const listed = await api('/instances/sign-author-edit-instance/posts');
     expect(listed.body.posts[0].text).toBe('Edited text');
+
+    // #2041: the pre-edit text is retained for disputes.
+    const history = await env.DB.prepare(
+      'SELECT action, snapshot_json FROM user_content_edit_history WHERE source_table = ? AND source_id = ?',
+    ).bind('sign_posts', postId).all();
+    expect(history.results).toHaveLength(1);
+    expect(history.results[0].action).toBe('edit');
+    expect(JSON.parse(history.results[0].snapshot_json).text).not.toBe('Edited text');
 
     const editMissing = await api(`/instances/sign-author-edit-instance/posts/${crypto.randomUUID()}`, signsShopper.session({
       method: 'PATCH', body: JSON.stringify({ text: 'Edited text' }),

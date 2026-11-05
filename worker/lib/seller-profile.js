@@ -36,8 +36,9 @@ import { handleSellerPayouts } from './seller-payouts-tax.js';
 import {
   sellerFromRow, getOrCreateSellerForUser, stripeAccountStatusJson, stripeConfigured, stripeRequest,
   stripeRequestV2, deriveStripeOnboardingStatus, requireSessionSeller, integerValue, selectRowsByIdsChunked,
-  sellerDeletionStatements,
+  sellerDeletionStatements, appBaseUrl,
 } from '../index.js';
+import { classifyStripeRequirements } from './stripe-requirements.js';
 // #1407 (sub-issue of #1404): the AI-made Stripe-reinstatement decision
 // flow, shared verbatim between the builder and seller sides -- see that
 // module's own header comment for the full rubric and design decisions.
@@ -65,6 +66,10 @@ async function handleSellers(request, env, db, route, url) {
 
   if (route.length === 3 && route[1] === 'me' && route[2] === 'stripe-account') {
     return handleSellerStripeAccount(request, env, db);
+  }
+
+  if (route.length === 3 && route[1] === 'me' && route[2] === 'stripe-onboarding-link') {
+    return handleStripeOnboardingLink(request, env, db, 'seller');
   }
 
   if (route.length === 3 && route[1] === 'me' && route[2] === 'payouts') {
@@ -528,7 +533,7 @@ async function handleSellerStripeAccount(request, env, db) {
   const sessionSeller = await getOrCreateSellerForUser(db, user);
 
   if (request.method === 'GET') {
-    return json(stripeAccountStatusJson(env, sessionSeller));
+    return json(stripeAccountStatusJson(env, await maybeRefreshStripeStatus(request, env, db, 'sellers', 'seller_id', sessionSeller)));
   }
 
   if (request.method === 'POST') {
@@ -617,7 +622,7 @@ async function handleBuilderStripeAccount(request, env, db) {
   const sessionBuilder = await getOrCreateBuilderForUser(db, user);
 
   if (request.method === 'GET') {
-    return json(stripeAccountStatusJson(env, sessionBuilder));
+    return json(stripeAccountStatusJson(env, await maybeRefreshStripeStatus(request, env, db, 'builders', 'builder_id', sessionBuilder)));
   }
 
   if (request.method === 'POST') {
@@ -672,4 +677,88 @@ async function handleBuilderStripeAccount(request, env, db) {
   return json({ error: 'Not found' }, 404);
 }
 
-export { handleSellers, handleMySeller, handleSellerStripeAccount, handleBuilderStripeAccount };
+
+// #2928 (resume): re-reads the account from Stripe and stores the fresh
+// derived status/requirements, the same write the POST handlers make (with
+// the same #3079 ordering floor, so an older delayed webhook cannot undo it).
+// Returns the updated row. Used when a person comes back from Stripe's own
+// onboarding step and wherever a stale stored requirements list would send
+// them to the wrong place.
+async function refreshStoredStripeStatus(env, db, table, idColumn, row) {
+  const account = await stripeRequest(env, 'GET', `accounts/${row.stripe_account_id}`);
+  const status = deriveStripeOnboardingStatus(account);
+  const requirementsDue = account.requirements?.currently_due || [];
+  const fetchedAtS = Math.floor(Date.now() / 1000);
+  const nowIso = new Date().toISOString();
+  await db.prepare(`
+    UPDATE ${table}
+    SET stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?,
+        stripe_event_created_at = MAX(COALESCE(stripe_event_created_at, 0), ?)
+    WHERE ${idColumn} = ? AND stripe_account_id = ?
+  `).bind(status, JSON.stringify(requirementsDue), nowIso, nowIso, fetchedAtS, row[idColumn], row.stripe_account_id).run();
+  return {
+    ...row,
+    stripe_onboarding_status: status,
+    stripe_requirements_due: JSON.stringify(requirementsDue),
+    stripe_updated_at: nowIso,
+  };
+}
+
+// GET .../stripe-account?refresh=1 re-reads Stripe first. Best-effort: if
+// Stripe cannot be reached, the stored status is still better than an error
+// that would blank the whole payout panel.
+async function maybeRefreshStripeStatus(request, env, db, table, idColumn, row) {
+  if (new URL(request.url).searchParams.get('refresh') !== '1') return row;
+  if (!row.stripe_account_id || !stripeConfigured(env)) return row;
+  await checkRateLimit(db, `stripe-account-refresh:${row[idColumn]}`, STRIPE_RATE_LIMIT_MAX);
+  try {
+    return await refreshStoredStripeStatus(env, db, table, idColumn, row);
+  } catch (error) {
+    console.error('Failed to refresh Stripe account status', row.stripe_account_id, error);
+    return row;
+  }
+}
+
+// #2928 (hand off): POST .../stripe-onboarding-link returns a single-use
+// Stripe-hosted onboarding URL (Accounts v2 Account Link) for whatever Stripe
+// still needs that our own forms never collect (a full SSN/ITIN, an ID
+// document...). Owner decision 2026-11-05, "Sensitive identity data that
+// only a provider needs goes directly to that provider": the Worker never
+// sees those values. `configurations` is deliberately not sent -- Stripe
+// removed it in API version 2026-09-30.endive and rejects it from then on
+// (STRIPE_V2_API_VERSION is later). Stored requirements are refreshed from
+// Stripe first so a stale list never blocks, or wrongly opens, the step.
+async function handleStripeOnboardingLink(request, env, db, kind) {
+  const user = await requireCurrentUser(request, db);
+  if (request.method !== 'POST') return json({ error: 'Not found' }, 404);
+  const isSeller = kind === 'seller';
+  const row = isSeller ? await getOrCreateSellerForUser(db, user) : await getOrCreateBuilderForUser(db, user);
+  const table = isSeller ? 'sellers' : 'builders';
+  const idColumn = isSeller ? 'seller_id' : 'builder_id';
+  await checkRateLimit(db, `stripe-onboarding-link:${row[idColumn]}`, STRIPE_RATE_LIMIT_MAX);
+  if (!stripeConfigured(env)) throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+  if (!row.stripe_account_id) {
+    throw new HttpError('Set up your payout account first.', 409);
+  }
+  const fresh = await refreshStoredStripeStatus(env, db, table, idColumn, row);
+  const needsStripeStep = classifyStripeRequirements(JSON.parse(fresh.stripe_requirements_due || '[]')).needsStripeStep;
+  if (needsStripeStep.length === 0) {
+    throw new HttpError('Stripe does not need anything more from you right now.', 409);
+  }
+  const base = appBaseUrl(env);
+  const link = await stripeRequestV2(env, 'POST', 'account_links', {
+    account: fresh.stripe_account_id,
+    use_case: {
+      type: 'account_onboarding',
+      account_onboarding: {
+        refresh_url: `${base}/?stripe=refresh&role=${kind}`,
+        return_url: `${base}/?stripe=return&role=${kind}`,
+        collection_options: { fields: 'currently_due' },
+      },
+    },
+  });
+  if (!link?.url) throw new HttpError('Stripe did not return an onboarding link.', 502);
+  return json({ url: link.url, expiresAt: link.expires_at || null });
+}
+
+export { handleSellers, handleMySeller, handleSellerStripeAccount, handleBuilderStripeAccount, handleStripeOnboardingLink };

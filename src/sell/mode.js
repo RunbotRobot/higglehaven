@@ -60,6 +60,7 @@ import {
   fetchMySeller, renameSeller, deleteSeller,
   fetchSellerStripeAccount, submitSellerStripeAccount, fetchSellerPayouts, requestSellerPayout,
 } from '../api.js';
+import { consumeStripeReturnMarker, ownRequirementsDue, syncStripeStepPrompt } from '../stripeStep.js';
 import { buildCatalogPickerButtons } from '../catalog/picker.js';
 import { dimensionsChanged } from '../catalog/upload.js';
 import { updateSelectionUI } from '../build/scene.js';
@@ -2364,7 +2365,8 @@ export async function renderSellSettingsSection() {
 
   let account;
   try {
-    account = await fetchSellerStripeAccount();
+    // #2928: back from Stripe's own onboarding step, re-read Stripe's view.
+    account = await fetchSellerStripeAccount({ refresh: consumeStripeReturnMarker() });
   } catch (err) {
     statusNote.textContent = err.message || 'Could not load your payout account status.';
     statusNote.classList.add('error');
@@ -2382,7 +2384,12 @@ export async function renderSellSettingsSection() {
     }
     if (account.status === 'complete') return 'Your payout account is fully set up.';
     if (account.status === 'requirements_due') {
-      return `Stripe needs more information: ${account.requirementsCurrentlyDue.join(', ')}`;
+      const own = ownRequirementsDue(account);
+      // Anything only Stripe collects is covered by the "Continue with
+      // Stripe" step below, not listed here.
+      return own.length > 0
+        ? `Stripe needs more information: ${own.join(', ')}`
+        : 'Your account needs one more step with Stripe.';
     }
     if (account.status === 'action_needed') return 'Stripe flagged an issue with this account — resubmit below.';
     if (account.connected) return 'Your account was created — verification is pending.';
@@ -2391,6 +2398,7 @@ export async function renderSellSettingsSection() {
 
   statusNote.textContent = describeStatus();
   statusNote.classList.remove('error');
+  syncStripeStepPrompt(statusField, 'seller', account);
 
   const fields = [
     ['firstName', 'First name', 'text'],

@@ -1761,7 +1761,28 @@ that our own forms never collect and Stripe must, such as
 (ID documents); it is empty when everything due is a field our forms
 already send. The platform never collects those itself, not even in
 transit, so a non-empty list means the person needs Stripe's own
-onboarding step (the hand-off is a separate change).
+onboarding step (see `POST .../stripe-onboarding-link` below).
+
+`GET .../stripe-account?refresh=1` (#2928, "resume") re-reads the account
+from Stripe first and stores the fresh status and requirements before
+answering, rate-limited with the other Stripe account calls. It is
+best-effort: if Stripe cannot be reached the stored status is returned
+unchanged rather than an error. The client sends it once after Stripe sends
+the person back (the `?stripe=return` marker on the return URL).
+
+### `POST /api/sellers/me/stripe-onboarding-link` (and `/api/builders/me/...`)
+
+#2928, "hand off". Returns `{ "url": "https://connect.stripe.com/...",
+"expiresAt": null | "..." }`, a single-use Stripe-hosted onboarding link
+(Accounts v2 Account Link, `use_case.account_onboarding`, collecting
+`currently_due`) for whatever Stripe needs that our own forms never collect.
+Stored requirements are refreshed from Stripe first. `409` when no payout
+account exists yet ("Set up your payout account first.") or when Stripe
+needs nothing more that we cannot collect; `503` when Stripe is not
+configured. The return URL is `/?stripe=return&role=seller|builder` and the
+refresh URL (expired or already-used link) is `/?stripe=refresh&role=...`.
+The `configurations` Account Link parameter is deliberately not sent: Stripe
+removed it in API version `2026-09-30.endive` and errors on it from then on.
 
 `configured` is `false` whenever this server has no `STRIPE_SECRET_KEY`
 Worker secret set (e.g. local dev, the automated test suite) — same
@@ -1991,7 +2012,7 @@ above — the owner still needs to register this endpoint's URL in the
 Stripe dashboard and copy the resulting signing secret here before any of
 this runs for real; the code itself doesn't need to wait for that.)
 
-Four event types are handled; everything else is a no-op `200`.
+Five event types are handled; everything else is a no-op `200`.
 
 `account.updated`: the account id on the event is looked up against both
 `sellers` and `builders` — a given Stripe Custom account belongs to
@@ -2008,6 +2029,18 @@ Ordering (#3071): Stripe doesn't guarantee delivery order, so the newest
 applied event's `created` time is stored in `stripe_event_created_at` and an
 `account.updated` older than it is ignored (a `200` no-op). An event with no
 numeric `created` is applied unconditionally, as before.
+
+**#782**: `payment_intent.succeeded` — backstop for a charge that
+succeeded while the buyer's `POST /api/purchases/finalize` never landed
+(closed tab, dropped connection). An intent created by our own checkout
+(its metadata carries `instanceId`/`templateId`) is finalized through the
+same core as the client call (`finalizeSucceededPaymentIntent`): same
+purchase row, credit, owned-avatar/animation grant, delivery token and
+notifications, no special messaging. Whichever of the client finalize and
+the webhook arrives first wins; the other finds the existing row (the
+`payment_intent_id` UNIQUE index plus an atomic batch make a concurrent
+loser roll back whole) and is a no-op. An unavailable item takes the same
+orphan-row path as a client finalize (#472). Other intents are ignored.
 
 **#1086/#2419**: `charge.refunded`, `charge.dispute.funds_withdrawn`, and
 `charge.dispute.funds_reinstated` — a charge can be reversed by Stripe's
@@ -4805,6 +4838,14 @@ can be added without their own table or endpoints — current sources are:
 - A product sale or its refund (see "Simulated purchases" below): the
   builder hosting the sold instance is notified of the commission earned,
   or clawed back on refund.
+- Land cap and refunds (#836): a full refund or chargeback also removes the
+  sale's `higgles_earnings_events` rows (linked by `purchase_id`, migration
+  0189), so a refunded sale no longer counts toward the trailing-window
+  land-cap recomputation. `land_cap_m2` itself is never lowered: the ratchet
+  keeps an already-granted cap, and growth resumes only once the adjusted
+  ledger's candidate cap exceeds it. A dispute resolved in the builder's
+  favor re-adds the credited amount. Sales recorded before the migration
+  have no link and are unaffected.
 - A friend request, its acceptance, or its decline (see "Friendship object"
   below): the recipient is notified of a new request, and the requester is
   notified once it's accepted or, if it's still pending when the recipient
@@ -6055,7 +6096,11 @@ removing unwanted content). A pre-#1830 post with `userId: null` can never
 match here, since there's nobody on record to own it. `401` with no
 session at all. `404` if the post doesn't exist (or belongs to a different
 instance). Rate-limited per editing account, the same shape as `POST`/
-`DELETE`'s own limits.
+`DELETE`'s own limits. **#2041:** a successful edit snapshots the pre-edit
+row into `user_content_edit_history` (`source_table: 'sign_posts'`,
+`action: 'edit'`), and the author's own self-delete (below) snapshots it
+with `action: 'delete'` -- the same retained dispute history product
+reviews and calendar events already keep.
 
 ### `DELETE /api/instances/:instanceId/posts/:postId`
 
@@ -11864,8 +11909,13 @@ owns (i.e. has an `owned_avatars` row for), newest-purchase first. Each
 entry is the same full template shape `GET /api/catalog` already returns
 (`templateId`, `name`, `dimensions`, `modelUrl`, ...), plus `purchasedAt`.
 
+Cursor-paginated like the other list endpoints (#1132): `?limit=` (1–100,
+default 100) and `?cursor=` (the previous response's `nextCursor`;
+`nextCursor` is `null` on the last page). The My Avatars settings list
+shows a "Load more" button while `nextCursor` is set.
+
 ```json
-{ "avatars": [{ "templateId": "avatar-...", "modelUrl": "/uploads/avatar-....glb", "purchasedAt": "2026-09-12T00:00:00.000Z", "...": "..." }] }
+{ "avatars": [{ "templateId": "avatar-...", "modelUrl": "/uploads/avatar-....glb", "purchasedAt": "2026-09-12T00:00:00.000Z", "...": "..." }], "nextCursor": null }
 ```
 
 ### `GET /api/builders/me/avatar`
@@ -12078,10 +12128,11 @@ Animations" settings panel (applying).
 `GET /api/builders/me/animations` lists every `owned_animations` row
 for the session builder, mirroring `GET /api/builders/me/avatars`
 exactly (same shape: each entry is the full template, plus
-`purchasedAt`).
+`purchasedAt`), including the same `?limit=`/`?cursor=`/`nextCursor`
+pagination (#1303).
 
 ```json
-{ "animations": [{ "templateId": "animation-...", "modelUrl": "/uploads/animation-....glb", "skeletonSignature": "ab12...", "purchasedAt": "2026-10-02T00:00:00.000Z", "...": "..." }] }
+{ "animations": [{ "templateId": "animation-...", "modelUrl": "/uploads/animation-....glb", "skeletonSignature": "ab12...", "purchasedAt": "2026-10-02T00:00:00.000Z", "...": "..." }], "nextCursor": null }
 ```
 
 ### `GET /api/builders/me/animation`
