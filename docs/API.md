@@ -10246,11 +10246,22 @@ The refund policy: a credit is refunded if the request turns out to have
 lost the concurrent one-pending-per-builder race above (no new job
 actually started, so nothing was really spent) or if the outbound Tripo
 call itself failed or never returned a `task_id` (never billed). Once
-Tripo's task-create call has actually returned a real `task_id`, the
-credit is **not** refunded regardless of what happens afterward —
-persisting that result failing, a later provider-side failure, or the
-15-minute processing-timeout cron sweep — same "billed means billed"
-reasoning the lost-task_id logging above already applies.
+Tripo's task-create call has returned a real `task_id`, the credit is
+also returned (#2970, owner decision 2026-11-05) when the job ends in a
+failure that is not attributable to what the builder submitted: Tripo
+`failed` / `cancelled` / `expired`, Tripo reporting success with no
+output file, a finished model that cannot be stored (after the retry
+bound), and the 15-minute processing-timeout cron sweep. The builder is
+told once, by an in-app notification and by the job's `error` text. The
+one case that keeps the credit spent is Tripo `banned` (a content-policy
+rejection of the builder's own video), so the filter can't be probed for
+free. The refund and the job's move to `failed` are one atomic D1 batch
+guarded by `processed_at IS NULL`: whichever of the webhook, a status
+poll, or the sweep arrives first both refunds and fails the job, and any
+later arrival (including a late success) changes nothing, so a job
+refunds at most once and a refunded job can never complete. Whether the
+platform absorbs the provider's dollar cost of a failed call is a
+separate question (#1618).
 
 `GET /api/video-generation-jobs/:jobId` is session-gated and returns the
 current state of one of the requesting builder's own jobs (`404` if the
