@@ -83,8 +83,24 @@ and the admin pages) also carries baseline hardening headers:
 `Strict-Transport-Security: max-age=63072000; includeSubDomains` (see
 `worker/index.js`'s `SECURITY_HEADERS`/`withSecurityHeaders`, applied once in
 `fetch`'s own wrapper around `routeRequest` rather than per-handler).
-Content-Security-Policy is a real gap, deliberately not closed here — see
-issue #1360.
+HTML responses (the app shell and the admin pages, not JSON) additionally
+carry `Content-Security-Policy-Report-Only` (#1360; the policy and the reason
+for each source are in `worker/lib/csp.js`). It is report-only on purpose,
+following the owner's decision on that issue: nothing is blocked yet, and the
+enforcing `Content-Security-Policy` header ships in a follow-up once the
+reports show the allow-list is right. Known gaps in it today: `'unsafe-inline'`
+for scripts and styles (index.html and the admin pages carry inline blocks),
+and the Stripe/Turnstile sources follow those vendors' published guidance
+without having been exercised in a browser with real keys.
+
+### `POST /api/csp-report`
+
+The `report-uri` target of that policy. Unauthenticated (browsers send it
+without credentials) and log-only: it always answers `204`, writes nothing to
+D1, logs one trimmed line (`directive`, `blocked`, `document`, `source`,
+`line`) to the Worker log, ignores a malformed or over-8KB body, and logs at
+most 100 reports per minute per isolate. Read the reports with `wrangler tail`
+or the Workers log viewer, looking for the `csp-report` label.
 
 ## Health endpoint
 
@@ -1734,9 +1750,18 @@ and a derived onboarding status are kept.
   "connected": false,
   "status": "not_started",
   "requirementsCurrentlyDue": [],
+  "stripeStepRequirements": [],
   "updatedAt": null
 }
 ```
+
+`stripeStepRequirements` (#2928) is the part of `requirementsCurrentlyDue`
+that our own forms never collect and Stripe must, such as
+`individual.id_number` (a full SSN/ITIN) or `individual.verification.*`
+(ID documents); it is empty when everything due is a field our forms
+already send. The platform never collects those itself, not even in
+transit, so a non-empty list means the person needs Stripe's own
+onboarding step (the hand-off is a separate change).
 
 `configured` is `false` whenever this server has no `STRIPE_SECRET_KEY`
 Worker secret set (e.g. local dev, the automated test suite) — same
@@ -2732,9 +2757,21 @@ field, so sending it replaces the whole object rather than deep-merging
 into it. A caller that wants to change one key inside `metadata` (the
 Seller modal's extensibility edit, say) needs to read the existing
 `metadata` first and send the whole merged object back — see "Extensible
-products (crop)" above. A request-body `sellerId` is ignored — this
+products (crop)" above. `dimensions` behaves the same way: it is replaced
+as a whole, never merged per axis, so a partial object such as
+`{ "dimensions": { "width": 5 } }` is rejected with `400`
+(`dimensions.depth must be a finite number`) rather than updating only the
+width. Always send all three of `width`, `depth` and `height`, as the
+Seller modal's size save does. A request-body `sellerId` is ignored — this
 endpoint never reassigns a template to a different seller, the same way
 `PUT /api/landlets/:id` never reassigns `ownerBuilderId`.
+
+`modelUrl`, `modelSizeBytes` and `skeletonSignature` describe one file and
+move together (#1753). A request that changes `modelUrl` must also send
+`modelSizeBytes` (`400` otherwise), and if it omits `skeletonSignature` the
+stored signature is cleared to `null` rather than left describing the old
+model. Re-sending the current `modelUrl`, or any edit that does not touch
+it, leaves all three alone.
 
 If the request actually changes `dimensions`, every builder with a placed
 instance of this template gets a notification once the update succeeds —
@@ -5194,6 +5231,62 @@ documents for itself), no e2e session can actually reach
 (not id-verified) friends, and that a direct `POST
 /api/direct-messages` against the real dev server still gets rejected
 even bypassing that button entirely.
+
+## Blocks (#3140)
+
+A durable, **silent** block between two people, keyed on the account
+(`user_id`), not the resettable builder profile (`migrations/0188_user_blocks.sql`).
+The blocked person is never notified and nothing in any response they get
+differs from a stranger's. All three routes need a signed-in, non-suspended account; blocking does
+**not** require ID verification. Writes share a `block-mutate` rate limit
+(20 per window).
+
+### `POST /api/blocks`
+
+Body: `{ "builderId": "..." }` or `{ "userId": "..." }` (a builder id is
+resolved to its account by the server; a client-supplied mapping is never
+trusted). Idempotent: blocking someone already blocked is the same `201`.
+In one atomic batch it also silently deletes any friendship or pending friend
+request between the two people, in either direction. Response:
+`201 { "blocked": true, "userId": "..." }`. `400` for blocking yourself or no
+target, `404` when no live account matches.
+
+### `DELETE /api/blocks/:userId`
+
+Idempotent: unblocking someone who is not blocked is the same `200
+{ "blocked": false, "userId": "..." }`.
+
+### `GET /api/blocks`
+
+The caller's own list only, newest first, up to 200:
+`{ "blocks": [{ "userId": "...", "username": "...", "blockedAt": "..." }] }`.
+Nothing here ever reveals that the caller has been blocked by someone else.
+Account deletion removes a person's rows in both directions.
+
+### What a block does (#3143)
+
+One shared predicate (`notBlockedEitherWaySql`/`notBlockedBySql` in
+`worker/lib/auth.js`) applies a block to every person-to-person surface, for
+a block from A against B. Nothing ever changes for B.
+
+- **Presence** (`GET /api/presence`): A's list omits B and B's omits A.
+- **Nearby chat** (`GET /api/nearby-chat`): each omits the other's messages.
+  Sending is unchanged.
+- **Voice signaling**: `POST /api/voice/signal` between the two is accepted
+  with the usual `201` but never stored; `GET` also withholds anything queued
+  earlier (it reappears after an unblock). Blocking removes the pair's
+  friend voice channel memberships (the blocked person leaves the blocker's
+  channel, the blocker leaves theirs), and the channel listing omits the
+  other person.
+- **Direct messages**: the friendship is already severed, so B's send gets
+  the same `403` a non-friend gets. A's `unread-count` excludes B; A can
+  still read the history.
+- **Friend requests**: B's request to A is stored and answered like any other
+  (B still sees it pending) but sends A no notification, is omitted from A's
+  `GET /api/friendships`, and cannot be accepted (`404`). A requesting B
+  while blocking them gets `400` ("Unblock this person before sending a
+  friend request.").
+- **Conduct reports** are unaffected: A can still report B.
 
 ## Nearby chat
 
@@ -10264,11 +10357,22 @@ The refund policy: a credit is refunded if the request turns out to have
 lost the concurrent one-pending-per-builder race above (no new job
 actually started, so nothing was really spent) or if the outbound Tripo
 call itself failed or never returned a `task_id` (never billed). Once
-Tripo's task-create call has actually returned a real `task_id`, the
-credit is **not** refunded regardless of what happens afterward —
-persisting that result failing, a later provider-side failure, or the
-15-minute processing-timeout cron sweep — same "billed means billed"
-reasoning the lost-task_id logging above already applies.
+Tripo's task-create call has returned a real `task_id`, the credit is
+also returned (#2970, owner decision 2026-11-05) when the job ends in a
+failure that is not attributable to what the builder submitted: Tripo
+`failed` / `cancelled` / `expired`, Tripo reporting success with no
+output file, a finished model that cannot be stored (after the retry
+bound), and the 15-minute processing-timeout cron sweep. The builder is
+told once, by an in-app notification and by the job's `error` text. The
+one case that keeps the credit spent is Tripo `banned` (a content-policy
+rejection of the builder's own video), so the filter can't be probed for
+free. The refund and the job's move to `failed` are one atomic D1 batch
+guarded by `processed_at IS NULL`: whichever of the webhook, a status
+poll, or the sweep arrives first both refunds and fails the job, and any
+later arrival (including a late success) changes nothing, so a job
+refunds at most once and a refunded job can never complete. Whether the
+platform absorbs the provider's dollar cost of a failed call is a
+separate question (#1618).
 
 `GET /api/video-generation-jobs/:jobId` is session-gated and returns the
 current state of one of the requesting builder's own jobs (`404` if the

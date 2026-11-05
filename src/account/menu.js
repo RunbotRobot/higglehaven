@@ -26,6 +26,7 @@ import { formatHiggles, START_MODE_KEY, BUILD_TARGET_LANDLET_ID_KEY } from '../m
 // directly the way fetchFriendVoiceChannels (read-only, used for
 // rendering only) does.
 import { joinFriendVoiceChannel, leaveFriendVoiceChannel } from '../shop/voiceChat.js';
+import { confirmAndBlockPerson } from '../blocks.js';
 import {
   fetchMyBuilder,
   fetchTaxSummary,
@@ -37,6 +38,8 @@ import {
   sendFriendRequest,
   acceptFriendRequest,
   removeFriendship,
+  fetchBlockedPeople,
+  unblockPerson,
   fetchWorld,
   fetchBuilders,
   fetchDirectMessages,
@@ -307,6 +310,8 @@ const friendsOutgoingListEl = document.getElementById('friends-outgoing-list');
 const friendsOutgoingEmptyEl = document.getElementById('friends-outgoing-empty');
 const friendsAcceptedListEl = document.getElementById('friends-accepted-list');
 const friendsAcceptedEmptyEl = document.getElementById('friends-accepted-empty');
+const friendsBlockedListEl = document.getElementById('friends-blocked-list');
+const friendsBlockedEmptyEl = document.getElementById('friends-blocked-empty');
 // #2781: the caller's own current friend-voice-channel membership status
 // line, rendered above the Requests/Friends sections -- see index.html's
 // own comment on this element.
@@ -451,6 +456,23 @@ function openDmModal(otherBuilderId, otherLabel) {
 }
 
 dmCloseBtn.addEventListener('click', closeDmModal);
+
+// #3140: Block from the DM header. Blocking also ends the friendship, so on
+// success this goes back to the (refreshed) friends list rather than leaving a
+// thread open with someone who is no longer a friend.
+const dmBlockBtn = document.getElementById('dm-block-btn');
+dmBlockBtn.addEventListener('click', async () => {
+  if (!dmOtherBuilderId) return;
+  dmBlockBtn.disabled = true;
+  try {
+    if (await confirmAndBlockPerson(dmOtherBuilderId)) {
+      closeDmModal();
+      await renderFriends();
+    }
+  } finally {
+    dmBlockBtn.disabled = false;
+  }
+});
 
 dmComposeForm.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -796,8 +818,64 @@ async function renderFriends() {
       }
     });
     actions.appendChild(removeBtn);
+    // #3140: Block sits next to Remove. It also ends the friendship (silently).
+    const blockBtn = document.createElement('button');
+    blockBtn.type = 'button';
+    blockBtn.className = 'danger';
+    blockBtn.textContent = 'Block';
+    blockBtn.addEventListener('click', async () => {
+      blockBtn.disabled = true;
+      if (await confirmAndBlockPerson(friendship.otherBuilderId)) await renderFriends();
+      else blockBtn.disabled = false;
+    });
+    actions.appendChild(blockBtn);
     row.appendChild(actions);
     friendsAcceptedListEl.appendChild(row);
+  }
+  await renderBlockedPeople(myLoadToken);
+}
+
+// #3140: the people this account has blocked, with Unblock. Account-level, so
+// it lists by username rather than any builder label.
+async function renderBlockedPeople(myLoadToken) {
+  let blocks;
+  try {
+    blocks = await fetchBlockedPeople();
+  } catch {
+    return; // best-effort: a failed load leaves the section as it was
+  }
+  if (myLoadToken !== friendsLoadToken) return;
+  friendsBlockedListEl.innerHTML = '';
+  friendsBlockedEmptyEl.hidden = blocks.length > 0;
+  for (const block of blocks) {
+    const row = document.createElement('div');
+    row.className = 'friend-row';
+    const body = document.createElement('div');
+    body.className = 'friend-row-body';
+    const label = document.createElement('div');
+    label.className = 'friend-row-label';
+    label.textContent = block.username;
+    body.appendChild(label);
+    row.appendChild(body);
+    const actions = document.createElement('div');
+    actions.className = 'friend-row-actions';
+    const unblockBtn = document.createElement('button');
+    unblockBtn.type = 'button';
+    unblockBtn.textContent = 'Unblock';
+    unblockBtn.addEventListener('click', async () => {
+      unblockBtn.disabled = true;
+      try {
+        await unblockPerson(block.userId);
+        await renderFriends();
+      } catch (err) {
+        friendsStatusEl.textContent = err.message || 'Could not unblock this person.';
+        friendsStatusEl.classList.add('error');
+        unblockBtn.disabled = false;
+      }
+    });
+    actions.appendChild(unblockBtn);
+    row.appendChild(actions);
+    friendsBlockedListEl.appendChild(row);
   }
 }
 

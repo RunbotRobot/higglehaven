@@ -23,9 +23,26 @@ import { checkRateLimit } from './rate-limit.js';
 import {
   requireCurrentUser, assertOwner, requireSessionBuilder, builderNotSuspendedSql,
   userIdForBuilder, builderIdForUser, builderIdsForUsers, RESOLVER_CHUNK_SIZE,
+  notBlockedEitherWaySql, notBlockedBySql, blockExistsBetween,
 } from './auth.js';
 import { fireNotification } from './notifications.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
+
+// #3145: blocks key on user_id and friendships now do too, so the friendship
+// paths check blocks directly on user ids instead of resolving builder ids
+// through `builders` the way auth.js's builder-expression helpers do.
+function userNotBlockedBySql(blockerUserExpr, blockedUserExpr) {
+  return `NOT EXISTS (
+    SELECT 1 FROM user_blocks AS blk_check
+    WHERE blk_check.blocker_user_id = ${blockerUserExpr} AND blk_check.blocked_user_id = ${blockedUserExpr}
+  )`;
+}
+
+async function userBlocks(db, blockerUserId, blockedUserId) {
+  const row = await db.prepare('SELECT 1 AS hit FROM user_blocks WHERE blocker_user_id = ? AND blocked_user_id = ?')
+    .bind(blockerUserId, blockedUserId).first();
+  return !!row;
+}
 // requireLandlet/assertReferenceExists/labelsByBuilderId/
 // ownedLandletsByBuilderId all stay in worker/index.js -- each is shared
 // well outside the social domain, or, for labelsByBuilderId/
@@ -258,8 +275,9 @@ export async function handlePresence(request, db, route, url) {
     const { results } = await db.prepare(`
       SELECT * FROM avatar_presence
       WHERE landlet_id = ? AND builder_id != ? AND updated_at >= ?
+        AND ${notBlockedEitherWaySql('?', 'avatar_presence.builder_id')}
       ORDER BY updated_at DESC LIMIT ${PRESENCE_NEARBY_LIMIT}
-    `).bind(landletId, sessionBuilder.builder_id, staleBefore).all();
+    `).bind(landletId, sessionBuilder.builder_id, staleBefore, sessionBuilder.builder_id).all();
     // #2043: docs/SPEC.md's "Flying avatars are invisible to other users" --
     // the client is the one actually hiding the mesh, but a flying avatar's
     // position is still withheld here too, not just left to the renderer's
@@ -372,8 +390,14 @@ export async function handleNearbyChat(request, db, route, url) {
     const cursor = decodeCursor(url.searchParams.get('cursor'));
     // #3123: a suspended sender's messages are hidden from everyone else the
     // moment the suspension starts, not left for the 30-minute prune.
-    const conditions = ['landlet_id = ?', builderNotSuspendedSql('nearby_chat_messages.builder_id')];
-    const bindings = [landletId];
+    // #3143: a block hides each side's messages from the other (sending is
+    // unchanged, so the blocked person learns nothing).
+    const conditions = [
+      'landlet_id = ?',
+      builderNotSuspendedSql('nearby_chat_messages.builder_id'),
+      notBlockedEitherWaySql('?', 'nearby_chat_messages.builder_id'),
+    ];
+    const bindings = [landletId, sessionBuilder.builder_id];
     if (cursor) {
       // Ascending/"poll forward from here" ordering, unlike direct_messages'
       // own descending/"most recent page" cursor above -- this is a live feed
@@ -684,7 +708,9 @@ async function handleFriendVoiceChannels(request, db, route) {
       )
       AND ${builderNotSuspendedSql('friend_voice_channel_members.owner_builder_id')}
       AND ${builderNotSuspendedSql('friend_voice_channel_members.member_builder_id')}
-    `).bind(sessionBuilder.builder_id).all();
+      AND ${notBlockedEitherWaySql('?', 'friend_voice_channel_members.owner_builder_id')}
+      AND ${notBlockedEitherWaySql('?', 'friend_voice_channel_members.member_builder_id')}
+    `).bind(sessionBuilder.builder_id, sessionBuilder.builder_id, sessionBuilder.builder_id).all();
     const membersByOwner = new Map();
     for (const row of results) {
       if (!membersByOwner.has(row.owner_builder_id)) membersByOwner.set(row.owner_builder_id, []);
@@ -912,9 +938,12 @@ export async function handleVoiceSignal(request, db, route, url, env) {
     // meaning they should stop receiving channel-tagged signals -- only
     // the *proximity* half of the query below actually needs a real
     // landletId to match against.
+    // #3143: a signal queued before a block (or relayed around it) never
+    // reaches the recipient.
+    const blockedSignalGuard = notBlockedEitherWaySql('voice_signaling_messages.to_builder_id', 'voice_signaling_messages.from_builder_id');
     const conditions = landletId === null
-      ? ['to_builder_id = ?', 'channel_owner_builder_id IS NOT NULL']
-      : ['to_builder_id = ?', '(landlet_id = ? OR channel_owner_builder_id IS NOT NULL)'];
+      ? ['to_builder_id = ?', 'channel_owner_builder_id IS NOT NULL', blockedSignalGuard]
+      : ['to_builder_id = ?', '(landlet_id = ? OR channel_owner_builder_id IS NOT NULL)', blockedSignalGuard];
     const bindings = landletId === null
       ? [sessionBuilder.builder_id]
       : [sessionBuilder.builder_id, landletId];
@@ -990,6 +1019,20 @@ export async function handleVoiceSignal(request, db, route, url, env) {
       }
     }
     const messageId = `voice-signal-${crypto.randomUUID()}`;
+    // #3143 (A block is silent): a signal between blocked people is accepted
+    // with the usual 201 and simply never stored, so neither side can tell.
+    if (await blockExistsBetween(db, sessionBuilder.builder_id, toBuilderId)) {
+      return json({
+        message: voiceSignalMessageFromRow({
+          message_id: messageId,
+          from_builder_id: sessionBuilder.builder_id,
+          kind,
+          payload: serializedPayload,
+          created_at: new Date().toISOString(),
+          channel_owner_builder_id: channelOwnerBuilderId,
+        }),
+      }, 201);
+    }
     await db.prepare(`
       INSERT INTO voice_signaling_messages (message_id, from_builder_id, to_builder_id, landlet_id, kind, payload, channel_owner_builder_id)
       VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -1059,6 +1102,10 @@ export async function handleFriendships(request, db, route, url) {
     const viewerUserId = sessionBuilder.user_id;
     const conditions = ['(requester_user_id = ? OR recipient_user_id = ?)'];
     const bindings = [viewerUserId, viewerUserId];
+    // #3143: a request sent to someone who blocked the sender is stored (so
+    // the sender sees nothing change) but never surfaces to the blocker.
+    conditions.push(`(recipient_user_id != ? OR ${userNotBlockedBySql('friendships.recipient_user_id', 'friendships.requester_user_id')})`);
+    bindings.push(viewerUserId);
     if (cursor) {
       conditions.push('(created_at < ? OR (created_at = ? AND friendship_id < ?))');
       bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
@@ -1108,6 +1155,13 @@ export async function handleFriendships(request, db, route, url) {
     if (requesterUserId === recipientUserId) {
       throw new HttpError('requesterBuilderId and recipientBuilderId must be different builders', 400);
     }
+    // #3143: the blocker themself can't request someone they blocked (they
+    // would have to unblock first); a request *to* a blocker is stored like
+    // any other but never notifies or surfaces to them (see the GET above).
+    if (await userBlocks(db, requesterUserId, recipientUserId)) {
+      throw new HttpError('Unblock this person before sending a friend request.', 400);
+    }
+    const recipientBlockedRequester = await userBlocks(db, recipientUserId, requesterUserId);
     // Folding the duplicate-pair check into the INSERT's own WHERE NOT
     // EXISTS makes the check-and-insert one atomic statement — a separate
     // SELECT-then-INSERT would let two concurrent requests for the same
@@ -1135,8 +1189,10 @@ export async function handleFriendships(request, db, route, url) {
     // re-poll GET /api/friendships. Best-effort, same as every other
     // notification in this file (fired after the write it's about, not
     // batched atomically with it).
-    await fireNotification(db, recipientBuilderId,
-      `${sessionBuilder.label} sent you a friend request.`);
+    if (!recipientBlockedRequester) {
+      await fireNotification(db, recipientBuilderId,
+        `${sessionBuilder.label} sent you a friend request.`);
+    }
     const row = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).first();
     // #2469: a concurrent DELETE (the recipient declining the request we
     // just notified them about, or either side's own self-delete cascade)
@@ -1156,6 +1212,11 @@ export async function handleFriendships(request, db, route, url) {
     // their own request would skip the other side's consent entirely.
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(existing.recipient_user_id, sessionBuilder.user_id, 'Only the recipient can accept a friend request');
+    // #3143: a request from someone the recipient blocked is invisible to the
+    // recipient, so it cannot be accepted either (same 404 as a missing row).
+    if (await userBlocks(db, existing.recipient_user_id, existing.requester_user_id)) {
+      return json({ error: 'Friendship not found' }, 404);
+    }
     await checkRateLimit(db, `friendship-mutate:${sessionBuilder.builder_id}`, FRIENDSHIP_MUTATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (input.status !== 'accepted') throw new HttpError('status must be "accepted"', 400);
@@ -1431,7 +1492,9 @@ export async function handleDirectMessages(request, db, route, url) {
   if (request.method === 'GET' && route.length === 2 && route[1] === 'unread-count') {
     const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
     const count = await db.prepare(`
-      SELECT COUNT(*) AS count FROM direct_messages WHERE recipient_builder_id = ? AND read_at IS NULL
+      SELECT COUNT(*) AS count FROM direct_messages
+      WHERE recipient_builder_id = ? AND read_at IS NULL
+        AND ${notBlockedBySql('direct_messages.recipient_builder_id', 'direct_messages.sender_builder_id')}
     `).bind(sessionBuilder.builder_id).first();
     return json({ count: count.count });
   }
