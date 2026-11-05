@@ -151,6 +151,7 @@ import {
   handleNotifications, notificationFromRow, handlePresence, handleFriendships, friendshipFromRow,
   handleDirectMessages, directMessageFromRow, handleNearbyChat, handleVoiceSignal,
 } from './lib/social.js';
+import { handleBlocks } from './lib/blocks.js';
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
@@ -682,6 +683,11 @@ async function handleApi(request, env, url, ctx) {
 
   if (route[0] === 'direct-messages') {
     return handleDirectMessages(request, env.DB, route, url);
+  }
+
+  // #3140 (sub-issue 1/2 of #3124): durable, silent blocks keyed on user_id.
+  if (route[0] === 'blocks') {
+    return handleBlocks(request, env.DB, route);
   }
 
   // #2779 (sub-issue of #2777): proximity text chat.
@@ -3139,6 +3145,13 @@ export async function cascadeDeleteAccount(db, userId) {
     db.prepare(`
       DELETE FROM sessions WHERE user_id = ? AND ${builderOkClause} AND ${sellerOkClause}
     `).bind(userId, ...guardBinds),
+    // #3140: a person's blocks go with them, in both directions (the ones
+    // they placed and the ones placed on them); gated like the statements
+    // above so a blocked deletion leaves every block in place too.
+    db.prepare(`
+      DELETE FROM user_blocks WHERE (blocker_user_id = ? OR blocked_user_id = ?)
+        AND ${builderOkClause} AND ${sellerOkClause}
+    `).bind(userId, userId, ...guardBinds),
   );
 
   const batchResults = await db.batch(statements);

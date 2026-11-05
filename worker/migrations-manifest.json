@@ -183,5 +183,6 @@
   "0183_backfill_products_image_url.sql",
   "0184_conduct_reports_one_per_reporter.sql",
   "0186_friend_voice_channel_members_last_seen_at.sql",
-  "0187_ncmec_evidence.sql"
+  "0187_ncmec_evidence.sql",
+  "0188_user_blocks.sql"
 ]

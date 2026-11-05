@@ -14,6 +14,7 @@
 // routing through main.js/mode.js the way the older shop/*.js leaves do.
 import { currentAuthUser } from '../account/auth.js';
 import { fetchNearbyChatMessages, sendNearbyChatMessage, sendNearbyChatReport } from '../api.js';
+import { confirmAndBlockPerson } from '../blocks.js';
 import { createPersistentMuteSet } from './mutePersistence.js';
 
 const NEARBY_CHAT_POLL_INTERVAL_MS = 2000;
@@ -79,7 +80,8 @@ function appendMessage(message) {
     const actionsEl = document.createElement('span');
     actionsEl.className = 'shop-nearby-chat-message-actions';
     actionsEl.innerHTML = '<button type="button" data-action="mute" title="Mute this sender">Mute</button>'
-      + '<button type="button" data-action="report" title="Report this sender">Report</button>';
+      + '<button type="button" data-action="report" title="Report this sender">Report</button>'
+      + '<button type="button" data-action="block" title="Block this person">Block</button>';
     line.appendChild(actionsEl);
   }
   chatLogEl.appendChild(line);
@@ -178,6 +180,12 @@ if (chatLogEl) {
       renderMutedList();
     } else if (button.dataset.action === 'report') {
       reportNearbyChatSender(builderId);
+    } else if (button.dataset.action === 'block') {
+      // #3140: what makes a block take effect everywhere is #3143; here the
+      // blocker simply stops seeing what is already on screen from them.
+      confirmAndBlockPerson(builderId).then((blocked) => {
+        if (blocked) removeMessagesFromBuilder(builderId);
+      });
     }
   });
 }
