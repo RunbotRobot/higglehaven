@@ -4768,6 +4768,14 @@ can be added without their own table or endpoints — current sources are:
 - A product sale or its refund (see "Simulated purchases" below): the
   builder hosting the sold instance is notified of the commission earned,
   or clawed back on refund.
+- Land cap and refunds (#836): a full refund or chargeback also removes the
+  sale's `higgles_earnings_events` rows (linked by `purchase_id`, migration
+  0189), so a refunded sale no longer counts toward the trailing-window
+  land-cap recomputation. `land_cap_m2` itself is never lowered: the ratchet
+  keeps an already-granted cap, and growth resumes only once the adjusted
+  ledger's candidate cap exceeds it. A dispute resolved in the builder's
+  favor re-adds the credited amount. Sales recorded before the migration
+  have no link and are unaffected.
 - A friend request, its acceptance, or its decline (see "Friendship object"
   below): the recipient is notified of a new request, and the requester is
   notified once it's accepted or, if it's still pending when the recipient

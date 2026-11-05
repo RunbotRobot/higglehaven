@@ -733,8 +733,8 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(creditNowCents, builderId),
-      db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
-        .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents),
+      db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents, purchase_id) VALUES (?, ?, ?, ?)')
+        .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents, purchaseId),
     );
   }
   if (!newBuilderClaim && builderId && escrowCents > 0) {
@@ -759,8 +759,8 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
     const followUp = [];
     if (creditNowCents > 0) {
       followUp.push(
-        db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
-          .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents),
+        db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents, purchase_id) VALUES (?, ?, ?, ?)')
+          .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents, purchaseId),
       );
     }
     if (escrowCents > 0) {
@@ -970,8 +970,8 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(creditNowCents, builderId),
-      db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
-        .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents),
+      db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents, purchase_id) VALUES (?, ?, ?, ?)')
+        .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents, purchaseId),
     );
   }
   if (!newBuilderClaim && builderId && escrowCents > 0) {
@@ -993,8 +993,8 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
     const followUp = [];
     if (creditNowCents > 0) {
       followUp.push(
-        db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
-          .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents),
+        db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents, purchase_id) VALUES (?, ?, ?, ?)')
+          .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents, purchaseId),
       );
     }
     if (escrowCents > 0) {

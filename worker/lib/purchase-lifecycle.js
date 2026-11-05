@@ -439,6 +439,14 @@ export async function clawBackPurchaseCommission(db, purchase, templateName) {
       await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
         .bind(clawbackAmountCents, purchase.builder_id).run();
     }
+    // #836 (owner decisions on the issue): the refunded sale no longer
+    // counts toward land-cap-raising earnings -- remove the ledger rows it
+    // (and any commission hold it later released) created. Runs after the
+    // hold revoke above so a release can't slip a row in behind it. The
+    // cap itself (builders.land_cap_m2) is a ratchet and is never lowered;
+    // only later recomputations see the adjusted ledger.
+    await db.prepare('DELETE FROM higgles_earnings_events WHERE purchase_id = ?')
+      .bind(purchase.purchase_id).run();
     // #1122: fired separately, after the debit above commits — a self-
     // delete race on purchase.builder_id between this function's caller
     // reading the purchase row and this point would otherwise fail the
