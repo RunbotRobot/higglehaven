@@ -47,6 +47,9 @@ for (const surface of SURFACES) {
         expect(repeat.body.reportId).toBe(first.body.reportId);
       }
       expect(await rowCount(alice.builderId, bob.builderId)).toBe(1);
+      // #3121: the reported account's user_id is still recorded on the surviving row.
+      const stored = await env.DB.prepare(`SELECT reported_user_id FROM ${surface.table} WHERE report_id = ?`).bind(first.body.reportId).first();
+      expect(stored.reported_user_id).toBeTruthy();
       const cards = await cardsAbout(bob.builderId);
       expect(cards).toHaveLength(1);
       expect(cards[0].task_id).toBe(first.body.reportId);
