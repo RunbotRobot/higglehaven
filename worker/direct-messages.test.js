@@ -262,10 +262,12 @@ describe('Direct messages (#1637)', () => {
     const deleted = await api(`/builders/${bob.builderId}`, bob.session({ method: 'DELETE' }));
     expect(deleted.response.status).toBe(200);
 
-    // Alice never acted -- her side of the thread (both messages she sent
-    // and received) must still be there, keyed by the same withBuilderId
-    // as before deletion.
-    const aliceThread = await api(`/direct-messages?withBuilderId=${bob.builderId}`, alice.session());
+    // #3146: messages are stored against the accounts, so Bob's new builder
+    // profile (created the next time he is signed in and asks for it) picks
+    // up the same thread; Alice reaches it by Bob's current builder id.
+    // (The old id no longer names anyone, so it reads as an empty thread.)
+    const bobNow = await api('/builders/me', bob.session());
+    const aliceThread = await api(`/direct-messages?withBuilderId=${bobNow.body.builder.builderId}`, alice.session());
     expect(aliceThread.body.messages).toHaveLength(2);
     expect(aliceThread.body.messages.map((m) => m.text).sort()).toEqual(['from alice', 'from bob']);
   });
@@ -426,11 +428,12 @@ describe('Direct messages (#1637)', () => {
   // worker/profiles.test.js's own friendships index test -- confirms the
   // composite sort-covering indexes from migrations/0120_direct_messages.sql
   // actually exist, since direct_messages' GET query is this table's own
-  // `(sender_builder_id = ? AND recipient_builder_id = ?) OR (...)
+  // `(sender_user_id = ? AND recipient_user_id = ?) OR (...)
   // ... ORDER BY created_at DESC, message_id DESC` just like friendships'.
   it('indexes direct_messages on each side of the sender/recipient OR, covering the sort', async () => {
     const indexes = (await env.DB.prepare('PRAGMA index_list(direct_messages)').all()).results;
-    expect(indexes.some((idx) => idx.name === 'idx_direct_messages_sender')).toBe(true);
-    expect(indexes.some((idx) => idx.name === 'idx_direct_messages_recipient')).toBe(true);
+    expect(indexes.some((idx) => idx.name === 'idx_direct_messages_sender_user')).toBe(true);
+    expect(indexes.some((idx) => idx.name === 'idx_direct_messages_recipient_user')).toBe(true);
+    expect(indexes.some((idx) => idx.name === 'idx_direct_messages_recipient_user_unread')).toBe(true);
   });
 });

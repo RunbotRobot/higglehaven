@@ -23,6 +23,7 @@ import { checkRateLimit } from './rate-limit.js';
 import {
   requireCurrentUser, assertOwner, requireSessionBuilder, builderNotSuspendedSql,
   notBlockedEitherWaySql, notBlockedBySql, blockExistsBetween, builderBlocks,
+  notBlockedByUserSql, userIdForBuilder, builderIdsForUsers,
 } from './auth.js';
 import { fireNotification } from './notifications.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
@@ -1378,13 +1379,14 @@ async function requireIdVerifiedSessionBuilder(request, db, message = 'ID verifi
 // a dropped response after the message already landed server-side looks,
 // client-side, identical to the send never reaching us at all, and
 // dmComposeInput's text isn't cleared on error, inviting an innocent
-// resubmit of the exact same text. Namespaced with both builder ids so a
-// key can never collide across two different senders or threads. A
+// resubmit of the exact same text. Namespaced with both user ids (#3146: the
+// account, not the resettable builder profile) so a key can never collide
+// across two different senders or threads. A
 // missing or malformed key degrades to no idempotency protection for
 // this one request, same defense-in-depth reasoning as the purchase path.
-function directMessageIdempotencyKey(senderBuilderId, recipientBuilderId, rawKey) {
+function directMessageIdempotencyKey(senderUserId, recipientUserId, rawKey) {
   if (typeof rawKey !== 'string' || !/^[A-Za-z0-9_-]{1,200}$/.test(rawKey)) return undefined;
-  return `message:${senderBuilderId}:${recipientBuilderId}:${rawKey}`;
+  return `message:${senderUserId}:${recipientUserId}:${rawKey}`;
 }
 
 // No existing isFriendsWith-style helper covers a single pair×status
@@ -1419,9 +1421,9 @@ export async function handleDirectMessages(request, db, route, url) {
     const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
     const count = await db.prepare(`
       SELECT COUNT(*) AS count FROM direct_messages
-      WHERE recipient_builder_id = ? AND read_at IS NULL
-        AND ${notBlockedBySql('direct_messages.recipient_builder_id', 'direct_messages.sender_builder_id')}
-    `).bind(sessionBuilder.builder_id).first();
+      WHERE recipient_user_id = ? AND read_at IS NULL
+        AND ${notBlockedByUserSql('direct_messages.recipient_user_id', 'direct_messages.sender_user_id')}
+    `).bind(sessionBuilder.user_id).first();
     return json({ count: count.count });
   }
 
@@ -1430,14 +1432,22 @@ export async function handleDirectMessages(request, db, route, url) {
     const withBuilderId = stringValue(url.searchParams.get('withBuilderId'), 'withBuilderId');
     const limit = queryLimit(url.searchParams.get('limit'), 100);
     const cursor = decodeCursor(url.searchParams.get('cursor'));
+    // #3146: a thread is between two accounts; the wire still names the other
+    // person by their current builder id (the friends list hands that out),
+    // resolved here. An id that no longer resolves (that person reset their
+    // builder profile since the client loaded it, or deleted their account)
+    // has no thread to show; the client's next friends refresh supplies the
+    // current id.
+    const withUserId = await userIdForBuilder(db, withBuilderId);
+    if (!withUserId) return json({ messages: [], nextCursor: null });
     // No friendship check on read — once sent, a message stays visible in
     // history the same way email/chat history survives an unfriend; only a
     // NEW send (POST below) is gated on a currently-accepted friendship.
     const conditions = [`
-      ((sender_builder_id = ? AND recipient_builder_id = ?)
-        OR (sender_builder_id = ? AND recipient_builder_id = ?))
+      ((sender_user_id = ? AND recipient_user_id = ?)
+        OR (sender_user_id = ? AND recipient_user_id = ?))
     `];
-    const bindings = [sessionBuilder.builder_id, withBuilderId, withBuilderId, sessionBuilder.builder_id];
+    const bindings = [sessionBuilder.user_id, withUserId, withUserId, sessionBuilder.user_id];
     if (cursor) {
       conditions.push('(created_at < ? OR (created_at = ? AND message_id < ?))');
       bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
@@ -1449,8 +1459,9 @@ export async function handleDirectMessages(request, db, route, url) {
     const hasMore = results.length > limit;
     const page = results.slice(0, limit);
     const last = page.at(-1);
+    const builderIdByUser = await builderIdsForUsers(db, [sessionBuilder.user_id, withUserId]);
     return json({
-      messages: page.map(directMessageFromRow),
+      messages: page.map((row) => directMessageFromRow(row, builderIdByUser)),
       nextCursor: hasMore ? encodeCursor(last.created_at, last.message_id) : null,
     });
   }
@@ -1461,7 +1472,10 @@ export async function handleDirectMessages(request, db, route, url) {
     const input = await readJson(request);
     const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db);
     const senderBuilderId = sessionBuilder.builder_id;
-    await checkRateLimit(db, `direct-message-send:${senderBuilderId}`, DIRECT_MESSAGE_SEND_RATE_LIMIT_MAX);
+    // #3146: the quota belongs to the person, so it is keyed on the account;
+    // keyed on the builder profile, resetting it would hand out a fresh one.
+    const senderUserId = sessionBuilder.user_id;
+    await checkRateLimit(db, `direct-message-send:${senderUserId}`, DIRECT_MESSAGE_SEND_RATE_LIMIT_MAX);
     const recipientBuilderId = stringValue(input.recipientBuilderId, 'recipientBuilderId');
     if (senderBuilderId === recipientBuilderId) {
       throw new HttpError('recipientBuilderId must be a different builder', 400);
@@ -1472,11 +1486,14 @@ export async function handleDirectMessages(request, db, route, url) {
     // trust_tier (on `users`, not `builders`) needs checking too, so this
     // is its own query rather than assertReferenceExists + a second lookup.
     const recipient = await db.prepare(`
-      SELECT b.builder_id, u.trust_tier FROM builders b
+      SELECT b.builder_id, b.user_id, u.trust_tier FROM builders b
       LEFT JOIN users u ON u.user_id = b.user_id
       WHERE b.builder_id = ?
     `).bind(recipientBuilderId).first();
-    if (!recipient) throw new HttpError(`recipientBuilderId "${recipientBuilderId}" does not exist`, 400);
+    // A builder with no account (migrations/0054, created before accounts
+    // existed) has no one to address a message to; refused like an unknown id.
+    if (!recipient || !recipient.user_id) throw new HttpError(`recipientBuilderId "${recipientBuilderId}" does not exist`, 400);
+    const recipientUserId = recipient.user_id;
     // #2415: friendship must be checked before the recipient's trust_tier --
     // trust_tier is never exposed through any public lookup (publicBuilderFromRow,
     // #807), but checking it first let any id_verified builder probe an
@@ -1494,7 +1511,7 @@ export async function handleDirectMessages(request, db, route, url) {
     // finds it here instead of delivering the same text twice — mirrors
     // writePurchaseRow's own idempotency check, keyed off message_id
     // itself the same way.
-    const idempotencyKey = directMessageIdempotencyKey(senderBuilderId, recipientBuilderId, input.idempotencyKey);
+    const idempotencyKey = directMessageIdempotencyKey(senderUserId, recipientUserId, input.idempotencyKey);
     let existing = null;
     if (idempotencyKey) {
       existing = await db.prepare('SELECT * FROM direct_messages WHERE message_id = ?').bind(idempotencyKey).first();
@@ -1505,7 +1522,9 @@ export async function handleDirectMessages(request, db, route, url) {
       // unconditionally would silently swallow that different message —
       // only treat this as the retry it's meant to catch when the text
       // actually matches.
-      if (existing && existing.text === text) return json({ message: directMessageFromRow(existing) });
+      if (existing && existing.text === text) {
+        return json({ message: directMessageFromRow(existing, await builderIdsForUsers(db, [existing.sender_user_id, existing.recipient_user_id])) });
+      }
     }
     // A key that collided with someone else's differently-texted row (the
     // mismatch above) must not be reused as this row's own id — it already
@@ -1521,7 +1540,7 @@ export async function handleDirectMessages(request, db, route, url) {
     // the eager assert above stays for the common-case clean 403, and this
     // WHERE EXISTS on the INSERT itself is the real race guard.
     const insertResult = await db.prepare(`
-      INSERT INTO direct_messages (message_id, sender_builder_id, recipient_builder_id, text)
+      INSERT INTO direct_messages (message_id, sender_user_id, recipient_user_id, text)
       SELECT ?, ?, ?, ? WHERE EXISTS (
         SELECT 1 FROM friendships
         WHERE status = 'accepted'
@@ -1529,7 +1548,7 @@ export async function handleDirectMessages(request, db, route, url) {
             OR (requester_builder_id = ? AND recipient_builder_id = ?))
       )
     `).bind(
-      messageId, senderBuilderId, recipientBuilderId, text,
+      messageId, senderUserId, recipientUserId, text,
       senderBuilderId, recipientBuilderId, recipientBuilderId, senderBuilderId,
     ).run();
     if (insertResult.meta.changes === 0) {
@@ -1540,7 +1559,7 @@ export async function handleDirectMessages(request, db, route, url) {
     // atomically with it.
     await fireNotification(db, recipientBuilderId, `${sessionBuilder.label} sent you a message.`);
     const row = await db.prepare('SELECT * FROM direct_messages WHERE message_id = ?').bind(messageId).first();
-    return json({ message: directMessageFromRow(row) }, 201);
+    return json({ message: directMessageFromRow(row, await builderIdsForUsers(db, [senderUserId, recipientUserId])) }, 201);
   }
 
   if (request.method === 'POST' && route.length === 2 && route[1] === 'mark-read') {
@@ -1552,13 +1571,17 @@ export async function handleDirectMessages(request, db, route, url) {
     // #1889: session -> rate limit -> readJson -> validate, matching the
     // dominant order this file's other mutating endpoints use (e.g.
     // friendships' PATCH/DELETE, calendar events, sign posts).
-    await checkRateLimit(db, `direct-message-mark-read:${sessionBuilder.builder_id}`, DIRECT_MESSAGE_MARK_READ_RATE_LIMIT_MAX);
+    await checkRateLimit(db, `direct-message-mark-read:${sessionBuilder.user_id}`, DIRECT_MESSAGE_MARK_READ_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const withBuilderId = stringValue(input.withBuilderId, 'withBuilderId');
-    await db.prepare(`
-      UPDATE direct_messages SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE recipient_builder_id = ? AND sender_builder_id = ? AND read_at IS NULL
-    `).bind(sessionBuilder.builder_id, withBuilderId).run();
+    // #3146: see the GET above; an id that no longer resolves has nothing to mark.
+    const withUserId = await userIdForBuilder(db, withBuilderId);
+    if (withUserId) {
+      await db.prepare(`
+        UPDATE direct_messages SET read_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE recipient_user_id = ? AND sender_user_id = ? AND read_at IS NULL
+      `).bind(sessionBuilder.user_id, withUserId).run();
+    }
     return json({ ok: true });
   }
 
@@ -1567,11 +1590,19 @@ export async function handleDirectMessages(request, db, route, url) {
 
 // Exported for worker/index.js's own exportSocialSection (handleExportData)
 // -- see that function's own call site for why it stays there.
-export function directMessageFromRow(row) {
+// #3146: stored against the two accounts. senderBuilderId/recipientBuilderId
+// stay in the wire shape (the friends list, the thread query and the send
+// body all still address people by builder id) and are each person's CURRENT
+// builder profile, from `builderIdByUser` (Map<userId, builderId>, see
+// builderIdsForUsers); null when that person has none (deleted, or reset
+// and not yet recreated). senderUserId/recipientUserId are the stable ids.
+export function directMessageFromRow(row, builderIdByUser = new Map()) {
   return {
     messageId: row.message_id,
-    senderBuilderId: row.sender_builder_id,
-    recipientBuilderId: row.recipient_builder_id,
+    senderUserId: row.sender_user_id,
+    recipientUserId: row.recipient_user_id,
+    senderBuilderId: builderIdByUser.get(row.sender_user_id) ?? null,
+    recipientBuilderId: builderIdByUser.get(row.recipient_user_id) ?? null,
     text: row.text,
     createdAt: row.created_at,
     readAt: row.read_at,

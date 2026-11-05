@@ -5175,6 +5175,8 @@ verification.
 ```json
 {
   "messageId": "message-3f1a9c20-9e44-4b7a-8c3d-1a2b3c4d5e6f",
+  "senderUserId": "user-alice",
+  "recipientUserId": "user-bob",
   "senderBuilderId": "builder-alice",
   "recipientBuilderId": "builder-bob",
   "text": "hey!",
@@ -5182,6 +5184,20 @@ verification.
   "readAt": null
 }
 ```
+
+Messages are stored against the two **accounts** (`direct_messages.sender_user_id`
+/ `recipient_user_id`, migrations/0191, #3146), not the builder profiles, so a
+thread and its unread counts survive either person resetting their builder
+profile. `senderUserId`/`recipientUserId` are the stable ids.
+`senderBuilderId`/`recipientBuilderId` stay in the shape because the friends
+list, the thread query and the send body still address people by builder id;
+each is that person's **current** builder profile, or `null` if they have none
+(account deleted, or profile reset and not yet recreated). The columns
+`sender_builder_id`/`recipient_builder_id` are retired (nullable, unwritten) and
+are dropped by 6/6 (#3149). A legacy row whose accounts could not be recovered
+by the migration (its builder was already reset, or had no account) is left in
+place but belongs to no thread. Account deletion does not delete messages, so
+the other person's history survives, as it did before.
 
 ### `GET /api/direct-messages?withBuilderId=X`
 
@@ -5192,6 +5208,9 @@ way as `GET /api/friendships` — `limit` (default and max 100) and
 friendship check on read — once sent, a message stays visible in history
 the same way email/chat history survives an unfriend; only a new send
 (`POST` below) is gated on a *currently* accepted friendship.
+`withBuilderId` is resolved to its account; an id that names no current
+builder (that person reset their profile or deleted their account since the
+client loaded it) returns an empty thread, not an error.
 
 ### `GET /api/direct-messages/unread-count`
 
@@ -5211,7 +5230,8 @@ Requires an ID-verified session.
 reference an existing builder, or `text` is missing or over 280
 characters. `403` if the recipient isn't ID-verified, or if no accepted
 friendship exists between the two builders. `429` after 20 requests per
-15 minutes from the same calling builder (see "Rate limiting" above).
+15 minutes from the same calling account (see "Rate limiting" above; the bucket
+is keyed on the account, so resetting a builder profile does not reset it).
 Returns `201` with the new message. Notifies `recipientBuilderId` (the
 generic notification system above, the same "no passive way to find out"
 fix #319 already applied to friend requests) — there's no dedicated
@@ -5232,7 +5252,7 @@ the request body here, unlike a single-row `PATCH` by id, since this
 marks a whole thread at once) — mirrors `POST
 /api/notifications/mark-all-read`'s own bulk shape. Always returns
 `{ "ok": true }`, even if nothing was unread. `429` after 200 calls per
-15 minutes from the same calling builder, under its own bucket separate
+15 minutes from the same calling account, under its own bucket separate
 from the send endpoint's — a much higher ceiling than most mutate
 buckets (#2260) because the frontend auto-fires this on every render of
 an open DM thread (on open, and again after every message sent), not

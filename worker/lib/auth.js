@@ -218,6 +218,19 @@ export function notBlockedBySql(blockerBuilderExpr, blockedBuilderExpr) {
   )`;
 }
 
+// notBlockedByUserSql: the same one-direction check as notBlockedBySql, for a
+// table that is already keyed by user_id (#3141 moves the social tables over
+// one at a time; direct_messages is one, #3146). Both arguments are trusted SQL
+// expressions for a *user_id* (a column reference or a `?` placeholder, never
+// user text); no builders join is needed.
+export function notBlockedByUserSql(blockerUserExpr, blockedUserExpr) {
+  return `NOT EXISTS (
+    SELECT 1 FROM user_blocks AS blk_user_check
+    WHERE blk_user_check.blocker_user_id = ${blockerUserExpr}
+      AND blk_user_check.blocked_user_id = ${blockedUserExpr}
+  )`;
+}
+
 // Single-pair JS checks for write paths (voice signal send, friend request).
 export async function blockExistsBetween(db, builderIdA, builderIdB) {
   const row = await db.prepare(`SELECT 1 AS hit WHERE (${notBlockedEitherWaySql('?', '?')}) = 0`)
