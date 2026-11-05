@@ -11877,8 +11877,13 @@ owns (i.e. has an `owned_avatars` row for), newest-purchase first. Each
 entry is the same full template shape `GET /api/catalog` already returns
 (`templateId`, `name`, `dimensions`, `modelUrl`, ...), plus `purchasedAt`.
 
+Cursor-paginated like the other list endpoints (#1132): `?limit=` (1–100,
+default 100) and `?cursor=` (the previous response's `nextCursor`;
+`nextCursor` is `null` on the last page). The My Avatars settings list
+shows a "Load more" button while `nextCursor` is set.
+
 ```json
-{ "avatars": [{ "templateId": "avatar-...", "modelUrl": "/uploads/avatar-....glb", "purchasedAt": "2026-09-12T00:00:00.000Z", "...": "..." }] }
+{ "avatars": [{ "templateId": "avatar-...", "modelUrl": "/uploads/avatar-....glb", "purchasedAt": "2026-09-12T00:00:00.000Z", "...": "..." }], "nextCursor": null }
 ```
 
 ### `GET /api/builders/me/avatar`
@@ -12091,10 +12096,11 @@ Animations" settings panel (applying).
 `GET /api/builders/me/animations` lists every `owned_animations` row
 for the session builder, mirroring `GET /api/builders/me/avatars`
 exactly (same shape: each entry is the full template, plus
-`purchasedAt`).
+`purchasedAt`), including the same `?limit=`/`?cursor=`/`nextCursor`
+pagination (#1303).
 
 ```json
-{ "animations": [{ "templateId": "animation-...", "modelUrl": "/uploads/animation-....glb", "skeletonSignature": "ab12...", "purchasedAt": "2026-10-02T00:00:00.000Z", "...": "..." }] }
+{ "animations": [{ "templateId": "animation-...", "modelUrl": "/uploads/animation-....glb", "skeletonSignature": "ab12...", "purchasedAt": "2026-10-02T00:00:00.000Z", "...": "..." }], "nextCursor": null }
 ```
 
 ### `GET /api/builders/me/animation`
