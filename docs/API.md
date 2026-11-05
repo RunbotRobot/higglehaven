@@ -501,7 +501,11 @@ cadence rather than this file's usual one-shot-mutation ~20.
 of a verification result — unauthenticated (no session cookie to check),
 verified instead via an HMAC-SHA256 signature over the raw request body
 (`x-signature` header, keyed by `DIDIT_WEBHOOK_SECRET`), `401` on a
-missing or wrong signature. `503` if `DIDIT_WEBHOOK_SECRET` isn't
+missing or wrong signature. `401` too when the body's own signed `timestamp`
+(Unix seconds) is more than 5 minutes from now, the same replay window the
+Stripe and Tripo webhooks use (Didit's `X-Timestamp` header is not covered by
+its signatures, so it is not trusted); a body with no numeric `timestamp` is
+processed as before. `503` if `DIDIT_WEBHOOK_SECRET` isn't
 configured. Idempotent against a repeat delivery for the same session —
 only the first delivery (webhook or a status poll, whichever gets there
 first) applies the resulting `trustTier` change.

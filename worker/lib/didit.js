@@ -395,6 +395,8 @@ export async function handleDiditVerificationStatus(request, env, db) {
 // got. Reads the raw body text (not readJson) because the signature is
 // computed over the exact bytes Didit sent, not this codebase's own
 // re-serialization of a parsed object.
+const DIDIT_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 5 * 60;
+
 export async function handleDiditWebhook(request, env, db) {
   if (!env.DIDIT_WEBHOOK_SECRET) throw new HttpError('Didit webhook is not configured on this server yet.', 503);
   const rawBody = await request.text();
@@ -411,6 +413,18 @@ export async function handleDiditWebhook(request, env, db) {
     payload = JSON.parse(rawBody);
   } catch {
     throw new HttpError('Webhook body is not valid JSON', 400);
+  }
+  // #1792: replay window, same 5-minute tolerance as Stripe (#872) and Tripo
+  // (#1659). Didit's X-Timestamp header is NOT covered by any of its
+  // signatures (per its webhook docs), so trusting it would let a replayer
+  // simply send a fresh header; the body's own `timestamp` (Unix seconds) is
+  // inside the signed bytes, so it is the one that proves freshness. Parity
+  // across sibling surfaces. Fails open if the field is absent or not a
+  // number (the check can't run -- the signature above still stands).
+  const sentAt = Number(payload?.timestamp);
+  if (payload?.timestamp != null && Number.isFinite(sentAt)
+      && Math.abs(Date.now() / 1000 - sentAt) > DIDIT_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS) {
+    throw new HttpError('Webhook timestamp is outside the allowed window', 401);
   }
   const sessionId = payload.session_id;
   const overallStatus = payload.status;
