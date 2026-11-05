@@ -8,7 +8,7 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { escalateExpiredSuspensions } from './index.js';
-import { api, signupBuilder } from './test-helpers.js';
+import { api, signupAdmin, signupBuilder } from './test-helpers.js';
 
 beforeAll(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
@@ -151,5 +151,30 @@ describe('escalateExpiredSuspensions (#2033)', () => {
       'SELECT COUNT(*) AS count FROM admin_action_log WHERE action_type = ? AND target_id = ?',
     ).bind('auto_escalate_suspension', userId).first();
     expect(logCountAfterRetry.count).toBe(1);
+  });
+
+  // #2308: the cascade delete must not remove the last operational admin.
+  it('does not delete the last operational admin, and escalates once another admin exists', async () => {
+    const other = await signupAdmin('escalate-last-admin-other');
+    const target = await signupAdmin('escalate-last-admin-target');
+    const otherId = await userIdFor(other);
+    const targetId = await userIdFor(target);
+    // Every other admin in the database is non-operational for this test.
+    await env.DB.prepare('UPDATE users SET is_admin = 0 WHERE user_id != ?').bind(targetId).run();
+    const suspensionId = await insertSuspension(targetId, { gracePeriodEndsAt: new Date(Date.now() - 1000).toISOString() });
+
+    await escalateExpiredSuspensions(env.DB);
+
+    const held = await env.DB.prepare('SELECT deleted_at FROM users WHERE user_id = ?').bind(targetId).first();
+    expect(held.deleted_at).toBeNull();
+    const heldSuspension = await env.DB.prepare('SELECT escalated_at FROM account_suspensions WHERE suspension_id = ?')
+      .bind(suspensionId).first();
+    expect(heldSuspension.escalated_at).toBeNull();
+
+    await env.DB.prepare('UPDATE users SET is_admin = 1 WHERE user_id = ?').bind(otherId).run();
+    await escalateExpiredSuspensions(env.DB);
+
+    const gone = await env.DB.prepare('SELECT deleted_at FROM users WHERE user_id = ?').bind(targetId).first();
+    expect(gone.deleted_at).toBeTruthy();
   });
 });

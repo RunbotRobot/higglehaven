@@ -45,6 +45,7 @@ import {
   handleAdminBootstrap, handleGrantAdmin, handleRevokeAdmin, handleListAdmins, handleSuspendAccount,
   handleUnsuspendAccount, handleSuspensionStatus, handleAdminUserSearch, handleAdminUserDetail,
   prepareSellerPermanentClosure, recordSellerClosure, removeClosedSellerPlacedInstances,
+  SUSPENSION_SPARES_LAST_ADMIN_SQL,
 } from './lib/account-moderation.js';
 // #1407 (sub-issue of #1404): the AI-made Stripe-reinstatement decision
 // flow -- see that module's own header comment for the full rubric and the
@@ -3205,6 +3206,22 @@ export async function escalateExpiredSuspensions(db) {
     RETURNING suspension_id, user_id, admin_user_id
   `).run();
   for (const row of due.results) {
+    // #2308 (Parity across sibling surfaces): the suspend paths refuse to
+    // suspend the last operational admin (#2268, #3085), so the cascade
+    // delete must not remove one either -- defense in depth for a state that
+    // got there another way (an admin demoted after the suspension was
+    // filed, say). Checked just before each delete, so two due admins can't
+    // both pass. The escalation is re-armed rather than dropped: it retries
+    // on the next cron run once another operational admin exists, and logs
+    // each time it is held back so it is never silent.
+    const spared = await db.prepare(`SELECT 1 AS spared WHERE ${SUSPENSION_SPARES_LAST_ADMIN_SQL}`)
+      .bind(row.user_id, row.user_id).first();
+    if (!spared) {
+      console.warn('escalateExpiredSuspensions: not deleting the last operational admin; will retry', row.suspension_id);
+      await db.prepare('UPDATE account_suspensions SET escalated_at = NULL WHERE suspension_id = ?')
+        .bind(row.suspension_id).run();
+      continue;
+    }
     // #2988: must run before the cascade (which deletes the seller row it
     // looks the account's pending slots up through); see that function's
     // own comment for the prepare/commit/rollback shape.
