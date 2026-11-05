@@ -1750,9 +1750,18 @@ and a derived onboarding status are kept.
   "connected": false,
   "status": "not_started",
   "requirementsCurrentlyDue": [],
+  "stripeStepRequirements": [],
   "updatedAt": null
 }
 ```
+
+`stripeStepRequirements` (#2928) is the part of `requirementsCurrentlyDue`
+that our own forms never collect and Stripe must, such as
+`individual.id_number` (a full SSN/ITIN) or `individual.verification.*`
+(ID documents); it is empty when everything due is a field our forms
+already send. The platform never collects those itself, not even in
+transit, so a non-empty list means the person needs Stripe's own
+onboarding step (the hand-off is a separate change).
 
 `configured` is `false` whenever this server has no `STRIPE_SECRET_KEY`
 Worker secret set (e.g. local dev, the automated test suite) — same
@@ -1982,7 +1991,7 @@ above — the owner still needs to register this endpoint's URL in the
 Stripe dashboard and copy the resulting signing secret here before any of
 this runs for real; the code itself doesn't need to wait for that.)
 
-Four event types are handled; everything else is a no-op `200`.
+Five event types are handled; everything else is a no-op `200`.
 
 `account.updated`: the account id on the event is looked up against both
 `sellers` and `builders` — a given Stripe Custom account belongs to
@@ -1999,6 +2008,18 @@ Ordering (#3071): Stripe doesn't guarantee delivery order, so the newest
 applied event's `created` time is stored in `stripe_event_created_at` and an
 `account.updated` older than it is ignored (a `200` no-op). An event with no
 numeric `created` is applied unconditionally, as before.
+
+**#782**: `payment_intent.succeeded` — backstop for a charge that
+succeeded while the buyer's `POST /api/purchases/finalize` never landed
+(closed tab, dropped connection). An intent created by our own checkout
+(its metadata carries `instanceId`/`templateId`) is finalized through the
+same core as the client call (`finalizeSucceededPaymentIntent`): same
+purchase row, credit, owned-avatar/animation grant, delivery token and
+notifications, no special messaging. Whichever of the client finalize and
+the webhook arrives first wins; the other finds the existing row (the
+`payment_intent_id` UNIQUE index plus an atomic batch make a concurrent
+loser roll back whole) and is a no-op. An unavailable item takes the same
+orphan-row path as a client finalize (#472). Other intents are ignored.
 
 **#1086/#2419**: `charge.refunded`, `charge.dispute.funds_withdrawn`, and
 `charge.dispute.funds_reinstated` — a charge can be reversed by Stripe's
@@ -4796,6 +4817,14 @@ can be added without their own table or endpoints — current sources are:
 - A product sale or its refund (see "Simulated purchases" below): the
   builder hosting the sold instance is notified of the commission earned,
   or clawed back on refund.
+- Land cap and refunds (#836): a full refund or chargeback also removes the
+  sale's `higgles_earnings_events` rows (linked by `purchase_id`, migration
+  0189), so a refunded sale no longer counts toward the trailing-window
+  land-cap recomputation. `land_cap_m2` itself is never lowered: the ratchet
+  keeps an already-granted cap, and growth resumes only once the adjusted
+  ledger's candidate cap exceeds it. A dispute resolved in the builder's
+  favor re-adds the credited amount. Sales recorded before the migration
+  have no link and are unaffected.
 - A friend request, its acceptance, or its decline (see "Friendship object"
   below): the recipient is notified of a new request, and the requester is
   notified once it's accepted or, if it's still pending when the recipient
@@ -5230,10 +5259,7 @@ even bypassing that button entirely.
 A durable, **silent** block between two people, keyed on the account
 (`user_id`), not the resettable builder profile (`migrations/0188_user_blocks.sql`).
 The blocked person is never notified and nothing in any response they get
-differs from a stranger's. This resource only lands the table and its
-controls; the per-surface filters that make a block take effect on presence,
-nearby chat, voice signaling, direct messages and friend requests are #3143.
-All three routes need a signed-in, non-suspended account; blocking does
+differs from a stranger's. All three routes need a signed-in, non-suspended account; blocking does
 **not** require ID verification. Writes share a `block-mutate` rate limit
 (20 per window).
 
@@ -5258,6 +5284,31 @@ The caller's own list only, newest first, up to 200:
 `{ "blocks": [{ "userId": "...", "username": "...", "blockedAt": "..." }] }`.
 Nothing here ever reveals that the caller has been blocked by someone else.
 Account deletion removes a person's rows in both directions.
+
+### What a block does (#3143)
+
+One shared predicate (`notBlockedEitherWaySql`/`notBlockedBySql` in
+`worker/lib/auth.js`) applies a block to every person-to-person surface, for
+a block from A against B. Nothing ever changes for B.
+
+- **Presence** (`GET /api/presence`): A's list omits B and B's omits A.
+- **Nearby chat** (`GET /api/nearby-chat`): each omits the other's messages.
+  Sending is unchanged.
+- **Voice signaling**: `POST /api/voice/signal` between the two is accepted
+  with the usual `201` but never stored; `GET` also withholds anything queued
+  earlier (it reappears after an unblock). Blocking removes the pair's
+  friend voice channel memberships (the blocked person leaves the blocker's
+  channel, the blocker leaves theirs), and the channel listing omits the
+  other person.
+- **Direct messages**: the friendship is already severed, so B's send gets
+  the same `403` a non-friend gets. A's `unread-count` excludes B; A can
+  still read the history.
+- **Friend requests**: B's request to A is stored and answered like any other
+  (B still sees it pending) but sends A no notification, is omitted from A's
+  `GET /api/friendships`, and cannot be accepted (`404`). A requesting B
+  while blocking them gets `400` ("Unblock this person before sending a
+  friend request.").
+- **Conduct reports** are unaffected: A can still report B.
 
 ## Nearby chat
 
@@ -6026,7 +6077,11 @@ removing unwanted content). A pre-#1830 post with `userId: null` can never
 match here, since there's nobody on record to own it. `401` with no
 session at all. `404` if the post doesn't exist (or belongs to a different
 instance). Rate-limited per editing account, the same shape as `POST`/
-`DELETE`'s own limits.
+`DELETE`'s own limits. **#2041:** a successful edit snapshots the pre-edit
+row into `user_content_edit_history` (`source_table: 'sign_posts'`,
+`action: 'edit'`), and the author's own self-delete (below) snapshots it
+with `action: 'delete'` -- the same retained dispute history product
+reviews and calendar events already keep.
 
 ### `DELETE /api/instances/:instanceId/posts/:postId`
 

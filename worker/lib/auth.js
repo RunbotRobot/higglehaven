@@ -188,6 +188,62 @@ export function builderNotSuspendedSql(column) {
   )`;
 }
 
+// #3143 (Blocks 2/2): the one shared predicate every person-to-person surface
+// uses to honour a block (AGENTS.md: "Parity across sibling surfaces"), so none
+// can drift. Both arguments are trusted SQL expressions for a *builder_id*
+// (a column reference or a `?` placeholder, never user text); each appears
+// exactly once so a `?` costs exactly one bind. Blocks key on user_id, so the
+// builder ids resolve through `builders` here -- #3141 removes that step later.
+// notBlockedEitherWaySql: true unless either person blocked the other.
+export function notBlockedEitherWaySql(builderExprA, builderExprB) {
+  return `NOT EXISTS (
+    SELECT 1 FROM user_blocks AS blk_check
+    JOIN builders AS blk_a ON blk_a.builder_id = ${builderExprA}
+    JOIN builders AS blk_b ON blk_b.builder_id = ${builderExprB}
+    WHERE (blk_check.blocker_user_id = blk_a.user_id AND blk_check.blocked_user_id = blk_b.user_id)
+       OR (blk_check.blocker_user_id = blk_b.user_id AND blk_check.blocked_user_id = blk_a.user_id)
+  )`;
+}
+
+// notBlockedBySql: one direction only -- true unless the first person blocked
+// the second. For surfaces where the blocked person must see no change at all
+// (their own pending friend request stays visible to them) but the blocker's
+// view hides it.
+export function notBlockedBySql(blockerBuilderExpr, blockedBuilderExpr) {
+  return `NOT EXISTS (
+    SELECT 1 FROM user_blocks AS blk_check
+    JOIN builders AS blk_a ON blk_a.builder_id = ${blockerBuilderExpr}
+    JOIN builders AS blk_b ON blk_b.builder_id = ${blockedBuilderExpr}
+    WHERE blk_check.blocker_user_id = blk_a.user_id AND blk_check.blocked_user_id = blk_b.user_id
+  )`;
+}
+
+// notBlockedByUserSql: the same one-direction check as notBlockedBySql, for a
+// table that is already keyed by user_id (#3141 moves the social tables over
+// one at a time; direct_messages is one, #3146). Both arguments are trusted SQL
+// expressions for a *user_id* (a column reference or a `?` placeholder, never
+// user text); no builders join is needed.
+export function notBlockedByUserSql(blockerUserExpr, blockedUserExpr) {
+  return `NOT EXISTS (
+    SELECT 1 FROM user_blocks AS blk_user_check
+    WHERE blk_user_check.blocker_user_id = ${blockerUserExpr}
+      AND blk_user_check.blocked_user_id = ${blockedUserExpr}
+  )`;
+}
+
+// Single-pair JS checks for write paths (voice signal send, friend request).
+export async function blockExistsBetween(db, builderIdA, builderIdB) {
+  const row = await db.prepare(`SELECT 1 AS hit WHERE (${notBlockedEitherWaySql('?', '?')}) = 0`)
+    .bind(builderIdA, builderIdB).first();
+  return !!row;
+}
+
+export async function builderBlocks(db, blockerBuilderId, blockedBuilderId) {
+  const row = await db.prepare(`SELECT 1 AS hit WHERE (${notBlockedBySql('?', '?')}) = 0`)
+    .bind(blockerBuilderId, blockedBuilderId).first();
+  return !!row;
+}
+
 // #3144 (1/6 of #3141): builders and sellers are role profiles hanging off one
 // account, and a builder profile can be reset to a brand-new builder_id through
 // ordinary self-service, so anything about a person as a person keys on

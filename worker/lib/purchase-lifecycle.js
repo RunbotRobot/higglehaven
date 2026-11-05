@@ -354,6 +354,24 @@ export async function notifySellerOfSaleChange(db, purchase, messageFor) {
   }
 }
 
+// #1304 (No silent loss): the buyer's side of the same reversals
+// notifySellerOfSaleChange covers. Fired after the write that reversed the
+// money has committed, and only on the branch that did the first real state
+// change. Best-effort like the seller notice. A guest/removed buyer
+// (buyer_builder_id NULL) has nobody to tell.
+export async function notifyBuyerOfRefund(db, purchase, amountCents, { partial = false } = {}) {
+  try {
+    if (!purchase.buyer_builder_id || !(amountCents > 0)) return;
+    const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
+      .bind(purchase.template_id).first();
+    const name = template?.name || 'Your purchase';
+    await fireNotification(db, purchase.buyer_builder_id,
+      `${partial ? 'Part of your payment for' : 'Your payment for'} "${name}" was refunded: ${formatCents(amountCents)} is on its way back to your original payment method.`);
+  } catch (err) {
+    console.error('notifyBuyerOfRefund failed', purchase.purchase_id, err);
+  }
+}
+
 // The seller's earnings a full reversal removes: whatever their share still
 // was after any earlier partial refund (purchaseSellerShareCents is the same
 // math the payout and 1099-K figures use).
@@ -439,6 +457,14 @@ export async function clawBackPurchaseCommission(db, purchase, templateName) {
       await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ? WHERE builder_id = ?')
         .bind(clawbackAmountCents, purchase.builder_id).run();
     }
+    // #836 (owner decisions on the issue): the refunded sale no longer
+    // counts toward land-cap-raising earnings -- remove the ledger rows it
+    // (and any commission hold it later released) created. Runs after the
+    // hold revoke above so a release can't slip a row in behind it. The
+    // cap itself (builders.land_cap_m2) is a ratchet and is never lowered;
+    // only later recomputations see the adjusted ledger.
+    await db.prepare('DELETE FROM higgles_earnings_events WHERE purchase_id = ?')
+      .bind(purchase.purchase_id).run();
     // #1122: fired separately, after the debit above commits — a self-
     // delete race on purchase.builder_id between this function's caller
     // reading the purchase row and this point would otherwise fail the
@@ -446,6 +472,10 @@ export async function clawBackPurchaseCommission(db, purchase, templateName) {
     await fireNotification(db, purchase.builder_id,
       `"${templateName}" purchase refunded — ${formatCents(clawbackAmountCents)} commission clawed back.`);
   }
+
+  // #1304: tell the buyer what came back (the full total minus any earlier
+  // partial refund they were already notified about).
+  await notifyBuyerOfRefund(db, purchase, purchase.total_cents - (purchase.refunded_amount_cents || 0));
 
   // #3072: the seller's side of the same reversal -- see notifySellerOfSaleChange.
   const sellerNotice = sellerReversalNotice(purchase);
