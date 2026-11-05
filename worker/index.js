@@ -83,6 +83,7 @@ import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-ad
 // and credit-orb route handlers, extracted into worker/lib/ -- see each
 // module's own comment for what deliberately stayed here instead (and why).
 import { handleStripeWebhook, handleCardSetupIntent, handleConfirmCard } from './lib/stripe.js';
+import { classifyStripeRequirements } from './lib/stripe-requirements.js';
 import { handleDiditVerificationSession, handleDiditVerificationStatus, handleDiditWebhook } from './lib/didit.js';
 import {
   handleVideoGenerationJobCreate, handleVideoGenerationJobStatus, handleVideoGenerationWebhook,
@@ -2936,11 +2937,15 @@ export async function decryptTaxIdPayload(env, stored) {
 // handleBuilderRedeem/sellerPayoutSummaryJson need this same status shape
 // (also still used directly here by the Stripe-onboarding handlers above).
 export function stripeAccountStatusJson(env, row) {
+  const requirementsCurrentlyDue = JSON.parse(row.stripe_requirements_due || '[]');
   return {
     configured: stripeConfigured(env),
     connected: !!row.stripe_account_id,
     status: row.stripe_onboarding_status || 'not_started',
-    requirementsCurrentlyDue: JSON.parse(row.stripe_requirements_due || '[]'),
+    requirementsCurrentlyDue,
+    // #2928: the subset Stripe must collect itself (never our forms); empty
+    // when everything due is something our own forms already send.
+    stripeStepRequirements: classifyStripeRequirements(requirementsCurrentlyDue).needsStripeStep,
     updatedAt: row.stripe_updated_at,
   };
 }

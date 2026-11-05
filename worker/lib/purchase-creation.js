@@ -485,6 +485,38 @@ export async function handlePurchaseFinalize(request, env) {
   if (paymentIntent.status !== 'succeeded') {
     throw new HttpError(`Payment has not completed yet (status: ${paymentIntent.status}).`, 400);
   }
+  return finalizeSucceededPaymentIntent(env, paymentIntent);
+}
+
+// #782: the one finalize core shared by the client's POST
+// /api/purchases/finalize and the payment_intent.succeeded webhook
+// (worker/lib/stripe.js), so a charge that succeeded is recorded even when
+// the buyer's finalize call never lands. Safe to run concurrently from both
+// (and from webhook redeliveries): purchases.payment_intent_id is UNIQUE
+// (migration 0069) and every effect (credit, earnings, owned avatar, stock)
+// rides in the same atomic batch as the purchase INSERT, so a loser rolls
+// back whole and simply returns the winner's row -- one purchase, one
+// commission effect. Per the owner's decision on #782, whichever arrives
+// first wins and the other is a no-op; an unavailable item takes the same
+// #472 orphan-row path as a client finalize (no new refund policy).
+export async function finalizeSucceededPaymentIntent(env, paymentIntent) {
+  const db = env.DB;
+  const paymentIntentId = paymentIntent.id;
+  const existingRow = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
+  if (existingRow) return json({ purchase: purchaseFromRow(existingRow) });
+  try {
+    return await writeFinalizedPurchase(env, paymentIntent);
+  } catch (error) {
+    // Lost the race to a concurrent finalize/webhook: its row is the answer.
+    const winner = await db.prepare('SELECT * FROM purchases WHERE payment_intent_id = ?').bind(paymentIntentId).first();
+    if (winner) return json({ purchase: purchaseFromRow(winner) });
+    throw error;
+  }
+}
+
+async function writeFinalizedPurchase(env, paymentIntent) {
+  const db = env.DB;
+  const paymentIntentId = paymentIntent.id;
   const meta = paymentIntent.metadata || {};
   const instance = await db.prepare('SELECT * FROM placed_instances WHERE instance_id = ?').bind(meta.instanceId).first();
   const template = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(meta.templateId).first();
@@ -733,8 +765,8 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(creditNowCents, builderId),
-      db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
-        .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents),
+      db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents, purchase_id) VALUES (?, ?, ?, ?)')
+        .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents, purchaseId),
     );
   }
   if (!newBuilderClaim && builderId && escrowCents > 0) {
@@ -759,8 +791,8 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
     const followUp = [];
     if (creditNowCents > 0) {
       followUp.push(
-        db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
-          .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents),
+        db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents, purchase_id) VALUES (?, ?, ?, ?)')
+          .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents, purchaseId),
       );
     }
     if (escrowCents > 0) {
@@ -864,7 +896,12 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
   // ever reaching here, so a retry of the same purchase can never
   // double-decrement.
   let justSoldOut = false;
-  if (template.stock_quantity != null) {
+  // #782: the oversell (real-money) path decrements inside the purchase
+  // batch below, floored at zero, so a finalize that loses the
+  // payment_intent_id UNIQUE race rolls the decrement back with everything
+  // else instead of double-decrementing stock.
+  const stockInBatch = template.stock_quantity != null && allowOversell;
+  if (template.stock_quantity != null && !stockInBatch) {
     const decremented = await db.prepare(`
       UPDATE catalog_templates SET stock_quantity = stock_quantity - ?
       WHERE template_id = ? AND stock_quantity >= ?
@@ -970,8 +1007,8 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
     statements.push(
       db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
         .bind(creditNowCents, builderId),
-      db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
-        .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents),
+      db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents, purchase_id) VALUES (?, ?, ?, ?)')
+        .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents, purchaseId),
     );
   }
   if (!newBuilderClaim && builderId && escrowCents > 0) {
@@ -983,7 +1020,17 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
   if (isAnimationCategory && buyerBuilderStillExists) {
     statements.push(...ownedAnimationStatements(db, buyerBuilderId, template.template_id, purchaseId));
   }
+  if (stockInBatch) {
+    statements.push(
+      db.prepare('UPDATE catalog_templates SET stock_quantity = MAX(stock_quantity - ?, 0) WHERE template_id = ?')
+        .bind(quantity, template.template_id),
+    );
+  }
   const batchResults = await db.batch(statements);
+  if (stockInBatch) {
+    const after = await db.prepare('SELECT stock_quantity FROM catalog_templates WHERE template_id = ?').bind(template.template_id).first();
+    justSoldOut = after.stock_quantity === 0;
+  }
   if (claimIndex >= 0) {
     // #2879: same self-delete-in-the-gap handling as writeOrphanedPurchaseRow's
     // own identical block -- see that one's comment for why.
@@ -993,8 +1040,8 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
     const followUp = [];
     if (creditNowCents > 0) {
       followUp.push(
-        db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) VALUES (?, ?, ?)')
-          .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents),
+        db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents, purchase_id) VALUES (?, ?, ?, ?)')
+          .bind(`earnings-${crypto.randomUUID()}`, builderId, creditNowCents, purchaseId),
       );
     }
     if (escrowCents > 0) {

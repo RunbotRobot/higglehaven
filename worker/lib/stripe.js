@@ -22,9 +22,10 @@ import { readJson, stringValue } from './validation.js';
 // #2615 moved clawBackPurchaseCommission out of worker/index.js into
 // worker/lib/purchase-lifecycle.js -- this webhook's own chargeback path
 // still needs it, just from its new home.
-import { clawBackPurchaseCommission, notifySellerOfSaleChange } from './purchase-lifecycle.js';
+import { clawBackPurchaseCommission, notifyBuyerOfRefund, notifySellerOfSaleChange } from './purchase-lifecycle.js';
 import { purchaseSellerShareCents } from './seller-payouts-tax.js';
 import { fireNotification } from './notifications.js';
+import { finalizeSucceededPaymentIntent } from './purchase-creation.js';
 import {
   stripeConfigured, stripeRequest, deriveStripeOnboardingStatus, userFromRow, formatCents,
 } from '../index.js';
@@ -135,6 +136,18 @@ export async function handleStripeWebhook(request, env, db) {
       ...(hasCreated ? [event.created, account.id, event.created] : [account.id]),
     );
     await db.batch([mk('sellers'), mk('builders')]);
+    return json({ received: true });
+  }
+  if (event.type === 'payment_intent.succeeded') {
+    // #782: backstop for a charge that succeeded while the buyer's finalize
+    // call never landed. Only intents our own checkout created (it stamps
+    // instanceId/templateId into metadata); anything else is ignored. The
+    // event object is the PaymentIntent itself and the signature above
+    // already authenticated it. A failure throws so Stripe redelivers.
+    const paymentIntent = event.data?.object;
+    if (paymentIntent?.id && paymentIntent.metadata?.instanceId && paymentIntent.metadata?.templateId) {
+      await finalizeSucceededPaymentIntent(env, paymentIntent);
+    }
     return json({ received: true });
   }
   if (STRIPE_PURCHASE_REVERSAL_EVENT_TYPES.includes(event.type)) {
@@ -306,6 +319,10 @@ async function handleDisputeFundsReinstatedWebhookEvent(db, purchase) {
 
   await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
     .bind(creditBackCents, purchase.builder_id).run();
+  // #836: the clawback removed this sale's earnings-ledger rows; the
+  // reinstated sale counts toward the land-cap window again.
+  await db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents, purchase_id) VALUES (?, ?, ?, ?)')
+    .bind(`earnings-${crypto.randomUUID()}`, purchase.builder_id, creditBackCents, purchase.purchase_id).run();
   const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
     .bind(purchase.template_id).first();
   await fireNotification(db, purchase.builder_id,
@@ -348,6 +365,9 @@ async function handlePartialRefundWebhookEvent(db, purchase, charge) {
     'UPDATE purchases SET refunded_amount_cents = ? WHERE purchase_id = ? AND refunded_at IS NULL AND refunded_amount_cents = ?',
   ).bind(newRefundedCents, purchase.purchase_id, purchase.refunded_amount_cents).run();
   if (guard.meta.changes === 0) return;
+
+  // #1304: the buyer is told the newly refunded amount.
+  await notifyBuyerOfRefund(db, purchase, newRefundedCents - purchase.refunded_amount_cents, { partial: true });
 
   // #3072: the seller's share shrinks by the same refunded fraction the
   // payout and 1099-K math use -- tell them, whether or not a hosting builder exists.

@@ -618,6 +618,31 @@ describe('Simulated purchases', () => {
     expect(rejected.response.status).toBe(404);
   });
 
+  it('#836: a refund removes the sale\'s earnings-ledger rows, so buy+refund no longer feeds the land cap', async () => {
+    const seller = await signupAdmin('purchase-refund-ledger-seller');
+    await createGreenbeltLandletWithArea('purchase-refund-ledger-landlet', 1000);
+    await claim('purchase-refund-ledger-landlet', seller);
+    await createTemplate('purchase-refund-ledger-template', { priceCents: 10000 });
+    await placeInstance('purchase-refund-ledger-instance', 'purchase-refund-ledger-landlet', 'purchase-refund-ledger-template', seller);
+    const ledger = async () => (await env.DB.prepare(
+      'SELECT COALESCE(SUM(amount_cents), 0) AS total, COUNT(*) AS n FROM higgles_earnings_events WHERE builder_id = ?',
+    ).bind(seller.builderId).first());
+    const capBefore = (await builderRow(seller.builderId)).land_cap_m2;
+
+    const purchased = await api('/instances/purchase-refund-ledger-instance/purchase', seller.session({ method: 'POST' }));
+    const { purchaseId, builderShareCents } = purchased.body.purchase;
+    const afterSale = await ledger();
+    expect(afterSale.total).toBe(builderShareCents);
+    const linked = await env.DB.prepare('SELECT COUNT(*) AS n FROM higgles_earnings_events WHERE purchase_id = ?').bind(purchaseId).first();
+    expect(linked.n).toBe(1);
+
+    const refunded = await api(`/purchases/${purchaseId}/refund`, adminSession({ method: 'POST' }));
+    expect(refunded.response.status).toBe(200);
+    expect((await ledger()).total).toBe(0);
+    // The ratchet is never lowered by a refund.
+    expect((await builderRow(seller.builderId)).land_cap_m2).toBeGreaterThanOrEqual(capBefore);
+  });
+
   it('refunds a purchase, clawing back exactly the builder\'s commission share (not the full total)', async () => {
     const seller = await signupAdmin('purchase-refund-seller');
     await createGreenbeltLandletWithArea('purchase-refund-landlet', 1000);

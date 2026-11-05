@@ -265,8 +265,8 @@ export function releaseHoldAndCreditStatements(db, { hold, amountCents, releaseS
   return [
     db.prepare(`UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ? AND ${stillClaimable}`)
       .bind(amountCents, hold.builder_id, hold.hold_id),
-    db.prepare(`INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents) SELECT ?, ?, ? WHERE ${stillClaimable}`)
-      .bind(`earnings-${crypto.randomUUID()}`, hold.builder_id, amountCents, hold.hold_id),
+    db.prepare(`INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents, purchase_id) SELECT ?, ?, ?, ? WHERE ${stillClaimable}`)
+      .bind(`earnings-${crypto.randomUUID()}`, hold.builder_id, amountCents, hold.purchase_id, hold.hold_id),
     releaseStatement,
   ];
 }
