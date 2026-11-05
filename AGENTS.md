@@ -404,6 +404,25 @@ it to catch a bad write for you. See issue #854 if you want the history
 here, and flag it as an open question rather than silently picking one
 or the other if it matters for what you're doing.
 
+**If the Cloudflare MCP connector says it needs authorization, that is
+not a decision to wait on.** Found 2026-11-05: the owner's connector
+session expired overnight, every D1 MCP tool vanished fleet-wide at
+once, and six sessions stopped in a `need_input` prompt asking the
+owner to re-authorize — invisible to the rest of the fleet, and to the
+owner, for hours (#3131). Only the owner can re-authorize it,
+higglehaven1 surfaces that in conversation, and nothing about your own
+task depends on it. Do not stop. In order: (1) if `CLOUDFLARE_API_TOKEN`
+is set in your environment, use the repo's own wrangler against the
+same database, from the repo root — `node_modules/.bin/wrangler d1
+execute higglehaven-db --remote --json --command "<sql>"` — reads and
+writes alike, under the same validation discipline; (2) if it isn't,
+claim on GitHub alone: the issue's `assignees` field is already named
+below as an authoritative check, so the three-step gate still works
+(read, `issue_write` with yourself as assignee, re-read), plus a
+one-line claim comment; then write the Control Room card the moment
+either path is back. Say so in one line on the PR or issue, never as a
+question to the owner.
+
 Field shapes carried over from the Artifact-era board 1:1, so the
 semantics below are unchanged — only the storage/transport is different
 (a `tasks`/`replies` "collection" below now means the
