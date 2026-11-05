@@ -2736,6 +2736,13 @@ products (crop)" above. A request-body `sellerId` is ignored — this
 endpoint never reassigns a template to a different seller, the same way
 `PUT /api/landlets/:id` never reassigns `ownerBuilderId`.
 
+`modelUrl`, `modelSizeBytes` and `skeletonSignature` describe one file and
+move together (#1753). A request that changes `modelUrl` must also send
+`modelSizeBytes` (`400` otherwise), and if it omits `skeletonSignature` the
+stored signature is cleared to `null` rather than left describing the old
+model. Re-sending the current `modelUrl`, or any edit that does not touch
+it, leaves all three alone.
+
 If the request actually changes `dimensions`, every builder with a placed
 instance of this template gets a notification once the update succeeds —
 see "Notifications" below.
