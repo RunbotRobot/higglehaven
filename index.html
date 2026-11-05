@@ -3909,7 +3909,7 @@
       #friends-voice-channel-status:empty {
         display: none;
       }
-      #friends-incoming-list, #friends-outgoing-list, #friends-accepted-list {
+      #friends-incoming-list, #friends-outgoing-list, #friends-accepted-list, #friends-blocked-list {
         display: flex;
         flex-direction: column;
         gap: 8px;
@@ -4108,7 +4108,7 @@
       .friend-row-actions button.danger {
         background: var(--danger);
       }
-      #friends-incoming-empty, #friends-outgoing-empty, #friends-accepted-empty {
+      #friends-incoming-empty, #friends-outgoing-empty, #friends-accepted-empty, #friends-blocked-empty {
         font-size: 13px;
         color: rgb(var(--ink-rgb) / 0.6);
       }
@@ -5460,6 +5460,9 @@
         <h3>Friends</h3>
         <div id="friends-accepted-list"></div>
         <div id="friends-accepted-empty">No friends yet.</div>
+        <h3>Blocked people</h3>
+        <div id="friends-blocked-list"></div>
+        <div id="friends-blocked-empty">You haven't blocked anyone.</div>
       </div>
     </div>
     <div id="friends-map-modal" role="dialog" aria-modal="true" tabindex="-1">

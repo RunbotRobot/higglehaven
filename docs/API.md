@@ -5163,6 +5163,40 @@ documents for itself), no e2e session can actually reach
 /api/direct-messages` against the real dev server still gets rejected
 even bypassing that button entirely.
 
+## Blocks (#3140)
+
+A durable, **silent** block between two people, keyed on the account
+(`user_id`), not the resettable builder profile (`migrations/0188_user_blocks.sql`).
+The blocked person is never notified and nothing in any response they get
+differs from a stranger's. This resource only lands the table and its
+controls; the per-surface filters that make a block take effect on presence,
+nearby chat, voice signaling, direct messages and friend requests are #3143.
+All three routes need a signed-in, non-suspended account; blocking does
+**not** require ID verification. Writes share a `block-mutate` rate limit
+(20 per window).
+
+### `POST /api/blocks`
+
+Body: `{ "builderId": "..." }` or `{ "userId": "..." }` (a builder id is
+resolved to its account by the server; a client-supplied mapping is never
+trusted). Idempotent: blocking someone already blocked is the same `201`.
+In one atomic batch it also silently deletes any friendship or pending friend
+request between the two people, in either direction. Response:
+`201 { "blocked": true, "userId": "..." }`. `400` for blocking yourself or no
+target, `404` when no live account matches.
+
+### `DELETE /api/blocks/:userId`
+
+Idempotent: unblocking someone who is not blocked is the same `200
+{ "blocked": false, "userId": "..." }`.
+
+### `GET /api/blocks`
+
+The caller's own list only, newest first, up to 200:
+`{ "blocks": [{ "userId": "...", "username": "...", "blockedAt": "..." }] }`.
+Nothing here ever reveals that the caller has been blocked by someone else.
+Account deletion removes a person's rows in both directions.
+
 ## Nearby chat
 
 Tracking issue #2777 (docs/SPEC.md §2's "Text chat available as an
