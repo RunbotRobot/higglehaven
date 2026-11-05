@@ -24,6 +24,7 @@
 // which still needs them for the full-account-data-export feature --
 // not a circular import, just worker/index.js importing one more name
 // from this module the same way it already imports handleModelUpload etc.
+import { isNcmecEvidenceKey } from './ncmec-evidence.js';
 import { json, HttpError, clientIp } from './http.js';
 import { requireAdmin, requireSessionBuilder, assertOwner } from './auth.js';
 import { checkRateLimit } from './rate-limit.js';
@@ -54,6 +55,9 @@ async function handleUploadedAsset(request, env) {
     throw new HttpError('Invalid upload path encoding', 400);
   }
   if (!key) throw new HttpError('Uploaded model key is required', 400);
+  // #3041: the NCMEC evidence store shares this bucket under its own prefix.
+  // It is never served, probed or deleted through the public asset route.
+  if (isNcmecEvidenceKey(key)) return json({ error: 'Not found' }, 404);
 
   if (request.method === 'DELETE') {
     if (!env.DB) throw new HttpError('D1 binding DB is not configured', 500);
@@ -304,7 +308,9 @@ async function handleModelListing(request, env, url) {
   const cursorParam = url.searchParams.get('cursor');
   const cursor = cursorParam === null ? undefined : stringValue(cursorParam, 'cursor');
   const listing = await env.MODELS.list({ limit, cursor });
-  const modelUrls = listing.objects.map((object) => `/uploads/${object.key}`);
+  // #3041: evidence-store objects are not uploads; keep them out of the view.
+  const visibleObjects = listing.objects.filter((object) => !isNcmecEvidenceKey(object.key));
+  const modelUrls = visibleObjects.map((object) => `/uploads/${object.key}`);
   const templateRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
   const productRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
   const videoJobRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
@@ -342,7 +348,7 @@ async function handleModelListing(request, env, url) {
     }
   }
   return json({
-    models: listing.objects.map((object) => {
+    models: visibleObjects.map((object) => {
       const modelUrl = `/uploads/${object.key}`;
       const referencedByTemplateIds = templateRefs.get(modelUrl);
       const referencedByProductIds = productRefs.get(modelUrl);
@@ -476,7 +482,11 @@ export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAg
   const now = Date.now();
   do {
     const listing = await env.MODELS.list({ cursor, limit: 100 });
-    const modelUrls = listing.objects.map((object) => `/uploads/${object.key}`);
+    // #3041: the NCMEC evidence store lives in this bucket under its own
+    // prefix and is never an orphan -- exclude it before anything else looks
+    // at the page, so it can never become a deletion target.
+    const pageObjects = listing.objects.filter((object) => !isNcmecEvidenceKey(object.key));
+    const modelUrls = pageObjects.map((object) => `/uploads/${object.key}`);
     const referencedUrls = new Set();
     if (modelUrls.length > 0) {
       // #774: image_url (thumbnails) shares this same bucket/URL scheme as
@@ -504,15 +514,15 @@ export async function cleanupUnreferencedModels(env, { maxDeletes, dryRun, minAg
       for (const row of referenced) referencedUrls.add(row.url);
     }
     let examinedWholePage = true;
-    for (let i = 0; i < listing.objects.length; i++) {
-      const object = listing.objects[i];
+    for (let i = 0; i < pageObjects.length; i++) {
+      const object = pageObjects[i];
       // #890: an object younger than minAgeMs is skipped, not just
       // "examined and found referenced" — it may still be mid-registration
       // (see this function's own callers for why the cron path passes a
       // nonzero minAgeMs and the admin-triggered one doesn't).
       const oldEnough = !object.uploaded || now - object.uploaded.getTime() >= minAgeMs;
       if (oldEnough && !referencedUrls.has(`/uploads/${object.key}`)) targets.push(object);
-      if (targets.length === maxDeletes && i < listing.objects.length - 1) {
+      if (targets.length === maxDeletes && i < pageObjects.length - 1) {
         examinedWholePage = false;
         break;
       }

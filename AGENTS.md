@@ -249,7 +249,18 @@ most likely to come up again.
   having the hybrid setup.") When moving between two versions of a
   provider API or two internal designs, cut over fully rather than
   running both; the owner would rather pay the migration cost once than
-  carry two code paths.
+  carry two code paths. **Refinement (2026-11-05, #2923):** the rule is
+  about not running two of *our own* designs side by side. It does not
+  mean waiting for a provider API that doesn't exist. The "fully v2"
+  Stripe call rested on a false premise -- there is no GA v2
+  replacement for Connect `/v1/transfers`, `/v1/payouts`, or
+  `/v1/balance` (the `stripe_transfers` capability is a flag that lets
+  a v2 account receive v1 transfers, and the only v2 outbound-transfer
+  objects belong to Treasury, a private-preview product for a different
+  architecture). A v2 Account object with v1 money movement is Stripe's
+  one documented GA path, so it is "one model", and the owner accepted
+  it. If Stripe later ships a GA v2 equivalent for Connect payouts,
+  that becomes an ordinary migration issue at that time.
 
 - **Nothing that isn't actively for sale is visible to shoppers *or*
   builders.** (2026-11-01, #2305.) A suspended seller's listings are
@@ -373,6 +384,38 @@ most likely to come up again.
   different thing (a shop's name, not a person's) and stays its own
   field. (#3142.)
 
+- **A platform-granted credit is refunded when the failure is ours or
+  the provider's, and stays spent only when it is attributable to what
+  the user submitted.** (2026-11-05, #2970.) Video-to-3D credits are
+  free grants under a daily budget, so the provider cost is sunk either
+  way and the only thing at stake is whether the builder loses a
+  rationed credit for an outcome they didn't cause. Tripo `failed`/
+  `cancelled`/`expired`, the 15-minute timeout sweep, and a finished
+  model we couldn't store all refund; `banned` (a content-policy
+  rejection of the builder's own video) does not, so the filter can't
+  be probed for free. User-facing copy says which happened. Whether the
+  platform absorbs the provider's *dollar* cost of a failed call is a
+  separate money question (#1618); this decision is about the user's
+  credit, not ours. Guard refunds against a late provider result
+  completing an already-refunded job.
+
+- **Sensitive identity data that only a provider needs goes directly to
+  that provider; the platform never handles it, even in transit.**
+  (2026-11-05, #2928.) Our own onboarding forms collect the minimum
+  (name, date of birth, address, last four of the SSN, phone). When
+  Stripe's requirements ask for more -- a full SSN/ITIN, a government
+  ID, proof of address -- the person is handed to Stripe's own
+  onboarding step (embedded in our page, or Stripe-hosted), so the data
+  goes from their browser to Stripe and never passes through the
+  Worker. This strengthens the existing "no KYC field is ever
+  persisted" promise to "never even seen" for the most sensitive
+  fields, and Stripe keeps that step current as requirements change
+  instead of the fleet re-reviewing them every six months. Stripe's
+  docs confirm live accounts do get asked (failed initial checks,
+  volume/time thresholds), so this is not a test-mode-only case. Apply
+  the same shape to any future provider that needs data we have no
+  reason to hold (a tax-filing vendor, an identity verifier).
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
@@ -463,7 +506,11 @@ task depends on it. Do not stop. In order: (1) if `CLOUDFLARE_API_TOKEN`
 is set in your environment, use the repo's own wrangler against the
 same database, from the repo root — `node_modules/.bin/wrangler d1
 execute higglehaven-db --remote --json --command "<sql>"` — reads and
-writes alike, under the same validation discipline; (2) if it isn't,
+writes alike, under the same validation discipline (it prints a banner
+to stderr, so parse stdout; check with `[ -n "$CLOUDFLARE_API_TOKEN" ]`
+first — higglehaven3, 4 and 6 all found it unset, and wrangler then
+fails with "set a CLOUDFLARE_API_TOKEN"; never go looking for a token
+elsewhere); (2) if it isn't,
 claim on GitHub alone: the issue's `assignees` field is already named
 below as an authoritative check, so the three-step gate still works
 (read, `issue_write` with yourself as assignee, re-read), plus a
@@ -684,6 +731,16 @@ the task from. None of the following eliminates the race (self-
 assigning a GitHub Issue, and claiming a task in the control room, are
 both advisory, not atomic), but each shrinks the window or lowers the
 cost when it happens anyway:
+
+- **Control Room unreachable (the D1 tool is missing or unauthenticated
+  and the wrangler fallback has no token): a GitHub comment on the issue
+  is an acceptable *last-resort* claim, and only then (#3131).** Say who
+  you are in it ("claimed by higglehaven4"), because every session shares
+  one GitHub identity and `assignees` can't tell sessions apart. Read the
+  issue's recent comments for another session's claim before you start,
+  and write the `control_room_tasks` card (status, session, a one-line
+  note) as soon as either route works again, including for work that has
+  already merged by then.
 
 - **Self-assign before you investigate, not after — and treat it as a
   three-step gate, not a single write: (1) read, (2) claim, (3) re-read

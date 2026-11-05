@@ -188,6 +188,65 @@ export function builderNotSuspendedSql(column) {
   )`;
 }
 
+// #3144 (1/6 of #3141): builders and sellers are role profiles hanging off one
+// account, and a builder profile can be reset to a brand-new builder_id through
+// ordinary self-service, so anything about a person as a person keys on
+// users.user_id (AGENTS.md, "Anything about a person as a person keys on the
+// account"). These resolvers are how the social tables that are still keyed by
+// builder_id move over, one table per sub-issue: see docs/API.md's "Moving a
+// table from builder ids to user ids" for the pattern. Each returns null when
+// there is nothing to resolve (no such builder, or a pre-auth builder whose
+// user_id is NULL; those rows exist -- migrations/0054 -- and must never be
+// guessed at), and the set versions simply omit the ids they cannot resolve.
+export async function userIdForBuilder(db, builderId) {
+  if (!builderId) return null;
+  const row = await db.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(builderId).first();
+  return row?.user_id ?? null;
+}
+
+export async function builderIdForUser(db, userId) {
+  if (!userId) return null;
+  const row = await db.prepare('SELECT builder_id FROM builders WHERE user_id = ?').bind(userId).first();
+  return row?.builder_id ?? null;
+}
+
+// One bound parameter per id, and D1 allows 100 bound parameters per
+// statement; a little headroom keeps a future extra condition from tipping it
+// over. Same chunking idiom suspendedSellerTemplateIds below and
+// selectModelUrlReferencesChunked (models.js) use for their own lists.
+export const RESOLVER_CHUNK_SIZE = 90;
+
+// Map<builderId, userId> for the builders in `builderIds` that have an account.
+export async function userIdsForBuilders(db, builderIds) {
+  const unique = [...new Set((builderIds || []).filter(Boolean))];
+  const resolved = new Map();
+  for (let i = 0; i < unique.length; i += RESOLVER_CHUNK_SIZE) {
+    const chunk = unique.slice(i, i + RESOLVER_CHUNK_SIZE);
+    const { results } = await db.prepare(`
+      SELECT builder_id, user_id FROM builders
+      WHERE user_id IS NOT NULL AND builder_id IN (${chunk.map(() => '?').join(', ')})
+    `).bind(...chunk).all();
+    for (const row of results) resolved.set(row.builder_id, row.user_id);
+  }
+  return resolved;
+}
+
+// Map<userId, builderId> for the accounts in `userIds` that currently have a
+// builder profile (at most one each, idx_builders_user_id).
+export async function builderIdsForUsers(db, userIds) {
+  const unique = [...new Set((userIds || []).filter(Boolean))];
+  const resolved = new Map();
+  for (let i = 0; i < unique.length; i += RESOLVER_CHUNK_SIZE) {
+    const chunk = unique.slice(i, i + RESOLVER_CHUNK_SIZE);
+    const { results } = await db.prepare(`
+      SELECT builder_id, user_id FROM builders
+      WHERE user_id IN (${chunk.map(() => '?').join(', ')})
+    `).bind(...chunk).all();
+    for (const row of results) resolved.set(row.user_id, row.builder_id);
+  }
+  return resolved;
+}
+
 // #3034 (found via #3029): which of these templates belong to a seller under
 // an active suspension -- the same predicate #2985 hides from the catalog
 // (catalog.js) and #2986 snapshots+removes on suspend. Instance write paths

@@ -40,6 +40,7 @@ import { handleFeedback } from './lib/feedback.js';
 import { handleTaxEducation } from './lib/tax-education.js';
 // #3040: admin-initiated NCMEC report records (insert-only).
 import { handleNcmecReports } from './lib/ncmec-reports.js';
+import { purgeExpiredNcmecEvidence } from './lib/ncmec-evidence.js';
 import {
   handleAdminBootstrap, handleGrantAdmin, handleRevokeAdmin, handleListAdmins, handleSuspendAccount,
   handleUnsuspendAccount, handleSuspensionStatus, handleAdminUserSearch, handleAdminUserDetail,
@@ -464,6 +465,11 @@ export default {
     ctx.waitUntil(pruneExpiredAuthState(env.DB).catch((error) => {
       console.error('pruneExpiredAuthState failed', error);
     }));
+    // #3041: retention purge for NCMEC evidence older than the one-year
+    // constant in ncmec-evidence.js (one admin_action_log row per report).
+    ctx.waitUntil(purgeExpiredNcmecEvidence(env).catch((error) => {
+      console.error('purgeExpiredNcmecEvidence failed', error);
+    }));
     ctx.waitUntil(checkMigrationDrift(env).catch((error) => {
       console.error('checkMigrationDrift failed', error);
     }));
@@ -773,7 +779,7 @@ async function handleApi(request, env, url, ctx) {
 
   // #3040: admin-initiated, insert-only NCMEC report records.
   if (route[0] === 'ncmec-reports') {
-    return handleNcmecReports(request, env.DB, route, url);
+    return handleNcmecReports(request, env, route, url);
   }
 
   if (request.method === 'GET' && route.length === 1 && route[0] === 'product-flags') {
