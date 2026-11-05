@@ -208,16 +208,28 @@ export async function fetchDiditVerificationStatus() {
 // pages through everything rather than silently keeping only the first
 // 100 templates once the catalog grows past that.
 export async function fetchCatalog() {
-  const all = [];
-  let cursor;
-  for (;;) {
-    const query = new URLSearchParams({ limit: '100' });
-    if (cursor) query.set('cursor', cursor);
-    const { templates, nextCursor } = await requestJson(`/catalog?${query.toString()}`);
-    all.push(...templates);
-    if (!nextCursor) return all;
-    cursor = nextCursor;
+  // #1757: a template renamed (or repriced) by its seller while this loop is
+  // mid-fetch can move from after the cursor to before it and be skipped.
+  // The first page of each pass reports totalCount; when a pass comes up
+  // short of it, re-run (bounded) and merge by templateId so the gap is
+  // filled invisibly. Rows that disappear or a rising total only cost an
+  // extra bounded pass.
+  const byId = new Map();
+  for (let pass = 0; pass < 3; pass += 1) {
+    let cursor;
+    let totalCount = null;
+    for (;;) {
+      const query = new URLSearchParams({ limit: '100' });
+      if (cursor) query.set('cursor', cursor);
+      const page = await requestJson(`/catalog?${query.toString()}`);
+      if (!cursor && typeof page.totalCount === 'number') totalCount = page.totalCount;
+      for (const template of page.templates) byId.set(template.templateId, template);
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    if (totalCount === null || byId.size >= totalCount) break;
   }
+  return [...byId.values()];
 }
 
 export async function fetchBuilders({ label } = {}) {
