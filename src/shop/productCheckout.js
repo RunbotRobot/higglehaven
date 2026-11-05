@@ -35,6 +35,7 @@ import {
 import { ensureBuilderIdentity } from '../account/identity.js';
 import { currentAuthUser } from '../account/auth.js';
 import { loadStripeJs, formatPriceCents } from '../main.js';
+import { createCheckoutPayState, runPayAttempt, describePayFailure } from './checkoutPayAttempt.js';
 import { shopTappedProduct, shopReviews, rebuildReviewSprites, productInfoText } from './worldSprites.js';
 
 const shopProductPreviewModalEl = document.getElementById('shop-product-preview-modal');
@@ -342,7 +343,14 @@ let rejectCheckoutFlow = null;
 // Cancel button. Now shares the same reject call checkoutCancelBtn's own
 // handler uses, so Escape and Cancel behave identically -- same fix shape
 // #1679 already applied to the Friends-map/DM modal's own Escape gap.
+// #3116: set once the card has been charged and cleared only when the
+// purchase is recorded. While set, closing the modal (Escape included) is
+// ignored -- otherwise a charged buyer could dismiss it and be told
+// "Checkout cancelled." for a purchase that was in fact paid for.
+let checkoutChargedAwaitingFinalize = false;
+
 function closeCheckoutModal() {
+  if (checkoutChargedAwaitingFinalize) return;
   checkoutModalEl.classList.remove('visible');
   closeModalA11y(checkoutModalEl);
   if (checkoutCardElement) {
@@ -373,6 +381,11 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
     checkoutStatusEl.classList.remove('error');
     checkoutPayBtn.disabled = true;
     checkoutCancelBtn.disabled = false;
+    // #3116: a previous checkout may have left the retry label/lock behind.
+    if (!checkoutPayBtn.dataset.defaultLabel) checkoutPayBtn.dataset.defaultLabel = checkoutPayBtn.textContent;
+    checkoutPayBtn.textContent = checkoutPayBtn.dataset.defaultLabel;
+    checkoutChargedAwaitingFinalize = false;
+    const payState = createCheckoutPayState();
     checkoutModalEl.classList.add('visible');
     // #1730: closeCheckoutModal itself now rejects (see its own comment)
     // once rejectCheckoutFlow is armed here, so Escape (wired to it via
@@ -400,24 +413,41 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
         // through for real, silently reporting a completed purchase as
         // cancelled.
         checkoutCancelBtn.disabled = true;
-        checkoutStatusEl.textContent = 'Processing…';
+        checkoutStatusEl.textContent = payState.paymentConfirmed ? 'Finishing your purchase…' : 'Processing…';
         checkoutStatusEl.classList.remove('error');
         try {
-          const result = await stripe.confirmCardPayment(clientSecret, { payment_method: { card: checkoutCardElement } });
-          if (result.error) throw new Error(result.error.message || 'Payment failed.');
-          const finalized = await finalizePurchase(paymentIntentId);
+          // #3116: after the card is charged, a retry only re-runs finalize
+          // (see checkoutPayAttempt.js) -- confirming the card again would
+          // fail with Stripe's own wording and leave the buyer believing a
+          // paid purchase had failed.
+          const finalized = await runPayAttempt(payState, {
+            confirm: () => stripe.confirmCardPayment(clientSecret, { payment_method: { card: checkoutCardElement } }),
+            finalize: () => {
+              checkoutChargedAwaitingFinalize = true;
+              return finalizePurchase(paymentIntentId);
+            },
+          });
           // Disarm before closing -- closeCheckoutModal's own reject must
           // not fire after a genuinely completed purchase (a settled
           // promise's second settle attempt is a silent no-op, but relying
           // on that would be fragile and misleading to read).
           rejectCheckoutFlow = null;
+          checkoutChargedAwaitingFinalize = false;
           closeCheckoutModal();
           resolve(finalized);
         } catch (err) {
-          checkoutStatusEl.textContent = err.message || 'Payment failed.';
+          checkoutStatusEl.textContent = describePayFailure(payState, err);
           checkoutStatusEl.classList.add('error');
           checkoutPayBtn.disabled = false;
-          checkoutCancelBtn.disabled = false;
+          if (payState.paymentConfirmed) {
+            // Charged: only finishing the purchase is on offer. Cancel stays
+            // disabled (as #841 did during confirmation) and the button
+            // says what it now does.
+            checkoutPayBtn.textContent = 'Finish purchase';
+            checkoutCancelBtn.disabled = true;
+          } else {
+            checkoutCancelBtn.disabled = false;
+          }
         }
       };
     }).catch((err) => {
@@ -426,6 +456,13 @@ function runCheckoutFlow({ clientSecret, paymentIntentId, publishableKey }, { na
     });
   });
 }
+
+// #3116: e2e-only hook (same window.__test* convention as the other hooks in
+// this file) -- runs the real checkout modal directly, so a test can drive
+// the charged-but-not-finalized path with a stubbed Stripe and finalize
+// response instead of needing real Stripe keys and a Shop-mode tap. Inert
+// unless a test calls it.
+window.__testRunCheckoutFlow = (intent, summary) => runCheckoutFlow(intent, summary);
 
 // #659: read-only, no submit/confirm action -- just the close button, same
 // as every other dismissible modal in this file (see #checkout-modal's own

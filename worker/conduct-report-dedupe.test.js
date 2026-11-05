@@ -107,8 +107,8 @@ for (const surface of SURFACES) {
 }
 
 // The deploy migration must survive duplicates already in production: rebuild
-// the pre-0182 state in scratch tables and run the migration's own statements.
-describe('migration 0182 over pre-existing duplicates (#3122)', () => {
+// the pre-0183 state in scratch tables and run the migration's own statements.
+describe('migration 0183 over pre-existing duplicates (#3122)', () => {
   it('keeps the earliest row per pair and then enforces uniqueness', async () => {
     for (const table of ['voice_conduct_reports', 'nearby_chat_reports']) {
       const alice = await signupIdVerifiedBuilder(`dedupe-mig-${table}-alice`);

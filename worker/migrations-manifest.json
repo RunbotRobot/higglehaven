@@ -179,5 +179,6 @@
   "0179_stripe_event_created_at.sql",
   "0180_redemption_destination_account.sql",
   "0181_video_generation_jobs_store_attempts.sql",
-  "0182_conduct_reports_one_per_reporter.sql"
+  "0182_conduct_reports_keep_reported_builder.sql",
+  "0183_conduct_reports_one_per_reporter.sql"
 ]

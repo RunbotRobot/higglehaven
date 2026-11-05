@@ -1,4 +1,4 @@
--- #3122: voice_conduct_reports (0160) and nearby_chat_reports (0172) had no
+-- #3122: voice_conduct_reports (0160, rebuilt by 0182) and nearby_chat_reports (0172, rebuilt by 0182) had no
 -- one-per-reporter rule, unlike product_flags (UNIQUE (template_id,
 -- flagger_builder_id), 0131): one reporter could file the same report
 -- against the same builder on every click, each with its own Control Room

@@ -160,4 +160,29 @@ describe('Nearby chat conduct reports (#2956)', () => {
     }));
     expect(limited.response.status).toBe(429);
   });
+
+  // #3121: the reported party can reset their own builder profile
+  // (DELETE /api/builders/:id), which used to cascade away every report
+  // against them and leave the card pointing at a builder id that no longer
+  // resolves. The report now survives, attributable to the user account.
+  it('keeps a nearby chat conduct report, attributable to the reported account, after the reported builder resets their profile (#3121)', async () => {
+    const alice = await signupIdVerifiedBuilder('nearby-chat-report-reset-alice');
+    const bob = await signupIdVerifiedBuilder('nearby-chat-report-reset-bob');
+    const bobUserId = (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(bob.builderId).first()).user_id;
+    const created = await api('/nearby-chat/report', alice.session({
+      method: 'POST', body: JSON.stringify({ reportedBuilderId: bob.builderId, reason: 'Abusive' }),
+    }));
+    expect(created.response.status).toBe(201);
+
+    const deleted = await api(`/builders/${bob.builderId}`, bob.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+
+    const row = await env.DB.prepare('SELECT * FROM nearby_chat_reports WHERE report_id = ?')
+      .bind(created.body.reportId).first();
+    expect(row).toMatchObject({ reported_builder_id: null, reported_user_id: bobUserId, reason: 'Abusive' });
+
+    const taskId = `nearby-chat-report-${created.body.reportId.slice('nearby-chat-report-'.length)}`;
+    const task = await env.DB.prepare('SELECT note FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();
+    expect(task.note).toContain(`Reported account: ${bobUserId}`);
+  });
 });
