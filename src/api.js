@@ -298,9 +298,12 @@ export async function equipAvatar(templateId) {
   return avatar;
 }
 
-export async function fetchMyOwnedAvatars() {
-  const { avatars } = await requestJson('/builders/me/avatars');
-  return avatars;
+// #1132: cursor-paginated like the sibling lists; resolves to { avatars,
+// nextCursor } (nextCursor null on the last page).
+export async function fetchMyOwnedAvatars(cursor = null) {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+  const { avatars, nextCursor } = await requestJson(`/builders/me/avatars${query}`);
+  return { avatars, nextCursor: nextCursor ?? null };
 }
 
 // #1164 (sub-issue of #1161): mirrors the three avatar helpers just above
@@ -320,9 +323,11 @@ export async function equipAnimation(templateId) {
   return animation;
 }
 
-export async function fetchMyOwnedAnimations() {
-  const { animations } = await requestJson('/builders/me/animations');
-  return animations;
+// #1303: same shape as fetchMyOwnedAvatars above.
+export async function fetchMyOwnedAnimations(cursor = null) {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+  const { animations, nextCursor } = await requestJson(`/builders/me/animations${query}`);
+  return { animations, nextCursor: nextCursor ?? null };
 }
 
 // Stripe Connect (Custom account) payout onboarding for a builder's own
@@ -382,8 +387,24 @@ export async function deleteSeller(sellerId) {
 // worker/index.js's own comment: no KYC field submitted here (name, DOB,
 // SSN, bank account) is ever stored on our own seller row, only Stripe's
 // resulting account id and a derived onboarding status.
-export async function fetchSellerStripeAccount() {
-  return requestJson('/sellers/me/stripe-account');
+// refresh: re-read Stripe's view first (used on coming back from Stripe's own
+// onboarding step, #2928).
+export async function fetchSellerStripeAccount({ refresh = false } = {}) {
+  return requestJson(`/sellers/me/stripe-account${refresh ? '?refresh=1' : ''}`);
+}
+
+// #2928: single-use Stripe-hosted onboarding URL for what Stripe needs that
+// our own forms never collect. Returns { url, expiresAt }.
+export async function startSellerStripeStep() {
+  return requestJson('/sellers/me/stripe-onboarding-link', { method: 'POST' });
+}
+
+export async function startBuilderStripeStep() {
+  return requestJson('/builders/me/stripe-onboarding-link', { method: 'POST' });
+}
+
+export async function refreshBuilderStripeAccount() {
+  return requestJson('/builders/me/stripe-account?refresh=1');
 }
 
 export async function submitSellerStripeAccount(payload) {
