@@ -921,9 +921,13 @@ function renderMyAvatarsField(onEquipped) {
     const myLoadToken = ++myAvatarsLoadToken;
     list.innerHTML = '<div class="settings-empty-note">Loading…</div>';
     let avatars;
+    let nextCursor;
     let equipped;
     try {
-      [avatars, equipped] = await Promise.all([fetchMyOwnedAvatars(), fetchMyEquippedAvatar()]);
+      let firstPage;
+      [firstPage, equipped] = await Promise.all([fetchMyOwnedAvatars(), fetchMyEquippedAvatar()]);
+      avatars = firstPage.avatars;
+      nextCursor = firstPage.nextCursor;
     } catch (err) {
       if (myLoadToken !== myAvatarsLoadToken) return; // superseded while loading — a newer call owns the panel now
       list.innerHTML = '';
@@ -934,6 +938,9 @@ function renderMyAvatarsField(onEquipped) {
       return;
     }
     if (myLoadToken !== myAvatarsLoadToken) return; // superseded while loading — a newer call owns the panel now
+
+    // #1132: appended pages redraw the whole list from the accumulated rows.
+    const drawRows = () => {
     list.innerHTML = '';
 
     // The default (no template equipped) is always offered as its own row,
@@ -984,6 +991,28 @@ function renderMyAvatarsField(onEquipped) {
       row.appendChild(actions);
       list.appendChild(row);
     }
+    if (nextCursor) {
+      const moreBtn = document.createElement('button');
+      moreBtn.type = 'button';
+      moreBtn.className = 'version-action-btn';
+      moreBtn.textContent = 'Load more';
+      moreBtn.addEventListener('click', async () => {
+        moreBtn.disabled = true;
+        try {
+          const page = await fetchMyOwnedAvatars(nextCursor);
+          if (myLoadToken !== myAvatarsLoadToken) return;
+          avatars = avatars.concat(page.avatars);
+          nextCursor = page.nextCursor;
+          drawRows();
+        } catch (err) {
+          alert(err.message || 'Could not load more avatars.');
+          moreBtn.disabled = false;
+        }
+      });
+      list.appendChild(moreBtn);
+    }
+    };
+    drawRows();
   }
   renderMyAvatarsList();
 }
@@ -1019,12 +1048,16 @@ function renderMyAnimationsField() {
     const myLoadToken = ++myAnimationsLoadToken;
     list.innerHTML = '<div class="settings-empty-note">Loading…</div>';
     let animations;
+    let nextCursor;
     let equipped;
     let equippedAvatar;
     try {
-      [animations, equipped, equippedAvatar] = await Promise.all([
+      let firstPage;
+      [firstPage, equipped, equippedAvatar] = await Promise.all([
         fetchMyOwnedAnimations(), fetchMyEquippedAnimation(), fetchMyEquippedAvatar(),
       ]);
+      animations = firstPage.animations;
+      nextCursor = firstPage.nextCursor;
     } catch (err) {
       if (myLoadToken !== myAnimationsLoadToken) return; // superseded while loading — a newer call owns the panel now
       list.innerHTML = '';
@@ -1035,6 +1068,9 @@ function renderMyAnimationsField() {
       return;
     }
     if (myLoadToken !== myAnimationsLoadToken) return; // superseded while loading — a newer call owns the panel now
+
+    // #1303: appended pages redraw the whole list from the accumulated rows.
+    const drawRows = () => {
     list.innerHTML = '';
 
     if (animations.length === 0) {
@@ -1094,6 +1130,28 @@ function renderMyAnimationsField() {
       row.appendChild(actions);
       list.appendChild(row);
     }
+    if (nextCursor) {
+      const moreBtn = document.createElement('button');
+      moreBtn.type = 'button';
+      moreBtn.className = 'version-action-btn';
+      moreBtn.textContent = 'Load more';
+      moreBtn.addEventListener('click', async () => {
+        moreBtn.disabled = true;
+        try {
+          const page = await fetchMyOwnedAnimations(nextCursor);
+          if (myLoadToken !== myAnimationsLoadToken) return;
+          animations = animations.concat(page.animations);
+          nextCursor = page.nextCursor;
+          drawRows();
+        } catch (err) {
+          alert(err.message || 'Could not load more animations.');
+          moreBtn.disabled = false;
+        }
+      });
+      list.appendChild(moreBtn);
+    }
+    };
+    drawRows();
   }
   renderMyAnimationsList();
   return renderMyAnimationsList;
