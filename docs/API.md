@@ -5496,7 +5496,11 @@ Requires an ID-verified session. Same forward-cursor poll shape as `GET
 "..." }`, `created_at ASC, message_id ASC`, same-cursor-echoed-back when
 quiet, `landletId` reflecting whichever landlet the response was computed
 for) — except `messages` here is only ever the caller's own inbox
-(`to_builder_id = caller`), not a landlet-wide feed. `landletId` is `null`
+(`to_builder_id = caller`), not a landlet-wide feed. **A proximity row is
+delivered to its addressee wherever they stand now (`#2955`)**: it was
+authorized when sent (sender and recipient in the same landlet), so two
+avatars walking across a landlet boundary mid-negotiation don't lose the
+signals already in flight. `landletId` is `null`
 when the caller has no recent-enough presence row — but unlike `GET
 /api/nearby-chat` (which really does return nothing in that case,
 `nearby-chat` being inherently landlet-scoped), this still returns any

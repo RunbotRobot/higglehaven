@@ -924,12 +924,21 @@ export async function handleVoiceSignal(request, db, route, url, env) {
     // #3143: a signal queued before a block (or relayed around it) never
     // reaches the recipient.
     const blockedSignalGuard = notBlockedEitherWaySql('voice_signaling_messages.to_builder_id', 'voice_signaling_messages.from_builder_id');
+    // #2955: a proximity row is delivered to the addressee regardless of which
+    // landlet they stand in *now*. It used to be matched against the caller's
+    // current landlet, so two avatars walking across a landlet boundary
+    // mid-negotiation had their already-sent signals silently dropped (the
+    // row carries the sender's landlet at send time) and the handshake only
+    // recovered through the 8 s watchdog retry. Nothing new becomes readable:
+    // only rows addressed to the caller are ever returned, and creating one
+    // already required the sender and recipient to be in the same landlet
+    // (and, client-side, within range) when it was sent; the short prune
+    // window bounds how stale a delivered row can be. A caller with no
+    // current presence at all still receives friend-channel signals only.
     const conditions = landletId === null
       ? ['to_builder_id = ?', 'channel_owner_builder_id IS NOT NULL', blockedSignalGuard]
-      : ['to_builder_id = ?', '(landlet_id = ? OR channel_owner_builder_id IS NOT NULL)', blockedSignalGuard];
-    const bindings = landletId === null
-      ? [sessionBuilder.builder_id]
-      : [sessionBuilder.builder_id, landletId];
+      : ['to_builder_id = ?', blockedSignalGuard];
+    const bindings = [sessionBuilder.builder_id];
     if (cursor) {
       // Same ascending/"poll forward from here" ordering as
       // handleNearbyChat's own cursor above.
