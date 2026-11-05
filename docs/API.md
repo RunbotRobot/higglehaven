@@ -5219,10 +5219,7 @@ even bypassing that button entirely.
 A durable, **silent** block between two people, keyed on the account
 (`user_id`), not the resettable builder profile (`migrations/0188_user_blocks.sql`).
 The blocked person is never notified and nothing in any response they get
-differs from a stranger's. This resource only lands the table and its
-controls; the per-surface filters that make a block take effect on presence,
-nearby chat, voice signaling, direct messages and friend requests are #3143.
-All three routes need a signed-in, non-suspended account; blocking does
+differs from a stranger's. All three routes need a signed-in, non-suspended account; blocking does
 **not** require ID verification. Writes share a `block-mutate` rate limit
 (20 per window).
 
@@ -5247,6 +5244,31 @@ The caller's own list only, newest first, up to 200:
 `{ "blocks": [{ "userId": "...", "username": "...", "blockedAt": "..." }] }`.
 Nothing here ever reveals that the caller has been blocked by someone else.
 Account deletion removes a person's rows in both directions.
+
+### What a block does (#3143)
+
+One shared predicate (`notBlockedEitherWaySql`/`notBlockedBySql` in
+`worker/lib/auth.js`) applies a block to every person-to-person surface, for
+a block from A against B. Nothing ever changes for B.
+
+- **Presence** (`GET /api/presence`): A's list omits B and B's omits A.
+- **Nearby chat** (`GET /api/nearby-chat`): each omits the other's messages.
+  Sending is unchanged.
+- **Voice signaling**: `POST /api/voice/signal` between the two is accepted
+  with the usual `201` but never stored; `GET` also withholds anything queued
+  earlier (it reappears after an unblock). Blocking removes the pair's
+  friend voice channel memberships (the blocked person leaves the blocker's
+  channel, the blocker leaves theirs), and the channel listing omits the
+  other person.
+- **Direct messages**: the friendship is already severed, so B's send gets
+  the same `403` a non-friend gets. A's `unread-count` excludes B; A can
+  still read the history.
+- **Friend requests**: B's request to A is stored and answered like any other
+  (B still sees it pending) but sends A no notification, is omitted from A's
+  `GET /api/friendships`, and cannot be accepted (`404`). A requesting B
+  while blocking them gets `400` ("Unblock this person before sending a
+  friend request.").
+- **Conduct reports** are unaffected: A can still report B.
 
 ## Nearby chat
 
