@@ -1146,7 +1146,12 @@ function updateShopFlight(dt) {
       // item-collision handling (which already stopped the *descent* short
       // of a solid object) but for the *landing spot itself*, against a
       // live player instead of static geometry.
-      const openSpot = nearestOpenLandingSpot(shopAvatarPosition.x, shopAvatarPosition.y);
+      // #2116: clamp each candidate to the world boundary inside the search
+      // (see nearestOpenLandingSpot), instead of clamping the winner after.
+      const landingMaxRadiusM = shopMaxRadiusAtWorldZM(shopAvatarPosition.z, shopAvatarMaxRadiusM());
+      const openSpot = nearestOpenLandingSpot(
+        shopAvatarPosition.x, shopAvatarPosition.y, (point) => clampShopRadius(point, landingMaxRadiusM),
+      );
       // #2362: obstructionTopZ/minAltitudeM above were computed at the
       // pre-nudge (x, y) -- if the nudge actually moved the avatar, that
       // floor belongs to the spot it's leaving, not the one it's landing
@@ -1165,13 +1170,11 @@ function updateShopFlight(dt) {
       }
       shopAvatarPosition.x = openSpot.x;
       shopAvatarPosition.y = openSpot.y;
-      // #2080: nearestOpenLandingSpot only checks clearance from other
-      // avatars, not the world boundary -- without this, a nudge taken near
-      // the wall could push shopAvatarPosition outside shopAvatarMaxRadiusM,
-      // left unclamped (clampShopRadius is otherwise only ever called from
-      // updateShopMovement, gated on actual movement input) until the
-      // player's next WASD/joystick move.
-      clampShopRadius(shopAvatarPosition, shopMaxRadiusAtWorldZM(shopAvatarPosition.z, shopAvatarMaxRadiusM()));
+      // #2080/#2116: openSpot is already inside the world boundary -- the
+      // search clamps every candidate itself -- so no clamp is needed here
+      // (clampShopRadius is otherwise only called from updateShopMovement,
+      // gated on movement input, so an unclamped landing would have stayed
+      // outside the wall until the player's next move).
       shopFlightState = 'grounded';
     }
   } else if (shopFlightState === 'flying') {
@@ -1472,17 +1475,29 @@ function landingSpotOccupiedByAvatar(x, y) {
 const LANDING_SPOT_SEARCH_DIRECTIONS = 8;
 const LANDING_SPOT_SEARCH_STEP_M = 0.5;
 const LANDING_SPOT_SEARCH_MAX_RADIUS_M = 5;
-function nearestOpenLandingSpot(x, y) {
-  if (!landingSpotOccupiedByAvatar(x, y)) return { x, y };
+// #2116: clampPoint (optional) maps a candidate onto the walkable area (the
+// world boundary) BEFORE its clearance is tested, so the returned spot is
+// already inside the boundary and already clear of other avatars. The old
+// order (nudge, then clamp) could scale the nudged spot straight back onto
+// the avatar it had just moved away from. If no clear spot exists the
+// clamped original is returned, the same accepted overlap as before.
+function nearestOpenLandingSpot(x, y, clampPoint = null) {
+  const clamped = (px, py) => {
+    if (!clampPoint) return { x: px, y: py };
+    const point = { x: px, y: py };
+    clampPoint(point);
+    return point;
+  };
+  const origin = clamped(x, y);
+  if (!landingSpotOccupiedByAvatar(origin.x, origin.y)) return origin;
   for (let radius = LANDING_SPOT_SEARCH_STEP_M; radius <= LANDING_SPOT_SEARCH_MAX_RADIUS_M; radius += LANDING_SPOT_SEARCH_STEP_M) {
     for (let i = 0; i < LANDING_SPOT_SEARCH_DIRECTIONS; i++) {
       const angle = (i / LANDING_SPOT_SEARCH_DIRECTIONS) * Math.PI * 2;
-      const candidateX = x + radius * Math.cos(angle);
-      const candidateY = y + radius * Math.sin(angle);
-      if (!landingSpotOccupiedByAvatar(candidateX, candidateY)) return { x: candidateX, y: candidateY };
+      const candidate = clamped(x + radius * Math.cos(angle), y + radius * Math.sin(angle));
+      if (!landingSpotOccupiedByAvatar(candidate.x, candidate.y)) return candidate;
     }
   }
-  return { x, y };
+  return origin;
 }
 // #2044: e2e-only hook, same convention as window.__testMoveShopAvatarWithCollision
 // below -- lets a test drive the search directly (against whatever
@@ -1494,6 +1509,8 @@ window.__testNearestOpenLandingSpot = (x, y) => nearestOpenLandingSpot(x, y);
 // above -- lets a test compute the real world-boundary radius a landing
 // should be clamped to, instead of hardcoding/guessing it.
 window.__testShopAvatarMaxRadiusM = () => shopAvatarMaxRadiusM();
+// #2116: the clearance a landing nudge must leave from another avatar.
+window.__testLandingClearanceM = () => shopAvatarCollisionHalfM() + SHOP_AVATAR_COLLISION_HALF_M;
 // #2852: same e2e-only convention -- lets a test read the real floor a
 // landing/item-collision check resolves to at (x, y), to confirm it
 // tracks a landlet's own real terrain elevation rather than the old
