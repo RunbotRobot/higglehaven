@@ -122,6 +122,7 @@ export async function handleStripeWebhook(request, env, db) {
     if (!account?.id) return json({ received: true });
     const status = deriveStripeOnboardingStatus(account);
     const requirementsDue = account.requirements?.currently_due || [];
+    const requirementsEventuallyDue = account.requirements?.eventually_due || [];
     const nowIso = new Date().toISOString();
     // #3071: Stripe doesn't guarantee delivery order, so only apply an event
     // that isn't older than the newest one already applied (see migration
@@ -129,10 +130,10 @@ export async function handleStripeWebhook(request, env, db) {
     // write.
     const hasCreated = Number.isFinite(event.created);
     const mk = (table) => db.prepare(`
-      UPDATE ${table} SET stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?${hasCreated ? ', stripe_event_created_at = ?' : ''}
+      UPDATE ${table} SET stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_requirements_eventually_due = ?, stripe_updated_at = ?, updated_at = ?${hasCreated ? ', stripe_event_created_at = ?' : ''}
       WHERE stripe_account_id = ?${hasCreated ? ' AND (stripe_event_created_at IS NULL OR stripe_event_created_at <= ?)' : ''}
     `).bind(
-      status, JSON.stringify(requirementsDue), nowIso, nowIso,
+      status, JSON.stringify(requirementsDue), JSON.stringify(requirementsEventuallyDue), nowIso, nowIso,
       ...(hasCreated ? [event.created, account.id, event.created] : [account.id]),
     );
     await db.batch([mk('sellers'), mk('builders')]);

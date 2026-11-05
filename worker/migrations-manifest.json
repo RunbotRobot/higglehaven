@@ -186,5 +186,6 @@
   "0187_ncmec_evidence.sql",
   "0188_user_blocks.sql",
   "0189_earnings_events_purchase_id.sql",
-  "0190_purchases_seller_user_id.sql"
+  "0190_purchases_seller_user_id.sql",
+  "0191_stripe_requirements_eventually_due.sql"
 ]
