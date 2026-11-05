@@ -57,6 +57,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
+import { createCoalescingSaveQueue } from '../coalescingSaveQueue.js';
 import {
   createInstanceRemote, updateInstanceRemote, deleteInstanceRemote,
   createInstancesRemote, upsertInstancesRemote, deleteInstancesRemote,
@@ -1356,8 +1357,22 @@ async function syncCreate(mesh) {
   }
 }
 
-export async function syncUpdate(mesh) {
-  const attemptId = nextSyncAttempt();
+// #1062: two quick drags of one instance used to fire two PATCHes that could
+// land out of order, so the earlier position silently overwrote the later one
+// server-side. Saves for one instance now run one at a time through
+// src/coalescingSaveQueue.js, which reads the mesh's state only when a save
+// actually starts.
+const updateQueue = createCoalescingSaveQueue(sendInstanceUpdate);
+
+export function syncUpdate(mesh) {
+  // Counted from queueing, not only from sending (see #3101 above).
+  return updateQueue.request(mesh.userData.instanceId, mesh, () => { syncsInFlight += 1; });
+}
+
+// Never rejects: every failure is reported through the connectivity
+// indicator / noteSyncFailure, same as before.
+async function sendInstanceUpdate(mesh) {
+  const attemptId = ++syncAttemptSeq;
   try {
     const { instanceId, ...patch } = instanceFromMesh(mesh);
     await updateInstanceRemote(instanceId, patch);
