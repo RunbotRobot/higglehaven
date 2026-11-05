@@ -14,6 +14,37 @@ export function markSharedModelResources(mesh) {
   mesh.userData.sharedModelResources = true;
 }
 
-export function ownsGeometryAndTextures(mesh) {
+// #1560 (cropped instances): loadCroppedModelInstance builds a new Mesh with
+// its own cropped geometry (safe to dispose) but gives it a material cloned
+// from the cached model, whose texture maps are still the cached source's.
+// Such a mesh owns its geometry and shares only its textures.
+export function markSharedModelTextures(mesh) {
+  mesh.userData.sharedModelTextures = true;
+}
+
+export function ownsGeometry(mesh) {
   return !mesh.userData?.sharedModelResources;
+}
+
+export function ownsTextures(mesh) {
+  return !mesh.userData?.sharedModelResources && !mesh.userData?.sharedModelTextures;
+}
+
+export function ownsGeometryAndTextures(mesh) {
+  return ownsGeometry(mesh) && ownsTextures(mesh);
+}
+
+// The one rule both teardown paths (disposeObject, disposeObject3D) apply to a
+// Mesh: materials are always the mesh's own (every instance clones them), but
+// geometry and textures are freed only when the mesh owns them.
+// `disposeTextures` is the caller's own texture-freeing helper for a material.
+export function disposeOwnedMeshResources(mesh, disposeTextures) {
+  if (ownsGeometry(mesh)) mesh.geometry?.dispose();
+  const freeTextures = ownsTextures(mesh);
+  const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+  for (const material of materials) {
+    if (!material) continue;
+    if (freeTextures) disposeTextures(material);
+    material.dispose();
+  }
 }
