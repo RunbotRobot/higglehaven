@@ -5985,7 +5985,11 @@ removing unwanted content). A pre-#1830 post with `userId: null` can never
 match here, since there's nobody on record to own it. `401` with no
 session at all. `404` if the post doesn't exist (or belongs to a different
 instance). Rate-limited per editing account, the same shape as `POST`/
-`DELETE`'s own limits.
+`DELETE`'s own limits. **#2041:** a successful edit snapshots the pre-edit
+row into `user_content_edit_history` (`source_table: 'sign_posts'`,
+`action: 'edit'`), and the author's own self-delete (below) snapshots it
+with `action: 'delete'` -- the same retained dispute history product
+reviews and calendar events already keep.
 
 ### `DELETE /api/instances/:instanceId/posts/:postId`
 

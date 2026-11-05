@@ -1045,6 +1045,9 @@ export async function handleSignPosts(request, db, route) {
     if (updated.meta.changes === 0) {
       throw new HttpError('Post changed concurrently — refetch and retry', 409);
     }
+    // #2041: parity with product reviews/calendar events -- retain the
+    // pre-edit text for disputes, logged only once the UPDATE is confirmed.
+    await recordContentEditHistory(db, 'sign_posts', postId, 'edit', existing, user.user_id);
     const row = await db.prepare('SELECT * FROM sign_posts WHERE post_id = ?').bind(postId).first();
     // #2354: meta.changes above only confirms the UPDATE matched a row at
     // the moment it ran -- a concurrent admin-override DELETE (below) can
@@ -1104,6 +1107,8 @@ export async function handleSignPosts(request, db, route) {
       if (deletedByAuthor.meta.changes === 0) {
         throw new HttpError('Post changed concurrently — refetch and retry', 409);
       }
+      // #2041: same retained-history snapshot as the author edit above.
+      await recordContentEditHistory(db, 'sign_posts', postId, 'delete', existing, sessionBuilder.user_id);
       return json({ deleted: true });
     }
     // Moderation: gated to the sign's own hosting landlet's owner, same as
