@@ -4,7 +4,7 @@ import { cropGeometryFromEnd } from '../meshCrop.js';
 import { skeletonSignatureFromBones } from '../skeletonSignature.js';
 import { curvedPosition, flatPosition } from '../../worker/earthCurvature.js';
 import { activeCatalog, LANDLET_SIDE_M } from './state.js';
-import { markSharedModelResources, ownsGeometryAndTextures } from '../sharedModelResources.js';
+import { markSharedModelResources, markSharedModelTextures, disposeOwnedMeshResources } from '../sharedModelResources.js';
 
 // #2553 (part of #2504/#2500's src/main.js module split, see #2503's design
 // comment for the full dependency map): the catalog-template -> Object3D
@@ -572,7 +572,12 @@ async function loadCroppedModelInstance(template, instance) {
     const originalMaterial = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
     const backingColor = averageTextureColor(originalMaterial?.map) || new THREE.Color(template.color);
     const backingMaterial = new THREE.MeshStandardMaterial({ color: backingColor, side: THREE.DoubleSide });
-    inner.add(new THREE.Mesh(geometry, [originalMaterial, backingMaterial]));
+    const croppedMesh = new THREE.Mesh(geometry, [originalMaterial, backingMaterial]);
+    // #1560: the cropped geometry is this instance's own, but originalMaterial
+    // is a clone whose texture maps still belong to the cached model, so a
+    // teardown frees the geometry and the materials but not those textures.
+    markSharedModelTextures(croppedMesh);
+    inner.add(croppedMesh);
   }
   const result = new THREE.Group();
   result.add(inner);
@@ -731,12 +736,6 @@ export function disposeObject(object) {
     if (!child.isMesh) return;
     // #1560: a loaded-model clone's geometry/textures belong to the cached
     // source shared by every clone -- free only its own cloned materials.
-    const owns = ownsGeometryAndTextures(child);
-    if (owns) child.geometry.dispose();
-    const materials = Array.isArray(child.material) ? child.material : [child.material];
-    for (const material of materials) {
-      if (owns) disposeMaterialTextures(material);
-      material.dispose();
-    }
+    disposeOwnedMeshResources(child, disposeMaterialTextures);
   });
 }
