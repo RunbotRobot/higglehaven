@@ -465,6 +465,55 @@ async function reportEvidenceLines(db, reporterBuilderId, reportedBuilderId, sur
   }
 }
 
+// #3122: shared by both conduct-report surfaces (voice, nearby chat) so
+// they cannot drift apart (standing default: parity across sibling
+// surfaces). One report row and one Control Room card per (reporter,
+// reported) pair: a repeat collapses into the existing pair, appending a
+// short line to the existing card instead of creating a new one, so a later
+// report carrying new information still reaches the admin (no silent loss)
+// without a single reporter flooding the board. All three writes run in one
+// batch, so the collapse is atomic (UNIQUE index + INSERT OR IGNORE; the
+// card insert only fires when this call's own report row won). A done card
+// is re-queued by a repeat: a new report on a card nobody is looking at
+// anymore is exactly the information that must not vanish. The reporter
+// gets the same 201 shape either way and never learns it was a repeat.
+// Bounded: once a card's note reaches CONDUCT_REPORT_NOTE_MAX_LENGTH, further
+// repeats stop appending (the row is still ignored), so one pair cannot
+// grow a note without limit.
+const CONDUCT_REPORT_NOTE_MAX_LENGTH = 4000;
+
+async function fileConductReport(db, {
+  table, kind, reportId, reporterBuilderId, reportedBuilderId, reportedUserId, reason, title, noteLines, now,
+}) {
+  const repeatLine = `[${now}] Repeat report from the same reporter against the same builder${reason ? `. Reason: ${reason}` : ''}`;
+  await db.batch([
+    db.prepare(`
+      INSERT OR IGNORE INTO ${table} (report_id, reporter_builder_id, reported_builder_id, reported_user_id, reason)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(reportId, reporterBuilderId, reportedBuilderId, reportedUserId, reason),
+    db.prepare(`
+      INSERT INTO control_room_tasks (
+        task_id, kind, note_number, title, status, session, posted_by,
+        note, note_updated_at, note_author, created_at, updated_at
+      )
+      SELECT ?, ?, (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (SELECT 1 FROM ${table} WHERE report_id = ?)
+    `).bind(reportId, kind, title, kind, noteLines.join('\n'), now, kind, now, now, reportId),
+    db.prepare(`
+      UPDATE control_room_tasks
+      SET note = note || char(10) || ?, note_updated_at = ?, updated_at = ?,
+          status = CASE WHEN status = 'done' THEN 'queued' ELSE status END
+      WHERE task_id = (SELECT report_id FROM ${table} WHERE reporter_builder_id = ? AND reported_builder_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM ${table} WHERE report_id = ?)
+        AND length(note) < ${CONDUCT_REPORT_NOTE_MAX_LENGTH}
+    `).bind(repeatLine, now, now, reporterBuilderId, reportedBuilderId, reportId),
+  ]);
+  const stored = await db.prepare(`
+    SELECT report_id FROM ${table} WHERE reporter_builder_id = ? AND reported_builder_id = ?
+  `).bind(reporterBuilderId, reportedBuilderId).first();
+  return stored.report_id;
+}
+
 // #3121: suspension is by user_id, and the reported builder's row can be
 // deleted by the reported party themselves (Reset your builder profile), so a
 // report records the reported account's user_id at filing time -- on the
@@ -494,7 +543,6 @@ async function handleNearbyChatReportCreate(request, db) {
   }
   const reportId = `nearby-chat-report-${crypto.randomUUID()}`;
   const now = new Date().toISOString();
-  const controlRoomTaskId = `nearby-chat-report-${reportId.slice('nearby-chat-report-'.length)}`;
   const controlRoomTitle = `Nearby chat conduct report against "${reportedLabel}"`;
   const reportedUserId = await reportedUserIdOf(db, reportedBuilderId);
   const controlRoomNoteLines = [`Reported builder: "${reportedLabel}" (${reportedBuilderId})`];
@@ -508,21 +556,12 @@ async function handleNearbyChatReportCreate(request, db) {
     `).bind(reportedBuilderId, sessionBuilder.builder_id).first();
     return `Reported builder has a chat message still on record in the reporter's landlet: ${message ? 'yes' : 'no'}`;
   }));
-  await db.batch([
-    db.prepare(`
-      INSERT INTO nearby_chat_reports (report_id, reporter_builder_id, reported_builder_id, reported_user_id, reason)
-      VALUES (?, ?, ?, ?, ?)
-    `).bind(reportId, sessionBuilder.builder_id, reportedBuilderId, reportedUserId, reason),
-    db.prepare(`
-      INSERT INTO control_room_tasks (
-        task_id, kind, note_number, title, status, session, posted_by,
-        note, note_updated_at, note_author, created_at, updated_at
-      ) VALUES (?, 'nearby-chat-report', (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', 'nearby-chat-report', ?, ?, 'nearby-chat-report', ?, ?)
-    `).bind(
-      controlRoomTaskId, controlRoomTitle, controlRoomNoteLines.join('\n'), now, now, now,
-    ),
-  ]);
-  return json({ reportId }, 201);
+  const storedReportId = await fileConductReport(db, {
+    table: 'nearby_chat_reports', kind: 'nearby-chat-report', reportId,
+    reporterBuilderId: sessionBuilder.builder_id, reportedBuilderId, reportedUserId, reason,
+    title: controlRoomTitle, noteLines: controlRoomNoteLines, now,
+  });
+  return json({ reportId: storedReportId }, 201);
 }
 
 // #2817 (sub-issue of #2780, itself sub-issue of #2777, proximity voice
@@ -802,16 +841,10 @@ async function handleVoiceReportCreate(request, db) {
   const reportId = `voice-report-${crypto.randomUUID()}`;
   const now = new Date().toISOString();
   // #2720's own direct `control_room_tasks` write (worker/lib/feedback.js's
-  // bug-report pattern) reused here for the same reason: every other
-  // source of Control Room work lands as a card the instant it exists
-  // rather than requiring a separate D1 query nobody will remember to run,
-  // and this is itself the trusted, same-process caller writing on the
-  // reporter's behalf (not a round trip through the validating
-  // /api/control-room/tasks HTTP API). `voice-report-<uuid>` keeps this
-  // id visually distinct from its own reportId while still pairing 1:1 via
-  // the shared uuid, same convention `bug-report-<uuid>` already
-  // establishes.
-  const controlRoomTaskId = `voice-report-${reportId.slice('voice-report-'.length)}`;
+  // bug-report pattern) reused here (via fileConductReport): the card lands
+  // the instant the report exists, written by this trusted same-process
+  // caller rather than round-tripping through the validating
+  // /api/control-room/tasks HTTP API. The card's task_id is the reportId.
   const controlRoomTitle = `Voice chat conduct report against "${reportedLabel}"`;
   const reportedUserId = await reportedUserIdOf(db, reportedBuilderId);
   const controlRoomNoteLines = [`Reported builder: "${reportedLabel}" (${reportedBuilderId})`];
@@ -825,21 +858,12 @@ async function handleVoiceReportCreate(request, db) {
     `).bind(sessionBuilder.builder_id, reportedBuilderId, reportedBuilderId, sessionBuilder.builder_id).first();
     return `Shared voice signaling still on record: ${signal ? 'yes' : 'no'}`;
   }));
-  await db.batch([
-    db.prepare(`
-      INSERT INTO voice_conduct_reports (report_id, reporter_builder_id, reported_builder_id, reported_user_id, reason)
-      VALUES (?, ?, ?, ?, ?)
-    `).bind(reportId, sessionBuilder.builder_id, reportedBuilderId, reportedUserId, reason),
-    db.prepare(`
-      INSERT INTO control_room_tasks (
-        task_id, kind, note_number, title, status, session, posted_by,
-        note, note_updated_at, note_author, created_at, updated_at
-      ) VALUES (?, 'voice-report', (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', 'voice-report', ?, ?, 'voice-report', ?, ?)
-    `).bind(
-      controlRoomTaskId, controlRoomTitle, controlRoomNoteLines.join('\n'), now, now, now,
-    ),
-  ]);
-  return json({ reportId }, 201);
+  const storedReportId = await fileConductReport(db, {
+    table: 'voice_conduct_reports', kind: 'voice-report', reportId,
+    reporterBuilderId: sessionBuilder.builder_id, reportedBuilderId, reportedUserId, reason,
+    title: controlRoomTitle, noteLines: controlRoomNoteLines, now,
+  });
+  return json({ reportId: storedReportId }, 201);
 }
 
 export async function handleVoiceSignal(request, db, route, url, env) {
