@@ -3384,6 +3384,18 @@ not a replacement for `scripts/check-migration-drift.mjs` (#492), which
 still catches the same drift immediately at deploy time; this catches it
 within the next 10-minute cron tick even when nobody deploys for a while.
 
+The same cron also runs `checkWebhookSecrets` (#1793): when a provider is
+configured (Stripe: `STRIPE_SECRET_KEY`; Didit: `DIDIT_API_KEY` and
+`DIDIT_WORKFLOW_ID`; Tripo: `TRIPO_API_KEY`) but its webhook secret
+(`STRIPE_WEBHOOK_SECRET`/`DIDIT_WEBHOOK_SECRET`/`TRIPO_WEBHOOK_SECRET`) is
+unset, every delivery gets a `503` and the sender eventually stops retrying.
+The handlers keep the `503` (accepting unsigned webhooks would be wrong); the
+check logs a `console.error` every tick and raises one Control Room card per
+provider (`ops-webhook-secret-<provider>`, `waitingOn: "owner"`, no email).
+The card resolves itself once the secret is set, and is not re-opened if the
+owner marks it done. Environments with no provider keys (dev, tests) raise
+nothing.
+
 ### World object
 
 ```json
