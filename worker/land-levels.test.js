@@ -1332,6 +1332,9 @@ describe('Landlet levels', () => {
       expect(deleted.response.status).toBe(409);
       expect(deleted.body.error).toMatch(/still placed on a landlet/);
       expect(deleted.body.error).not.toMatch(/still in use/);
+      // #3111: names the product, never the raw template id.
+      expect(deleted.body.error).toContain('"Test template template-1706-placed"');
+      expect(deleted.body.error).not.toMatch(/"template-1706-placed"/);
 
       const { results: stillExists } = await env.DB.prepare('SELECT 1 FROM catalog_templates WHERE template_id = ?')
         .bind(templateId).all();

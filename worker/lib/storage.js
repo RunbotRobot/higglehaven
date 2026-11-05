@@ -144,14 +144,11 @@ export async function reserveStorageBudget(db, usage, sizeBytes, sizeLabel) {
     WHERE ? + (SELECT COALESCE(SUM(size_bytes), 0) FROM model_upload_reservations) + ? <= ?
   `).bind(reservationId, sizeBytes, now, usage.usedBytes, sizeBytes, MAX_TOTAL_STORAGE_BYTES).run();
   if (reserved.meta.changes === 0) {
-    const reservedBytes = await db.prepare(`
-      SELECT COALESCE(SUM(size_bytes), 0) AS total FROM model_upload_reservations
-    `).first();
-    const remainingBudget = MAX_TOTAL_STORAGE_BYTES - usage.usedBytes - reservedBytes.total;
-    throw new HttpError(
-      `${sizeLabel} is ${formatBytes(sizeBytes)}, but only ${formatBytes(Math.max(remainingBudget, 0))} of storage headroom is left (${formatBytes(MAX_TOTAL_STORAGE_BYTES)} total cap)`,
-      507,
-    );
+    // #3111: this used to report the remaining headroom and the platform's
+    // total storage cap to whoever was uploading. That is the platform's own
+    // capacity, not something an uploader needs (or should) see; all they can
+    // act on is that uploads are unavailable for now.
+    throw new HttpError('Uploads are temporarily unavailable. Please try again later.', 507);
   }
   return reservationId;
 }
