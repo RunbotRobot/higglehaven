@@ -185,5 +185,6 @@
   "0186_friend_voice_channel_members_last_seen_at.sql",
   "0187_ncmec_evidence.sql",
   "0188_user_blocks.sql",
-  "0189_earnings_events_purchase_id.sql"
+  "0189_earnings_events_purchase_id.sql",
+  "0190_auction_resolution_resumable.sql"
 ]

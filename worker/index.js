@@ -1947,6 +1947,20 @@ const AUCTION_UNSETTLED_TRANSFER_SQL = `(
   )
 )`;
 
+// #968: a raw-SQL predicate for an auction whose resolution started
+// (resolveAuction's guard flip stamps resolving_at) but was interrupted
+// before any outcome was recorded: no winning_bid_id and no
+// resolution_completed_at. Rows ended any other way (#809's sibling-auction
+// end, legacy rows) have no resolving_at and are never matched. The
+// staleness window keeps a sweep from racing a resolver that is merely
+// still running; the real exclusion is resolveAuction's own atomic claim.
+const AUCTION_RESOLUTION_STALE_MINUTES = 5;
+const AUCTION_STUCK_RESOLUTION_SQL = `(
+  status = 'ended' AND winning_bid_id IS NULL
+  AND resolving_at IS NOT NULL AND resolution_completed_at IS NULL
+  AND resolving_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now', '-${AUCTION_RESOLUTION_STALE_MINUTES} minutes')
+)`;
+
 // Sweeps up to AUCTION_SWEEP_LIMIT active-but-expired auctions (plus any
 // stuck mid-settlement per #875 — see AUCTION_UNSETTLED_TRANSFER_SQL) and
 // resolves each in turn. Called both from scheduled() (#770 — so an
@@ -1959,6 +1973,7 @@ export async function resolveDueAuctions(db) {
     SELECT * FROM auctions
     WHERE (status = 'active' AND ends_at <= strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
        OR ${AUCTION_UNSETTLED_TRANSFER_SQL}
+       OR ${AUCTION_STUCK_RESOLUTION_SQL}
     ORDER BY ends_at LIMIT ?
   `).bind(AUCTION_SWEEP_LIMIT).all();
   // #2289: isolate each auction's own resolution, same as
@@ -1987,6 +2002,10 @@ export async function resolveDueAuctions(db) {
 // settlement-marker lookup here too.
 export async function resolveAuctionIfDue(db, auction) {
   if (auction.status === 'ended' && auction.winning_bid_id) return resolveAuction(db, auction);
+  // #968: resolveAuction's own atomic claim decides whether it's actually stale.
+  if (auction.status === 'ended' && auction.resolving_at && !auction.resolution_completed_at) {
+    return resolveAuction(db, auction);
+  }
   if (auction.status !== 'active' || auction.ends_at > new Date().toISOString()) return auction;
   return resolveAuction(db, auction);
 }
@@ -2106,12 +2125,29 @@ async function resolveAuction(db, auction) {
   // the money-mutating side effects below. winning_bid_id is finalized
   // below, once the real winner (who may not be the top bid — see next
   // comment) is known, not here.
-  const guard = await db.prepare(`
-    UPDATE auctions SET status = 'ended', updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    WHERE auction_id = ? AND status = 'active'
-  `).bind(auction.auction_id).run();
-  if (guard.meta.changes === 0) {
-    return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
+  if (auction.status === 'ended') {
+    // #968: an earlier resolver stamped resolving_at and was interrupted
+    // before recording any outcome. Atomically take over (live-evaluated
+    // staleness + still-unfinished, so exactly one caller wins and a
+    // still-running resolver is never raced), then re-enter the loop below,
+    // which resumes from the per-bid markers instead of re-debiting.
+    const claimed = await db.prepare(`
+      UPDATE auctions SET resolving_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE auction_id = ? AND ${AUCTION_STUCK_RESOLUTION_SQL}
+      RETURNING auction_id
+    `).bind(auction.auction_id).first();
+    if (!claimed) {
+      return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
+    }
+  } else {
+    const guard = await db.prepare(`
+      UPDATE auctions SET status = 'ended', resolving_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE auction_id = ? AND status = 'active'
+    `).bind(auction.auction_id).run();
+    if (guard.meta.changes === 0) {
+      return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
+    }
   }
 
   // #629 (owner-confirmed, 2026-09-10): bidding's own held-balance/land-cap
@@ -2141,13 +2177,36 @@ async function resolveAuction(db, auction) {
   const skippedCandidateBuilderIds = [];
   let winner = null;
   for (const candidate of candidates) {
-    const debited = await db.prepare(`
-      UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ?
-      WHERE builder_id = ? AND higgles_balance_cents >= ?
-    `).bind(candidate.amount_cents, candidate.bidder_builder_id, candidate.amount_cents).run();
-    if (debited.meta.changes === 0) {
+    // #968: per-bid markers make this loop resumable. 'skipped' bids from an
+    // interrupted earlier run stay skipped (and are re-notified exactly once,
+    // since notifications only fire after the completion marker lands);
+    // a 'debited' bid is never debited again, we go straight to its transfer
+    // attempt. The marker write and the debit ride in one batch tied by a
+    // fresh token, so a replay (marker already set -> 0 rows) can't debit.
+    if (candidate.resolution === 'skipped') {
       skippedCandidateBuilderIds.push(candidate.bidder_builder_id);
       continue;
+    }
+    if (candidate.resolution !== 'debited') {
+      const token = crypto.randomUUID();
+      const [marked] = await db.batch([
+        db.prepare(`
+          UPDATE auction_bids SET resolution = 'debited', resolution_token = ?
+          WHERE bid_id = ? AND resolution IS NULL
+            AND (SELECT higgles_balance_cents FROM builders WHERE builder_id = ?) >= ?
+        `).bind(token, candidate.bid_id, candidate.bidder_builder_id, candidate.amount_cents),
+        db.prepare(`
+          UPDATE builders SET higgles_balance_cents = higgles_balance_cents - ?
+          WHERE builder_id = ? AND higgles_balance_cents >= ?
+            AND EXISTS (SELECT 1 FROM auction_bids WHERE bid_id = ? AND resolution = 'debited' AND resolution_token = ?)
+        `).bind(candidate.amount_cents, candidate.bidder_builder_id, candidate.amount_cents, candidate.bid_id, token),
+      ]);
+      if (marked.meta.changes === 0) {
+        await db.prepare(`UPDATE auction_bids SET resolution = 'skipped' WHERE bid_id = ? AND resolution IS NULL`)
+          .bind(candidate.bid_id).run();
+        skippedCandidateBuilderIds.push(candidate.bidder_builder_id);
+        continue;
+      }
     }
 
     // #785: a plain recomputeLandCap() read-then-compare here (like the
@@ -2213,8 +2272,17 @@ async function resolveAuction(db, auction) {
       `).bind(candidate.bid_id, auction.auction_id, auction.landlet_id, candidate.bidder_builder_id),
     ]);
     if (transferred.meta.changes === 0) {
-      await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
-        .bind(candidate.amount_cents, candidate.bidder_builder_id).run();
+      // #968: refund gated on the bid still being 'debited' and flipped to
+      // 'skipped' in the same atomic batch, so a refund can't repeat.
+      await db.batch([
+        db.prepare(`
+          UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ?
+          WHERE builder_id = ?
+            AND EXISTS (SELECT 1 FROM auction_bids WHERE bid_id = ? AND resolution = 'debited')
+        `).bind(candidate.amount_cents, candidate.bidder_builder_id, candidate.bid_id),
+        db.prepare(`UPDATE auction_bids SET resolution = 'skipped' WHERE bid_id = ? AND resolution = 'debited'`)
+          .bind(candidate.bid_id),
+      ]);
       skippedCandidateBuilderIds.push(candidate.bidder_builder_id);
       continue;
     }
@@ -2324,7 +2392,23 @@ async function resolveAuction(db, auction) {
       message: `Your auction for ${auction.landlet_id} ended with no bids — you keep the land.`,
     });
   }
-  if (statements.length > 0) await db.batch(statements);
+  if (winner) {
+    if (statements.length > 0) await db.batch(statements);
+  } else {
+    // #968: the completion marker rides first in the same atomic batch as
+    // the no-winner outcome; notifications fire only if this call is the
+    // one that landed it, so a resumed/duplicate resolver never re-notifies.
+    const results = await db.batch([
+      db.prepare(`
+        UPDATE auctions SET resolution_completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE auction_id = ? AND resolution_completed_at IS NULL
+      `).bind(auction.auction_id),
+      ...statements,
+    ]);
+    if (results[0].meta.changes === 0) {
+      return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
+    }
+  }
   await fireNotifications(db, pendingNotifications);
   return db.prepare('SELECT * FROM auctions WHERE auction_id = ?').bind(auction.auction_id).first();
 }
