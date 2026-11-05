@@ -20,7 +20,7 @@ import {
   readJson, stringValue, finiteNumber, queryLimit, decodeCursor, encodeCursor,
 } from './validation.js';
 import { checkRateLimit } from './rate-limit.js';
-import { requireCurrentUser, assertOwner, requireSessionBuilder } from './auth.js';
+import { requireCurrentUser, assertOwner, requireSessionBuilder, builderNotSuspendedSql } from './auth.js';
 import { fireNotification } from './notifications.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 // requireLandlet/assertReferenceExists/labelsByBuilderId/
@@ -367,7 +367,9 @@ export async function handleNearbyChat(request, db, route, url) {
     }
     const limit = queryLimit(url.searchParams.get('limit'), NEARBY_CHAT_POLL_LIMIT);
     const cursor = decodeCursor(url.searchParams.get('cursor'));
-    const conditions = ['landlet_id = ?'];
+    // #3123: a suspended sender's messages are hidden from everyone else the
+    // moment the suspension starts, not left for the 30-minute prune.
+    const conditions = ['landlet_id = ?', builderNotSuspendedSql('nearby_chat_messages.builder_id')];
     const bindings = [landletId];
     if (cursor) {
       // Ascending/"poll forward from here" ordering, unlike direct_messages'
@@ -612,11 +614,17 @@ async function handleFriendVoiceChannels(request, db, route) {
 
   if (request.method === 'GET' && route.length === 2) {
     await checkRateLimit(db, `friend-voice-channel-poll:${sessionBuilder.builder_id}`, FRIEND_VOICE_CHANNEL_POLL_RATE_LIMIT_MAX);
+    // #3123: a suspended member drops out of the listing, and a suspended
+    // owner takes their whole channel with them (the owner's own row is
+    // what marks a channel active); neither is deleted, so a lifted
+    // suspension simply reappears.
     const { results } = await db.prepare(`
       SELECT owner_builder_id, member_builder_id FROM friend_voice_channel_members
       WHERE owner_builder_id IN (
         SELECT owner_builder_id FROM friend_voice_channel_members WHERE member_builder_id = ?
       )
+      AND ${builderNotSuspendedSql('friend_voice_channel_members.owner_builder_id')}
+      AND ${builderNotSuspendedSql('friend_voice_channel_members.member_builder_id')}
     `).bind(sessionBuilder.builder_id).all();
     const membersByOwner = new Map();
     for (const row of results) {
