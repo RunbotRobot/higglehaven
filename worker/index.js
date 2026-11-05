@@ -1396,21 +1396,37 @@ async function handleBuilders(request, env, db, route, url) {
     // labelValue) — a rename call could bypass the create-time cap
     // entirely. Same fix shape as #337/#358.
     const label = labelValue(input.label, 'label');
-    // #1187: same case-insensitive uniqueness guard as the create path
-    // above — see its own comment for why this is an app-level NOT EXISTS
-    // rather than a schema-level UNIQUE index. Excludes this builder's own
-    // current row so a case-only rename of your own label (e.g. "Ada" ->
-    // "ADA") isn't rejected as colliding with itself.
-    const result = await db.prepare(`
-      UPDATE builders SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE builder_id = ? AND NOT EXISTS (SELECT 1 FROM builders WHERE label = ? COLLATE NOCASE AND builder_id != ?)
-    `).bind(label, route[1], label, route[1]).run();
-    if (result.meta.changes === 0) {
+    // #3142 (owner decision 2026-11-05, "One alias per person"): a person's
+    // name is the account's username, and builders.label is only a copy of
+    // it, so a rename here sets the username and the label follows in the
+    // same batch -- the two can no longer drift apart. The signup cap on
+    // usernames applies, since this is now where one is set.
+    if (label.length > 40) throw new HttpError('label must be 40 characters or fewer', 400);
+    const userId = sessionBuilder.user_id;
+    // #1187's case-insensitive uniqueness, now against both other accounts'
+    // usernames (the schema's own idx_users_username_nocase) and any other
+    // builder's label (a legacy label that never matched its username).
+    // Excludes this person's own rows so a case-only change is fine. The
+    // label UPDATE re-checks the username live, so it only lands if the
+    // username UPDATE just before it did (the batch is one transaction).
+    const [usernameResult, labelResult] = await db.batch([
+      db.prepare(`
+        UPDATE users SET username = ?
+        WHERE user_id = ?
+          AND NOT EXISTS (SELECT 1 FROM users WHERE username = ? COLLATE NOCASE AND user_id != ?)
+          AND NOT EXISTS (SELECT 1 FROM builders WHERE label = ? COLLATE NOCASE AND builder_id != ?)
+      `).bind(label, userId, label, userId, label, route[1]),
+      db.prepare(`
+        UPDATE builders SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE builder_id = ? AND EXISTS (SELECT 1 FROM users WHERE user_id = ? AND username = ?)
+      `).bind(label, route[1], userId, label),
+    ]);
+    if (usernameResult.meta.changes === 0 || labelResult.meta.changes === 0) {
       // requireBuilder/assertOwner above already confirmed this builder_id
-      // exists and belongs to the caller, so the only way the atomic guard
-      // just above could have refused this update is the NOT EXISTS
-      // failing — another builder already holds this label.
-      throw new HttpError('That builder name is already taken — names must be unique, ignoring case', 409);
+      // exists and belongs to the caller, so the only way the guard just
+      // above could have refused is the NOT EXISTS failing -- another
+      // person already holds this name.
+      throw new HttpError('That name is already taken -- names must be unique, ignoring case', 409);
     }
     const updated = await requireBuilder(db, route[1]);
     return json({ builder: builderFromRow(updated) });
