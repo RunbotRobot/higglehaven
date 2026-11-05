@@ -302,17 +302,18 @@ describe('Voice signaling relay (#2817)', () => {
       expect(got.body.iceServers).toEqual([{ urls: 'stun:stun.l.google.com:19302' }]);
     });
 
-    it('includes the TURN server once its secret is configured', async () => {
+    // #3134: the static-credential fallback is gone. A relay URL with no
+    // shared secret is STUN only, even if the retired static secrets are still
+    // set on the Worker -- nothing reads them any more.
+    it('returns STUN only when the TURN URL is set without TURN_SHARED_SECRET, never a static pair', async () => {
       env.TURN_SERVER_URL = 'turn:turn.example.com:3478';
-      env.TURN_SERVER_USERNAME = 'test-turn-user';
-      env.TURN_SERVER_CREDENTIAL = 'test-turn-credential';
-      const alice = await signupIdVerifiedBuilder('voice-ice-config-turn-alice');
+      env.TURN_SERVER_USERNAME = 'retired-user';
+      env.TURN_SERVER_CREDENTIAL = 'retired-credential';
+      const alice = await signupIdVerifiedBuilder('voice-ice-config-no-secret-alice');
       const got = await api('/voice/ice-config', alice.session());
       expect(got.response.status).toBe(200);
-      expect(got.body.iceServers).toEqual([
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'turn:turn.example.com:3478', username: 'test-turn-user', credential: 'test-turn-credential' },
-      ]);
+      expect(got.body.iceServers).toEqual([{ urls: 'stun:stun.l.google.com:19302' }]);
+      expect(JSON.stringify(got.body)).not.toMatch(/retired-user|retired-credential/);
     });
 
     // #3039: RFC 2202 HMAC-SHA1 test case 2 (key "Jefe") pins the algorithm
@@ -329,15 +330,12 @@ describe('Voice signaling relay (#2817)', () => {
 
     it('mints a per-caller, time-limited credential when TURN_SHARED_SECRET is set', async () => {
       env.TURN_SERVER_URL = 'turn:turn.example.com:3478';
-      env.TURN_SERVER_USERNAME = 'static-user';
-      env.TURN_SERVER_CREDENTIAL = 'static-credential';
       env.TURN_SHARED_SECRET = 'shared-secret';
       const alice = await signupIdVerifiedBuilder('voice-ice-config-shared-alice');
       const got = await api('/voice/ice-config', alice.session());
       expect(got.response.status).toBe(200);
       const turn = got.body.iceServers[1];
       expect(turn.urls).toBe('turn:turn.example.com:3478');
-      expect(turn.username).not.toBe('static-user');
       const [expiry] = turn.username.split(':');
       const nowS = Math.floor(Date.now() / 1000);
       expect(Number(expiry)).toBeGreaterThan(nowS + 3500);

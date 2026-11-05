@@ -479,7 +479,8 @@ async function reportEvidenceLines(db, reporterBuilderId, reportedBuilderId, sur
 // gets the same 201 shape either way and never learns it was a repeat.
 // Bounded: once a card's note reaches CONDUCT_REPORT_NOTE_MAX_LENGTH, further
 // repeats stop appending (the row is still ignored), so one pair cannot
-// grow a note without limit.
+// grow a note without limit -- but a repeat still re-queues a done card
+// (#3137), because the cap limits text, not whether an admin sees a new report.
 const CONDUCT_REPORT_NOTE_MAX_LENGTH = 4000;
 
 async function fileConductReport(db, {
@@ -499,13 +500,18 @@ async function fileConductReport(db, {
       SELECT ?, ?, (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', ?, ?, ?, ?, ?, ?
       WHERE EXISTS (SELECT 1 FROM ${table} WHERE report_id = ?)
     `).bind(reportId, kind, title, kind, noteLines.join('\n'), now, kind, now, now, reportId),
+    // #3137: the cap bounds only the appended text. The done -> queued flip
+    // must always apply on a repeat, or a genuinely new incident from a pair
+    // whose note already hit the cap, on a card an admin since closed, would
+    // never reach anyone. A capped card that is not done is left untouched.
     db.prepare(`
       UPDATE control_room_tasks
-      SET note = note || char(10) || ?, note_updated_at = ?, updated_at = ?,
+      SET note = CASE WHEN length(note) < ${CONDUCT_REPORT_NOTE_MAX_LENGTH} THEN note || char(10) || ? ELSE note END,
+          note_updated_at = CASE WHEN length(note) < ${CONDUCT_REPORT_NOTE_MAX_LENGTH} THEN ? ELSE note_updated_at END,
+          updated_at = CASE WHEN length(note) < ${CONDUCT_REPORT_NOTE_MAX_LENGTH} OR status = 'done' THEN ? ELSE updated_at END,
           status = CASE WHEN status = 'done' THEN 'queued' ELSE status END
       WHERE task_id = (SELECT report_id FROM ${table} WHERE reporter_builder_id = ? AND reported_builder_id = ?)
         AND NOT EXISTS (SELECT 1 FROM ${table} WHERE report_id = ?)
-        AND length(note) < ${CONDUCT_REPORT_NOTE_MAX_LENGTH}
     `).bind(repeatLine, now, now, reporterBuilderId, reportedBuilderId, reportId),
   ]);
   const stored = await db.prepare(`
@@ -763,11 +769,15 @@ async function handleFriendVoiceChannels(request, db, route) {
 // needed) -- Cloudflare's own free tier doesn't run one, same reasoning
 // #2778 gave for why TURN needs its own answer.
 //
-// #3039 (resolving #3010): when TURN_SHARED_SECRET is set (coturn's
-// `use-auth-secret` / the TURN REST API convention), every request mints a
-// short-lived credential instead of handing out one static pair to every
-// caller. TURN_SERVER_USERNAME/TURN_SERVER_CREDENTIAL remain only as the
-// fallback until the relay is switched over.
+// #3039 (resolving #3010): TURN_SHARED_SECRET (coturn's `use-auth-secret` /
+// the TURN REST API convention) mints a short-lived credential per request
+// instead of handing out one static pair to every caller. #3134: the relay
+// has been switched over, so that is now the only mode (the owner's *One
+// model, not a hybrid* decision) -- the old static
+// TURN_SERVER_USERNAME/TURN_SERVER_CREDENTIAL fallback is gone and nothing
+// reads those two secrets any more. A TURN_SERVER_URL with no
+// TURN_SHARED_SECRET gets STUN only (never a static pair), with one log line
+// per isolate so the misconfiguration is findable without spamming.
 const VOICE_ICE_CONFIG_RATE_LIMIT_MAX = PRESENCE_NEARBY_RATE_LIMIT_MAX;
 export const TURN_CREDENTIAL_TTL_SECONDS = 3600;
 
@@ -781,6 +791,8 @@ export async function mintTurnCredential(sharedSecret, builderId, nowMs = Date.n
   return { username, credential: btoa(binary) };
 }
 
+let warnedTurnMissingSecret = false;
+
 async function handleVoiceIceConfig(request, db, env) {
   const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
   await checkRateLimit(db, `voice-ice-config:${sessionBuilder.builder_id}`, VOICE_ICE_CONFIG_RATE_LIMIT_MAX);
@@ -789,12 +801,9 @@ async function handleVoiceIceConfig(request, db, env) {
     if (env.TURN_SHARED_SECRET) {
       const { username, credential } = await mintTurnCredential(env.TURN_SHARED_SECRET, sessionBuilder.builder_id);
       iceServers.push({ urls: env.TURN_SERVER_URL, username, credential });
-    } else {
-      iceServers.push({
-        urls: env.TURN_SERVER_URL,
-        username: env.TURN_SERVER_USERNAME,
-        credential: env.TURN_SERVER_CREDENTIAL,
-      });
+    } else if (!warnedTurnMissingSecret) {
+      warnedTurnMissingSecret = true;
+      console.error('TURN_SERVER_URL is set but TURN_SHARED_SECRET is not; serving STUN only');
     }
   }
   return json({ iceServers });

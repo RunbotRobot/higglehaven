@@ -4862,6 +4862,20 @@ single `db.batch()` alongside the update — so a pure rename, price change,
 or extensibility edit creates no notifications at all, only an actual size
 change does.
 
+## Moving a table from builder ids to user ids (#3141)
+
+Owner decision (2026-11-05, AGENTS.md): anything about a person as a person keys on the account (`users.user_id`); role-scoped data keeps its role id. A builder profile can be reset to a brand-new `builder_id` through ordinary self-service, so a table keyed by `builder_id` loses its link to the person when that happens. The social tables (friendships, direct messages, presence, nearby chat, voice signaling, friend voice channels, conduct reports) therefore move to `*_user_id` columns, one table per sub-issue of #3141. Each of those sub-issues follows this pattern rather than re-deriving it.
+
+**Resolvers** (`worker/lib/auth.js`): `userIdForBuilder(db, builderId)` and `builderIdForUser(db, userId)` return the id or `null`; `userIdsForBuilders(db, builderIds)` and `builderIdsForUsers(db, userIds)` take a list, chunk it under D1's 100-bound-parameter limit, and return a `Map`, omitting what they cannot resolve. A builder created before accounts existed has `user_id` NULL (migrations/0054) and resolves to `null`; never guess a mapping, and never accept a client-supplied one.
+
+**Per-table steps**
+1. Migration: add the new `*_user_id` TEXT columns beside the old ones. Plain TEXT with no foreign key and no cascade (same reasoning as `direct_messages`' 0122 and the conduct reports' 0182: the record must outlive the other party's profile reset; account deletion cleans it up explicitly in `cascadeDeleteAccount`). Index the new columns for the queries that used the old indexes.
+2. Backfill in the same migration: `UPDATE t SET x_user_id = (SELECT user_id FROM builders WHERE builder_id = t.x_builder_id) WHERE x_user_id IS NULL`. A row whose user id cannot be recovered (its builder was already reset, or has no account) keeps its builder-id value in place and is not dropped: no silent loss. The migration must not fail on such rows.
+3. Cut over fully in the same PR (One model, not a hybrid): every writer writes the user id, every reader reads it, and the wire shape of the API and the client switch together. The old columns are left in place but unwritten until the last sub-issue (6/6) drops them. The only exception is the rows from step 2 that have no recoverable user id; say in the PR how readers treat them.
+4. Re-express the old indexes and any `UNIQUE` rules on the new columns. A `UNIQUE` over a nullable column treats NULLs as distinct, so check what the rule means for the unrecoverable rows.
+5. Account deletion removes the rows for the deleted `user_id` explicitly.
+6. Tests: the feature survives a builder-profile reset on either side; an unrecoverable (pre-auth) row neither breaks a list nor disappears; counts and ordering are unchanged.
+
 ## Friend requests
 
 docs/SPEC.md §6: "Friend/group systems: standard friend requests; social
@@ -5362,13 +5376,14 @@ Same `id_verified` gate and a per-builder rate limit. Returns
 committed:
 
 - `TURN_SERVER_URL` — the relay's `turn:` URL.
-- `TURN_SHARED_SECRET` — coturn's `static-auth-secret` (`use-auth-secret`).
-  When set, each response carries a fresh credential with a one-hour
-  lifetime: `username = "<expiryUnixSeconds>:<builderId>"`,
+- `TURN_SHARED_SECRET` — coturn's `static-auth-secret` (`use-auth-secret`),
+  required for the TURN entry. Each response carries a fresh credential with
+  a one-hour lifetime: `username = "<expiryUnixSeconds>:<builderId>"`,
   `credential = base64(HMAC-SHA1(TURN_SHARED_SECRET, username))`. The client
-  re-fetches it before it expires (`src/shop/voiceChat.js`).
-- `TURN_SERVER_USERNAME` / `TURN_SERVER_CREDENTIAL` — a single static pair,
-  used only while `TURN_SHARED_SECRET` is unset.
+  re-fetches it before it expires (`src/shop/voiceChat.js`). If
+  `TURN_SERVER_URL` is set but this secret is not, the response is STUN only
+  (and one error is logged per isolate); there is no static-credential
+  fallback (#3134).
 
 ### `GET /api/voice/signal`
 
@@ -11508,7 +11523,8 @@ docs/SPEC.md §6 requires mandatory CSAM/CSEM reporting to NCMEC's
 CyberTipline. Owner approved building it 2026-11-03 in three steps; this is
 step 1 only: an **admin-initiated record** that a confirmed moderation
 decision is being reported. It makes **no external submission** (that is
-#3042, blocked on registering with NCMEC) and preserves no evidence (#3041).
+#3042, blocked on registering with NCMEC). Evidence preservation (#3041) is
+documented in its own subsection below.
 Everything here is `requireAdmin`-gated (a suspended admin gets `403` like
 anywhere else) and invisible to the reported account: no notification is
 sent, nothing in the account's own data export mentions it, and the
@@ -11558,6 +11574,59 @@ report also writes one `admin_action_log` entry (`ncmec_report_create`,
 
 Newest first. Optional `limit` (1 to 100, default 50) and `reportedUserId`
 filter. Returns `{ reports: [...] }` in the same shape.
+
+### Preserved evidence (#3041, sub-issue 2/3 of #3031)
+
+Owner decision 2026-11-05: content is preserved **only for items an admin has
+recorded a report on**, in a segregated admin-only store that every deletion
+and cleanup path skips, and auto-purged at one year. The 2026-10-20
+`sexual_content` keep-nothing rule still governs every ordinary removal; it
+is overridden only by a filed report.
+
+Creating a report (above) also writes one `ncmec_evidence` row
+(`migrations/0187_ncmec_evidence.sql`) in the **same atomic batch** as the
+`ncmec_reports` row, so neither can exist without the other. It holds, as
+captured at report time: the reported account (`users` row minus credentials
+and tax data, plus its builder and seller identity), upload metadata (up to
+200 catalog templates and 200 video-to-3D jobs the account created), and one
+entry per `contentRefs` item. For a content table the store can read
+(`sign_posts`, `calendar_events`, `product_reviews`, `catalog_templates`,
+`products`, `video_generation_jobs`) that entry is
+`{ status: "preserved", row, r2Keys, missingObjects, removalSnapshots }`,
+and every R2 object the row references (`/uploads/<key>`) is **copied** to
+`ncmec-evidence/<reportId>/<key>` in the `MODELS` bucket. If the item no
+longer existed at report time (for example a `sexual_content` removal made
+before the report), the entry is `{ status: "not_retained", reason,
+removalSnapshots }` and says so plainly; nothing is reconstructed. If an R2
+copy fails for any reason other than the source being gone, the report
+request fails and nothing is recorded; a duplicate report deletes its copies
+again.
+
+Nothing else references the evidence table (no foreign keys), so account
+deletion, listing/template deletion, saved-layout cleanup and the other
+cleanup jobs cannot reach it. The `ncmec-evidence/` R2 prefix is excluded
+from the orphan sweep (`cleanupUnreferencedModels`, manual and cron), from
+the admin model listing, and is answered `404` by `GET`/`HEAD`/`DELETE
+/uploads/ncmec-evidence/...`. It is not in any data export and no
+notification is sent from it. Rows are immutable (an `UPDATE` trigger
+aborts); the only deletion is the retention purge.
+
+**Retention.** One constant, `NCMEC_EVIDENCE_RETENTION_MS` in
+`worker/lib/ncmec-evidence.js` (one year, 18 U.S.C. § 2258A(h) as amended by
+the REPORT Act), compared against `captured_at` at run time, so counsel can
+change it without a schema change. The scheduled job deletes the R2 copies,
+then the row, and writes one `admin_action_log` entry per purged report
+(`ncmec_evidence_purge`, `targetType: "ncmec_report"`, `targetId` the
+`reportId`, `detail` with `capturedAt` and `r2ObjectsDeleted`). The immutable
+`ncmec_reports` record is never touched. Preserved objects count toward the
+`MODELS` bucket's storage total.
+
+### `GET /api/ncmec-reports/:reportId/evidence`
+
+`requireAdmin`-gated, read-only. Returns `{ evidence: { evidenceId,
+reportId, reportedUserId, account, uploads, content, capturedAt } }`, or
+`404` if the report has no preserved evidence (never recorded, or already
+purged).
 
 ### Admin Dashboard
 
