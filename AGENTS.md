@@ -36,6 +36,9 @@
   spellings only in customer-facing display strings.
 - Use Cloudflare free-tier-compatible designs.
 - Run `npm test`, `npm run build`, and `git diff --check`.
+- Adding a migration also needs `npm run generate:migration-checksums` (pins its
+  SHA-256 in `scripts/migration-checksums.json`; `npm test` fails until you do),
+  and never edit an already-merged migration -- the same check rejects it (#805).
 - Commit each completed change.
 
 ## Bug-report feedback capture: extend deliberately, prune deliberately

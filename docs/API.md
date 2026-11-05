@@ -3373,6 +3373,19 @@ not a replacement for `scripts/check-migration-drift.mjs` (#492), which
 still catches the same drift immediately at deploy time; this catches it
 within the next 10-minute cron tick even when nobody deploys for a while.
 
+**#805 (phase 1): applied migrations are content-pinned.** Everything above
+compares filenames only, so editing an already-applied migration after the
+fact left every check green. `scripts/migration-checksums.json` pins each
+`migrations/*.sql` file's SHA-256, and `scripts/check-migration-checksums.mjs`
+runs as a `pretest` check: it fails on an edited pinned file (put the change
+in a new migration), on a migration with no pin yet (`npm run
+generate:migration-checksums` adds missing pins and refuses to touch an
+existing one), and on a pin whose file is gone. The lock is repo-side, not a
+D1 table: deploys run from `main`, so a file that still matches the pin from
+the PR that added it is what was applied. Phase 2 (diffing the live D1
+schema against a fresh apply, to catch an out-of-band `ALTER TABLE`) is a
+separate follow-up.
+
 The same cron also runs `checkWebhookSecrets` (#1793): when a provider is
 configured (Stripe: `STRIPE_SECRET_KEY`; Didit: `DIDIT_API_KEY` and
 `DIDIT_WORKFLOW_ID`; Tripo: `TRIPO_API_KEY`) but its webhook secret
