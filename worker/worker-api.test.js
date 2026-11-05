@@ -4320,15 +4320,32 @@ describe('Worker API', () => {
     expect(materialized.body.candidates.every(({ materializedAt }) => materializedAt !== null)).toBe(true);
     expect(materialized.body.nextCursor).toBeNull();
 
+    // #3181: this file shares one D1, so by now earlier tests have left a
+    // large number of pending candidates, and walking all of them at limit=1
+    // took ~45 s on a CI runner (the timeout). The first few pages stay at
+    // limit=1, which is what proves cursor chaining (exactly one row per page,
+    // a non-null cursor between pages); the rest is walked at the endpoint's
+    // max of 100, and the same cursor keeps working across the page-size
+    // change.
     const pendingIds = [];
     let cursor = null;
+    let pages = 0;
     do {
+      const pageLimit = pages < 3 ? 1 : 100;
       const suffix = cursor ? `&cursor=${encodeURIComponent(cursor)}` : '';
-      const page = await api(`/land-candidates?state=pending&limit=1${suffix}`, adminSession());
-      expect(page.body.candidates).toHaveLength(1);
-      expect(page.body.candidates[0].materializedAt).toBeNull();
-      pendingIds.push(page.body.candidates[0].landletId);
+      const page = await api(`/land-candidates?state=pending&limit=${pageLimit}${suffix}`, adminSession());
+      expect(page.body.candidates.length).toBeGreaterThan(0);
+      expect(page.body.candidates.length).toBeLessThanOrEqual(pageLimit);
+      if (pageLimit === 1) expect(page.body.candidates).toHaveLength(1);
+      for (const candidate of page.body.candidates) {
+        expect(candidate.materializedAt).toBeNull();
+        pendingIds.push(candidate.landletId);
+      }
       cursor = page.body.nextCursor;
+      pages += 1;
+      // This test just queued two pending rows, so page one (limit=1) always
+      // has a successor, whatever else the shared D1 holds or doesn't.
+      if (pages === 1) expect(cursor).not.toBeNull();
     } while (cursor);
     expect(new Set(pendingIds).size).toBe(pendingIds.length);
     expect(pendingIds).toEqual(expect.arrayContaining(['page-outside-a', 'page-outside-b']));

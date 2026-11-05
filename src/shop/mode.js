@@ -44,6 +44,7 @@
 // enterShopMode ever referenced any of them, even back when it still lived
 // in main.js.
 import * as THREE from 'three';
+import { ownsGeometryAndTextures } from '../sharedModelResources.js';
 import { landlet, createGroundTexture, normalizeGroundShapeUVs, disposeObject, disposeMaterialTextures } from '../world/models.js';
 import { scene, camera, renderer, registerModeFrameUpdate, registerFacingOverride } from '../world/scene.js';
 import { activeCatalog, setActiveCatalog } from '../world/state.js';
@@ -273,12 +274,14 @@ export function disposeObject3D(object) {
       return;
     }
     if (!child.isMesh) return;
-    child.geometry?.dispose();
+    // #1560: same shared-with-the-cached-model rule as disposeObject.
+    const owns = ownsGeometryAndTextures(child);
+    if (owns) child.geometry?.dispose();
     const materials = Array.isArray(child.material) ? child.material : [child.material];
     for (const material of materials) {
       if (!material) continue;
       // #1359: same texture-leak gap disposeObject's own fix just closed.
-      disposeMaterialTextures(material);
+      if (owns) disposeMaterialTextures(material);
       material.dispose();
     }
   });

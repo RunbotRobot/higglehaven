@@ -15,7 +15,7 @@ import {
 import { notificationStatement, fireNotification, fireNotifications } from './lib/notifications.js';
 import {
   SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser, requireAdmin, assertOwner,
-  assertVerified, requireSessionBuilder, requireVerifiedSession,
+  assertVerified, requireSessionBuilder, requireVerifiedSession, builderIdsForUsers,
 } from './lib/auth.js';
 // #2530: the shared R2 storage-budget machinery (genuinely cross-domain --
 // see worker/lib/storage.js's own comment) plus the models/uploaded-assets
@@ -84,6 +84,7 @@ import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-ad
 // module's own comment for what deliberately stayed here instead (and why).
 import { handleStripeWebhook, handleCardSetupIntent, handleConfirmCard } from './lib/stripe.js';
 import { classifyStripeRequirements } from './lib/stripe-requirements.js';
+import { checkWebhookSecrets } from './lib/webhook-secret-check.js';
 import { handleDiditVerificationSession, handleDiditVerificationStatus, handleDiditWebhook } from './lib/didit.js';
 import {
   handleVideoGenerationJobCreate, handleVideoGenerationJobStatus, handleVideoGenerationWebhook,
@@ -478,6 +479,11 @@ export default {
     }));
     ctx.waitUntil(checkMigrationDrift(env).catch((error) => {
       console.error('checkMigrationDrift failed', error);
+    }));
+    // #1793: alert (log + one Control Room card) when a provider is configured
+    // but its webhook secret is not.
+    ctx.waitUntil(checkWebhookSecrets(env).catch((error) => {
+      console.error('checkWebhookSecrets failed', error);
     }));
     // #848: without this, only a manually-triggered admin POST ever
     // reclaims unreferenced R2 uploads (most notably concept-image's own
@@ -1396,21 +1402,37 @@ async function handleBuilders(request, env, db, route, url) {
     // labelValue) — a rename call could bypass the create-time cap
     // entirely. Same fix shape as #337/#358.
     const label = labelValue(input.label, 'label');
-    // #1187: same case-insensitive uniqueness guard as the create path
-    // above — see its own comment for why this is an app-level NOT EXISTS
-    // rather than a schema-level UNIQUE index. Excludes this builder's own
-    // current row so a case-only rename of your own label (e.g. "Ada" ->
-    // "ADA") isn't rejected as colliding with itself.
-    const result = await db.prepare(`
-      UPDATE builders SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE builder_id = ? AND NOT EXISTS (SELECT 1 FROM builders WHERE label = ? COLLATE NOCASE AND builder_id != ?)
-    `).bind(label, route[1], label, route[1]).run();
-    if (result.meta.changes === 0) {
+    // #3142 (owner decision 2026-11-05, "One alias per person"): a person's
+    // name is the account's username, and builders.label is only a copy of
+    // it, so a rename here sets the username and the label follows in the
+    // same batch -- the two can no longer drift apart. The signup cap on
+    // usernames applies, since this is now where one is set.
+    if (label.length > 40) throw new HttpError('label must be 40 characters or fewer', 400);
+    const userId = sessionBuilder.user_id;
+    // #1187's case-insensitive uniqueness, now against both other accounts'
+    // usernames (the schema's own idx_users_username_nocase) and any other
+    // builder's label (a legacy label that never matched its username).
+    // Excludes this person's own rows so a case-only change is fine. The
+    // label UPDATE re-checks the username live, so it only lands if the
+    // username UPDATE just before it did (the batch is one transaction).
+    const [usernameResult, labelResult] = await db.batch([
+      db.prepare(`
+        UPDATE users SET username = ?
+        WHERE user_id = ?
+          AND NOT EXISTS (SELECT 1 FROM users WHERE username = ? COLLATE NOCASE AND user_id != ?)
+          AND NOT EXISTS (SELECT 1 FROM builders WHERE label = ? COLLATE NOCASE AND builder_id != ?)
+      `).bind(label, userId, label, userId, label, route[1]),
+      db.prepare(`
+        UPDATE builders SET label = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+        WHERE builder_id = ? AND EXISTS (SELECT 1 FROM users WHERE user_id = ? AND username = ?)
+      `).bind(label, route[1], userId, label),
+    ]);
+    if (usernameResult.meta.changes === 0 || labelResult.meta.changes === 0) {
       // requireBuilder/assertOwner above already confirmed this builder_id
-      // exists and belongs to the caller, so the only way the atomic guard
-      // just above could have refused this update is the NOT EXISTS
-      // failing — another builder already holds this label.
-      throw new HttpError('That builder name is already taken — names must be unique, ignoring case', 409);
+      // exists and belongs to the caller, so the only way the guard just
+      // above could have refused is the NOT EXISTS failing -- another
+      // person already holds this name.
+      throw new HttpError('That name is already taken -- names must be unique, ignoring case', 409);
     }
     const updated = await requireBuilder(db, route[1]);
     return json({ builder: builderFromRow(updated) });
@@ -3425,8 +3447,11 @@ async function exportSocialSection(db, builderId, userId) {
     SELECT * FROM friendships WHERE requester_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
   `).bind(builderId, builderId).all();
   const directMessages = await db.prepare(`
-    SELECT * FROM direct_messages WHERE sender_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
-  `).bind(builderId, builderId).all();
+    SELECT * FROM direct_messages WHERE sender_user_id = ? OR recipient_user_id = ? ORDER BY created_at ASC
+  `).bind(userId, userId).all();
+  // #3146: messages are stored against the accounts; the wire shape still
+  // carries each person's current builder id.
+  const dmBuilderIds = await builderIdsForUsers(db, directMessages.results.flatMap((row) => [row.sender_user_id, row.recipient_user_id]));
   const notifications = await db.prepare(`
     SELECT * FROM notifications WHERE builder_id = ? ORDER BY created_at ASC
   `).bind(builderId).all();
@@ -3515,7 +3540,7 @@ async function exportSocialSection(db, builderId, userId) {
   return {
     friendships: friendships.results.map((row) =>
       friendshipFromRow(row, builderId, friendshipLabelsById, friendshipLandletsById)),
-    directMessages: directMessages.results.map(directMessageFromRow),
+    directMessages: directMessages.results.map((row) => directMessageFromRow(row, dmBuilderIds)),
     notifications: notifications.results.map(notificationFromRow),
     productReviews: productReviews.results.map(reviewFromRow),
     sellerFeedback: sellerFeedback.results.map(sellerFeedbackFromRow),
