@@ -364,14 +364,14 @@ most likely to come up again.
   and "builder" are modes a person is in, not identity types: do not
   rename `builder_id` to `shopper_id` or collapse the role tables. New
   social features start on `user_id`; existing social tables migrate
-  there (#3137).
+  there (#3141).
 
 - **One alias per person, shown wherever a person is shown: the
   account's `username`.** (2026-11-05.) The builder label is derived
   from it, not a second editable name, and the unused
   `users.display_name` column goes. A seller's storefront name is a
   different thing (a shop's name, not a person's) and stays its own
-  field. (#3138.)
+  field. (#3142.)
 
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
