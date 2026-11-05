@@ -479,7 +479,8 @@ async function reportEvidenceLines(db, reporterBuilderId, reportedBuilderId, sur
 // gets the same 201 shape either way and never learns it was a repeat.
 // Bounded: once a card's note reaches CONDUCT_REPORT_NOTE_MAX_LENGTH, further
 // repeats stop appending (the row is still ignored), so one pair cannot
-// grow a note without limit.
+// grow a note without limit -- but a repeat still re-queues a done card
+// (#3137), because the cap limits text, not whether an admin sees a new report.
 const CONDUCT_REPORT_NOTE_MAX_LENGTH = 4000;
 
 async function fileConductReport(db, {
@@ -499,13 +500,18 @@ async function fileConductReport(db, {
       SELECT ?, ?, (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', ?, ?, ?, ?, ?, ?
       WHERE EXISTS (SELECT 1 FROM ${table} WHERE report_id = ?)
     `).bind(reportId, kind, title, kind, noteLines.join('\n'), now, kind, now, now, reportId),
+    // #3137: the cap bounds only the appended text. The done -> queued flip
+    // must always apply on a repeat, or a genuinely new incident from a pair
+    // whose note already hit the cap, on a card an admin since closed, would
+    // never reach anyone. A capped card that is not done is left untouched.
     db.prepare(`
       UPDATE control_room_tasks
-      SET note = note || char(10) || ?, note_updated_at = ?, updated_at = ?,
+      SET note = CASE WHEN length(note) < ${CONDUCT_REPORT_NOTE_MAX_LENGTH} THEN note || char(10) || ? ELSE note END,
+          note_updated_at = CASE WHEN length(note) < ${CONDUCT_REPORT_NOTE_MAX_LENGTH} THEN ? ELSE note_updated_at END,
+          updated_at = CASE WHEN length(note) < ${CONDUCT_REPORT_NOTE_MAX_LENGTH} OR status = 'done' THEN ? ELSE updated_at END,
           status = CASE WHEN status = 'done' THEN 'queued' ELSE status END
       WHERE task_id = (SELECT report_id FROM ${table} WHERE reporter_builder_id = ? AND reported_builder_id = ?)
         AND NOT EXISTS (SELECT 1 FROM ${table} WHERE report_id = ?)
-        AND length(note) < ${CONDUCT_REPORT_NOTE_MAX_LENGTH}
     `).bind(repeatLine, now, now, reporterBuilderId, reportedBuilderId, reportId),
   ]);
   const stored = await db.prepare(`
