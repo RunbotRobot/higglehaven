@@ -15,7 +15,7 @@ import {
 import { notificationStatement, fireNotification, fireNotifications } from './lib/notifications.js';
 import {
   SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser, requireAdmin, assertOwner,
-  assertVerified, requireSessionBuilder, requireVerifiedSession,
+  assertVerified, requireSessionBuilder, requireVerifiedSession, builderIdsForUsers,
 } from './lib/auth.js';
 // #2530: the shared R2 storage-budget machinery (genuinely cross-domain --
 // see worker/lib/storage.js's own comment) plus the models/uploaded-assets
@@ -3292,8 +3292,11 @@ async function exportSocialSection(db, builderId, userId) {
     SELECT * FROM friendships WHERE requester_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
   `).bind(builderId, builderId).all();
   const directMessages = await db.prepare(`
-    SELECT * FROM direct_messages WHERE sender_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
-  `).bind(builderId, builderId).all();
+    SELECT * FROM direct_messages WHERE sender_user_id = ? OR recipient_user_id = ? ORDER BY created_at ASC
+  `).bind(userId, userId).all();
+  // #3146: messages are stored against the accounts; the wire shape still
+  // carries each person's current builder id.
+  const dmBuilderIds = await builderIdsForUsers(db, directMessages.results.flatMap((row) => [row.sender_user_id, row.recipient_user_id]));
   const notifications = await db.prepare(`
     SELECT * FROM notifications WHERE builder_id = ? ORDER BY created_at ASC
   `).bind(builderId).all();
@@ -3382,7 +3385,7 @@ async function exportSocialSection(db, builderId, userId) {
   return {
     friendships: friendships.results.map((row) =>
       friendshipFromRow(row, builderId, friendshipLabelsById, friendshipLandletsById)),
-    directMessages: directMessages.results.map(directMessageFromRow),
+    directMessages: directMessages.results.map((row) => directMessageFromRow(row, dmBuilderIds)),
     notifications: notifications.results.map(notificationFromRow),
     productReviews: productReviews.results.map(reviewFromRow),
     sellerFeedback: sellerFeedback.results.map(sellerFeedbackFromRow),
