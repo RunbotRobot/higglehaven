@@ -1456,7 +1456,14 @@ sign posts/purchases (#362, mirroring #337).
 ### `PUT /api/builders/:builderId`
 ### `PATCH /api/builders/:builderId`
 
-Renames a builder. `label` is required. Returns `404` if the builder
+Renames a builder. A person has one alias, the account's `username`
+(**#3142**, owner decision 2026-11-05, "One alias per person"), and
+`builders.label` is only a copy of it: this sets both in one batch, so they
+cannot drift apart (a seller profile additionally has its own storefront
+name, `sellers.label`, which this does not touch). The new name obeys
+signup's 40-character username cap (`400` over it) and must be unique
+case-insensitively across every account's username *and* every other
+builder's label. `label` is required. Returns `404` if the builder
 doesn't exist, `403` if it isn't your own (see "Authorization model"
 above) — requires a session logged in as this builder. `409` if `label`
 collides case-insensitively with a *different* builder's (#1187) — a
@@ -1767,7 +1774,7 @@ in `currently_due` (volume or time thresholds), and the part of it only
 Stripe may collect. They never affect `status` and block nothing; the
 payout panels use them to offer the same Stripe step a little earlier, with
 softer copy. Stored per row in `stripe_requirements_eventually_due`
-(migration 0191, field names only; `NULL` reads as empty), refreshed by the
+(migration 0192, field names only; `NULL` reads as empty), refreshed by the
 same writes as `stripe_requirements_due`.
 
 `stripeStepRequirements` (#2928) is the part of `requirementsCurrentlyDue`
@@ -2556,6 +2563,17 @@ Optional query parameters:
 The response includes `nextCursor`, which is `null` after the final page. Keep
 the same filters and `sort` mode while following a cursor; cursors are specific
 to their sort mode.
+
+The first page (no `cursor`) also includes `totalCount`, how many templates
+matched the filters at that moment (#1757). The keyset cursor sorts on `name`
+(or `priceCents`), which a template's own seller can edit between two page
+requests, so a row renamed from after the cursor to before it can be skipped
+by that one fetch. `fetchCatalog` in `src/api.js` compares what it collected
+against `totalCount` and, when short, re-runs the pass (at most three passes,
+merging by `templateId`), so the gap is filled without any change to the sort
+or the UI. Any other caller paging this endpoint should do the same; a
+residual miss is possible only if the catalog keeps changing across all
+passes, and the next load picks it up.
 
 A row with `isTestModel: true` (#1946) is listed here exactly like any
 other row — this endpoint does not filter by it. An earlier version of
@@ -5175,6 +5193,8 @@ verification.
 ```json
 {
   "messageId": "message-3f1a9c20-9e44-4b7a-8c3d-1a2b3c4d5e6f",
+  "senderUserId": "user-alice",
+  "recipientUserId": "user-bob",
   "senderBuilderId": "builder-alice",
   "recipientBuilderId": "builder-bob",
   "text": "hey!",
@@ -5182,6 +5202,20 @@ verification.
   "readAt": null
 }
 ```
+
+Messages are stored against the two **accounts** (`direct_messages.sender_user_id`
+/ `recipient_user_id`, migrations/0191, #3146), not the builder profiles, so a
+thread and its unread counts survive either person resetting their builder
+profile. `senderUserId`/`recipientUserId` are the stable ids.
+`senderBuilderId`/`recipientBuilderId` stay in the shape because the friends
+list, the thread query and the send body still address people by builder id;
+each is that person's **current** builder profile, or `null` if they have none
+(account deleted, or profile reset and not yet recreated). The columns
+`sender_builder_id`/`recipient_builder_id` are retired (nullable, unwritten) and
+are dropped by 6/6 (#3149). A legacy row whose accounts could not be recovered
+by the migration (its builder was already reset, or had no account) is left in
+place but belongs to no thread. Account deletion does not delete messages, so
+the other person's history survives, as it did before.
 
 ### `GET /api/direct-messages?withBuilderId=X`
 
@@ -5192,6 +5226,9 @@ way as `GET /api/friendships` — `limit` (default and max 100) and
 friendship check on read — once sent, a message stays visible in history
 the same way email/chat history survives an unfriend; only a new send
 (`POST` below) is gated on a *currently* accepted friendship.
+`withBuilderId` is resolved to its account; an id that names no current
+builder (that person reset their profile or deleted their account since the
+client loaded it) returns an empty thread, not an error.
 
 ### `GET /api/direct-messages/unread-count`
 
@@ -5211,7 +5248,8 @@ Requires an ID-verified session.
 reference an existing builder, or `text` is missing or over 280
 characters. `403` if the recipient isn't ID-verified, or if no accepted
 friendship exists between the two builders. `429` after 20 requests per
-15 minutes from the same calling builder (see "Rate limiting" above).
+15 minutes from the same calling account (see "Rate limiting" above; the bucket
+is keyed on the account, so resetting a builder profile does not reset it).
 Returns `201` with the new message. Notifies `recipientBuilderId` (the
 generic notification system above, the same "no passive way to find out"
 fix #319 already applied to friend requests) — there's no dedicated
@@ -5232,7 +5270,7 @@ the request body here, unlike a single-row `PATCH` by id, since this
 marks a whole thread at once) — mirrors `POST
 /api/notifications/mark-all-read`'s own bulk shape. Always returns
 `{ "ok": true }`, even if nothing was unread. `429` after 200 calls per
-15 minutes from the same calling builder, under its own bucket separate
+15 minutes from the same calling account, under its own bucket separate
 from the send endpoint's — a much higher ceiling than most mutate
 buckets (#2260) because the frontend auto-fires this on every render of
 an open DM thread (on open, and again after every message sent), not
@@ -5507,7 +5545,11 @@ Requires an ID-verified session. Same forward-cursor poll shape as `GET
 "..." }`, `created_at ASC, message_id ASC`, same-cursor-echoed-back when
 quiet, `landletId` reflecting whichever landlet the response was computed
 for) — except `messages` here is only ever the caller's own inbox
-(`to_builder_id = caller`), not a landlet-wide feed. `landletId` is `null`
+(`to_builder_id = caller`), not a landlet-wide feed. **A proximity row is
+delivered to its addressee wherever they stand now (`#2955`)**: it was
+authorized when sent (sender and recipient in the same landlet), so two
+avatars walking across a landlet boundary mid-negotiation don't lose the
+signals already in flight. `landletId` is `null`
 when the caller has no recent-enough presence row — but unlike `GET
 /api/nearby-chat` (which really does return nothing in that case,
 `nearby-chat` being inherently landlet-scoped), this still returns any

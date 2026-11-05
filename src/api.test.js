@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   confirmCard, createInstancesRemote, deleteInstancesRemote, deleteLandletLevel, fetchAllAuctions, fetchAllLandlets,
-  fetchBundles, fetchCurrentUser, fetchSharedBundles, replaceLandletDraft, upsertInstancesRemote,
+  fetchBundles, fetchCatalog, fetchCurrentUser, fetchSharedBundles, replaceLandletDraft, upsertInstancesRemote,
 } from './api.js';
 
 // fetchAllLandlets makes real fetch() calls against /api/... — mock the
@@ -377,5 +377,47 @@ describe('replaceLandletDraft', () => {
     expect(sentBody.versionName).toBe('Restored from "V1"');
     expect(typeof sentBody.idempotencyKey).toBe('string');
     expect(sentBody.idempotencyKey.length).toBeGreaterThan(0);
+  });
+});
+
+// #1757: a template renamed mid-fetch can be skipped by the keyset cursor;
+// fetchCatalog notices via the first page's totalCount and re-runs the pass.
+describe('fetchCatalog (#1757)', () => {
+  it('makes one pass when the collected rows reach totalCount', async () => {
+    const urls = mockPaginatedFetch([
+      { templates: [{ templateId: 'a' }], nextCursor: 'c1', totalCount: 2 },
+      { templates: [{ templateId: 'b' }], nextCursor: null },
+    ]);
+    const all = await fetchCatalog();
+    expect(all.map((t) => t.templateId)).toEqual(['a', 'b']);
+    expect(urls).toHaveLength(2);
+  });
+
+  it('re-runs the pass and merges by templateId when a renamed row was skipped', async () => {
+    const urls = mockPaginatedFetch([
+      // pass 1: "c" was renamed behind the cursor and never returned
+      { templates: [{ templateId: 'a' }], nextCursor: 'c1', totalCount: 3 },
+      { templates: [{ templateId: 'b' }], nextCursor: null },
+      // pass 2: everything is in order now; "a"/"b" are de-duplicated
+      { templates: [{ templateId: 'c' }, { templateId: 'a' }], nextCursor: 'c2', totalCount: 3 },
+      { templates: [{ templateId: 'b' }], nextCursor: null },
+    ]);
+    const all = await fetchCatalog();
+    expect(all.map((t) => t.templateId).sort()).toEqual(['a', 'b', 'c']);
+    expect(urls).toHaveLength(4);
+  });
+
+  it('stops after three passes even if the total never settles', async () => {
+    const page = { templates: [{ templateId: 'a' }], nextCursor: null, totalCount: 5 };
+    const urls = mockPaginatedFetch([page, page, page, page]);
+    const all = await fetchCatalog();
+    expect(all).toHaveLength(1);
+    expect(urls).toHaveLength(3);
+  });
+
+  it('does not loop when the server sends no totalCount', async () => {
+    const urls = mockPaginatedFetch([{ templates: [{ templateId: 'a' }], nextCursor: null }]);
+    await fetchCatalog();
+    expect(urls).toHaveLength(1);
   });
 });
