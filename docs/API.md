@@ -4862,6 +4862,20 @@ single `db.batch()` alongside the update — so a pure rename, price change,
 or extensibility edit creates no notifications at all, only an actual size
 change does.
 
+## Moving a table from builder ids to user ids (#3141)
+
+Owner decision (2026-11-05, AGENTS.md): anything about a person as a person keys on the account (`users.user_id`); role-scoped data keeps its role id. A builder profile can be reset to a brand-new `builder_id` through ordinary self-service, so a table keyed by `builder_id` loses its link to the person when that happens. The social tables (friendships, direct messages, presence, nearby chat, voice signaling, friend voice channels, conduct reports) therefore move to `*_user_id` columns, one table per sub-issue of #3141. Each of those sub-issues follows this pattern rather than re-deriving it.
+
+**Resolvers** (`worker/lib/auth.js`): `userIdForBuilder(db, builderId)` and `builderIdForUser(db, userId)` return the id or `null`; `userIdsForBuilders(db, builderIds)` and `builderIdsForUsers(db, userIds)` take a list, chunk it under D1's 100-bound-parameter limit, and return a `Map`, omitting what they cannot resolve. A builder created before accounts existed has `user_id` NULL (migrations/0054) and resolves to `null`; never guess a mapping, and never accept a client-supplied one.
+
+**Per-table steps**
+1. Migration: add the new `*_user_id` TEXT columns beside the old ones. Plain TEXT with no foreign key and no cascade (same reasoning as `direct_messages`' 0122 and the conduct reports' 0182: the record must outlive the other party's profile reset; account deletion cleans it up explicitly in `cascadeDeleteAccount`). Index the new columns for the queries that used the old indexes.
+2. Backfill in the same migration: `UPDATE t SET x_user_id = (SELECT user_id FROM builders WHERE builder_id = t.x_builder_id) WHERE x_user_id IS NULL`. A row whose user id cannot be recovered (its builder was already reset, or has no account) keeps its builder-id value in place and is not dropped: no silent loss. The migration must not fail on such rows.
+3. Cut over fully in the same PR (One model, not a hybrid): every writer writes the user id, every reader reads it, and the wire shape of the API and the client switch together. The old columns are left in place but unwritten until the last sub-issue (6/6) drops them. The only exception is the rows from step 2 that have no recoverable user id; say in the PR how readers treat them.
+4. Re-express the old indexes and any `UNIQUE` rules on the new columns. A `UNIQUE` over a nullable column treats NULLs as distinct, so check what the rule means for the unrecoverable rows.
+5. Account deletion removes the rows for the deleted `user_id` explicitly.
+6. Tests: the feature survives a builder-profile reset on either side; an unrecoverable (pre-auth) row neither breaks a list nor disappears; counts and ordering are unchanged.
+
 ## Friend requests
 
 docs/SPEC.md §6: "Friend/group systems: standard friend requests; social
