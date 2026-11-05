@@ -2118,7 +2118,8 @@
         min-height: 18px;
       }
       #upload-status.error {
-        color: #b3402c;
+        /* #1544: #a83a27 (was #b3402c, 4.27:1 on the tinted .seller-row) keeps >= 4.5:1 AA on panel, pill and seller-row composites. */
+        color: #a83a27;
       }
       #upload-dimensions-preview {
         width: 100%;
@@ -2419,7 +2420,7 @@
         min-height: 18px;
       }
       #checkout-status.error {
-        color: #b3402c;
+        color: #a83a27;
       }
       #checkout-modal-actions {
         display: flex;
@@ -2495,7 +2496,7 @@
         min-height: 18px;
       }
       #feedback-status.error {
-        color: #b3402c;
+        color: #a83a27;
       }
       #feedback-modal-actions {
         display: flex;
@@ -2572,7 +2573,7 @@
         min-height: 18px;
       }
       #verify-status.error {
-        color: #b3402c;
+        color: #a83a27;
       }
       #verify-modal-actions {
         display: flex;
@@ -2743,7 +2744,7 @@
       }
       /* #2218: same danger color as .seller-row-flagged-badge below. */
       .seller-card-flagged-badge {
-        color: #b3402c;
+        color: #a83a27;
         font-size: 11px;
         font-weight: 600;
       }
@@ -2791,7 +2792,7 @@
       .seller-row-flagged-badge {
         font-size: 11px;
         font-weight: 600;
-        color: #b3402c;
+        color: #a83a27;
       }
       .seller-row-dims {
         font-size: 11px;
@@ -2818,7 +2819,7 @@
       }
       .seller-row-action-btn.danger {
         border-color: rgb(255 120 100 / 0.5);
-        color: #b3402c;
+        color: #a83a27;
       }
       .seller-row-action-btn:disabled {
         opacity: 0.5;
@@ -2933,7 +2934,7 @@
         color: rgb(var(--ink-rgb) / 0.65);
       }
       .seller-row-status.error {
-        color: #b3402c;
+        color: #a83a27;
       }
       .seller-size-save-btn {
         padding: 6px 14px;
@@ -2951,7 +2952,7 @@
         color: rgb(var(--ink-rgb) / 0.65);
       }
       .seller-size-status.error {
-        color: #b3402c;
+        color: #a83a27;
       }
       /* Edit Price — same idiom/reasoning as Edit Size's own panel above,
          own classes throughout for the same "don't share a class across
@@ -2994,7 +2995,7 @@
         color: rgb(var(--ink-rgb) / 0.65);
       }
       .seller-price-status.error {
-        color: #b3402c;
+        color: #a83a27;
       }
       .seller-digital-good-checkbox-label {
         display: flex;
@@ -3045,7 +3046,7 @@
         color: rgb(var(--ink-rgb) / 0.65);
       }
       .seller-digital-good-status.error {
-        color: #b3402c;
+        color: #a83a27;
       }
       /* No-returns policy (docs/SPEC.md §5) row display + edit panel — own
          classes throughout, same "don't share a class across genuinely
@@ -3086,7 +3087,7 @@
         color: rgb(var(--ink-rgb) / 0.65);
       }
       .seller-no-returns-status.error {
-        color: #b3402c;
+        color: #a83a27;
       }
       /* Shipping (docs/SPEC.md §5) row display + edit panel — own classes
          throughout, same "don't share a class across genuinely different
@@ -3127,7 +3128,7 @@
         color: rgb(var(--ink-rgb) / 0.65);
       }
       .seller-domestic-only-status.error {
-        color: #b3402c;
+        color: #a83a27;
       }
       #seller-status {
         font-size: 13px;
@@ -3213,7 +3214,7 @@
         color: rgb(var(--ink-rgb) / 0.6);
       }
       .settings-empty-note.error {
-        color: #b3402c;
+        color: #a83a27;
       }
       /* #2843: each tax-education entry is a native <details> disclosure
          so the General tab doesn't dump every matched entry's full body
@@ -3660,7 +3661,7 @@
         min-height: 18px;
       }
       #auth-status.error {
-        color: #b3402c;
+        color: #a83a27;
       }
       #auth-status.success {
         color: #3f7a1f;
@@ -4603,7 +4604,7 @@
         font-size: 17px;
       }
       #my-lands-status.error {
-        color: #b3402c;
+        color: #a83a27;
         font-size: 13px;
       }
       #my-lands-empty {
@@ -4890,7 +4891,7 @@
         min-height: 18px;
       }
       #claim-status.error {
-        color: #b3402c;
+        color: #a83a27;
       }
       #claim-modal-actions {
         display: flex;

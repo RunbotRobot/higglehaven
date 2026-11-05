@@ -387,8 +387,24 @@ export async function deleteSeller(sellerId) {
 // worker/index.js's own comment: no KYC field submitted here (name, DOB,
 // SSN, bank account) is ever stored on our own seller row, only Stripe's
 // resulting account id and a derived onboarding status.
-export async function fetchSellerStripeAccount() {
-  return requestJson('/sellers/me/stripe-account');
+// refresh: re-read Stripe's view first (used on coming back from Stripe's own
+// onboarding step, #2928).
+export async function fetchSellerStripeAccount({ refresh = false } = {}) {
+  return requestJson(`/sellers/me/stripe-account${refresh ? '?refresh=1' : ''}`);
+}
+
+// #2928: single-use Stripe-hosted onboarding URL for what Stripe needs that
+// our own forms never collect. Returns { url, expiresAt }.
+export async function startSellerStripeStep() {
+  return requestJson('/sellers/me/stripe-onboarding-link', { method: 'POST' });
+}
+
+export async function startBuilderStripeStep() {
+  return requestJson('/builders/me/stripe-onboarding-link', { method: 'POST' });
+}
+
+export async function refreshBuilderStripeAccount() {
+  return requestJson('/builders/me/stripe-account?refresh=1');
 }
 
 export async function submitSellerStripeAccount(payload) {

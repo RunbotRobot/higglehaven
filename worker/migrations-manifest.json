@@ -182,9 +182,10 @@
   "0182_conduct_reports_keep_reported_builder.sql",
   "0183_backfill_products_image_url.sql",
   "0184_conduct_reports_one_per_reporter.sql",
+  "0185_builder_label_follows_username.sql",
   "0186_friend_voice_channel_members_last_seen_at.sql",
   "0187_ncmec_evidence.sql",
   "0188_user_blocks.sql",
   "0189_earnings_events_purchase_id.sql",
-  "0190_builder_label_follows_username.sql"
+  "0190_purchases_seller_user_id.sql"
 ]

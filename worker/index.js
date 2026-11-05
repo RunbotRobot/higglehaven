@@ -129,7 +129,7 @@ import { handleBuilderRedeem, handleSellerPayouts, handleTax } from './lib/selle
 // see that module's own header comment for why sellerFromRow/
 // getOrCreateSellerForUser/stripeAccountStatusJson stay here instead.
 import {
-  handleSellers, handleMySeller, handleSellerStripeAccount, handleBuilderStripeAccount,
+  handleSellers, handleMySeller, handleSellerStripeAccount, handleBuilderStripeAccount, handleStripeOnboardingLink,
 } from './lib/seller-profile.js';
 // #2542: the signup/login/logout/delete-account/change-password/me/
 // verify-email/request-password-reset/reset-password/resend-verification/
@@ -1188,6 +1188,11 @@ async function handleBuilders(request, env, db, route, url) {
   // just against the builders table/getOrCreateBuilderForUser instead.
   if (route.length === 3 && route[1] === 'me' && route[2] === 'stripe-account') {
     return handleBuilderStripeAccount(request, env, db);
+  }
+
+  // #2928: hand off to Stripe's own onboarding step -- see handleStripeOnboardingLink.
+  if (route.length === 3 && route[1] === 'me' && route[2] === 'stripe-onboarding-link') {
+    return handleStripeOnboardingLink(request, env, db, 'builder');
   }
 
   // #625 (sub-issue of #349/#324): redeem a builder's higgles balance for
