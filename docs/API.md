@@ -4569,7 +4569,15 @@ referenced catalog template and landlet is validated with bounded set
 queries before insertion. `POST` is create-only and returns `201`; a
 duplicate stored ID returns `409`. `PUT` replaces stored IDs, creates
 missing IDs, and returns `200`, making bounded draft synchronization
-idempotent. An invalid reference, or the caller never owning a touched
+idempotent. **`updateOnly` (#3101).** A `PUT` body may also carry
+`"updateOnly": true` (only meaningful on `PUT`): any `instanceId` with no
+stored row is then skipped instead of created, and the response adds
+`missingInstanceIds` listing them (every other item is written as usual; if
+all are missing nothing is written and the response is `200` with empty
+`instances`). Build mode sends it when saving moves of items its scene
+believes exist, so a stale tab cannot silently recreate an item another tab
+deleted; a deliberate recreate (Undo of a delete) uses `POST`. Without the
+flag `PUT` behaves exactly as described above. An invalid reference, or the caller never owning a touched
 landlet at all, returns `400`/`403` and leaves the entire batch unchanged.
 
 **Partial rejection (#1772).** The batch spans an arbitrary set of distinct
