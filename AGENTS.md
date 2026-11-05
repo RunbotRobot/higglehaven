@@ -325,6 +325,21 @@ most likely to come up again.
   upload nobody's claimed yet"). Internal context belongs in a code
   comment next to the string, not in the string.
 
+- **A legal preservation duty overrides a keep-nothing rule only for
+  the items the duty attaches to, in a segregated store with a fixed
+  term.** (2026-11-05, #3041.) The `sexual_content` rule (2026-10-20:
+  nothing retained on removal, not even a text fragment) stays for
+  every ordinary removal. Once an admin records an NCMEC report
+  (#3044), the reported content and its account/upload metadata are
+  preserved in an evidence store that is admin-only, excluded by
+  construction from every deletion and cleanup path, and auto-purged
+  at the statutory term (one year today, a single constant). The
+  principle: when the law requires retaining something the platform
+  deliberately keeps nothing of, retain the narrowest set the duty
+  actually covers, wall it off from everything else, and give it an
+  expiry; never widen the general retention rule to make the duty
+  easier to meet.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
