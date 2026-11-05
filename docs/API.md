@@ -5650,8 +5650,15 @@ reusing `product_flags`: that table's unit is a listing with a seller
 strike-ladder consequence, the wrong shape for "a builder said something
 inappropriate over voice chat."
 
-One report per (reporter, reported) pair (#3122): a repeat from the same
-reporter against the same builder is collapsed rather than rejected. It
+One report per (reporter, reported) pair (#3122), keyed on the two
+accounts (#3148): a repeat from the same reporter against the same person
+is collapsed rather than rejected, including after either side has reset
+their builder profile (a reset changes the builder id, not the person). A
+builder with no account cannot be reported (`400`, like an unknown
+builder). The rows store `reporter_user_id` / `reported_user_id`; the
+reporter's report no longer cascades from their builder profile, and
+deleting the reporter's whole account removes the reports they filed
+(reports against an account are kept). It
 returns the same `201` and the same `reportId` as the first report, so
 the reporter never learns it was a repeat, and instead of a new row and a
 new card it appends a dated line (with the repeat's `reason`, if any) to

@@ -3180,6 +3180,18 @@ export async function cascadeDeleteAccount(db, userId) {
     WHERE (requester_user_id = ? OR recipient_user_id = ?) AND ${builderOkClause} AND ${sellerOkClause}
   `).bind(userId, userId, ...guardBinds));
 
+  // #3148: conduct reports key the reporter on the account and no longer
+  // cascade from the builder profile, so deleting the account removes the
+  // reports the account filed (a deleted reporter's own reports have no
+  // durable evidentiary role; the reported side is kept by user id, #3121).
+  // Gated like the statements around it.
+  for (const reportsTable of ['voice_conduct_reports', 'nearby_chat_reports']) {
+    statements.push(db.prepare(`
+      DELETE FROM ${reportsTable}
+      WHERE reporter_user_id = ? AND ${builderOkClause} AND ${sellerOkClause}
+    `).bind(userId, ...guardBinds));
+  }
+
   const usersUpdateIndex = statements.length;
   statements.push(
     db.prepare(`
