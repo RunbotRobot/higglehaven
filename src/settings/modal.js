@@ -448,11 +448,33 @@ async function renderTaxPaperworkField() {
 // src/sell/mode.js's renderSellerIdentityField (#2565) -- lives here rather
 // than either of those modules since it reads/writes justDeletedIdentityKind
 // and calls renderSettingsSection, both chrome-owned.
+// #3142 (one alias per person): user-visible wording for the two profile
+// kinds. A person has exactly one name, their username (the builder profile's
+// label follows it); the seller profile's name is a shop name, a different
+// thing. Public copy never says "builder identity"/"seller identity"
+// (AGENTS.md: "Public-facing copy describes what the user sees, never
+// internals").
+const IDENTITY_FIELD_COPY = {
+  Builder: {
+    label: 'Username',
+    renamePrompt: 'Change your username',
+    loadError: 'Could not load your username.',
+    resetDone: 'Reset — a fresh profile was created.',
+  },
+  Seller: {
+    label: 'Shop name',
+    renamePrompt: 'Rename your shop',
+    loadError: 'Could not load your shop details.',
+    resetDone: 'Reset — a fresh seller profile was created.',
+  },
+};
+
 export async function renderIdentityField(kind, { fetchProfile, idKey, renameProfile, deleteProfile, deleteWarning, onDeleted, onRenamed }) {
   const field = document.createElement('div');
   field.className = 'settings-field';
   const label = document.createElement('span');
-  label.textContent = `${kind} Identity`;
+  const copy = IDENTITY_FIELD_COPY[kind];
+  label.textContent = copy.label;
   field.appendChild(label);
   const status = document.createElement('div');
   status.className = 'settings-empty-note';
@@ -464,7 +486,7 @@ export async function renderIdentityField(kind, { fetchProfile, idKey, renamePro
   try {
     profile = await fetchProfile();
   } catch (err) {
-    status.textContent = err.message || `Could not load your ${kind.toLowerCase()} identity.`;
+    status.textContent = err.message || copy.loadError;
     status.classList.add('error');
     return;
   }
@@ -507,13 +529,13 @@ export async function renderIdentityField(kind, { fetchProfile, idKey, renamePro
   // one) is what fetchProfile() above actually returned.
   if (justDeletedIdentityKind === kind) {
     justDeletedIdentityKind = null;
-    status.textContent = `Reset — a fresh ${kind.toLowerCase()} identity was created.`;
+    status.textContent = copy.resetDone;
   } else {
     status.textContent = '';
   }
 
   renameBtn.addEventListener('click', async () => {
-    const next = prompt(`Rename your ${kind.toLowerCase()} identity`, profile.label);
+    const next = prompt(copy.renamePrompt, profile.label);
     if (!next || !next.trim() || next.trim() === profile.label) return;
     if (next.trim().length > 100) {
       alert('Keep it to 100 characters or fewer.');

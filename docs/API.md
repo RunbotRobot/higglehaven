@@ -1470,6 +1470,17 @@ collides case-insensitively with a *different* builder's (#1187) — a
 case-only change to your own existing label (e.g. "Ada" → "ADA") is fine,
 only another builder already holding it is rejected.
 
+**Where a person's name is shown (#3142).** Sign posts, community-calendar
+events, product reviews and seller feedback store the author's name as it was
+when they posted (`author_label`), but their public list endpoints
+(`GET /api/instances/:id/posts`, `.../events`, `GET /api/catalog/:templateId/reviews`
+and the seller-feedback list) return the author's **current** username as
+`authorLabel` when the account still exists, so a rename follows the person
+everywhere. A row with no account on record (a legacy row, or a deleted
+account) keeps the name it was posted under; a name is never lost. The data
+export returns the stored name. A purchase's `buyerLabel` is deliberately a
+snapshot: it is a financial record, not a person's current alias.
+
 Deliberately an app-level check (an atomic `NOT EXISTS` folded into the
 `INSERT`/`UPDATE`'s own `WHERE`, same idiom `PUT /api/landlets/:landletId`'s
 own name-uniqueness guard above uses), not a schema-level `COLLATE NOCASE`

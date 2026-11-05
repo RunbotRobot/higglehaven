@@ -838,7 +838,10 @@ export function reviewFromRow(row) {
   return {
     reviewId: row.review_id,
     templateId: row.template_id,
-    authorLabel: row.author_label,
+    // #3142: current username when the query resolved it (current_author_label),
+    // else the name as it was when this was written. GDPR export rows are
+    // plain SELECT *, so they keep the stored name.
+    authorLabel: row.current_author_label ?? row.author_label,
     rating: row.rating,
     text: row.text,
     // #1113: the real purchase this review is tied to. Null for a review
@@ -3855,7 +3858,10 @@ export function sellerFeedbackFromRow(row) {
     feedbackId: row.feedback_id,
     purchaseId: row.purchase_id,
     sellerId: row.seller_id,
-    authorLabel: row.author_label,
+    // #3142: current username when the query resolved it (current_author_label),
+    // else the name as it was when this was written. GDPR export rows are
+    // plain SELECT *, so they keep the stored name.
+    authorLabel: row.current_author_label ?? row.author_label,
     rating: row.rating,
     text: row.text,
     createdAt: row.created_at,
