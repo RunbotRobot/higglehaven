@@ -4811,7 +4811,7 @@ async function renderAuctionSection() {
   if (!builderId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
-    note.textContent = 'Choose a builder identity to start or bid on an auction.';
+    note.textContent = 'Set up your profile to start or bid on an auction.';
     settingsSectionEl.appendChild(note);
     return;
   }
@@ -5248,7 +5248,7 @@ async function renderLowStockSection() {
   if (!builderId) {
     const note = document.createElement('div');
     note.className = 'settings-empty-note';
-    note.textContent = 'Choose a builder identity to see which of your placed products are low on stock.';
+    note.textContent = 'Set up your profile to see which of your placed products are low on stock.';
     settingsSectionEl.appendChild(note);
     return;
   }
