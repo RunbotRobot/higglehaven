@@ -106,6 +106,23 @@ for (const surface of SURFACES) {
       const after = (await env.DB.prepare('SELECT note FROM control_room_tasks WHERE task_id = ?').bind(first.body.reportId).first()).note;
       expect(after).toBe(before);
     });
+
+    // #3137: the cap only limits how much text a repeat may append; it must
+    // never stop a repeat from re-queuing a card an admin already closed, or a
+    // genuinely new incident from a pair at the cap would go unseen.
+    it('still re-queues a done card whose note is at the cap, without growing the note', async () => {
+      const alice = await signupIdVerifiedBuilder(`dedupe-${surface.kind}-capdone-alice`);
+      const bob = await signupIdVerifiedBuilder(`dedupe-${surface.kind}-capdone-bob`);
+      const first = await report(alice, bob.builderId);
+      await env.DB.prepare("UPDATE control_room_tasks SET note = note || ?, status = 'done' WHERE task_id = ?")
+        .bind('x'.repeat(4000), first.body.reportId).run();
+      const before = (await env.DB.prepare('SELECT note FROM control_room_tasks WHERE task_id = ?').bind(first.body.reportId).first()).note;
+      const repeat = await report(alice, bob.builderId, 'new incident after the cap');
+      expect(repeat.response.status).toBe(201);
+      const after = await env.DB.prepare('SELECT status, note FROM control_room_tasks WHERE task_id = ?').bind(first.body.reportId).first();
+      expect(after.status).toBe('queued');
+      expect(after.note).toBe(before);
+    });
   });
 }
 
