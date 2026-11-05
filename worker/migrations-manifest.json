@@ -180,5 +180,6 @@
   "0180_redemption_destination_account.sql",
   "0181_video_generation_jobs_store_attempts.sql",
   "0182_conduct_reports_keep_reported_builder.sql",
-  "0183_backfill_products_image_url.sql"
+  "0183_backfill_products_image_url.sql",
+  "0184_conduct_reports_one_per_reporter.sql"
 ]
