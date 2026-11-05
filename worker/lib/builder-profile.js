@@ -27,7 +27,7 @@
 // instead and the cycle disappears on its own -- not something to fix
 // now.
 import { json, HttpError } from './http.js';
-import { readJson, labelValue } from './validation.js';
+import { readJson, labelValue, queryLimit, decodeCursor, encodeCursor } from './validation.js';
 import { checkRateLimit } from './rate-limit.js';
 import { requireCurrentUser } from './auth.js';
 import { templateFromRow, recomputeLandCap } from '../index.js';
@@ -160,16 +160,40 @@ export async function handleMyBuilder(request, db) {
 export async function handleMyOwnedAvatars(request, db) {
   const user = await requireCurrentUser(request, db);
   const builder = await getOrCreateBuilderForUser(db, user);
-  const { results } = await db.prepare(`
-    SELECT catalog_templates.*, owned_avatars.purchased_at AS owned_purchased_at
-    FROM owned_avatars
-    JOIN catalog_templates ON catalog_templates.template_id = owned_avatars.template_id
-    WHERE owned_avatars.builder_id = ?
-    ORDER BY owned_avatars.purchased_at DESC
-  `).bind(builder.builder_id).all();
+  const { rows, nextCursor } = await listOwnedTemplates(db, request, 'owned_avatars', builder.builder_id);
   return json({
-    avatars: results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
+    avatars: rows.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
+    nextCursor,
   });
+}
+
+// #1132 / #1303: the owned-avatars and owned-animations lists used to return
+// every row in one unbounded SELECT, unlike the sibling list endpoints (Parity
+// across sibling surfaces). Newest purchase first, cursor-paginated the same
+// way GET /api/builders/me/saved-layouts is: ?limit= (default 100, max 100)
+// and ?cursor=, with nextCursor null on the last page. `table` is always a
+// hard-coded owned_* table name from the two callers, never request input.
+async function listOwnedTemplates(db, request, table, builderId) {
+  const url = new URL(request.url);
+  const limit = queryLimit(url.searchParams.get('limit'), 100);
+  const cursor = decodeCursor(url.searchParams.get('cursor'));
+  const conditions = [`${table}.builder_id = ?`];
+  const bindings = [builderId];
+  if (cursor) {
+    conditions.push(`(${table}.purchased_at < ? OR (${table}.purchased_at = ? AND ${table}.template_id < ?))`);
+    bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+  }
+  const { results } = await db.prepare(`
+    SELECT catalog_templates.*, ${table}.purchased_at AS owned_purchased_at
+    FROM ${table}
+    JOIN catalog_templates ON catalog_templates.template_id = ${table}.template_id
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY ${table}.purchased_at DESC, ${table}.template_id DESC LIMIT ?
+  `).bind(...bindings, limit + 1).all();
+  const hasMore = results.length > limit;
+  const rows = results.slice(0, limit);
+  const last = rows.at(-1);
+  return { rows, nextCursor: hasMore ? encodeCursor(last.owned_purchased_at, last.template_id) : null };
 }
 
 // #1057: PUT below had no rate limit at all, unlike every comparable
@@ -289,15 +313,10 @@ export async function handleMyNotificationPreferences(request, db) {
 export async function handleMyOwnedAnimations(request, db) {
   const user = await requireCurrentUser(request, db);
   const builder = await getOrCreateBuilderForUser(db, user);
-  const { results } = await db.prepare(`
-    SELECT catalog_templates.*, owned_animations.purchased_at AS owned_purchased_at
-    FROM owned_animations
-    JOIN catalog_templates ON catalog_templates.template_id = owned_animations.template_id
-    WHERE owned_animations.builder_id = ?
-    ORDER BY owned_animations.purchased_at DESC
-  `).bind(builder.builder_id).all();
+  const { rows, nextCursor } = await listOwnedTemplates(db, request, 'owned_animations', builder.builder_id);
   return json({
-    animations: results.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
+    animations: rows.map((row) => ({ ...templateFromRow(row), purchasedAt: row.owned_purchased_at })),
+    nextCursor,
   });
 }
 

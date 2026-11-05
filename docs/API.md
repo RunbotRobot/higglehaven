@@ -501,7 +501,11 @@ cadence rather than this file's usual one-shot-mutation ~20.
 of a verification result — unauthenticated (no session cookie to check),
 verified instead via an HMAC-SHA256 signature over the raw request body
 (`x-signature` header, keyed by `DIDIT_WEBHOOK_SECRET`), `401` on a
-missing or wrong signature. `503` if `DIDIT_WEBHOOK_SECRET` isn't
+missing or wrong signature. `401` too when the body's own signed `timestamp`
+(Unix seconds) is more than 5 minutes from now, the same replay window the
+Stripe and Tripo webhooks use (Didit's `X-Timestamp` header is not covered by
+its signatures, so it is not trusted); a body with no numeric `timestamp` is
+processed as before. `503` if `DIDIT_WEBHOOK_SECRET` isn't
 configured. Idempotent against a repeat delivery for the same session —
 only the first delivery (webhook or a status poll, whichever gets there
 first) applies the resulting `trustTier` change.
@@ -1761,7 +1765,28 @@ that our own forms never collect and Stripe must, such as
 (ID documents); it is empty when everything due is a field our forms
 already send. The platform never collects those itself, not even in
 transit, so a non-empty list means the person needs Stripe's own
-onboarding step (the hand-off is a separate change).
+onboarding step (see `POST .../stripe-onboarding-link` below).
+
+`GET .../stripe-account?refresh=1` (#2928, "resume") re-reads the account
+from Stripe first and stores the fresh status and requirements before
+answering, rate-limited with the other Stripe account calls. It is
+best-effort: if Stripe cannot be reached the stored status is returned
+unchanged rather than an error. The client sends it once after Stripe sends
+the person back (the `?stripe=return` marker on the return URL).
+
+### `POST /api/sellers/me/stripe-onboarding-link` (and `/api/builders/me/...`)
+
+#2928, "hand off". Returns `{ "url": "https://connect.stripe.com/...",
+"expiresAt": null | "..." }`, a single-use Stripe-hosted onboarding link
+(Accounts v2 Account Link, `use_case.account_onboarding`, collecting
+`currently_due`) for whatever Stripe needs that our own forms never collect.
+Stored requirements are refreshed from Stripe first. `409` when no payout
+account exists yet ("Set up your payout account first.") or when Stripe
+needs nothing more that we cannot collect; `503` when Stripe is not
+configured. The return URL is `/?stripe=return&role=seller|builder` and the
+refresh URL (expired or already-used link) is `/?stripe=refresh&role=...`.
+The `configurations` Account Link parameter is deliberately not sent: Stripe
+removed it in API version `2026-09-30.endive` and errors on it from then on.
 
 `configured` is `false` whenever this server has no `STRIPE_SECRET_KEY`
 Worker secret set (e.g. local dev, the automated test suite) — same
@@ -5150,7 +5175,7 @@ verification.
 ```
 
 Messages are stored against the two **accounts** (`direct_messages.sender_user_id`
-/ `recipient_user_id`, migrations/0190, #3146), not the builder profiles, so a
+/ `recipient_user_id`, migrations/0191, #3146), not the builder profiles, so a
 thread and its unread counts survive either person resetting their builder
 profile. `senderUserId`/`recipientUserId` are the stable ids.
 `senderBuilderId`/`recipientBuilderId` stay in the shape because the friends
@@ -9276,6 +9301,12 @@ notice (see its own comment on why):
   threshold's own second leg (200 transactions) and any lower state
   thresholds are **not** modeled yet — a known gap, not a silent
   miscalculation, flagged in #645's own GitHub issue.
+  The payee is the account: each purchase records its seller's `user_id`
+  (`purchases.seller_user_id`, #835) when it is written, so income still
+  counts after the seller deletes their profile and re-creates one. Sales
+  made before that column existed are matched through the seller row
+  while it exists; any whose seller was already deleted then cannot be
+  recovered.
 - **`1099-nec`**: a builder profile's own `builderHigglesCents` crossing
   `$600` for the year — 1099-NEC's standard nonemployee-compensation
   threshold, much lower than 1099-K's and a genuinely different number
@@ -11890,8 +11921,13 @@ owns (i.e. has an `owned_avatars` row for), newest-purchase first. Each
 entry is the same full template shape `GET /api/catalog` already returns
 (`templateId`, `name`, `dimensions`, `modelUrl`, ...), plus `purchasedAt`.
 
+Cursor-paginated like the other list endpoints (#1132): `?limit=` (1–100,
+default 100) and `?cursor=` (the previous response's `nextCursor`;
+`nextCursor` is `null` on the last page). The My Avatars settings list
+shows a "Load more" button while `nextCursor` is set.
+
 ```json
-{ "avatars": [{ "templateId": "avatar-...", "modelUrl": "/uploads/avatar-....glb", "purchasedAt": "2026-09-12T00:00:00.000Z", "...": "..." }] }
+{ "avatars": [{ "templateId": "avatar-...", "modelUrl": "/uploads/avatar-....glb", "purchasedAt": "2026-09-12T00:00:00.000Z", "...": "..." }], "nextCursor": null }
 ```
 
 ### `GET /api/builders/me/avatar`
@@ -12104,10 +12140,11 @@ Animations" settings panel (applying).
 `GET /api/builders/me/animations` lists every `owned_animations` row
 for the session builder, mirroring `GET /api/builders/me/avatars`
 exactly (same shape: each entry is the full template, plus
-`purchasedAt`).
+`purchasedAt`), including the same `?limit=`/`?cursor=`/`nextCursor`
+pagination (#1303).
 
 ```json
-{ "animations": [{ "templateId": "animation-...", "modelUrl": "/uploads/animation-....glb", "skeletonSignature": "ab12...", "purchasedAt": "2026-10-02T00:00:00.000Z", "...": "..." }] }
+{ "animations": [{ "templateId": "animation-...", "modelUrl": "/uploads/animation-....glb", "skeletonSignature": "ab12...", "purchasedAt": "2026-10-02T00:00:00.000Z", "...": "..." }], "nextCursor": null }
 ```
 
 ### `GET /api/builders/me/animation`
