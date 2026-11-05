@@ -32,6 +32,7 @@ import {
   leaveFriendVoiceChannel as apiLeaveFriendVoiceChannel,
 } from '../api.js';
 import { shopOtherAvatars } from './presenceAndContent.js';
+import { createPersistentMuteSet } from './mutePersistence.js';
 import { shopAvatarPosition } from '../main.js';
 
 // docs/SPEC.md §2: "100 feet (~30m) of complete silence as the outer
@@ -137,12 +138,14 @@ let voicePollToken = 0;
 // anonymous identifier into the UI for no benefit.
 let voicePeerSeq = 0;
 // builderId -> locally muted (#2819's per-shopper mute) -- purely
-// client-side, never reaches the server, and scoped to one connection's
-// own lifetime (cleared in teardownPeer): reconnecting to the same
-// builder after they leave and come back starts unmuted again, same as a
-// fresh RTCPeerConnection would. Applies uniformly to a proximity peer or
-// a friend-channel peer (#2781) alike -- see desiredGainFor below.
-const mutedPeers = new Set();
+// client-side, never reaches the server. #3128: no longer scoped to one
+// connection's own lifetime: walking out of range and back, a dropped
+// connection or a reload used to silently un-mute a harasser. It is now kept
+// per signed-in account in localStorage (src/shop/mutePersistence.js), and a
+// persisted muted peer shows as muted again the moment it reconnects.
+// Applies uniformly to a proximity peer or a friend-channel peer (#2781)
+// alike -- see desiredGainFor below.
+const mutedPeers = createPersistentMuteSet('voice', () => currentAuthUser?.userId ?? null);
 // #2781: last-known result of GET /voice/friend-channels, refreshed by
 // reconcileFriendVoiceChannels below -- src/account/menu.js's friends
 // panel reads this (via getActiveFriendVoiceChannels) to render current
@@ -494,7 +497,7 @@ function teardownPeer(builderId) {
   entry.gainNode?.disconnect();
   entry.pc.close();
   peers.delete(builderId);
-  mutedPeers.delete(builderId); // #2819: mute is scoped to this connection's own lifetime
+  // #3128: the mute deliberately outlives this connection (see mutedPeers above).
   refreshVoicePeersDiagnostic();
   renderVoicePeersList();
 }

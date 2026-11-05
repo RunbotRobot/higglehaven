@@ -14,6 +14,7 @@
 // routing through main.js/mode.js the way the older shop/*.js leaves do.
 import { currentAuthUser } from '../account/auth.js';
 import { fetchNearbyChatMessages, sendNearbyChatMessage, sendNearbyChatReport } from '../api.js';
+import { createPersistentMuteSet } from './mutePersistence.js';
 
 const NEARBY_CHAT_POLL_INTERVAL_MS = 2000;
 
@@ -23,6 +24,9 @@ const chatLogEl = document.getElementById('shop-nearby-chat-log');
 const chatStatusEl = document.getElementById('shop-nearby-chat-status');
 const chatFormEl = document.getElementById('shop-nearby-chat-form');
 const chatInputEl = document.getElementById('shop-nearby-chat-input');
+const mutedWrapEl = document.getElementById('shop-nearby-chat-muted');
+const mutedToggleEl = document.getElementById('shop-nearby-chat-muted-toggle');
+const mutedListEl = document.getElementById('shop-nearby-chat-muted-list');
 
 let chatOpen = false;
 let chatLastPollAt = 0;
@@ -38,16 +42,14 @@ let chatLastKnownLandletId;
 let chatPollToken = 0;
 const seenMessageIds = new Set();
 const ownMessageIds = new Set();
-// #2956: parity with proximity voice chat's own mutedPeers (voiceChat.js)
-// -- a sender muted this way is scoped to this page session only (reset on
-// reload, never sent to the server), same "mute is scoped to this
-// connection's own lifetime" precedent #2819 established. Unlike voice's
-// persistent peer-list row, a muted sender's messages here are fully
-// removed from the flat chat log (not just silenced) and never re-rendered
-// -- there's no "unmute" affordance, since there's no row left to show one
-// on once the messages are gone; muting is a one-way "stop showing me this
-// person" action for the rest of this session.
-const mutedBuilderIds = new Set();
+// #2956: parity with proximity voice chat's own mutedPeers (voiceChat.js).
+// A muted sender's messages are fully removed from the flat chat log (not
+// just silenced). #3128: the mute is kept per signed-in account in
+// localStorage (src/shop/mutePersistence.js) so a reload no longer brings the
+// sender back, and a "Muted (N)" list in the panel offers Unmute -- messages
+// carry no sender name (this chat is deliberately unlabeled), so the list
+// numbers the muted senders instead. Never sent to the server.
+const mutedBuilderIds = createPersistentMuteSet('nearby-chat', () => currentAuthUser?.userId ?? null);
 
 // #1637's own DM gate requires trust_tier === 'id_verified' specifically --
 // docs/SPEC.md §6: "Full social features (voice, messaging, direct
@@ -109,6 +111,61 @@ async function reportNearbyChatSender(builderId) {
   }
 }
 
+// #3128: the "Muted (N)" control. Hidden entirely while nothing is muted.
+// Called on every poll, so it only touches the DOM when the set changed (a
+// redraw mid-click would swap the Unmute button out from under the pointer).
+let renderedMutedSignature = '';
+function renderMutedList() {
+  if (!mutedWrapEl) return;
+  const ids = mutedBuilderIds.values();
+  const signature = ids.join('|');
+  if (signature === renderedMutedSignature) return;
+  renderedMutedSignature = signature;
+  mutedWrapEl.hidden = ids.length === 0;
+  if (ids.length === 0) {
+    mutedListEl.hidden = true;
+    mutedToggleEl.setAttribute('aria-expanded', 'false');
+    return;
+  }
+  mutedToggleEl.textContent = `Muted (${ids.length})`;
+  mutedListEl.replaceChildren(...ids.map((builderId, index) => {
+    const row = document.createElement('div');
+    row.className = 'shop-nearby-chat-muted-row';
+    row.dataset.builderId = builderId;
+    const label = document.createElement('span');
+    label.textContent = `Muted sender ${index + 1}`;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.action = 'unmute';
+    button.textContent = 'Unmute';
+    row.append(label, button);
+    return row;
+  }));
+}
+
+// Messages from a sender muted earlier were skipped (but marked seen), so
+// after an unmute the log is rebuilt from the server's recent history.
+function resetChatLog() {
+  chatCursor = null;
+  seenMessageIds.clear();
+  chatLogEl.replaceChildren();
+}
+
+if (mutedToggleEl) {
+  mutedToggleEl.addEventListener('click', () => {
+    mutedListEl.hidden = !mutedListEl.hidden;
+    mutedToggleEl.setAttribute('aria-expanded', String(!mutedListEl.hidden));
+  });
+  mutedListEl.addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-action="unmute"]');
+    const row = event.target.closest('[data-builder-id]');
+    if (!button || !row) return;
+    mutedBuilderIds.delete(row.dataset.builderId);
+    renderMutedList();
+    resetChatLog();
+  });
+}
+
 if (chatLogEl) {
   chatLogEl.addEventListener('click', (event) => {
     const button = event.target.closest('button[data-action]');
@@ -118,6 +175,7 @@ if (chatLogEl) {
     if (button.dataset.action === 'mute') {
       mutedBuilderIds.add(builderId);
       removeMessagesFromBuilder(builderId);
+      renderMutedList();
     } else if (button.dataset.action === 'report') {
       reportNearbyChatSender(builderId);
     }
@@ -194,5 +252,8 @@ export function pollNearbyChatIfNeeded(now) {
     }
     if (result.nextCursor) chatCursor = result.nextCursor;
     result.messages.forEach(appendMessage);
+    // #3128: the signed-in account isn't known at module load, so the persisted
+    // list is (re)drawn here, once a poll proves the account is live.
+    renderMutedList();
   }).catch(() => {});
 }
