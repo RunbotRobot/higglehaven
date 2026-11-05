@@ -972,8 +972,14 @@ export async function handleSignPosts(request, db, route) {
   if (request.method === 'GET' && route.length === 3) {
     const instance = await db.prepare('SELECT instance_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
+    // #3142 (one alias per person): show the author's CURRENT username where
+    // their account still exists, falling back to the name snapshotted at
+    // posting time (a deleted account's posts keep the name they were made
+    // under -- never lose it). See signPostFromRow.
     const { results } = await db.prepare(`
-      SELECT * FROM sign_posts WHERE instance_id = ? ORDER BY created_at DESC LIMIT 200
+      SELECT s.*, u.username AS current_author_label FROM sign_posts s
+      LEFT JOIN users u ON u.user_id = s.user_id
+      WHERE s.instance_id = ? ORDER BY s.created_at DESC LIMIT 200
     `).bind(instanceId).all();
     // #356: this was ORDER BY created_at with no DESC — ascending, so once
     // a sign passed 200 posts, the LIMIT window was always the *oldest*
@@ -1186,7 +1192,9 @@ export function signPostFromRow(row) {
   return {
     postId: row.post_id,
     instanceId: row.instance_id,
-    authorLabel: row.author_label,
+    // #3142: the author's current username when the query resolved it
+    // (current_author_label), else the name as it was when this was posted.
+    authorLabel: row.current_author_label ?? row.author_label,
     text: row.text,
     userId: row.user_id,
     createdAt: row.created_at,
@@ -1253,8 +1261,12 @@ export async function handleCalendarEvents(request, db, route) {
   if (request.method === 'GET' && route.length === 3) {
     const instance = await db.prepare('SELECT instance_id FROM placed_instances WHERE instance_id = ?').bind(instanceId).first();
     if (!instance) return json({ error: 'Instance not found' }, 404);
+    // #3142: current username where the account still exists, else the
+    // posting-time snapshot (see calendarEventFromRow).
     const { results } = await db.prepare(`
-      SELECT * FROM calendar_events WHERE instance_id = ? ORDER BY created_at DESC LIMIT 200
+      SELECT e.*, u.username AS current_author_label FROM calendar_events e
+      LEFT JOIN users u ON u.user_id = e.user_id
+      WHERE e.instance_id = ? ORDER BY e.created_at DESC LIMIT 200
     `).bind(instanceId).all();
     // #356: same ascending-window/no-count gap as handleSignPosts above,
     // fixed the same way — DESC for the right LIMIT window, .reverse() to
@@ -1501,7 +1513,9 @@ export function calendarEventFromRow(row) {
   return {
     eventId: row.event_id,
     instanceId: row.instance_id,
-    authorLabel: row.author_label,
+    // #3142: the author's current username when the query resolved it
+    // (current_author_label), else the name as it was when this was posted.
+    authorLabel: row.current_author_label ?? row.author_label,
     text: row.text,
     scheduledAt: row.scheduled_at,
     triggeredAt: row.triggered_at,
