@@ -63,7 +63,7 @@ import {
   fetchLandlets, fetchLandlet, fetchLandletLevels, addLandletLevel, deleteLandletLevel,
   groupInstancesRemote, ungroupInstancesRemote,
   fetchMyBuilder, renameBuilder, deleteBuilder,
-  fetchBuilderRedeemStatus, submitBuilderStripeAccount, redeemHiggles,
+  fetchBuilderRedeemStatus, submitBuilderStripeAccount, redeemHiggles, refreshBuilderStripeAccount,
   fetchAllLandlets, startAuction, fetchAuctions, fetchAllAuctions, fetchAuction,
   fetchAuctionBids, fetchBuildersByIds, placeBid, resolveAuctionNow,
   fetchLowStock, fetchSoldOutMarkers, dismissSoldOutMarker,
@@ -96,6 +96,7 @@ import {
   START_MODE_KEY, PREVIEW_SAVED_LAYOUT_ID_KEY,
 } from '../main.js';
 import { addItemBtn, closeCatalogPicker } from '../catalog/picker.js';
+import { consumeStripeReturnMarker, ownRequirementsDue, syncStripeStepPrompt } from '../stripeStep.js';
 import {
   settingsSectionEl, settingsRenderToken, renderSettingsSection, renderIdentityField,
 } from '../settings/modal.js';
@@ -4216,6 +4217,9 @@ async function renderRedeemHigglesField() {
 
   let redeemStatus;
   try {
+    // #2928: back from Stripe's own onboarding step, re-read Stripe's view
+    // first (best-effort) so the status below reflects it.
+    if (consumeStripeReturnMarker()) await refreshBuilderStripeAccount().catch(() => {});
     redeemStatus = await fetchBuilderRedeemStatus();
   } catch (err) {
     statusNote.textContent = err.message || 'Could not load your redemption status.';
@@ -4233,7 +4237,12 @@ async function renderRedeemHigglesField() {
     }
     if (redeemStatus.status === 'complete') return 'Your payout account is fully set up.';
     if (redeemStatus.status === 'requirements_due') {
-      return `Stripe needs more information: ${redeemStatus.requirementsCurrentlyDue.join(', ')}`;
+      const own = ownRequirementsDue(redeemStatus);
+      // Anything only Stripe collects is covered by the "Continue with
+      // Stripe" step, not listed here.
+      return own.length > 0
+        ? `Stripe needs more information: ${own.join(', ')}`
+        : 'Your account needs one more step with Stripe.';
     }
     if (redeemStatus.status === 'action_needed') return 'Stripe flagged an issue with this account — resubmit below.';
     if (redeemStatus.connected) return 'Your account was created — verification is pending.';
@@ -4248,6 +4257,7 @@ async function renderRedeemHigglesField() {
       : '';
     statusNote.textContent = `Available to redeem: ${formatHiggles(redeemStatus.availableCents)} — ${describeAccountStatus()}${pendingNote}`;
     statusNote.classList.remove('error');
+    syncStripeStepPrompt(statusField, 'builder', redeemStatus);
   }
   refreshStatusNote();
 
