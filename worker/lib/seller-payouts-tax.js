@@ -1026,11 +1026,13 @@ async function generateTax1099Drafts(db, year) {
     // gross_income_cents must reflect the refund-aware total, not the
     // stale pre-refund one.
     db.prepare(`
-      SELECT s.user_id AS user_id, SUM(p.total_cents - p.refunded_amount_cents) AS total
-      FROM purchases p JOIN sellers s ON s.seller_id = p.seller_id
-      WHERE s.user_id IS NOT NULL AND p.payment_intent_id IS NOT NULL AND p.refunded_at IS NULL
+      -- #835: p.seller_user_id survives the seller row being deleted; the
+      -- sellers join only covers rows written before that column existed.
+      SELECT COALESCE(p.seller_user_id, s.user_id) AS user_id, SUM(p.total_cents - p.refunded_amount_cents) AS total
+      FROM purchases p LEFT JOIN sellers s ON s.seller_id = p.seller_id
+      WHERE COALESCE(p.seller_user_id, s.user_id) IS NOT NULL AND p.payment_intent_id IS NOT NULL AND p.refunded_at IS NULL
         AND p.created_at >= ? AND p.created_at < ?
-      GROUP BY s.user_id HAVING total >= ?
+      GROUP BY COALESCE(p.seller_user_id, s.user_id) HAVING total >= ?
     `).bind(yearStart, yearEnd, TAX_REPORTING_THRESHOLD_CENTS).all(),
   ]);
 
@@ -1079,11 +1081,11 @@ async function pruneStaleTax1099Drafts(db, year, yearStart, yearEnd) {
     db.prepare(`
       SELECT f.form_id FROM tax_1099_forms f
       LEFT JOIN (
-        SELECT s.user_id AS user_id, SUM(p.total_cents - p.refunded_amount_cents) AS total
-        FROM purchases p JOIN sellers s ON s.seller_id = p.seller_id
-        WHERE s.user_id IS NOT NULL AND p.payment_intent_id IS NOT NULL AND p.refunded_at IS NULL
+        SELECT COALESCE(p.seller_user_id, s.user_id) AS user_id, SUM(p.total_cents - p.refunded_amount_cents) AS total
+        FROM purchases p LEFT JOIN sellers s ON s.seller_id = p.seller_id
+        WHERE COALESCE(p.seller_user_id, s.user_id) IS NOT NULL AND p.payment_intent_id IS NOT NULL AND p.refunded_at IS NULL
           AND p.created_at >= ? AND p.created_at < ?
-        GROUP BY s.user_id
+        GROUP BY COALESCE(p.seller_user_id, s.user_id)
       ) live ON live.user_id = f.user_id
       WHERE f.tax_year = ? AND f.form_type = '1099-k' AND f.status = 'draft'
         AND COALESCE(live.total, 0) < ?

@@ -9256,6 +9256,12 @@ notice (see its own comment on why):
   threshold's own second leg (200 transactions) and any lower state
   thresholds are **not** modeled yet — a known gap, not a silent
   miscalculation, flagged in #645's own GitHub issue.
+  The payee is the account: each purchase records its seller's `user_id`
+  (`purchases.seller_user_id`, #835) when it is written, so income still
+  counts after the seller deletes their profile and re-creates one. Sales
+  made before that column existed are matched through the seller row
+  while it exists; any whose seller was already deleted then cannot be
+  recovered.
 - **`1099-nec`**: a builder profile's own `builderHigglesCents` crossing
   `$600` for the year — 1099-NEC's standard nonemployee-compensation
   threshold, much lower than 1099-K's and a genuinely different number
