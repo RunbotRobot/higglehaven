@@ -5462,6 +5462,12 @@ they themselves own:
 `429` after 600 requests per 15 minutes from the same calling builder
 (same budget as the signaling relay's own poll).
 
+This poll is also the member's liveness signal (#3120): it refreshes the
+caller's `last_seen_at` about once a minute, and the cron removes any member
+not seen for 5 minutes (a closed tab never sends a leave). When every row
+of a channel has expired, the next join re-opens it and notifies the owner
+again.
+
 ### `POST /api/voice/friend-channels/:ownerBuilderId/join`
 
 No body. Joining your own channel (`ownerBuilderId` is the caller's own
