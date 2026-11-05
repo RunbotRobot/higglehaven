@@ -2546,6 +2546,17 @@ The response includes `nextCursor`, which is `null` after the final page. Keep
 the same filters and `sort` mode while following a cursor; cursors are specific
 to their sort mode.
 
+The first page (no `cursor`) also includes `totalCount`, how many templates
+matched the filters at that moment (#1757). The keyset cursor sorts on `name`
+(or `priceCents`), which a template's own seller can edit between two page
+requests, so a row renamed from after the cursor to before it can be skipped
+by that one fetch. `fetchCatalog` in `src/api.js` compares what it collected
+against `totalCount` and, when short, re-runs the pass (at most three passes,
+merging by `templateId`), so the gap is filled without any change to the sort
+or the UI. Any other caller paging this endpoint should do the same; a
+residual miss is possible only if the catalog keeps changing across all
+passes, and the next load picks it up.
+
 A row with `isTestModel: true` (#1946) is listed here exactly like any
 other row — this endpoint does not filter by it. An earlier version of
 this endpoint hid those rows from a non-admin caller, but that broke
