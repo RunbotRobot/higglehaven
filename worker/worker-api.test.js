@@ -5301,6 +5301,77 @@ describe('Top-level fetch() routing (#1232)', () => {
     }
   });
 
+  // #1360: Content-Security-Policy ships report-only first (owner decision on
+  // the issue). It must be the report-only header, never the enforcing one,
+  // and only on documents.
+  it('sends a report-only Content-Security-Policy on HTML responses, never the enforcing header, and none on JSON', async () => {
+    const page = await SELF.fetch('https://higglehaven.test/admin/control-room');
+    expect(page.headers.get('content-type')).toMatch(/text\/html/);
+    const policy = page.headers.get('content-security-policy-report-only');
+    expect(policy).toContain("default-src 'self'");
+    expect(policy).toContain('https://js.stripe.com');
+    expect(policy).toContain("frame-ancestors 'none'");
+    expect(policy).toContain('report-uri /api/csp-report');
+    expect(page.headers.get('content-security-policy')).toBeNull();
+
+    const api = await SELF.fetch('https://higglehaven.test/api/health');
+    expect(api.headers.get('content-security-policy-report-only')).toBeNull();
+    expect(api.headers.get('content-security-policy')).toBeNull();
+  });
+
+  it('accepts a CSP violation report with a 204, logs one trimmed line, and ignores garbage', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const report = JSON.stringify({ 'csp-report': {
+        'effective-directive': 'img-src', 'blocked-uri': `https://evil.example/${'x'.repeat(500)}`,
+        'document-uri': 'https://higglehaven.test/', 'line-number': 7,
+      } });
+      const ok = await SELF.fetch('https://higglehaven.test/api/csp-report', {
+        method: 'POST', headers: { 'content-type': 'application/csp-report' }, body: report,
+      });
+      expect(ok.status).toBe(204);
+      const garbage = await SELF.fetch('https://higglehaven.test/api/csp-report', { method: 'POST', body: 'not json' });
+      expect(garbage.status).toBe(204);
+      const empty = await SELF.fetch('https://higglehaven.test/api/csp-report', { method: 'POST' });
+      expect(empty.status).toBe(204);
+      // Only the valid report produced a log line, and its long field was trimmed.
+      expect(warn).toHaveBeenCalledTimes(1);
+      const [label, line] = warn.mock.calls[0];
+      expect(label).toBe('csp-report');
+      const logged = JSON.parse(line);
+      expect(logged.directive).toBe('img-src');
+      expect(logged.blocked.length).toBe(200);
+      expect(logged.line).toBe(7);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('logs at most one CSP report budget per minute per isolate, and nothing for an oversized or malformed body', async () => {
+    const { handleCspReport } = await import('./lib/csp.js');
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const mk = (body, headers = {}) => new Request('https://higglehaven.test/api/csp-report', { method: 'POST', body, headers });
+      const valid = JSON.stringify({ 'csp-report': { 'effective-directive': 'script-src', 'blocked-uri': 'https://evil.example/a.js' } });
+      const t0 = 10_000_000_000_000;
+      for (let i = 0; i < 150; i += 1) {
+        expect((await handleCspReport(mk(valid), t0)).status).toBe(204);
+      }
+      expect(warn).toHaveBeenCalledTimes(100);
+      warn.mockClear();
+      // A fresh minute resets the budget.
+      await handleCspReport(mk(valid), t0 + 61_000);
+      expect(warn).toHaveBeenCalledTimes(1);
+      warn.mockClear();
+      // Oversized (declared) and malformed bodies are acknowledged, not logged.
+      expect((await handleCspReport(mk(valid, { 'content-length': String(1024 * 1024) }), t0 + 200_000)).status).toBe(204);
+      expect((await handleCspReport(mk('{"csp-report": 5}'), t0 + 200_000)).status).toBe(204);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   // #1546: same malformed-percent-escape risk handleUploadedAsset's own
   // /uploads/%E0%A4%A test (above) already covers — routePath's decode
   // step used to throw an uncaught URIError here, falling through to a

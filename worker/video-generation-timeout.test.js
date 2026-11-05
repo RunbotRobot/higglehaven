@@ -49,6 +49,27 @@ describe('expireStaleVideoGenerationJobs (#1619)', () => {
     expect(freshRow.processed_at).toBeNull();
   });
 
+  // #2970: a timeout is the provider's silence, so the credit comes back --
+  // once, however often the sweep runs.
+  it('returns the credit of a timed-out job exactly once and tells the builder', async () => {
+    const builder = await signupBuilder('video-timeout-refund');
+    await env.DB.prepare('UPDATE builders SET video_generation_credits = 3 WHERE builder_id = ?').bind(builder.builderId).run();
+    const jobId = await seedJob(builder.builderId, { status: 'processing', ageMs: 20 * 60 * 1000 });
+
+    await expireStaleVideoGenerationJobs(env.DB);
+    await expireStaleVideoGenerationJobs(env.DB);
+
+    const credits = await env.DB.prepare('SELECT video_generation_credits AS c FROM builders WHERE builder_id = ?').bind(builder.builderId).first();
+    expect(credits.c).toBe(4);
+    const row = await env.DB.prepare('SELECT status, error_message FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
+    expect(row.status).toBe('failed');
+    expect(row.error_message).toMatch(/credit has been returned/);
+    const notices = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM notifications WHERE builder_id = ? AND message LIKE '%credit has been returned%'",
+    ).bind(builder.builderId).first();
+    expect(notices.n).toBe(1);
+  });
+
   it('never touches a job already resolved, or one still pending (not yet processing), regardless of age', async () => {
     const alreadyComplete = await signupBuilder('video-timeout-complete');
     const stillPending = await signupBuilder('video-timeout-pending');

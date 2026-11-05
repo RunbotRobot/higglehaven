@@ -26,6 +26,7 @@
 // sides can call addTrack/addTransceiver independently and let
 // onnegotiationneeded sort it out.
 import { currentAuthUser } from '../account/auth.js';
+import { confirmAndBlockPerson } from '../blocks.js';
 import {
   fetchMyBuilder, sendVoiceSignal, fetchVoiceSignals, fetchVoiceIceConfig, sendVoiceReport,
   fetchFriendVoiceChannels, joinFriendVoiceChannel as apiJoinFriendVoiceChannel,
@@ -522,6 +523,7 @@ function renderVoicePeersList() {
       + `<span class="shop-voice-peer-label">Nearby voice ${entry.displaySeq}</span>`
       + `<button type="button" data-action="mute" class="${muted ? 'shop-voice-peer-muted' : ''}">${muted ? 'Unmute' : 'Mute'}</button>`
       + '<button type="button" data-action="report">Report</button>'
+      + '<button type="button" data-action="block">Block</button>'
       + '</div>';
   }).join('');
 }
@@ -539,6 +541,8 @@ if (voicePeersListEl) {
       refreshVoicePeersDiagnostic(); // keeps window.__shopVoicePeers' own muted field current
     } else if (button.dataset.action === 'report') {
       reportVoicePeer(builderId);
+    } else if (button.dataset.action === 'block') {
+      confirmAndBlockPerson(builderId); // #3140; taking effect on voice is #3143
     }
   });
 }

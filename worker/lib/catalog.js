@@ -1749,7 +1749,26 @@ export async function handleCatalog(request, db, route, url, models, env) {
     // above) permanently block updates on a template whose seller has
     // since deleted their account, contradicting docs/API.md's "same as
     // null seller_id" promise for that case.
-    const template = validateTemplate({ ...templateFromRow(existing), ...input, templateId: route[1], sellerId: existing.seller_id }, route[1]);
+    // #1753: modelUrl, modelSizeBytes and skeletonSignature describe one file
+    // and travel together everywhere else (Save Size, Duplicate). A PATCH that
+    // moves modelUrl alone would leave the size and rig signature describing
+    // the OLD model -- skewing showcase pagination and letting the animation
+    // compatibility badge vouch for a pairing that may no longer match. So a
+    // modelUrl change must bring its own modelSizeBytes (a 400 otherwise), and
+    // an omitted skeletonSignature is cleared rather than kept stale (the
+    // Save Size rescale never re-sends it).
+    const modelUrlChanged = input.modelUrl !== undefined && input.modelUrl !== existing.model_url;
+    if (modelUrlChanged && input.modelSizeBytes === undefined) {
+      throw new HttpError('modelSizeBytes is required when modelUrl changes', 400);
+    }
+    const clearSkeletonSignature = modelUrlChanged && input.skeletonSignature === undefined;
+    const template = validateTemplate({
+      ...templateFromRow(existing),
+      ...input,
+      ...(clearSkeletonSignature ? { skeletonSignature: null } : {}),
+      templateId: route[1],
+      sellerId: existing.seller_id,
+    }, route[1]);
     await assertUploadedModelExists(models, template.modelUrl);
     // #1742: same lost-update race #468 already fixed for bundles -- two
     // concurrent partial PATCHes to *different* fields (a price change and
@@ -1811,7 +1830,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
       template.sellerId,
       input.modelUrl === undefined ? 0 : 1, template.modelUrl,
       input.modelSizeBytes === undefined ? 0 : 1, template.modelSizeBytes,
-      input.skeletonSignature === undefined ? 0 : 1, template.skeletonSignature,
+      input.skeletonSignature === undefined && !clearSkeletonSignature ? 0 : 1, template.skeletonSignature,
       input.metadata === undefined ? 0 : 1, JSON.stringify(template.metadata),
       input.stockQuantity === undefined ? 0 : 1, template.stockQuantity,
       route[1],

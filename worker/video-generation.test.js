@@ -719,6 +719,130 @@ describe('video_generation_credits (#1993)', () => {
   });
 });
 
+// #2970 (owner decision 2026-11-05): a credit is returned when the failure is
+// the platform's or the provider's, and stays spent only for `banned`.
+describe('video_generation_credits refund on failure (#2970)', () => {
+  async function startJob(label) {
+    const builder = await signupBuilderWithCredits(label, 5);
+    const created = await postJobCreate(jobCreateForm(), { headers: { cookie: `hh_session=${builder.sessionToken}` } });
+    const { jobId } = await created.json();
+    expect(await videoGenerationCredits(builder.builderId)).toBe(4);
+    return { builder, jobId };
+  }
+
+  async function creditNoticeCount(builderId) {
+    const row = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM notifications WHERE builder_id = ? AND message LIKE '%credit has been returned%'",
+    ).bind(builderId).first();
+    return row.n;
+  }
+
+  for (const tripoStatus of ['failed', 'cancelled', 'expired']) {
+    it(`returns the credit exactly once when Tripo reports ${tripoStatus}, however often it is polled`, async () => {
+      const { builder, jobId } = await startJob(`video-refund-${tripoStatus}`);
+      nextTaskStatus = tripoStatus;
+      try {
+        const first = await api(`/video-generation-jobs/${jobId}`, builder.session());
+        expect(first.body.status).toBe('failed');
+        expect(first.body.error).toMatch(/credit has been returned/);
+        expect(await videoGenerationCredits(builder.builderId)).toBe(5);
+        await api(`/video-generation-jobs/${jobId}`, builder.session());
+        await api(`/video-generation-jobs/${jobId}`, builder.session());
+        expect(await videoGenerationCredits(builder.builderId)).toBe(5);
+        expect(await creditNoticeCount(builder.builderId)).toBe(1);
+      } finally {
+        nextTaskStatus = 'success';
+      }
+    });
+  }
+
+  it('keeps the credit spent, and sends no refund notice, when Tripo bans the input', async () => {
+    const { builder, jobId } = await startJob('video-refund-banned');
+    nextTaskStatus = 'banned';
+    try {
+      const result = await api(`/video-generation-jobs/${jobId}`, builder.session());
+      expect(result.body.status).toBe('failed');
+      expect(result.body.error).toMatch(/credit for this attempt was used/);
+      await api(`/video-generation-jobs/${jobId}`, builder.session());
+      expect(await videoGenerationCredits(builder.builderId)).toBe(4);
+      expect(await creditNoticeCount(builder.builderId)).toBe(0);
+    } finally {
+      nextTaskStatus = 'success';
+    }
+  });
+
+  it('returns the credit when Tripo reports success with no output file', async () => {
+    const { builder, jobId } = await startJob('video-refund-no-output');
+    nextTaskStatus = 'success-no-output';
+    try {
+      const result = await api(`/video-generation-jobs/${jobId}`, builder.session());
+      expect(result.body.status).toBe('failed');
+      await api(`/video-generation-jobs/${jobId}`, builder.session());
+      expect(await videoGenerationCredits(builder.builderId)).toBe(5);
+    } finally {
+      nextTaskStatus = 'success';
+    }
+  });
+
+  it('returns the credit once when a persistent store failure uses up its retries', async () => {
+    const { builder, jobId } = await startJob('video-refund-store-failure');
+    nextTaskStatus = 'success';
+    nextModelDownloadUrl = FLAKY_MODEL_DOWNLOAD_URL;
+    flakyDownloadFailuresRemaining = 1000;
+    try {
+      for (let attempt = 1; attempt <= 4; attempt++) {
+        await api(`/video-generation-jobs/${jobId}`, builder.session());
+        expect(await videoGenerationCredits(builder.builderId)).toBe(4); // still retrying: nothing returned yet
+      }
+      const last = await api(`/video-generation-jobs/${jobId}`, builder.session());
+      expect(last.body.status).toBe('failed');
+      expect(last.body.error).toMatch(/credit has been returned/);
+      expect(await videoGenerationCredits(builder.builderId)).toBe(5);
+      await api(`/video-generation-jobs/${jobId}`, builder.session());
+      expect(await videoGenerationCredits(builder.builderId)).toBe(5);
+      expect(await creditNoticeCount(builder.builderId)).toBe(1);
+    } finally {
+      nextModelDownloadUrl = FAKE_MODEL_DOWNLOAD_URL;
+      flakyDownloadFailuresRemaining = 0;
+    }
+  });
+
+  it('returns the credit once when a poll and a webhook race to the same failure', async () => {
+    const { builder, jobId } = await startJob('video-refund-race');
+    const row = await env.DB.prepare('SELECT provider_task_id FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
+    nextTaskStatus = 'failed';
+    try {
+      await Promise.all([
+        api(`/video-generation-jobs/${jobId}`, builder.session()),
+        postWebhook({ type: 'task.failed', data: { task_id: row.provider_task_id, status: 'failed' } }),
+        api(`/video-generation-jobs/${jobId}`, builder.session()),
+        postWebhook({ type: 'task.failed', data: { task_id: row.provider_task_id, status: 'failed' } }),
+      ]);
+      expect(await videoGenerationCredits(builder.builderId)).toBe(5);
+      expect(await creditNoticeCount(builder.builderId)).toBe(1);
+    } finally {
+      nextTaskStatus = 'success';
+    }
+  });
+
+  it('does not let a late success complete a job whose credit was already returned', async () => {
+    const { builder, jobId } = await startJob('video-refund-late-success');
+    nextTaskStatus = 'failed';
+    try {
+      await api(`/video-generation-jobs/${jobId}`, builder.session());
+    } finally {
+      nextTaskStatus = 'success';
+    }
+    expect(await videoGenerationCredits(builder.builderId)).toBe(5);
+    const late = await api(`/video-generation-jobs/${jobId}`, builder.session());
+    expect(late.body.status).toBe('failed');
+    const row = await env.DB.prepare('SELECT status, model_url FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
+    expect(row.status).toBe('failed');
+    expect(row.model_url).toBeNull();
+    expect(await videoGenerationCredits(builder.builderId)).toBe(5);
+  });
+});
+
 describe('reserveVideoGenerationJob (#1619)', () => {
   it('reserves a pending row for the first caller', async () => {
     const builder = await signupBuilderWithCredits('video-gen-reserve-first');

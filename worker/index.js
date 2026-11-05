@@ -45,6 +45,7 @@ import {
   handleAdminBootstrap, handleGrantAdmin, handleRevokeAdmin, handleListAdmins, handleSuspendAccount,
   handleUnsuspendAccount, handleSuspensionStatus, handleAdminUserSearch, handleAdminUserDetail,
   prepareSellerPermanentClosure, recordSellerClosure, removeClosedSellerPlacedInstances,
+  SUSPENSION_SPARES_LAST_ADMIN_SQL,
 } from './lib/account-moderation.js';
 // #1407 (sub-issue of #1404): the AI-made Stripe-reinstatement decision
 // flow -- see that module's own header comment for the full rubric and the
@@ -150,10 +151,12 @@ import {
   handleNotifications, notificationFromRow, handlePresence, handleFriendships, friendshipFromRow,
   handleDirectMessages, directMessageFromRow, handleNearbyChat, handleVoiceSignal,
 } from './lib/social.js';
+import { handleBlocks } from './lib/blocks.js';
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
 import { handleLandlets } from './lib/land.js';
+import { CSP_REPORT_ONLY_POLICY, isHtmlResponse, handleCspReport } from './lib/csp.js';
 // #2538: bundle and land-acquisition-auction route handlers, extracted into
 // worker/lib/auctions.js -- see that module's own header comment for what
 // deliberately stayed here instead (bundleFromRow also used by
@@ -190,6 +193,8 @@ const SECURITY_HEADERS = {
 function withSecurityHeaders(response) {
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value);
+  // #1360: report-only, on documents only; see worker/lib/csp.js.
+  if (isHtmlResponse(response)) headers.set('content-security-policy-report-only', CSP_REPORT_ONLY_POLICY);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
@@ -651,6 +656,12 @@ async function handleApi(request, env, url, ctx) {
     return json({ ok: true, service: 'higglehaven-api' });
   }
 
+  // #1360: browsers POST CSP violation reports here (report-uri in the
+  // report-only policy). Log-only; see worker/lib/csp.js.
+  if (request.method === 'POST' && route.length === 1 && route[0] === 'csp-report') {
+    return handleCspReport(request);
+  }
+
   if (route[0] === 'auth') {
     return handleAuth(request, env, env.DB, route, url, ctx);
   }
@@ -681,6 +692,11 @@ async function handleApi(request, env, url, ctx) {
 
   if (route[0] === 'direct-messages') {
     return handleDirectMessages(request, env.DB, route, url);
+  }
+
+  // #3140 (sub-issue 1/2 of #3124): durable, silent blocks keyed on user_id.
+  if (route[0] === 'blocks') {
+    return handleBlocks(request, env.DB, route);
   }
 
   // #2779 (sub-issue of #2777): proximity text chat.
@@ -3138,6 +3154,13 @@ export async function cascadeDeleteAccount(db, userId) {
     db.prepare(`
       DELETE FROM sessions WHERE user_id = ? AND ${builderOkClause} AND ${sellerOkClause}
     `).bind(userId, ...guardBinds),
+    // #3140: a person's blocks go with them, in both directions (the ones
+    // they placed and the ones placed on them); gated like the statements
+    // above so a blocked deletion leaves every block in place too.
+    db.prepare(`
+      DELETE FROM user_blocks WHERE (blocker_user_id = ? OR blocked_user_id = ?)
+        AND ${builderOkClause} AND ${sellerOkClause}
+    `).bind(userId, userId, ...guardBinds),
   );
 
   const batchResults = await db.batch(statements);
@@ -3205,6 +3228,22 @@ export async function escalateExpiredSuspensions(db) {
     RETURNING suspension_id, user_id, admin_user_id
   `).run();
   for (const row of due.results) {
+    // #2308 (Parity across sibling surfaces): the suspend paths refuse to
+    // suspend the last operational admin (#2268, #3085), so the cascade
+    // delete must not remove one either -- defense in depth for a state that
+    // got there another way (an admin demoted after the suspension was
+    // filed, say). Checked just before each delete, so two due admins can't
+    // both pass. The escalation is re-armed rather than dropped: it retries
+    // on the next cron run once another operational admin exists, and logs
+    // each time it is held back so it is never silent.
+    const spared = await db.prepare(`SELECT 1 AS spared WHERE ${SUSPENSION_SPARES_LAST_ADMIN_SQL}`)
+      .bind(row.user_id, row.user_id).first();
+    if (!spared) {
+      console.warn('escalateExpiredSuspensions: not deleting the last operational admin; will retry', row.suspension_id);
+      await db.prepare('UPDATE account_suspensions SET escalated_at = NULL WHERE suspension_id = ?')
+        .bind(row.suspension_id).run();
+      continue;
+    }
     // #2988: must run before the cascade (which deletes the seller row it
     // looks the account's pending slots up through); see that function's
     // own comment for the prepare/commit/rollback shape.
