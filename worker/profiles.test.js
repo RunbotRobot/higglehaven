@@ -105,6 +105,36 @@ describe('Builders', () => {
       expect(me.body.builder.label).not.toBe('existing HOLDER');
     });
 
+    // #3142 (*One alias per person*): the builder label is a copy of the
+    // account's username, so renaming sets both, and a name another account
+    // already holds is refused whichever of the two tables holds it.
+    it('renaming a builder sets the account username and the label together (#3142)', async () => {
+      const renamer = await signupBuilder('one-alias-renamer');
+      const renamed = await api(`/builders/${renamer.builderId}`, renamer.session({
+        method: 'PATCH', body: JSON.stringify({ label: 'One Alias Renamed' }),
+      }));
+      expect(renamed.response.status).toBe(200);
+      expect(renamed.body.builder.label).toBe('One Alias Renamed');
+      const me = await api('/auth/me', renamer.session());
+      expect(me.body.user.username).toBe('One Alias Renamed');
+
+      const other = await signupBuilder('one-alias-other');
+      const taken = await api(`/builders/${other.builderId}`, other.session({
+        method: 'PATCH', body: JSON.stringify({ label: 'one alias RENAMED' }),
+      }));
+      expect(taken.response.status).toBe(409);
+      const otherMe = await api('/auth/me', other.session());
+      expect(otherMe.body.user.username).not.toBe('one alias RENAMED');
+      expect((await api('/builders/me', other.session())).body.builder.label).not.toBe('one alias RENAMED');
+
+      // #3142: the label is now the username, so a rename obeys signup's
+      // 40-character username cap, not just the general 100-character one.
+      const tooLong = await api(`/builders/${other.builderId}`, other.session({
+        method: 'PATCH', body: JSON.stringify({ label: 'x'.repeat(41) }),
+      }));
+      expect(tooLong.response.status).toBe(400);
+    });
+
     it('allows a case-only rename of a builder\'s own existing label', async () => {
       const renamer = await signupBuilder('label-self-case-rename');
       const original = renamer.builder.label;
@@ -924,10 +954,10 @@ describe('Builders', () => {
     expect(rejected.body.error).toMatch(/label must be 100 characters or fewer/);
 
     const stillFine = await api(`/builders/${renamer.builderId}`, renamer.session({
-      method: 'PATCH', body: JSON.stringify({ label: 'x'.repeat(100) }),
+      method: 'PATCH', body: JSON.stringify({ label: 'x'.repeat(40) }),
     }));
     expect(stillFine.response.status).toBe(200);
-    expect(stillFine.body.builder.label).toBe('x'.repeat(100));
+    expect(stillFine.body.builder.label).toBe('x'.repeat(40));
   });
 
   it('rate-limits repeated builder creation from the same client', async () => {

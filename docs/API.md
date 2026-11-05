@@ -1436,7 +1436,14 @@ sign posts/purchases (#362, mirroring #337).
 ### `PUT /api/builders/:builderId`
 ### `PATCH /api/builders/:builderId`
 
-Renames a builder. `label` is required. Returns `404` if the builder
+Renames a builder. A person has one alias, the account's `username`
+(**#3142**, owner decision 2026-11-05, "One alias per person"), and
+`builders.label` is only a copy of it: this sets both in one batch, so they
+cannot drift apart (a seller profile additionally has its own storefront
+name, `sellers.label`, which this does not touch). The new name obeys
+signup's 40-character username cap (`400` over it) and must be unique
+case-insensitively across every account's username *and* every other
+builder's label. `label` is required. Returns `404` if the builder
 doesn't exist, `403` if it isn't your own (see "Authorization model"
 above) — requires a session logged in as this builder. `409` if `label`
 collides case-insensitively with a *different* builder's (#1187) — a
