@@ -340,6 +340,39 @@ most likely to come up again.
   expiry; never widen the general retention rule to make the duty
   easier to meet.
 
+- **A block is silent.** (2026-11-05, #3124.) The blocked person is
+  never told, by notification or by any difference they could detect
+  from a stranger's experience: their DM to the blocker gets the same
+  plain "you can't message this person" a non-friend gets, their friend
+  request gets no answer, and the blocker is simply absent from their
+  presence and chat. Nothing fakes a delivery either. The owner weighed
+  the mild confusion of an unexplained silence against telling a
+  harasser who blocked them and when, and chose silence; a block carries
+  no consequence for the blocked person beyond one individual's
+  attention (no strike, no record visible to anyone else), so there is
+  nothing to appeal. The same posture already holds for conduct reports
+  (invisible to the reported person) and mutes (undetectable).
+
+- **Anything about a person as a person keys on the account
+  (`user_id`); role-scoped data keeps its role id.** (2026-11-05,
+  #3124, from the #3121 lesson.) `builders` and `sellers` are role
+  profiles hanging off one account, one each, not identities, and a
+  builder profile can be reset to a new id. So friends, DMs, blocks,
+  presence, chat and voice signaling, conduct reports and suspension
+  are account-level facts and key on `user_id`; landlets and versions
+  stay on `builder_id`, listings and payouts on `seller_id`. "Shopper"
+  and "builder" are modes a person is in, not identity types: do not
+  rename `builder_id` to `shopper_id` or collapse the role tables. New
+  social features start on `user_id`; existing social tables migrate
+  there (#3141).
+
+- **One alias per person, shown wherever a person is shown: the
+  account's `username`.** (2026-11-05.) The builder label is derived
+  from it, not a second editable name, and the unused
+  `users.display_name` column goes. A seller's storefront name is a
+  different thing (a shop's name, not a person's) and stays its own
+  field. (#3142.)
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
