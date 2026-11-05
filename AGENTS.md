@@ -506,7 +506,11 @@ task depends on it. Do not stop. In order: (1) if `CLOUDFLARE_API_TOKEN`
 is set in your environment, use the repo's own wrangler against the
 same database, from the repo root — `node_modules/.bin/wrangler d1
 execute higglehaven-db --remote --json --command "<sql>"` — reads and
-writes alike, under the same validation discipline; (2) if it isn't,
+writes alike, under the same validation discipline (it prints a banner
+to stderr, so parse stdout; check with `[ -n "$CLOUDFLARE_API_TOKEN" ]`
+first — higglehaven3, 4 and 6 all found it unset, and wrangler then
+fails with "set a CLOUDFLARE_API_TOKEN"; never go looking for a token
+elsewhere); (2) if it isn't,
 claim on GitHub alone: the issue's `assignees` field is already named
 below as an authoritative check, so the three-step gate still works
 (read, `issue_write` with yourself as assignee, re-read), plus a
@@ -727,6 +731,16 @@ the task from. None of the following eliminates the race (self-
 assigning a GitHub Issue, and claiming a task in the control room, are
 both advisory, not atomic), but each shrinks the window or lowers the
 cost when it happens anyway:
+
+- **Control Room unreachable (the D1 tool is missing or unauthenticated
+  and the wrangler fallback has no token): a GitHub comment on the issue
+  is an acceptable *last-resort* claim, and only then (#3131).** Say who
+  you are in it ("claimed by higglehaven4"), because every session shares
+  one GitHub identity and `assignees` can't tell sessions apart. Read the
+  issue's recent comments for another session's claim before you start,
+  and write the `control_room_tasks` card (status, session, a one-line
+  note) as soon as either route works again, including for work that has
+  already merged by then.
 
 - **Self-assign before you investigate, not after — and treat it as a
   three-step gate, not a single write: (1) read, (2) claim, (3) re-read
