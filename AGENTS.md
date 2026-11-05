@@ -399,6 +399,23 @@ most likely to come up again.
   credit, not ours. Guard refunds against a late provider result
   completing an already-refunded job.
 
+- **Sensitive identity data that only a provider needs goes directly to
+  that provider; the platform never handles it, even in transit.**
+  (2026-11-05, #2928.) Our own onboarding forms collect the minimum
+  (name, date of birth, address, last four of the SSN, phone). When
+  Stripe's requirements ask for more -- a full SSN/ITIN, a government
+  ID, proof of address -- the person is handed to Stripe's own
+  onboarding step (embedded in our page, or Stripe-hosted), so the data
+  goes from their browser to Stripe and never passes through the
+  Worker. This strengthens the existing "no KYC field is ever
+  persisted" promise to "never even seen" for the most sensitive
+  fields, and Stripe keeps that step current as requirements change
+  instead of the fleet re-reviewing them every six months. Stripe's
+  docs confirm live accounts do get asked (failed initial checks,
+  volume/time thresholds), so this is not a test-mode-only case. Apply
+  the same shape to any future provider that needs data we have no
+  reason to hold (a tax-filing vendor, an identity verifier).
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
