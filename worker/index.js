@@ -156,6 +156,7 @@ import { handleBlocks } from './lib/blocks.js';
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
 import { handleLandlets } from './lib/land.js';
+import { CSP_REPORT_ONLY_POLICY, isHtmlResponse, handleCspReport } from './lib/csp.js';
 // #2538: bundle and land-acquisition-auction route handlers, extracted into
 // worker/lib/auctions.js -- see that module's own header comment for what
 // deliberately stayed here instead (bundleFromRow also used by
@@ -192,6 +193,8 @@ const SECURITY_HEADERS = {
 function withSecurityHeaders(response) {
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value);
+  // #1360: report-only, on documents only; see worker/lib/csp.js.
+  if (isHtmlResponse(response)) headers.set('content-security-policy-report-only', CSP_REPORT_ONLY_POLICY);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
@@ -651,6 +654,12 @@ async function handleApi(request, env, url, ctx) {
 
   if (request.method === 'GET' && route.length === 1 && route[0] === 'health') {
     return json({ ok: true, service: 'higglehaven-api' });
+  }
+
+  // #1360: browsers POST CSP violation reports here (report-uri in the
+  // report-only policy). Log-only; see worker/lib/csp.js.
+  if (request.method === 'POST' && route.length === 1 && route[0] === 'csp-report') {
+    return handleCspReport(request);
   }
 
   if (route[0] === 'auth') {

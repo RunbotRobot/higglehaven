@@ -83,8 +83,24 @@ and the admin pages) also carries baseline hardening headers:
 `Strict-Transport-Security: max-age=63072000; includeSubDomains` (see
 `worker/index.js`'s `SECURITY_HEADERS`/`withSecurityHeaders`, applied once in
 `fetch`'s own wrapper around `routeRequest` rather than per-handler).
-Content-Security-Policy is a real gap, deliberately not closed here — see
-issue #1360.
+HTML responses (the app shell and the admin pages, not JSON) additionally
+carry `Content-Security-Policy-Report-Only` (#1360; the policy and the reason
+for each source are in `worker/lib/csp.js`). It is report-only on purpose,
+following the owner's decision on that issue: nothing is blocked yet, and the
+enforcing `Content-Security-Policy` header ships in a follow-up once the
+reports show the allow-list is right. Known gaps in it today: `'unsafe-inline'`
+for scripts and styles (index.html and the admin pages carry inline blocks),
+and the Stripe/Turnstile sources follow those vendors' published guidance
+without having been exercised in a browser with real keys.
+
+### `POST /api/csp-report`
+
+The `report-uri` target of that policy. Unauthenticated (browsers send it
+without credentials) and log-only: it always answers `204`, writes nothing to
+D1, logs one trimmed line (`directive`, `blocked`, `document`, `source`,
+`line`) to the Worker log, ignores a malformed or over-8KB body, and logs at
+most 100 reports per minute per isolate. Read the reports with `wrangler tail`
+or the Workers log viewer, looking for the `csp-report` label.
 
 ## Health endpoint
 
