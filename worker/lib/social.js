@@ -20,7 +20,7 @@ import {
   readJson, stringValue, finiteNumber, queryLimit, decodeCursor, encodeCursor,
 } from './validation.js';
 import { checkRateLimit } from './rate-limit.js';
-import { requireCurrentUser, assertOwner, requireSessionBuilder } from './auth.js';
+import { requireCurrentUser, assertOwner, requireSessionBuilder, builderNotSuspendedSql } from './auth.js';
 import { fireNotification } from './notifications.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 // requireLandlet/assertReferenceExists/labelsByBuilderId/
@@ -367,7 +367,9 @@ export async function handleNearbyChat(request, db, route, url) {
     }
     const limit = queryLimit(url.searchParams.get('limit'), NEARBY_CHAT_POLL_LIMIT);
     const cursor = decodeCursor(url.searchParams.get('cursor'));
-    const conditions = ['landlet_id = ?'];
+    // #3123: a suspended sender's messages are hidden from everyone else the
+    // moment the suspension starts, not left for the 30-minute prune.
+    const conditions = ['landlet_id = ?', builderNotSuspendedSql('nearby_chat_messages.builder_id')];
     const bindings = [landletId];
     if (cursor) {
       // Ascending/"poll forward from here" ordering, unlike direct_messages'
@@ -463,6 +465,16 @@ async function reportEvidenceLines(db, reporterBuilderId, reportedBuilderId, sur
   }
 }
 
+// #3121: suspension is by user_id, and the reported builder's row can be
+// deleted by the reported party themselves (Reset your builder profile), so a
+// report records the reported account's user_id at filing time -- on the
+// report row and in the Control Room card -- rather than relying on a
+// builder id that may stop resolving.
+async function reportedUserIdOf(db, builderId) {
+  const row = await db.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(builderId).first();
+  return row?.user_id ?? null;
+}
+
 async function handleNearbyChatReportCreate(request, db) {
   const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use nearby chat.');
   await checkRateLimit(db, `nearby-chat-report-create:${sessionBuilder.builder_id}`, NEARBY_CHAT_REPORT_CREATE_RATE_LIMIT_MAX);
@@ -484,7 +496,9 @@ async function handleNearbyChatReportCreate(request, db) {
   const now = new Date().toISOString();
   const controlRoomTaskId = `nearby-chat-report-${reportId.slice('nearby-chat-report-'.length)}`;
   const controlRoomTitle = `Nearby chat conduct report against "${reportedLabel}"`;
+  const reportedUserId = await reportedUserIdOf(db, reportedBuilderId);
   const controlRoomNoteLines = [`Reported builder: "${reportedLabel}" (${reportedBuilderId})`];
+  if (reportedUserId) controlRoomNoteLines.push(`Reported account: ${reportedUserId}`);
   if (reason) controlRoomNoteLines.push(`Reason: ${reason}`);
   controlRoomNoteLines.push(...await reportEvidenceLines(db, sessionBuilder.builder_id, reportedBuilderId, async () => {
     const message = await db.prepare(`
@@ -496,9 +510,9 @@ async function handleNearbyChatReportCreate(request, db) {
   }));
   await db.batch([
     db.prepare(`
-      INSERT INTO nearby_chat_reports (report_id, reporter_builder_id, reported_builder_id, reason)
-      VALUES (?, ?, ?, ?)
-    `).bind(reportId, sessionBuilder.builder_id, reportedBuilderId, reason),
+      INSERT INTO nearby_chat_reports (report_id, reporter_builder_id, reported_builder_id, reported_user_id, reason)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(reportId, sessionBuilder.builder_id, reportedBuilderId, reportedUserId, reason),
     db.prepare(`
       INSERT INTO control_room_tasks (
         task_id, kind, note_number, title, status, session, posted_by,
@@ -600,11 +614,17 @@ async function handleFriendVoiceChannels(request, db, route) {
 
   if (request.method === 'GET' && route.length === 2) {
     await checkRateLimit(db, `friend-voice-channel-poll:${sessionBuilder.builder_id}`, FRIEND_VOICE_CHANNEL_POLL_RATE_LIMIT_MAX);
+    // #3123: a suspended member drops out of the listing, and a suspended
+    // owner takes their whole channel with them (the owner's own row is
+    // what marks a channel active); neither is deleted, so a lifted
+    // suspension simply reappears.
     const { results } = await db.prepare(`
       SELECT owner_builder_id, member_builder_id FROM friend_voice_channel_members
       WHERE owner_builder_id IN (
         SELECT owner_builder_id FROM friend_voice_channel_members WHERE member_builder_id = ?
       )
+      AND ${builderNotSuspendedSql('friend_voice_channel_members.owner_builder_id')}
+      AND ${builderNotSuspendedSql('friend_voice_channel_members.member_builder_id')}
     `).bind(sessionBuilder.builder_id).all();
     const membersByOwner = new Map();
     for (const row of results) {
@@ -782,7 +802,9 @@ async function handleVoiceReportCreate(request, db) {
   // establishes.
   const controlRoomTaskId = `voice-report-${reportId.slice('voice-report-'.length)}`;
   const controlRoomTitle = `Voice chat conduct report against "${reportedLabel}"`;
+  const reportedUserId = await reportedUserIdOf(db, reportedBuilderId);
   const controlRoomNoteLines = [`Reported builder: "${reportedLabel}" (${reportedBuilderId})`];
+  if (reportedUserId) controlRoomNoteLines.push(`Reported account: ${reportedUserId}`);
   if (reason) controlRoomNoteLines.push(`Reason: ${reason}`);
   controlRoomNoteLines.push(...await reportEvidenceLines(db, sessionBuilder.builder_id, reportedBuilderId, async () => {
     const signal = await db.prepare(`
@@ -794,9 +816,9 @@ async function handleVoiceReportCreate(request, db) {
   }));
   await db.batch([
     db.prepare(`
-      INSERT INTO voice_conduct_reports (report_id, reporter_builder_id, reported_builder_id, reason)
-      VALUES (?, ?, ?, ?)
-    `).bind(reportId, sessionBuilder.builder_id, reportedBuilderId, reason),
+      INSERT INTO voice_conduct_reports (report_id, reporter_builder_id, reported_builder_id, reported_user_id, reason)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(reportId, sessionBuilder.builder_id, reportedBuilderId, reportedUserId, reason),
     db.prepare(`
       INSERT INTO control_room_tasks (
         task_id, kind, note_number, title, status, session, posted_by,
