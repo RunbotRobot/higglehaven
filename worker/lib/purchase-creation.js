@@ -1262,6 +1262,10 @@ export function purchaseFromRow(row) {
     templateId: row.template_id,
     builderId: row.builder_id,
     sellerId: row.seller_id,
+    // #3142 audit: deliberately the buyer's name AS IT WAS at purchase time.
+    // A purchase is a financial record (who bought, when); unlike a sign post
+    // or review it is not shown as a person's current alias, so it keeps the
+    // snapshot rather than following later renames.
     buyerLabel: row.buyer_label,
     // #1112: the buyer's own builder_id, captured at purchase time now that
     // every real purchase requires a verified session (N44) — unlike

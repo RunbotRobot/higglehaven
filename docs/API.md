@@ -1470,6 +1470,17 @@ collides case-insensitively with a *different* builder's (#1187) — a
 case-only change to your own existing label (e.g. "Ada" → "ADA") is fine,
 only another builder already holding it is rejected.
 
+**Where a person's name is shown (#3142).** Sign posts, community-calendar
+events, product reviews and seller feedback store the author's name as it was
+when they posted (`author_label`), but their public list endpoints
+(`GET /api/instances/:id/posts`, `.../events`, `GET /api/catalog/:templateId/reviews`
+and the seller-feedback list) return the author's **current** username as
+`authorLabel` when the account still exists, so a rename follows the person
+everywhere. A row with no account on record (a legacy row, or a deleted
+account) keeps the name it was posted under; a name is never lost. The data
+export returns the stored name. A purchase's `buyerLabel` is deliberately a
+snapshot: it is a financial record, not a person's current alias.
+
 Deliberately an app-level check (an atomic `NOT EXISTS` folded into the
 `INSERT`/`UPDATE`'s own `WHERE`, same idiom `PUT /api/landlets/:landletId`'s
 own name-uniqueness guard above uses), not a schema-level `COLLATE NOCASE`
@@ -4993,7 +5004,8 @@ Owner decision (2026-11-05, AGENTS.md): anything about a person as a person keys
 docs/SPEC.md §6: "Friend/group systems: standard friend requests; social
 map shows an accepted friend's location." One `friendships` row (see
 `migrations/0049_friendships.sql`) per relationship, shared by both
-builders — direction preserved (`requesterBuilderId`/`recipientBuilderId`)
+people — direction preserved (`requesterUserId`/`recipientUserId`; the
+`*BuilderId` fields below are each side's current builder profile)
 so the frontend can tell "I sent this" from "I received this" without a
 second table, and `status` flips from `pending` to `accepted` in place
 rather than deleting and recreating the row on accept. `PATCH` (accept) is
@@ -5028,23 +5040,40 @@ piece on its own).
 
 ### Friendship object
 
+A friendship is a fact about two **accounts** (`users.user_id`), not their
+builder profiles (#3145, 2 of 6 under #3141; AGENTS.md, "Anything about a
+person as a person keys on the account"). A builder profile can be reset to a
+brand-new `builder_id` through ordinary self-service, and doing that no longer
+ends a friendship: the row is stored against `requester_user_id` /
+`recipient_user_id` (migration 0188; the old builder-id columns are kept
+unwritten until 6/6 drops them) and goes away only when the account is deleted
+(`cascadeDeleteAccount`) or a party ends it. The `*BuilderId` fields in the
+response are each person's *current* builder profile, because direct messages,
+voice and presence are still keyed by builder until their own sub-issues land;
+they are `null` for a person who has no builder profile at the moment, in
+which case `otherLabel` falls back to their username. `POST` still takes
+`recipientBuilderId` (the thing a client can see) and the server resolves it to
+the owner's account; a builder with no account cannot be befriended.
+
 ```json
 {
   "friendshipId": "friendship-3f1a9c20-9e44-4b7a-8c3d-1a2b3c4d5e6f",
   "requesterBuilderId": "builder-alice",
   "recipientBuilderId": "builder-bob",
+  "requesterUserId": "user-alice",
+  "recipientUserId": "user-bob",
   "status": "accepted",
   "createdAt": "2026-08-25T00:00:00.000Z",
   "otherBuilderId": "builder-bob",
+  "otherUserId": "user-bob",
   "otherLabel": "Bob",
   "direction": "outgoing",
   "otherLandlet": { "landletId": "starter-landlet", "name": "Starter landlet", "center": { "x": 0, "y": 0 } }
 }
 ```
 
-The last four fields (`otherBuilderId`/`otherLabel`/`direction`/
-`otherLandlet`) are computed relative to whichever `builderId` the request
-was made as — the same row looks different depending on who's asking (see
+The `other*` fields, `direction` and `otherLandlet` are computed relative to
+whichever account the request was made as — the same row looks different depending on who's asking (see
 `GET` below). `otherLandlet` is `null` if that builder hasn't claimed a
 lándlet yet, and picks the first one found if they somehow own more than
 one (auctions can transfer extra ones in) — good enough for this feature's
@@ -8213,7 +8242,7 @@ instance, template, or seller it references is later removed, the same
 "keep the record, drop the live reference" reasoning `notifications.template_id`
 already uses.
 
-`buyer_user_id` (#3195, `migrations/0192`) records the buyer's *account* on
+`buyer_user_id` (#3195, `migrations/0193`) records the buyer's *account* on
 each purchase when it is written, also without a foreign key. The buyer is a
 person, and `buyer_builder_id` is `ON DELETE SET NULL`, so a purchase loses
 that link whenever the buyer's builder profile is deleted or reset; the

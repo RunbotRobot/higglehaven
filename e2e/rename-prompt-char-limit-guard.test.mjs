@@ -54,7 +54,7 @@ await openAccountMenu(page);
 await page.click('#settings-btn');
 await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
 await page.click('.settings-tab-btn[data-section="build"]');
-const builderIdentityField = page.locator('.settings-field').filter({ hasText: 'Builder Identity' });
+const builderIdentityField = page.locator('.settings-field').filter({ hasText: 'Username' });
 await builderIdentityField.waitFor({ timeout: 10000 });
 const builderRenameBtn = builderIdentityField.locator('button', { hasText: 'Rename' });
 
