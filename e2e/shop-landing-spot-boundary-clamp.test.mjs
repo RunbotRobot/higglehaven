@@ -122,6 +122,12 @@ console.log('A\'s own final distance from world center vs. its boundary radius (
 // Assembled here, after every interaction has happened, rather than at
 // launch time -- #2735: a spread copy taken right after launchPage() would
 // freeze on the still-empty source arrays and never see a real error.
+// #2116: the clamp must not scale the nudged spot back onto B. Distance is
+// measured to B's real position, against the same clearance the search uses.
+const clearanceM = await pageA.evaluate(() => window.__testLandingClearanceM());
+const distanceFromBM = Math.hypot(finalPosition.x - nearRadiusM, finalPosition.y);
+console.log('A\'s final distance from B vs. required clearance (#2116, should be >= clearance):', distanceFromBM, 'vs', clearanceM);
+
 const errors = [...sessionA.errors, ...sessionB.errors];
 const pass =
   landletCreated.status === 201 &&
@@ -130,6 +136,7 @@ const pass =
   Math.abs(bEntry.x - nearRadiusM) < 0.5 && Math.abs(bEntry.y - 0) < 0.5 &&
   maxRadiusM > 1 && // sane sanity bound -- the nudge math below assumes real room to work with
   finalRadiusM <= maxRadiusM + 0.01 &&
+  distanceFromBM >= clearanceM - 0.01 &&
   errors.length === 0;
 
 await sessionB.browser.close();
