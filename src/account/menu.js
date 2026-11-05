@@ -724,7 +724,10 @@ async function renderFriends() {
     // only this viewer's own tier is known client-side, so the button is
     // gated on that alone; if the other side isn't id_verified, sending
     // still fails with the server's own clear error, shown in dmStatusEl.
-    if (currentAuthUser?.trustTier === 'id_verified') {
+    // #3145: friendships key on the account, so a friend can briefly have no
+    // builder profile (null otherBuilderId); direct messages and voice are
+    // still addressed to a builder profile, so there is nothing to offer then.
+    if (currentAuthUser?.trustTier === 'id_verified' && friendship.otherBuilderId) {
       const messageBtn = document.createElement('button');
       messageBtn.type = 'button';
       messageBtn.textContent = 'Message';

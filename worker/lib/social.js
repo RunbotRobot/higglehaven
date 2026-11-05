@@ -20,7 +20,10 @@ import {
   readJson, stringValue, finiteNumber, queryLimit, decodeCursor, encodeCursor,
 } from './validation.js';
 import { checkRateLimit } from './rate-limit.js';
-import { requireCurrentUser, assertOwner, requireSessionBuilder, builderNotSuspendedSql } from './auth.js';
+import {
+  requireCurrentUser, assertOwner, requireSessionBuilder, builderNotSuspendedSql,
+  userIdForBuilder, builderIdForUser, builderIdsForUsers, RESOLVER_CHUNK_SIZE,
+} from './auth.js';
 import { fireNotification } from './notifications.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 // requireLandlet/assertReferenceExists/labelsByBuilderId/
@@ -1050,8 +1053,12 @@ export async function handleFriendships(request, db, route, url) {
     // that #711's own sibling-endpoint audit missed.
     const limit = queryLimit(url.searchParams.get('limit'), 100);
     const cursor = decodeCursor(url.searchParams.get('cursor'));
-    const conditions = ['(requester_builder_id = ? OR recipient_builder_id = ?)'];
-    const bindings = [builderId, builderId];
+    // #3145: friendships key on the account, so match on the session's own
+    // user id; the builderId query parameter above only has to be the
+    // caller's own current builder profile (assertOwner), as before.
+    const viewerUserId = sessionBuilder.user_id;
+    const conditions = ['(requester_user_id = ? OR recipient_user_id = ?)'];
+    const bindings = [viewerUserId, viewerUserId];
     if (cursor) {
       conditions.push('(created_at < ? OR (created_at = ? AND friendship_id < ?))');
       bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
@@ -1062,13 +1069,10 @@ export async function handleFriendships(request, db, route, url) {
     `).bind(...bindings, limit + 1).all();
     const hasMore = results.length > limit;
     const page = results.slice(0, limit);
-    const otherBuilderIds = page.map((row) =>
-      row.requester_builder_id === builderId ? row.recipient_builder_id : row.requester_builder_id);
-    const labelsById = await labelsByBuilderId(db, otherBuilderIds);
-    const landletsById = await ownedLandletsByBuilderId(db, otherBuilderIds);
+    const context = await friendshipContext(db, page, viewerUserId);
     const last = page.at(-1);
     return json({
-      friendships: page.map((row) => friendshipFromRow(row, builderId, labelsById, landletsById)),
+      friendships: page.map((row) => friendshipFromRow(row, viewerUserId, context)),
       nextCursor: hasMore ? encodeCursor(last.created_at, last.friendship_id) : null,
     });
   }
@@ -1092,6 +1096,18 @@ export async function handleFriendships(request, db, route, url) {
     }
     await assertReferenceExists(db, 'builders', 'builder_id', requesterBuilderId, 'requesterBuilderId');
     await assertReferenceExists(db, 'builders', 'builder_id', recipientBuilderId, 'recipientBuilderId');
+    // #3145: the request targets a builder profile (that is what a client can
+    // see), but the friendship is stored against the person's account. A
+    // builder with no account (a pre-auth profile) is not someone who can be
+    // befriended; refuse it the way an unknown builder is refused.
+    const requesterUserId = sessionBuilder.user_id;
+    const recipientUserId = await userIdForBuilder(db, recipientBuilderId);
+    if (!recipientUserId) {
+      throw new HttpError(`recipientBuilderId "${recipientBuilderId}" does not exist`, 400);
+    }
+    if (requesterUserId === recipientUserId) {
+      throw new HttpError('requesterBuilderId and recipientBuilderId must be different builders', 400);
+    }
     // Folding the duplicate-pair check into the INSERT's own WHERE NOT
     // EXISTS makes the check-and-insert one atomic statement — a separate
     // SELECT-then-INSERT would let two concurrent requests for the same
@@ -1100,16 +1116,16 @@ export async function handleFriendships(request, db, route, url) {
     // product_reviews/auction_bids already use for this exact race shape.
     const friendshipId = `friendship-${crypto.randomUUID()}`;
     const inserted = await db.prepare(`
-      INSERT INTO friendships (friendship_id, requester_builder_id, recipient_builder_id)
+      INSERT INTO friendships (friendship_id, requester_user_id, recipient_user_id)
       SELECT ?, ?, ?
       WHERE NOT EXISTS (
         SELECT 1 FROM friendships
-        WHERE (requester_builder_id = ? AND recipient_builder_id = ?)
-           OR (requester_builder_id = ? AND recipient_builder_id = ?)
+        WHERE (requester_user_id = ? AND recipient_user_id = ?)
+           OR (requester_user_id = ? AND recipient_user_id = ?)
       )
     `).bind(
-      friendshipId, requesterBuilderId, recipientBuilderId,
-      requesterBuilderId, recipientBuilderId, recipientBuilderId, requesterBuilderId,
+      friendshipId, requesterUserId, recipientUserId,
+      requesterUserId, recipientUserId, recipientUserId, requesterUserId,
     ).run();
     if (inserted.meta.changes === 0) {
       throw new HttpError('A friendship or pending request already exists between these builders', 409);
@@ -1129,9 +1145,8 @@ export async function handleFriendships(request, db, route, url) {
     // already fixed elsewhere, not an uncaught friendshipFromRow(undefined)
     // crash.
     if (!row) return json({ error: 'Friendship not found' }, 404);
-    const labelsById = await labelsByBuilderId(db, [recipientBuilderId]);
-    const landletsById = await ownedLandletsByBuilderId(db, [recipientBuilderId]);
-    return json({ friendship: friendshipFromRow(row, requesterBuilderId, labelsById, landletsById) }, 201);
+    const context = await friendshipContext(db, [row], requesterUserId);
+    return json({ friendship: friendshipFromRow(row, requesterUserId, context) }, 201);
   }
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
@@ -1140,7 +1155,7 @@ export async function handleFriendships(request, db, route, url) {
     // Only the recipient can accept a request — the requester accepting
     // their own request would skip the other side's consent entirely.
     const sessionBuilder = await requireSessionBuilder(request, db);
-    assertOwner(existing.recipient_builder_id, sessionBuilder.builder_id, 'Only the recipient can accept a friend request');
+    assertOwner(existing.recipient_user_id, sessionBuilder.user_id, 'Only the recipient can accept a friend request');
     await checkRateLimit(db, `friendship-mutate:${sessionBuilder.builder_id}`, FRIENDSHIP_MUTATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     if (input.status !== 'accepted') throw new HttpError('status must be "accepted"', 400);
@@ -1159,8 +1174,13 @@ export async function handleFriendships(request, db, route, url) {
     // above (#319), for the requester's side of an acceptance — only fired
     // when this call is the one that actually made the transition.
     if (result.meta.changes === 1) {
-      await fireNotification(db, existing.requester_builder_id,
-        `${sessionBuilder.label} accepted your friend request.`);
+      // Notifications are still addressed to a builder profile (3/6-4/6 of
+      // #3141 move the rest); the requester's CURRENT one, if they have any.
+      const requesterBuilderId = await builderIdForUser(db, existing.requester_user_id);
+      if (requesterBuilderId) {
+        await fireNotification(db, requesterBuilderId,
+          `${sessionBuilder.label} accepted your friend request.`);
+      }
     }
     const updated = await db.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(route[1]).first();
     // Not found here means a concurrent DELETE (the requester cancelling,
@@ -1168,9 +1188,8 @@ export async function handleFriendships(request, db, route, url) {
     // and the UPDATE — a genuine 404, distinct from the already-accepted
     // no-op case above (where this SELECT still finds the row).
     if (!updated) return json({ error: 'Friendship not found' }, 404);
-    const labelsById = await labelsByBuilderId(db, [updated.requester_builder_id]);
-    const landletsById = await ownedLandletsByBuilderId(db, [updated.requester_builder_id]);
-    return json({ friendship: friendshipFromRow(updated, updated.recipient_builder_id, labelsById, landletsById) });
+    const context = await friendshipContext(db, [updated], updated.recipient_user_id);
+    return json({ friendship: friendshipFromRow(updated, updated.recipient_user_id, context) });
   }
 
   if (request.method === 'DELETE' && route.length === 2) {
@@ -1179,8 +1198,8 @@ export async function handleFriendships(request, db, route, url) {
     // Either side of the friendship can end it (or decline/cancel a pending
     // request) — not just the one who happened to send it.
     const sessionBuilder = await requireSessionBuilder(request, db);
-    if (sessionBuilder.builder_id !== existing.requester_builder_id
-      && sessionBuilder.builder_id !== existing.recipient_builder_id) {
+    if (sessionBuilder.user_id !== existing.requester_user_id
+      && sessionBuilder.user_id !== existing.recipient_user_id) {
       throw new HttpError('Not your friendship', 403);
     }
     await checkRateLimit(db, `friendship-mutate:${sessionBuilder.builder_id}`, FRIENDSHIP_MUTATE_RATE_LIMIT_MAX);
@@ -1193,7 +1212,7 @@ export async function handleFriendships(request, db, route, url) {
     // of scope here. #858: the owner confirmed unfriending an accepted
     // friendship should stay silent (no notification), matching the
     // mainstream silent-unfriend convention, so this isn't a gap to fix.
-    const isDecline = existing.status === 'pending' && sessionBuilder.builder_id === existing.recipient_builder_id;
+    const isDecline = existing.status === 'pending' && sessionBuilder.user_id === existing.recipient_user_id;
     // #1006: gated on the DELETE's own `WHERE status = 'pending'`, the same
     // shape #353 already established for the sibling PATCH/accept branch —
     // this used to decide whether to notify purely from the pre-fetch
@@ -1206,8 +1225,11 @@ export async function handleFriendships(request, db, route, url) {
       ? await db.prepare(`DELETE FROM friendships WHERE friendship_id = ? AND status = 'pending'`).bind(route[1]).run()
       : await db.prepare('DELETE FROM friendships WHERE friendship_id = ?').bind(route[1]).run();
     if (isDecline && result.meta.changes === 1) {
-      await fireNotification(db, existing.requester_builder_id,
-        `${sessionBuilder.label} declined your friend request.`);
+      const requesterBuilderId = await builderIdForUser(db, existing.requester_user_id);
+      if (requesterBuilderId) {
+        await fireNotification(db, requesterBuilderId,
+          `${sessionBuilder.label} declined your friend request.`);
+      }
     } else if (isDecline && result.meta.changes === 0) {
       // #1197: the response below used to be unconditional, so a decline
       // that lost a race to a concurrent PATCH/accept (same recipient, two
@@ -1238,12 +1260,19 @@ export async function handleFriendships(request, db, route, url) {
     // can never touch a channel's own owner-anchor row (owner_builder_id
     // === member_builder_id).
     if (result.meta.changes === 1) {
-      await db.batch([
-        db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?')
-          .bind(existing.requester_builder_id, existing.recipient_builder_id),
-        db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?')
-          .bind(existing.recipient_builder_id, existing.requester_builder_id),
-      ]);
+      // friend_voice_channel_members is still keyed by builder profile until
+      // 4/6 of #3141, so resolve each side's current one; a person with no
+      // builder profile at the moment has no membership row to remove.
+      const requesterBuilderId = await builderIdForUser(db, existing.requester_user_id);
+      const recipientBuilderId = await builderIdForUser(db, existing.recipient_user_id);
+      if (requesterBuilderId && recipientBuilderId) {
+        await db.batch([
+          db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?')
+            .bind(requesterBuilderId, recipientBuilderId),
+          db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?')
+            .bind(recipientBuilderId, requesterBuilderId),
+        ]);
+      }
     }
     return json({ deleted: true });
   }
@@ -1251,12 +1280,41 @@ export async function handleFriendships(request, db, route, url) {
   return json({ error: 'Not found' }, 404);
 }
 
+// #3145: everything friendshipFromRow needs beyond the row itself, resolved in
+// bulk for a list of rows. The friendship is stored against accounts, but the
+// rest of the app (direct messages, voice, presence, the landlet lookup) still
+// speaks in builder profiles until the other #3141 sub-issues land, so each
+// person is resolved to their CURRENT builder profile. A person without one
+// right now still has a friendship; they just have no builder id to show.
+export async function friendshipContext(db, rows, viewerUserId) {
+  const userIds = rows.flatMap((row) => [row.requester_user_id, row.recipient_user_id]).filter(Boolean);
+  const builderByUser = await builderIdsForUsers(db, userIds);
+  const otherUserIds = rows.map((row) => (row.requester_user_id === viewerUserId
+    ? row.recipient_user_id : row.requester_user_id)).filter(Boolean);
+  const otherBuilderIds = otherUserIds.map((userId) => builderByUser.get(userId)).filter(Boolean);
+  const labelsById = await labelsByBuilderId(db, otherBuilderIds);
+  const landletsById = await ownedLandletsByBuilderId(db, otherBuilderIds);
+  // The one alias a person has is their account's username (#3142); a
+  // friend with no builder profile at the moment still gets a name.
+  const usernameByUser = new Map();
+  const needName = [...new Set(otherUserIds.filter((userId) => !builderByUser.has(userId)))];
+  for (let i = 0; i < needName.length; i += RESOLVER_CHUNK_SIZE) {
+    const chunk = needName.slice(i, i + RESOLVER_CHUNK_SIZE);
+    const { results } = await db.prepare(
+      `SELECT user_id, username FROM users WHERE user_id IN (${chunk.map(() => '?').join(', ')})`,
+    ).bind(...chunk).all();
+    for (const row of results) usernameByUser.set(row.user_id, row.username);
+  }
+  return { builderByUser, labelsById, landletsById, usernameByUser };
+}
+
 // Exported for worker/index.js's own exportSocialSection (handleExportData)
 // -- see that function's own call site for why it stays there.
-export function friendshipFromRow(row, viewerBuilderId, labelsById, landletsById) {
-  const otherBuilderId = row.requester_builder_id === viewerBuilderId
-    ? row.recipient_builder_id
-    : row.requester_builder_id;
+export function friendshipFromRow(row, viewerUserId, context) {
+  const { builderByUser, labelsById, landletsById, usernameByUser } = context;
+  const viewerIsRequester = row.requester_user_id === viewerUserId;
+  const otherUserId = viewerIsRequester ? row.recipient_user_id : row.requester_user_id;
+  const otherBuilderId = builderByUser.get(otherUserId) ?? null;
   // Owner (#610): "It's public knowledge who owns a lánd when you're
   // already looking at it. But it seems like a further invasion of
   // privacy to be able to provide a path from a stranger to their lánd.
@@ -1266,16 +1324,22 @@ export function friendshipFromRow(row, viewerBuilderId, labelsById, landletsById
   // before either side has actually agreed to connect) shouldn't hand
   // either party a shortcut straight to the other's home before that
   // consent exists.
-  const landlet = row.status === 'accepted' ? (landletsById.get(otherBuilderId) ?? null) : null;
+  const landlet = row.status === 'accepted' && otherBuilderId ? (landletsById.get(otherBuilderId) ?? null) : null;
   return {
     friendshipId: row.friendship_id,
-    requesterBuilderId: row.requester_builder_id,
-    recipientBuilderId: row.recipient_builder_id,
+    // Current builder profile of each side (null if that person has none right
+    // now), for the surfaces that are still keyed by builder; the account ids
+    // are the stable identity.
+    requesterBuilderId: builderByUser.get(row.requester_user_id) ?? null,
+    recipientBuilderId: builderByUser.get(row.recipient_user_id) ?? null,
+    requesterUserId: row.requester_user_id,
+    recipientUserId: row.recipient_user_id,
     status: row.status,
     createdAt: row.created_at,
     otherBuilderId,
-    otherLabel: labelsById.get(otherBuilderId) ?? null,
-    direction: row.requester_builder_id === viewerBuilderId ? 'outgoing' : 'incoming',
+    otherUserId,
+    otherLabel: (otherBuilderId ? labelsById.get(otherBuilderId) : null) ?? usernameByUser.get(otherUserId) ?? null,
+    direction: viewerIsRequester ? 'outgoing' : 'incoming',
     otherLandlet: landlet ? { landletId: landlet.landletId, name: landlet.name, center: landlet.center } : null,
   };
 }
@@ -1340,12 +1404,17 @@ function directMessageIdempotencyKey(senderBuilderId, recipientBuilderId, rawKey
 // messages at all, so the hardcoded default below (unchanged, matches
 // every pre-#2781 call site's expectation) doesn't apply there.
 async function acceptedFriendshipExists(db, builderIdA, builderIdB) {
+  // #3145: friendships key on the account, and callers here still hold builder
+  // ids, so each is resolved to its owner's user id inside the query itself
+  // (a builder with no account yields NULL, which never matches).
   const row = await db.prepare(`
     SELECT 1 FROM friendships
     WHERE status = 'accepted'
-      AND ((requester_builder_id = ? AND recipient_builder_id = ?)
-        OR (requester_builder_id = ? AND recipient_builder_id = ?))
-  `).bind(builderIdA, builderIdB, builderIdB, builderIdA).first();
+      AND ((requester_user_id = (SELECT user_id FROM builders WHERE builder_id = ?1)
+            AND recipient_user_id = (SELECT user_id FROM builders WHERE builder_id = ?2))
+        OR (requester_user_id = (SELECT user_id FROM builders WHERE builder_id = ?2)
+            AND recipient_user_id = (SELECT user_id FROM builders WHERE builder_id = ?1)))
+  `).bind(builderIdA, builderIdB).first();
   return !!row;
 }
 
@@ -1467,8 +1536,10 @@ export async function handleDirectMessages(request, db, route, url) {
       SELECT ?, ?, ?, ? WHERE EXISTS (
         SELECT 1 FROM friendships
         WHERE status = 'accepted'
-          AND ((requester_builder_id = ? AND recipient_builder_id = ?)
-            OR (requester_builder_id = ? AND recipient_builder_id = ?))
+          AND ((requester_user_id = (SELECT user_id FROM builders WHERE builder_id = ?)
+                AND recipient_user_id = (SELECT user_id FROM builders WHERE builder_id = ?))
+            OR (requester_user_id = (SELECT user_id FROM builders WHERE builder_id = ?)
+                AND recipient_user_id = (SELECT user_id FROM builders WHERE builder_id = ?)))
       )
     `).bind(
       messageId, senderBuilderId, recipientBuilderId, text,

@@ -147,7 +147,7 @@ import {
 // exportSocialSection's use of the three *FromRow formatters below,
 // imported back the same way builder-profile.js/auth-routes.js already do).
 import {
-  handleNotifications, notificationFromRow, handlePresence, handleFriendships, friendshipFromRow,
+  handleNotifications, notificationFromRow, handlePresence, handleFriendships, friendshipFromRow, friendshipContext,
   handleDirectMessages, directMessageFromRow, handleNearbyChat, handleVoiceSignal,
 } from './lib/social.js';
 // #2533: the landlet core domain -- CRUD, draft/live state, versions, and
@@ -3120,6 +3120,15 @@ export async function cascadeDeleteAccount(db, userId) {
   const sellerOkClause = sellerId ? 'NOT EXISTS (SELECT 1 FROM sellers WHERE seller_id = ?)' : '1 = 1';
   const guardBinds = [...(builderId ? [builderId] : []), ...(sellerId ? [sellerId] : [])];
 
+  // #3145: friendships key on the account and no longer cascade from the
+  // builder profile (a profile reset must not end them), so deleting the
+  // account removes them explicitly -- gated like the statements below, so a
+  // blocked deletion leaves every friendship exactly as it was.
+  statements.push(db.prepare(`
+    DELETE FROM friendships
+    WHERE (requester_user_id = ? OR recipient_user_id = ?) AND ${builderOkClause} AND ${sellerOkClause}
+  `).bind(userId, userId, ...guardBinds));
+
   const usersUpdateIndex = statements.length;
   statements.push(
     db.prepare(`
@@ -3288,9 +3297,10 @@ const EXPORT_DATA_RATE_LIMIT_MAX = 10;
 // migrations/0125). See the calendarEvents query below for the real
 // filter now in use.
 async function exportSocialSection(db, builderId, userId) {
+  // #3145: friendships key on the account, so the export is the account's.
   const friendships = await db.prepare(`
-    SELECT * FROM friendships WHERE requester_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
-  `).bind(builderId, builderId).all();
+    SELECT * FROM friendships WHERE requester_user_id = ? OR recipient_user_id = ? ORDER BY created_at ASC
+  `).bind(userId, userId).all();
   const directMessages = await db.prepare(`
     SELECT * FROM direct_messages WHERE sender_builder_id = ? OR recipient_builder_id = ? ORDER BY created_at ASC
   `).bind(builderId, builderId).all();
@@ -3375,13 +3385,10 @@ async function exportSocialSection(db, builderId, userId) {
     list.push(versionInstanceFromRow(row));
     instancesByArchivedVersionId.set(row.version_id, list);
   }
-  const friendshipOtherBuilderIds = friendships.results.map((row) =>
-    row.requester_builder_id === builderId ? row.recipient_builder_id : row.requester_builder_id);
-  const friendshipLabelsById = await labelsByBuilderId(db, friendshipOtherBuilderIds);
-  const friendshipLandletsById = await ownedLandletsByBuilderId(db, friendshipOtherBuilderIds);
+  const friendshipContextForExport = await friendshipContext(db, friendships.results, userId);
   return {
     friendships: friendships.results.map((row) =>
-      friendshipFromRow(row, builderId, friendshipLabelsById, friendshipLandletsById)),
+      friendshipFromRow(row, userId, friendshipContextForExport)),
     directMessages: directMessages.results.map(directMessageFromRow),
     notifications: notifications.results.map(notificationFromRow),
     productReviews: productReviews.results.map(reviewFromRow),

@@ -567,32 +567,25 @@ describe('Didit verification webhook (#589)', () => {
       expect(row.builder_id).toBeNull();
     });
 
-    it('still cascades a deleted builder into its own friendships', async () => {
+    // #3145: friendships now key on the account (user_id), not the builder
+    // profile, and no longer cascade from it -- deleting or resetting a builder
+    // profile must not end a person's friendships. (The rows are removed with
+    // the account instead: cascadeDeleteAccount.)
+    it('no longer cascades a deleted builder into friendships, which belong to the account (#3145)', async () => {
       const requester = await signupBuilder('post-0093-friendships-cascade-requester');
       const recipient = await signupBuilder('post-0093-friendships-cascade-recipient');
+      const userIdOf = async (builderId) => (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?')
+        .bind(builderId).first()).user_id;
       const friendshipId = `friendship-${crypto.randomUUID()}`;
       await env.DB.prepare(
-        'INSERT INTO friendships (friendship_id, requester_builder_id, recipient_builder_id) VALUES (?, ?, ?)',
-      ).bind(friendshipId, requester.builderId, recipient.builderId).run();
+        'INSERT INTO friendships (friendship_id, requester_user_id, recipient_user_id) VALUES (?, ?, ?)',
+      ).bind(friendshipId, await userIdOf(requester.builderId), await userIdOf(recipient.builderId)).run();
 
       await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(requester.builderId).run();
-
-      const { results } = await env.DB.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).all();
-      expect(results).toHaveLength(0);
-    });
-
-    it('still cascades a deleted builder into its own friendships via the recipient side', async () => {
-      const requester = await signupBuilder('post-0093-friend-cascade-req-2');
-      const recipient = await signupBuilder('post-0093-friend-cascade-rec-2');
-      const friendshipId = `friendship-${crypto.randomUUID()}`;
-      await env.DB.prepare(
-        'INSERT INTO friendships (friendship_id, requester_builder_id, recipient_builder_id) VALUES (?, ?, ?)',
-      ).bind(friendshipId, requester.builderId, recipient.builderId).run();
-
       await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(recipient.builderId).run();
 
       const { results } = await env.DB.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).all();
-      expect(results).toHaveLength(0);
+      expect(results).toHaveLength(1);
     });
 
     it('still cascades a deleted builder into its own bundles', async () => {

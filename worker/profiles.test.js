@@ -2015,8 +2015,12 @@ describe('Friendships', () => {
   // that drop didn't silently no-op.
   it('indexes friendships on each side of the requester/recipient OR, covering the sort', async () => {
     const indexes = (await env.DB.prepare('PRAGMA index_list(friendships)').all()).results;
-    expect(indexes.some((idx) => idx.name === 'idx_friendships_requester_created')).toBe(true);
-    expect(indexes.some((idx) => idx.name === 'idx_friendships_recipient_created')).toBe(true);
+    // #3145: re-expressed on the account columns (migration 0188); the
+    // builder-keyed indexes went with the old table.
+    expect(indexes.some((idx) => idx.name === 'idx_friendships_requester_user_created')).toBe(true);
+    expect(indexes.some((idx) => idx.name === 'idx_friendships_recipient_user_created')).toBe(true);
+    expect(indexes.some((idx) => idx.name === 'idx_friendships_requester_created')).toBe(false);
+    expect(indexes.some((idx) => idx.name === 'idx_friendships_recipient_created')).toBe(false);
     expect(indexes.some((idx) => idx.name === 'idx_friendships_requester')).toBe(false);
     expect(indexes.some((idx) => idx.name === 'idx_friendships_recipient')).toBe(false);
   });
