@@ -3396,6 +3396,27 @@ The card resolves itself once the secret is set, and is not re-opened if the
 owner marks it done. Environments with no provider keys (dev, tests) raise
 nothing.
 
+The once-daily cron (`0 3 * * *`, the same trigger as the D1 backup) also runs
+`checkSchemaDrift` (#3203, Phase 2 of #805). `checkMigrationDrift` only knows
+which migration *files* were applied; it cannot see a manual hotfix
+`ALTER TABLE`/`CREATE INDEX` run against production outside the migrations
+system. This compares production's live schema against
+`worker/schema-snapshot.json`, a normalized snapshot of what a fresh apply of
+`migrations/` produces (`npm run generate:schema-snapshot`, which applies the
+migrations to a scratch in-memory SQLite database via `node:sqlite`; wired into
+`deploy`/`deploy:ci`, and kept honest by `scripts/check-schema-snapshot-fresh.mjs`
+as a `pretest` check — so **any PR that adds or changes a migration must run
+`npm run generate:schema-snapshot` and commit the result**). Tables are compared
+structurally (a set of columns: name, declared type, `NOT NULL`, default,
+primary-key position; column order is not significant) and indexes, triggers
+and views by name plus whitespace-collapsed SQL; `sqlite_*`, `_cf_*` and `d1_*`
+objects are ignored. On a difference it logs a `console.error` every run, raises
+one Control Room card (`ops-schema-drift`, `waitingOn: "owner"`) that resolves
+itself once production matches again, and — only when the card is first raised or
+re-opened, and only if `OPS_ALERT_EMAIL` is configured — emails that address.
+`worker/schema-drift.test.js` asserts the snapshot built under `node:sqlite` shows
+no drift against a migrated D1, which is the guard against false positives.
+
 ### World object
 
 ```json

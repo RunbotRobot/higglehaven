@@ -1,6 +1,9 @@
 import { landletMaxWorldRadius } from './geometry.js';
 import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from './earthCurvature.js';
 import migrationsManifest from './migrations-manifest.json';
+// #3203: expected live schema (what a fresh apply of migrations/ produces), for
+// the daily checkSchemaDrift below; generated, see scripts/generate-schema-snapshot.mjs.
+import schemaSnapshot from './schema-snapshot.json';
 // #2501/#2528: cross-cutting helpers used from nearly every route handler
 // below, extracted into worker/lib/ -- see each module's own comment for
 // the call-site counts that justified pulling it out of this file.
@@ -85,6 +88,7 @@ import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-ad
 import { handleStripeWebhook, handleCardSetupIntent, handleConfirmCard } from './lib/stripe.js';
 import { classifyStripeRequirements } from './lib/stripe-requirements.js';
 import { checkWebhookSecrets } from './lib/webhook-secret-check.js';
+import { checkSchemaDrift } from './lib/schema-drift.js';
 import { handleDiditVerificationSession, handleDiditVerificationStatus, handleDiditWebhook } from './lib/didit.js';
 import {
   handleVideoGenerationJobCreate, handleVideoGenerationJobStatus, handleVideoGenerationWebhook,
@@ -545,6 +549,11 @@ export default {
     if (event.cron === DB_BACKUP_CRON_EXPRESSION) {
       ctx.waitUntil(backupDatabaseToR2(env).catch((error) => {
         console.error('backupDatabaseToR2 failed', error);
+      }));
+      // #3203: once a day is plenty for "someone changed production's schema
+      // by hand", and the check reads a few thousand schema rows.
+      ctx.waitUntil(checkSchemaDrift(env, { expected: schemaSnapshot, sendEmail }).catch((error) => {
+        console.error('checkSchemaDrift failed', error);
       }));
     }
   },
