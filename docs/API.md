@@ -5328,13 +5328,14 @@ Same `id_verified` gate and a per-builder rate limit. Returns
 committed:
 
 - `TURN_SERVER_URL` — the relay's `turn:` URL.
-- `TURN_SHARED_SECRET` — coturn's `static-auth-secret` (`use-auth-secret`).
-  When set, each response carries a fresh credential with a one-hour
-  lifetime: `username = "<expiryUnixSeconds>:<builderId>"`,
+- `TURN_SHARED_SECRET` — coturn's `static-auth-secret` (`use-auth-secret`),
+  required for the TURN entry. Each response carries a fresh credential with
+  a one-hour lifetime: `username = "<expiryUnixSeconds>:<builderId>"`,
   `credential = base64(HMAC-SHA1(TURN_SHARED_SECRET, username))`. The client
-  re-fetches it before it expires (`src/shop/voiceChat.js`).
-- `TURN_SERVER_USERNAME` / `TURN_SERVER_CREDENTIAL` — a single static pair,
-  used only while `TURN_SHARED_SECRET` is unset.
+  re-fetches it before it expires (`src/shop/voiceChat.js`). If
+  `TURN_SERVER_URL` is set but this secret is not, the response is STUN only
+  (and one error is logged per isolate); there is no static-credential
+  fallback (#3134).
 
 ### `GET /api/voice/signal`
 

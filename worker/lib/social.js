@@ -763,11 +763,15 @@ async function handleFriendVoiceChannels(request, db, route) {
 // needed) -- Cloudflare's own free tier doesn't run one, same reasoning
 // #2778 gave for why TURN needs its own answer.
 //
-// #3039 (resolving #3010): when TURN_SHARED_SECRET is set (coturn's
-// `use-auth-secret` / the TURN REST API convention), every request mints a
-// short-lived credential instead of handing out one static pair to every
-// caller. TURN_SERVER_USERNAME/TURN_SERVER_CREDENTIAL remain only as the
-// fallback until the relay is switched over.
+// #3039 (resolving #3010): TURN_SHARED_SECRET (coturn's `use-auth-secret` /
+// the TURN REST API convention) mints a short-lived credential per request
+// instead of handing out one static pair to every caller. #3134: the relay
+// has been switched over, so that is now the only mode (the owner's *One
+// model, not a hybrid* decision) -- the old static
+// TURN_SERVER_USERNAME/TURN_SERVER_CREDENTIAL fallback is gone and nothing
+// reads those two secrets any more. A TURN_SERVER_URL with no
+// TURN_SHARED_SECRET gets STUN only (never a static pair), with one log line
+// per isolate so the misconfiguration is findable without spamming.
 const VOICE_ICE_CONFIG_RATE_LIMIT_MAX = PRESENCE_NEARBY_RATE_LIMIT_MAX;
 export const TURN_CREDENTIAL_TTL_SECONDS = 3600;
 
@@ -781,6 +785,8 @@ export async function mintTurnCredential(sharedSecret, builderId, nowMs = Date.n
   return { username, credential: btoa(binary) };
 }
 
+let warnedTurnMissingSecret = false;
+
 async function handleVoiceIceConfig(request, db, env) {
   const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
   await checkRateLimit(db, `voice-ice-config:${sessionBuilder.builder_id}`, VOICE_ICE_CONFIG_RATE_LIMIT_MAX);
@@ -789,12 +795,9 @@ async function handleVoiceIceConfig(request, db, env) {
     if (env.TURN_SHARED_SECRET) {
       const { username, credential } = await mintTurnCredential(env.TURN_SHARED_SECRET, sessionBuilder.builder_id);
       iceServers.push({ urls: env.TURN_SERVER_URL, username, credential });
-    } else {
-      iceServers.push({
-        urls: env.TURN_SERVER_URL,
-        username: env.TURN_SERVER_USERNAME,
-        credential: env.TURN_SERVER_CREDENTIAL,
-      });
+    } else if (!warnedTurnMissingSecret) {
+      warnedTurnMissingSecret = true;
+      console.error('TURN_SERVER_URL is set but TURN_SHARED_SECRET is not; serving STUN only');
     }
   }
   return json({ iceServers });
