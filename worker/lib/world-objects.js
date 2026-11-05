@@ -234,8 +234,8 @@ export async function handleInstances(request, env, route, url) {
     if (!Array.isArray(input.instances)) throw new HttpError('instances must be an array', 400);
     if (input.instances.length === 0) throw new HttpError('instances must contain at least one item', 400);
     if (input.instances.length > 100) throw new HttpError('instances must contain at most 100 items', 400);
-    const instances = input.instances.map((item) => validateInstance(item, crypto.randomUUID()));
-    const instanceIds = instances.map((instance) => instance.instanceId);
+    let instances = input.instances.map((item) => validateInstance(item, crypto.randomUUID()));
+    let instanceIds = instances.map((instance) => instance.instanceId);
     if (new Set(instanceIds).size !== instanceIds.length) {
       throw new HttpError('instanceId values must be unique', 400);
     }
@@ -244,6 +244,36 @@ export async function handleInstances(request, env, route, url) {
     await assertReferencesExist(db, 'catalog_templates', 'template_id', instances.map((instance) => instance.templateId), 'templateId');
     await assertReferencesExist(db, 'landlets', 'landlet_id', instances.map((instance) => instance.landletId), 'landletId');
     const existingInstances = await getInstancesById(db, instanceIds);
+    // #3101 (option 2): PUT's "creates missing IDs" behavior is what lets a
+    // stale Build tab silently recreate an item another tab deleted -- the
+    // tab only ever sends PUT for items it still believes exist (a deliberate
+    // recreate, like Undo of a delete, goes through POST). A caller that
+    // knows it is only updating sets updateOnly: ids with no stored row are
+    // then skipped and reported back in missingInstanceIds instead of being
+    // created. Absent the flag, PUT keeps its documented create-or-replace
+    // behavior exactly.
+    const updateOnly = request.method === 'PUT' && input.updateOnly === true;
+    const missingInstanceIds = updateOnly
+      ? instanceIds.filter((instanceId) => !existingInstances.has(instanceId))
+      : [];
+    // Of the missing ids, the ones a seller suspension removed from this
+    // builder's land (a still-pending #2986 snapshot): the client says so in
+    // its own words and refreshes Removed Items, rather than blaming another tab.
+    let suspendedSellerInstanceIds = [];
+    if (missingInstanceIds.length > 0) {
+      const placeholders = missingInstanceIds.map(() => '?').join(', ');
+      const { results: pending } = await db.prepare(`
+        SELECT json_extract(instance_json, '$.instance_id') AS instance_id
+        FROM suspended_seller_instance_snapshots
+        WHERE builder_id = ? AND restored_at IS NULL AND cleared_at IS NULL
+          AND json_extract(instance_json, '$.instance_id') IN (${placeholders})
+      `).bind(sessionBuilder.builder_id, ...missingInstanceIds).all();
+      suspendedSellerInstanceIds = pending.map((row) => row.instance_id);
+      const missingSet = new Set(missingInstanceIds);
+      instances = instances.filter((instance) => !missingSet.has(instance.instanceId));
+      instanceIds = instances.map((instance) => instance.instanceId);
+      if (instances.length === 0) return json({ instances: [], rejectedInstanceIds: [], missingInstanceIds, suspendedSellerInstanceIds });
+    }
     await assertTemplatesFromActiveSellers(db, instances.filter((instance) => {
       const existing = existingInstances.get(instance.instanceId);
       return !existing || instance.templateId !== existing.templateId;
@@ -386,6 +416,7 @@ export async function handleInstances(request, env, route, url) {
     return json({
       instances: succeededInstanceIds.map((instanceId) => stored.get(instanceId)),
       rejectedInstanceIds,
+      ...(updateOnly ? { missingInstanceIds, suspendedSellerInstanceIds } : {}),
     }, request.method === 'POST' ? 201 : 200);
   }
 

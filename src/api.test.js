@@ -223,6 +223,40 @@ describe('upsertInstancesRemote', () => {
   });
 });
 
+describe('upsertInstancesRemote updateOnly (#3101)', () => {
+  it('asks the server not to create missing ids and reports the ones it skipped', async () => {
+    const bodies = [];
+    vi.stubGlobal('fetch', vi.fn((url, options) => {
+      const body = JSON.parse(options.body);
+      bodies.push(body);
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          instances: body.instances.filter((i) => i.instanceId !== 'gone'),
+          rejectedInstanceIds: [],
+          missingInstanceIds: ['gone'],
+        }),
+      });
+    }));
+    const updated = await upsertInstancesRemote([
+      { instanceId: 'kept', x: 0, y: 0, z: 0 }, { instanceId: 'gone', x: 1, y: 0, z: 0 },
+    ], { updateOnly: true });
+    expect(bodies[0].updateOnly).toBe(true);
+    expect(updated.map((i) => i.instanceId)).toEqual(['kept']);
+    expect(updated.missingInstanceIds).toEqual(['gone']);
+  });
+
+  it('does not send updateOnly unless asked', async () => {
+    const bodies = [];
+    vi.stubGlobal('fetch', vi.fn((url, options) => {
+      bodies.push(JSON.parse(options.body));
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ instances: [] }) });
+    }));
+    await upsertInstancesRemote([{ instanceId: 'a', x: 0, y: 0, z: 0 }]);
+    expect('updateOnly' in bodies[0]).toBe(false);
+  });
+});
+
 describe('deleteInstancesRemote', () => {
   it('attaches how many instances succeeded before a chunk failure', async () => {
     let call = 0;
