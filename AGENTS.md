@@ -373,6 +373,21 @@ most likely to come up again.
   different thing (a shop's name, not a person's) and stays its own
   field. (#3142.)
 
+- **A platform-granted credit is refunded when the failure is ours or
+  the provider's, and stays spent only when it is attributable to what
+  the user submitted.** (2026-11-05, #2970.) Video-to-3D credits are
+  free grants under a daily budget, so the provider cost is sunk either
+  way and the only thing at stake is whether the builder loses a
+  rationed credit for an outcome they didn't cause. Tripo `failed`/
+  `cancelled`/`expired`, the 15-minute timeout sweep, and a finished
+  model we couldn't store all refund; `banned` (a content-policy
+  rejection of the builder's own video) does not, so the filter can't
+  be probed for free. User-facing copy says which happened. Whether the
+  platform absorbs the provider's *dollar* cost of a failed call is a
+  separate money question (#1618); this decision is about the user's
+  credit, not ours. Guard refunds against a late provider result
+  completing an already-refunded job.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
