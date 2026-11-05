@@ -1037,6 +1037,32 @@
       #shop-nearby-chat-status.error {
         color: #ff8a80;
       }
+      /* #3128: "Muted (N)" control + the Unmute list it expands; hidden
+         while nothing is muted. Same compact pill shape as the message
+         action buttons above. */
+      #shop-nearby-chat-muted[hidden], #shop-nearby-chat-muted-list[hidden] {
+        display: none;
+      }
+      #shop-nearby-chat-muted {
+        font: 11px/1.4 sans-serif;
+        color: var(--pill-text);
+      }
+      #shop-nearby-chat-muted button {
+        padding: 1px 6px;
+        border-radius: 5px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        font: 11px/1.4 sans-serif;
+        cursor: pointer;
+      }
+      .shop-nearby-chat-muted-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        margin-top: 3px;
+      }
       #shop-nearby-chat-form {
         display: flex;
         gap: 4px;
@@ -4925,6 +4951,10 @@
     <div id="shop-nearby-chat-panel">
       <div id="shop-nearby-chat-log" role="log" aria-live="polite"></div>
       <div id="shop-nearby-chat-status" role="status" aria-live="polite"></div>
+      <div id="shop-nearby-chat-muted" hidden>
+        <button id="shop-nearby-chat-muted-toggle" type="button" aria-expanded="false" aria-controls="shop-nearby-chat-muted-list">Muted (0)</button>
+        <div id="shop-nearby-chat-muted-list" hidden></div>
+      </div>
       <form id="shop-nearby-chat-form">
         <input id="shop-nearby-chat-input" type="text" maxlength="280" placeholder="Say something nearby…" autocomplete="off" />
         <button type="submit">Send</button>

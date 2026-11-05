@@ -282,6 +282,10 @@ const aMutedBAfterToggle = await pageA.evaluate((builderId) => {
   return entry?.muted === true;
 }, builderB.builderId);
 console.log('A\'s own mute toggle for B took effect (should be true):', aMutedBAfterToggle);
+// #3128: the mute is kept per account in localStorage (so it outlives a
+// reconnect or reload), and un-muting removes it again.
+const mutePersistedForA = await pageA.evaluate(() => Object.keys(localStorage).some((k) => k.startsWith('hh-muted:voice:')));
+console.log('A\'s mute of B is persisted in localStorage (should be true):', mutePersistedForA);
 
 // Un-mute again -- back to the normal distance-ramped gain the rest of
 // this test's own flying-exclusion teardown below doesn't otherwise care
@@ -292,6 +296,8 @@ await pageA.waitForFunction(() => {
   const btn = document.querySelector('#shop-voice-peers-list button[data-action="mute"]');
   return btn && !btn.classList.contains('shop-voice-peer-muted');
 }, { timeout: 5000 });
+const mutePersistenceCleared = await pageA.evaluate(() => !Object.keys(localStorage).some((k) => k.startsWith('hh-muted:voice:')));
+console.log('un-muting removes the persisted mute (should be true):', mutePersistenceCleared);
 
 await pageA.click('#shop-voice-peers-list button[data-action="report"]');
 // The click handler's own fetch is async and unawaited from this test's
@@ -332,6 +338,8 @@ const pass =
   !!aSeesB && !!bSeesA &&
   peerRowCountBeforeMute === 1 &&
   aMutedBAfterToggle &&
+  mutePersistedForA &&
+  mutePersistenceCleared &&
   reportedCorrectly &&
   bTornDownInA &&
   errors.length === 0;
