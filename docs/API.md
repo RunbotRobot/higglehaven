@@ -11474,7 +11474,8 @@ docs/SPEC.md §6 requires mandatory CSAM/CSEM reporting to NCMEC's
 CyberTipline. Owner approved building it 2026-11-03 in three steps; this is
 step 1 only: an **admin-initiated record** that a confirmed moderation
 decision is being reported. It makes **no external submission** (that is
-#3042, blocked on registering with NCMEC) and preserves no evidence (#3041).
+#3042, blocked on registering with NCMEC). Evidence preservation (#3041) is
+documented in its own subsection below.
 Everything here is `requireAdmin`-gated (a suspended admin gets `403` like
 anywhere else) and invisible to the reported account: no notification is
 sent, nothing in the account's own data export mentions it, and the
@@ -11524,6 +11525,59 @@ report also writes one `admin_action_log` entry (`ncmec_report_create`,
 
 Newest first. Optional `limit` (1 to 100, default 50) and `reportedUserId`
 filter. Returns `{ reports: [...] }` in the same shape.
+
+### Preserved evidence (#3041, sub-issue 2/3 of #3031)
+
+Owner decision 2026-11-05: content is preserved **only for items an admin has
+recorded a report on**, in a segregated admin-only store that every deletion
+and cleanup path skips, and auto-purged at one year. The 2026-10-20
+`sexual_content` keep-nothing rule still governs every ordinary removal; it
+is overridden only by a filed report.
+
+Creating a report (above) also writes one `ncmec_evidence` row
+(`migrations/0187_ncmec_evidence.sql`) in the **same atomic batch** as the
+`ncmec_reports` row, so neither can exist without the other. It holds, as
+captured at report time: the reported account (`users` row minus credentials
+and tax data, plus its builder and seller identity), upload metadata (up to
+200 catalog templates and 200 video-to-3D jobs the account created), and one
+entry per `contentRefs` item. For a content table the store can read
+(`sign_posts`, `calendar_events`, `product_reviews`, `catalog_templates`,
+`products`, `video_generation_jobs`) that entry is
+`{ status: "preserved", row, r2Keys, missingObjects, removalSnapshots }`,
+and every R2 object the row references (`/uploads/<key>`) is **copied** to
+`ncmec-evidence/<reportId>/<key>` in the `MODELS` bucket. If the item no
+longer existed at report time (for example a `sexual_content` removal made
+before the report), the entry is `{ status: "not_retained", reason,
+removalSnapshots }` and says so plainly; nothing is reconstructed. If an R2
+copy fails for any reason other than the source being gone, the report
+request fails and nothing is recorded; a duplicate report deletes its copies
+again.
+
+Nothing else references the evidence table (no foreign keys), so account
+deletion, listing/template deletion, saved-layout cleanup and the other
+cleanup jobs cannot reach it. The `ncmec-evidence/` R2 prefix is excluded
+from the orphan sweep (`cleanupUnreferencedModels`, manual and cron), from
+the admin model listing, and is answered `404` by `GET`/`HEAD`/`DELETE
+/uploads/ncmec-evidence/...`. It is not in any data export and no
+notification is sent from it. Rows are immutable (an `UPDATE` trigger
+aborts); the only deletion is the retention purge.
+
+**Retention.** One constant, `NCMEC_EVIDENCE_RETENTION_MS` in
+`worker/lib/ncmec-evidence.js` (one year, 18 U.S.C. § 2258A(h) as amended by
+the REPORT Act), compared against `captured_at` at run time, so counsel can
+change it without a schema change. The scheduled job deletes the R2 copies,
+then the row, and writes one `admin_action_log` entry per purged report
+(`ncmec_evidence_purge`, `targetType: "ncmec_report"`, `targetId` the
+`reportId`, `detail` with `capturedAt` and `r2ObjectsDeleted`). The immutable
+`ncmec_reports` record is never touched. Preserved objects count toward the
+`MODELS` bucket's storage total.
+
+### `GET /api/ncmec-reports/:reportId/evidence`
+
+`requireAdmin`-gated, read-only. Returns `{ evidence: { evidenceId,
+reportId, reportedUserId, account, uploads, content, capturedAt } }`, or
+`404` if the report has no preserved evidence (never recorded, or already
+purged).
 
 ### Admin Dashboard
 

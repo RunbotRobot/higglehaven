@@ -20,6 +20,7 @@ import { json, HttpError } from './http.js';
 import { readJson, stringValue, queryLimit } from './validation.js';
 import { requireAdmin } from './auth.js';
 import { checkRateLimit } from './rate-limit.js';
+import { buildNcmecEvidence, discardEvidenceObjects, handleNcmecEvidenceGet } from './ncmec-evidence.js';
 
 // Same bucket shape and ceiling as the sibling admin mutations in
 // account-moderation.js (ADMIN_GRANT_RATE_LIMIT_MAX), keyed by the acting
@@ -99,7 +100,8 @@ async function resolveDecision(db, input, decisionType) {
   return { decisionId: snapshot.snapshot_id, reportedUserId: reported.user_id, contentRefs: [ref] };
 }
 
-async function handleCreate(request, db) {
+async function handleCreate(request, env) {
+  const db = env.DB;
   const admin = await requireAdmin(request, db);
   await checkRateLimit(db, `ncmec-report:${admin.user_id}`, NCMEC_REPORT_RATE_LIMIT_MAX);
   const input = await readJson(request);
@@ -118,12 +120,18 @@ async function handleCreate(request, db) {
   const { decisionId, reportedUserId, contentRefs } = await resolveDecision(db, input, decisionType);
 
   const reportId = `ncmec-report-${crypto.randomUUID()}`;
+  // #3041: preserve whatever still exists, in the same atomic batch as the
+  // report row. R2 copies happen first; if the report then turns out to be a
+  // duplicate they are deleted again below.
+  const evidence = await buildNcmecEvidence(env, { reportId, reportedUserId, contentRefs });
   // One report per decision. ON CONFLICT on exactly that unique pair (not
   // INSERT OR IGNORE, which would also swallow a NOT NULL/CHECK violation
   // as if it were a duplicate). The audit-log row is batched with the
   // insert but conditional on the report row actually existing, so a
   // duplicate attempt logs nothing and a real one can never lack its log.
-  const results = await db.batch([
+  let results;
+  try {
+    results = await db.batch([
     db.prepare(`
       INSERT INTO ncmec_reports
         (report_id, decision_type, decision_id, reported_user_id, content_refs_json, note, reported_by_admin_id)
@@ -138,8 +146,14 @@ async function handleCreate(request, db) {
       `admin-action-${crypto.randomUUID()}`, admin.user_id, reportedUserId,
       JSON.stringify({ reportId, decisionType, decisionId }), reportId,
     ),
-  ]);
+    evidence.statement,
+    ]);
+  } catch (error) {
+    await discardEvidenceObjects(env, evidence.copiedKeys);
+    throw error;
+  }
   if (results[0].meta.changes === 0) {
+    await discardEvidenceObjects(env, evidence.copiedKeys);
     const existing = await db.prepare(
       'SELECT report_id FROM ncmec_reports WHERE decision_type = ? AND decision_id = ?',
     ).bind(decisionType, decisionId).first();
@@ -164,8 +178,13 @@ async function handleList(request, db, url) {
 // Insert and read only: there is deliberately no PATCH/PUT/DELETE route,
 // and the table's own triggers (migrations/0176) abort an UPDATE/DELETE
 // even from code that bypasses this handler.
-export async function handleNcmecReports(request, db, route, url) {
-  if (route.length === 1 && request.method === 'POST') return handleCreate(request, db);
+export async function handleNcmecReports(request, env, route, url) {
+  const db = env.DB;
+  if (route.length === 1 && request.method === 'POST') return handleCreate(request, env);
   if (route.length === 1 && request.method === 'GET') return handleList(request, db, url);
+  // #3041: the preserved evidence for one report (admin-only, read-only).
+  if (route.length === 3 && route[2] === 'evidence' && request.method === 'GET') {
+    return handleNcmecEvidenceGet(request, env, route[1]);
+  }
   return json({ error: 'Not found' }, 404);
 }
