@@ -457,6 +457,23 @@ function openDmModal(otherBuilderId, otherLabel) {
 
 dmCloseBtn.addEventListener('click', closeDmModal);
 
+// #3140: Block from the DM header. Blocking also ends the friendship, so on
+// success this goes back to the (refreshed) friends list rather than leaving a
+// thread open with someone who is no longer a friend.
+const dmBlockBtn = document.getElementById('dm-block-btn');
+dmBlockBtn.addEventListener('click', async () => {
+  if (!dmOtherBuilderId) return;
+  dmBlockBtn.disabled = true;
+  try {
+    if (await confirmAndBlockPerson(dmOtherBuilderId)) {
+      closeDmModal();
+      await renderFriends();
+    }
+  } finally {
+    dmBlockBtn.disabled = false;
+  }
+});
+
 dmComposeForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   const text = dmComposeInput.value.trim();
