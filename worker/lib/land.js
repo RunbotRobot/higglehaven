@@ -540,6 +540,17 @@ export async function handleLandletLevels(request, db, route) {
     const maxZ = Math.max(0, ...remainingIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M;
     const outOfRange = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)')
       .bind(landletId, minZ, maxZ).all();
+    // #2925 (accepted, not a bug to fix): this pre-delete snapshot picks the
+    // rate-limit bucket, while the sweep below re-reads (freshOutOfRange,
+    // #928) because it must be accurate. A concurrent instance-create from
+    // the same owner landing between the two can make the stricter
+    // saved-layout-create bucket get skipped for that one request. Moving
+    // the choice after the DELETE would reintroduce #924 (a 429 after an
+    // irreversible removal), and nothing earlier has post-delete data, so
+    // the only real fix would be a lock across the whole read-decide-delete-
+    // sweep sequence. The impact is one builder misattributing a count
+    // against their own quota (no other account's data or money), so it
+    // isn't worth that machinery. Don't "fix" this by swapping snapshots.
     if (outOfRange.results.length > 0) {
       await checkRateLimit(db, `saved-layout-create:${landlet.owner_builder_id}`, SAVED_LAYOUT_CREATE_RATE_LIMIT_MAX);
     } else {
