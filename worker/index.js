@@ -84,6 +84,7 @@ import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-ad
 // module's own comment for what deliberately stayed here instead (and why).
 import { handleStripeWebhook, handleCardSetupIntent, handleConfirmCard } from './lib/stripe.js';
 import { classifyStripeRequirements } from './lib/stripe-requirements.js';
+import { checkWebhookSecrets } from './lib/webhook-secret-check.js';
 import { handleDiditVerificationSession, handleDiditVerificationStatus, handleDiditWebhook } from './lib/didit.js';
 import {
   handleVideoGenerationJobCreate, handleVideoGenerationJobStatus, handleVideoGenerationWebhook,
@@ -478,6 +479,11 @@ export default {
     }));
     ctx.waitUntil(checkMigrationDrift(env).catch((error) => {
       console.error('checkMigrationDrift failed', error);
+    }));
+    // #1793: alert (log + one Control Room card) when a provider is configured
+    // but its webhook secret is not.
+    ctx.waitUntil(checkWebhookSecrets(env).catch((error) => {
+      console.error('checkWebhookSecrets failed', error);
     }));
     // #848: without this, only a manually-triggered admin POST ever
     // reclaims unreferenced R2 uploads (most notably concept-image's own
