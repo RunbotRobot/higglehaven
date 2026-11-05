@@ -41,6 +41,7 @@ describe('expireStaleVideoGenerationJobs (#1619)', () => {
     const staleRow = await env.DB.prepare('SELECT status, error_message, processed_at FROM video_generation_jobs WHERE job_id = ?').bind(staleJobId).first();
     expect(staleRow.status).toBe('failed');
     expect(staleRow.error_message).toMatch(/timed out/i);
+    expect(staleRow.error_message).toMatch(/credit/i); // #3111
     expect(staleRow.processed_at).toBeTruthy();
 
     const freshRow = await env.DB.prepare('SELECT status, processed_at FROM video_generation_jobs WHERE job_id = ?').bind(freshJobId).first();
