@@ -1995,7 +1995,7 @@ above — the owner still needs to register this endpoint's URL in the
 Stripe dashboard and copy the resulting signing secret here before any of
 this runs for real; the code itself doesn't need to wait for that.)
 
-Four event types are handled; everything else is a no-op `200`.
+Five event types are handled; everything else is a no-op `200`.
 
 `account.updated`: the account id on the event is looked up against both
 `sellers` and `builders` — a given Stripe Custom account belongs to
@@ -2012,6 +2012,18 @@ Ordering (#3071): Stripe doesn't guarantee delivery order, so the newest
 applied event's `created` time is stored in `stripe_event_created_at` and an
 `account.updated` older than it is ignored (a `200` no-op). An event with no
 numeric `created` is applied unconditionally, as before.
+
+**#782**: `payment_intent.succeeded` — backstop for a charge that
+succeeded while the buyer's `POST /api/purchases/finalize` never landed
+(closed tab, dropped connection). An intent created by our own checkout
+(its metadata carries `instanceId`/`templateId`) is finalized through the
+same core as the client call (`finalizeSucceededPaymentIntent`): same
+purchase row, credit, owned-avatar/animation grant, delivery token and
+notifications, no special messaging. Whichever of the client finalize and
+the webhook arrives first wins; the other finds the existing row (the
+`payment_intent_id` UNIQUE index plus an atomic batch make a concurrent
+loser roll back whole) and is a no-op. An unavailable item takes the same
+orphan-row path as a client finalize (#472). Other intents are ignored.
 
 **#1086/#2419**: `charge.refunded`, `charge.dispute.funds_withdrawn`, and
 `charge.dispute.funds_reinstated` — a charge can be reversed by Stripe's
