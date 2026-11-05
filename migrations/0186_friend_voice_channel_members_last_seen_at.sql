@@ -1,0 +1,14 @@
+-- #3120: friend_voice_channel_members was the only ephemeral social table
+-- with no cron prune and no liveness signal, so a member who just closed
+-- the tab (or lost connectivity) stayed a member forever: the channel stayed
+-- "active", GET /voice/friend-channels kept listing them, and the owner was
+-- never notified again (the #2833 notification fires only when a join
+-- creates the owner's row, which had survived).
+--
+-- last_seen_at is refreshed from a member's own GET /voice/friend-channels
+-- poll (at most about once a minute per member, so it stays cheap on D1's
+-- free tier) and pruneStaleFriendVoiceChannelMembers (worker/index.js,
+-- run from the cron) deletes rows whose freshest signal is old. NULL means
+-- "never refreshed since joining", read as joined_at via COALESCE, so
+-- existing rows need no backfill.
+ALTER TABLE friend_voice_channel_members ADD COLUMN last_seen_at TEXT;

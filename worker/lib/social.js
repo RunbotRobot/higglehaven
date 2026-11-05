@@ -644,6 +644,8 @@ const FRIEND_VOICE_CHANNEL_MUTATE_RATE_LIMIT_MAX = 40;
 // polling budget as VOICE_SIGNAL_POLL_RATE_LIMIT_MAX/
 // PRESENCE_REPORT_RATE_LIMIT_MAX above.
 const FRIEND_VOICE_CHANNEL_POLL_RATE_LIMIT_MAX = PRESENCE_REPORT_RATE_LIMIT_MAX;
+// #3120: minimum gap between last_seen_at writes for one member.
+const FRIEND_VOICE_CHANNEL_LAST_SEEN_REFRESH_MS = 60 * 1000;
 
 // GET lists the channels the caller is currently a member of (including
 // one they themselves own); POST .../join and .../leave are the only
@@ -653,6 +655,15 @@ async function handleFriendVoiceChannels(request, db, route) {
 
   if (request.method === 'GET' && route.length === 2) {
     await checkRateLimit(db, `friend-voice-channel-poll:${sessionBuilder.builder_id}`, FRIEND_VOICE_CHANNEL_POLL_RATE_LIMIT_MAX);
+    // #3120: this poll is the member's liveness signal (see migration
+    // 0186); pruneStaleFriendVoiceChannelMembers drops a member that stops
+    // polling. Conditional so a member polling every ~1.2s writes about once
+    // a minute, not on every poll (an UPDATE that matches no row is free).
+    const nowMs = Date.now();
+    await db.prepare(`
+      UPDATE friend_voice_channel_members SET last_seen_at = ?
+      WHERE member_builder_id = ? AND COALESCE(last_seen_at, joined_at) < ?
+    `).bind(new Date(nowMs).toISOString(), sessionBuilder.builder_id, new Date(nowMs - FRIEND_VOICE_CHANNEL_LAST_SEEN_REFRESH_MS).toISOString()).run();
     // #3123: a suspended member drops out of the listing, and a suspended
     // owner takes their whole channel with them (the owner's own row is
     // what marks a channel active); neither is deleted, so a lifted
