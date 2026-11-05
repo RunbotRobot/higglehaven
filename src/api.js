@@ -298,9 +298,12 @@ export async function equipAvatar(templateId) {
   return avatar;
 }
 
-export async function fetchMyOwnedAvatars() {
-  const { avatars } = await requestJson('/builders/me/avatars');
-  return avatars;
+// #1132: cursor-paginated like the sibling lists; resolves to { avatars,
+// nextCursor } (nextCursor null on the last page).
+export async function fetchMyOwnedAvatars(cursor = null) {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+  const { avatars, nextCursor } = await requestJson(`/builders/me/avatars${query}`);
+  return { avatars, nextCursor: nextCursor ?? null };
 }
 
 // #1164 (sub-issue of #1161): mirrors the three avatar helpers just above
@@ -320,9 +323,11 @@ export async function equipAnimation(templateId) {
   return animation;
 }
 
-export async function fetchMyOwnedAnimations() {
-  const { animations } = await requestJson('/builders/me/animations');
-  return animations;
+// #1303: same shape as fetchMyOwnedAvatars above.
+export async function fetchMyOwnedAnimations(cursor = null) {
+  const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+  const { animations, nextCursor } = await requestJson(`/builders/me/animations${query}`);
+  return { animations, nextCursor: nextCursor ?? null };
 }
 
 // Stripe Connect (Custom account) payout onboarding for a builder's own
