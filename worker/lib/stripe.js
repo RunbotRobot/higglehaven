@@ -306,6 +306,10 @@ async function handleDisputeFundsReinstatedWebhookEvent(db, purchase) {
 
   await db.prepare('UPDATE builders SET higgles_balance_cents = higgles_balance_cents + ? WHERE builder_id = ?')
     .bind(creditBackCents, purchase.builder_id).run();
+  // #836: the clawback removed this sale's earnings-ledger rows; the
+  // reinstated sale counts toward the land-cap window again.
+  await db.prepare('INSERT INTO higgles_earnings_events (event_id, builder_id, amount_cents, purchase_id) VALUES (?, ?, ?, ?)')
+    .bind(`earnings-${crypto.randomUUID()}`, purchase.builder_id, creditBackCents, purchase.purchase_id).run();
   const template = await db.prepare('SELECT name FROM catalog_templates WHERE template_id = ?')
     .bind(purchase.template_id).first();
   await fireNotification(db, purchase.builder_id,
