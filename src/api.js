@@ -1884,6 +1884,26 @@ export async function sendNearbyChatReport({ reportedBuilderId, reason }) {
   return reportId;
 }
 
+// #3140 (sub-issue of #3124): durable, silent blocks keyed on the account.
+// Blocking takes whichever id the surface already has (a builder id on
+// presence, chat and friends); the server resolves it to the account itself.
+export async function blockPerson({ builderId }) {
+  await requestJson('/blocks', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ builderId }),
+  });
+}
+
+export async function fetchBlockedPeople() {
+  const { blocks } = await requestJson('/blocks');
+  return blocks;
+}
+
+export async function unblockPerson(userId) {
+  await requestJson(`/blocks/${encodeURIComponent(userId)}`, { method: 'DELETE' });
+}
+
 // #2817/#2818 (sub-issues of #2780, proximity voice chat): the WebRTC
 // signaling relay — point-to-point, unlike fetchNearbyChatMessages' own
 // landlet-wide broadcast above. src/shop/voiceChat.js is the only caller.

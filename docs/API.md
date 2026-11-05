@@ -2736,6 +2736,13 @@ products (crop)" above. A request-body `sellerId` is ignored — this
 endpoint never reassigns a template to a different seller, the same way
 `PUT /api/landlets/:id` never reassigns `ownerBuilderId`.
 
+`modelUrl`, `modelSizeBytes` and `skeletonSignature` describe one file and
+move together (#1753). A request that changes `modelUrl` must also send
+`modelSizeBytes` (`400` otherwise), and if it omits `skeletonSignature` the
+stored signature is cleared to `null` rather than left describing the old
+model. Re-sending the current `modelUrl`, or any edit that does not touch
+it, leaves all three alone.
+
 If the request actually changes `dimensions`, every builder with a placed
 instance of this template gets a notification once the update succeeds —
 see "Notifications" below.
@@ -5184,6 +5191,40 @@ documents for itself), no e2e session can actually reach
 (not id-verified) friends, and that a direct `POST
 /api/direct-messages` against the real dev server still gets rejected
 even bypassing that button entirely.
+
+## Blocks (#3140)
+
+A durable, **silent** block between two people, keyed on the account
+(`user_id`), not the resettable builder profile (`migrations/0188_user_blocks.sql`).
+The blocked person is never notified and nothing in any response they get
+differs from a stranger's. This resource only lands the table and its
+controls; the per-surface filters that make a block take effect on presence,
+nearby chat, voice signaling, direct messages and friend requests are #3143.
+All three routes need a signed-in, non-suspended account; blocking does
+**not** require ID verification. Writes share a `block-mutate` rate limit
+(20 per window).
+
+### `POST /api/blocks`
+
+Body: `{ "builderId": "..." }` or `{ "userId": "..." }` (a builder id is
+resolved to its account by the server; a client-supplied mapping is never
+trusted). Idempotent: blocking someone already blocked is the same `201`.
+In one atomic batch it also silently deletes any friendship or pending friend
+request between the two people, in either direction. Response:
+`201 { "blocked": true, "userId": "..." }`. `400` for blocking yourself or no
+target, `404` when no live account matches.
+
+### `DELETE /api/blocks/:userId`
+
+Idempotent: unblocking someone who is not blocked is the same `200
+{ "blocked": false, "userId": "..." }`.
+
+### `GET /api/blocks`
+
+The caller's own list only, newest first, up to 200:
+`{ "blocks": [{ "userId": "...", "username": "...", "blockedAt": "..." }] }`.
+Nothing here ever reveals that the caller has been blocked by someone else.
+Account deletion removes a person's rows in both directions.
 
 ## Nearby chat
 
@@ -10254,11 +10295,22 @@ The refund policy: a credit is refunded if the request turns out to have
 lost the concurrent one-pending-per-builder race above (no new job
 actually started, so nothing was really spent) or if the outbound Tripo
 call itself failed or never returned a `task_id` (never billed). Once
-Tripo's task-create call has actually returned a real `task_id`, the
-credit is **not** refunded regardless of what happens afterward —
-persisting that result failing, a later provider-side failure, or the
-15-minute processing-timeout cron sweep — same "billed means billed"
-reasoning the lost-task_id logging above already applies.
+Tripo's task-create call has returned a real `task_id`, the credit is
+also returned (#2970, owner decision 2026-11-05) when the job ends in a
+failure that is not attributable to what the builder submitted: Tripo
+`failed` / `cancelled` / `expired`, Tripo reporting success with no
+output file, a finished model that cannot be stored (after the retry
+bound), and the 15-minute processing-timeout cron sweep. The builder is
+told once, by an in-app notification and by the job's `error` text. The
+one case that keeps the credit spent is Tripo `banned` (a content-policy
+rejection of the builder's own video), so the filter can't be probed for
+free. The refund and the job's move to `failed` are one atomic D1 batch
+guarded by `processed_at IS NULL`: whichever of the webhook, a status
+poll, or the sweep arrives first both refunds and fails the job, and any
+later arrival (including a late success) changes nothing, so a job
+refunds at most once and a refunded job can never complete. Whether the
+platform absorbs the provider's dollar cost of a failed call is a
+separate question (#1618).
 
 `GET /api/video-generation-jobs/:jobId` is session-gated and returns the
 current state of one of the requesting builder's own jobs (`404` if the

@@ -20,6 +20,7 @@ import { timingSafeEqual, bytesToHex } from './crypto.js';
 import { checkRateLimit } from './rate-limit.js';
 import { assertOwner, requireSessionBuilder } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
+import { fireNotification } from './notifications.js';
 import { hasValidImageSignature } from '../index.js';
 import {
   MAX_MODEL_BYTES, formatBytes, validateGlb, getStorageUsage, reserveStorageBudget,
@@ -286,16 +287,58 @@ const TRIPO_TERMINAL_FAILURE_STATUSES = new Set(['failed', 'cancelled', 'banned'
 // message, and every case said "try a different video", which is wrong for a
 // provider-side failure and for an expired result. Each one also says what
 // happened to the credit: it is spent when the job starts (see
-// handleVideoGenerationJobCreate) and a post-Tripo failure does not return it
-// -- whether the platform should absorb that cost is the owner-gated #1618 /
-// #2970, so if that policy changes, these four strings and the timeout one
-// below are what to update.
+// handleVideoGenerationJobCreate).
+//
+// #2970 (owner decision 2026-11-05, AGENTS.md "A platform-granted credit is
+// refunded when the failure is ours or the provider's"): every failure that
+// is not attributable to what the builder submitted returns the credit, and
+// the message says so. `banned` (a content-policy rejection of the builder's
+// own video) is the one case that keeps it spent, so the filter can't be
+// probed for free.
 const TRIPO_FAILURE_MESSAGES = {
-  failed: 'We couldn\'t turn this video into a 3D model. The credit for this attempt was used. You can try again, ideally with a different video.',
-  cancelled: 'This generation was cancelled before it finished. The credit for this attempt was used.',
+  failed: 'We couldn\'t turn this video into a 3D model. Your credit has been returned. You can try again, ideally with a different video.',
+  cancelled: 'This generation was cancelled before it finished. Your credit has been returned.',
   banned: 'This video can\'t be turned into a 3D model. The credit for this attempt was used; please try a different video.',
-  expired: 'The finished model expired before we could save it. The credit for this attempt was used; please start a new generation.',
+  expired: 'The finished model expired before we could save it. Your credit has been returned; please start a new generation.',
 };
+
+// Statuses whose credit is NOT returned (see the comment above).
+const TRIPO_CREDIT_KEPT_STATUSES = new Set(['banned']);
+
+const VIDEO_GENERATION_CREDIT_RETURNED_NOTICE = 'Your 3D model generation didn\'t finish, so your credit has been returned. You can start a new generation.';
+
+// #2970: the single place a video_generation_job moves to 'failed'. The
+// optional credit refund is made atomic with that transition: both statements
+// run in one D1 batch (a transaction), the refund FIRST and keyed on the job
+// still being unprocessed (`processed_at IS NULL`), then the status update
+// under the same guard. Whichever of the webhook, a status poll, or the
+// timeout sweep gets there first both refunds and fails the job; any later
+// arrival sees `processed_at` already set, so its refund matches no row and
+// its status update changes none -- a job can never refund twice, and a
+// refunded job can never be completed afterwards (a late success hits the
+// same `processed_at IS NULL` guard in applyTripoTaskResult). The
+// notification is sent only by the caller whose status update actually
+// changed the row.
+async function failVideoGenerationJob(db, jobId, message, { refundCredit }) {
+  const failJob = db.prepare(`
+    UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+    WHERE job_id = ? AND processed_at IS NULL
+  `).bind(message, jobId);
+  if (!refundCredit) {
+    await failJob.run();
+    return false;
+  }
+  const job = await db.prepare('SELECT builder_id FROM video_generation_jobs WHERE job_id = ?').bind(jobId).first();
+  if (!job) return false;
+  const refund = db.prepare(`
+    UPDATE builders SET video_generation_credits = video_generation_credits + 1
+    WHERE builder_id = (SELECT builder_id FROM video_generation_jobs WHERE job_id = ? AND processed_at IS NULL)
+  `).bind(jobId);
+  const [, failed] = await db.batch([refund, failJob]);
+  if (failed.meta.changes !== 1) return false;
+  await fireNotification(db, job.builder_id, VIDEO_GENERATION_CREDIT_RETURNED_NOTICE);
+  return true;
+}
 
 // #3108: how many times a transient failure to store a finished model is
 // retried (once per status poll or webhook delivery) before the job is given
@@ -320,10 +363,9 @@ async function applyTripoTaskResult(db, env, jobId, task) {
     // below was never caught by either caller (the webhook handler, or the
     // status-poll path).
     if (!task?.output?.model_url) {
-      await db.prepare(`
-        UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE job_id = ? AND processed_at IS NULL
-      `).bind('We couldn\'t retrieve the finished model. The credit for this attempt was used; please start a new generation.', jobId).run();
+      await failVideoGenerationJob(db, jobId,
+        'We couldn\'t retrieve the finished model. Your credit has been returned; please start a new generation.',
+        { refundCredit: true });
       return;
     }
     // Fetching/storing happens before the atomic claim below (unlike
@@ -359,10 +401,9 @@ async function applyTripoTaskResult(db, env, jobId, task) {
         `).bind(jobId).first();
         if (!attempt || attempt.store_attempts < TRIPO_STORE_MAX_ATTEMPTS) return;
       }
-      await db.prepare(`
-        UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-        WHERE job_id = ? AND processed_at IS NULL
-      `).bind('Failed to retrieve the generated model — please try again', jobId).run();
+      await failVideoGenerationJob(db, jobId,
+        'We couldn\'t retrieve the generated model. Your credit has been returned; please try again.',
+        { refundCredit: true });
       return;
     }
     await db.prepare(`
@@ -372,10 +413,8 @@ async function applyTripoTaskResult(db, env, jobId, task) {
     return;
   }
   if (TRIPO_TERMINAL_FAILURE_STATUSES.has(task.status)) {
-    await db.prepare(`
-      UPDATE video_generation_jobs SET status = 'failed', error_message = ?, processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-      WHERE job_id = ? AND processed_at IS NULL
-    `).bind(TRIPO_FAILURE_MESSAGES[task.status], jobId).run();
+    await failVideoGenerationJob(db, jobId, TRIPO_FAILURE_MESSAGES[task.status],
+      { refundCredit: !TRIPO_CREDIT_KEPT_STATUSES.has(task.status) });
   }
 }
 
@@ -400,11 +439,18 @@ const VIDEO_GENERATION_PROCESSING_TIMEOUT_MS = 15 * 60 * 1000;
 
 export async function expireStaleVideoGenerationJobs(db) {
   const cutoff = new Date(Date.now() - VIDEO_GENERATION_PROCESSING_TIMEOUT_MS).toISOString();
-  await db.prepare(`
-    UPDATE video_generation_jobs
-    SET status = 'failed', error_message = 'This generation timed out. The credit for this attempt was used; please try again.', processed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+  // #2970: a timeout is the provider's silence, not the builder's doing, so
+  // each stale job returns its credit; handled per job so the refund and the
+  // status change stay one atomic step (failVideoGenerationJob).
+  const { results: stale } = await db.prepare(`
+    SELECT job_id FROM video_generation_jobs
     WHERE status = 'processing' AND processed_at IS NULL AND created_at < ?
-  `).bind(cutoff).run();
+  `).bind(cutoff).all();
+  for (const { job_id: jobId } of stale) {
+    await failVideoGenerationJob(db, jobId,
+      'This generation timed out. Your credit has been returned; please try again.',
+      { refundCredit: true });
+  }
 }
 
 // Shared by handleVideoGenerationJobStatus (poll the current job's task)
