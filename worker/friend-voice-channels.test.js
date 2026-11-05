@@ -7,6 +7,7 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { api, signupBuilder } from './test-helpers.js';
+import { pruneStaleFriendVoiceChannelMembers } from './index.js';
 
 beforeAll(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
@@ -467,6 +468,55 @@ describe('Friend voice channels (#2781)', () => {
       expect(bobView.body.landletId).toBeNull();
       expect(bobView.body.messages).toHaveLength(1);
       expect(bobView.body.messages[0]).toMatchObject({ channelOwnerBuilderId: alice.builderId, fromBuilderId: alice.builderId });
+    });
+  });
+  // #3120
+  describe('stale membership expiry', () => {
+    it('prunes members whose tab is gone, so the next join re-opens and re-notifies the owner', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-expiry-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-expiry-bob');
+      const carol = await signupIdVerifiedBuilder('voice-channel-expiry-carol');
+      await becomeFriends(alice, bob);
+      await becomeFriends(alice, carol);
+      const waiting = () => env.DB.prepare("SELECT COUNT(*) AS n FROM notifications WHERE builder_id = ? AND message LIKE '%waiting in your voice channel%'")
+        .bind(alice.builderId).first().then((r) => r.n);
+
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+      expect(await waiting()).toBe(1);
+
+      // Everyone closes their tab: nothing polls, the rows age out.
+      const old = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      await env.DB.prepare('UPDATE friend_voice_channel_members SET joined_at = ?, last_seen_at = NULL WHERE owner_builder_id = ?')
+        .bind(old, alice.builderId).run();
+      await pruneStaleFriendVoiceChannelMembers(env.DB);
+      const gone = await env.DB.prepare('SELECT COUNT(*) AS n FROM friend_voice_channel_members WHERE owner_builder_id = ?')
+        .bind(alice.builderId).first();
+      expect(gone.n).toBe(0);
+
+      await api(`/voice/friend-channels/${alice.builderId}/join`, carol.session({ method: 'POST' }));
+      expect(await waiting()).toBe(2);
+    });
+
+    it('keeps a member that is still polling, and refreshes last_seen_at from the poll', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-channel-expiry-live-alice');
+      const bob = await signupIdVerifiedBuilder('voice-channel-expiry-live-bob');
+      await becomeFriends(alice, bob);
+      await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
+      const old = new Date(Date.now() - 4 * 60 * 1000).toISOString();
+      await env.DB.prepare('UPDATE friend_voice_channel_members SET joined_at = ?, last_seen_at = NULL WHERE owner_builder_id = ?')
+        .bind(old, alice.builderId).run();
+
+      await api('/voice/friend-channels', bob.session());
+      const old2 = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+      await env.DB.prepare('UPDATE friend_voice_channel_members SET joined_at = ? WHERE owner_builder_id = ?').bind(old2, alice.builderId).run();
+      await pruneStaleFriendVoiceChannelMembers(env.DB);
+
+      const rows = await env.DB.prepare('SELECT member_builder_id, last_seen_at FROM friend_voice_channel_members WHERE owner_builder_id = ?')
+        .bind(alice.builderId).all();
+      const bobRow = rows.results.find((r) => r.member_builder_id === bob.builderId);
+      expect(bobRow.last_seen_at).not.toBeNull();
+      // alice never polled, so only her own anchor row (stale joined_at) is pruned; bob's survives.
+      expect(rows.results.map((r) => r.member_builder_id)).toEqual([bob.builderId]);
     });
   });
 });

@@ -493,6 +493,11 @@ export default {
     ctx.waitUntil(pruneStaleVoiceSignalingMessages(env.DB).catch((error) => {
       console.error('pruneStaleVoiceSignalingMessages failed', error);
     }));
+    // #3120: without this, a friend voice channel member who closed the tab
+    // stays in friend_voice_channel_members forever.
+    ctx.waitUntil(pruneStaleFriendVoiceChannelMembers(env.DB).catch((error) => {
+      console.error('pruneStaleFriendVoiceChannelMembers failed', error);
+    }));
     // #1619: without this, a video-to-3D job stuck in 'processing' (no
     // webhook ever arrived, polling stopped once the frontend gave up)
     // sits there forever with no automatic timeout/expiry.
@@ -2471,6 +2476,18 @@ const VOICE_SIGNAL_MESSAGE_STALE_CLEANUP_MS = 2 * 60 * 1000;
 export async function pruneStaleVoiceSignalingMessages(db) {
   const cutoff = new Date(Date.now() - VOICE_SIGNAL_MESSAGE_STALE_CLEANUP_MS).toISOString();
   await db.prepare('DELETE FROM voice_signaling_messages WHERE created_at < ?').bind(cutoff).run();
+}
+
+// #3120: friend_voice_channel_members (migrations/0159) had no cleanup, so a
+// member who closed the tab stayed in the channel forever (see migration
+// 0186). A member's own GET /voice/friend-channels poll refreshes
+// last_seen_at about once a minute; the window is well above that, and above
+// how long a backgrounded tab's throttled timers can go quiet.
+const FRIEND_VOICE_CHANNEL_MEMBER_STALE_CLEANUP_MS = 5 * 60 * 1000;
+
+export async function pruneStaleFriendVoiceChannelMembers(db) {
+  const cutoff = new Date(Date.now() - FRIEND_VOICE_CHANNEL_MEMBER_STALE_CLEANUP_MS).toISOString();
+  await db.prepare('DELETE FROM friend_voice_channel_members WHERE COALESCE(last_seen_at, joined_at) < ?').bind(cutoff).run();
 }
 
 // #1135: production D1 (users, builders, purchases, balances, ...) has no
