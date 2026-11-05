@@ -1380,6 +1380,11 @@ export async function handleCatalog(request, db, route, url, models, env) {
     // real seller), so losing Build-mode access to them is a functional
     // regression, not the intended effect. See handleInstancePurchase's
     // own guard below for what is_test_model actually gates today.
+    // #1757: the filters above, before any cursor condition, count the rows
+    // the whole listing should return -- see the first-page-only totalCount
+    // below.
+    const filterWhere = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const filterBindings = [...bindings];
     if (cursor && sort === 'name') {
       // #1015: COLLATE NOCASE on both comparisons, matching the ORDER BY
       // below and migrations/0092's own idx_catalog_templates_name_nocase
@@ -1408,6 +1413,16 @@ export async function handleCatalog(request, db, route, url, models, env) {
     const hasMore = results.length > limit;
     const page = results.slice(0, limit);
     const last = page.at(-1);
+    // #1757: the keyset cursor sorts on a column (name, price) the template's
+    // own seller can edit between two page requests, so a row renamed from
+    // after the cursor to before it is never returned in that fetch. The
+    // first page also reports how many rows matched at that moment, so a
+    // multi-page client (fetchCatalog) can notice it came up short and
+    // re-fetch the gap -- invisibly, with no change to the sort or the UI.
+    // Only the first page pays for the COUNT.
+    const totalCount = cursor ? undefined : (await db.prepare(
+      `SELECT COUNT(*) AS total FROM catalog_templates ${filterWhere}`,
+    ).bind(...filterBindings).first()).total;
     return json({
       templates: page.map(templateFromRow),
       nextCursor: hasMore
@@ -1415,6 +1430,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
           ? encodeCatalogCursor(last.name, last.template_id)
           : encodeCatalogPriceCursor(last.price_cents, last.template_id))
         : null,
+      ...(totalCount === undefined ? {} : { totalCount }),
     });
   }
 

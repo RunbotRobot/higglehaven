@@ -217,7 +217,11 @@ describe('Voice signaling relay (#2817)', () => {
       expect(carolView.body.messages[0].payload).toEqual({ sdp: 'to-carol' });
     });
 
-    it('does not return a message addressed to the caller from a different landlet than they currently stand in', async () => {
+    // #2955: two avatars walking across a landlet boundary mid-negotiation must
+    // not lose the signals already sent. The row was authorized (same landlet,
+    // addressed to bob) when it was created, so it stays deliverable to bob
+    // wherever he stands now, and the handshake can finish from the new landlet.
+    it('still returns a message addressed to the caller after they cross into a different landlet', async () => {
       const alice = await signupIdVerifiedBuilder('voice-signal-landletmove-alice');
       const bob = await signupIdVerifiedBuilder('voice-signal-landletmove-bob');
       await setPresence(alice.builderId, { landletId: 'voice-signal-landlet-move-a' });
@@ -226,11 +230,42 @@ describe('Voice signaling relay (#2817)', () => {
         method: 'POST', body: JSON.stringify({ toBuilderId: bob.builderId, kind: 'offer', payload: { sdp: 'x' } }),
       }));
 
-      // Bob moves to a different landlet before polling.
+      // Both walk into the next landlet before bob polls.
+      await setPresence(alice.builderId, { landletId: 'voice-signal-landlet-move-b' });
       await setPresence(bob.builderId, { landletId: 'voice-signal-landlet-move-b' });
       const bobView = await api('/voice/signal', bob.session());
-      expect(bobView.body.messages).toEqual([]);
       expect(bobView.body.landletId).toBe('voice-signal-landlet-move-b');
+      expect(bobView.body.messages.map((m) => m.payload.sdp)).toEqual(['x']);
+
+      // ...and bob's answer, sent from the new landlet, reaches alice there.
+      const answered = await api('/voice/signal', bob.session({
+        method: 'POST', body: JSON.stringify({ toBuilderId: alice.builderId, kind: 'answer', payload: { sdp: 'y' } }),
+      }));
+      expect(answered.response.status).toBe(201);
+      const aliceView = await api('/voice/signal', alice.session());
+      expect(aliceView.body.messages.map((m) => m.payload.sdp)).toEqual(['y']);
+    });
+
+    it('does not hand a proximity signal to a caller with no current presence, and never to anyone but its addressee', async () => {
+      const alice = await signupIdVerifiedBuilder('voice-signal-nopresence-alice');
+      const bob = await signupIdVerifiedBuilder('voice-signal-nopresence-bob');
+      const carol = await signupIdVerifiedBuilder('voice-signal-nopresence-carol');
+      await setPresence(alice.builderId, { landletId: 'voice-signal-landlet-nopresence' });
+      await setPresence(bob.builderId, { landletId: 'voice-signal-landlet-nopresence' });
+      await setPresence(carol.builderId, { landletId: 'voice-signal-landlet-nopresence' });
+      await api('/voice/signal', alice.session({
+        method: 'POST', body: JSON.stringify({ toBuilderId: bob.builderId, kind: 'offer', payload: { sdp: 'x' } }),
+      }));
+
+      // Bob's presence goes stale (he left Shop mode): proximity rows are not handed out.
+      await setPresence(bob.builderId, { landletId: 'voice-signal-landlet-nopresence', updatedAt: new Date(Date.now() - 60_000).toISOString() });
+      const bobStale = await api('/voice/signal', bob.session());
+      expect(bobStale.body.messages).toEqual([]);
+      expect(bobStale.body.landletId).toBeNull();
+
+      // Carol, in the very same landlet, is not the addressee and sees nothing.
+      const carolView = await api('/voice/signal', carol.session());
+      expect(carolView.body.messages).toEqual([]);
     });
 
     it('polls forward from a cursor, only returning newer messages, and echoes the same cursor back when there are none', async () => {
