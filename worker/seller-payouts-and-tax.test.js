@@ -1246,6 +1246,41 @@ describe('Seller payouts (#454)', () => {
       expect(forms).toEqual([expect.objectContaining({ formType: '1099-k', status: 'draft', grossIncomeCents: 2000000 })]);
     });
 
+    // #835: the payee is the account, so a seller who deleted their profile
+    // (the sellers row goes, purchases keep a dangling seller_id) still has
+    // that income on their 1099-K.
+    it('keeps a deleted seller profile\'s historic income on the 1099-K', async () => {
+      const builder = await signupBuilder('tax-1099-k-deleted-builder');
+      const seller = await createConnectedSeller('tax-1099-k-deleted-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller);
+      const row = await env.DB.prepare('SELECT seller_user_id FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+      expect(row.seller_user_id).toBeTruthy();
+      await env.DB.prepare(`
+        UPDATE purchases SET total_cents = 2000000, paid_out_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+          stripe_payout_id = 'po_test' WHERE purchase_id = ?
+      `).bind(purchaseId).run();
+
+      const sellerDeleted = await api(`/sellers/${seller.sellerId}`, seller.session({ method: 'DELETE' }));
+      expect(sellerDeleted.response.status).toBe(200);
+
+      const got = await api(`/tax/admin-forms?year=${new Date().getUTCFullYear()}`, adminSession());
+      const forms = got.body.forms.filter((f) => f.email === seller.email);
+      expect(forms).toEqual([expect.objectContaining({ formType: '1099-k', status: 'draft', grossIncomeCents: 2000000 })]);
+    });
+
+    // #835: a row written before seller_user_id existed (NULL) whose seller
+    // still exists is still counted, via the sellers join.
+    it('still counts a legacy purchase row with no seller_user_id while its seller exists', async () => {
+      const builder = await signupBuilder('tax-1099-k-legacy-builder');
+      const seller = await createConnectedSeller('tax-1099-k-legacy-seller');
+      const purchaseId = await makeRealMoneyPurchase(builder, seller);
+      await env.DB.prepare('UPDATE purchases SET total_cents = 2000000, seller_user_id = NULL WHERE purchase_id = ?').bind(purchaseId).run();
+
+      const got = await api(`/tax/admin-forms?year=${new Date().getUTCFullYear()}`, adminSession());
+      const forms = got.body.forms.filter((f) => f.email === seller.email);
+      expect(forms).toEqual([expect.objectContaining({ formType: '1099-k', grossIncomeCents: 2000000 })]);
+    });
+
     // #2247 (owner decision 2026-10-25): a 1099-K draft's own
     // grossIncomeCents must already reflect a partial refund at generation
     // time, same as the Tax summary endpoint's sellerPayoutCents -- not
