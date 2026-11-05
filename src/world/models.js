@@ -4,6 +4,7 @@ import { cropGeometryFromEnd } from '../meshCrop.js';
 import { skeletonSignatureFromBones } from '../skeletonSignature.js';
 import { curvedPosition, flatPosition } from '../../worker/earthCurvature.js';
 import { activeCatalog, LANDLET_SIDE_M } from './state.js';
+import { markSharedModelResources, ownsGeometryAndTextures } from '../sharedModelResources.js';
 
 // #2553 (part of #2504/#2500's src/main.js module split, see #2503's design
 // comment for the full dependency map): the catalog-template -> Object3D
@@ -275,6 +276,8 @@ export async function loadModelInstance(url) {
   // instance sharing the same cached material.
   model.traverse((child) => {
     if (child.isMesh) {
+      // #1560: geometry and texture maps stay shared with the cached source.
+      markSharedModelResources(child);
       child.material = Array.isArray(child.material)
         ? child.material.map((material) => material.clone())
         : child.material.clone();
@@ -726,10 +729,13 @@ export function disposeObject(object) {
       return;
     }
     if (!child.isMesh) return;
-    child.geometry.dispose();
+    // #1560: a loaded-model clone's geometry/textures belong to the cached
+    // source shared by every clone -- free only its own cloned materials.
+    const owns = ownsGeometryAndTextures(child);
+    if (owns) child.geometry.dispose();
     const materials = Array.isArray(child.material) ? child.material : [child.material];
     for (const material of materials) {
-      disposeMaterialTextures(material);
+      if (owns) disposeMaterialTextures(material);
       material.dispose();
     }
   });
