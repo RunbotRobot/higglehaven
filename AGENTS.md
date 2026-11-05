@@ -249,7 +249,18 @@ most likely to come up again.
   having the hybrid setup.") When moving between two versions of a
   provider API or two internal designs, cut over fully rather than
   running both; the owner would rather pay the migration cost once than
-  carry two code paths.
+  carry two code paths. **Refinement (2026-11-05, #2923):** the rule is
+  about not running two of *our own* designs side by side. It does not
+  mean waiting for a provider API that doesn't exist. The "fully v2"
+  Stripe call rested on a false premise -- there is no GA v2
+  replacement for Connect `/v1/transfers`, `/v1/payouts`, or
+  `/v1/balance` (the `stripe_transfers` capability is a flag that lets
+  a v2 account receive v1 transfers, and the only v2 outbound-transfer
+  objects belong to Treasury, a private-preview product for a different
+  architecture). A v2 Account object with v1 money movement is Stripe's
+  one documented GA path, so it is "one model", and the owner accepted
+  it. If Stripe later ships a GA v2 equivalent for Connect payouts,
+  that becomes an ordinary migration issue at that time.
 
 - **Nothing that isn't actively for sale is visible to shoppers *or*
   builders.** (2026-11-01, #2305.) A suspended seller's listings are
