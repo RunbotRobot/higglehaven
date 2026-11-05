@@ -1761,7 +1761,28 @@ that our own forms never collect and Stripe must, such as
 (ID documents); it is empty when everything due is a field our forms
 already send. The platform never collects those itself, not even in
 transit, so a non-empty list means the person needs Stripe's own
-onboarding step (the hand-off is a separate change).
+onboarding step (see `POST .../stripe-onboarding-link` below).
+
+`GET .../stripe-account?refresh=1` (#2928, "resume") re-reads the account
+from Stripe first and stores the fresh status and requirements before
+answering, rate-limited with the other Stripe account calls. It is
+best-effort: if Stripe cannot be reached the stored status is returned
+unchanged rather than an error. The client sends it once after Stripe sends
+the person back (the `?stripe=return` marker on the return URL).
+
+### `POST /api/sellers/me/stripe-onboarding-link` (and `/api/builders/me/...`)
+
+#2928, "hand off". Returns `{ "url": "https://connect.stripe.com/...",
+"expiresAt": null | "..." }`, a single-use Stripe-hosted onboarding link
+(Accounts v2 Account Link, `use_case.account_onboarding`, collecting
+`currently_due`) for whatever Stripe needs that our own forms never collect.
+Stored requirements are refreshed from Stripe first. `409` when no payout
+account exists yet ("Set up your payout account first.") or when Stripe
+needs nothing more that we cannot collect; `503` when Stripe is not
+configured. The return URL is `/?stripe=return&role=seller|builder` and the
+refresh URL (expired or already-used link) is `/?stripe=refresh&role=...`.
+The `configurations` Account Link parameter is deliberately not sent: Stripe
+removed it in API version `2026-09-30.endive` and errors on it from then on.
 
 `configured` is `false` whenever this server has no `STRIPE_SECRET_KEY`
 Worker secret set (e.g. local dev, the automated test suite) — same
