@@ -2732,7 +2732,12 @@ field, so sending it replaces the whole object rather than deep-merging
 into it. A caller that wants to change one key inside `metadata` (the
 Seller modal's extensibility edit, say) needs to read the existing
 `metadata` first and send the whole merged object back — see "Extensible
-products (crop)" above. A request-body `sellerId` is ignored — this
+products (crop)" above. `dimensions` behaves the same way: it is replaced
+as a whole, never merged per axis, so a partial object such as
+`{ "dimensions": { "width": 5 } }` is rejected with `400`
+(`dimensions.depth must be a finite number`) rather than updating only the
+width. Always send all three of `width`, `depth` and `height`, as the
+Seller modal's size save does. A request-body `sellerId` is ignored — this
 endpoint never reassigns a template to a different seller, the same way
 `PUT /api/landlets/:id` never reassigns `ownerBuilderId`.
 
