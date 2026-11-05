@@ -325,6 +325,54 @@ most likely to come up again.
   upload nobody's claimed yet"). Internal context belongs in a code
   comment next to the string, not in the string.
 
+- **A legal preservation duty overrides a keep-nothing rule only for
+  the items the duty attaches to, in a segregated store with a fixed
+  term.** (2026-11-05, #3041.) The `sexual_content` rule (2026-10-20:
+  nothing retained on removal, not even a text fragment) stays for
+  every ordinary removal. Once an admin records an NCMEC report
+  (#3044), the reported content and its account/upload metadata are
+  preserved in an evidence store that is admin-only, excluded by
+  construction from every deletion and cleanup path, and auto-purged
+  at the statutory term (one year today, a single constant). The
+  principle: when the law requires retaining something the platform
+  deliberately keeps nothing of, retain the narrowest set the duty
+  actually covers, wall it off from everything else, and give it an
+  expiry; never widen the general retention rule to make the duty
+  easier to meet.
+
+- **A block is silent.** (2026-11-05, #3124.) The blocked person is
+  never told, by notification or by any difference they could detect
+  from a stranger's experience: their DM to the blocker gets the same
+  plain "you can't message this person" a non-friend gets, their friend
+  request gets no answer, and the blocker is simply absent from their
+  presence and chat. Nothing fakes a delivery either. The owner weighed
+  the mild confusion of an unexplained silence against telling a
+  harasser who blocked them and when, and chose silence; a block carries
+  no consequence for the blocked person beyond one individual's
+  attention (no strike, no record visible to anyone else), so there is
+  nothing to appeal. The same posture already holds for conduct reports
+  (invisible to the reported person) and mutes (undetectable).
+
+- **Anything about a person as a person keys on the account
+  (`user_id`); role-scoped data keeps its role id.** (2026-11-05,
+  #3124, from the #3121 lesson.) `builders` and `sellers` are role
+  profiles hanging off one account, one each, not identities, and a
+  builder profile can be reset to a new id. So friends, DMs, blocks,
+  presence, chat and voice signaling, conduct reports and suspension
+  are account-level facts and key on `user_id`; landlets and versions
+  stay on `builder_id`, listings and payouts on `seller_id`. "Shopper"
+  and "builder" are modes a person is in, not identity types: do not
+  rename `builder_id` to `shopper_id` or collapse the role tables. New
+  social features start on `user_id`; existing social tables migrate
+  there (#3141).
+
+- **One alias per person, shown wherever a person is shown: the
+  account's `username`.** (2026-11-05.) The builder label is derived
+  from it, not a second editable name, and the unused
+  `users.display_name` column goes. A seller's storefront name is a
+  different thing (a shop's name, not a person's) and stays its own
+  field. (#3142.)
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
@@ -403,6 +451,25 @@ to the same discipline it would enforce (below) rather than relying on
 it to catch a bad write for you. See issue #854 if you want the history
 here, and flag it as an open question rather than silently picking one
 or the other if it matters for what you're doing.
+
+**If the Cloudflare MCP connector says it needs authorization, that is
+not a decision to wait on.** Found 2026-11-05: the owner's connector
+session expired overnight, every D1 MCP tool vanished fleet-wide at
+once, and six sessions stopped in a `need_input` prompt asking the
+owner to re-authorize — invisible to the rest of the fleet, and to the
+owner, for hours (#3131). Only the owner can re-authorize it,
+higglehaven1 surfaces that in conversation, and nothing about your own
+task depends on it. Do not stop. In order: (1) if `CLOUDFLARE_API_TOKEN`
+is set in your environment, use the repo's own wrangler against the
+same database, from the repo root — `node_modules/.bin/wrangler d1
+execute higglehaven-db --remote --json --command "<sql>"` — reads and
+writes alike, under the same validation discipline; (2) if it isn't,
+claim on GitHub alone: the issue's `assignees` field is already named
+below as an authoritative check, so the three-step gate still works
+(read, `issue_write` with yourself as assignee, re-read), plus a
+one-line claim comment; then write the Control Room card the moment
+either path is back. Say so in one line on the PR or issue, never as a
+question to the owner.
 
 Field shapes carried over from the Artifact-era board 1:1, so the
 semantics below are unchanged — only the storage/transport is different

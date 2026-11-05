@@ -174,6 +174,20 @@ export async function builderHasActiveSuspension(db, builderId) {
   return !!row;
 }
 
+// #3123: the same predicate as builderHasActiveSuspension, as a SQL fragment
+// for list queries that must hide what a suspended builder left behind in a
+// shared surface (nearby chat, friend voice channels) without a per-row
+// lookup. `column` is a trusted, hard-coded builder_id column reference from
+// the calling query, never user input.
+export function builderNotSuspendedSql(column) {
+  return `NOT EXISTS (
+    SELECT 1 FROM builders AS suspended_check_b
+    JOIN account_suspensions AS suspended_check_s ON suspended_check_s.user_id = suspended_check_b.user_id
+    WHERE suspended_check_b.builder_id = ${column}
+      AND suspended_check_s.lifted_at IS NULL AND suspended_check_s.escalated_at IS NULL
+  )`;
+}
+
 // #3034 (found via #3029): which of these templates belong to a seller under
 // an active suspension -- the same predicate #2985 hides from the catalog
 // (catalog.js) and #2986 snapshots+removes on suspend. Instance write paths

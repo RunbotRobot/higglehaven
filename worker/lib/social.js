@@ -20,7 +20,7 @@ import {
   readJson, stringValue, finiteNumber, queryLimit, decodeCursor, encodeCursor,
 } from './validation.js';
 import { checkRateLimit } from './rate-limit.js';
-import { requireCurrentUser, assertOwner, requireSessionBuilder } from './auth.js';
+import { requireCurrentUser, assertOwner, requireSessionBuilder, builderNotSuspendedSql } from './auth.js';
 import { fireNotification } from './notifications.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 // requireLandlet/assertReferenceExists/labelsByBuilderId/
@@ -367,7 +367,9 @@ export async function handleNearbyChat(request, db, route, url) {
     }
     const limit = queryLimit(url.searchParams.get('limit'), NEARBY_CHAT_POLL_LIMIT);
     const cursor = decodeCursor(url.searchParams.get('cursor'));
-    const conditions = ['landlet_id = ?'];
+    // #3123: a suspended sender's messages are hidden from everyone else the
+    // moment the suspension starts, not left for the 30-minute prune.
+    const conditions = ['landlet_id = ?', builderNotSuspendedSql('nearby_chat_messages.builder_id')];
     const bindings = [landletId];
     if (cursor) {
       // Ascending/"poll forward from here" ordering, unlike direct_messages'
@@ -463,6 +465,65 @@ async function reportEvidenceLines(db, reporterBuilderId, reportedBuilderId, sur
   }
 }
 
+// #3122: shared by both conduct-report surfaces (voice, nearby chat) so
+// they cannot drift apart (standing default: parity across sibling
+// surfaces). One report row and one Control Room card per (reporter,
+// reported) pair: a repeat collapses into the existing pair, appending a
+// short line to the existing card instead of creating a new one, so a later
+// report carrying new information still reaches the admin (no silent loss)
+// without a single reporter flooding the board. All three writes run in one
+// batch, so the collapse is atomic (UNIQUE index + INSERT OR IGNORE; the
+// card insert only fires when this call's own report row won). A done card
+// is re-queued by a repeat: a new report on a card nobody is looking at
+// anymore is exactly the information that must not vanish. The reporter
+// gets the same 201 shape either way and never learns it was a repeat.
+// Bounded: once a card's note reaches CONDUCT_REPORT_NOTE_MAX_LENGTH, further
+// repeats stop appending (the row is still ignored), so one pair cannot
+// grow a note without limit.
+const CONDUCT_REPORT_NOTE_MAX_LENGTH = 4000;
+
+async function fileConductReport(db, {
+  table, kind, reportId, reporterBuilderId, reportedBuilderId, reportedUserId, reason, title, noteLines, now,
+}) {
+  const repeatLine = `[${now}] Repeat report from the same reporter against the same builder${reason ? `. Reason: ${reason}` : ''}`;
+  await db.batch([
+    db.prepare(`
+      INSERT OR IGNORE INTO ${table} (report_id, reporter_builder_id, reported_builder_id, reported_user_id, reason)
+      VALUES (?, ?, ?, ?, ?)
+    `).bind(reportId, reporterBuilderId, reportedBuilderId, reportedUserId, reason),
+    db.prepare(`
+      INSERT INTO control_room_tasks (
+        task_id, kind, note_number, title, status, session, posted_by,
+        note, note_updated_at, note_author, created_at, updated_at
+      )
+      SELECT ?, ?, (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', ?, ?, ?, ?, ?, ?
+      WHERE EXISTS (SELECT 1 FROM ${table} WHERE report_id = ?)
+    `).bind(reportId, kind, title, kind, noteLines.join('\n'), now, kind, now, now, reportId),
+    db.prepare(`
+      UPDATE control_room_tasks
+      SET note = note || char(10) || ?, note_updated_at = ?, updated_at = ?,
+          status = CASE WHEN status = 'done' THEN 'queued' ELSE status END
+      WHERE task_id = (SELECT report_id FROM ${table} WHERE reporter_builder_id = ? AND reported_builder_id = ?)
+        AND NOT EXISTS (SELECT 1 FROM ${table} WHERE report_id = ?)
+        AND length(note) < ${CONDUCT_REPORT_NOTE_MAX_LENGTH}
+    `).bind(repeatLine, now, now, reporterBuilderId, reportedBuilderId, reportId),
+  ]);
+  const stored = await db.prepare(`
+    SELECT report_id FROM ${table} WHERE reporter_builder_id = ? AND reported_builder_id = ?
+  `).bind(reporterBuilderId, reportedBuilderId).first();
+  return stored.report_id;
+}
+
+// #3121: suspension is by user_id, and the reported builder's row can be
+// deleted by the reported party themselves (Reset your builder profile), so a
+// report records the reported account's user_id at filing time -- on the
+// report row and in the Control Room card -- rather than relying on a
+// builder id that may stop resolving.
+async function reportedUserIdOf(db, builderId) {
+  const row = await db.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(builderId).first();
+  return row?.user_id ?? null;
+}
+
 async function handleNearbyChatReportCreate(request, db) {
   const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use nearby chat.');
   await checkRateLimit(db, `nearby-chat-report-create:${sessionBuilder.builder_id}`, NEARBY_CHAT_REPORT_CREATE_RATE_LIMIT_MAX);
@@ -482,9 +543,10 @@ async function handleNearbyChatReportCreate(request, db) {
   }
   const reportId = `nearby-chat-report-${crypto.randomUUID()}`;
   const now = new Date().toISOString();
-  const controlRoomTaskId = `nearby-chat-report-${reportId.slice('nearby-chat-report-'.length)}`;
   const controlRoomTitle = `Nearby chat conduct report against "${reportedLabel}"`;
+  const reportedUserId = await reportedUserIdOf(db, reportedBuilderId);
   const controlRoomNoteLines = [`Reported builder: "${reportedLabel}" (${reportedBuilderId})`];
+  if (reportedUserId) controlRoomNoteLines.push(`Reported account: ${reportedUserId}`);
   if (reason) controlRoomNoteLines.push(`Reason: ${reason}`);
   controlRoomNoteLines.push(...await reportEvidenceLines(db, sessionBuilder.builder_id, reportedBuilderId, async () => {
     const message = await db.prepare(`
@@ -494,21 +556,12 @@ async function handleNearbyChatReportCreate(request, db) {
     `).bind(reportedBuilderId, sessionBuilder.builder_id).first();
     return `Reported builder has a chat message still on record in the reporter's landlet: ${message ? 'yes' : 'no'}`;
   }));
-  await db.batch([
-    db.prepare(`
-      INSERT INTO nearby_chat_reports (report_id, reporter_builder_id, reported_builder_id, reason)
-      VALUES (?, ?, ?, ?)
-    `).bind(reportId, sessionBuilder.builder_id, reportedBuilderId, reason),
-    db.prepare(`
-      INSERT INTO control_room_tasks (
-        task_id, kind, note_number, title, status, session, posted_by,
-        note, note_updated_at, note_author, created_at, updated_at
-      ) VALUES (?, 'nearby-chat-report', (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', 'nearby-chat-report', ?, ?, 'nearby-chat-report', ?, ?)
-    `).bind(
-      controlRoomTaskId, controlRoomTitle, controlRoomNoteLines.join('\n'), now, now, now,
-    ),
-  ]);
-  return json({ reportId }, 201);
+  const storedReportId = await fileConductReport(db, {
+    table: 'nearby_chat_reports', kind: 'nearby-chat-report', reportId,
+    reporterBuilderId: sessionBuilder.builder_id, reportedBuilderId, reportedUserId, reason,
+    title: controlRoomTitle, noteLines: controlRoomNoteLines, now,
+  });
+  return json({ reportId: storedReportId }, 201);
 }
 
 // #2817 (sub-issue of #2780, itself sub-issue of #2777, proximity voice
@@ -591,6 +644,8 @@ const FRIEND_VOICE_CHANNEL_MUTATE_RATE_LIMIT_MAX = 40;
 // polling budget as VOICE_SIGNAL_POLL_RATE_LIMIT_MAX/
 // PRESENCE_REPORT_RATE_LIMIT_MAX above.
 const FRIEND_VOICE_CHANNEL_POLL_RATE_LIMIT_MAX = PRESENCE_REPORT_RATE_LIMIT_MAX;
+// #3120: minimum gap between last_seen_at writes for one member.
+const FRIEND_VOICE_CHANNEL_LAST_SEEN_REFRESH_MS = 60 * 1000;
 
 // GET lists the channels the caller is currently a member of (including
 // one they themselves own); POST .../join and .../leave are the only
@@ -600,11 +655,26 @@ async function handleFriendVoiceChannels(request, db, route) {
 
   if (request.method === 'GET' && route.length === 2) {
     await checkRateLimit(db, `friend-voice-channel-poll:${sessionBuilder.builder_id}`, FRIEND_VOICE_CHANNEL_POLL_RATE_LIMIT_MAX);
+    // #3120: this poll is the member's liveness signal (see migration
+    // 0186); pruneStaleFriendVoiceChannelMembers drops a member that stops
+    // polling. Conditional so a member polling every ~1.2s writes about once
+    // a minute, not on every poll (an UPDATE that matches no row is free).
+    const nowMs = Date.now();
+    await db.prepare(`
+      UPDATE friend_voice_channel_members SET last_seen_at = ?
+      WHERE member_builder_id = ? AND COALESCE(last_seen_at, joined_at) < ?
+    `).bind(new Date(nowMs).toISOString(), sessionBuilder.builder_id, new Date(nowMs - FRIEND_VOICE_CHANNEL_LAST_SEEN_REFRESH_MS).toISOString()).run();
+    // #3123: a suspended member drops out of the listing, and a suspended
+    // owner takes their whole channel with them (the owner's own row is
+    // what marks a channel active); neither is deleted, so a lifted
+    // suspension simply reappears.
     const { results } = await db.prepare(`
       SELECT owner_builder_id, member_builder_id FROM friend_voice_channel_members
       WHERE owner_builder_id IN (
         SELECT owner_builder_id FROM friend_voice_channel_members WHERE member_builder_id = ?
       )
+      AND ${builderNotSuspendedSql('friend_voice_channel_members.owner_builder_id')}
+      AND ${builderNotSuspendedSql('friend_voice_channel_members.member_builder_id')}
     `).bind(sessionBuilder.builder_id).all();
     const membersByOwner = new Map();
     for (const row of results) {
@@ -771,18 +841,14 @@ async function handleVoiceReportCreate(request, db) {
   const reportId = `voice-report-${crypto.randomUUID()}`;
   const now = new Date().toISOString();
   // #2720's own direct `control_room_tasks` write (worker/lib/feedback.js's
-  // bug-report pattern) reused here for the same reason: every other
-  // source of Control Room work lands as a card the instant it exists
-  // rather than requiring a separate D1 query nobody will remember to run,
-  // and this is itself the trusted, same-process caller writing on the
-  // reporter's behalf (not a round trip through the validating
-  // /api/control-room/tasks HTTP API). `voice-report-<uuid>` keeps this
-  // id visually distinct from its own reportId while still pairing 1:1 via
-  // the shared uuid, same convention `bug-report-<uuid>` already
-  // establishes.
-  const controlRoomTaskId = `voice-report-${reportId.slice('voice-report-'.length)}`;
+  // bug-report pattern) reused here (via fileConductReport): the card lands
+  // the instant the report exists, written by this trusted same-process
+  // caller rather than round-tripping through the validating
+  // /api/control-room/tasks HTTP API. The card's task_id is the reportId.
   const controlRoomTitle = `Voice chat conduct report against "${reportedLabel}"`;
+  const reportedUserId = await reportedUserIdOf(db, reportedBuilderId);
   const controlRoomNoteLines = [`Reported builder: "${reportedLabel}" (${reportedBuilderId})`];
+  if (reportedUserId) controlRoomNoteLines.push(`Reported account: ${reportedUserId}`);
   if (reason) controlRoomNoteLines.push(`Reason: ${reason}`);
   controlRoomNoteLines.push(...await reportEvidenceLines(db, sessionBuilder.builder_id, reportedBuilderId, async () => {
     const signal = await db.prepare(`
@@ -792,21 +858,12 @@ async function handleVoiceReportCreate(request, db) {
     `).bind(sessionBuilder.builder_id, reportedBuilderId, reportedBuilderId, sessionBuilder.builder_id).first();
     return `Shared voice signaling still on record: ${signal ? 'yes' : 'no'}`;
   }));
-  await db.batch([
-    db.prepare(`
-      INSERT INTO voice_conduct_reports (report_id, reporter_builder_id, reported_builder_id, reason)
-      VALUES (?, ?, ?, ?)
-    `).bind(reportId, sessionBuilder.builder_id, reportedBuilderId, reason),
-    db.prepare(`
-      INSERT INTO control_room_tasks (
-        task_id, kind, note_number, title, status, session, posted_by,
-        note, note_updated_at, note_author, created_at, updated_at
-      ) VALUES (?, 'voice-report', (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', 'voice-report', ?, ?, 'voice-report', ?, ?)
-    `).bind(
-      controlRoomTaskId, controlRoomTitle, controlRoomNoteLines.join('\n'), now, now, now,
-    ),
-  ]);
-  return json({ reportId }, 201);
+  const storedReportId = await fileConductReport(db, {
+    table: 'voice_conduct_reports', kind: 'voice-report', reportId,
+    reporterBuilderId: sessionBuilder.builder_id, reportedBuilderId, reportedUserId, reason,
+    title: controlRoomTitle, noteLines: controlRoomNoteLines, now,
+  });
+  return json({ reportId: storedReportId }, 201);
 }
 
 export async function handleVoiceSignal(request, db, route, url, env) {

@@ -4569,7 +4569,15 @@ referenced catalog template and landlet is validated with bounded set
 queries before insertion. `POST` is create-only and returns `201`; a
 duplicate stored ID returns `409`. `PUT` replaces stored IDs, creates
 missing IDs, and returns `200`, making bounded draft synchronization
-idempotent. An invalid reference, or the caller never owning a touched
+idempotent. **`updateOnly` (#3101).** A `PUT` body may also carry
+`"updateOnly": true` (only meaningful on `PUT`): any `instanceId` with no
+stored row is then skipped instead of created, and the response adds
+`missingInstanceIds` listing them (every other item is written as usual; if
+all are missing nothing is written and the response is `200` with empty
+`instances`). Build mode sends it when saving moves of items its scene
+believes exist, so a stale tab cannot silently recreate an item another tab
+deleted; a deliberate recreate (Undo of a delete) uses `POST`. Without the
+flag `PUT` behaves exactly as described above. An invalid reference, or the caller never owning a touched
 landlet at all, returns `400`/`403` and leaves the entire batch unchanged.
 
 **Partial rejection (#1772).** The batch spans an arbitrary set of distinct
@@ -5406,6 +5414,19 @@ reusing `product_flags`: that table's unit is a listing with a seller
 strike-ladder consequence, the wrong shape for "a builder said something
 inappropriate over voice chat."
 
+One report per (reporter, reported) pair (#3122): a repeat from the same
+reporter against the same builder is collapsed rather than rejected. It
+returns the same `201` and the same `reportId` as the first report, so
+the reporter never learns it was a repeat, and instead of a new row and a
+new card it appends a dated line (with the repeat's `reason`, if any) to
+the existing card, re-queuing that card if an admin had already marked it
+done. A card stops accepting appended lines once its note passes 4000
+characters. The same rule applies to `POST /api/nearby-chat/report`
+(`nearby_chat_reports`, `kind: "nearby-chat-report"`), which otherwise
+mirrors this endpoint; both go through `fileConductReport` in
+`worker/lib/social.js`. `worker/conduct-report-dedupe.test.js` owns that
+contract.
+
 ### Testing note
 
 `worker/voice-signal.test.js` owns the signaling-relay backend contract:
@@ -5461,6 +5482,12 @@ they themselves own:
 
 `429` after 600 requests per 15 minutes from the same calling builder
 (same budget as the signaling relay's own poll).
+
+This poll is also the member's liveness signal (#3120): it refreshes the
+caller's `last_seen_at` about once a minute, and the cron removes any member
+not seen for 5 minutes (a closed tab never sends a leave). When every row
+of a channel has expired, the next join re-opens it and notifies the owner
+again.
 
 ### `POST /api/voice/friend-channels/:ownerBuilderId/join`
 

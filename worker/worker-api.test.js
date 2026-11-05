@@ -1764,24 +1764,16 @@ describe('Worker API', () => {
   // id can genuinely land in this window. Same wrap-the-triggering-
   // statement's-own-run() technique as the #2364 test above.
   it('returns 404, not a raw 500, when the template is deleted in the gap between its own INSERT and re-fetch', async () => {
+    // #3109: the create path's two INSERTs now go through one db.batch(), so
+    // the race window is opened by wrapping batch() rather than the
+    // INSERT statement's own run().
+    const originalBatch = env.DB.batch.bind(env.DB);
     const originalPrepare = env.DB.prepare.bind(env.DB);
-    env.DB.prepare = (sql) => {
-      const stmt = originalPrepare(sql);
-      if (sql.includes('INSERT INTO catalog_templates')) {
-        const originalBind = stmt.bind.bind(stmt);
-        stmt.bind = (...args) => {
-          const bound = originalBind(...args);
-          const originalRun = bound.run.bind(bound);
-          bound.run = async () => {
-            const result = await originalRun();
-            await originalPrepare('DELETE FROM catalog_templates WHERE template_id = ?')
-              .bind('catalog-post-insert-delete-race-template').run();
-            return result;
-          };
-          return bound;
-        };
-      }
-      return stmt;
+    env.DB.batch = async (statements) => {
+      const result = await originalBatch(statements);
+      await originalPrepare('DELETE FROM catalog_templates WHERE template_id = ?')
+        .bind('catalog-post-insert-delete-race-template').run();
+      return result;
     };
     let created;
     try {
@@ -1793,7 +1785,7 @@ describe('Worker API', () => {
         }),
       });
     } finally {
-      env.DB.prepare = originalPrepare;
+      env.DB.batch = originalBatch;
     }
 
     expect(created.response.status).toBe(404);
@@ -1945,6 +1937,59 @@ describe('Worker API', () => {
     const invalidCursor = await api('/instances?cursor=invalid');
     expect(invalidCursor.response.status).toBe(400);
     expect(invalidCursor.body).toEqual({ error: 'cursor is invalid' });
+  });
+
+  // #3101: a stale Build tab only ever PUTs items it still believes exist; with
+  // updateOnly the server must not recreate one that another tab deleted.
+  it('PUT /instances/batch with updateOnly updates existing items and skips (never recreates) missing ones', async () => {
+    const builder = await signupBuilder('instance-batch-update-only-builder');
+    await createGreenbeltLandlet('instance-batch-update-only-landlet', { x: 6000, y: 3200 });
+    expect((await api('/landlets/instance-batch-update-only-landlet/claim', builder.session({ method: 'POST' }))).response.status).toBe(200);
+    const item = (instanceId, x) => ({ instanceId, landletId: 'instance-batch-update-only-landlet', templateId: 'placeholder-chair', x, y: 2 });
+    expect((await api('/instances/batch', builder.session({
+      method: 'POST', body: JSON.stringify({ instances: [item('update-only-kept', 1), item('update-only-gone', 2)] }),
+    }))).response.status).toBe(201);
+    expect((await api('/instances/update-only-gone', builder.session({ method: 'DELETE' }))).response.status).toBe(200);
+
+    const saved = await api('/instances/batch', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({ updateOnly: true, instances: [item('update-only-kept', 7), item('update-only-gone', 8)] }),
+    }));
+    expect(saved.response.status).toBe(200);
+    expect(saved.body.instances.map((i) => i.instanceId)).toEqual(['update-only-kept']);
+    expect(saved.body.missingInstanceIds).toEqual(['update-only-gone']);
+    expect((await api('/instances/update-only-kept')).body.instance.x).toBe(7);
+    expect((await api('/instances/update-only-gone')).response.status).toBe(404);
+
+    // A missing id that a seller suspension removed (a still-pending snapshot)
+    // is reported separately so the client can say so rather than blame another tab.
+    await env.DB.prepare(`
+      INSERT INTO suspended_seller_instance_snapshots (snapshot_id, seller_id, builder_id, landlet_id, template_id, instance_json)
+      VALUES ('update-only-snapshot', 'update-only-seller', ?, 'instance-batch-update-only-landlet', 'placeholder-chair', ?)
+    `).bind(builder.builderId, JSON.stringify({ instance_id: 'update-only-suspended' })).run();
+    const mixedMissing = await api('/instances/batch', builder.session({
+      method: 'PUT',
+      body: JSON.stringify({ updateOnly: true, instances: [item('update-only-kept', 7), item('update-only-gone', 8), item('update-only-suspended', 9)] }),
+    }));
+    expect(mixedMissing.body.missingInstanceIds).toEqual(['update-only-gone', 'update-only-suspended']);
+    expect(mixedMissing.body.suspendedSellerInstanceIds).toEqual(['update-only-suspended']);
+    expect((await api('/instances/update-only-suspended')).response.status).toBe(404);
+
+    // Everything missing: nothing written, still a clean 200.
+    const allGone = await api('/instances/batch', builder.session({
+      method: 'PUT', body: JSON.stringify({ updateOnly: true, instances: [item('update-only-gone', 9)] }),
+    }));
+    expect(allGone.response.status).toBe(200);
+    expect(allGone.body).toEqual({ instances: [], rejectedInstanceIds: [], missingInstanceIds: ['update-only-gone'], suspendedSellerInstanceIds: [] });
+    expect((await api('/instances/update-only-gone')).response.status).toBe(404);
+
+    // Without the flag PUT keeps its documented create-or-replace behavior.
+    const plain = await api('/instances/batch', builder.session({
+      method: 'PUT', body: JSON.stringify({ instances: [item('update-only-gone', 3)] }),
+    }));
+    expect(plain.response.status).toBe(200);
+    expect('missingInstanceIds' in plain.body).toBe(false);
+    expect((await api('/instances/update-only-gone')).response.status).toBe(200);
   });
 
   it('atomically creates bounded instance batches', async () => {
