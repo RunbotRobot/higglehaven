@@ -160,10 +160,16 @@ export async function handleProductReviews(request, db, route) {
     // purchase at all" into a clean 400 instead of a confusing 409.
     const purchase = await db.prepare(`
       SELECT purchase_id FROM purchases
-      WHERE template_id = ? AND buyer_builder_id = ? AND refunded_at IS NULL
+      WHERE template_id = ? AND refunded_at IS NULL
+        AND (buyer_user_id = ? OR (buyer_user_id IS NULL AND buyer_builder_id = ?))
         AND NOT EXISTS (SELECT 1 FROM product_reviews WHERE purchase_id = purchases.purchase_id)
       ORDER BY created_at ASC LIMIT 1
-    `).bind(templateId, sessionBuilder.builder_id).first();
+    `).bind(templateId, sessionBuilder.user_id, sessionBuilder.builder_id).first();
+    // #3217: a purchase belongs to the account (purchases.buyer_user_id,
+    // #3195), not the resettable builder profile -- buyer_builder_id is
+    // ON DELETE SET NULL (migration 0099), so matching only on it stranded
+    // a buyer's right to review after a builder-profile reset. The builder
+    // match stays as a fallback only for a purchase with no buyer_user_id.
     if (!purchase) {
       throw new HttpError('Only a shopper who has purchased this product, and not yet reviewed that purchase, can review it', 400);
     }
