@@ -188,5 +188,9 @@
   "0188_user_blocks.sql": "8e42be5eaec9e63ee2c7222c108385e82dd8542058022180960e59d0dd19c5ee",
   "0189_earnings_events_purchase_id.sql": "239681a094b93c5c1c2223ca3bc7ec647bf511812353eb554f0226c0bcf9b869",
   "0190_purchases_seller_user_id.sql": "782cc29af2cdf2e941b762bcbfe2839b1946e743f9cb1e0c6b4898d99f0588b6",
-  "0191_direct_messages_user_id.sql": "d11a5c7e0e3e690fb58bc2bb5912e2645df891a343a1e32a49153fe89f57eb73"
+  "0191_direct_messages_user_id.sql": "d11a5c7e0e3e690fb58bc2bb5912e2645df891a343a1e32a49153fe89f57eb73",
+  "0192_friendships_user_id.sql": "3076eb42a8f4b9ba83389a58718d1fccaa2de053d9a9b0e648d09106aa9399ae",
+  "0193_stripe_requirements_eventually_due.sql": "b64fa5cfb68e031bc1c900e081a457668bc89f4cc907db2dfe825fb5bb5653e2",
+  "0194_saved_layout_sign_calendar_content.sql": "3d7c7fd824e3285db20d0fea11fabe33d81d622b5f8e737094334c7c8b4f4fbf",
+  "0200_auction_resolution_resumable.sql": "2f6fd6fdcece1aaf8072777ad08d882da6f735f914ae718d12e248462ea62866"
 }
