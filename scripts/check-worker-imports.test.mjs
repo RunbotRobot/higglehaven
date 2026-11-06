@@ -9,8 +9,7 @@ import { listSourceFiles } from './check-worker-imports.mjs';
 // (scripts/**/*.test.mjs, worker/**/*.test.js, and src/**/*.test.js all
 // share one `test.include`), not plain Node. That side-effecting half is
 // exercised for real by `pretest` itself (same precedent as this repo's
-// check-migrations-manifest-fresh.mjs, whose own side-effecting main()
-// has no dedicated test file either).
+// check-migration-number-collisions.mjs main()).
 describe('listSourceFiles (#2684)', () => {
   function fakeFs(tree) {
     return (dir) => (tree.get(dir) || []).map((entry) => ({

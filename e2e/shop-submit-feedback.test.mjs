@@ -68,5 +68,23 @@ await page.waitForFunction(
 const modalStillVisible = await page.locator('#feedback-modal.visible').count();
 console.log('modal auto-closed after a successful submit (should be 0):', modalStillVisible);
 
-const pass = previewLoaded && statusText.length > 0 && modalStillVisible === 0 && errors.length === 0;
+// A capture that produces nothing must not leave a broken-image icon behind,
+// and must say so (the report can still be sent without a picture).
+await page.evaluate(() => { HTMLCanvasElement.prototype.toBlob = function toBlobNothing(callback) { callback(null); }; });
+await page.click('#shop-feedback-btn');
+await page.waitForSelector('#feedback-modal.visible', { timeout: 5000 });
+await page.waitForFunction(
+  () => document.getElementById('feedback-status').textContent.includes("couldn't capture"),
+  null,
+  { timeout: 5000 },
+);
+const brokenPreviewHidden = await page.evaluate(() => {
+  const img = document.getElementById('feedback-screenshot-preview');
+  return img.hidden && getComputedStyle(img).display === 'none';
+});
+const submitStillEnabled = await page.evaluate(() => !document.getElementById('feedback-submit-btn').disabled);
+console.log('failed capture: preview hidden, not a broken icon (should be true):', brokenPreviewHidden);
+console.log('failed capture: report can still be sent (should be true):', submitStillEnabled);
+
+const pass = previewLoaded && statusText.length > 0 && modalStillVisible === 0 && brokenPreviewHidden && submitStillEnabled && errors.length === 0;
 await finish(browser, { pass, label: 'shop-submit-feedback', errors });

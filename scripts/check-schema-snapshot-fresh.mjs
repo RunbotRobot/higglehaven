@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // #3203: worker/schema-snapshot.json is generated (generate-schema-snapshot.mjs)
 // but checked in; this fails `npm test` the moment it no longer matches what
-// migrations/ produces -- the same guard check-migrations-manifest-fresh.mjs
-// gives worker/migrations-manifest.json. Without it a new migration would make
+// migrations/ produces (worker/migrations-manifest.json had the same guard
+// until #3210 stopped committing it). Without it a new migration would make
 // the Worker's daily checkSchemaDrift report every column the migration added
 // as an out-of-band change.
 import { readFileSync } from 'node:fs';
