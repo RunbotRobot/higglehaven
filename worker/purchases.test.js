@@ -361,7 +361,7 @@ describe('Simulated purchases', () => {
     expect(after).toEqual({ buyer_builder_id: null, buyer_user_id: buyerUser.user_id });
   });
 
-  // The backfill in migrations/0193 resolves an existing purchase's buyer
+  // The backfill in migrations/0194 resolves an existing purchase's buyer
   // through buyer_builder_id; a purchase whose link was already cleared stays
   // NULL. (Same SQL as the migration, run against hand-made rows, since the
   // test database applies every migration to an empty table.)

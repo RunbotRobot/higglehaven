@@ -83,7 +83,7 @@ import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-ad
 // and credit-orb route handlers, extracted into worker/lib/ -- see each
 // module's own comment for what deliberately stayed here instead (and why).
 import { handleStripeWebhook, handleCardSetupIntent, handleConfirmCard } from './lib/stripe.js';
-import { classifyStripeRequirements } from './lib/stripe-requirements.js';
+import { classifyStripeRequirements, eventuallyDueOnly, stripeStepEventuallyDueOnly } from './lib/stripe-requirements.js';
 import { checkWebhookSecrets } from './lib/webhook-secret-check.js';
 import { handleDiditVerificationSession, handleDiditVerificationStatus, handleDiditWebhook } from './lib/didit.js';
 import {
@@ -1577,7 +1577,7 @@ async function handleBuilders(request, env, db, route, url) {
     // "AND stripe_account_id IS NULL" guard below).
     const result = await db.prepare(`
       UPDATE builders
-      SET stripe_account_id = NULL, stripe_onboarding_status = 'not_started', stripe_requirements_due = NULL, stripe_updated_at = ?, updated_at = ?
+      SET stripe_account_id = NULL, stripe_onboarding_status = 'not_started', stripe_requirements_due = NULL, stripe_requirements_eventually_due = NULL, stripe_updated_at = ?, updated_at = ?
       WHERE builder_id = ? AND stripe_account_id = ?
     `).bind(nowIso, nowIso, route[1], previousAccountId).run();
     if (result.meta.changes === 0) {
@@ -2960,6 +2960,11 @@ export function stripeAccountStatusJson(env, row) {
     // #2928: the subset Stripe must collect itself (never our forms); empty
     // when everything due is something our own forms already send.
     stripeStepRequirements: classifyStripeRequirements(requirementsCurrentlyDue).needsStripeStep,
+    // #2928: early heads-up. What Stripe will ask for later (eventually_due,
+    // minus what is already due now), and the part of it only Stripe may
+    // collect. Never blocks anything; status above ignores it.
+    requirementsEventuallyDue: eventuallyDueOnly(row.stripe_requirements_due, row.stripe_requirements_eventually_due),
+    stripeStepEventuallyDue: stripeStepEventuallyDueOnly(row.stripe_requirements_due, row.stripe_requirements_eventually_due),
     updatedAt: row.stripe_updated_at,
   };
 }
