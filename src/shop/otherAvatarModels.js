@@ -32,7 +32,58 @@ export function normalizeEquippedAvatar(raw) {
   const { templateId, modelUrl } = raw;
   if (typeof templateId !== 'string' || !templateId) return null;
   if (typeof modelUrl !== 'string' || !modelUrl) return null;
-  return { templateId, modelUrl };
+  // #3230: skeletonSignature rides along (null from an older server, or a
+  // model with no skeleton) so animationForAvatar can run the compatibility
+  // check without another request.
+  return { templateId, modelUrl, skeletonSignature: normalizeSignature(raw.skeletonSignature) };
+}
+
+function normalizeSignature(raw) {
+  return typeof raw === 'string' && raw ? raw : null;
+}
+
+// #3230: same shape as normalizeEquippedAvatar -- { templateId, modelUrl,
+// skeletonSignature } or null (nothing applied, an older server without the
+// field, or anything malformed).
+export function normalizeEquippedAnimation(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const { templateId, modelUrl } = raw;
+  if (typeof templateId !== 'string' || !templateId) return null;
+  if (typeof modelUrl !== 'string' || !modelUrl) return null;
+  return { templateId, modelUrl, skeletonSignature: normalizeSignature(raw.skeletonSignature) };
+}
+
+// #3230: the applied animation to play on this avatar's body, or null for
+// "use the avatar's own clips". Same rule the shopper's own avatar uses
+// (createCustomShopAvatar / animationCompatibility, #1162): exact signature
+// equality, and both signatures must actually be present -- a missing one can
+// never match. Incompatible or absent: fail open to the avatar's own clips.
+export function animationForAvatar(equippedAvatar, equippedAnimation) {
+  if (!equippedAvatar || !equippedAnimation) return null;
+  if (!equippedAvatar.skeletonSignature || !equippedAnimation.skeletonSignature) return null;
+  return equippedAvatar.skeletonSignature === equippedAnimation.skeletonSignature ? equippedAnimation : null;
+}
+
+// #3230: horizontal speed (m/s) above which another player's avatar plays its
+// walk clip. Presence only carries positions, so locomotion is inferred from
+// how far the avatar travelled between its last two snapshots; a stationary
+// avatar's jitter is far below this, a real walk (several m/s) far above.
+export const OTHER_AVATAR_WALK_SPEED_MPS = 0.4;
+
+// Which named clip ('idle' | 'walk') an observed movement calls for. Flying
+// avatars are never drawn for other users (#2043), so 'fly' never applies.
+// An avatar that stops reports a snapshot at the same spot, which reads as
+// idle by distance alone. t (lerp progress toward the latest snapshot) only
+// matters when snapshots stop arriving altogether: it is measured from when the
+// poll *started*, so ordinary response latency already puts it past 1 while the
+// avatar is still walking, which is why the cutoff is a whole extra interval of
+// staleness (t >= 2) rather than t >= 1.
+export const OTHER_AVATAR_STALE_LERP_T = 2;
+
+export function locomotionStateFor(fromX, fromY, toX, toY, lerpDurationMs, t) {
+  if (t >= OTHER_AVATAR_STALE_LERP_T) return 'idle';
+  const seconds = Math.max(lerpDurationMs, 1) / 1000;
+  return Math.hypot(toX - fromX, toY - fromY) / seconds > OTHER_AVATAR_WALK_SPEED_MPS ? 'walk' : 'idle';
 }
 
 // failedAt: Map<templateId, timestampMs> of recent load failures.
