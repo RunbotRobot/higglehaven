@@ -1479,6 +1479,60 @@ describe('Worker API', () => {
     expect(notices.body.notifications[0].templateId).toBe('catalog-batch-resize-referenced');
   });
 
+  // #797 (owner decision): a placed product links live to the seller's
+  // template, so a builder whose PUBLISHED version still shows it -- even
+  // after they removed it from their draft -- must hear about a resize.
+  // The recipient query used to look at the draft (placed_instances) only.
+  it('notifies a builder whose published version still shows a resized template, once, even when the draft no longer has it', async () => {
+    const created = await api('/catalog', {
+      method: 'POST',
+      body: JSON.stringify({
+        templateId: 'published-resize-template', name: 'Published resize template',
+        color: '#123456', dimensions: { width: 1, depth: 1, height: 1 },
+      }),
+    });
+    expect(created.response.status).toBe(201);
+    const hostingBuilder = await signupBuilder('published-resize-builder');
+    await api('/landlets', hostingBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        landletId: 'published-resize-landlet', name: 'Published resize landlet', areaM2: 100,
+        status: 'claimed', ownerBuilderId: hostingBuilder.builderId, center: { x: 6400, y: 0 },
+      }),
+    }));
+    expect((await api('/instances', hostingBuilder.session({
+      method: 'POST',
+      body: JSON.stringify({
+        instanceId: 'published-resize-instance', landletId: 'published-resize-landlet',
+        templateId: 'published-resize-template', x: 0, y: 0,
+      }),
+    }))).response.status).toBe(201);
+    const saved = await api('/landlets/published-resize-landlet/versions', hostingBuilder.session({
+      method: 'POST', body: JSON.stringify({ name: 'Published' }),
+    }));
+    expect(saved.response.status).toBe(201);
+    expect((await api(`/landlets/published-resize-landlet/versions/${saved.body.version.versionId}/activate`, hostingBuilder.session({ method: 'POST' }))).response.status).toBe(200);
+
+    // First resize: the draft and the published version both hold one copy
+    // -- one notification saying "1 placed", not 2.
+    expect((await api('/catalog/published-resize-template', {
+      method: 'PATCH', body: JSON.stringify({ dimensions: { width: 2, depth: 2, height: 2 } }),
+    })).response.status).toBe(200);
+    let notices = await api('/notifications', hostingBuilder.session());
+    expect(notices.body.notifications).toHaveLength(1);
+    expect(notices.body.notifications[0].message).toContain('you have 1 placed');
+
+    // Now the builder removes it from their draft; shoppers still see it in
+    // the published version, so a second resize must still reach them.
+    expect((await api('/instances/published-resize-instance', hostingBuilder.session({ method: 'DELETE' }))).response.status).toBe(200);
+    expect((await api('/catalog/published-resize-template', {
+      method: 'PATCH', body: JSON.stringify({ dimensions: { width: 3, depth: 3, height: 3 } }),
+    })).response.status).toBe(200);
+    notices = await api('/notifications', hostingBuilder.session());
+    expect(notices.body.notifications).toHaveLength(2);
+    expect(notices.body.notifications.every((n) => n.message.includes('was resized by its seller'))).toBe(true);
+  });
+
   // #920: notifyBuildersOfDimensionChange sends one notification per
   // builder (not per instance) -- correct -- but used to hardcode the
   // message text to "you have one placed" regardless of how many copies

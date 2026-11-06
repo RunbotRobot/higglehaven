@@ -2872,8 +2872,8 @@ else still depends on it." from D1's foreign-key behavior), or with a
 specific `409` if the template is referenced only by a
 `saved_layout_instances` row (a builder's saved layout, possibly one that
 isn't visible to the caller at all — see #729) or a `version_instances` row
-(a landlet's past published version history) — both of those are immutable
-snapshot tables, kept on `ON DELETE RESTRICT` deliberately, so the template
+(a landlet's past published version history) — both of those are layout
+snapshot tables (where a template was placed, not the template itself), kept on `ON DELETE RESTRICT` deliberately, so the template
 can't be deleted out from under them even after every live instance is gone.
 
 #1291: deleting an avatar/animation template is never blocked by builders
@@ -3396,6 +3396,19 @@ not a replacement for `scripts/check-migration-drift.mjs` (#492), which
 still catches the same drift immediately at deploy time; this catches it
 within the next 10-minute cron tick even when nobody deploys for a while.
 
+**#805 (phase 1): applied migrations are content-pinned.** Everything above
+compares filenames only, so editing an already-applied migration after the
+fact left every check green. `scripts/migration-checksums.json` pins each
+`migrations/*.sql` file's SHA-256, and `scripts/check-migration-checksums.mjs`
+runs as a `pretest` check: it fails on an edited pinned file (put the change
+in a new migration), on a migration with no pin yet (`npm run
+generate:migration-checksums` adds missing pins and refuses to touch an
+existing one), and on a pin whose file is gone. The lock is repo-side, not a
+D1 table: deploys run from `main`, so a file that still matches the pin from
+the PR that added it is what was applied. Phase 2 (diffing the live D1
+schema against a fresh apply, to catch an out-of-band `ALTER TABLE`) is a
+separate follow-up.
+
 The same cron also runs `checkWebhookSecrets` (#1793): when a provider is
 configured (Stripe: `STRIPE_SECRET_KEY`; Didit: `DIDIT_API_KEY` and
 `DIDIT_WORKFLOW_ID`; Tripo: `TRIPO_API_KEY`) but its webhook secret
@@ -3407,6 +3420,27 @@ provider (`ops-webhook-secret-<provider>`, `waitingOn: "owner"`, no email).
 The card resolves itself once the secret is set, and is not re-opened if the
 owner marks it done. Environments with no provider keys (dev, tests) raise
 nothing.
+
+The once-daily cron (`0 3 * * *`, the same trigger as the D1 backup) also runs
+`checkSchemaDrift` (#3203, Phase 2 of #805). `checkMigrationDrift` only knows
+which migration *files* were applied; it cannot see a manual hotfix
+`ALTER TABLE`/`CREATE INDEX` run against production outside the migrations
+system. This compares production's live schema against
+`worker/schema-snapshot.json`, a normalized snapshot of what a fresh apply of
+`migrations/` produces (`npm run generate:schema-snapshot`, which applies the
+migrations to a scratch in-memory SQLite database via `node:sqlite`; wired into
+`deploy`/`deploy:ci`, and kept honest by `scripts/check-schema-snapshot-fresh.mjs`
+as a `pretest` check — so **any PR that adds or changes a migration must run
+`npm run generate:schema-snapshot` and commit the result**). Tables are compared
+structurally (a set of columns: name, declared type, `NOT NULL`, default,
+primary-key position; column order is not significant) and indexes, triggers
+and views by name plus whitespace-collapsed SQL; `sqlite_*`, `_cf_*` and `d1_*`
+objects are ignored. On a difference it logs a `console.error` every run, raises
+one Control Room card (`ops-schema-drift`, `waitingOn: "owner"`) that resolves
+itself once production matches again, and — only when the card is first raised or
+re-opened, and only if `OPS_ALERT_EMAIL` is configured — emails that address.
+`worker/schema-drift.test.js` asserts the snapshot built under `node:sqlite` shows
+no drift against a migrated D1, which is the guard against false positives.
 
 ### World object
 
@@ -4331,7 +4365,9 @@ Response:
 
 Returns the layout selected for the shopper-facing landlet without exposing the
 builder's mutable draft. The response includes the landlet, a `published`
-boolean, active version metadata, and the immutable snapshotted instances.
+boolean, active version metadata, and the snapshotted instances (their
+position/rotation are fixed; each product itself is the seller's live template,
+so a seller's later edit shows here too, #797).
 
 When no version has been activated yet, the endpoint still returns `200` with
 `published: false`, `version: null`, and an empty `instances` array. Once a
@@ -4397,7 +4433,7 @@ the complete mutable draft. The request body is:
 `landletId` values supplied on individual entries are ignored in favor of the
 route landlet. Instance IDs must be unique within the request, and a request may
 contain at most 250 instances. An empty array clears the draft. D1 applies the
-draft replacement and immutable version snapshot as one batch, so a validation
+draft replacement and version layout snapshot as one batch, so a validation
 or foreign-key failure leaves both the previous draft and version history
 intact. `versionName` and `versionMetadata` are optional; the default name is
 `Version N`. `versionName` is capped at 100 characters (`400` past that,
@@ -4464,7 +4500,12 @@ history.
 
 ## Landlet versions
 
-Landlet versions are immutable snapshots of a landlet's placed instances. The
+Landlet versions are layout snapshots of a landlet's placed instances: where each
+product sits and how it is rotated is fixed once saved, but the product itself
+stays the seller's live template (#797): a seller may change it at any time, and
+the builder is notified (`notifyBuildersOfDimensionChange` covers both the draft
+and the landlet's active version, one notification per builder with the larger
+of the two copy counts per landlet). The
 mutable `placed_instances` rows remain the builder's current draft, while a
 landlet's `activeVersionId` points at the snapshot intended for shoppers.
 
@@ -4497,7 +4538,7 @@ The response includes `nextCursor`, which is `null` after the oldest version.
 ### `POST /api/landlets/:landletId/versions`
 
 Requires a session logged in as the landlet's owner (`403` otherwise).
-Saves the landlet's current placed instances as a new immutable snapshot.
+Saves the landlet's current placed instances as a new layout snapshot.
 Rate-limited per builder (20 per 15-minute window, `429` past that, #796),
 sharing the same `landlet-version:<builderId>` bucket as `PUT .../draft`
 above — each save duplicates every placed instance into a new
@@ -4707,6 +4748,20 @@ deleted; a deliberate recreate (Undo of a delete) uses `POST`. Without the
 flag `PUT` behaves exactly as described above. An invalid reference, or the caller never owning a touched
 landlet at all, returns `400`/`403` and leaves the entire batch unchanged.
 
+**`expectedUpdatedAt` (#1062, server half).** On `PUT`, each item may carry
+`"expectedUpdatedAt"`, the `updatedAt` the caller last saw for that instance.
+An instance whose stored `updatedAt` differs is **not** overwritten: it is
+skipped, and the response adds `staleInstanceIds` plus `staleInstances` (each
+one's current stored state) so the caller can reconcile instead of clobbering
+a newer edit (another tab, another request). The check is repeated inside the
+write itself, so a write landing in between is reported through
+`rejectedInstanceIds` as described below. An id with no stored row is a create
+and has nothing to be stale against; the field is ignored on `POST`. Without
+the field `PUT` is last-write-wins exactly as before, and the response gains
+no new fields (`staleInstanceIds`/`staleInstances` appear only when at least
+one item sent the field). A non-string or empty value is `400`. Combines with
+`updateOnly`.
+
 **Partial rejection (#1772).** The batch spans an arbitrary set of distinct
 landlets, each independently re-guarded at write time against the
 possibility that its ownership changed in the moment between the up-front
@@ -4776,6 +4831,13 @@ Requires a session logged in as the owner of the instance's current
 landlet, and (if the update moves it) its new target landlet too (`403`
 otherwise). Updates a placed instance. The current implementation merges
 request fields with the existing instance before validation.
+
+**`expectedUpdatedAt` (#1062, server half).** The body may carry
+`"expectedUpdatedAt"`, the `updatedAt` the caller last saw. If the stored
+`updatedAt` differs the write is refused with `409`, nothing is changed, and
+the body carries `staleInstanceId` and `instance` (the current stored state)
+next to `error`, so the caller can reconcile. Absent the field the write is
+last-write-wins as before. A non-string or empty value is `400`.
 
 ### `DELETE /api/instances/:instanceId`
 
@@ -8254,6 +8316,17 @@ instance, template, or seller it references is later removed, the same
 "keep the record, drop the live reference" reasoning `notifications.template_id`
 already uses.
 
+`buyer_user_id` (#3195, `migrations/0194`) records the buyer's *account* on
+each purchase when it is written, also without a foreign key. The buyer is a
+person, and `buyer_builder_id` is `ON DELETE SET NULL`, so a purchase loses
+that link whenever the buyer's builder profile is deleted or reset; the
+account link survives, so a buyer's purchase history (the upcoming "My
+Purchases" list, #2115) can be keyed on it. It is `NULL` for a purchase whose
+buyer had no resolvable account, and for a purchase made before the column
+existed whose builder link was already gone (the migration backfills every
+other row through `buyer_builder_id`). It is internal: no purchase response
+exposes it.
+
 ### Commission math
 
 docs/SPEC.md §5's "Universal commission formula": "2% standard for
@@ -9552,7 +9625,7 @@ The migrations currently create twenty main backend tables:
   scale").
 - `world_settings`: singleton dev world settings for circular expansion and
   shared world constants.
-- `landlet_versions`: immutable layout snapshot metadata.
+- `landlet_versions`: layout snapshot metadata (placement is fixed; products stay live, #797).
 - `version_instances`: instance transforms captured within each snapshot.
 - `landlet_candidates`: lightweight planned plots awaiting first circle overlap,
   with optional generated-ring membership.

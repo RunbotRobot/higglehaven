@@ -1097,7 +1097,9 @@ export async function markDirectMessagesRead(withBuilderId) {
 }
 
 // Landlet versions (see docs/API.md's "Landlet drafts"/"Landlet versions") —
-// immutable snapshots of a landlet's placed instances, separate from the
+// snapshots of where a landlet's products are placed (position/rotation; the
+// products themselves stay live, so a seller's edit shows in a published
+// version and the builder is notified, #797), separate from the
 // mutable placed_instances rows a builder is actively editing. A landlet's
 // activeVersionId points at whichever snapshot (if any) shoppers see; a
 // landlet that's never been published has none, and Shop mode falls back to
@@ -1172,7 +1174,7 @@ export function clearDraftIdempotencyKey(landletId) {
   try { localStorage.removeItem(draftIdempotencyStorageKey(landletId)); } catch (e) { /* ignore */ }
 }
 
-// Snapshots the landlet's *current* live instances as a new immutable
+// Snapshots the landlet's *current* placement layout as a new
 // version — this alone doesn't change what shoppers see (see
 // activateLandletVersion); "Publish" in the UI does both in sequence.
 export async function saveLandletVersion(landletId, { name, metadata } = {}) {
