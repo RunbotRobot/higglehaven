@@ -50,9 +50,6 @@ describe('Friendships key on the account (#3145)', () => {
     const row = await env.DB.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind(friendshipId).first();
     expect(row.requester_user_id).toBe(await userIdOf(alice.builderId));
     expect(row.recipient_user_id).toBe(await userIdOf(bob.builderId));
-    // The retired builder-id columns are no longer written.
-    expect(row.requester_builder_id).toBeNull();
-    expect(row.recipient_builder_id).toBeNull();
 
     const list = await api('/friendships', alice.session());
     expect(list.body.friendships).toHaveLength(1);
@@ -188,17 +185,17 @@ describe('Friendships key on the account (#3145)', () => {
     expect(bobList.body.friendships).toEqual([]);
   });
 
-  it('migration 0188 leaves a friendship whose builder had no account in place instead of dropping it', async () => {
-    // Simulates a row that could not be backfilled: builder ids only.
+  it('a friendship row whose accounts could not be recovered stays in place and does not break a list', async () => {
+    // Simulates a row the backfills could not resolve: both user ids NULL.
     await env.DB.prepare(
-      'INSERT INTO friendships (friendship_id, requester_builder_id, recipient_builder_id) VALUES (?, ?, ?)',
-    ).bind('friendship-unrecoverable', 'builder-preauth-a', 'builder-preauth-b').run();
+      'INSERT INTO friendships (friendship_id, requester_user_id, recipient_user_id) VALUES (?, NULL, NULL)',
+    ).bind('friendship-unrecoverable').run();
     const alice = await signupBuilder('fr-uid-inert-alice');
     const list = await api('/friendships', alice.session());
     expect(list.response.status).toBe(200);
     expect(list.body.friendships).toEqual([]);
     const row = await env.DB.prepare('SELECT * FROM friendships WHERE friendship_id = ?').bind('friendship-unrecoverable').first();
-    expect(row.requester_builder_id).toBe('builder-preauth-a');
+    expect(row).not.toBeNull();
     expect(row.requester_user_id).toBeNull();
   });
 });
