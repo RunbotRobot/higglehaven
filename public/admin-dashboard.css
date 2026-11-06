@@ -1,0 +1,124 @@
+  :root { color-scheme: light; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 0; background: #f4f7ef; color: #16240a;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    display: flex; min-height: 100vh;
+  }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #5a6b52; margin: 0 0 20px; font-size: 13px; }
+  nav {
+    width: 240px; flex: 0 0 240px; background: #eef3e6; border-right: 1px solid #dbe4d0;
+    padding: 20px 12px; overflow-y: auto;
+  }
+  nav .nav-title { font-size: 12px; text-transform: uppercase; letter-spacing: 0.03em; color: #4a5941; margin: 16px 8px 6px; }
+  nav .nav-title:first-child { margin-top: 0; }
+  nav button.nav-item, nav a.nav-item {
+    display: block; width: 100%; text-align: left; background: none; border: none; border-radius: 8px;
+    padding: 8px 10px; font: inherit; color: #16240a; cursor: pointer; text-decoration: none; margin-bottom: 2px;
+  }
+  nav button.nav-item:hover, nav a.nav-item:hover { background: #dbe4d0; }
+  nav button.nav-item.active { background: #6ca42e; color: #fff; font-weight: 600; }
+  nav .nav-item .ext-arrow { float: right; color: #5a6b52; }
+  main { flex: 1 1 auto; padding: 24px 32px; min-width: 0; }
+  .panel { display: none; }
+  .panel.active { display: block; }
+  .placeholder {
+    background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; padding: 24px; color: #4a5941;
+  }
+  .placeholder a { color: #3f6e1c; }
+  .fixtures-badge {
+    display: inline-block; background: #f4d35e; color: #5a3d00; font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.03em; padding: 3px 8px; border-radius: 6px; margin-bottom: 8px;
+  }
+  .fixtures-panel .placeholder { border-color: #f4d35e; background: #fffaf0; }
+  /* Shared toolbar/table/err vocabulary admin-action-log.html already
+     established -- copied rather than shared, same "no shared JS/CSS file
+     between these admin pages" convention that file and admin-control-
+     room.html already both follow. */
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 16px; }
+  .toolbar[hidden] { display: none; }
+  input, button {
+    font: inherit; border-radius: 8px; border: 1px solid #c7d3bd; padding: 8px 10px;
+    background: #fff; color: #16240a;
+  }
+  input { flex: 0 0 220px; }
+  button { cursor: pointer; background: #6ca42e; color: #16240a; border-color: #5a8e24; font-weight: 600; }
+  button:hover:not(:disabled) { background: #5a8e24; }
+  button:disabled { cursor: not-allowed; opacity: 0.55; }
+  button.secondary { background: #fff; color: #16240a; font-weight: 500; }
+  button.secondary:hover { background: #eef3e6; }
+  /* #1824 */
+  button.danger { background: #b3402c; color: #fff; border-color: #8a2a12; }
+  button.danger:hover { background: #8a2a12; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  .err { color: #8a2a12; font-size: 13px; margin: 0 0 12px; }
+  /* #1823 */
+  .ok { color: #3f6e1c; font-size: 13px; margin: 0 0 12px; }
+  .status-pill {
+    display: inline-block; font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 0.03em; padding: 2px 7px; border-radius: 5px; background: #eef3e6; color: #4a5941;
+  }
+  .status-pill.status-approved { background: #e3efd6; color: #3f6e1c; }
+  .status-pill.status-filing, .status-pill.status-filed { background: #dce9f5; color: #1d4e7a; }
+  .status-pill.status-voided { background: #f1e5e5; color: #7a1d1d; }
+  table { width: 100%; border-collapse: collapse; background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; overflow: hidden; margin-bottom: 16px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid #eef1e8; font-size: 13px; vertical-align: top; }
+  th { background: #eef3e6; font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: #4a5941; }
+  tr:last-child td { border-bottom: none; }
+  .empty { color: #6a7a60; padding: 30px; text-align: center; }
+  /* #1824 */
+  .row-status { font-size: 12px; color: #5a6b52; margin-top: 4px; }
+  .row-status.error { color: #8a2a12; }
+  /* #1820 */
+  .models-storage-card {
+    background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; padding: 16px 20px; margin-bottom: 16px;
+  }
+  .models-storage-bar { height: 10px; border-radius: 5px; background: #eef3e6; overflow: hidden; margin: 8px 0; }
+  .models-storage-bar-fill { height: 100%; background: #6ca42e; }
+  .models-storage-bar-fill.warn { background: #e0a526; }
+  .models-storage-bar-fill.crit { background: #c0392b; }
+  .models-section-title { font-size: 15px; margin: 24px 0 4px; }
+  .deletable-tag { color: #8a2a12; font-weight: 600; }
+  .ref-ids { font: 12px/1.4 ui-monospace, monospace; color: #4a5941; }
+  /* #1821 */
+  .world-panel h2 { font-size: 15px; margin: 24px 0 10px; }
+  .world-panel h2:first-child { margin-top: 0; }
+  .world-panel h3 { font-size: 13px; margin: 0 0 8px; }
+  .world-panel .hint { color: #5a6b52; font-size: 12px; margin: 0 0 10px; }
+  .stat-grid { display: flex; gap: 16px; flex-wrap: wrap; background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; padding: 14px 18px; margin-bottom: 12px; }
+  .stat-grid .stat { min-width: 90px; }
+  .stat-grid .stat .n { font-size: 18px; font-weight: 700; }
+  .stat-grid .stat .l { font-size: 11px; text-transform: uppercase; letter-spacing: 0.03em; color: #5a6b52; }
+  textarea {
+    font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; border-radius: 8px; border: 1px solid #c7d3bd;
+    padding: 8px 10px; background: #fff; color: #16240a; width: 100%; min-height: 70px; display: block; margin-bottom: 8px;
+  }
+  details.edit-world { margin-bottom: 16px; }
+  details.edit-world summary { cursor: pointer; color: #3f6e1c; font-weight: 600; margin-bottom: 10px; }
+  .edit-wrap { background: #fff; border: 1px solid #dbe4d0; border-radius: 12px; padding: 14px 16px; margin: 10px 0 20px; }
+  .mono { font: 12px ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .landlets-panel h3 { font-size: 13px; margin: 20px 0 8px; }
+  .landlets-panel h3:first-child { margin-top: 0; }
+  .landlets-panel .hint { color: #5a6b52; font-size: 12px; margin: 0 0 10px; }
+  .landlets-panel .edit-wrap.conflict { border-color: #e0a526; background: #fffaf0; }
+  .fixtures-panel .grant-card {
+    background: #fffaf0; border: 1px solid #f4d35e; border-radius: 12px; padding: 20px; margin-bottom: 16px;
+  }
+  .fixtures-panel .grant-card h2 { font-size: 15px; margin: 0 0 4px; }
+  .fixtures-panel .grant-card .grant-desc { color: #5a6b52; font-size: 13px; margin: 0 0 14px; }
+  .fixtures-panel .grant-form { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .fixtures-panel input {
+    font: inherit; border-radius: 8px; border: 1px solid #c7d3bd; padding: 8px 10px; background: #fff; color: #16240a;
+  }
+  .fixtures-panel input[name$="BuilderId"] { flex: 1 1 220px; min-width: 160px; }
+  .fixtures-panel input[name$="AmountDollars"] { flex: 0 0 120px; }
+  .fixtures-panel button {
+    font: inherit; cursor: pointer; border-radius: 8px; border: 1px solid #5a8e24; padding: 8px 14px;
+    background: #6ca42e; color: #16240a; font-weight: 600;
+  }
+  .fixtures-panel button:hover { background: #5a8e24; }
+  .fixtures-panel button:disabled { opacity: 0.6; cursor: default; }
+  .fixtures-panel .grant-result { margin: 10px 0 0; font-size: 13px; }
+  .fixtures-panel .grant-result.success { color: #3f6e1c; }
+  .fixtures-panel .grant-result.error { color: #8a2a12; }

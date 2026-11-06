@@ -1,0 +1,5008 @@
+      /* Shared brand colors (docs/SPEC.md §1's "Visual brand direction":
+         lighthearted, whimsical, very bright — pale green and pale yellow
+         as the primary palette, soft supporting colors, clean/minimalist).
+         Space-separated RGB (no commas) so each usage can pick its own
+         alpha via rgb(var(--x-rgb) / a) — the modern slash-alpha syntax
+         requires space-separated channels; combining it with the legacy
+         comma-separated form is invalid CSS and silently drops the whole
+         declaration, which is exactly what a comma-separated value here
+         did everywhere it was used.
+
+         Every surface in this app — small floating HUD chrome AND large
+         text-heavy dialogs alike — now shares one light, bright system
+         (previously dialogs used a dark, heavy panel with white text; that
+         read as serious/ominous rather than the intended feel, the same
+         reasoning behind removing the day-night cycle's dark "night"
+         phase). Two pale surfaces, not one, so the palette's two named
+         colors both actually show up:
+         --pill-rgb is the small floating HUD chrome (mode-nav, gizmo
+         buttons, joystick, Add Item, product-info, ...) — pale green.
+         --panel-rgb is the large, text-heavy dialogs (Upload/Seller/
+         Identity/Settings/Claim/Notifications/Friends, and the Add Item
+         catalog picker) — pale yellow.
+         --ink-rgb is the one dark-green ink color used for all text/
+         borders/subtle fills on top of either pale surface (replacing what
+         used to be white-on-dark throughout every dialog).
+         --brand-green is reserved for an *active* state (e.g. the Shop tab
+         once you're in it) — more saturated than either pale surface so
+         "selected" reads as a step up in intensity, not just a different
+         hue.
+         --danger is the one accent used for destructive actions (delete/
+         refund) — a soft, friendly coral rather than a harsh dark red, in
+         keeping with "soft colors" and never fully abandoning brightness
+         even for a warning. */
+      :root {
+        --ink-rgb: 22 36 10;
+        --pill-rgb: 214 232 190;
+        --panel-rgb: 250 240 199;
+        --pill-text: rgb(var(--ink-rgb));
+        --pill-text-soft: rgb(var(--ink-rgb) / 0.65);
+        --brand-green: #6ca42e;
+        --danger: #e2694f;
+        /* Owner (df3j71gtdpwkt8y9ze6j, after the first pill-rgb pass):
+           "They're still too gray. I want them to really pop with a
+           spring green of some kind." pill-rgb (214 232 190) is a very
+           pale, low-saturation tint — correct for the rest of the HUD
+           chrome it shares with dialogs/gizmo buttons, but blended at low
+           alpha over an arbitrary, often-dark 3D backdrop it still reads
+           as washed-out gray rather than a color anyone would call
+           "green." This is a distinctly more saturated, brighter green
+           reserved for the shop-mode movement controls' own resting state
+           (see .shop-joystick/#shop-fly-btn/#shop-vertical-controls below)
+           — deliberately still short of --brand-green's own saturation so
+           "active" (already using brand-green) keeps reading as a step up
+           in intensity, not just a different hue, per this file's own
+           palette convention above. */
+        --spring-green-rgb: 62 199 91;
+      }
+      html, body {
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        height: 100%;
+        background: #eef4e0;
+      }
+      /* #1504: the viewport meta tag used to carry user-scalable=no/
+         maximum-scale=1.0 site-wide so the custom pinch-zoom camera
+         gesture (setShopFov's pointerdown/pointermove pinch handlers in
+         main.js) wouldn't fight the browser's own native pinch-zoom —
+         but that disabled pinch-zoom everywhere, including every
+         text-heavy modal with no competing gesture. touch-action:none
+         scopes the same prevention to just this canvas, matching the
+         existing pattern on #claim-map-canvas/.seller-preview-canvas
+         below, and leaves the rest of the document pinch-zoomable. */
+      #app {
+        width: 100vw;
+        height: 100vh;
+        display: block;
+        touch-action: none;
+      }
+      /* #1590: covers the raw scene-rebuild flash both at cold app startup
+         (blank page background, then an empty placeholder scene, before
+         the real world/avatar are ready) and at every in-app Shop/Build/
+         Sell mode switch — #mode-nav's own switcher is a real
+         location.reload() (see START_MODE_KEY's own comment in main.js),
+         so a mode switch re-runs this exact same cold-start sequence from
+         scratch. Visible by default in the markup itself (no JS needed for
+         the very first paint).
+
+         z-index: deliberately *below* every real action modal (20 —
+         Auth/Verify/Notifications/Friends/Seller/Upload, up through 40 for
+         settings-modal) — bootstrap()'s own identity gate (Shop's
+         ensureShopperIdentity, Build/Sell's ensureBuilderIdentity/
+         ensureSellerIdentity) can open #auth-modal/#verify-modal as part of
+         this exact same loading window, and that needs to stay reachable:
+         a login/verification prompt is itself part of "ready for input,"
+         not something to hide behind a non-interactive splash. Sitting
+         above the plain 3D canvas and the un-indexed HUD (shop-status,
+         joysticks, product-info, ...) is enough to mask the scene-rebuild
+         flash itself; #topbar-left/#mode-nav's own 21 intentionally shows
+         through on top, same as they already do over the raw scene today
+         (both are "always reachable" persistent chrome per their own
+         comments, never conditionally hidden pre-load). */
+      #loading-screen {
+        position: fixed;
+        inset: 0;
+        z-index: 15;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #eef4e0;
+        opacity: 1;
+        transition: opacity 0.4s ease;
+      }
+      #loading-screen.loading-screen-hidden {
+        opacity: 0;
+      }
+      #loading-screen img {
+        width: min(240px, 60vw);
+        height: auto;
+      }
+      /* Wordmark and the account-menu toggle share one fixed top-left row
+         (owner request: a cog icon "just to the right of the higglehaven
+         wordmark" instead of the menu living in its own row lower down,
+         freeing that space to see the 3D world). Sized by its two flex
+         children rather than a fixed width, so it stays correct regardless
+         of the wordmark's own responsive width (see the max-width:480px
+         rule below).
+
+         z-index (#539): every full-viewport action modal (Seller,
+         Notifications, Friends, Auth, ...) sits at z-index 20, deliberately
+         above this row — you're expected to reach them by opening the
+         account menu first, then that modal replaces it. The Seller modal
+         is different: it's reached from #mode-nav, not the account menu,
+         and stays open as an ongoing workspace rather than a quick
+         in-and-out action, so it needs the menu to actually stay reachable
+         while it's open (owner: "This change will open up the ability to
+         access the menu from Sell mode, which is currently not possible").
+         Raising this row above every z-index:20 modal (not just Seller's)
+         is the simplest fix that doesn't special-case Seller specifically,
+         and costs nothing: reaching the menu while another such modal is
+         open just means closing it via that modal's own X first, exactly
+         as before. Stays below claim-modal (30, a mandatory onboarding
+         step that should keep fully blocking everything) and settings-modal
+         (40, which needs to render above the account-menu-panel that opens
+         it). */
+      #topbar-left {
+        position: fixed;
+        top: 10px;
+        left: 12px;
+        z-index: 21;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      /* The wordmark's own green-on-transparent art has no contrast
+         guarantee against an arbitrary background — great against the
+         ground plane and most products, unreadable against the sky. Same
+         translucent-dark-pill treatment as every other text overlay
+         (#product-info, the gizmo buttons, ...) fixes that uniformly,
+         since it controls the pixels immediately behind the logo instead
+         of depending on whatever happens to be in the 3D scene there. */
+      #wordmark-panel {
+        pointer-events: none;
+        /* The wordmark art is itself green — sitting on the pale-green
+           pill background every other bit of chrome now uses would leave
+           it low-contrast, exactly what this background exists to avoid
+           (see the comment above it). Keeps the old dark panel color, at
+           the same near-opaque alpha every modal panel uses (0.97) rather
+           than a lower one — at 0.55 the dark green blended so far toward
+           the sky behind it (especially a bright blue one) that it read as
+           a washed-out gray instead of green, the opposite of the point. */
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 8px;
+        padding: 4px 10px;
+        display: flex;
+        align-items: center;
+      }
+      #wordmark {
+        height: 26px;
+        width: auto;
+        display: block;
+      }
+      /* #product-info is centered and can grow wide enough (its "Tap a
+         product to inspect it" hint text especially) to reach the
+         wordmark's corner on narrow phone screens — shrink the wordmark
+         there rather than fight over the same space. */
+      @media (max-width: 480px) {
+        #wordmark {
+          height: 18px;
+        }
+        #wordmark-panel {
+          padding: 3px 8px;
+        }
+      }
+      /* #540: Sell mode's "faux lándlet" 3D array — scrolling through pages
+         of the seller's own products (see enterSellMode/loadSellerShowcasePage
+         in src/main.js), each page its own ground plane sized to fit that
+         page's items, capped by a cumulative model-file-size budget rather
+         than a fixed item count. Hidden by default (only shown while
+         currentMode === 'sell'); bottom-center is free in every other mode.
+         bottom matches #seller-showcase-manage-btn's own bottom (owner
+         feedback N51 — the two pills read as vertically mismatched
+         otherwise, and this one used to sit 4px higher). */
+      #seller-showcase-pager {
+        display: none;
+        position: fixed;
+        bottom: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10;
+        align-items: center;
+        gap: 10px;
+        background: rgb(var(--pill-rgb) / 0.65);
+        padding: 6px 14px;
+        border-radius: 999px;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #seller-showcase-pager.visible {
+        display: flex;
+      }
+      #seller-showcase-pager button {
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        border-radius: 999px;
+        width: 26px;
+        height: 26px;
+        font-size: 13px;
+        line-height: 1;
+      }
+      #seller-showcase-pager button:disabled {
+        opacity: 0.4;
+      }
+      /* Reopens #seller-modal after it's been closed to browse the
+         showcase array behind it — otherwise closing it would strand the
+         seller with no way back to Manage/List/Upload. Bottom-right is
+         free while in Sell mode: #camera-debug-panel (its usual occupant)
+         is one of SELL_HIDDEN_BUILDER_UI_IDS. */
+      #seller-showcase-manage-btn {
+        display: none;
+        position: fixed;
+        bottom: 12px;
+        right: 8px;
+        z-index: 10;
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      #seller-showcase-manage-btn.visible {
+        display: block;
+      }
+      /* #635 (sub-issue of #631): the faux-layout preview's own small
+         toolbar — top-center, since bottom-center is already
+         #seller-showcase-pager's spot and this mode is never active at
+         the same time as Sell mode. Same pill look as the showcase
+         toolbars above for visual consistency across every "dedicated
+         read-only 3D view" this app has. */
+      #layout-preview-toolbar {
+        display: none;
+        position: fixed;
+        top: 16px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10;
+        align-items: center;
+        gap: 10px;
+        background: rgb(var(--pill-rgb) / 0.65);
+        padding: 8px 16px;
+        border-radius: 999px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        /* #666: on a narrow viewport this row's own natural (unwrapped)
+           width can exceed the screen — the picker <select> alone can run
+           wide (a landlet with no name falls back to its raw id), and a
+           long saved-layout name pushes further. Left unconstrained, a
+           row wider than the viewport still renders at its full natural
+           width (browsers don't shrink a fixed-position, auto-width flex
+           container below its children's own minimum content width) and,
+           since it's centered via the transform above rather than
+           anchored to an edge, ends up overflowing *both* sides at once —
+           the rightmost child (the paste button) can land entirely off
+           the right edge, unclickable, with nothing about that visible
+           from the CSS values themselves. max-width plus wrapping is the
+           fix: once a line can't fit, it wraps onto a second centered row
+           instead of forcing the whole pill wider than the screen.
+           Combined with the white-space/truncation rules below (so a
+           single long name/id can't itself balloon into many wrapped
+           lines and drag the wrong sibling's height along with it via
+           align-items:center), this keeps every child readable and
+           reachable regardless of what a saved layout or landlet happens
+           to be named. */
+        max-width: calc(100vw - 24px);
+        flex-wrap: wrap;
+        justify-content: center;
+      }
+      #layout-preview-toolbar.visible {
+        display: flex;
+      }
+      #layout-preview-back-btn,
+      #layout-preview-paste-btn {
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        border-radius: 999px;
+        padding: 4px 12px;
+        font: 13px/1.4 sans-serif;
+        white-space: nowrap;
+      }
+      /* Both of these can hold arbitrary, builder-chosen text (a saved
+         layout's own generated name; a landlet's name, or its raw id when
+         unnamed) with no length limit enforced anywhere upstream — capped
+         and truncated here so one long value can't single-handedly widen
+         or (via text wrapping under flex-shrink) vertically balloon the
+         whole toolbar row, the actual root cause behind #666. */
+      #layout-preview-name {
+        max-width: 160px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      /* #648: only shown once populateLayoutPreviewPasteTarget (src/main.js)
+         finds the builder owns more than one claimed landlet — same
+         "picker only when there's a real choice to make" convention
+         renderStartSection's own .landlet-picker already follows. */
+      #layout-preview-paste-target {
+        border-radius: 999px;
+        padding: 4px 10px;
+        font: 13px/1.4 sans-serif;
+        max-width: 140px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      /* The drag-rectangle itself — positioned/sized entirely via inline
+         style from JS on every pointermove while dragging (see
+         updateLayoutPreviewMarquee in src/main.js), so this rule only
+         needs to own the fixed visual look. pointer-events:none so the
+         rectangle drawn "in front of" the meshes it's selecting never
+         itself intercepts the very pointerup that finishes the drag. */
+      #layout-preview-marquee {
+        display: none;
+        position: fixed;
+        z-index: 9;
+        border: 1px solid rgb(255 255 255 / 0.9);
+        background: rgb(255 255 255 / 0.15);
+        pointer-events: none;
+      }
+      #layout-preview-marquee.visible {
+        display: block;
+      }
+      /* #3219: a raw camera-pose readout is a developer aid, not something an
+         ordinary builder should see; hidden unless src/build/scene.js's
+         updateCameraDebug adds .admin-visible for an admin account. */
+      #camera-debug-panel {
+        position: fixed;
+        bottom: 44px;
+        right: 8px;
+        z-index: 10;
+        display: none;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 4px;
+      }
+      #camera-debug-panel.admin-visible {
+        display: flex;
+      }
+      /* #545: only shown when a sync to the backend has failed with a real
+         network-level error (server unreachable) — Build mode's own edits
+         still save fine to this device via localStorage either way
+         (persistLayout, called before any of syncCreate/syncUpdate/
+         syncDelete/syncBatch* ever run), so this exists purely to surface
+         that gap rather than to block anything. Owner: "a little icon in
+         the corner that indicates when server connectivity is not
+         reachable... if they click or tap that icon, it explains what the
+         icon means... when the server is reachable, no icon needs to be
+         displayed" — hidden by default, toggled via setServerReachable in
+         src/main.js. Bottom-left is otherwise unused by any other builder
+         chrome (the other three corners all host something already —
+         #topbar-left, #undo-redo-panel/#mode-nav, #camera-debug-panel). */
+      #connectivity-indicator {
+        position: fixed;
+        bottom: 12px;
+        left: 12px;
+        z-index: 10;
+        width: 34px;
+        height: 34px;
+        border-radius: 50%;
+        border: none;
+        background: var(--danger);
+        color: #fff;
+        font-size: 16px;
+        line-height: 1;
+        cursor: pointer;
+      }
+      /* Shop mode's overlay — hidden by default, toggled with the shared
+         .visible class (main.js) exactly like the modals, but these aren't
+         modals: they float over the full-screen flight view rather than
+         gating it, so each is its own small fixed element instead of one
+         dimming backdrop. */
+      .shop-ui {
+        display: none;
+        position: fixed;
+        z-index: 16;
+      }
+      .shop-ui.visible {
+        display: block;
+      }
+      #shop-status {
+        /* Was top: 10px, left: 12px — the exact same spot as #topbar-left's
+           wordmark panel (z-index 21 vs. this row's 16), which sat on top of
+           and clipped this text's leading characters (Control Room N47:
+           "e world..." visible, the rest of "Loading the world…" hidden
+           behind the wordmark). Dropping below the topbar-left row (bottom
+           edge ~44px: wordmark-panel's 26px logo + 4px top/bottom padding,
+           starting at topbar-left's own top: 10px) clears it with margin in
+           both the default and the @media(max-width:480px) shrunk-wordmark
+           case. */
+        top: 56px;
+        left: 12px;
+        max-width: 60vw;
+        background: rgb(var(--pill-rgb) / 0.65);
+        padding: 8px 14px;
+        border-radius: 8px;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        pointer-events: none;
+      }
+      /* Only shown while within SIGN_INTERACT_RADIUS_M of a community sign
+         (see updateSignFade in src/main.js) — unlike shop-status above,
+         this one is a real tappable button, so it doesn't inherit its
+         pointer-events: none. Stacked well above the bottom-center movement
+         joysticks below (found via manual verification, not caught by the
+         e2e suite since raw Shop-mode camera movement isn't automated —
+         see docs/API.md's "Community signs"). */
+      #shop-sign-hint {
+        bottom: 180px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgb(var(--pill-rgb) / 0.9);
+        padding: 8px 16px;
+        border-radius: 8px;
+        border: none;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        cursor: pointer;
+      }
+      /* #1176: shown during the spawn-flow rotating orbit (see enterShopMode
+         in src/main.js) when the shopper has a last-known position to offer.
+         Deliberately not a plain .shop-ui (that base class's .visible just
+         flips `display`, which can't transition) — the owner specifically
+         asked for the auto-hide five seconds after the shopper starts
+         navigating on their own to be "a non-jarring fade transition, not
+         an instant hide," so this button fades via opacity both in and out
+         instead. Centered at the same top offset as #shop-status (left: 12
+         there, centered here, so the two never collide). */
+      #shop-last-location-btn {
+        position: fixed;
+        z-index: 16;
+        top: 56px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgb(var(--pill-rgb) / 0.9);
+        padding: 10px 18px;
+        border-radius: 8px;
+        border: none;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        cursor: pointer;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.4s;
+      }
+      #shop-last-location-btn.visible {
+        opacity: 1;
+        pointer-events: auto;
+      }
+      /* #1995: a brief "+1 free model-generation credit!" confirmation on
+         collecting a credit orb — same opacity-fade-in/out shape as
+         #shop-last-location-btn just above (a non-jarring fade, not an
+         instant show/hide), but never interactive (no pointer-events: auto
+         on .visible) since this is a passive notice, not a button. Centered
+         just above #shop-sign-hint/#shop-calendar-hint's own stack so a
+         collection near a sign/calendar doesn't collide with either. */
+      #shop-credit-orb-toast {
+        position: fixed;
+        z-index: 16;
+        bottom: 280px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgb(var(--pill-rgb) / 0.9);
+        padding: 8px 16px;
+        border-radius: 8px;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.4s;
+      }
+      #shop-credit-orb-toast.visible {
+        opacity: 1;
+      }
+      /* #2447: unlike #shop-credit-orb-toast just above (a one-shot,
+         auto-hiding confirmation), this stays up for as long as collection
+         keeps failing without a real server response -- "offline", not a
+         momentary blip -- and clears the moment a request succeeds again,
+         so it's shown/hidden directly rather than on an auto-hide timer.
+         Stacked one slot above the toast per that comment's own stacking
+         idiom, so a success toast firing right as connectivity returns
+         doesn't collide with this notice fading out. */
+      #shop-credit-orb-offline-notice {
+        position: fixed;
+        z-index: 16;
+        bottom: 330px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgb(var(--pill-rgb) / 0.9);
+        padding: 8px 16px;
+        border-radius: 8px;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.4s;
+      }
+      #shop-credit-orb-offline-notice.visible {
+        opacity: 1;
+      }
+      /* Reported directly by a player ("It won't let me collect more
+         orbs!") -- a 429 from CREDIT_ORB_COLLECT_RATE_LIMIT_MAX used to
+         leave the orb in place with no explanation at all. Auto-hides on
+         its own timer (presenceAndContent.js's showCreditOrbRateLimitNotice)
+         rather than the offline-notice's shown/hidden-directly shape, since
+         the cooldown it's timed to is a known, fixed duration rather than
+         "until a request finally succeeds." Stacked one slot above the
+         offline notice per its own stacking idiom. */
+      #shop-credit-orb-rate-limit-notice {
+        position: fixed;
+        z-index: 16;
+        bottom: 380px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgb(var(--pill-rgb) / 0.9);
+        padding: 8px 16px;
+        border-radius: 8px;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.4s;
+      }
+      #shop-credit-orb-rate-limit-notice.visible {
+        opacity: 1;
+      }
+      /* Same treatment as #shop-sign-hint just above (see its own comment),
+         stacked one slot higher so both can show at once near an
+         overlapping sign+calendar without colliding. */
+      #shop-calendar-hint {
+        bottom: 230px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgb(var(--pill-rgb) / 0.9);
+        padding: 8px 16px;
+        border-radius: 8px;
+        border: none;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        cursor: pointer;
+      }
+      /* Dual virtual joysticks: lower-left walks (forward/back/strafe),
+         right looks (yaw/pitch) — each tracks its own pointer via
+         setPointerCapture so both thumbs work at once. The knob is an
+         absolutely-positioned child re-centered with a translate() offset
+         computed in JS; the base's own .shop-ui position:fixed already
+         gives the knob a containing block, so no extra positioning rule
+         is needed here. */
+      .shop-joystick {
+        width: 108px;
+        height: 108px;
+        bottom: 24px;
+        border-radius: 50%;
+        /* Owner: "the three controls at the bottom of shop mode" (this,
+           #shop-fly-btn, #shop-vertical-controls below) read as gray
+           rather than on-brand green — an ink-rgb tint reads that way at
+           low alpha since ink-rgb is a near-black green. Every other bit
+           of floating HUD chrome over the 3D scene (#shop-status,
+           #shop-sign-hint, ...) already uses a pale pill-rgb fill with no
+           border for contrast against an arbitrary backdrop instead; this
+           just brings the joystick in line with that, matching what the
+           :root palette comment already claimed it did.
+           Owner (follow-up): pill-rgb's own pale tint still read as gray,
+           not green — see --spring-green-rgb's own comment above for why
+           this now uses that instead, at a higher alpha so it doesn't
+           wash out the same way against a dark 3D backdrop. */
+        background: rgb(var(--spring-green-rgb) / 0.85);
+        touch-action: none;
+      }
+      .shop-joystick-knob {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 44px;
+        height: 44px;
+        margin: -22px 0 0 -22px;
+        border-radius: 50%;
+        background: rgb(var(--ink-rgb) / 0.4);
+        pointer-events: none;
+      }
+      #shop-move-joystick {
+        left: 20px;
+      }
+      #shop-look-joystick {
+        right: 20px;
+      }
+      /* docs/SPEC.md §2's flight trigger — double-tap to take off/land
+         (see bindShopFlyToggle in src/main.js; double-press space does the
+         same on desktop). Centered above the hint text, its own row so it
+         never collides with the move/look joysticks on either side. */
+      /* #1589: the bird artwork fills the whole pill on a white background
+         now, rather than sitting as a small icon on a green one — padding
+         removed so the image can reach the button's own edge. */
+      #shop-fly-btn {
+        bottom: 78px;
+        left: 50%;
+        transform: translateX(-50%);
+        width: 56px;
+        height: 56px;
+        padding: 0;
+        border-radius: 50%;
+        border: none;
+        background: #fff;
+        color: var(--pill-text);
+        font-size: 18px;
+        touch-action: none;
+        /* #1815: the icon itself is now zoomed in (see its own JS-set
+           transform/transform-origin, set per-icon in setShopFlyBtnFlying)
+           to crop out the owner-supplied artwork's own baked-in circular
+           backdrop -- without this, that zoom would spill the icon's
+           rendered box past this button's own edges instead of staying
+           clipped to it. */
+        overflow: hidden;
+      }
+      #shop-fly-btn-icon {
+        display: block;
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        object-fit: cover;
+      }
+      #shop-fly-btn.active {
+        background: var(--brand-green);
+      }
+      /* Ascend/descend while actually flying (updateShopFlight in
+         src/main.js sets shop-flying on <body> for the duration) — hidden
+         the rest of the time, since holding altitude only means anything
+         once airborne. Stacked above #shop-fly-btn rather than sharing its
+         row. */
+      #shop-vertical-controls {
+        display: none;
+        bottom: 132px;
+        left: 50%;
+        transform: translateX(-50%);
+        flex-direction: column;
+        gap: 8px;
+      }
+      body.shop-flying #shop-vertical-controls.visible {
+        display: flex;
+      }
+      #shop-vertical-controls button {
+        width: 52px;
+        height: 40px;
+        border-radius: 12px;
+        border: none;
+        background: rgb(var(--spring-green-rgb) / 0.85);
+        color: var(--pill-text);
+        font-size: 16px;
+        touch-action: none;
+      }
+      #shop-vertical-controls button.active {
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      /* Undo/redo are always-relevant, not tied to a selection, so they get
+         their own persistent spot rather than crowding into the
+         selection-only gizmo-mode-controls row. Owner: "I want the Shop/
+         Build/Sell tab buttons to be in the same row as the higglehaven
+         wordmark to increase open screen space" — that claimed this
+         panel's old top-right-of-row-1 spot (see #mode-nav below), so
+         undo/redo swapped down into #mode-nav's old row (top: 48px)
+         instead, rather than needing a brand new one. That row's left
+         side (once the account menu's own spot — see #topbar-left) is
+         empty now that the account menu moved up next to the wordmark. */
+      #undo-redo-panel {
+        position: fixed;
+        top: 48px;
+        right: 8px;
+        z-index: 10;
+        display: flex;
+        gap: 8px;
+      }
+      /* Account menu — Identity/Notices/Friends/Settings used to be four
+         separate persistent pills across two rows. Consolidated into one
+         expanding menu (docs/SPEC.md §1's "clean, minimalist... expanding
+         menus... leave plenty of screen space open") — one small pill
+         instead of a whole cluster, expanding into a dropdown only when
+         actually needed. Lives in #topbar-left next to the wordmark panel;
+         that panel is pointer-events: none (it's decorative branding), so
+         this is its own sibling element rather than fighting that to
+         become clickable.
+
+         The four original buttons keep their original IDs/click handlers
+         untouched in main.js — only their layout changed, from independent
+         fixed pills to plain rows inside this panel, so
+         SHOP_HIDDEN_BUILDER_UI_IDS's existing per-ID hiding (Identity/
+         Notices/Friends hidden in Shop mode, Settings never hidden) keeps
+         working exactly as before with no JS changes. */
+      #account-menu {
+        /* Purely to give the absolutely-positioned dropdown panel below
+           (and the ::after unread-badge dot) something to anchor to —
+           #topbar-left's own z-index:21 already lifts this whole row
+           above the z-index:10 floating-HUD tier (gizmo-mode-controls,
+           product-info, ...), the reason the dropdown needs to clear that
+           tier at all (found via e2e/seller-upload-and-resize.test.mjs
+           timing out on a click that should have landed). Still below
+           #catalog-picker (no z-index of its own — inherits #add-item-panel's
+           10) and every real modal (20+), since a row click always closes
+           this panel before anything else can open. */
+        position: relative;
+      }
+      #account-menu-toggle {
+        padding: 5px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.55);
+        color: var(--pill-text-soft);
+        font: 12px/1.4 sans-serif;
+        position: relative;
+      }
+      #account-menu-toggle.active {
+        background: rgb(var(--pill-rgb) / 0.9);
+        color: var(--pill-text);
+      }
+      /* A small dot on the collapsed toggle summarizing "something in here
+         needs your attention" — pure CSS (:has(), already relied on
+         elsewhere in this file for body:has(#catalog-picker.visible)), so
+         it never needs separate JS bookkeeping beyond the badge
+         hidden-attribute toggles refreshNotificationsBadge/friends already do. */
+      #account-menu:has(#notifications-badge:not([hidden])) #account-menu-toggle::after,
+      #account-menu:has(#friends-badge:not([hidden])) #account-menu-toggle::after,
+      #account-menu:has(#dm-badge:not([hidden])) #account-menu-toggle::after {
+        content: '';
+        position: absolute;
+        top: 2px;
+        right: 4px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #d9483a;
+      }
+      #account-menu-panel {
+        display: none;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 4px;
+        position: absolute;
+        top: calc(100% + 6px);
+        left: 0;
+        min-width: 150px;
+        background: rgb(var(--pill-rgb) / 0.95);
+        border-radius: 12px;
+        padding: 6px;
+        box-shadow: 0 6px 18px rgb(var(--ink-rgb) / 0.18);
+      }
+      #account-menu-panel.expanded {
+        display: flex;
+      }
+      #account-menu-panel button {
+        padding: 7px 12px;
+        border-radius: 8px;
+        border: none;
+        background: transparent;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        text-align: left;
+      }
+      #account-menu-panel button:hover {
+        background: rgb(var(--ink-rgb) / 0.08);
+      }
+      #account-menu-landcap {
+        padding: 7px 12px;
+        margin-top: 2px;
+        border-top: 1px solid rgb(var(--ink-rgb) / 0.12);
+        font: 12px/1.4 sans-serif;
+        color: var(--pill-text);
+        opacity: 0.75;
+      }
+      #account-menu-tax-notice {
+        padding: 7px 12px;
+        font: 12px/1.4 sans-serif;
+        color: var(--pill-text);
+        opacity: 0.75;
+      }
+      #account-menu-tax-notice.crossed {
+        color: var(--danger);
+        opacity: 1;
+      }
+      /* N48 (Control Room, 2026-09-11): "the note 'starter landlet — built
+         by an unknown builder' should be in the menu to declutter the 3D
+         world" — was a fixed top-right HUD overlay (#shop-landlet-info)
+         shown any time the shopper stood on a claimed landlet; moved into
+         the account menu instead, same as #build-info's own earlier move
+         into Settings (see the account-menu-landcap comment above). Kept
+         live-updating (updateShopLandletInfo in src/main.js) even while the
+         menu panel itself is collapsed, so it's current the moment the menu
+         opens rather than stale until the next landlet crossing. */
+      #account-menu-landlet-info {
+        padding: 7px 12px;
+        font: 12px/1.4 sans-serif;
+        color: var(--pill-text);
+        opacity: 0.75;
+      }
+      #notifications-badge,
+      #friends-badge,
+      #dm-badge {
+        display: inline-block;
+        min-width: 15px;
+        margin-left: 5px;
+        padding: 0 4px;
+        border-radius: 999px;
+        background: #d9483a;
+        color: #fff;
+        font-size: 10px;
+        line-height: 15px;
+        text-align: center;
+      }
+      #notifications-badge[hidden],
+      #friends-badge[hidden],
+      #dm-badge[hidden] {
+        display: none;
+      }
+      /* The three peer top-level views — always reachable regardless of
+         which one is currently active (including during Shop mode, unlike
+         most of the builder UI — see SHOP_HIDDEN_BUILDER_UI_IDS in main.js),
+         so switching feels like tabs rather than one-way doors. Owner: "I
+         want the Shop/Build/Sell tab buttons to be in the same row as the
+         higglehaven wordmark to increase open screen space" — shares the
+         top row with #topbar-left (wordmark + account menu) now
+         (top: 10px, same as it), rather than the row below (where
+         #undo-redo-panel moved to instead).
+
+         z-index (#1596): same 21 as #topbar-left above, for the same reason
+         — every full-viewport action modal (Seller, Notifications, Friends,
+         Auth, ...) sits at z-index 20, so at the old z-index:10 the Seller
+         modal's own overlay sat on top of these buttons and silently ate
+         the click, forcing a close-modal-first detour that #topbar-left's
+         own account menu was already exempted from. Each mode-nav click
+         just triggers location.reload() (see its own handler below), so
+         letting it fire with another modal still open is harmless — no
+         in-modal state to reconcile first, unlike a true in-place close. */
+      #mode-nav {
+        position: fixed;
+        top: 10px;
+        right: 8px;
+        z-index: 21;
+        display: flex;
+        gap: 6px;
+      }
+      .mode-nav-btn {
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.55);
+        color: var(--pill-text-soft);
+        font: 12px/1.4 sans-serif;
+      }
+      .mode-nav-btn.active {
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      /* #1169: on-screen compass, Shop and Build modes only (Sell has no
+         free-look camera to orient — added to SELL_HIDDEN_BUILDER_UI_IDS
+         rather than SHOP_HIDDEN_BUILDER_UI_IDS in main.js, the inverse of
+         most builder chrome, since this one should stay visible in Shop).
+         Third row under #mode-nav/#undo-redo-panel on the same right-hand
+         stack (top: 10px, 48px) — the only right-side spot free in both
+         modes (#undo-redo-panel itself is Build-only). The dial face never
+         rotates (N/E/S/W stay at their fixed screen positions); only the
+         needle turns, driven by updateCompassNeedle() in main.js. */
+      #compass-panel {
+        position: fixed;
+        top: 86px;
+        right: 8px;
+        z-index: 10;
+        width: 48px;
+        height: 48px;
+      }
+      #compass-dial {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        background: rgb(var(--pill-rgb) / 0.65);
+      }
+      /* #2718 (sub-issue of #2715): "Submit Feedback" trigger. Same
+         right-hand stacked-pill shape #mode-nav (top: 10)/#compass-panel
+         (top: 86, 48px tall) above already use -- this continues that
+         stack one slot down (86 + 48 + 8 gap = 142). Shop-only (class
+         shop-ui, like #shop-fly-btn), hidden until src/shop/mode.js's
+         enterShopMode reveals it. */
+      #shop-feedback-btn {
+        top: 142px;
+        right: 8px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 12px/1.4 sans-serif;
+        cursor: pointer;
+      }
+      /* #2779: a small collapsed toggle, same shape/position column as
+         #compass-panel (top: 86px) and #shop-feedback-btn (top: 142px)
+         above -- next free slot in that right-edge stack. */
+      #shop-nearby-chat-btn {
+        top: 182px;
+        right: 8px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 12px/1.4 sans-serif;
+        cursor: pointer;
+      }
+      /* Deliberately its own open/closed state (not .shop-ui's own
+         .visible) -- #shop-nearby-chat-btn's visibility already tracks
+         trust-tier eligibility; this tracks "did the shopper tap it open,"
+         a fully independent axis. See src/shop/nearbyChat.js. */
+      #shop-nearby-chat-panel {
+        display: none;
+        position: fixed;
+        z-index: 16;
+        top: 262px;
+        right: 8px;
+        width: 220px;
+        background: rgb(var(--pill-rgb) / 0.85);
+        border-radius: 8px;
+        padding: 8px;
+        flex-direction: column;
+        gap: 6px;
+      }
+      #shop-nearby-chat-panel.open {
+        display: flex;
+      }
+      #shop-nearby-chat-log {
+        max-height: 160px;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font: 12px/1.4 sans-serif;
+        color: var(--pill-text);
+      }
+      .shop-nearby-chat-message {
+        word-break: break-word;
+        display: flex;
+        align-items: baseline;
+        gap: 6px;
+      }
+      .shop-nearby-chat-message-text {
+        flex: 1 1 auto;
+      }
+      /* Right-aligned/dimmed for the sender's own sent messages -- same
+         "which side is mine" convention a chat UI almost always uses,
+         cheap here since src/shop/nearbyChat.js already knows a message's
+         id the instant it sends it, well before the next poll would
+         otherwise tell it apart from anyone else's. */
+      .shop-nearby-chat-message.own {
+        opacity: 0.75;
+        text-align: right;
+      }
+      /* #2956: parity with .shop-voice-peer-row button's own compact pill
+         shape above -- never rendered on the sender's own messages. */
+      .shop-nearby-chat-message-actions {
+        display: flex;
+        gap: 3px;
+        flex: 0 0 auto;
+      }
+      .shop-nearby-chat-message-actions button {
+        padding: 1px 5px;
+        border-radius: 5px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        font: 10px/1.4 sans-serif;
+        cursor: pointer;
+      }
+      /* #2796: same minimal text+error-class shape #dm-status already
+         uses for the structurally identical DM-send failure case. */
+      #shop-nearby-chat-status {
+        font-size: 11px;
+        color: rgb(var(--ink-rgb) / 0.75);
+        min-height: 14px;
+      }
+      #shop-nearby-chat-status.error {
+        color: #ff8a80;
+      }
+      /* #3128: "Muted (N)" control + the Unmute list it expands; hidden
+         while nothing is muted. Same compact pill shape as the message
+         action buttons above. */
+      #shop-nearby-chat-muted[hidden], #shop-nearby-chat-muted-list[hidden] {
+        display: none;
+      }
+      #shop-nearby-chat-muted {
+        font: 11px/1.4 sans-serif;
+        color: var(--pill-text);
+      }
+      #shop-nearby-chat-muted button {
+        padding: 1px 6px;
+        border-radius: 5px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        font: 11px/1.4 sans-serif;
+        cursor: pointer;
+      }
+      .shop-nearby-chat-muted-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        margin-top: 3px;
+      }
+      #shop-nearby-chat-form {
+        display: flex;
+        gap: 4px;
+      }
+      #shop-nearby-chat-input {
+        flex: 1;
+        min-width: 0;
+        padding: 4px 6px;
+        border-radius: 6px;
+        border: none;
+        font: 12px/1.4 sans-serif;
+      }
+      #shop-nearby-chat-form button {
+        padding: 4px 10px;
+        border-radius: 6px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        font: 12px/1.4 sans-serif;
+        cursor: pointer;
+      }
+      /* #2818: next free slot in the same right-edge stack as
+         #shop-feedback-btn/#shop-nearby-chat-btn above -- a small round
+         icon button (no text pill) rather than matching their shape, since
+         its state is carried entirely by the icon/background color, not a
+         label. */
+      #shop-voice-btn {
+        top: 222px;
+        right: 8px;
+        width: 32px;
+        height: 32px;
+        padding: 0;
+        border-radius: 50%;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font-size: 16px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+      /* Current-state convention (#2778's resolution) -- background color
+         always reflects what the mic is doing right now. */
+      #shop-voice-btn.unmuted {
+        background: rgb(var(--spring-green-rgb) / 0.65);
+      }
+      #shop-voice-btn.speaking {
+        box-shadow: 0 0 0 3px rgb(var(--spring-green-rgb) / 0.6);
+      }
+      #shop-voice-btn.denied {
+        background: rgb(255 92 92 / 0.55);
+      }
+      #shop-voice-btn.requesting {
+        opacity: 0.6;
+        cursor: wait;
+      }
+      /* #2819: anchored to the left of #shop-voice-btn (top: 222px, 32px
+         tall, right: 8px) rather than stacked into the #shop-nearby-chat-
+         panel's own vertical slot below it, so the two never collide when
+         both happen to be open at once. Same display:none/.open toggle
+         shape as #shop-nearby-chat-panel, just driven by "is anyone
+         connected" instead of a tap. */
+      #shop-voice-peers-panel {
+        display: none;
+        position: fixed;
+        z-index: 16;
+        top: 222px;
+        right: 48px;
+        width: 180px;
+        background: rgb(var(--pill-rgb) / 0.85);
+        border-radius: 8px;
+        padding: 6px;
+      }
+      #shop-voice-peers-panel.open {
+        display: block;
+      }
+      .shop-voice-peer-row {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        padding: 3px 0;
+        font: 12px/1.4 sans-serif;
+        color: var(--pill-text);
+      }
+      .shop-voice-peer-row .shop-voice-peer-label {
+        flex: 1 1 auto;
+      }
+      .shop-voice-peer-row button {
+        padding: 2px 7px;
+        border-radius: 6px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        font: 11px/1.4 sans-serif;
+        cursor: pointer;
+      }
+      .shop-voice-peer-row button.shop-voice-peer-muted {
+        background: rgb(255 92 92 / 0.45);
+      }
+      .compass-label {
+        position: absolute;
+        color: var(--pill-text-soft);
+        font: 10px/1 sans-serif;
+        pointer-events: none;
+      }
+      .compass-label.compass-n {
+        top: 2px;
+        left: 50%;
+        transform: translateX(-50%);
+      }
+      .compass-label.compass-e {
+        top: 50%;
+        right: 3px;
+        transform: translateY(-50%);
+      }
+      .compass-label.compass-s {
+        bottom: 2px;
+        left: 50%;
+        transform: translateX(-50%);
+      }
+      .compass-label.compass-w {
+        top: 50%;
+        left: 3px;
+        transform: translateY(-50%);
+      }
+      /* A simple CSS-triangle needle, apex up at rotate(0) — rotated in JS
+         by updateCompassNeedle() to point toward the current facing
+         direction's compass bearing, clockwise from North (matching
+         rotate()'s own clockwise-for-positive-degrees convention, so no
+         sign flip is needed between the computed bearing and this
+         transform). transform-origin sits at the triangle's own base
+         center (4px, 14px within its 8x14 box — see border-bottom below),
+         which is also the dial's exact center, so it swings like a clock
+         hand anchored there rather than around its own bounding box. */
+      #compass-needle {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 0;
+        height: 0;
+        margin: -14px 0 0 -4px;
+        border-left: 4px solid transparent;
+        border-right: 4px solid transparent;
+        border-bottom: 14px solid rgb(var(--ink-rgb) / 0.85);
+        transform-origin: 4px 14px;
+      }
+      #undo-redo-panel button {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      #undo-redo-panel button:disabled {
+        opacity: 0.4;
+      }
+      #camera-debug {
+        color: rgba(255, 255, 255, 0.75);
+        font: 11px/1.4 monospace;
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.9);
+        text-align: right;
+        white-space: pre;
+        user-select: text;
+        -webkit-user-select: text;
+      }
+      #camera-debug-copy {
+        padding: 3px 10px;
+        border-radius: 6px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.6);
+        color: var(--pill-text-soft);
+        font: 11px/1.4 sans-serif;
+      }
+      #product-info {
+        position: fixed;
+        top: 12px;
+        left: 50%;
+        transform: translateX(-50%);
+        color: var(--pill-text);
+        background: rgb(var(--pill-rgb) / 0.65);
+        padding: 8px 14px;
+        border-radius: 8px;
+        font: 14px/1.4 sans-serif;
+        text-align: center;
+        pointer-events: none;
+        z-index: 10;
+      }
+      /* Whatever this hint currently says (a selected item's name, a
+         Measure readout, ...) is stale and redundant once the catalog
+         picker is open — the builder is choosing a product to place, not
+         looking at the world. Pure CSS so it stays correct regardless of
+         which of catalog-picker's several close paths (pick a tile,
+         re-tap Add Item, tap elsewhere, paste, ...) fires. */
+      body:has(#catalog-picker.visible) #product-info {
+        display: none;
+      }
+      #gizmo-mode-controls {
+        position: fixed;
+        top: 64px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: none;
+        flex-wrap: wrap;
+        justify-content: center;
+        /* Both max-width AND width (not max-width alone) — a wrapping flex
+           row with only max-width shrinks to whatever "optimal line
+           breaking" width Chromium picks (empirically far narrower than
+           94vw once there are several buttons, since it minimizes total
+           line count rather than maximizing row width), which packs far
+           fewer buttons per row than the budget actually allows and grows
+           the panel much taller than necessary. That extra height isn't
+           just cosmetic on a phone-width viewport: it can reach down far
+           enough to sit on top of the 3D canvas itself and silently
+           swallow taps meant for it (found via e2e/bundles.test.mjs
+           failing to select a placed tree once this row had enough
+           buttons — see the Community Sign click handler's own comment in
+           src/main.js). Forcing the full budget-width used per row keeps
+           the panel as short as the button count actually requires. */
+        width: 94vw;
+        max-width: 94vw;
+        gap: 8px;
+        z-index: 10;
+      }
+      #gizmo-mode-controls.visible {
+        display: flex;
+      }
+      /* Below ~480px, the gap between #topbar-left (wordmark + account
+         menu) and #mode-nav (both anchored to the same top row) is
+         narrower than product-info's own centered text — no amount of
+         shrinking the neighbors avoids the overlap, since that centered
+         box is wider than the gap on either side of it. product-info (and
+         the gizmo-mode-controls row that follows it) drop below both
+         corner panels instead — and below the #undo-redo-panel row
+         (top: 48px, itself roughly 27px tall) that sits between them and
+         the top edge, so a long centered hint (Measure's own delta
+         readout is the longest one) clears all three rows rather than
+         just the first.
+         Placed after the rules it
+         overrides, not inside the wordmark-shrink media query above, so the
+         cascade's source-order tiebreak doesn't let the unconditional base
+         rule win. */
+      @media (max-width: 480px) {
+        #product-info {
+          top: 84px;
+        }
+        #gizmo-mode-controls {
+          top: 136px;
+        }
+      }
+      #gizmo-mode-controls button {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.5);
+        color: var(--pill-text-soft);
+        font: 14px/1.4 sans-serif;
+        transition: transform 100ms ease, background-color 100ms ease, color 100ms ease;
+      }
+      #gizmo-mode-controls button.active {
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      /* Rotate has no group form, so it's disabled (not hidden) for a
+         multi-item selection — hiding it entirely used to let Move, Snap,
+         Copy, and Delete reflow into different left/right positions
+         depending on whether Rotate happened to be present. Disabling
+         keeps every button in the same spot every time. */
+      #gizmo-mode-controls button:disabled {
+        opacity: 0.4;
+      }
+      /* Tactile press feedback (Copy button) — the button's own pill
+         background flashes to the brand color and back, the same surface
+         a physical button's own material would visibly depress into,
+         rather than an opacity/filter overlay sitting on top of it or a
+         label swap that reads like the button now does something else. */
+      /* Trim's and Resize's numeric fields — same pill shape as the buttons
+         around them, but only ever shown for a selection each respectively
+         applies to (see updateSelectionUI), unlike the mode buttons
+         themselves which stay present but disabled the rest of the time
+         for the same layout-stability reason documented on button:disabled
+         above. Hidden by display, not disabled, since there's no
+         meaningful "disabled" number to show when a field doesn't apply. */
+      .gizmo-numeric-control {
+        display: none;
+        align-items: center;
+        gap: 4px;
+        padding: 8px 14px;
+        border-radius: 999px;
+        background: rgb(var(--pill-rgb) / 0.5);
+        color: var(--pill-text-soft);
+        font: 14px/1.4 sans-serif;
+      }
+      .gizmo-numeric-control.visible {
+        display: inline-flex;
+      }
+      .gizmo-numeric-control input {
+        width: 4.5em;
+        border: none;
+        border-radius: 4px;
+        padding: 2px 4px;
+        font: inherit;
+        background: rgb(0 0 0 / 0.1);
+        color: var(--pill-text);
+      }
+      /* #1945: wider than the plain numeric fields above (a slider needs
+         real drag room, not just enough width to show a few digits) —
+         shown (via the shared .gizmo-numeric-control/.visible pair) only
+         while multi-select is on, toggled alongside #toggle-multiselect
+         itself rather than tied to a selection. */
+      #multiselect-brush-control input[type="range"] {
+        width: 90px;
+      }
+      /* The brush's own on-screen footprint while multi-select is active —
+         a plain fixed-position circle following the pointer, sized to match
+         the brush radius a drag actually sweeps (see
+         addEverythingInBrushAtClientPos). Not a 3D scene object: a screen-
+         space DOM circle is simpler and exactly matches the screen-space
+         hit-test it's representing. */
+      #multiselect-brush-indicator {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 0;
+        height: 0;
+        border-radius: 50%;
+        border: 2px solid var(--brand-green);
+        background: rgb(108 164 46 / 0.12);
+        pointer-events: none;
+        z-index: 11;
+        transform: translate(-50%, -50%);
+        display: none;
+      }
+      #multiselect-brush-indicator.visible {
+        display: block;
+      }
+      /* Trim can apply to more than one axis at once (see docs/API.md) —
+         each axis gets its own labeled field inside #trim-length-control,
+         hidden until updateSelectionUI/setGizmoMode knows that particular
+         axis is actually extensible for the selected item. */
+      .trim-axis-field {
+        display: none;
+        align-items: center;
+        gap: 4px;
+      }
+      .trim-axis-field.active {
+        display: inline-flex;
+      }
+      .trim-axis-tag {
+        font-weight: 600;
+        opacity: 0.75;
+      }
+      #gizmo-mode-controls button.pressed {
+        transform: scale(0.92);
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      #delete-item {
+        background: var(--danger);
+        color: #fff;
+      }
+      #add-item-panel {
+        position: fixed;
+        bottom: 44px;
+        left: 8px;
+        z-index: 10;
+        display: flex;
+        /* Reversed so the catalog picker opens upward, above the button,
+           since the panel is anchored to the bottom of the screen. */
+        flex-direction: column-reverse;
+        gap: 8px;
+      }
+      /* Vertical construction (issue #169) — bottom-center, clear of
+         #add-item-panel (bottom-left) and #camera-debug-panel (bottom-
+         right), the same "always in the DOM, hidden from Shop mode only
+         via SHOP_HIDDEN_BUILDER_UI_IDS" convention as every other
+         Build-only panel here (see main.js).
+         #1153: the nav/build/dig/remove/status row used to all sit open on
+         screen at once, dominating the build view — collapsed into one
+         small toggle (showing just the current level, e.g. "Ground") that
+         expands into a dropdown panel on tap, the same
+         one-pill-instead-of-a-whole-cluster idiom #account-menu already
+         uses elsewhere in this file for the same reason
+         (docs/SPEC.md §1's "clean, minimalist... expanding menus... leave
+         plenty of screen space open"). Unlike #account-menu, the panel here
+         opens *upward* (bottom: 100%, not top) since this whole control
+         sits at the bottom of the screen — opening downward would run it
+         off-screen. It also doesn't auto-close on every inner button
+         click: Up/Down/Build/Dig are meant to be used repeatedly while
+         reviewing #level-status's result, and that status renders inside
+         this same panel, so auto-closing on click would hide the very
+         message a Build/Dig failure needs to show. */
+      #level-controls {
+        position: fixed;
+        bottom: 44px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 10;
+      }
+      #level-menu-toggle {
+        padding: 6px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        min-width: 7em;
+      }
+      #level-menu-toggle.active {
+        background: rgb(var(--pill-rgb) / 0.9);
+      }
+      #level-menu-panel {
+        display: none;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 6px;
+        position: absolute;
+        bottom: calc(100% + 6px);
+        left: 50%;
+        transform: translateX(-50%);
+        min-width: 220px;
+      }
+      #level-menu-panel.expanded {
+        display: flex;
+      }
+      #level-nav {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      #level-nav button {
+        border: none;
+        background: none;
+        color: inherit;
+        font: inherit;
+        padding: 0 4px;
+      }
+      #level-nav button:disabled {
+        opacity: 0.35;
+      }
+      #level-build-btn, #level-dig-btn, #level-remove-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      #level-remove-btn {
+        background: var(--danger);
+        color: #fff;
+      }
+      #level-status:not(:empty) {
+        font-size: 13px;
+        color: var(--pill-text);
+        background: rgb(var(--pill-rgb) / 0.65);
+        padding: 6px 14px;
+        border-radius: 999px;
+        text-align: center;
+      }
+      #level-status.error {
+        color: #fff;
+        background: var(--danger);
+      }
+      #add-item-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        align-self: flex-start;
+      }
+      #catalog-picker {
+        display: none;
+        position: relative;
+        /* Nearly opaque, matching every real modal panel (upload/seller/
+           identity/settings) — 0.65 (an ordinary floating pill's alpha)
+           let the land show through behind it clearly enough to make the
+           listings hard to read. */
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 10px;
+        padding: 36px 8px 8px;
+        max-width: min(90vw, 360px);
+        max-height: 50vh;
+      }
+      #catalog-picker.visible {
+        /* #2762: flex column so #catalog-manual-mode (the single
+           scrolling region now -- see its own rule below) can use
+           flex: 1 + min-height: 0 to fill whatever's left of this panel's
+           own max-height budget after #catalog-mode-tabs, rather than
+           everything just stacking as blocks with nothing to actually
+           clip or scroll the overflow. */
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      /* Client-side only — filters the already-built tiles by name rather
+         than re-querying or re-rendering thumbnails, since a template's
+         appearance/name never changes mid-session (see buildCatalogPickerButtons's
+         own thumbnail-cache comment). Matters once the catalog has more
+         than a screenful of products to scroll through.
+
+         #1082: unified across both products and the bundle section below
+         (owner's own call — one search box, with a scope toggle for which
+         section(s) it applies to — rather than a second, separate bundle
+         search box). "Search…" rather than "Search products…" since the
+         box itself no longer implies products-only. */
+      #catalog-search-input {
+        display: block;
+        width: 100%;
+        box-sizing: border-box;
+        margin-bottom: 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      /* #1082: which section(s) the search box above (and the sections'
+         own visibility) applies to — mirrors .bundle-tab-btn's look, one
+         level up from it (that toggle picks a tab *within* the bundle
+         section; this one picks which section(s) show at all). */
+      #catalog-search-scope-tabs {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+      /* #2051: same [hidden]-vs-equal-specificity-author-rule gotcha as
+         #catalog-picker-grid[hidden] above -- openCatalogPickerForPick
+         hides this row for the duration of a backup pick (a backup must be
+         a single product, so there's nothing for it to switch between),
+         which the base rule's unconditional display: flex would otherwise
+         silently defeat. */
+      #catalog-search-scope-tabs[hidden] {
+        display: none;
+      }
+      .search-scope-btn {
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: rgb(var(--ink-rgb) / 0.85);
+        font: 12px/1.4 sans-serif;
+      }
+      .search-scope-btn.active {
+        background: var(--brand-green);
+        border-color: transparent;
+        color: #16240a;
+      }
+      #catalog-picker-grid,
+      #prompt-mode-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+        gap: 8px;
+      }
+      /* #2762: #catalog-picker-grid used to cap and scroll itself against
+         the viewport here, independently of #bundle-picker-grid below
+         doing the same against its own separate budget -- the two
+         combined routinely exceeded #catalog-picker's own max-height,
+         since nothing clipped the overflow. #catalog-manual-mode (see its
+         own rule below) is the single scrolling region now, so this grid
+         goes back to a plain auto-height block. #prompt-mode-grid is a
+         sibling living directly under #catalog-picker, not inside that
+         scrolling wrapper, so it still needs its own budget-against-the-
+         viewport cap exactly as before. */
+      #prompt-mode-grid {
+        max-height: calc(50vh - 88px);
+        overflow-y: auto;
+      }
+      /* #1082: the base rule above sets display unconditionally, which (per
+         .catalog-tile[hidden]'s own precedent just below) outranks the
+         browser's default [hidden] rule on specificity ties, broken by
+         source order — needed now that filterCatalogTiles can hide this
+         whole grid, not just individual tiles within it. */
+      #catalog-picker-grid[hidden] {
+        display: none;
+      }
+      /* #329: a top-level toggle between today's search-and-drag-and-drop
+         flow and prompt mode, mirroring .bundle-tab-btn's own look one
+         level up (that toggle picks a tab *within* manual mode; this one
+         picks between manual and prompt mode entirely). */
+      #catalog-mode-tabs {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 8px;
+        /* #2762: keep this row at its own natural height under the
+           flex-column #catalog-picker.visible above -- it isn't the
+           scrolling region, #catalog-manual-mode below is. */
+        flex-shrink: 0;
+      }
+      .catalog-mode-tab-btn {
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: rgb(var(--ink-rgb) / 0.85);
+        font: 12px/1.4 sans-serif;
+      }
+      .catalog-mode-tab-btn.active {
+        background: var(--brand-green);
+        border-color: transparent;
+        color: #16240a;
+      }
+      /* #2762: the single scrolling region inside #catalog-picker's
+         flex column -- flex: 1 claims whatever's left of the panel's own
+         max-height after #catalog-mode-tabs above, and min-height: 0
+         overrides a flex item's default auto min-height (which would
+         otherwise let this grow past that budget instead of actually
+         scrolling internally). display stays block (not flex) for its
+         own children -- a flex child defaults to flex-shrink: 1, so if
+         this were a flex column too, the search bar/grid/bundle section
+         below would get squeezed smaller than their own content instead
+         of actually overflowing into this wrapper's scrollbar, since
+         overflow: auto resets a flex item's automatic minimum size to 0
+         and lets that shrinking happen. Plain block children just
+         overflow their parent's box when too tall, which is exactly what
+         overflow-y: auto here is for. */
+      #catalog-manual-mode {
+        display: block;
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+      }
+      #catalog-prompt-mode[hidden],
+      #catalog-manual-mode[hidden] {
+        display: none;
+      }
+      #prompt-mode-input {
+        display: block;
+        width: 100%;
+        box-sizing: border-box;
+        margin-bottom: 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        resize: vertical;
+        min-height: 48px;
+      }
+      #prompt-mode-generate-btn {
+        display: block;
+        width: 100%;
+        margin-bottom: 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: none;
+        background: var(--brand-green);
+        color: #16240a;
+        font: 13px/1.4 sans-serif;
+      }
+      #prompt-mode-generate-btn:disabled {
+        opacity: 0.5;
+      }
+      #prompt-mode-status {
+        margin-bottom: 8px;
+        color: rgb(var(--ink-rgb) / 0.75);
+        font: 12px/1.4 sans-serif;
+      }
+      #prompt-mode-status[hidden],
+      #prompt-mode-empty[hidden] {
+        display: none;
+      }
+      #prompt-mode-empty {
+        padding: 12px 4px;
+        color: rgb(var(--ink-rgb) / 0.65);
+        font: 13px/1.4 sans-serif;
+      }
+      .catalog-tile[hidden] {
+        display: none;
+      }
+      #catalog-picker-empty {
+        padding: 12px 4px;
+        color: rgb(var(--ink-rgb) / 0.65);
+        font: 13px/1.4 sans-serif;
+      }
+      #catalog-picker-empty[hidden] {
+        display: none;
+      }
+      .catalog-tile {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 6px;
+        border-radius: 8px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        font: 12px/1.3 sans-serif;
+      }
+      .catalog-thumb {
+        width: 64px;
+        height: 64px;
+        object-fit: contain;
+        border-radius: 6px;
+        background: rgb(var(--ink-rgb) / 0.1);
+      }
+      .catalog-tile-name {
+        text-align: center;
+        overflow-wrap: anywhere;
+      }
+      .catalog-tile-stock {
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      .catalog-tile-stock-sold-out {
+        color: var(--danger);
+      }
+      /* Bundles (saved multi-item groups, see migrations/0039_bundles.sql,
+         0040_bundle_sharing.sql) — a separate section below the ordinary
+         product grid. My Bundles / Community mirror the tab-toggle look
+         .settings-tab-btn already uses. The whole section only shows once
+         there's something in *either* tab to see — a builder who's never
+         used Save Bundle but whose landlet neighbors have shared some still
+         gets to discover the Community tab; one where nobody's shared
+         anything yet doesn't show an empty section for no reason. No
+         thumbnail (composing one from several items isn't worth the
+         complexity yet) — just a name and item count. */
+      #bundle-picker-section {
+        margin-top: 10px;
+        padding-top: 10px;
+        border-top: 1px solid rgb(var(--ink-rgb) / 0.15);
+      }
+      #bundle-picker-section[hidden] {
+        display: none;
+      }
+      #bundle-picker-tabs {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 8px;
+      }
+      .bundle-tab-btn {
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: rgb(var(--ink-rgb) / 0.85);
+        font: 12px/1.4 sans-serif;
+      }
+      .bundle-tab-btn.active {
+        background: var(--brand-green);
+        border-color: transparent;
+        color: #16240a;
+      }
+      #bundle-picker-empty {
+        padding: 8px 4px;
+        color: rgb(var(--ink-rgb) / 0.6);
+        font: 12px/1.4 sans-serif;
+      }
+      #bundle-picker-empty[hidden] {
+        display: none;
+      }
+      /* #2762: used to cap and scroll itself against the viewport
+         (max-height: 30vh), independently of #catalog-picker-grid above
+         doing the same against its own separate budget -- see
+         #catalog-manual-mode's own comment for why neither one still
+         does that; it's the single scrolling region for both now. */
+      #bundle-picker-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .bundle-tile {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      /* #1082: same reasoning as #catalog-picker-grid[hidden] above — the
+         unconditional display: flex just above needs an explicit override
+         now that filterBundleTiles can hide an individual tile. */
+      .bundle-tile[hidden] {
+        display: none;
+      }
+      .bundle-tile-place {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        font: 13px/1.3 sans-serif;
+        text-align: left;
+      }
+      .bundle-tile-name {
+        overflow-wrap: anywhere;
+      }
+      .bundle-tile-count {
+        color: rgb(var(--ink-rgb) / 0.6);
+        font-size: 11px;
+      }
+      .bundle-tile-delete {
+        flex-shrink: 0;
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: rgb(255 180 168 / 0.9);
+        font-size: 16px;
+        line-height: 1;
+      }
+      /* Same size/shape as .bundle-tile-delete, own class (see main.js's
+         own comment) so a selector targeting one never accidentally hits
+         the other — this one toggles Share, not delete. */
+      .bundle-tile-share {
+        flex-shrink: 0;
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: rgb(var(--ink-rgb) / 0.85);
+        font-size: 16px;
+        line-height: 1;
+      }
+      /* Same size/shape again, own class for the same reason .bundle-tile-share
+         has one — a selector for any one of rename/share/delete must never
+         accidentally hit another. */
+      .bundle-tile-rename {
+        flex-shrink: 0;
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: rgb(var(--ink-rgb) / 0.85);
+        font-size: 14px;
+        line-height: 1;
+      }
+      #upload-model-btn,
+      #sell-this-too-btn,
+      #toggle-multiselect,
+      #toggle-measure,
+      #paste-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.65);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        align-self: flex-start;
+      }
+      #toggle-multiselect.active,
+      #toggle-measure.active {
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      #paste-btn:disabled {
+        opacity: 0.4;
+      }
+      #upload-modal {
+        position: fixed;
+        inset: 0;
+        /* Reachable only from inside the Seller modal (z-index 20) now —
+           needs to stack above it rather than tie, the same "open a modal
+           over an already-open one" pattern the identity modal uses over
+           the claim modal. */
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #upload-modal.visible {
+        display: flex;
+      }
+      #upload-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 90vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      /* Shared close ("x") button for every modal — upper-right corner,
+         replacing what used to be a scattered mix of inline Cancel/Close/
+         Back buttons at the bottom of each one. One consistent place to
+         look for "get me out of here" instead of a different label and
+         position in every popup. */
+      .modal-close-btn {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        width: 28px;
+        height: 28px;
+        padding: 0;
+        border: none;
+        border-radius: 50%;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        font-size: 18px;
+        line-height: 1;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        cursor: pointer;
+      }
+      .modal-close-btn:hover {
+        background: rgb(var(--ink-rgb) / 0.22);
+      }
+      #upload-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      /* #2748: same centered-overlay-stacked-above-the-Seller-modal shape
+         as #upload-modal above, just its own id so both can independently
+         toggle .visible. */
+      #sell-this-too-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #sell-this-too-modal.visible {
+        display: flex;
+      }
+      #sell-this-too-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 420px;
+        max-height: 90vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #sell-this-too-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      /* Same grid idiom as #seller-list-view's own tiles (reuses that
+         view's .seller-card/-thumb/-name/-price classes directly, see
+         src/sell/mode.js's renderSellThisTooGrid). */
+      #sell-this-too-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+        gap: 10px;
+        max-height: 55vh;
+        overflow-y: auto;
+      }
+      #upload-modal-content label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      /* #1599: same [hidden]-vs-equal-specificity-author-rule problem
+         .stripe-onboarding-form label[hidden] fixes above — an ID selector's
+         specificity beats [hidden]'s just as much as a class selector does,
+         so the digital-good disclaimer label stayed visible even while
+         hidden was set. */
+      #upload-modal-content label[hidden] {
+        display: none;
+      }
+      #upload-modal-content input[type='text'] {
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      /* #1602: a small "?" button that reveals a popup of explanatory text
+         next to the control it describes, instead of that text sitting
+         inline and permanently taking up space. Generic/reusable (scoped
+         by class, not an id) so it isn't tied to the upload modal alone --
+         see src/main.js's single delegated click handler for the toggle
+         behavior shared by every instance. */
+      .info-tooltip-btn {
+        flex: 0 0 auto;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        border: 1px solid rgb(var(--ink-rgb) / 0.35);
+        background: rgb(var(--ink-rgb) / 0.08);
+        color: rgb(var(--ink-rgb) / 0.75);
+        font: 11px/1 sans-serif;
+        cursor: pointer;
+        padding: 0;
+      }
+      .info-tooltip-popup {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      .field-with-tooltip {
+        display: flex;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      .field-with-tooltip > label {
+        flex: 1 1 auto;
+      }
+      .upload-step-heading {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      /* Digital goods (docs/SPEC.md §4) — a checkbox (row layout, unlike
+         the column layout every other #upload-modal-content label uses for
+         a text input) that reveals a second label with the platform-
+         controlled disclaimer picker once checked. */
+      #upload-digital-good-label {
+        flex-direction: row !important;
+        align-items: center;
+        gap: 8px !important;
+      }
+      #upload-digital-good-disclaimer-select {
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      #upload-status {
+        font-size: 13px;
+        min-height: 18px;
+      }
+      #upload-status.error {
+        /* #1544: #a83a27 (was #b3402c, 4.27:1 on the tinted .seller-row) keeps >= 4.5:1 AA on panel, pill and seller-row composites. */
+        color: #a83a27;
+      }
+      #upload-dimensions-preview {
+        width: 100%;
+        height: 170px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.06);
+        touch-action: none;
+      }
+      #upload-animations-detected {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      /* #2442: the free-generations-remaining line above the video picker
+         -- same small/muted treatment as #upload-animations-detected. */
+      #upload-video-credits {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      /* Same row-layout checkbox pattern as #upload-digital-good-label
+         above — see #680/#681's "avatar" catalog category. */
+      #upload-avatar-category-label {
+        flex-direction: row !important;
+        align-items: center;
+        gap: 8px !important;
+      }
+      /* #1163 (sub-issue of #1161): same row-layout pattern, for the
+         sibling "standalone animation" catalog category. */
+      #upload-animation-category-label {
+        flex-direction: row !important;
+        align-items: center;
+        gap: 8px !important;
+      }
+      .upload-dimension-field {
+        display: flex;
+        flex-direction: row !important;
+        align-items: center;
+        gap: 8px;
+      }
+      .upload-dimension-field span:first-child {
+        flex: 1;
+      }
+      .upload-dimension-input {
+        width: 5.5em;
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      #upload-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #upload-modal-actions button {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+      }
+      #upload-cancel-btn {
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+      }
+      #upload-submit-btn {
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      #upload-submit-btn:disabled {
+        opacity: 0.5;
+      }
+      /* #2761: same modal shell as #upload-modal — the reusable name-input
+         modal src/ui/bundleNameModal.js opens for both Save Bundle (with
+         the share checkbox) and the bundle-tile rename prompt (without
+         it), replacing the native prompt()/confirm() pair this app's
+         bundle flow was the last holdout still using. */
+      #bundle-name-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #bundle-name-modal.visible {
+        display: flex;
+      }
+      #bundle-name-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #bundle-name-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #bundle-name-modal-content label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      /* Same [hidden]-vs-equal-specificity-author-rule fix #upload-modal-
+         content label[hidden] already needs — an ID selector's specificity
+         beats [hidden] just as much as a class selector does. */
+      #bundle-name-modal-content label[hidden] {
+        display: none;
+      }
+      #bundle-name-input {
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      /* Row-layout checkbox, same pattern #upload-digital-good-label uses. */
+      #bundle-name-share-label {
+        flex-direction: row !important;
+        align-items: center;
+        gap: 8px !important;
+      }
+      #bundle-name-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #bundle-name-save-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      /* #2388: same shell as #bundle-name-modal above, for the moderation-
+         delete category picker. */
+      #moderation-category-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #moderation-category-modal.visible {
+        display: flex;
+      }
+      #moderation-category-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #moderation-category-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #moderation-category-modal-subtitle {
+        margin: 0;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      #moderation-category-options {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      #moderation-category-options label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      #moderation-category-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #moderation-category-delete-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: #c0392b;
+        color: #fff;
+      }
+      #moderation-category-delete-btn:disabled {
+        opacity: 0.5;
+      }
+      /* #453: real-money checkout — same modal shell as #upload-modal,
+         stacked above the world (no other modal opens over Shop mode's
+         world view), holding a Stripe Elements card field. */
+      /* #659: same modal shell as #checkout-modal just below (read-only —
+         no action buttons, just the close button every dismissible modal
+         in this file already has via .modal-close-btn), scrollable and a
+         little wider since this is a few paragraphs of real text rather
+         than a compact checkout form. */
+      #refund-policy-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #refund-policy-modal.visible {
+        display: flex;
+      }
+      #refund-policy-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 480px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 20px;
+        color: var(--pill-text);
+        font: 14px/1.5 sans-serif;
+      }
+      #refund-policy-modal-content h2 {
+        margin: 0 0 12px;
+        font-size: 18px;
+      }
+      #refund-policy-modal-content p {
+        margin: 0 0 12px;
+      }
+      #refund-policy-modal-content p:last-child {
+        margin-bottom: 0;
+      }
+      #checkout-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #checkout-modal.visible {
+        display: flex;
+      }
+      #checkout-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #checkout-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #checkout-summary {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      #checkout-card-element {
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+      }
+      #checkout-status {
+        font-size: 13px;
+        min-height: 18px;
+      }
+      #checkout-status.error {
+        color: #a83a27;
+      }
+      #checkout-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #checkout-pay-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      /* #2718 (sub-issue of #2715): "Submit Feedback" modal -- same shell
+         shape as #checkout-modal just above (fixed, centered, dimming
+         backdrop; a scrollable max-height so a small phone viewport never
+         clips the actions row below a tall screenshot preview). */
+      #feedback-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #feedback-modal.visible {
+        display: flex;
+      }
+      #feedback-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 90vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        box-sizing: border-box;
+      }
+      #feedback-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #feedback-screenshot-preview[hidden] {
+        display: none;
+      }
+      #feedback-screenshot-preview {
+        display: block;
+        width: 100%;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+      }
+      #feedback-description {
+        width: 100%;
+        min-height: 70px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: inherit;
+        font: inherit;
+        padding: 8px;
+        resize: vertical;
+        box-sizing: border-box;
+      }
+      #feedback-status {
+        font-size: 13px;
+        min-height: 18px;
+      }
+      #feedback-status.error {
+        color: #a83a27;
+      }
+      #feedback-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #feedback-submit-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      #feedback-cancel-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: inherit;
+        font: 14px/1.4 sans-serif;
+      }
+      #checkout-pay-btn:disabled {
+        opacity: 0.5;
+      }
+      /* docs/SPEC.md §6 / #556: same modal shell as #checkout-modal, but
+         with no close button — this one is not optional once it's shown
+         (see openVerifyModal's own comment in src/main.js), the one
+         escape hatch being "log out instead," which never gets you into
+         Build/Sell without clearing it on a later login either. */
+      #verify-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.35);
+        padding: 16px;
+      }
+      #verify-modal.visible {
+        display: flex;
+      }
+      #verify-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 380px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #verify-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #verify-modal-intro {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+        margin: 0;
+      }
+      #verify-card-element {
+        padding: 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+      }
+      #verify-status {
+        font-size: 13px;
+        min-height: 18px;
+      }
+      #verify-status.error {
+        color: #a83a27;
+      }
+      #verify-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+      #verify-age-continue-btn, #verify-card-submit-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      #verify-age-continue-btn:disabled, #verify-card-submit-btn:disabled {
+        opacity: 0.5;
+      }
+      #verify-logout-btn {
+        align-self: center;
+        background: none;
+        border: none;
+        color: rgb(var(--ink-rgb) / 0.6);
+        font: 13px/1.4 sans-serif;
+        text-decoration: underline;
+        cursor: pointer;
+        padding: 0;
+      }
+      /* Same modal shell as #upload-modal, just wider — each row needs
+         room for an axis picker, a minimum-length field, and a Save
+         button alongside the product name. */
+      #seller-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #seller-modal.visible {
+        display: flex;
+      }
+      #seller-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 420px;
+        max-height: 90vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #seller-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      /* #1602: layout-only (no font-size/color of its own, unlike
+         .upload-step-heading) so wrapping the h2 in this doesn't disturb
+         its existing size/color -- just places the new "?" tooltip button
+         beside it. */
+      .modal-heading-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      /* #542: search/filter/sort across a seller's own products. Lives as
+         its own row between the upload button and the list so it's always
+         visible without needing any row expanded — matches the
+         .seller-digital-good-select styling convention already used for
+         other seller-modal form controls. */
+      #seller-filter-controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      #seller-filter-controls[hidden] {
+        display: none;
+      }
+      .seller-filter-control {
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #seller-search-input.seller-filter-control {
+        flex: 1 1 140px;
+        min-width: 0;
+      }
+      #seller-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        max-height: 55vh;
+        overflow-y: auto;
+      }
+      #seller-list[hidden],
+      #seller-list-view[hidden] {
+        display: none;
+      }
+      /* #541: a lighter, thumbnail-first alternative to the per-row
+         editor above — same tab-toggle look #settings-tabs already uses,
+         reused rather than inventing a new pattern. */
+      #seller-view-toggle {
+        display: flex;
+        gap: 6px;
+      }
+      .seller-view-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: rgb(var(--ink-rgb) / 0.85);
+        font: 13px/1.4 sans-serif;
+      }
+      .seller-view-btn.active {
+        background: var(--brand-green);
+        border-color: transparent;
+        color: #16240a;
+      }
+      /* Same grid idiom as #catalog-picker-grid's own tiles, just larger —
+         this is a browsing surface, not a compact picker. */
+      #seller-list-view {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+        gap: 10px;
+        max-height: 55vh;
+        overflow-y: auto;
+      }
+      .seller-card {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 4px;
+        padding: 8px;
+        border-radius: 10px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.08);
+        color: var(--pill-text);
+        font: 12px/1.3 sans-serif;
+        cursor: pointer;
+      }
+      .seller-card-thumb {
+        width: 96px;
+        height: 96px;
+        object-fit: contain;
+        border-radius: 8px;
+        background: rgb(var(--ink-rgb) / 0.1);
+      }
+      .seller-card-name {
+        text-align: center;
+        overflow-wrap: anywhere;
+        font-weight: 600;
+      }
+      .seller-card-price {
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      .seller-card-digital-good {
+        color: var(--pill-text-soft);
+        font-size: 11px;
+      }
+      /* #2218: same danger color as .seller-row-flagged-badge below. */
+      .seller-card-flagged-badge {
+        color: #a83a27;
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .seller-row {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        background: rgb(var(--ink-rgb) / 0.08);
+        border-radius: 10px;
+        padding: 10px 12px;
+        transition: background-color 100ms ease;
+      }
+      .seller-row.expanded {
+        background: rgb(108 164 46 / 0.28);
+      }
+      .seller-row-toggle {
+        display: flex;
+        width: 100%;
+        background: none;
+        border: none;
+        padding: 0;
+        text-align: left;
+        font: inherit;
+        cursor: pointer;
+      }
+      .seller-row-details {
+        display: none;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .seller-row.expanded .seller-row-details {
+        display: flex;
+      }
+      /* No truncation — a product's full name matters more here than a
+         tidy single line, and unlike the catalog picker's own compact
+         buttons, each row already has room to grow vertically. */
+      .seller-row-label {
+        font-size: 15px;
+        font-weight: 600;
+        color: var(--pill-text);
+      }
+      /* #2218: same danger color as .seller-row-status.error below --
+         deliberately visible rather than hidden/deleted, so a seller's
+         own moderation history stays transparent in their own list. */
+      .seller-row-flagged-badge {
+        font-size: 11px;
+        font-weight: 600;
+        color: #a83a27;
+      }
+      .seller-row-dims {
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      .seller-row-actions {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .seller-row-action-btn {
+        flex-shrink: 0;
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: rgb(var(--ink-rgb) / 0.85);
+        font: 12px/1.4 sans-serif;
+      }
+      .seller-row-action-btn.active {
+        background: var(--brand-green);
+        border-color: transparent;
+        color: #16240a;
+      }
+      .seller-row-action-btn.danger {
+        border-color: rgb(255 120 100 / 0.5);
+        color: #a83a27;
+      }
+      .seller-row-action-btn:disabled {
+        opacity: 0.5;
+      }
+      /* The live 3D preview only exists in the DOM (a single shared canvas,
+         moved between rows in main.js) while a row's Preview button is
+         toggled on — collapsed rows reserve no space for it at all, so the
+         list reads as products first, not as a viewport. */
+      .seller-row-preview {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .seller-preview-canvas {
+        width: 100%;
+        height: 170px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.06);
+        touch-action: none;
+      }
+      .seller-preview-hint {
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      /* Extensibility is a real but rare need (see docs/API.md) — a plain
+         text-styled toggle keeps it available without competing visually
+         with the pill buttons above for a seller who's just here to
+         rename or delete something. */
+      .seller-extensibility-toggle {
+        align-self: flex-start;
+        padding: 2px 0;
+        border: none;
+        background: none;
+        color: rgb(var(--ink-rgb) / 0.6);
+        font: 12px/1.4 sans-serif;
+        text-decoration: underline;
+        text-underline-offset: 2px;
+      }
+      .seller-extensibility-panel {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      .seller-extensibility-panel[hidden] {
+        display: none;
+      }
+      /* One row per axis (see AXIS_LIST/AXIS_ROW_LABELS in main.js) — a
+         template can be extensible on any subset of x/y/z at once, so
+         each gets its own checkbox + min-length field rather than a
+         single either/or picker. */
+      .seller-axis-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font: 13px/1.4 sans-serif;
+        color: var(--pill-text);
+      }
+      .seller-min-input {
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        width: 5.5em;
+      }
+      /* Edit Size's own panel/row/input — visually identical to
+         .seller-extensibility-panel/.seller-axis-row/.seller-min-input
+         above but kept as fully separate classes (see main.js's own
+         comment) so existing per-row lookups that assume exactly one
+         .seller-extensibility-panel, or exactly three .seller-axis-row,
+         per row aren't broken by this second panel's own elements. */
+      .seller-size-panel {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      .seller-size-panel[hidden] {
+        display: none;
+      }
+      .seller-size-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font: 13px/1.4 sans-serif;
+        color: var(--pill-text);
+      }
+      .seller-size-input {
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        width: 5.5em;
+      }
+      .seller-save-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: var(--brand-green);
+        color: #16240a;
+        font: 13px/1.4 sans-serif;
+      }
+      .seller-save-btn:disabled {
+        opacity: 0.5;
+      }
+      .seller-row-status {
+        font-size: 11px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      .seller-row-status.error {
+        color: #a83a27;
+      }
+      .seller-size-save-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: var(--brand-green);
+        color: #16240a;
+        font: 13px/1.4 sans-serif;
+      }
+      .seller-size-save-btn:disabled {
+        opacity: 0.5;
+      }
+      .seller-size-status {
+        font-size: 11px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      .seller-size-status.error {
+        color: #a83a27;
+      }
+      /* Edit Price — same idiom/reasoning as Edit Size's own panel above,
+         own classes throughout for the same "don't share a class across
+         genuinely different rows/panels" reasoning. */
+      .seller-row-price {
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      .seller-price-panel {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      .seller-price-panel[hidden] {
+        display: none;
+      }
+      .seller-price-input {
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        width: 8em;
+      }
+      .seller-price-save-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: var(--brand-green);
+        color: #16240a;
+        font: 13px/1.4 sans-serif;
+      }
+      .seller-price-save-btn:disabled {
+        opacity: 0.5;
+      }
+      .seller-price-status {
+        font-size: 11px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      .seller-price-status.error {
+        color: #a83a27;
+      }
+      .seller-digital-good-checkbox-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font: 13px/1.4 sans-serif;
+        color: var(--pill-text);
+      }
+      /* Digital goods (docs/SPEC.md §4) row display + edit panel — own
+         classes throughout despite being visually identical to
+         .seller-row-price/.seller-price-* above (same "don't share a
+         class across genuinely different rows/panels" reasoning as
+         Extensibility vs. Edit Size). */
+      .seller-row-digital-good {
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      .seller-digital-good-panel {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      .seller-digital-good-panel[hidden] {
+        display: none;
+      }
+      .seller-digital-good-select {
+        padding: 6px 8px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      .seller-digital-good-save-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: var(--brand-green);
+        color: #16240a;
+        font: 13px/1.4 sans-serif;
+      }
+      .seller-digital-good-save-btn:disabled {
+        opacity: 0.5;
+      }
+      .seller-digital-good-status {
+        font-size: 11px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      .seller-digital-good-status.error {
+        color: #a83a27;
+      }
+      /* No-returns policy (docs/SPEC.md §5) row display + edit panel — own
+         classes throughout, same "don't share a class across genuinely
+         different rows/panels" reasoning as Digital Good vs. Edit Size. */
+      .seller-row-no-returns {
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      .seller-no-returns-panel {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      .seller-no-returns-panel[hidden] {
+        display: none;
+      }
+      .seller-no-returns-checkbox-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font: 13px/1.4 sans-serif;
+        color: var(--pill-text);
+      }
+      .seller-no-returns-save-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: var(--brand-green);
+        color: #16240a;
+        font: 13px/1.4 sans-serif;
+      }
+      .seller-no-returns-save-btn:disabled {
+        opacity: 0.5;
+      }
+      .seller-no-returns-status {
+        font-size: 11px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      .seller-no-returns-status.error {
+        color: #a83a27;
+      }
+      /* Shipping (docs/SPEC.md §5) row display + edit panel — own classes
+         throughout, same "don't share a class across genuinely different
+         rows/panels" reasoning as No-Returns vs. Digital Good. */
+      .seller-row-domestic-only {
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      .seller-domestic-only-panel {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 6px;
+      }
+      .seller-domestic-only-panel[hidden] {
+        display: none;
+      }
+      .seller-domestic-only-checkbox-label {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font: 13px/1.4 sans-serif;
+        color: var(--pill-text);
+      }
+      .seller-domestic-only-save-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: var(--brand-green);
+        color: #16240a;
+        font: 13px/1.4 sans-serif;
+      }
+      .seller-domestic-only-save-btn:disabled {
+        opacity: 0.5;
+      }
+      .seller-domestic-only-status {
+        font-size: 11px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      .seller-domestic-only-status.error {
+        color: #a83a27;
+      }
+      #seller-status {
+        font-size: 13px;
+        min-height: 18px;
+      }
+      /* Same modal shell as #upload-modal. */
+      #settings-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #settings-modal.visible {
+        display: flex;
+      }
+      #settings-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 90vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #settings-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #settings-tabs {
+        display: flex;
+        gap: 6px;
+        flex-wrap: wrap;
+      }
+      .settings-tab-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: rgb(var(--ink-rgb) / 0.85);
+        font: 13px/1.4 sans-serif;
+      }
+      .settings-tab-btn.active {
+        background: var(--brand-green);
+        border-color: transparent;
+        color: #16240a;
+      }
+      #settings-section {
+        display: flex;
+        flex-direction: column;
+        gap: 14px;
+        min-height: 80px;
+      }
+      .settings-field {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      .settings-radio-row {
+        display: flex;
+        gap: 14px;
+      }
+      .settings-radio-row label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font: 14px/1.4 sans-serif;
+        color: var(--pill-text);
+      }
+      .settings-empty-note {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      .settings-empty-note.error {
+        color: #a83a27;
+      }
+      /* #2843: each tax-education entry is a native <details> disclosure
+         so the General tab doesn't dump every matched entry's full body
+         open by default — plain-language text only, so no rich styling
+         inside the body itself is needed. */
+      .tax-education-entry {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      .tax-education-entry summary {
+        cursor: pointer;
+        font-weight: 600;
+      }
+      .tax-education-entry p {
+        margin: 6px 0 0;
+        white-space: pre-wrap;
+      }
+      /* Publish + Version History (Settings' Build tab) — same small-pill
+         look as .seller-row-action-btn, kept as its own class since it
+         lives outside the Seller modal. */
+      .version-action-btn {
+        align-self: flex-start;
+        flex-shrink: 0;
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: rgb(var(--ink-rgb) / 0.85);
+        font: 12px/1.4 sans-serif;
+      }
+      .version-action-btn:disabled {
+        opacity: 0.5;
+      }
+      .version-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        max-height: 220px;
+        overflow-y: auto;
+      }
+      .version-row {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: rgb(var(--ink-rgb) / 0.08);
+      }
+      .version-row-info {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      .version-row-actions {
+        display: flex;
+        gap: 6px;
+      }
+      /* Land acquisition auctions (Build settings tab, alongside Land
+         Cap) — same look/shape as the version-history rows just above,
+         but its own classes throughout rather than reused ones (a
+         "start auction"/"place bid" button is a genuinely different
+         action from Publish/Set Live, and this project has hit real bugs
+         before from sharing a class across different buttons). */
+      .auction-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        max-height: 260px;
+        overflow-y: auto;
+      }
+      .auction-row {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: rgb(var(--ink-rgb) / 0.08);
+      }
+      .auction-row-info {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      .auction-row-bid-form {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .auction-row-bid-input {
+        width: 5.5em;
+        border: none;
+        border-radius: 4px;
+        padding: 4px 6px;
+        font: 13px/1.4 sans-serif;
+        background: rgb(var(--ink-rgb) / 0.08);
+        color: var(--pill-text);
+      }
+      .auction-bid-btn, .auction-start-btn, .auction-resolve-btn, .auction-bid-history-btn,
+      .auction-refresh-btn {
+        align-self: flex-start;
+        flex-shrink: 0;
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: rgb(var(--ink-rgb) / 0.85);
+        font: 12px/1.4 sans-serif;
+      }
+      .auction-bid-btn:disabled, .auction-start-btn:disabled, .auction-resolve-btn:disabled,
+      .auction-bid-history-btn:disabled, .auction-refresh-btn:disabled {
+        opacity: 0.5;
+      }
+      .auction-bid-history {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .auction-bid-history[hidden] {
+        display: none;
+      }
+      .auction-bid-history-row {
+        font-size: 11px;
+        color: rgb(var(--ink-rgb) / 0.7);
+      }
+      .auction-start-form {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+      .auction-start-form label {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      .auction-start-form input {
+        width: 5.5em;
+        border: none;
+        border-radius: 4px;
+        padding: 4px 6px;
+        font: 13px/1.4 sans-serif;
+        background: rgb(var(--ink-rgb) / 0.08);
+        color: var(--pill-text);
+      }
+      /* Low-stock list (#1949, sub-issue of #1947), Build settings tab —
+         same list/row look as .auction-list/.auction-row just above, own
+         classes throughout since the filter inputs are a distinct shape
+         (a client-side threshold filter, not a submit form). */
+      .low-stock-filter-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 8px;
+      }
+      .low-stock-filter-row label {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      .low-stock-filter-input {
+        width: 5.5em;
+        border: none;
+        border-radius: 4px;
+        padding: 4px 6px;
+        font: 13px/1.4 sans-serif;
+        background: rgb(var(--ink-rgb) / 0.08);
+        color: var(--pill-text);
+      }
+      .low-stock-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        max-height: 260px;
+        overflow-y: auto;
+      }
+      .low-stock-row {
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: rgb(var(--ink-rgb) / 0.08);
+      }
+      .low-stock-row[hidden] {
+        display: none;
+      }
+      .low-stock-row-info {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      /* Sold-out markers (#2068, leaf sub-issue of #1973/#1947), Build
+         settings tab — same list/row look as .low-stock-list/.low-stock-row
+         just above, own classes since each row carries a Dismiss action
+         the low-stock rows don't. */
+      .sold-out-marker-toggle-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.75);
+        margin-bottom: 8px;
+      }
+      .sold-out-marker-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        max-height: 260px;
+        overflow-y: auto;
+      }
+      .sold-out-marker-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: rgb(var(--ink-rgb) / 0.08);
+      }
+      .sold-out-marker-row-info {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      .sold-out-marker-row-dismiss {
+        flex-shrink: 0;
+        border: none;
+        border-radius: 4px;
+        padding: 4px 10px;
+        font: 12px/1.4 sans-serif;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        cursor: pointer;
+      }
+      /* Sell Your Lándlet's landlet picker (#249) — only rendered when a
+         builder owns more than one claimed landlet at once, so it's a
+         one-off row rather than reusing .auction-start-form's row-of-
+         inputs layout, which assumes several short numeric fields. */
+      .landlet-picker label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      .landlet-picker select {
+        border: none;
+        border-radius: 4px;
+        padding: 4px 6px;
+        font: 13px/1.4 sans-serif;
+        background: rgb(var(--ink-rgb) / 0.08);
+        color: var(--pill-text);
+      }
+      /* Seller payout onboarding (#452) — many short fields (name, DOB,
+         address, bank details), so one label+input per row rather than
+         .auction-start-form's inline row-of-a-couple-fields layout. */
+      .stripe-onboarding-form {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        max-width: 320px;
+      }
+      .stripe-onboarding-form label {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      /* Same [hidden]-vs-equal-specificity-author-rule problem .auth-form[hidden]
+         fixes above — the tax-paperwork field toggles individual W-9/W-8BEN-only
+         labels within this form via the hidden attribute. */
+      .stripe-onboarding-form label[hidden] {
+        display: none;
+      }
+      .stripe-onboarding-form input {
+        flex: 1 1 auto;
+        min-width: 0;
+        border: none;
+        border-radius: 4px;
+        padding: 4px 6px;
+        font: 13px/1.4 sans-serif;
+        background: rgb(var(--ink-rgb) / 0.08);
+        color: var(--pill-text);
+      }
+      #settings-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+      }
+      #settings-modal-actions button {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      /* Real login (docs/API.md's "Authentication") — same modal shell as
+         #settings-modal, higher z-index so it can be reached (and, on a
+         verify/reset email link, opened automatically) from anywhere,
+         including over the claim modal when entering Build mode requires
+         logging in first. */
+      #auth-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 40;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #auth-modal.visible {
+        display: flex;
+      }
+      #auth-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 90vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #auth-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #auth-tabs {
+        display: flex;
+        gap: 6px;
+      }
+      .auth-form {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      /* [hidden] and .auth-form are equal-specificity selectors, and an
+         author stylesheet's rule always wins over the UA stylesheet's own
+         [hidden]{display:none} regardless of source order — without this,
+         .auth-form's own `display: flex` silently overrides `hidden`,
+         showing all four forms stacked at once instead of just the active
+         one (caught via manual screenshot verification, not by anything
+         checking hidden's underlying DOM attribute rather than the
+         rendered layout). */
+      .auth-form[hidden] {
+        display: none;
+      }
+      .auth-form label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      /* Checkbox + its own text side by side, unlike the stacked
+         label-above-input layout every other .auth-form field uses. */
+      .auth-form label.auth-checkbox-label {
+        flex-direction: row;
+        align-items: center;
+        gap: 8px;
+      }
+      #auth-modal-content input[type='email'],
+      #auth-modal-content input[type='password'],
+      #auth-modal-content input[type='text'] {
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      /* Wraps a password field so a show/hide toggle can sit right next to
+         it — lets someone check what they actually typed before submitting,
+         rather than trusting a masked field with no way to double back on a
+         typo. Used on both login and signup. */
+      .auth-password-field {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+      }
+      .auth-password-field input {
+        flex: 1;
+        min-width: 0;
+      }
+      .auth-password-toggle-btn {
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        padding: 0;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text-soft);
+      }
+      .auth-password-toggle-btn svg {
+        width: 16px;
+        height: 16px;
+      }
+      .auth-form > button[type='submit'] {
+        padding: 9px 16px;
+        border-radius: 999px;
+        border: none;
+        background: var(--brand-green);
+        color: #16240a;
+        font: 14px/1.4 sans-serif;
+        transition: transform 90ms ease, background-color 90ms ease;
+      }
+      /* Tactile press feedback, same .pressed pattern as the gizmo
+         controls' own Copy button (see #gizmo-mode-controls button.pressed)
+         — a brief scale-down + darken so tapping Log In/Sign Up while
+         waiting on the network still visibly registers, rather than the
+         button looking inert until the request resolves. Bigger than the
+         gizmo buttons' own 0.92/no-color-change version and paired with an
+         actual color shift (not just scale) — this button's resting state
+         is already the brand green those buttons only turn on press, so
+         scale alone read as too faint to notice as "an animation." */
+      .auth-form > button[type='submit'].pressed {
+        transform: scale(0.88);
+        background: #4e7622;
+      }
+      .auth-link-btn {
+        align-self: flex-start;
+        background: none;
+        border: none;
+        padding: 0;
+        color: rgb(var(--ink-rgb) / 0.65);
+        font: 12px/1.4 sans-serif;
+        text-decoration: underline;
+      }
+      .auth-hint {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      #auth-status {
+        font-size: 13px;
+        min-height: 18px;
+      }
+      #auth-status.error {
+        color: #a83a27;
+      }
+      #auth-status.success {
+        color: #3f7a1f;
+      }
+      #auth-account-email {
+        font-size: 15px;
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+      #auth-account-verified {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      #auth-account-verified.verified {
+        color: #3f7a1f;
+      }
+      #auth-account-suspension {
+        font-size: 13px;
+        line-height: 1.4;
+        color: #c0392b;
+        border: 1px solid #c0392b;
+        border-radius: 8px;
+        padding: 8px 10px;
+      }
+      #auth-account-suspension[hidden] {
+        display: none;
+      }
+      #auth-logged-in {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      /* Same [hidden]-vs-equal-or-higher-specificity-author-rule problem
+         .auth-form[hidden] fixes above — an ID selector's specificity beats
+         [hidden]'s just as much as a class selector tied. */
+      #auth-logged-in[hidden] {
+        display: none;
+      }
+      #auth-resend-verify-btn,
+      #auth-logout-btn,
+      #auth-change-password-btn,
+      #auth-export-data-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        align-self: flex-start;
+      }
+      #auth-change-password-form {
+        border-top: 1px solid rgb(var(--ink-rgb) / 0.12);
+        padding-top: 10px;
+      }
+      /* #1149: the real "delete your login" action, distinct from the
+         builder/seller "reset" actions in Settings — outlined in --danger
+         rather than filled, so the account panel doesn't read as alarming
+         until someone actually opens this flow. */
+      #auth-delete-account-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: 1px solid rgb(226 105 79 / 0.5);
+        background: none;
+        color: var(--danger);
+        font: 14px/1.4 sans-serif;
+        align-self: flex-start;
+      }
+      #auth-delete-account-form {
+        border-top: 1px solid rgb(var(--ink-rgb) / 0.12);
+        padding-top: 10px;
+      }
+      .auth-form > button[type='submit'].danger {
+        background: var(--danger);
+        color: #fff;
+      }
+      /* Same modal shell as #settings-modal. */
+      #notifications-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #notifications-modal.visible {
+        display: flex;
+      }
+      #notifications-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #notifications-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #notifications-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .notification-row {
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.9);
+      }
+      .notification-row.unread {
+        background: rgb(var(--ink-rgb) / 0.16);
+        cursor: pointer;
+      }
+      .notification-row-time {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      #notifications-empty {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      #notifications-mark-all-btn {
+        align-self: flex-start;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #notifications-mark-all-btn:disabled {
+        opacity: 0.5;
+      }
+      #notifications-load-more-btn {
+        align-self: center;
+        margin-top: 8px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #notifications-load-more-btn:disabled {
+        opacity: 0.5;
+      }
+      /* #1215: Saved Layouts' own "Load more" — same shape/placement as
+         #notifications-load-more-btn just above, since this panel's list
+         is cursor-paginated the identical way but never had a control for
+         it at all. */
+      #saved-layouts-load-more-btn {
+        align-self: center;
+        margin-top: 8px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #saved-layouts-load-more-btn:disabled {
+        opacity: 0.5;
+      }
+      /* "My Purchases" (#3197): same modal shell as #notifications-modal,
+         opened from #my-purchases-btn. */
+      #my-purchases-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #my-purchases-modal.visible {
+        display: flex;
+      }
+      #my-purchases-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #my-purchases-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #my-purchases-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .my-purchase-row {
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.9);
+        overflow-wrap: anywhere;
+      }
+      .my-purchase-name {
+        font-weight: 600;
+      }
+      .my-purchase-meta {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      .my-purchase-feedback {
+        margin-top: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .my-purchase-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .my-purchase-action {
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font: 12px/1.4 sans-serif;
+      }
+      .my-purchase-action:disabled {
+        opacity: 0.5;
+      }
+      .my-purchase-feedback-form {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .my-purchase-feedback-form textarea {
+        width: 100%;
+        box-sizing: border-box;
+        font: 13px/1.4 sans-serif;
+      }
+      /* #3199: "Report a problem" -- inline confirm and outcome note. The
+         buttons reuse .my-purchase-action / .my-purchase-actions above. */
+      .my-purchase-dispute {
+        margin-top: 6px;
+      }
+      .my-purchase-confirm {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+      }
+      .my-purchase-note {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--pill-text);
+      }
+      .my-purchase-feedback-status {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      #my-purchases-empty {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      #my-purchases-load-more-btn {
+        align-self: center;
+        margin-top: 8px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #my-purchases-load-more-btn:disabled {
+        opacity: 0.5;
+      }
+      /* Same modal shell as #notifications-modal — friend requests
+         (docs/SPEC.md §2), opened from #friends-btn. Three subsections
+         (Requests/Sent/Friends) share one .friend-row look with different
+         action buttons per section rather than three separate row classes,
+         since the row body itself (label + optional location line) is
+         identical across all three. */
+      #friends-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #friends-modal.visible {
+        display: flex;
+      }
+      #friends-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      #friends-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #friends-modal-content h3 {
+        margin: 4px 0 0;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.65);
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      .friends-toolbar {
+        display: flex;
+        gap: 8px;
+      }
+      #friends-add-btn, #friends-map-btn {
+        align-self: flex-start;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #friends-status {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      #friends-status.error {
+        color: #ff8a80;
+      }
+      /* #2781: empty (display: none via the :empty selector) when the
+         caller isn't currently a member of any friend voice channel --
+         renderFriendVoiceChannelStatus only ever populates it with a
+         single .friend-row-shaped line, reusing that row's own
+         label/actions layout rather than inventing a second one. */
+      #friends-voice-channel-status:empty {
+        display: none;
+      }
+      #friends-incoming-list, #friends-outgoing-list, #friends-accepted-list, #friends-blocked-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      /* #1205: a lightweight 2D top-down view of every accepted friend's
+         claimed lándlet — deliberately a plain canvas, not the claim
+         flyover's WebGL scene (see drawFriendsMap's own comment in
+         src/main.js for why). Swaps places with #friends-modal itself
+         (hidden while this is open) rather than stacking as a second
+         modal layer, the simplest way to avoid z-index/backdrop-click
+         ordering questions between the two. */
+      #friends-map-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #friends-map-modal.visible {
+        display: flex;
+      }
+      #friends-map-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      #friends-map-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #friends-map-canvas {
+        width: 100%;
+        aspect-ratio: 1;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+      }
+      #friends-map-empty {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      /* Same modal shell as #friends-map-modal — swaps places with
+         #friends-modal the same way (hidden while this is open), opened
+         via each accepted friend's own "Message" button (#1637). */
+      #dm-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #dm-modal.visible {
+        display: flex;
+      }
+      #dm-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 80vh;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      #dm-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      /* #3140: the DM header's Block control. */
+      #dm-block-btn {
+        align-self: flex-start;
+        background: var(--danger);
+      }
+      #dm-status {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      #dm-status.error {
+        color: #ff8a80;
+      }
+      #dm-list {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        overflow-y: auto;
+        flex: 1;
+        min-height: 120px;
+      }
+      .dm-row {
+        max-width: 80%;
+        padding: 8px 12px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.9);
+      }
+      .dm-row.sent {
+        align-self: flex-end;
+        background: rgb(var(--ink-rgb) / 0.16);
+      }
+      .dm-row-time {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      #dm-empty {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      #dm-compose-form {
+        display: flex;
+        gap: 8px;
+      }
+      #dm-compose-input {
+        flex: 1;
+        padding: 8px 10px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.08);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #dm-send-btn {
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #dm-send-btn:disabled {
+        opacity: 0.5;
+      }
+      /* #1677: same shape/placement as #notifications-load-more-btn and
+         #saved-layouts-load-more-btn -- this one loads older messages, so
+         it sits above #dm-list rather than below it. */
+      #dm-load-more-btn {
+        align-self: center;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #dm-load-more-btn:disabled {
+        opacity: 0.5;
+      }
+      .friend-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 8px 12px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.9);
+      }
+      .friend-row-body {
+        min-width: 0;
+      }
+      .friend-row-label {
+        font-weight: 600;
+      }
+      .friend-row-location {
+        margin-top: 2px;
+        font-size: 11px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      .friend-row-actions {
+        flex-shrink: 0;
+        display: flex;
+        gap: 6px;
+      }
+      .friend-row-actions button {
+        border: none;
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 12px;
+        color: var(--pill-text);
+        background: rgb(var(--ink-rgb) / 0.15);
+      }
+      .friend-row-actions button.danger {
+        background: var(--danger);
+      }
+      #friends-incoming-empty, #friends-outgoing-empty, #friends-accepted-empty, #friends-blocked-empty {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      /* Same modal shell as #notifications-modal — a builder's moderation
+         view for one specific community sign's posts (see "Community
+         signs" in docs/API.md), opened from #manage-sign-posts in
+         #gizmo-mode-controls. Deliberately its own classes throughout
+         (.sign-post-row, not a reused .notification-row) despite the near-
+         identical look — notification-row's own unread/click-to-mark-read
+         behavior doesn't apply here, and this project has hit the same
+         "shared class, different button" bug more than once by reusing a
+         class across genuinely different elements (see the bundle
+         share-toggle's own comment). */
+      #sign-posts-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #sign-posts-modal.visible {
+        display: flex;
+      }
+      #sign-posts-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #sign-posts-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #sign-posts-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .sign-post-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.9);
+      }
+      .sign-post-row-body {
+        min-width: 0;
+      }
+      .sign-post-row-author {
+        font-weight: 600;
+      }
+      .sign-post-row-time {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      .sign-post-row-delete {
+        flex-shrink: 0;
+        border: none;
+        border-radius: 999px;
+        width: 24px;
+        height: 24px;
+        background: var(--danger);
+        color: #fff;
+        font-size: 13px;
+        line-height: 1;
+      }
+      #sign-posts-empty,
+      #sign-posts-truncated {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      /* Un-flagging a sign lives here, inside the moderation panel, rather
+         than as its own always-present toolbar button next to Community
+         Sign — see that button's own click-handler comment for why (a
+         second toolbar button here once pushed #gizmo-mode-controls tall
+         enough on a phone-width viewport to physically overlap and
+         intercept taps meant for the 3D canvas beneath it). */
+      #sign-posts-unflag-btn {
+        align-self: flex-start;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      /* Same shell/reasoning as #sign-posts-modal and its rules just above
+         — a builder's moderation view for one specific community
+         calendar's events, opened from #toggle-community-calendar. */
+      #calendar-events-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #calendar-events-modal.visible {
+        display: flex;
+      }
+      #calendar-events-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #calendar-events-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #calendar-events-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .calendar-event-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.9);
+      }
+      .calendar-event-row-body {
+        min-width: 0;
+      }
+      .calendar-event-row-author {
+        font-weight: 600;
+      }
+      .calendar-event-row-time {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      .calendar-event-row-actions {
+        flex-shrink: 0;
+        display: flex;
+        gap: 6px;
+      }
+      .calendar-event-row-delete,
+      .calendar-event-row-edit {
+        flex-shrink: 0;
+        border: none;
+        border-radius: 999px;
+        width: 24px;
+        height: 24px;
+        color: #fff;
+        font-size: 13px;
+        line-height: 1;
+      }
+      .calendar-event-row-delete {
+        background: var(--danger);
+      }
+      .calendar-event-row-edit {
+        background: rgb(var(--ink-rgb) / 0.35);
+      }
+      #calendar-events-empty,
+      #calendar-events-truncated {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      #calendar-events-unflag-btn {
+        align-self: flex-start;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      /* #2050/#2051: a builder's own config panel for one placed
+         instance's backup/replacement chain, opened from
+         #toggle-backup-chain. Same modal shell/reasoning as
+         #sign-posts-modal/#calendar-events-modal above, but every row's
+         own up/down/remove controls (ordering matters here, unlike those
+         two) rather than a single delete button. */
+      #backup-chain-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #backup-chain-modal.visible {
+        display: flex;
+      }
+      #backup-chain-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #backup-chain-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #backup-chain-intro {
+        margin: 0;
+        font-size: 13px;
+        color: var(--pill-text-soft);
+      }
+      #backup-chain-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .backup-chain-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.9);
+      }
+      .backup-chain-row-name {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .backup-chain-row-up,
+      .backup-chain-row-down,
+      .backup-chain-row-remove {
+        flex-shrink: 0;
+        border: none;
+        border-radius: 999px;
+        width: 24px;
+        height: 24px;
+        background: rgb(var(--ink-rgb) / 0.35);
+        color: #fff;
+        font-size: 12px;
+        line-height: 1;
+      }
+      .backup-chain-row-remove {
+        background: var(--danger);
+      }
+      #backup-chain-empty {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      #backup-chain-add-btn {
+        align-self: flex-start;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      /* #2987: the builder-facing "Removed Items" list (src/build/
+         pendingRestoration.js) -- products taken off this builder's land
+         because their seller was suspended. Same modal shell as
+         #backup-chain-modal above. */
+      #pending-restoration-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #pending-restoration-modal.visible {
+        display: flex;
+      }
+      #pending-restoration-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 400px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #pending-restoration-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #pending-restoration-intro {
+        margin: 0;
+        font-size: 13px;
+        color: var(--pill-text-soft);
+      }
+      #pending-restoration-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .pending-restoration-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.9);
+      }
+      .pending-restoration-row-image {
+        flex-shrink: 0;
+        width: 40px;
+        height: 40px;
+        border-radius: 6px;
+        object-fit: cover;
+      }
+      .pending-restoration-row-text {
+        flex: 1;
+        min-width: 0;
+      }
+      .pending-restoration-row-name {
+        font-weight: 600;
+        overflow-wrap: anywhere;
+      }
+      .pending-restoration-row-detail {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      .pending-restoration-row-clear {
+        flex-shrink: 0;
+        padding: 6px 12px;
+        border: none;
+        border-radius: 999px;
+        background: var(--danger);
+        color: #fff;
+        font: 13px/1.4 sans-serif;
+      }
+      #pending-restoration-empty {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      /* #1811 (sub-issue of #1809): isolated 3D preview + item info for a
+         tapped product, same modal shell/reasoning as #sign-posts-modal
+         above — replacing the old #shop-product-info/#shop-buy-hint/
+         #shop-review-hint/#shop-return-policy-link pills, removed in
+         #1813 once this modal covered everything they did. */
+      #shop-product-preview-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #shop-product-preview-modal.visible {
+        display: flex;
+      }
+      #shop-product-preview-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      /* Same sizing/background idiom as .seller-preview-canvas (Sell mode's
+         own on-demand product preview) — a fixed height rather than an
+         aspect-ratio box, since the modal's own max-width already bounds
+         the other dimension. */
+      #shop-product-preview-canvas {
+        width: 100%;
+        height: 220px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.06);
+        touch-action: none;
+      }
+      #shop-product-preview-info {
+        font-size: 14px;
+        color: var(--pill-text);
+      }
+      /* #1812: the Buy/Review/Return-Policy actions, migrated in from the
+         original #shop-buy-hint/#shop-review-hint/#shop-return-policy-link
+         pills (removed in #1813) -- same rounded-pill-button look as
+         #sign-posts-unflag-btn's own rule above, laid out in a row rather
+         than stacked since all three can be visible together. Hidden by
+         default (no .visible), toggled by the same updateReviewFade gating
+         their pill-era originals used. */
+      #shop-product-preview-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      #shop-product-preview-actions button {
+        display: none;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #shop-product-preview-actions button.visible {
+        display: inline-block;
+      }
+      /* #1150's "My Lands" list — same shell/reasoning as #calendar-events-modal
+         and its rules just above, opened from the account-menu gear icon's
+         own panel rather than a community sign/calendar flag. */
+      #my-lands-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #my-lands-modal.visible {
+        display: flex;
+      }
+      #my-lands-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #my-lands-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #my-lands-status.error {
+        color: #a83a27;
+        font-size: 13px;
+      }
+      #my-lands-empty {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      /* A real <button> (see its own click-handler comment, src/main.js),
+         styled to read as the clickable land name it is. */
+      .my-lands-open-link {
+        border: none;
+        background: none;
+        padding: 0;
+        color: var(--pill-text);
+        font: inherit;
+        font-weight: 600;
+        text-decoration: underline;
+      }
+      /* Product reviews (docs/API.md's "Product reviews") live in the
+         Seller modal, not Build mode — a review is about the product
+         itself, not about wherever a builder happens to have placed it, so
+         its moderation panel is a per-row collapsed panel in #seller-list
+         (like .seller-extensibility-panel), not a toggle-then-manage
+         Build-mode modal. */
+      .seller-review-toggle {
+        margin-top: 8px;
+      }
+      .seller-review-panel {
+        margin-top: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .seller-review-summary {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      .seller-review-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .product-review-row,
+      .seller-feedback-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.9);
+      }
+      .product-review-row-body,
+      .seller-feedback-row-body {
+        min-width: 0;
+      }
+      .product-review-row-author,
+      .seller-feedback-row-author {
+        font-weight: 600;
+      }
+      .product-review-row-rating,
+      .seller-feedback-row-rating {
+        color: #ffd93d;
+      }
+      .product-review-row-time,
+      .seller-feedback-row-time {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      .product-review-row-delete {
+        flex-shrink: 0;
+        border: none;
+        border-radius: 999px;
+        width: 24px;
+        height: 24px;
+        background: var(--danger);
+        color: #fff;
+        font-size: 13px;
+        line-height: 1;
+      }
+      .seller-review-empty,
+      .seller-review-truncated {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      /* Simulated purchases (docs/API.md's "Simulated purchases"/"Refunds")
+         — this product's own sale history, same collapsed-panel-in-
+         #seller-list idiom as Reviews just above, own classes throughout
+         despite the visual similarity. */
+      .seller-sales-toggle {
+        margin-top: 8px;
+      }
+      .seller-sales-panel {
+        margin-top: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .seller-sales-summary {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      .seller-sales-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .product-sale-row {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.9);
+      }
+      .product-sale-row-body {
+        min-width: 0;
+      }
+      .product-sale-row-commission {
+        color: var(--brand-green);
+      }
+      .product-sale-row-time {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      .product-sale-row-refund-btn {
+        flex-shrink: 0;
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: none;
+        background: var(--danger);
+        color: #fff;
+        font: 12px/1.4 sans-serif;
+      }
+      .product-sale-row-refund-btn:disabled {
+        opacity: 0.5;
+      }
+      .product-sale-row-refunded {
+        flex-shrink: 0;
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      /* #454: seller's own side of the physical-goods payout hold. */
+      .product-sale-row-shipping {
+        margin-top: 4px;
+        font-size: 11px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      .product-sale-row-ship-btn {
+        padding: 4px 10px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: rgb(var(--ink-rgb) / 0.85);
+        font: 11px/1.4 sans-serif;
+      }
+      .product-sale-row-ship-btn:disabled {
+        opacity: 0.5;
+      }
+      .seller-sales-empty,
+      .seller-sales-truncated {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      /* Same modal shell as #upload-modal — shown at startup, before
+         bootstrap() has resolved a landlet to build on, whenever this
+         builder (see ensureBuilderIdentity in src/main.js) doesn't
+         already own one. */
+      #claim-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 30;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #claim-modal.visible {
+        display: flex;
+      }
+      #claim-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 440px;
+        max-height: 90vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #claim-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #claim-hint {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      /* Square viewport onto the 3D world flyover (a separate Three.js
+         renderer/scene from the builder view — see loadLandletMap in
+         main.js) — aspect-ratio keeps it square at any modal width instead
+         of hardcoding a pixel height. touch-action:none stops the browser's
+         own scroll/zoom gestures from fighting OrbitControls' drag/pinch. */
+      #claim-map-wrap {
+        width: 100%;
+        aspect-ratio: 1 / 1;
+        border-radius: 10px;
+        overflow: hidden;
+        background: rgb(var(--ink-rgb) / 0.08);
+      }
+      #claim-map-canvas {
+        width: 100%;
+        height: 100%;
+        display: block;
+        touch-action: none;
+      }
+      #claim-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
+      .claim-legend-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+      }
+      .claim-swatch {
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        display: inline-block;
+      }
+      .claim-swatch.available {
+        background: var(--brand-green);
+      }
+      .claim-swatch.claimed {
+        background: rgb(var(--ink-rgb) / 0.28);
+      }
+      .claim-swatch.water {
+        /* Matches CLAIM_PLOT_COLORS.water in src/main.js (#220). */
+        background: #4a9bd1;
+      }
+      #claim-selection-panel {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+        border-radius: 10px;
+        padding: 10px 12px;
+      }
+      #claim-selection-name {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      #claim-confirm-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: var(--brand-green);
+        color: #16240a;
+        white-space: nowrap;
+      }
+      #claim-confirm-btn:disabled {
+        opacity: 0.4;
+      }
+      #claim-status {
+        font-size: 13px;
+        min-height: 18px;
+      }
+      #claim-status.error {
+        color: #a83a27;
+      }
+      #claim-modal-actions {
+        display: flex;
+        flex-wrap: wrap;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      #claim-modal-actions button {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+      }
