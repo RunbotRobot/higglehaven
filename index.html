@@ -387,15 +387,21 @@
       #layout-preview-marquee.visible {
         display: block;
       }
+      /* #3219: a raw camera-pose readout is a developer aid, not something an
+         ordinary builder should see; hidden unless src/build/scene.js's
+         updateCameraDebug adds .admin-visible for an admin account. */
       #camera-debug-panel {
         position: fixed;
         bottom: 44px;
         right: 8px;
         z-index: 10;
-        display: flex;
+        display: none;
         flex-direction: column;
         align-items: flex-end;
         gap: 4px;
+      }
+      #camera-debug-panel.admin-visible {
+        display: flex;
       }
       /* #545: only shown when a sync to the backend has failed with a real
          network-level error (server unreachable) — Build mode's own edits
