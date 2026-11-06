@@ -239,6 +239,18 @@ export async function handleInstances(request, env, route, url) {
     if (new Set(instanceIds).size !== instanceIds.length) {
       throw new HttpError('instanceId values must be unique', 400);
     }
+    // #1062 (server half): an optional per-item expectedUpdatedAt -- the
+    // updatedAt the caller last saw for that instance. See the stale-write
+    // handling below. Only meaningful on PUT (POST can only create).
+    const expectedUpdatedAtById = new Map();
+    if (request.method === 'PUT') {
+      input.instances.forEach((item, i) => {
+        const expected = item?.expectedUpdatedAt;
+        if (expected === undefined || expected === null) return;
+        if (typeof expected !== 'string' || expected === '') throw new HttpError('expectedUpdatedAt must be a non-empty string', 400);
+        expectedUpdatedAtById.set(instanceIds[i], expected);
+      });
+    }
     const sessionBuilder = await requireSessionBuilder(request, db);
     await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
     await assertReferencesExist(db, 'catalog_templates', 'template_id', instances.map((instance) => instance.templateId), 'templateId');
@@ -272,7 +284,40 @@ export async function handleInstances(request, env, route, url) {
       const missingSet = new Set(missingInstanceIds);
       instances = instances.filter((instance) => !missingSet.has(instance.instanceId));
       instanceIds = instances.map((instance) => instance.instanceId);
-      if (instances.length === 0) return json({ instances: [], rejectedInstanceIds: [], missingInstanceIds, suspendedSellerInstanceIds });
+    }
+    // #1062 (server half), also the stale-write half of #3101: a caller that
+    // sends expectedUpdatedAt is saying "replace this instance only if it is
+    // still the version I last saw". An instance another tab or request has
+    // changed since is NOT overwritten: it is skipped and reported back in
+    // staleInstanceIds, with its current stored state in staleInstances so the
+    // caller can reconcile instead of silently clobbering the newer edit. An
+    // id with no stored row is a create, which has nothing to be stale
+    // against. Absent the field, PUT keeps its documented last-write-wins
+    // replace exactly. The atomic version of this check is the WHERE on the
+    // ON CONFLICT clause below; this up-front pass is what produces the
+    // clean, itemised report.
+    const staleInstances = instances
+      .filter((instance) => {
+        const expected = expectedUpdatedAtById.get(instance.instanceId);
+        const existing = existingInstances.get(instance.instanceId);
+        return expected !== undefined && existing && existing.updatedAt !== expected;
+      })
+      .map((instance) => existingInstances.get(instance.instanceId));
+    const staleInstanceIds = staleInstances.map((instance) => instance.instanceId);
+    if (staleInstanceIds.length > 0) {
+      const staleSet = new Set(staleInstanceIds);
+      instances = instances.filter((instance) => !staleSet.has(instance.instanceId));
+      instanceIds = instances.map((instance) => instance.instanceId);
+    }
+    const hasPreconditions = expectedUpdatedAtById.size > 0;
+    const preconditionFields = () => (hasPreconditions ? { staleInstanceIds, staleInstances } : {});
+    if (instances.length === 0) {
+      return json({
+        instances: [],
+        rejectedInstanceIds: [],
+        ...(updateOnly ? { missingInstanceIds, suspendedSellerInstanceIds } : {}),
+        ...preconditionFields(),
+      });
     }
     await assertTemplatesFromActiveSellers(db, instances.filter((instance) => {
       const existing = existingInstances.get(instance.instanceId);
@@ -353,7 +398,11 @@ export async function handleInstances(request, env, route, url) {
       `).bind(...candidateGroupIds, sessionBuilder.builder_id).all();
       verifiedGroupIds = new Set(ownedGroups.map((row) => row.group_id));
     }
-    const conflictClause = request.method === 'PUT' ? `
+    // The trailing WHERE is the atomic form of the expectedUpdatedAt check
+    // above: a write landing between that pre-read and this statement makes
+    // the conflict update match no row, which the rejectedInstanceIds
+    // handling below already reports as "refetch and retry".
+    const conflictClauseFor = (instance) => (request.method === 'PUT' ? `
       ON CONFLICT(instance_id) DO UPDATE SET
         landlet_id = excluded.landlet_id, template_id = excluded.template_id,
         x_m = excluded.x_m, y_m = excluded.y_m, z_m = excluded.z_m,
@@ -362,7 +411,8 @@ export async function handleInstances(request, env, route, url) {
         scale = excluded.scale, is_community_sign = excluded.is_community_sign,
         is_community_calendar = excluded.is_community_calendar,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-    ` : '';
+      ${expectedUpdatedAtById.has(instance.instanceId) ? 'WHERE placed_instances.updated_at = ?' : ''}
+    ` : '');
     // #456: same reasoning as the single-create endpoint above — fold the
     // ownership re-check into each write instead of trusting the
     // point-in-time requireOwnedLandlets check above alone.
@@ -371,8 +421,11 @@ export async function handleInstances(request, env, route, url) {
         (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id)
       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       WHERE EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
-      ${conflictClause}
-    `).bind(...instanceParams(instance), verifiedGroupIds.has(instance.groupId) ? instance.groupId : null, instance.landletId, sessionBuilder.builder_id)));
+      ${conflictClauseFor(instance)}
+    `).bind(
+      ...instanceParams(instance), verifiedGroupIds.has(instance.groupId) ? instance.groupId : null, instance.landletId, sessionBuilder.builder_id,
+      ...(request.method === 'PUT' && expectedUpdatedAtById.has(instance.instanceId) ? [expectedUpdatedAtById.get(instance.instanceId)] : []),
+    )));
     // #1772: a batch can span multiple landlets (requireOwnedLandlets above
     // explicitly supports that), and db.batch() has no atomic rollback on a
     // WHERE-guard mismatch (same D1 semantics the single-instance PATCH
@@ -417,6 +470,7 @@ export async function handleInstances(request, env, route, url) {
       instances: succeededInstanceIds.map((instanceId) => stored.get(instanceId)),
       rejectedInstanceIds,
       ...(updateOnly ? { missingInstanceIds, suspendedSellerInstanceIds } : {}),
+      ...preconditionFields(),
     }, request.method === 'POST' ? 201 : 200);
   }
 
@@ -532,6 +586,21 @@ export async function handleInstances(request, env, route, url) {
     if (instance.landletId !== existing.landlet_id) {
       await requireOwnedLandlet(db, instance.landletId, sessionBuilder.builder_id);
     }
+    // #1062 (server half): optional precondition, same meaning as on the batch
+    // PUT above -- "apply only if the instance is still the version I last
+    // saw". Refused with a 409 that carries the current stored state, so the
+    // caller can reconcile rather than overwrite a newer edit. Absent the
+    // field, last-write-wins as before.
+    const expectedUpdatedAt = input.expectedUpdatedAt ?? null;
+    if (expectedUpdatedAt !== null && (typeof expectedUpdatedAt !== 'string' || expectedUpdatedAt === '')) {
+      throw new HttpError('expectedUpdatedAt must be a non-empty string', 400);
+    }
+    if (expectedUpdatedAt !== null && existing.updated_at !== expectedUpdatedAt) {
+      throw new HttpError('This item was changed somewhere else — refresh to see the latest version.', 409, {
+        staleInstanceId: route[1],
+        instance: instanceFromRow(existing),
+      });
+    }
     // Found via backlog audit (#338): re-validating crop unconditionally
     // here, even when neither crop nor templateId actually changed, meant a
     // template shrunk (or its extensible.minM raised) after an instance's
@@ -593,7 +662,8 @@ export async function handleInstances(request, env, route, url) {
       SET landlet_id = ?, template_id = ?, x_m = ?, y_m = ?, z_m = ?, rotation_x_rad = ?, rotation_y_rad = ?, rotation_z_rad = ?, label = ?, crop_json = ?, scale = ?, is_community_sign = ?, is_community_calendar = ?, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE instance_id = ?
         AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
-    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0, instance.isCommunityCalendar ? 1 : 0, route[1], instance.landletId, sessionBuilder.builder_id).run();
+        AND (? IS NULL OR updated_at = ?)
+    `).bind(instance.landletId, instance.templateId, instance.x, instance.y, instance.z, instance.rotationX, instance.rotationY, instance.rotationZ, instance.label, JSON.stringify(instance.crop), instance.scale, instance.isCommunitySign ? 1 : 0, instance.isCommunityCalendar ? 1 : 0, route[1], instance.landletId, sessionBuilder.builder_id, expectedUpdatedAt, expectedUpdatedAt).run();
     if (updated.meta.changes === 0) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
     }
