@@ -536,14 +536,14 @@ async function reportEvidenceLines(db, reporterUserId, reportedUserId, surfaceAc
 const CONDUCT_REPORT_NOTE_MAX_LENGTH = 4000;
 
 async function fileConductReport(db, {
-  table, kind, reportId, reporterBuilderId, reportedBuilderId, reportedUserId, reason, title, noteLines, now,
+  table, kind, reportId, reporterUserId, reportedUserId, reason, title, noteLines, now,
 }) {
-  const repeatLine = `[${now}] Repeat report from the same reporter against the same builder${reason ? `. Reason: ${reason}` : ''}`;
+  const repeatLine = `[${now}] Repeat report from the same reporter against the same account${reason ? `. Reason: ${reason}` : ''}`;
   await db.batch([
     db.prepare(`
-      INSERT OR IGNORE INTO ${table} (report_id, reporter_builder_id, reported_builder_id, reported_user_id, reason)
-      VALUES (?, ?, ?, ?, ?)
-    `).bind(reportId, reporterBuilderId, reportedBuilderId, reportedUserId, reason),
+      INSERT OR IGNORE INTO ${table} (report_id, reporter_user_id, reported_user_id, reason)
+      VALUES (?, ?, ?, ?)
+    `).bind(reportId, reporterUserId, reportedUserId, reason),
     db.prepare(`
       INSERT INTO control_room_tasks (
         task_id, kind, note_number, title, status, session, posted_by,
@@ -562,13 +562,13 @@ async function fileConductReport(db, {
           note_updated_at = CASE WHEN length(note) < ${CONDUCT_REPORT_NOTE_MAX_LENGTH} THEN ? ELSE note_updated_at END,
           updated_at = CASE WHEN length(note) < ${CONDUCT_REPORT_NOTE_MAX_LENGTH} OR status = 'done' THEN ? ELSE updated_at END,
           status = CASE WHEN status = 'done' THEN 'queued' ELSE status END
-      WHERE task_id = (SELECT report_id FROM ${table} WHERE reporter_builder_id = ? AND reported_builder_id = ?)
+      WHERE task_id = (SELECT report_id FROM ${table} WHERE reporter_user_id = ? AND reported_user_id = ?)
         AND NOT EXISTS (SELECT 1 FROM ${table} WHERE report_id = ?)
-    `).bind(repeatLine, now, now, reporterBuilderId, reportedBuilderId, reportId),
+    `).bind(repeatLine, now, now, reporterUserId, reportedUserId, reportId),
   ]);
   const stored = await db.prepare(`
-    SELECT report_id FROM ${table} WHERE reporter_builder_id = ? AND reported_builder_id = ?
-  `).bind(reporterBuilderId, reportedBuilderId).first();
+    SELECT report_id FROM ${table} WHERE reporter_user_id = ? AND reported_user_id = ?
+  `).bind(reporterUserId, reportedUserId).first();
   return stored.report_id;
 }
 
@@ -603,8 +603,13 @@ async function handleNearbyChatReportCreate(request, db) {
   const now = new Date().toISOString();
   const controlRoomTitle = `Nearby chat conduct report against "${reportedLabel}"`;
   const reportedUserId = await reportedUserIdOf(db, reportedBuilderId);
-  const controlRoomNoteLines = [`Reported builder: "${reportedLabel}" (${reportedBuilderId})`];
-  if (reportedUserId) controlRoomNoteLines.push(`Reported account: ${reportedUserId}`);
+  // #3148: the one-per-reporter rule keys on accounts, so a builder with no
+  // account cannot be reported (refused like an unknown builder; chat and
+  // voice participants are always id-verified accounts, so none is reachable
+  // through these surfaces in practice).
+  if (!reportedUserId) throw new HttpError('reportedBuilderId does not name a real builder', 400);
+  if (reportedUserId === sessionBuilder.user_id) throw new HttpError('reportedBuilderId cannot be the caller themselves', 400);
+  const controlRoomNoteLines = [`Reported account: ${reportedUserId} — current builder "${reportedLabel}" (${reportedBuilderId})`];
   if (reason) controlRoomNoteLines.push(`Reason: ${reason}`);
   controlRoomNoteLines.push(...await reportEvidenceLines(db, sessionBuilder.user_id, reportedUserId, async () => {
     const message = await db.prepare(`
@@ -616,7 +621,7 @@ async function handleNearbyChatReportCreate(request, db) {
   }));
   const storedReportId = await fileConductReport(db, {
     table: 'nearby_chat_reports', kind: 'nearby-chat-report', reportId,
-    reporterBuilderId: sessionBuilder.builder_id, reportedBuilderId, reportedUserId, reason,
+    reporterUserId: sessionBuilder.user_id, reportedUserId, reason,
     title: controlRoomTitle, noteLines: controlRoomNoteLines, now,
   });
   return json({ reportId: storedReportId }, 201);
@@ -942,8 +947,13 @@ async function handleVoiceReportCreate(request, db) {
   // /api/control-room/tasks HTTP API. The card's task_id is the reportId.
   const controlRoomTitle = `Voice chat conduct report against "${reportedLabel}"`;
   const reportedUserId = await reportedUserIdOf(db, reportedBuilderId);
-  const controlRoomNoteLines = [`Reported builder: "${reportedLabel}" (${reportedBuilderId})`];
-  if (reportedUserId) controlRoomNoteLines.push(`Reported account: ${reportedUserId}`);
+  // #3148: the one-per-reporter rule keys on accounts, so a builder with no
+  // account cannot be reported (refused like an unknown builder; chat and
+  // voice participants are always id-verified accounts, so none is reachable
+  // through these surfaces in practice).
+  if (!reportedUserId) throw new HttpError('reportedBuilderId does not name a real builder', 400);
+  if (reportedUserId === sessionBuilder.user_id) throw new HttpError('reportedBuilderId cannot be the caller themselves', 400);
+  const controlRoomNoteLines = [`Reported account: ${reportedUserId} — current builder "${reportedLabel}" (${reportedBuilderId})`];
   if (reason) controlRoomNoteLines.push(`Reason: ${reason}`);
   controlRoomNoteLines.push(...await reportEvidenceLines(db, sessionBuilder.user_id, reportedUserId, async () => {
     const signal = await db.prepare(`
@@ -955,7 +965,7 @@ async function handleVoiceReportCreate(request, db) {
   }));
   const storedReportId = await fileConductReport(db, {
     table: 'voice_conduct_reports', kind: 'voice-report', reportId,
-    reporterBuilderId: sessionBuilder.builder_id, reportedBuilderId, reportedUserId, reason,
+    reporterUserId: sessionBuilder.user_id, reportedUserId, reason,
     title: controlRoomTitle, noteLines: controlRoomNoteLines, now,
   });
   return json({ reportId: storedReportId }, 201);

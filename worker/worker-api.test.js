@@ -5372,18 +5372,25 @@ describe('Top-level fetch() routing (#1232)', () => {
     }
   });
 
-  // #1360: Content-Security-Policy ships report-only first (owner decision on
-  // the issue). It must be the report-only header, never the enforcing one,
-  // and only on documents.
-  it('sends a report-only Content-Security-Policy on HTML responses, never the enforcing header, and none on JSON', async () => {
+  // #1360: Content-Security-Policy is enforcing (owner un-gated the switch
+  // from report-only on 2026-11-06). It must be the enforcing header, never
+  // the report-only one, and only on documents.
+  it('sends an enforcing Content-Security-Policy on HTML responses, never the report-only header, and none on JSON', async () => {
     const page = await SELF.fetch('https://higglehaven.test/admin/control-room');
     expect(page.headers.get('content-type')).toMatch(/text\/html/);
-    const policy = page.headers.get('content-security-policy-report-only');
+    const policy = page.headers.get('content-security-policy');
     expect(policy).toContain("default-src 'self'");
     expect(policy).toContain('https://js.stripe.com');
     expect(policy).toContain("frame-ancestors 'none'");
     expect(policy).toContain('report-uri /api/csp-report');
-    expect(page.headers.get('content-security-policy')).toBeNull();
+    // #1360: scripts and style elements are file-only; the one remaining
+    // inline allowance is style="" attributes, and nothing else carries it.
+    const directives = Object.fromEntries(policy.split('; ').map((d) => [d.split(' ')[0], d.split(' ').slice(1)]));
+    expect(directives['script-src']).not.toContain("'unsafe-inline'");
+    expect(directives['style-src']).not.toContain("'unsafe-inline'");
+    expect(directives['style-src-attr']).toEqual(["'unsafe-inline'"]);
+    expect(policy.match(/'unsafe-inline'/g)).toHaveLength(1);
+    expect(page.headers.get('content-security-policy-report-only')).toBeNull();
 
     const api = await SELF.fetch('https://higglehaven.test/api/health');
     expect(api.headers.get('content-security-policy-report-only')).toBeNull();

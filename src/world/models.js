@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 import { cropGeometryFromEnd } from '../meshCrop.js';
 import { skeletonSignatureFromBones } from '../skeletonSignature.js';
 import { curvedPosition, flatPosition } from '../../worker/earthCurvature.js';
@@ -266,9 +267,15 @@ export async function computeSkeletonSignature(url) {
 // specific to these placeholder assets — which is why the placeholder
 // models here are deliberately authored in standard Y-up space rather than
 // pre-rotated to dodge it.
-export async function loadModelInstance(url) {
+// skeletonSafe (#3230): Object3D.clone() leaves every clone of a skinned mesh
+// sharing the original's skeleton, so a mixer driving one instance would move
+// them all. Other players' avatars each get their own AnimationMixer, so they
+// ask for SkeletonUtils.clone, which rebinds each clone to its own bones.
+// Opt-in so every other caller (placed products, the shopper's own avatar)
+// keeps exactly the clone it always had.
+export async function loadModelInstance(url, { skeletonSafe = false } = {}) {
   const cachedScene = await loadModelScene(url);
-  const model = cachedScene.clone();
+  const model = skeletonSafe ? cloneSkinned(cachedScene) : cachedScene.clone();
   // Object3D.clone() shares materials/geometries by reference. Geometry
   // being shared is fine (read-only), but materials need independent
   // copies per instance so a future per-material tweak on one placed

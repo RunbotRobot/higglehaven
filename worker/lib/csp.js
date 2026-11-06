@@ -1,18 +1,30 @@
-// #1360: Content-Security-Policy, in report-only mode first (owner decision
-// on the issue: ship `Content-Security-Policy-Report-Only` with a reasoned
-// starting allow-list, prove it in a real browser, then switch to the
-// enforcing header in a follow-up once nothing legitimate is reported).
+// #1360: Content-Security-Policy. It shipped report-only first (#3165, owner
+// decision on the issue) and is now the enforcing header (owner un-gated the
+// switch on 2026-11-06: production has no real traffic to wait on, and a
+// real-browser pass over every page under the enforcing header found 0
+// violations). `report-uri` stays on it, so a violation a real user ever hits
+// still surfaces in the Worker log.
 //
 // Every entry below is a source this app actually uses today:
-//   - script-src: its own Vite bundle; Stripe.js and Cloudflare Turnstile,
-//     both injected as <script> tags at runtime (src/main.js loadStripeJs /
-//     loadTurnstileJs). 'unsafe-inline' is a known gap, not a choice:
-//     index.html and the admin pages (public/admin-*.html) carry inline
-//     <script> blocks, so the enforcing version needs those moved to files
-//     or hashed first (the report-only phase tells us nothing else is
-//     inline).
-//   - style-src: 'unsafe-inline' for the same reason (large inline <style>
-//     blocks and style="" attributes in index.html and the admin pages).
+//   - script-src: its own Vite bundle and the classic scripts under public/
+//     (the viewport fix and the admin pages' scripts); Stripe.js and
+//     Cloudflare Turnstile, both injected as <script> tags at runtime
+//     (src/main.js loadStripeJs / loadTurnstileJs). No 'unsafe-inline': every
+//     page's script blocks live in files, and scripts/check-no-inline-blocks.mjs
+//     (a pretest step) fails the build if one comes back, because a browser
+//     would just ignore it and the page would silently stop working.
+//   - style-src: 'self' only, so <style> elements are gone too (index.html's
+//     CSS is src/app.css, the admin pages' are public/admin-*.css). CSSOM
+//     writes (el.style.x = ...) are not governed by it.
+//   - style-src-attr: 'unsafe-inline' stays, narrowly, for style="" attributes
+//     (a few static ones on the admin pages and one computed bar width). An
+//     attribute cannot run script or add rules, so it is a far smaller hole
+//     than a style element, and it is kept as a hedge: Stripe.js and Turnstile
+//     build iframes and widgets in our page, and neither vendor's published
+//     guidance says whether they set inline style attributes. The e2e sandbox
+//     has no keys for either, so this is the one part not proven in a browser
+//     here; dropping it is the follow-up once a real-keys pass (or the
+//     csp-report log) shows no style-src-attr violation.
 //   - img-src / media-src / connect-src: 'self' (built-in /models and R2
 //     /uploads are same-origin) plus data: and blob: -- Three.js's GLTF
 //     loader turns embedded textures into blob: URLs, and thumbnails are
@@ -25,10 +37,11 @@
 //   - frame-ancestors 'none' repeats X-Frame-Options: DENY in CSP form.
 // WebRTC peer connections (voice chat) are not governed by any fetch
 // directive, so they need no entry.
-export const CSP_REPORT_ONLY_POLICY = [
+export const CSP_POLICY = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://js.stripe.com https://challenges.cloudflare.com",
-  "style-src 'self' 'unsafe-inline'",
+  "script-src 'self' https://js.stripe.com https://challenges.cloudflare.com",
+  "style-src 'self'",
+  "style-src-attr 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
   "media-src 'self' blob:",

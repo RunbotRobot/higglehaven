@@ -255,9 +255,7 @@
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "message_id": "TEXT|0||1",
       "read_at": "TEXT|0||0",
-      "recipient_builder_id": "TEXT|0||0",
       "recipient_user_id": "TEXT|0||0",
-      "sender_builder_id": "TEXT|0||0",
       "sender_user_id": "TEXT|0||0",
       "text": "TEXT|1||0"
     },
@@ -282,9 +280,7 @@
     "friendships": {
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "friendship_id": "TEXT|0||1",
-      "recipient_builder_id": "TEXT|0||0",
       "recipient_user_id": "TEXT|0||0",
-      "requester_builder_id": "TEXT|0||0",
       "requester_user_id": "TEXT|0||0",
       "status": "TEXT|1|'pending'|0"
     },
@@ -437,9 +433,8 @@
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "reason": "TEXT|0||0",
       "report_id": "TEXT|0||1",
-      "reported_builder_id": "TEXT|0||0",
       "reported_user_id": "TEXT|0||0",
-      "reporter_builder_id": "TEXT|1||0"
+      "reporter_user_id": "TEXT|0||0"
     },
     "notifications": {
       "builder_id": "TEXT|1||0",
@@ -808,9 +803,8 @@
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "reason": "TEXT|0||0",
       "report_id": "TEXT|0||1",
-      "reported_builder_id": "TEXT|0||0",
       "reported_user_id": "TEXT|0||0",
-      "reporter_builder_id": "TEXT|1||0"
+      "reporter_user_id": "TEXT|0||0"
     },
     "voice_signaling_messages": {
       "channel_owner_user_id": "TEXT|0||0",
@@ -1146,11 +1140,7 @@
     },
     "index:idx_nearby_chat_reports_pair": {
       "tbl": "nearby_chat_reports",
-      "sql": "CREATE UNIQUE INDEX idx_nearby_chat_reports_pair ON nearby_chat_reports(reporter_builder_id, reported_builder_id)"
-    },
-    "index:idx_nearby_chat_reports_reported": {
-      "tbl": "nearby_chat_reports",
-      "sql": "CREATE INDEX idx_nearby_chat_reports_reported ON nearby_chat_reports(reported_builder_id, created_at)"
+      "sql": "CREATE UNIQUE INDEX idx_nearby_chat_reports_pair ON nearby_chat_reports(reporter_user_id, reported_user_id)"
     },
     "index:idx_nearby_chat_reports_reported_user": {
       "tbl": "nearby_chat_reports",
@@ -1350,11 +1340,7 @@
     },
     "index:idx_voice_conduct_reports_pair": {
       "tbl": "voice_conduct_reports",
-      "sql": "CREATE UNIQUE INDEX idx_voice_conduct_reports_pair ON voice_conduct_reports(reporter_builder_id, reported_builder_id)"
-    },
-    "index:idx_voice_conduct_reports_reported": {
-      "tbl": "voice_conduct_reports",
-      "sql": "CREATE INDEX idx_voice_conduct_reports_reported ON voice_conduct_reports(reported_builder_id, created_at)"
+      "sql": "CREATE UNIQUE INDEX idx_voice_conduct_reports_pair ON voice_conduct_reports(reporter_user_id, reported_user_id)"
     },
     "index:idx_voice_conduct_reports_reported_user": {
       "tbl": "voice_conduct_reports",

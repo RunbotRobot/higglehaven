@@ -84,14 +84,18 @@ and the admin pages) also carries baseline hardening headers:
 `worker/index.js`'s `SECURITY_HEADERS`/`withSecurityHeaders`, applied once in
 `fetch`'s own wrapper around `routeRequest` rather than per-handler).
 HTML responses (the app shell and the admin pages, not JSON) additionally
-carry `Content-Security-Policy-Report-Only` (#1360; the policy and the reason
-for each source are in `worker/lib/csp.js`). It is report-only on purpose,
-following the owner's decision on that issue: nothing is blocked yet, and the
-enforcing `Content-Security-Policy` header ships in a follow-up once the
-reports show the allow-list is right. Known gaps in it today: `'unsafe-inline'`
-for scripts and styles (index.html and the admin pages carry inline blocks),
-and the Stripe/Turnstile sources follow those vendors' published guidance
-without having been exercised in a browser with real keys.
+carry an enforcing `Content-Security-Policy` (#1360; the policy and the reason
+for each source are in `worker/lib/csp.js`). It shipped report-only first and
+was switched to enforcing once a real-browser pass over every page found no
+violations; `report-uri /api/csp-report` stays on it, so a violation a real
+user hits is still logged. Scripts and `<style>` elements are file-only
+(`script-src` and `style-src` carry no `'unsafe-inline'`; the page scripts and
+CSS live in `public/` and `src/app.css`, and `scripts/check-no-inline-blocks.mjs`
+fails `pretest` if an inline block comes back). Known gaps in it today:
+`style-src-attr 'unsafe-inline'` is kept for `style=""` attributes, and the
+Stripe/Turnstile sources follow those vendors' published guidance without
+having been exercised in a browser with real keys (which is also why the
+attribute allowance is still there).
 
 ### `POST /api/csp-report`
 
@@ -1551,13 +1555,14 @@ bid that's since been outbid, or that was on an auction which has already
 ended (whether or not it won), doesn't block deletion (#1691) — same
 reasoning as the seller case above.
 
-`friendships.requester_builder_id`/`recipient_builder_id` are both `ON
-DELETE CASCADE` (migrations/0093), so every friendship involving this
-builder — pending or already-accepted — is silently removed along with
-it, with no notification to the other side and no guard (#1080). Owner's
-call, 2026-10-01: leave this behavior as is rather than adding a
-notification, consistent with the silent-unfriend decision on #858 — see
-"Notifications" below for the same choice recorded in that catalog.
+Friendships, direct messages and conduct reports are keyed on the account
+(`users.user_id`), not on this builder profile (#3141), so resetting the
+profile does not end any of them; the person simply appears under their new
+builder id. Deleting the whole *account* still removes the friendships it is
+part of — pending or accepted — silently, with no notification to the other
+side and no guard (#1080). Owner's call, 2026-10-01: no notification,
+consistent with the silent-unfriend decision on #858 — see "Notifications"
+below for the same choice recorded in that catalog.
 
 Response:
 
@@ -5323,8 +5328,7 @@ profile. `senderUserId`/`recipientUserId` are the stable ids.
 list, the thread query and the send body still address people by builder id;
 each is that person's **current** builder profile, or `null` if they have none
 (account deleted, or profile reset and not yet recreated). The columns
-`sender_builder_id`/`recipient_builder_id` are retired (nullable, unwritten) and
-are dropped by 6/6 (#3149). A legacy row whose accounts could not be recovered
+`sender_builder_id`/`recipient_builder_id` were dropped by 6/6 (#3149). A legacy row whose accounts could not be recovered
 by the migration (its builder was already reset, or had no account) is left in
 place but belongs to no thread. Account deletion does not delete messages, so
 the other person's history survives, as it did before.
@@ -5407,10 +5411,10 @@ friendship gate, self-send rejection, unknown-recipient rejection, the
 clears-unread happy path, and that message history survives the
 friendship ending (a new send no longer allowed, but nothing already
 sent disappears) or either side resetting their builder profile (#1690
-— `sender_builder_id`/`recipient_builder_id` are plain, non-FK columns,
-same shape `purchases.seller_id` already uses, specifically so the
-surviving party's own copy of a thread is never destroyed by an action
-only the other party took). `e2e/direct-messages-gating.test.mjs` covers what only
+— messages are keyed on the two accounts (`sender_user_id`/
+`recipient_user_id`, no foreign key), specifically so the surviving
+party's own copy of a thread is never destroyed by an action only the
+other party took). `e2e/direct-messages-gating.test.mjs` covers what only
 a real browser can show: since this deployment never configures
 `DIDIT_API_KEY` (same constraint `e2e/didit-verification.test.mjs`
 documents for itself), no e2e session can actually reach
@@ -5749,8 +5753,15 @@ reusing `product_flags`: that table's unit is a listing with a seller
 strike-ladder consequence, the wrong shape for "a builder said something
 inappropriate over voice chat."
 
-One report per (reporter, reported) pair (#3122): a repeat from the same
-reporter against the same builder is collapsed rather than rejected. It
+One report per (reporter, reported) pair (#3122), keyed on the two
+accounts (#3148): a repeat from the same reporter against the same person
+is collapsed rather than rejected, including after either side has reset
+their builder profile (a reset changes the builder id, not the person). A
+builder with no account cannot be reported (`400`, like an unknown
+builder). The rows store `reporter_user_id` / `reported_user_id`; the
+reporter's report no longer cascades from their builder profile, and
+deleting the reporter's whole account removes the reports they filed
+(reports against an account are kept). It
 returns the same `201` and the same `reportId` as the first report, so
 the reporter never learns it was a repeat, and instead of a new row and a
 new card it appends a dated line (with the repeat's `reason`, if any) to
