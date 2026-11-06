@@ -681,18 +681,26 @@ export async function createInstancesRemote(instances) {
 // are reported on the result (updated.missingInstanceIds) instead of being
 // silently recreated. Only for callers that are updating items the scene
 // believes exist -- a deliberate recreate must keep using POST.
-export async function upsertInstancesRemote(instances, { updateOnly = false } = {}) {
+// #1062: items may carry expectedUpdatedAt (the updatedAt the caller last saw);
+// the server then skips, rather than overwrites, any whose stored version has
+// moved on, and the result carries staleInstances (their current stored state).
+// onChunkStored(storedInstances) runs after each chunk lands, so a caller can
+// record the new versions even if a later chunk fails.
+export async function upsertInstancesRemote(instances, { updateOnly = false, onChunkStored } = {}) {
   const updated = [];
   const missingInstanceIds = [];
   const suspendedSellerInstanceIds = [];
+  const staleInstances = [];
   for (const batch of chunk(instances, INSTANCE_BATCH_CHUNK_SIZE)) {
     try {
-      const { instances: stored, rejectedInstanceIds, missingInstanceIds: missingInChunk, suspendedSellerInstanceIds: suspendedInChunk } = await requestJson('/instances/batch', {
+      const { instances: stored, rejectedInstanceIds, missingInstanceIds: missingInChunk, suspendedSellerInstanceIds: suspendedInChunk, staleInstances: staleInChunk } = await requestJson('/instances/batch', {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify(updateOnly ? { instances: batch, updateOnly: true } : { instances: batch }),
       });
       updated.push(...stored);
+      onChunkStored?.(stored);
+      if (staleInChunk?.length) staleInstances.push(...staleInChunk);
       if (missingInChunk?.length) missingInstanceIds.push(...missingInChunk);
       if (suspendedInChunk?.length) suspendedSellerInstanceIds.push(...suspendedInChunk);
       // #1772: same reasoning as createInstancesRemote's own fix above.
@@ -710,6 +718,7 @@ export async function upsertInstancesRemote(instances, { updateOnly = false } = 
     updated.missingInstanceIds = missingInstanceIds;
     updated.suspendedSellerInstanceIds = suspendedSellerInstanceIds;
   }
+  if (staleInstances.length > 0) updated.staleInstances = staleInstances;
   return updated;
 }
 

@@ -4807,7 +4807,7 @@ request fields with the existing instance before validation.
 `"expectedUpdatedAt"`, the `updatedAt` the caller last saw. If the stored
 `updatedAt` differs the write is refused with `409`, nothing is changed, and
 the body carries `staleInstanceId` and `instance` (the current stored state)
-next to `error`, so the caller can reconcile. Absent the field the write is
+next to `error` (`"This item was changed somewhere else."`), so the caller can reconcile. Absent the field the write is
 last-write-wins as before. A non-string or empty value is `400`.
 
 ### `DELETE /api/instances/:instanceId`
