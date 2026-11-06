@@ -88,16 +88,17 @@ const MY_PURCHASES_DEFAULT_LIMIT = 50;
 // account (purchases.buyer_user_id, #3195), not the resettable builder
 // profile. Returns only what the buyer already saw in the purchase flow plus
 // three computed flags: no payment-intent id, no delivery token, no host
-// builder, no commission figures. Actions (feedback, dispute) still authorise
-// by purchases.buyer_builder_id, so a receipt whose builder link was cleared
-// by a profile reset lists fine but reports those flags as false.
+// builder, no commission figures. Every row here is the caller's by account
+// (buyer_user_id), and the feedback and dispute actions authorise on the same
+// account (#3214), so the flags below never depend on the resettable builder
+// profile: a receipt whose builder link was cleared by a reset still offers
+// both actions.
 async function handleMyPurchases(request, env, url) {
   const db = env.DB;
   const user = await requireCurrentUser(request, db);
   await checkRateLimit(db, `purchases-mine:${user.user_id}`, MY_PURCHASES_RATE_LIMIT_MAX);
   const limit = queryLimit(url.searchParams.get('limit'), MY_PURCHASES_DEFAULT_LIMIT);
   const cursor = decodeCursor(url.searchParams.get('cursor'));
-  const builder = await db.prepare('SELECT builder_id FROM builders WHERE user_id = ?').bind(user.user_id).first();
   const conditions = ['p.buyer_user_id = ?'];
   const bindings = [user.user_id];
   if (cursor) {
@@ -106,7 +107,7 @@ async function handleMyPurchases(request, env, url) {
   }
   const { results } = await db.prepare(`
     SELECT p.purchase_id, p.created_at, p.seller_id, p.quantity, p.total_cents, p.is_digital_good,
-           p.shipped_at, p.refunded_at, p.refunded_amount_cents, p.paid_out_at, p.buyer_builder_id,
+           p.shipped_at, p.refunded_at, p.refunded_amount_cents, p.paid_out_at,
            t.name AS product_name, s.label AS seller_name,
            f.rating AS feedback_rating, f.text AS feedback_text
     FROM purchases p
@@ -121,7 +122,6 @@ async function handleMyPurchases(request, env, url) {
   const last = page.at(-1);
   return json({
     purchases: page.map((row) => {
-      const actable = !!builder && row.buyer_builder_id === builder.builder_id;
       const hasFeedback = row.feedback_rating !== null && row.feedback_rating !== undefined;
       return {
         purchaseId: row.purchase_id,
@@ -137,9 +137,9 @@ async function handleMyPurchases(request, env, url) {
         // Same rules handleSellerFeedbackCreate / handlePurchaseDispute apply:
         // a seller on record, not refunded, no feedback yet / not already
         // refunded or paid out.
-        canLeaveFeedback: actable && !!row.seller_id && !row.refunded_at && !hasFeedback,
+        canLeaveFeedback: !!row.seller_id && !row.refunded_at && !hasFeedback,
         feedback: hasFeedback ? { rating: row.feedback_rating, text: row.feedback_text } : null,
-        canDispute: actable && disputeBlock(row) === null,
+        canDispute: disputeBlock(row) === null,
       };
     }),
     nextCursor: hasMore ? encodeCursor(last.created_at, last.purchase_id) : null,

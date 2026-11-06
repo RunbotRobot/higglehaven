@@ -109,7 +109,7 @@ describe('GET /api/purchases/mine (#3196)', () => {
     expect(JSON.stringify(res.body)).not.toMatch(/paymentIntent|payment_intent|tokenHash|commission|builderShare|platformShare/i);
   });
 
-  it('still lists a receipt after the buyer\'s builder profile is deleted, but offers no actions on it', async () => {
+  it('still lists a receipt after the buyer\'s builder profile is deleted, and the actions it offers really work (#3214)', async () => {
     const buyer = await signupBuilder('mine-reset');
     const seller = await signupSeller('mine-reset-seller');
     const purchaseId = await addPurchase(buyer, { sellerId: seller.sellerId });
@@ -118,7 +118,15 @@ describe('GET /api/purchases/mine (#3196)', () => {
     await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(buyer.builderId).run();
     const after = await mine(buyer);
     expect(after.response.status).toBe(200);
-    expect(after.body.purchases[0]).toMatchObject({ purchaseId, canLeaveFeedback: false, canDispute: false });
+    expect(after.body.purchases[0]).toMatchObject({ purchaseId, canLeaveFeedback: true, canDispute: true });
+
+    // ...and the flags are not a promise the endpoints refuse.
+    const feedback = await api(`/purchases/${purchaseId}/feedback`, buyer.session({
+      method: 'POST', body: JSON.stringify({ rating: 5 }),
+    }));
+    expect(feedback.response.status).toBe(201);
+    const dispute = await api(`/purchases/${purchaseId}/dispute`, buyer.session({ method: 'POST' }));
+    expect(dispute.response.status).toBe(200);
   });
 });
 

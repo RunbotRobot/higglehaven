@@ -8350,9 +8350,10 @@ the purchase has a seller on record, is not refunded, and has no feedback yet
 (`feedback` then carries the caller's own `rating`/`text` for an edit control
 to prefill); `canDispute` is true while the purchase is neither refunded nor
 paid out (it says a dispute *can be raised*, never whether it will auto-resolve,
-which stays internal). Feedback and dispute still authorise by
-`purchases.buyer_builder_id`, so a receipt whose builder link was cleared by a
-profile reset is listed with both flags `false`. Deliberately absent: payment
+which stays internal). Feedback and dispute authorise on the account
+(`purchases.buyer_user_id`, #3214), the same key this list uses, so a receipt
+whose builder profile was later reset is still listed with both actions
+available. Deliberately absent: payment
 intent ids, delivery-confirmation tokens, the hosting builder, and commission
 figures.
 
