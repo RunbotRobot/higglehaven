@@ -38,7 +38,7 @@ import {
   stripeRequestV2, deriveStripeOnboardingStatus, requireSessionSeller, integerValue, selectRowsByIdsChunked,
   sellerDeletionStatements, appBaseUrl,
 } from '../index.js';
-import { classifyStripeRequirements } from './stripe-requirements.js';
+import { classifyStripeRequirements, stripeStepEventuallyDueOnly } from './stripe-requirements.js';
 // #1407 (sub-issue of #1404): the AI-made Stripe-reinstatement decision
 // flow, shared verbatim between the builder and seller sides -- see that
 // module's own header comment for the full rubric and design decisions.
@@ -259,7 +259,7 @@ async function handleSellers(request, env, db, route, url) {
     // null that one out instead.
     const result = await db.prepare(`
       UPDATE sellers
-      SET stripe_account_id = NULL, stripe_onboarding_status = 'not_started', stripe_requirements_due = NULL, stripe_updated_at = ?, updated_at = ?
+      SET stripe_account_id = NULL, stripe_onboarding_status = 'not_started', stripe_requirements_due = NULL, stripe_requirements_eventually_due = NULL, stripe_updated_at = ?, updated_at = ?
       WHERE seller_id = ? AND stripe_account_id = ?
     `).bind(nowIso, nowIso, route[1], previousAccountId).run();
     if (result.meta.changes === 0) {
@@ -554,6 +554,7 @@ async function handleSellerStripeAccount(request, env, db) {
 
     const status = deriveStripeOnboardingStatus(account);
     const requirementsDue = account.requirements?.currently_due || [];
+  const requirementsEventuallyDue = account.requirements?.eventually_due || [];
     // #3079: stamp the ordering floor (migration 0179) with this fetch's own
     // time, only ever forward, so an older delayed account.updated webhook
     // can't overwrite the fresher status just written here.
@@ -569,10 +570,10 @@ async function handleSellerStripeAccount(request, env, db) {
     // account both target the same id, so there's no orphaning risk there.
     const result = await db.prepare(`
       UPDATE sellers
-      SET stripe_account_id = ?, stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?,
+      SET stripe_account_id = ?, stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_requirements_eventually_due = ?, stripe_updated_at = ?, updated_at = ?,
           stripe_event_created_at = MAX(COALESCE(stripe_event_created_at, 0), ?)
       WHERE seller_id = ?${createdNewAccount ? ' AND stripe_account_id IS NULL' : ''}
-    `).bind(account.id, status, JSON.stringify(requirementsDue), nowIso, nowIso, fetchedAtS, sessionSeller.seller_id).run();
+    `).bind(account.id, status, JSON.stringify(requirementsDue), JSON.stringify(requirementsEventuallyDue), nowIso, nowIso, fetchedAtS, sessionSeller.seller_id).run();
 
     if (createdNewAccount && result.meta.changes === 0) {
       // Lost the race — another request's account already won. Don't leave
@@ -603,6 +604,7 @@ async function handleSellerStripeAccount(request, env, db) {
       stripe_account_id: account.id,
       stripe_onboarding_status: status,
       stripe_requirements_due: JSON.stringify(requirementsDue),
+      stripe_requirements_eventually_due: JSON.stringify(requirementsEventuallyDue),
       stripe_updated_at: nowIso,
     }));
   }
@@ -642,6 +644,7 @@ async function handleBuilderStripeAccount(request, env, db) {
 
     const status = deriveStripeOnboardingStatus(account);
     const requirementsDue = account.requirements?.currently_due || [];
+  const requirementsEventuallyDue = account.requirements?.eventually_due || [];
     // #3079: stamp the ordering floor (migration 0179) with this fetch's own
     // time, only ever forward, so an older delayed account.updated webhook
     // can't overwrite the fresher status just written here.
@@ -649,10 +652,10 @@ async function handleBuilderStripeAccount(request, env, db) {
     const nowIso = new Date().toISOString();
     const result = await db.prepare(`
       UPDATE builders
-      SET stripe_account_id = ?, stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?,
+      SET stripe_account_id = ?, stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_requirements_eventually_due = ?, stripe_updated_at = ?, updated_at = ?,
           stripe_event_created_at = MAX(COALESCE(stripe_event_created_at, 0), ?)
       WHERE builder_id = ?${createdNewAccount ? ' AND stripe_account_id IS NULL' : ''}
-    `).bind(account.id, status, JSON.stringify(requirementsDue), nowIso, nowIso, fetchedAtS, sessionBuilder.builder_id).run();
+    `).bind(account.id, status, JSON.stringify(requirementsDue), JSON.stringify(requirementsEventuallyDue), nowIso, nowIso, fetchedAtS, sessionBuilder.builder_id).run();
 
     if (createdNewAccount && result.meta.changes === 0) {
       // #2304: same logging gap as the seller sibling above.
@@ -670,6 +673,7 @@ async function handleBuilderStripeAccount(request, env, db) {
       stripe_account_id: account.id,
       stripe_onboarding_status: status,
       stripe_requirements_due: JSON.stringify(requirementsDue),
+      stripe_requirements_eventually_due: JSON.stringify(requirementsEventuallyDue),
       stripe_updated_at: nowIso,
     }));
   }
@@ -688,18 +692,20 @@ async function refreshStoredStripeStatus(env, db, table, idColumn, row) {
   const account = await stripeRequest(env, 'GET', `accounts/${row.stripe_account_id}`);
   const status = deriveStripeOnboardingStatus(account);
   const requirementsDue = account.requirements?.currently_due || [];
+  const requirementsEventuallyDue = account.requirements?.eventually_due || [];
   const fetchedAtS = Math.floor(Date.now() / 1000);
   const nowIso = new Date().toISOString();
   await db.prepare(`
     UPDATE ${table}
-    SET stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_updated_at = ?, updated_at = ?,
+    SET stripe_onboarding_status = ?, stripe_requirements_due = ?, stripe_requirements_eventually_due = ?, stripe_updated_at = ?, updated_at = ?,
         stripe_event_created_at = MAX(COALESCE(stripe_event_created_at, 0), ?)
     WHERE ${idColumn} = ? AND stripe_account_id = ?
-  `).bind(status, JSON.stringify(requirementsDue), nowIso, nowIso, fetchedAtS, row[idColumn], row.stripe_account_id).run();
+  `).bind(status, JSON.stringify(requirementsDue), JSON.stringify(requirementsEventuallyDue), nowIso, nowIso, fetchedAtS, row[idColumn], row.stripe_account_id).run();
   return {
     ...row,
     stripe_onboarding_status: status,
     stripe_requirements_due: JSON.stringify(requirementsDue),
+    stripe_requirements_eventually_due: JSON.stringify(requirementsEventuallyDue),
     stripe_updated_at: nowIso,
   };
 }
@@ -742,7 +748,12 @@ async function handleStripeOnboardingLink(request, env, db, kind) {
   }
   const fresh = await refreshStoredStripeStatus(env, db, table, idColumn, row);
   const needsStripeStep = classifyStripeRequirements(JSON.parse(fresh.stripe_requirements_due || '[]')).needsStripeStep;
-  if (needsStripeStep.length === 0) {
+  // An early heads-up (eventually_due only) opens the same step, collecting
+  // what Stripe will ask for later instead of what is due now.
+  const needsStripeStepLater = needsStripeStep.length === 0
+    ? stripeStepEventuallyDueOnly(fresh.stripe_requirements_due, fresh.stripe_requirements_eventually_due)
+    : [];
+  if (needsStripeStep.length === 0 && needsStripeStepLater.length === 0) {
     throw new HttpError('Stripe does not need anything more from you right now.', 409);
   }
   const base = appBaseUrl(env);
@@ -753,7 +764,7 @@ async function handleStripeOnboardingLink(request, env, db, kind) {
       account_onboarding: {
         refresh_url: `${base}/?stripe=refresh&role=${kind}`,
         return_url: `${base}/?stripe=return&role=${kind}`,
-        collection_options: { fields: 'currently_due' },
+        collection_options: { fields: needsStripeStep.length > 0 ? 'currently_due' : 'eventually_due' },
       },
     },
   });

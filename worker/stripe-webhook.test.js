@@ -83,6 +83,23 @@ describe('Stripe account.updated webhook (#766)', () => {
     expect(row.stripe_onboarding_status).toBe('complete');
   });
 
+  it('stores requirements.eventually_due for sellers and builders (#2928)', async () => {
+    const seller = await signupSeller('stripe-webhook-eventually');
+    const builder = await signupBuilder('stripe-webhook-eventually-b');
+    await env.DB.prepare("UPDATE sellers SET stripe_account_id = 'acct_eventually' WHERE seller_id = ?").bind(seller.sellerId).run();
+    await env.DB.prepare("UPDATE builders SET stripe_account_id = 'acct_eventually' WHERE builder_id = ?").bind(builder.builderId).run();
+    const res = await postStripeWebhook(accountUpdatedEvent('acct_eventually', {
+      requirements: { currently_due: [], eventually_due: ['individual.id_number'] },
+    }));
+    expect(res.status).toBe(200);
+    const s = await env.DB.prepare('SELECT stripe_onboarding_status, stripe_requirements_eventually_due FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
+    const b = await env.DB.prepare('SELECT stripe_requirements_eventually_due FROM builders WHERE builder_id = ?').bind(builder.builderId).first();
+    expect(JSON.parse(s.stripe_requirements_eventually_due)).toEqual(['individual.id_number']);
+    expect(JSON.parse(b.stripe_requirements_eventually_due)).toEqual(['individual.id_number']);
+    // eventually_due alone never blocks anything.
+    expect(s.stripe_onboarding_status).not.toBe('requirements_due');
+  });
+
   // #2418: during a secret rotation Stripe keeps the old secret active for
   // up to 24h and signs each event with BOTH secrets, sending every
   // resulting v1 signature in the same header -- this server must accept
