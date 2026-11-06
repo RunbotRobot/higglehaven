@@ -68,7 +68,9 @@
       "auction_id": "TEXT|1||0",
       "bid_id": "TEXT|0||1",
       "bidder_builder_id": "TEXT|1||0",
-      "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0"
+      "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "resolution": "TEXT|0||0",
+      "resolution_token": "TEXT|0||0"
     },
     "auctions": {
       "auction_id": "TEXT|0||1",
@@ -76,6 +78,8 @@
       "ends_at": "TEXT|1||0",
       "inactivity_triggered": "INTEGER|1|0|0",
       "landlet_id": "TEXT|1||0",
+      "resolution_completed_at": "TEXT|0||0",
+      "resolving_at": "TEXT|0||0",
       "seller_builder_id": "TEXT|1||0",
       "starting_bid_cents": "INTEGER|1|0|0",
       "status": "TEXT|1|'active'|0",
@@ -856,6 +860,10 @@
     "index:idx_auctions_landlet_id": {
       "tbl": "auctions",
       "sql": "CREATE INDEX idx_auctions_landlet_id ON auctions(landlet_id)"
+    },
+    "index:idx_auctions_resolution_pending": {
+      "tbl": "auctions",
+      "sql": "CREATE INDEX idx_auctions_resolution_pending ON auctions(resolving_at) WHERE status = 'ended' AND winning_bid_id IS NULL AND resolution_completed_at IS NULL AND resolving_at IS NOT NULL"
     },
     "index:idx_auctions_seller_builder_id": {
       "tbl": "auctions",
