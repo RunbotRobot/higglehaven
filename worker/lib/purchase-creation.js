@@ -735,15 +735,18 @@ export async function writeOrphanedPurchaseRow(env, meta, amounts, paymentIntent
       INSERT INTO purchases
         (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label, buyer_builder_id,
          unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents,
-         payment_intent_id, is_digital_good, delivery_confirm_token_hash, seller_user_id)
+         payment_intent_id, is_digital_good, delivery_confirm_token_hash, seller_user_id, buyer_user_id)
       -- #835: the seller's account id, captured now so a later seller-profile
       -- delete can't erase this sale from the 1099-K aggregation.
+      -- #3195: likewise the buyer's account id, so a buyer's purchase history
+      -- survives their builder profile being deleted or reset.
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-        (SELECT user_id FROM sellers WHERE seller_id = ?))
+        (SELECT user_id FROM sellers WHERE seller_id = ?),
+        (SELECT user_id FROM builders WHERE builder_id = ?))
     `).bind(purchaseId, meta.instanceId, meta.templateId, builderId, sellerId, buyerLabel,
       buyerBuilderStillExists ? meta.buyerBuilderId : null,
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
-      isDigitalGood ? 1 : 0, tokenHash, sellerId),
+      isDigitalGood ? 1 : 0, tokenHash, sellerId, buyerBuilderStillExists ? meta.buyerBuilderId : null),
   ];
   // #2879: must come right after the purchase-row INSERT above, and in
   // the same batch -- commissionCreditClaimStatement's own live subquery
@@ -982,15 +985,18 @@ export async function writePurchaseRow(env, instance, template, landlet, amounts
       INSERT INTO purchases
         (purchase_id, instance_id, template_id, builder_id, seller_id, buyer_label, buyer_builder_id,
          unit_price_cents, quantity, total_cents, commission_cents, builder_share_cents, platform_share_cents,
-         payment_intent_id, is_digital_good, delivery_confirm_token_hash, seller_user_id)
+         payment_intent_id, is_digital_good, delivery_confirm_token_hash, seller_user_id, buyer_user_id)
       -- #835: the seller's account id, captured now so a later seller-profile
       -- delete can't erase this sale from the 1099-K aggregation.
+      -- #3195: likewise the buyer's account id, so a buyer's purchase history
+      -- survives their builder profile being deleted or reset.
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-        (SELECT user_id FROM sellers WHERE seller_id = ?))
+        (SELECT user_id FROM sellers WHERE seller_id = ?),
+        (SELECT user_id FROM builders WHERE builder_id = ?))
     `).bind(purchaseId, instance.instance_id, template.template_id, builderId, template.seller_id, buyerLabel,
       buyerBuilderStillExists ? buyerBuilderId : null,
       unitPriceCents, quantity, totalCents, commissionCents, builderShareCents, platformShareCents, paymentIntentId,
-      isDigitalGood ? 1 : 0, tokenHash, template.seller_id),
+      isDigitalGood ? 1 : 0, tokenHash, template.seller_id, buyerBuilderStillExists ? buyerBuilderId : null),
   ];
   // #2879: must come right after the purchase-row INSERT above, and in
   // the same batch -- see writeOrphanedPurchaseRow's own identical block

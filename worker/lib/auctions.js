@@ -26,7 +26,10 @@ import {
   positiveInteger,
 } from './validation.js';
 import { fireNotifications } from './notifications.js';
-import { requireSessionBuilder, assertOwner } from './auth.js';
+import { requireSessionBuilder, assertOwner, currentUser, adminInGoodStanding } from './auth.js';
+import { adminActionLogStatement } from './admin-log.js';
+import { moderationRemovalCategory, recordModerationRemovalSnapshot } from './content-moderation.js';
+import { assertNotProhibitedContent } from './prohibited-content.js';
 import { LANDLET_RELEASED_VIA_AUCTION_SQL, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 } from './land-cap.js';
 import {
   requireLandlet, recomputeLandCap, resolveAuctionIfDue, resolveDueAuctions,
@@ -66,6 +69,9 @@ const BUNDLE_CREATE_RATE_LIMIT_MAX = 20;
 // PATCH and DELETE share one bucket since both are "mutate an existing
 // bundle" actions, not two independently-abusable surfaces.
 const BUNDLE_MUTATE_RATE_LIMIT_MAX = 20;
+// #921: admin removal override. Same safety-net sizing as the sign-post and
+// review overrides it mirrors; bucketed by the admin, not the bundle owner.
+const BUNDLE_ADMIN_DELETE_RATE_LIMIT_MAX = 20;
 
 // #1720: same shape as purchaseIdempotencyKey (#473/#974) — the client
 // mints+persists a key across a retry of what it considers the same save
@@ -142,6 +148,9 @@ export async function handleBundles(request, db, route, url) {
     await checkRateLimit(db, `bundle-create:${sessionBuilder.builder_id}`, BUNDLE_CREATE_RATE_LIMIT_MAX);
     const builderId = sessionBuilder.builder_id;
     const name = labelValue(input.name, 'name');
+    // #921: a shared bundle's name is community-visible free text, so it gets
+    // the same baseline prohibited-content check catalog templates use.
+    assertNotProhibitedContent({ name }, 'bundle');
     const items = validateBundleItems(input.items);
     const shared = input.shared === true;
     await assertReferencesExist(db, 'catalog_templates', 'template_id', items.map((item) => item.templateId), 'items[].templateId');
@@ -197,6 +206,7 @@ export async function handleBundles(request, db, route, url) {
     // actually holds at UPDATE time, not a value read before this
     // request's own await gap.
     const name = input.name === undefined ? null : labelValue(input.name, 'name');
+    if (name !== null) assertNotProhibitedContent({ name }, 'bundle'); // #921
     const shared = input.shared === undefined ? null : (input.shared === true ? 1 : 0);
     // Found via backlog audit: without checking this UPDATE's own
     // meta.changes, a concurrent DELETE of this bundle landing between the
@@ -221,6 +231,26 @@ export async function handleBundles(request, db, route, url) {
   if (request.method === 'DELETE' && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(route[1]).first();
     if (!existing) return json({ error: 'Bundle not found' }, 404);
+    // #921: an admin can remove any bundle (a shared one carries
+    // community-visible text, and before this only its author could ever
+    // remove it). Checked first via the non-throwing currentUser lookup, same
+    // shape as the sign-post (#781) and product-review (#1712) overrides; a
+    // removal needs a moderation category and leaves a snapshot (#2388).
+    const requester = await currentUser(request, db);
+    const admin = await adminInGoodStanding(db, requester);
+    // An admin deleting their own bundle is an ordinary self-delete, not a
+    // moderation removal: no category needed, no snapshot.
+    const adminOwnsBundle = admin && Boolean(await db.prepare('SELECT 1 FROM builders WHERE builder_id = ? AND user_id = ?')
+      .bind(existing.builder_id, admin.user_id).first());
+    if (admin && !adminOwnsBundle) {
+      await checkRateLimit(db, `bundle-delete-override:${admin.user_id}`, BUNDLE_ADMIN_DELETE_RATE_LIMIT_MAX);
+      const category = moderationRemovalCategory(await readJson(request));
+      const deletedByAdmin = await db.prepare('DELETE FROM bundles WHERE bundle_id = ?').bind(route[1]).run();
+      if (deletedByAdmin.meta.changes === 0) return json({ error: 'Bundle not found' }, 404);
+      await recordModerationRemovalSnapshot(db, 'bundles', route[1], category, existing, admin.user_id);
+      await adminActionLogStatement(db, admin.user_id, 'delete_bundle_override', 'bundle', route[1]).run();
+      return json({ deleted: true });
+    }
     const sessionBuilder = await requireSessionBuilder(request, db);
     assertOwner(existing.builder_id, sessionBuilder.builder_id, 'Not your bundle');
     await checkRateLimit(db, `bundle-mutate:${sessionBuilder.builder_id}`, BUNDLE_MUTATE_RATE_LIMIT_MAX);

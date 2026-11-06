@@ -334,6 +334,59 @@ describe('Simulated purchases', () => {
     expect(row.buyer_builder_id).toBe(buyer.builderId);
   });
 
+  // #3195 (1/5 of #2115): the buyer is a person, so each purchase also records
+  // the buyer's account (no foreign key), and that record outlives the buyer's
+  // builder profile -- unlike buyer_builder_id, which is ON DELETE SET NULL.
+  it('records the buyer\'s account on each purchase, and keeps it when the buyer\'s builder profile is deleted', async () => {
+    const seller = await signupBuilder('purchase-buyer-user-seller');
+    const buyer = await signupAdmin('purchase-buyer-user-buyer');
+    await createGreenbeltLandletWithArea('purchase-buyer-user-landlet', 1000);
+    await claim('purchase-buyer-user-landlet', seller);
+    await createTemplate('purchase-buyer-user-template', { priceCents: 1000 });
+    await placeInstance('purchase-buyer-user-instance', 'purchase-buyer-user-landlet', 'purchase-buyer-user-template', seller);
+
+    const purchased = await api('/instances/purchase-buyer-user-instance/purchase', buyer.session({ method: 'POST' }));
+    expect(purchased.response.status).toBe(201);
+    const purchaseId = purchased.body.purchase.purchaseId;
+    const buyerUser = await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(buyer.builderId).first();
+    expect(buyerUser.user_id).toBeTruthy();
+
+    const row = await env.DB.prepare('SELECT buyer_builder_id, buyer_user_id FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    expect(row).toEqual({ buyer_builder_id: buyer.builderId, buyer_user_id: buyerUser.user_id });
+
+    // The builder profile goes (a reset or delete): the builder link is cleared,
+    // the account link stays, so the receipt still belongs to this person.
+    await env.DB.prepare('DELETE FROM builders WHERE builder_id = ?').bind(buyer.builderId).run();
+    const after = await env.DB.prepare('SELECT buyer_builder_id, buyer_user_id FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
+    expect(after).toEqual({ buyer_builder_id: null, buyer_user_id: buyerUser.user_id });
+  });
+
+  // The backfill in migrations/0194 resolves an existing purchase's buyer
+  // through buyer_builder_id; a purchase whose link was already cleared stays
+  // NULL. (Same SQL as the migration, run against hand-made rows, since the
+  // test database applies every migration to an empty table.)
+  it('backfills buyer_user_id from buyer_builder_id, and leaves an already-orphaned receipt NULL', async () => {
+    const seller = await signupBuilder('purchase-buyer-backfill-seller');
+    const buyer = await signupBuilder('purchase-buyer-backfill-buyer');
+    const base = ['unit_price_cents', 'quantity', 'total_cents', 'commission_cents', 'builder_share_cents', 'platform_share_cents'];
+    for (const [id, buyerBuilderId] of [['purchase-backfill-linked', buyer.builderId], ['purchase-backfill-orphan', null]]) {
+      await env.DB.prepare(`
+        INSERT INTO purchases (purchase_id, instance_id, template_id, builder_id, buyer_label, buyer_builder_id, ${base.join(', ')})
+        VALUES (?, 'i', 't', ?, 'x', ?, 100, 1, 100, 10, 5, 5)
+      `).bind(id, seller.builderId, buyerBuilderId).run();
+    }
+    await env.DB.prepare(`
+      UPDATE purchases
+      SET buyer_user_id = (SELECT user_id FROM builders WHERE builders.builder_id = purchases.buyer_builder_id)
+      WHERE buyer_user_id IS NULL AND buyer_builder_id IS NOT NULL
+    `).run();
+    const buyerUser = await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(buyer.builderId).first();
+    const linked = await env.DB.prepare('SELECT buyer_user_id FROM purchases WHERE purchase_id = ?').bind('purchase-backfill-linked').first();
+    const orphan = await env.DB.prepare('SELECT buyer_user_id FROM purchases WHERE purchase_id = ?').bind('purchase-backfill-orphan').first();
+    expect(linked.buyer_user_id).toBe(buyerUser.user_id);
+    expect(orphan.buyer_user_id).toBeNull();
+  });
+
   // #761/#1113: the in-world "Simulate Purchase" button (src/main.js) — the
   // only real purchase path this app ships — never sends an explicit
   // buyerLabel at all. #761 fixed that path leaving buyer_label NULL
