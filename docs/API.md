@@ -88,10 +88,14 @@ carry an enforcing `Content-Security-Policy` (#1360; the policy and the reason
 for each source are in `worker/lib/csp.js`). It shipped report-only first and
 was switched to enforcing once a real-browser pass over every page found no
 violations; `report-uri /api/csp-report` stays on it, so a violation a real
-user hits is still logged. Known gaps in it today: `'unsafe-inline'`
-for scripts and styles (index.html and the admin pages carry inline blocks),
-and the Stripe/Turnstile sources follow those vendors' published guidance
-without having been exercised in a browser with real keys.
+user hits is still logged. Scripts and `<style>` elements are file-only
+(`script-src` and `style-src` carry no `'unsafe-inline'`; the page scripts and
+CSS live in `public/` and `src/app.css`, and `scripts/check-no-inline-blocks.mjs`
+fails `pretest` if an inline block comes back). Known gaps in it today:
+`style-src-attr 'unsafe-inline'` is kept for `style=""` attributes, and the
+Stripe/Turnstile sources follow those vendors' published guidance without
+having been exercised in a browser with real keys (which is also why the
+attribute allowance is still there).
 
 ### `POST /api/csp-report`
 

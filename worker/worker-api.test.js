@@ -5383,6 +5383,13 @@ describe('Top-level fetch() routing (#1232)', () => {
     expect(policy).toContain('https://js.stripe.com');
     expect(policy).toContain("frame-ancestors 'none'");
     expect(policy).toContain('report-uri /api/csp-report');
+    // #1360: scripts and style elements are file-only; the one remaining
+    // inline allowance is style="" attributes, and nothing else carries it.
+    const directives = Object.fromEntries(policy.split('; ').map((d) => [d.split(' ')[0], d.split(' ').slice(1)]));
+    expect(directives['script-src']).not.toContain("'unsafe-inline'");
+    expect(directives['style-src']).not.toContain("'unsafe-inline'");
+    expect(directives['style-src-attr']).toEqual(["'unsafe-inline'"]);
+    expect(policy.match(/'unsafe-inline'/g)).toHaveLength(1);
     expect(page.headers.get('content-security-policy-report-only')).toBeNull();
 
     const api = await SELF.fetch('https://higglehaven.test/api/health');
