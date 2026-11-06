@@ -90,12 +90,10 @@ describe('Direct messages keyed on the account (#3146)', () => {
     await send(alice, bob, 'before');
     await resetBuilderProfile(alice);
 
-    // Friendships are still builder-keyed until 2/6, so the reset ends the
-    // friendship today; restore it the way the test already does, then
-    // confirm the old message is still in the thread under the new profile.
+    // Friendships key on the account (#3145), so the reset does not end the
+    // friendship; the new profile can keep messaging without re-friending.
     const aliceNow = (await api('/builders/me', alice.session())).body.builder;
     const aliceFresh = { ...alice, builderId: aliceNow.builderId };
-    await becomeFriends(aliceFresh, bob);
     const after = await send(aliceFresh, bob, 'after');
     expect(after.response.status).toBe(201);
     const thread = await api(`/direct-messages?withBuilderId=${aliceNow.builderId}`, bob.session());
