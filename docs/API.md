@@ -8314,6 +8314,40 @@ panel (see "Refunds" below). If the template has a `sellerId`, this
 requires a session logged in as that seller (`403` otherwise) — a
 seller-less template stays open to unauthenticated reads.
 
+`GET /api/purchases/mine` (#3196, "My Purchases") is the buyer's own list: it
+requires a session (`401` otherwise; a base-tier account is enough, since
+seeing your own receipts is not a social feature) and returns the purchases
+whose `buyer_user_id` (#3195) is the caller's account, newest first,
+cursor-paginated (`limit` default 50, max 100; `nextCursor` is `null` on the
+last page; `400` for a bad `limit` or `cursor`). Rate-limited per account
+(`purchases-mine`, 60 per window). Because it keys on the account, a receipt
+is still listed after the buyer's builder profile was deleted or reset.
+Each row carries only what the buyer already saw in the purchase flow, plus
+three flags the server computes with the same rules the actions themselves
+enforce:
+
+```json
+{ "purchases": [ {
+  "purchaseId": "...", "createdAt": "...",
+  "productName": "A Lovely Lamp", "sellerName": "...",
+  "quantity": 2, "totalCents": 1000, "isDigitalGood": false,
+  "shippedAt": null, "refundedAt": null, "refundedAmountCents": 0,
+  "canLeaveFeedback": true, "feedback": null, "canDispute": true
+} ], "nextCursor": null }
+```
+
+`productName` is `"(removed product)"` and `sellerName` is `"(former seller)"`
+when the product or seller no longer exists. `canLeaveFeedback` is true when
+the purchase has a seller on record, is not refunded, and has no feedback yet
+(`feedback` then carries the caller's own `rating`/`text` for an edit control
+to prefill); `canDispute` is true while the purchase is neither refunded nor
+paid out (it says a dispute *can be raised*, never whether it will auto-resolve,
+which stays internal). Feedback and dispute still authorise by
+`purchases.buyer_builder_id`, so a receipt whose builder link was cleared by a
+profile reset is listed with both flags `false`. Deliberately absent: payment
+intent ids, delivery-confirmation tokens, the hosting builder, and commission
+figures.
+
 `GET /api/purchases?danglingSeller=1` requires an admin session (`403`
 otherwise); lists every purchase whose `seller_id` is non-null but no
 longer points at a live seller (the account was deleted) — the admin
