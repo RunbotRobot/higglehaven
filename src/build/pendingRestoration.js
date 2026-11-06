@@ -91,7 +91,11 @@ function renderSlots(slots) {
 
 // Returns the fetched slots (so a caller that needs them, such as the Build
 // tab-focus reconcile in scene.js, doesn't fetch twice), or null when the
-// fetch failed or a newer refresh superseded this one.
+// fetch failed. A refresh that a newer one superseded still returns what it
+// fetched (it just doesn't render it, the newer refresh owns the panel):
+// #3192 -- two tab-focus handlers refresh at nearly the same moment, and
+// handing the loser null made it conclude "nothing was removed" and skip
+// telling the builder why items had left their land.
 export async function refresh() {
   const myLoadToken = ++loadToken;
   let slots;
@@ -103,7 +107,7 @@ export async function refresh() {
     if (myLoadToken === loadToken) renderSlots([]);
     return null;
   }
-  if (myLoadToken !== loadToken) return null; // superseded by a newer refresh
+  if (myLoadToken !== loadToken) return slots; // superseded: the newer refresh renders, this data is still valid
   renderSlots(slots);
   return slots;
 }
