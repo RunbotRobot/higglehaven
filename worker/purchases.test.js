@@ -1068,6 +1068,55 @@ describe('Simulated purchases', () => {
       expect(purchased.body.requiresPayment).toBeUndefined();
     });
 
+    // #3237 interim guard: a stored 'complete' older than the bound is
+    // re-read from Stripe at checkout, so an account Stripe has since
+    // disabled (webhook missed) stops taking real money.
+    it('re-reads a stale "complete" Stripe status at checkout and stops real-money checkout for a disabled account (#3237)', async () => {
+      const seller = await signupSeller('checkout-stale-status-seller');
+      const builder = await signupAdmin('checkout-stale-status-builder');
+      await createGreenbeltLandletWithArea('checkout-stale-status-landlet', 1000);
+      await claim('checkout-stale-status-landlet', builder);
+      const created = await api('/catalog', seller.session({
+        method: 'POST',
+        body: JSON.stringify({
+          templateId: 'checkout-stale-status-template', name: 'Stale status product', color: '#123456',
+          dimensions: { width: 1, depth: 1, height: 1 }, priceCents: 5000, sellerId: seller.sellerId,
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+      await placeInstance('checkout-stale-status-instance', 'checkout-stale-status-landlet', 'checkout-stale-status-template', builder);
+      await env.DB.prepare(`
+        UPDATE sellers SET stripe_account_id = 'acct_stale_status', stripe_onboarding_status = 'complete', stripe_updated_at = ? WHERE seller_id = ?
+      `).bind(new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(), seller.sellerId).run();
+
+      const originalFetch = globalThis.fetch;
+      env.STRIPE_SECRET_KEY = 'test-stripe-key';
+      const fetched = [];
+      globalThis.fetch = async (input, init) => {
+        const url = typeof input === 'string' ? input : input.url;
+        if (url === 'https://api.stripe.com/v1/accounts/acct_stale_status') {
+          fetched.push(url);
+          return new Response(JSON.stringify({
+            id: 'acct_stale_status', requirements: { currently_due: ['individual.id_number'], disabled_reason: 'requirements.past_due' },
+          }), { status: 200 });
+        }
+        return originalFetch(input, init);
+      };
+      let purchased;
+      try {
+        purchased = await api('/instances/checkout-stale-status-instance/purchase', builder.session({ method: 'POST' }));
+      } finally {
+        globalThis.fetch = originalFetch;
+        env.STRIPE_SECRET_KEY = undefined;
+      }
+      expect(fetched).toHaveLength(1);
+      // No PaymentIntent was created: the admin falls through to the simulated path.
+      expect(purchased.response.status).toBe(201);
+      expect(purchased.body.requiresPayment).toBeUndefined();
+      const row = await env.DB.prepare('SELECT stripe_onboarding_status FROM sellers WHERE seller_id = ?').bind(seller.sellerId).first();
+      expect(row.stripe_onboarding_status).toBe('action_needed');
+    });
+
     it('validates paymentIntentId before checking whether Stripe is configured', async () => {
       const missing = await api('/purchases/finalize', { method: 'POST', body: JSON.stringify({}) });
       expect(missing.response.status).toBe(400);

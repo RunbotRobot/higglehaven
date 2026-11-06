@@ -26,6 +26,7 @@ import { clawBackPurchaseCommission, notifyBuyerOfRefund, notifySellerOfSaleChan
 import { purchaseSellerShareCents } from './seller-payouts-tax.js';
 import { fireNotification } from './notifications.js';
 import { finalizeSucceededPaymentIntent } from './purchase-creation.js';
+import { refreshStoredStripeStatus } from './seller-profile.js';
 import {
   stripeConfigured, stripeRequest, deriveStripeOnboardingStatus, userFromRow, formatCents,
 } from '../index.js';
@@ -84,8 +85,9 @@ const STRIPE_PURCHASE_REVERSAL_EVENT_TYPES = ['charge.refunded', 'charge.dispute
 // against both sellers and builders (a Custom account belongs to exactly
 // one, never both) since the event alone doesn't say which role created
 // it; #1086 added the three purchase-reversal event types below.
-export async function handleStripeWebhook(request, env, db) {
-  if (!env.STRIPE_WEBHOOK_SECRET) throw new HttpError('Stripe webhook is not configured on this server yet.', 503);
+// #3237: the signature check, shared by the v1 endpoint and the v2 thin-event
+// endpoint below (each has its own signing secret). Returns the raw body.
+async function readVerifiedStripeBody(request, secret) {
   const rawBody = await request.text();
   const signatureHeader = request.headers.get('stripe-signature') || '';
   const signatureEntries = signatureHeader.split(',').map((part) => part.split('=').map((piece) => piece.trim()));
@@ -101,7 +103,7 @@ export async function handleStripeWebhook(request, env, db) {
   const v1Signatures = signatureEntries.filter(([entryKey]) => entryKey === 'v1').map(([, value]) => value);
   if (!timestamp || v1Signatures.length === 0) throw new HttpError('Invalid webhook signature', 401);
   const key = await crypto.subtle.importKey(
-    'raw', new TextEncoder().encode(env.STRIPE_WEBHOOK_SECRET), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+    'raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
   );
   const signedPayload = `${timestamp}.${rawBody}`;
   const expectedSignature = bytesToHex(new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(signedPayload))));
@@ -111,6 +113,54 @@ export async function handleStripeWebhook(request, env, db) {
   if (Math.abs(Date.now() / 1000 - Number(timestamp)) > STRIPE_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS) {
     throw new HttpError('Invalid webhook signature', 401);
   }
+  return rawBody;
+}
+
+// #3237: our connected accounts are Accounts v2. Stripe delivers a v2
+// account's v1 `account.updated` only to a "Connected accounts"-scope
+// endpoint, while the v2 thin events below go to a "Your account"-scope one,
+// so the v1 endpoint above never hears about status changes. Thin events
+// carry no object snapshot (just `related_object.id`), so the handler
+// re-reads the account through the same refreshStoredStripeStatus the
+// payout panel uses. A separate endpoint and signing secret
+// (STRIPE_WEBHOOK_SECRET_V2) keeps the two destinations from being mixed up.
+const STRIPE_V2_ACCOUNT_EVENT_TYPES = new Set([
+  'v2.core.account[requirements].updated',
+  'v2.core.account[configuration.merchant].capability_status_updated',
+  'v2.core.account_link.returned',
+]);
+
+export async function handleStripeV2Webhook(request, env, db) {
+  if (!env.STRIPE_WEBHOOK_SECRET_V2) throw new HttpError('Stripe v2 webhook is not configured on this server yet.', 503);
+  const rawBody = await readVerifiedStripeBody(request, env.STRIPE_WEBHOOK_SECRET_V2);
+  let event;
+  try {
+    event = JSON.parse(rawBody);
+  } catch {
+    throw new HttpError('Webhook body is not valid JSON', 400);
+  }
+  // Any other v2 type is acknowledged so Stripe does not retry it.
+  if (!STRIPE_V2_ACCOUNT_EVENT_TYPES.has(event.type)) return json({ received: true });
+  const accountId = event.type === 'v2.core.account_link.returned'
+    ? (event.data?.account_id || event.related_object?.id)
+    : event.related_object?.id;
+  if (typeof accountId !== 'string' || !accountId.startsWith('acct_')) return json({ received: true });
+  const createdAtS = Math.floor(Date.parse(event.created) / 1000);
+  for (const [table, idColumn] of [['sellers', 'seller_id'], ['builders', 'builder_id']]) {
+    const row = await db.prepare(`SELECT * FROM ${table} WHERE stripe_account_id = ?`).bind(accountId).first();
+    if (!row) continue;
+    // Ordering guard (#3071/#3079): a status already refreshed at or after
+    // this event's time is at least as fresh as what a fetch now would add.
+    if (Number.isFinite(createdAtS) && (row.stripe_event_created_at || 0) > createdAtS) continue;
+    // A failed fetch throws, so Stripe redelivers.
+    await refreshStoredStripeStatus(env, db, table, idColumn, row);
+  }
+  return json({ received: true });
+}
+
+export async function handleStripeWebhook(request, env, db) {
+  if (!env.STRIPE_WEBHOOK_SECRET) throw new HttpError('Stripe webhook is not configured on this server yet.', 503);
+  const rawBody = await readVerifiedStripeBody(request, env.STRIPE_WEBHOOK_SECRET);
   let event;
   try {
     event = JSON.parse(rawBody);

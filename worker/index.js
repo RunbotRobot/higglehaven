@@ -85,7 +85,7 @@ import { handleSelfDealingFlags, handleSoldOutMarkers } from './lib/purchases-ad
 // #2541: Stripe webhook/card-setup, Didit verification, video generation,
 // and credit-orb route handlers, extracted into worker/lib/ -- see each
 // module's own comment for what deliberately stayed here instead (and why).
-import { handleStripeWebhook, handleCardSetupIntent, handleConfirmCard } from './lib/stripe.js';
+import { handleStripeWebhook, handleStripeV2Webhook, handleCardSetupIntent, handleConfirmCard } from './lib/stripe.js';
 import { classifyStripeRequirements, eventuallyDueOnly, stripeStepEventuallyDueOnly } from './lib/stripe-requirements.js';
 import { checkWebhookSecrets } from './lib/webhook-secret-check.js';
 import { checkSchemaDrift } from './lib/schema-drift.js';
@@ -303,7 +303,7 @@ function accessLoginPage(errorMessage) {
 // verifies its own signature/HMAC before doing anything, so exempting them
 // here doesn't weaken the gate for real users; it just lets the vendor's
 // server reach a route it authenticates a different way.
-const ACCESS_GATE_EXEMPT_PATHS = new Set(['/api/auth/stripe-webhook', '/api/auth/didit-webhook', '/api/auth/video-generation-webhook']);
+const ACCESS_GATE_EXEMPT_PATHS = new Set(['/api/auth/stripe-webhook', '/api/auth/stripe-webhook-v2', '/api/auth/didit-webhook', '/api/auth/video-generation-webhook']);
 
 // Returns a Response to short-circuit the request (unauthorized, or a
 // freshly-granted redirect), or null to let the real routing below handle
@@ -3153,6 +3153,9 @@ async function handleAuth(request, env, db, route, url, ctx) {
   }
   if (request.method === 'POST' && route.length === 2 && route[1] === 'stripe-webhook') {
     return handleStripeWebhook(request, env, db);
+  }
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'stripe-webhook-v2') {
+    return handleStripeV2Webhook(request, env, db);
   }
   return json({ error: 'Not found' }, 404);
 }

@@ -2068,6 +2068,29 @@ applied event's `created` time is stored in `stripe_event_created_at` and an
 `account.updated` older than it is ignored (a `200` no-op). An event with no
 numeric `created` is applied unconditionally, as before.
 
+**#3237** (`POST /api/auth/stripe-webhook-v2`): our connected accounts are
+Accounts v2. Stripe delivers a v2 account's v1 `account.updated` only to an
+endpoint registered for *Connected accounts*, while this app's endpoint is
+registered for *Your account* (correct for payments, refunds and disputes,
+which are platform charges). So account status comes from v2 **thin
+events** on a second endpoint with its own signing secret,
+`STRIPE_WEBHOOK_SECRET_V2` (same `Stripe-Signature` scheme and replay
+window as above; `503` if unset, `401` on a bad signature). Handled types:
+`v2.core.account[requirements].updated`,
+`v2.core.account[configuration.merchant].capability_status_updated` and
+`v2.core.account_link.returned`; any other type is a `200` no-op. A thin
+event carries no object snapshot, only `related_object.id` (for
+`account_link.returned`, `data.account_id`), so the handler looks the
+account up in `sellers`/`builders` and re-reads it from Stripe through the
+same refresh the payout panel uses. An event older than the stored
+`stripe_event_created_at` is ignored; a failed fetch answers `500` so
+Stripe redelivers. A missing `STRIPE_WEBHOOK_SECRET_V2` raises the same
+self-clearing Control Room card as the first secret. As a backstop for a
+missed delivery, `POST /api/instances/:id/purchase` re-reads a seller's
+Stripe status when the stored `complete` is more than an hour old, so a
+disabled account cannot stay purchasable (best-effort: an unreachable
+Stripe leaves the stored status in place).
+
 **#782**: `payment_intent.succeeded` — backstop for a charge that
 succeeded while the buyer's `POST /api/purchases/finalize` never landed
 (closed tab, dropped connection). An intent created by our own checkout

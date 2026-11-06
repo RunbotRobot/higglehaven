@@ -14,6 +14,8 @@
 // raises nothing.
 export const WEBHOOK_SECRET_PROVIDERS = [
   { id: 'stripe', label: 'Stripe', secret: 'STRIPE_WEBHOOK_SECRET', inUse: (env) => !!env.STRIPE_SECRET_KEY },
+  // #3237: Accounts v2 status changes arrive as thin events on a second endpoint with its own signing secret.
+  { id: 'stripe-v2', label: 'Stripe (account status)', secret: 'STRIPE_WEBHOOK_SECRET_V2', inUse: (env) => !!env.STRIPE_SECRET_KEY },
   { id: 'didit', label: 'Didit', secret: 'DIDIT_WEBHOOK_SECRET', inUse: (env) => !!env.DIDIT_API_KEY && !!env.DIDIT_WORKFLOW_ID },
   { id: 'tripo', label: 'Tripo (video-to-3D)', secret: 'TRIPO_WEBHOOK_SECRET', inUse: (env) => !!env.TRIPO_API_KEY },
 ];
