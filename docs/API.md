@@ -3420,6 +3420,27 @@ The card resolves itself once the secret is set, and is not re-opened if the
 owner marks it done. Environments with no provider keys (dev, tests) raise
 nothing.
 
+The once-daily cron (`0 3 * * *`, the same trigger as the D1 backup) also runs
+`checkSchemaDrift` (#3203, Phase 2 of #805). `checkMigrationDrift` only knows
+which migration *files* were applied; it cannot see a manual hotfix
+`ALTER TABLE`/`CREATE INDEX` run against production outside the migrations
+system. This compares production's live schema against
+`worker/schema-snapshot.json`, a normalized snapshot of what a fresh apply of
+`migrations/` produces (`npm run generate:schema-snapshot`, which applies the
+migrations to a scratch in-memory SQLite database via `node:sqlite`; wired into
+`deploy`/`deploy:ci`, and kept honest by `scripts/check-schema-snapshot-fresh.mjs`
+as a `pretest` check — so **any PR that adds or changes a migration must run
+`npm run generate:schema-snapshot` and commit the result**). Tables are compared
+structurally (a set of columns: name, declared type, `NOT NULL`, default,
+primary-key position; column order is not significant) and indexes, triggers
+and views by name plus whitespace-collapsed SQL; `sqlite_*`, `_cf_*` and `d1_*`
+objects are ignored. On a difference it logs a `console.error` every run, raises
+one Control Room card (`ops-schema-drift`, `waitingOn: "owner"`) that resolves
+itself once production matches again, and — only when the card is first raised or
+re-opened, and only if `OPS_ALERT_EMAIL` is configured — emails that address.
+`worker/schema-drift.test.js` asserts the snapshot built under `node:sqlite` shows
+no drift against a migrated D1, which is the guard against false positives.
+
 ### World object
 
 ```json
@@ -4719,6 +4740,20 @@ deleted; a deliberate recreate (Undo of a delete) uses `POST`. Without the
 flag `PUT` behaves exactly as described above. An invalid reference, or the caller never owning a touched
 landlet at all, returns `400`/`403` and leaves the entire batch unchanged.
 
+**`expectedUpdatedAt` (#1062, server half).** On `PUT`, each item may carry
+`"expectedUpdatedAt"`, the `updatedAt` the caller last saw for that instance.
+An instance whose stored `updatedAt` differs is **not** overwritten: it is
+skipped, and the response adds `staleInstanceIds` plus `staleInstances` (each
+one's current stored state) so the caller can reconcile instead of clobbering
+a newer edit (another tab, another request). The check is repeated inside the
+write itself, so a write landing in between is reported through
+`rejectedInstanceIds` as described below. An id with no stored row is a create
+and has nothing to be stale against; the field is ignored on `POST`. Without
+the field `PUT` is last-write-wins exactly as before, and the response gains
+no new fields (`staleInstanceIds`/`staleInstances` appear only when at least
+one item sent the field). A non-string or empty value is `400`. Combines with
+`updateOnly`.
+
 **Partial rejection (#1772).** The batch spans an arbitrary set of distinct
 landlets, each independently re-guarded at write time against the
 possibility that its ownership changed in the moment between the up-front
@@ -4788,6 +4823,13 @@ Requires a session logged in as the owner of the instance's current
 landlet, and (if the update moves it) its new target landlet too (`403`
 otherwise). Updates a placed instance. The current implementation merges
 request fields with the existing instance before validation.
+
+**`expectedUpdatedAt` (#1062, server half).** The body may carry
+`"expectedUpdatedAt"`, the `updatedAt` the caller last saw. If the stored
+`updatedAt` differs the write is refused with `409`, nothing is changed, and
+the body carries `staleInstanceId` and `instance` (the current stored state)
+next to `error`, so the caller can reconcile. Absent the field the write is
+last-write-wins as before. A non-string or empty value is `400`.
 
 ### `DELETE /api/instances/:instanceId`
 
