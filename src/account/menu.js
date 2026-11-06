@@ -1167,6 +1167,17 @@ const myPurchasesLoadMoreBtn = document.getElementById('my-purchases-load-more-b
 let myPurchasesLoadToken = 0;
 let myPurchasesNextCursor = null;
 
+// A row updates itself from the API's own response (onChanged); anything the
+// local copy can't be trusted for -- a delete, a 409 -- reloads the list.
+function appendMyPurchaseRow(purchase) {
+  const row = createPurchaseRow(purchase, {
+    onChanged: () => {},
+    onReload: () => renderMyPurchases(),
+    dispute: disputePurchase, // #3199
+  });
+  myPurchasesListEl.appendChild(row);
+}
+
 function showMyPurchasesMessage(text) {
   myPurchasesEmptyEl.textContent = text;
   myPurchasesEmptyEl.hidden = false;
@@ -1188,7 +1199,7 @@ async function renderMyPurchases() {
   }
   if (myLoadToken !== myPurchasesLoadToken) return;
   if (page.purchases.length === 0) showMyPurchasesMessage("You haven't bought anything yet.");
-  for (const purchase of page.purchases) myPurchasesListEl.appendChild(createPurchaseRow(purchase, { dispute: disputePurchase }));
+  for (const purchase of page.purchases) appendMyPurchaseRow(purchase);
   myPurchasesNextCursor = page.nextCursor;
   myPurchasesLoadMoreBtn.hidden = !myPurchasesNextCursor;
 }
@@ -1199,7 +1210,7 @@ myPurchasesLoadMoreBtn.addEventListener('click', async () => {
   try {
     const page = await fetchMyPurchases({ cursor: myPurchasesNextCursor });
     if (myLoadToken !== myPurchasesLoadToken) return;
-    for (const purchase of page.purchases) myPurchasesListEl.appendChild(createPurchaseRow(purchase, { dispute: disputePurchase }));
+    for (const purchase of page.purchases) appendMyPurchaseRow(purchase);
     myPurchasesNextCursor = page.nextCursor;
     myPurchasesLoadMoreBtn.hidden = !myPurchasesNextCursor;
   } catch (err) {
