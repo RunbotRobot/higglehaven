@@ -21,9 +21,9 @@ async function signupIdVerifiedBuilder(label) {
 
 async function setPresence(builderId, { landletId, updatedAt = new Date().toISOString() } = {}) {
   await env.DB.prepare(`
-    INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
-    VALUES (?, ?, 0, 0, 0, 0, 0, ?)
-    ON CONFLICT (builder_id) DO UPDATE SET landlet_id = excluded.landlet_id, updated_at = excluded.updated_at
+    INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
+    VALUES ((SELECT user_id FROM builders WHERE builder_id = ?), ?, 0, 0, 0, 0, 0, ?)
+    ON CONFLICT (user_id) DO UPDATE SET landlet_id = excluded.landlet_id, updated_at = excluded.updated_at
   `).bind(builderId, landletId, updatedAt).run();
 }
 

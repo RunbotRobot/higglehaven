@@ -87,11 +87,11 @@
       "winning_bid_id": "TEXT|0||0"
     },
     "avatar_presence": {
-      "builder_id": "TEXT|0||1",
       "flying": "INTEGER|1|0|0",
       "heading": "REAL|0||0",
       "landlet_id": "TEXT|0||0",
       "updated_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "user_id": "TEXT|0||1",
       "x": "REAL|1||0",
       "y": "REAL|1||0",
       "z": "REAL|1||0"
@@ -276,8 +276,8 @@
     "friend_voice_channel_members": {
       "joined_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "last_seen_at": "TEXT|0||0",
-      "member_builder_id": "TEXT|1||2",
-      "owner_builder_id": "TEXT|1||1"
+      "member_user_id": "TEXT|1||2",
+      "owner_user_id": "TEXT|1||1"
     },
     "friendships": {
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
@@ -427,11 +427,11 @@
       "reported_user_id": "TEXT|1||0"
     },
     "nearby_chat_messages": {
-      "builder_id": "TEXT|1||0",
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "landlet_id": "TEXT|1||0",
       "message_id": "TEXT|0||1",
-      "text": "TEXT|1||0"
+      "text": "TEXT|1||0",
+      "user_id": "TEXT|1||0"
     },
     "nearby_chat_reports": {
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
@@ -815,14 +815,14 @@
       "reporter_user_id": "TEXT|0||0"
     },
     "voice_signaling_messages": {
-      "channel_owner_builder_id": "TEXT|0||0",
+      "channel_owner_user_id": "TEXT|0||0",
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
-      "from_builder_id": "TEXT|1||0",
+      "from_user_id": "TEXT|1||0",
       "kind": "TEXT|1||0",
       "landlet_id": "TEXT|1||0",
       "message_id": "TEXT|0||1",
       "payload": "TEXT|1||0",
-      "to_builder_id": "TEXT|1||0"
+      "to_user_id": "TEXT|1||0"
     },
     "world_settings": {
       "coordinate_rotation_deg": "REAL|1|210|0",
@@ -1024,7 +1024,7 @@
     },
     "index:idx_friend_voice_channel_members_member": {
       "tbl": "friend_voice_channel_members",
-      "sql": "CREATE INDEX idx_friend_voice_channel_members_member ON friend_voice_channel_members(member_builder_id)"
+      "sql": "CREATE INDEX idx_friend_voice_channel_members_member ON friend_voice_channel_members(member_user_id)"
     },
     "index:idx_friendships_recipient_user_created": {
       "tbl": "friendships",
@@ -1364,7 +1364,7 @@
     },
     "index:idx_voice_signaling_messages_recipient": {
       "tbl": "voice_signaling_messages",
-      "sql": "CREATE INDEX idx_voice_signaling_messages_recipient ON voice_signaling_messages(to_builder_id, landlet_id, created_at, message_id)"
+      "sql": "CREATE INDEX idx_voice_signaling_messages_recipient ON voice_signaling_messages(to_user_id, landlet_id, created_at, message_id)"
     },
     "trigger:ncmec_evidence_no_update": {
       "tbl": "ncmec_evidence",

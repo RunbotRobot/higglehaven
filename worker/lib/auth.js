@@ -231,6 +231,43 @@ export function notBlockedByUserSql(blockerUserExpr, blockedUserExpr) {
   )`;
 }
 
+// notBlockedEitherWayByUserSql: the either-direction counterpart, for the
+// ephemeral social tables that key on user_id (#3147, 4/6 of #3141: presence,
+// nearby chat, voice signaling, friend voice channels). Same contract as
+// notBlockedEitherWaySql: both arguments are trusted SQL expressions for a
+// *user_id* (a column reference or a `?` placeholder, never user text) and each
+// appears exactly once, so a `?` costs exactly one bind. They are joined through
+// `users` (every account keeps its users row, even after deletion) purely to
+// reference each expression once.
+export function notBlockedEitherWayByUserSql(userExprA, userExprB) {
+  return `NOT EXISTS (
+    SELECT 1 FROM user_blocks AS blk_user_check
+    JOIN users AS blk_user_a ON blk_user_a.user_id = ${userExprA}
+    JOIN users AS blk_user_b ON blk_user_b.user_id = ${userExprB}
+    WHERE (blk_user_check.blocker_user_id = blk_user_a.user_id AND blk_user_check.blocked_user_id = blk_user_b.user_id)
+       OR (blk_user_check.blocker_user_id = blk_user_b.user_id AND blk_user_check.blocked_user_id = blk_user_a.user_id)
+  )`;
+}
+
+// userNotSuspendedSql: builderNotSuspendedSql (#3126) for a column that already
+// holds a user_id, so the join through builders is not needed (#3147). `column`
+// is a trusted, hard-coded user_id column reference, never user input.
+export function userNotSuspendedSql(column) {
+  return `NOT EXISTS (
+    SELECT 1 FROM account_suspensions AS suspended_user_check
+    WHERE suspended_user_check.user_id = ${column}
+      AND suspended_user_check.lifted_at IS NULL AND suspended_user_check.escalated_at IS NULL
+  )`;
+}
+
+// Single-pair user-id check for write paths (voice signal send).
+export async function userBlockExistsBetween(db, userIdA, userIdB) {
+  if (!userIdA || !userIdB) return false;
+  const row = await db.prepare(`SELECT 1 AS hit WHERE (${notBlockedEitherWayByUserSql('?', '?')}) = 0`)
+    .bind(userIdA, userIdB).first();
+  return !!row;
+}
+
 // Single-pair JS checks for write paths (voice signal send, friend request).
 export async function blockExistsBetween(db, builderIdA, builderIdB) {
   const row = await db.prepare(`SELECT 1 AS hit WHERE (${notBlockedEitherWaySql('?', '?')}) = 0`)

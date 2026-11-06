@@ -21,9 +21,10 @@ import {
 } from './validation.js';
 import { checkRateLimit } from './rate-limit.js';
 import {
-  requireCurrentUser, assertOwner, requireSessionBuilder, builderNotSuspendedSql, suspendedSellerTemplateIds,
+  requireCurrentUser, assertOwner, requireSessionBuilder, suspendedSellerTemplateIds,
   userIdForBuilder, builderIdForUser, builderIdsForUsers, RESOLVER_CHUNK_SIZE,
-  notBlockedEitherWaySql, notBlockedBySql, blockExistsBetween, notBlockedByUserSql,
+  notBlockedBySql, notBlockedByUserSql,
+  notBlockedEitherWayByUserSql, userNotSuspendedSql, userBlockExistsBetween,
 } from './auth.js';
 import { fireNotification } from './notifications.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
@@ -225,10 +226,13 @@ const PRESENCE_NEARBY_RATE_LIMIT_MAX = PRESENCE_REPORT_RATE_LIMIT_MAX;
 // avatar_presence row) applies just as much to scoping a chat message as it
 // does to scoping a presence read. null means "nowhere recent enough" —
 // no nearby anything, presence or chat alike.
-async function callersCurrentLandletId(db, builderId) {
+// #3147: avatar_presence is keyed on the account, so this takes a user id (null
+// when the caller named someone who does not resolve: nowhere, same as stale).
+async function callersCurrentLandletId(db, userId) {
+  if (!userId) return null;
   const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
-  const ownPresence = await db.prepare('SELECT landlet_id, updated_at FROM avatar_presence WHERE builder_id = ?')
-    .bind(builderId).first();
+  const ownPresence = await db.prepare('SELECT landlet_id, updated_at FROM avatar_presence WHERE user_id = ?')
+    .bind(userId).first();
   return ownPresence && ownPresence.updated_at >= staleBefore ? ownPresence.landlet_id : null;
 }
 
@@ -240,14 +244,15 @@ export async function handlePresence(request, db, route, url) {
   // has never reported a position at all.
   if (request.method === 'GET' && route.length === 2 && route[1] === 'me') {
     const sessionBuilder = await requireSessionBuilder(request, db);
-    const row = await db.prepare('SELECT * FROM avatar_presence WHERE builder_id = ?')
-      .bind(sessionBuilder.builder_id).first();
-    return json({ presence: row ? avatarPresenceFromRow(row) : null });
+    const row = await db.prepare('SELECT * FROM avatar_presence WHERE user_id = ?')
+      .bind(sessionBuilder.user_id).first();
+    return json({ presence: row ? avatarPresenceFromRow({ ...row, builder_id: sessionBuilder.builder_id }) : null });
   }
 
   if (request.method === 'GET' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `presence-nearby:${sessionBuilder.builder_id}`, PRESENCE_NEARBY_RATE_LIMIT_MAX);
+    // #3147: the quota belongs to the person, so it is keyed on the account.
+    await checkRateLimit(db, `presence-nearby:${sessionBuilder.user_id}`, PRESENCE_NEARBY_RATE_LIMIT_MAX);
     const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
     // #2269: a client-supplied `landletId` query param used to be trusted
     // outright -- any verified account could enumerate landlet ids via the
@@ -260,21 +265,27 @@ export async function handlePresence(request, db, route, url) {
     // trust a client-supplied location claim" fix already applied to the
     // credit-orb collect endpoint (#2222) -- so a caller can only ever see
     // who's nearby wherever they themselves actually, recently were.
-    const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
+    const landletId = await callersCurrentLandletId(db, sessionBuilder.user_id);
     if (landletId === null) {
       return json({ avatars: [] });
     }
+    // #3147: presence is stored against the account; the wire still names
+    // each person by their CURRENT builder profile, so the join supplies it
+    // (and a person with no builder profile right now has nothing to render,
+    // which is what the old ON DELETE CASCADE on a profile reset did too).
     const { results } = await db.prepare(`
-      SELECT * FROM avatar_presence
-      WHERE landlet_id = ? AND builder_id != ? AND updated_at >= ?
-        AND ${notBlockedEitherWaySql('?', 'avatar_presence.builder_id')}
-      ORDER BY updated_at DESC LIMIT ${PRESENCE_NEARBY_LIMIT}
-    `).bind(landletId, sessionBuilder.builder_id, staleBefore, sessionBuilder.builder_id).all();
+      SELECT avatar_presence.*, builders.builder_id AS builder_id
+      FROM avatar_presence
+      JOIN builders ON builders.user_id = avatar_presence.user_id
+      WHERE avatar_presence.landlet_id = ? AND avatar_presence.user_id != ? AND avatar_presence.updated_at >= ?
+        AND ${notBlockedEitherWayByUserSql('?', 'avatar_presence.user_id')}
+      ORDER BY avatar_presence.updated_at DESC LIMIT ${PRESENCE_NEARBY_LIMIT}
+    `).bind(landletId, sessionBuilder.user_id, staleBefore, sessionBuilder.user_id).all();
     // #2043: docs/SPEC.md's "Flying avatars are invisible to other users" --
     // the client is the one actually hiding the mesh, but a flying avatar's
     // position is still withheld here too, not just left to the renderer's
     // own discretion to respect. Never withhold the caller's own row from
-    // themselves (irrelevant here, this query already excludes builder_id =
+    // themselves (irrelevant here, this query already excludes user_id =
     // self) or from GET .../me (that endpoint is "where was I," unaffected).
     const visible = results.filter((row) => !row.flying);
     const equipped = await equippedAvatarsByBuilder(db, visible.map((row) => row.builder_id));
@@ -291,7 +302,7 @@ export async function handlePresence(request, db, route, url) {
   // write frequency.
   if (request.method === 'POST' && route.length === 1) {
     const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `presence-report:${sessionBuilder.builder_id}`, PRESENCE_REPORT_RATE_LIMIT_MAX);
+    await checkRateLimit(db, `presence-report:${sessionBuilder.user_id}`, PRESENCE_REPORT_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const x = finiteNumber(input.x, 'x');
     const y = finiteNumber(input.y, 'y');
@@ -315,22 +326,24 @@ export async function handlePresence(request, db, route, url) {
       await requireLandlet(db, landletId);
     }
     await db.prepare(`
-      INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
+      INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
-      ON CONFLICT(builder_id) DO UPDATE SET
+      ON CONFLICT(user_id) DO UPDATE SET
         landlet_id = excluded.landlet_id, x = excluded.x, y = excluded.y, z = excluded.z,
         heading = excluded.heading, flying = excluded.flying, updated_at = excluded.updated_at
-    `).bind(sessionBuilder.builder_id, landletId, x, y, z, heading, flying ? 1 : 0).run();
-    const row = await db.prepare('SELECT * FROM avatar_presence WHERE builder_id = ?')
-      .bind(sessionBuilder.builder_id).first();
-    // #2492: not found here means a concurrent self-delete (migrations/0100's
-    // own ON DELETE CASCADE on builder_id) landed in the single await gap
+    `).bind(sessionBuilder.user_id, landletId, x, y, z, heading, flying ? 1 : 0).run();
+    const row = await db.prepare('SELECT * FROM avatar_presence WHERE user_id = ?')
+      .bind(sessionBuilder.user_id).first();
+    // #2492: not found here means a concurrent account deletion (which now
+    // removes this row explicitly, #3147; it used to be migrations/0100's ON
+    // DELETE CASCADE on builder_id) landed in the single await gap
     // between the upsert above and this re-SELECT -- a genuine 404, same
     // race shape #2334/#2354/#2391/#2428/#2429 already fixed elsewhere, not
     // an uncaught null-dereference crash.
     if (!row) return json({ error: 'Your account was deleted concurrently — please sign in again' }, 404);
     return json({
       presence: {
+        userId: row.user_id,
         landletId: row.landlet_id,
         x: row.x,
         y: row.y,
@@ -361,6 +374,9 @@ const NEARBY_CHAT_POLL_LIMIT = 50;
 function nearbyChatMessageFromRow(row) {
   return {
     messageId: row.message_id,
+    // #3147: stored against the account; builderId is the author's CURRENT
+    // builder profile (joined in by the caller), userId the stable id.
+    userId: row.user_id,
     builderId: row.builder_id,
     text: row.text,
     createdAt: row.created_at,
@@ -374,8 +390,8 @@ export async function handleNearbyChat(request, db, route, url) {
   // presence/avatar-visibility's own looser "any non-'none' tier" gate.
   if (request.method === 'GET' && route.length === 1) {
     const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use nearby chat.');
-    await checkRateLimit(db, `nearby-chat-poll:${sessionBuilder.builder_id}`, NEARBY_CHAT_POLL_RATE_LIMIT_MAX);
-    const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
+    await checkRateLimit(db, `nearby-chat-poll:${sessionBuilder.user_id}`, NEARBY_CHAT_POLL_RATE_LIMIT_MAX);
+    const landletId = await callersCurrentLandletId(db, sessionBuilder.user_id);
     if (landletId === null) {
       // #2802: landletId still reported (null here) so the client can tell
       // "no nearby landlet" apart from an actual landlet id change -- see
@@ -389,22 +405,28 @@ export async function handleNearbyChat(request, db, route, url) {
     // #3143: a block hides each side's messages from the other (sending is
     // unchanged, so the blocked person learns nothing).
     const conditions = [
-      'landlet_id = ?',
-      builderNotSuspendedSql('nearby_chat_messages.builder_id'),
-      notBlockedEitherWaySql('?', 'nearby_chat_messages.builder_id'),
+      'nearby_chat_messages.landlet_id = ?',
+      userNotSuspendedSql('nearby_chat_messages.user_id'),
+      notBlockedEitherWayByUserSql('?', 'nearby_chat_messages.user_id'),
     ];
-    const bindings = [landletId, sessionBuilder.builder_id];
+    const bindings = [landletId, sessionBuilder.user_id];
     if (cursor) {
       // Ascending/"poll forward from here" ordering, unlike direct_messages'
       // own descending/"most recent page" cursor above -- this is a live feed
       // a client tails forward in time, not a history a client pages
       // backward through.
-      conditions.push('(created_at > ? OR (created_at = ? AND message_id > ?))');
+      conditions.push('(nearby_chat_messages.created_at > ? OR (nearby_chat_messages.created_at = ? AND nearby_chat_messages.message_id > ?))');
       bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
     }
+    // #3147: the join supplies each author's current builder profile for the
+    // wire; an author with none right now has no one to attribute the line to
+    // (a profile reset used to delete their messages through the cascade).
     const { results } = await db.prepare(`
-      SELECT * FROM nearby_chat_messages WHERE ${conditions.join(' AND ')}
-      ORDER BY created_at ASC, message_id ASC LIMIT ?
+      SELECT nearby_chat_messages.*, builders.builder_id AS builder_id
+      FROM nearby_chat_messages
+      JOIN builders ON builders.user_id = nearby_chat_messages.user_id
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY nearby_chat_messages.created_at ASC, nearby_chat_messages.message_id ASC LIMIT ?
     `).bind(...bindings, limit).all();
     const last = results.at(-1);
     return json({
@@ -426,8 +448,8 @@ export async function handleNearbyChat(request, db, route, url) {
   if (request.method === 'POST' && route.length === 1) {
     const input = await readJson(request);
     const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use nearby chat.');
-    await checkRateLimit(db, `nearby-chat-send:${sessionBuilder.builder_id}`, NEARBY_CHAT_SEND_RATE_LIMIT_MAX);
-    const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
+    await checkRateLimit(db, `nearby-chat-send:${sessionBuilder.user_id}`, NEARBY_CHAT_SEND_RATE_LIMIT_MAX);
+    const landletId = await callersCurrentLandletId(db, sessionBuilder.user_id);
     if (landletId === null) {
       throw new HttpError('A recent position report is required before sending a nearby chat message', 400);
     }
@@ -435,11 +457,11 @@ export async function handleNearbyChat(request, db, route, url) {
     if (text.length > 280) throw new HttpError('text must be 280 characters or fewer', 400);
     const messageId = `nearby-chat-${crypto.randomUUID()}`;
     await db.prepare(`
-      INSERT INTO nearby_chat_messages (message_id, builder_id, landlet_id, text)
+      INSERT INTO nearby_chat_messages (message_id, user_id, landlet_id, text)
       VALUES (?, ?, ?, ?)
-    `).bind(messageId, sessionBuilder.builder_id, landletId, text).run();
+    `).bind(messageId, sessionBuilder.user_id, landletId, text).run();
     const row = await db.prepare('SELECT * FROM nearby_chat_messages WHERE message_id = ?').bind(messageId).first();
-    return json({ message: nearbyChatMessageFromRow(row) }, 201);
+    return json({ message: nearbyChatMessageFromRow({ ...row, builder_id: sessionBuilder.builder_id }) }, 201);
   }
 
   if (route.length === 2 && route[1] === 'report' && request.method === 'POST') {
@@ -468,15 +490,18 @@ const NEARBY_CHAT_REPORT_CREATE_RATE_LIMIT_MAX = 20;
 // filed, just without the annotation. The records are short-lived (signaling
 // and chat rows are pruned within minutes, presence is only fresh for
 // seconds), so the card says outright that a "no" is weak evidence.
-async function reportEvidenceLines(db, reporterBuilderId, reportedBuilderId, surfaceActivityLine) {
+// #3147: the tables read here are keyed on the account, so this takes user ids
+// (a reported builder with no account resolves to null and simply matches
+// nothing, i.e. "no").
+async function reportEvidenceLines(db, reporterUserId, reportedUserId, surfaceActivityLine) {
   try {
     const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
     const coPresent = await db.prepare(`
       SELECT 1 AS present FROM avatar_presence reporter
       JOIN avatar_presence reported ON reported.landlet_id = reporter.landlet_id
-      WHERE reporter.builder_id = ? AND reported.builder_id = ?
+      WHERE reporter.user_id = ? AND reported.user_id = ?
         AND reporter.updated_at >= ? AND reported.updated_at >= ?
-    `).bind(reporterBuilderId, reportedBuilderId, staleBefore, staleBefore).first();
+    `).bind(reporterUserId, reportedUserId, staleBefore, staleBefore).first();
     return [
       'Interaction evidence (admin triage only; these records are short-lived, so "no" is weak evidence):',
       `- ${await surfaceActivityLine()}`,
@@ -582,12 +607,12 @@ async function handleNearbyChatReportCreate(request, db) {
   if (reportedUserId === sessionBuilder.user_id) throw new HttpError('reportedBuilderId cannot be the caller themselves', 400);
   const controlRoomNoteLines = [`Reported account: ${reportedUserId} — current builder "${reportedLabel}" (${reportedBuilderId})`];
   if (reason) controlRoomNoteLines.push(`Reason: ${reason}`);
-  controlRoomNoteLines.push(...await reportEvidenceLines(db, sessionBuilder.builder_id, reportedBuilderId, async () => {
+  controlRoomNoteLines.push(...await reportEvidenceLines(db, sessionBuilder.user_id, reportedUserId, async () => {
     const message = await db.prepare(`
       SELECT 1 AS present FROM nearby_chat_messages
-      WHERE builder_id = ? AND landlet_id = (SELECT landlet_id FROM avatar_presence WHERE builder_id = ?)
+      WHERE user_id = ? AND landlet_id = (SELECT landlet_id FROM avatar_presence WHERE user_id = ?)
       LIMIT 1
-    `).bind(reportedBuilderId, sessionBuilder.builder_id).first();
+    `).bind(reportedUserId, sessionBuilder.user_id).first();
     return `Reported builder has a chat message still on record in the reporter's landlet: ${message ? 'yes' : 'no'}`;
   }));
   const storedReportId = await fileConductReport(db, {
@@ -627,9 +652,13 @@ const VOICE_SIGNAL_KINDS = new Set(['offer', 'answer', 'ice-candidate']);
 // the client-side WebRTC stack is the actual producer/consumer here.
 const VOICE_SIGNAL_PAYLOAD_MAX_CHARS = 20000;
 
+// #3147: stored against the accounts. fromBuilderId / channelOwnerBuilderId are
+// each person's CURRENT builder profile (the callers join or supply them: a
+// client still names peers by builder id); the *UserId fields are the stable ids.
 function voiceSignalMessageFromRow(row) {
   return {
     messageId: row.message_id,
+    fromUserId: row.from_user_id,
     fromBuilderId: row.from_builder_id,
     kind: row.kind,
     payload: JSON.parse(row.payload),
@@ -640,6 +669,7 @@ function voiceSignalMessageFromRow(row) {
     // skip the distance-based gain ramp for that connection, per SPEC's
     // "regardless of proximity" (no distance-based volume ramp here).
     channelOwnerBuilderId: row.channel_owner_builder_id || null,
+    channelOwnerUserId: row.channel_owner_user_id || null,
   };
 }
 
@@ -656,14 +686,17 @@ function voiceSignalMessageFromRow(row) {
 // to be mutual friends with EACH OTHER, only (per the join-time check)
 // with the owner -- same "anyone the host added, talks to everyone else
 // the host added" shape an ordinary group call uses.
-async function sharedActiveFriendVoiceChannelExists(db, builderIdA, builderIdB, ownerBuilderId) {
+// #3147: keyed on the accounts; a null id (a builder that does not resolve to
+// an account) is never a member of anything.
+async function sharedActiveFriendVoiceChannelExists(db, userIdA, userIdB, ownerUserId) {
+  if (!userIdA || !userIdB || !ownerUserId) return false;
   const row = await db.prepare(`
     SELECT 1 FROM friend_voice_channel_members a
-    JOIN friend_voice_channel_members b ON b.owner_builder_id = a.owner_builder_id
+    JOIN friend_voice_channel_members b ON b.owner_user_id = a.owner_user_id
     JOIN friend_voice_channel_members o
-      ON o.owner_builder_id = a.owner_builder_id AND o.member_builder_id = o.owner_builder_id
-    WHERE a.owner_builder_id = ? AND a.member_builder_id = ? AND b.member_builder_id = ?
-  `).bind(ownerBuilderId, builderIdA, builderIdB).first();
+      ON o.owner_user_id = a.owner_user_id AND o.member_user_id = o.owner_user_id
+    WHERE a.owner_user_id = ? AND a.member_user_id = ? AND b.member_user_id = ?
+  `).bind(ownerUserId, userIdA, userIdB).first();
   return !!row;
 }
 
@@ -688,7 +721,7 @@ async function handleFriendVoiceChannels(request, db, route) {
   const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
 
   if (request.method === 'GET' && route.length === 2) {
-    await checkRateLimit(db, `friend-voice-channel-poll:${sessionBuilder.builder_id}`, FRIEND_VOICE_CHANNEL_POLL_RATE_LIMIT_MAX);
+    await checkRateLimit(db, `friend-voice-channel-poll:${sessionBuilder.user_id}`, FRIEND_VOICE_CHANNEL_POLL_RATE_LIMIT_MAX);
     // #3120: this poll is the member's liveness signal (see migration
     // 0186); pruneStaleFriendVoiceChannelMembers drops a member that stops
     // polling. Conditional so a member polling every ~1.2s writes about once
@@ -696,41 +729,61 @@ async function handleFriendVoiceChannels(request, db, route) {
     const nowMs = Date.now();
     await db.prepare(`
       UPDATE friend_voice_channel_members SET last_seen_at = ?
-      WHERE member_builder_id = ? AND COALESCE(last_seen_at, joined_at) < ?
-    `).bind(new Date(nowMs).toISOString(), sessionBuilder.builder_id, new Date(nowMs - FRIEND_VOICE_CHANNEL_LAST_SEEN_REFRESH_MS).toISOString()).run();
+      WHERE member_user_id = ? AND COALESCE(last_seen_at, joined_at) < ?
+    `).bind(new Date(nowMs).toISOString(), sessionBuilder.user_id, new Date(nowMs - FRIEND_VOICE_CHANNEL_LAST_SEEN_REFRESH_MS).toISOString()).run();
     // #3123: a suspended member drops out of the listing, and a suspended
     // owner takes their whole channel with them (the owner's own row is
     // what marks a channel active); neither is deleted, so a lifted
     // suspension simply reappears.
     const { results } = await db.prepare(`
-      SELECT owner_builder_id, member_builder_id FROM friend_voice_channel_members
-      WHERE owner_builder_id IN (
-        SELECT owner_builder_id FROM friend_voice_channel_members WHERE member_builder_id = ?
+      SELECT owner_user_id, member_user_id FROM friend_voice_channel_members
+      WHERE owner_user_id IN (
+        SELECT owner_user_id FROM friend_voice_channel_members WHERE member_user_id = ?
       )
-      AND ${builderNotSuspendedSql('friend_voice_channel_members.owner_builder_id')}
-      AND ${builderNotSuspendedSql('friend_voice_channel_members.member_builder_id')}
-      AND ${notBlockedEitherWaySql('?', 'friend_voice_channel_members.owner_builder_id')}
-      AND ${notBlockedEitherWaySql('?', 'friend_voice_channel_members.member_builder_id')}
-    `).bind(sessionBuilder.builder_id, sessionBuilder.builder_id, sessionBuilder.builder_id).all();
+      AND ${userNotSuspendedSql('friend_voice_channel_members.owner_user_id')}
+      AND ${userNotSuspendedSql('friend_voice_channel_members.member_user_id')}
+      AND ${notBlockedEitherWayByUserSql('?', 'friend_voice_channel_members.owner_user_id')}
+      AND ${notBlockedEitherWayByUserSql('?', 'friend_voice_channel_members.member_user_id')}
+    `).bind(sessionBuilder.user_id, sessionBuilder.user_id, sessionBuilder.user_id).all();
+    // #3147: stored against the accounts; the wire still names people by their
+    // CURRENT builder profile (and adds the user ids). A person with no builder
+    // profile right now cannot be shown, so they (or, for the owner, the whole
+    // channel) drop out of the listing, as a profile reset's cascade used to do.
+    const builderByUser = await builderIdsForUsers(db, results.flatMap((row) => [row.owner_user_id, row.member_user_id]));
     const membersByOwner = new Map();
     for (const row of results) {
-      if (!membersByOwner.has(row.owner_builder_id)) membersByOwner.set(row.owner_builder_id, []);
-      membersByOwner.get(row.owner_builder_id).push(row.member_builder_id);
+      if (!builderByUser.has(row.owner_user_id) || !builderByUser.has(row.member_user_id)) continue;
+      if (!membersByOwner.has(row.owner_user_id)) membersByOwner.set(row.owner_user_id, []);
+      membersByOwner.get(row.owner_user_id).push(row.member_user_id);
     }
     return json({
-      channels: [...membersByOwner.entries()].map(([ownerBuilderId, members]) => ({ ownerBuilderId, members })),
+      channels: [...membersByOwner.entries()].map(([ownerUserId, memberUserIds]) => ({
+        ownerBuilderId: builderByUser.get(ownerUserId),
+        ownerUserId,
+        members: memberUserIds.map((userId) => builderByUser.get(userId)),
+        memberUserIds,
+      })),
     });
   }
 
   if (request.method === 'POST' && route.length === 4 && route[3] === 'join') {
     const ownerBuilderId = route[2];
-    await checkRateLimit(db, `friend-voice-channel-mutate:${sessionBuilder.builder_id}`, FRIEND_VOICE_CHANNEL_MUTATE_RATE_LIMIT_MAX);
+    await checkRateLimit(db, `friend-voice-channel-mutate:${sessionBuilder.user_id}`, FRIEND_VOICE_CHANNEL_MUTATE_RATE_LIMIT_MAX);
     // Joining your own channel (starting it) needs no friendship check --
     // everyone else does, the same bar the owner's own friend list already
     // gates adding a member through in the first place.
     if (ownerBuilderId !== sessionBuilder.builder_id) {
       await assertAcceptedFriendship(db, sessionBuilder.builder_id, ownerBuilderId,
         'Joining a friend voice channel requires an existing accepted friendship with its owner');
+    }
+    // #3147: the channel is keyed by its owner's account. An accepted
+    // friendship (above) already implies the owner has one; the 403 mirrors
+    // the friendship message for an id that resolves to no account at all.
+    const ownerUserId = ownerBuilderId === sessionBuilder.builder_id
+      ? sessionBuilder.user_id
+      : await userIdForBuilder(db, ownerBuilderId);
+    if (!ownerUserId) {
+      throw new HttpError('Joining a friend voice channel requires an existing accepted friendship with its owner', 403);
     }
     // Always ensures the owner's own row exists too, even when the owner
     // isn't the one calling this -- that row is what marks the channel
@@ -744,10 +797,10 @@ async function handleFriendVoiceChannels(request, db, route) {
     // that issue's own text suggests, since any accepted friend opening it
     // is already the intended, unchanged join model.
     const results = await db.batch([
-      db.prepare('INSERT INTO friend_voice_channel_members (owner_builder_id, member_builder_id) VALUES (?, ?) ON CONFLICT (owner_builder_id, member_builder_id) DO NOTHING')
-        .bind(ownerBuilderId, ownerBuilderId),
-      db.prepare('INSERT INTO friend_voice_channel_members (owner_builder_id, member_builder_id) VALUES (?, ?) ON CONFLICT (owner_builder_id, member_builder_id) DO NOTHING')
-        .bind(ownerBuilderId, sessionBuilder.builder_id),
+      db.prepare('INSERT INTO friend_voice_channel_members (owner_user_id, member_user_id) VALUES (?, ?) ON CONFLICT (owner_user_id, member_user_id) DO NOTHING')
+        .bind(ownerUserId, ownerUserId),
+      db.prepare('INSERT INTO friend_voice_channel_members (owner_user_id, member_user_id) VALUES (?, ?) ON CONFLICT (owner_user_id, member_user_id) DO NOTHING')
+        .bind(ownerUserId, sessionBuilder.user_id),
     ]);
     // #2930: a separate pre-check SELECT (the previous shape here) lets two
     // concurrent joins from different friends both observe "not yet active"
@@ -773,16 +826,20 @@ async function handleFriendVoiceChannels(request, db, route) {
 
   if (request.method === 'POST' && route.length === 4 && route[3] === 'leave') {
     const ownerBuilderId = route[2];
-    await checkRateLimit(db, `friend-voice-channel-mutate:${sessionBuilder.builder_id}`, FRIEND_VOICE_CHANNEL_MUTATE_RATE_LIMIT_MAX);
+    await checkRateLimit(db, `friend-voice-channel-mutate:${sessionBuilder.user_id}`, FRIEND_VOICE_CHANNEL_MUTATE_RATE_LIMIT_MAX);
     if (ownerBuilderId === sessionBuilder.builder_id) {
       // The owner leaving ends the channel for everyone, not just
       // themselves -- "hanging up" a group call closes it, rather than
       // silently leaving every other member still trying to reach a host
       // who's no longer there.
-      await db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_builder_id = ?').bind(ownerBuilderId).run();
+      await db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_user_id = ?').bind(sessionBuilder.user_id).run();
     } else {
-      await db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?')
-        .bind(ownerBuilderId, sessionBuilder.builder_id).run();
+      // #3147: an owner id that resolves to no account has no channel to leave.
+      const ownerUserId = await userIdForBuilder(db, ownerBuilderId);
+      if (ownerUserId) {
+        await db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_user_id = ? AND member_user_id = ?')
+          .bind(ownerUserId, sessionBuilder.user_id).run();
+      }
     }
     return json({ ok: true });
   }
@@ -825,7 +882,7 @@ let warnedTurnMissingSecret = false;
 
 async function handleVoiceIceConfig(request, db, env) {
   const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
-  await checkRateLimit(db, `voice-ice-config:${sessionBuilder.builder_id}`, VOICE_ICE_CONFIG_RATE_LIMIT_MAX);
+  await checkRateLimit(db, `voice-ice-config:${sessionBuilder.user_id}`, VOICE_ICE_CONFIG_RATE_LIMIT_MAX);
   const iceServers = [{ urls: 'stun:stun.l.google.com:19302' }];
   if (env?.TURN_SERVER_URL) {
     if (env.TURN_SHARED_SECRET) {
@@ -894,12 +951,12 @@ async function handleVoiceReportCreate(request, db) {
   if (reportedUserId === sessionBuilder.user_id) throw new HttpError('reportedBuilderId cannot be the caller themselves', 400);
   const controlRoomNoteLines = [`Reported account: ${reportedUserId} — current builder "${reportedLabel}" (${reportedBuilderId})`];
   if (reason) controlRoomNoteLines.push(`Reason: ${reason}`);
-  controlRoomNoteLines.push(...await reportEvidenceLines(db, sessionBuilder.builder_id, reportedBuilderId, async () => {
+  controlRoomNoteLines.push(...await reportEvidenceLines(db, sessionBuilder.user_id, reportedUserId, async () => {
     const signal = await db.prepare(`
       SELECT 1 AS present FROM voice_signaling_messages
-      WHERE (from_builder_id = ? AND to_builder_id = ?) OR (from_builder_id = ? AND to_builder_id = ?)
+      WHERE (from_user_id = ? AND to_user_id = ?) OR (from_user_id = ? AND to_user_id = ?)
       LIMIT 1
-    `).bind(sessionBuilder.builder_id, reportedBuilderId, reportedBuilderId, sessionBuilder.builder_id).first();
+    `).bind(sessionBuilder.user_id, reportedUserId, reportedUserId, sessionBuilder.user_id).first();
     return `Shared voice signaling still on record: ${signal ? 'yes' : 'no'}`;
   }));
   const storedReportId = await fileConductReport(db, {
@@ -929,8 +986,8 @@ export async function handleVoiceSignal(request, db, route, url, env) {
   }
   if (request.method === 'GET') {
     const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
-    await checkRateLimit(db, `voice-signal-poll:${sessionBuilder.builder_id}`, VOICE_SIGNAL_POLL_RATE_LIMIT_MAX);
-    const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
+    await checkRateLimit(db, `voice-signal-poll:${sessionBuilder.user_id}`, VOICE_SIGNAL_POLL_RATE_LIMIT_MAX);
+    const landletId = await callersCurrentLandletId(db, sessionBuilder.user_id);
     const limit = queryLimit(url.searchParams.get('limit'), VOICE_SIGNAL_POLL_LIMIT);
     const cursor = decodeCursor(url.searchParams.get('cursor'));
     // #2897: a friend-channel-tagged row (channel_owner_builder_id set) is
@@ -946,7 +1003,7 @@ export async function handleVoiceSignal(request, db, route, url, env) {
     // landletId to match against.
     // #3143: a signal queued before a block (or relayed around it) never
     // reaches the recipient.
-    const blockedSignalGuard = notBlockedEitherWaySql('voice_signaling_messages.to_builder_id', 'voice_signaling_messages.from_builder_id');
+    const blockedSignalGuard = notBlockedEitherWayByUserSql('voice_signaling_messages.to_user_id', 'voice_signaling_messages.from_user_id');
     // #2955: a proximity row is delivered to the addressee regardless of which
     // landlet they stand in *now*. It used to be matched against the caller's
     // current landlet, so two avatars walking across a landlet boundary
@@ -959,18 +1016,28 @@ export async function handleVoiceSignal(request, db, route, url, env) {
     // window bounds how stale a delivered row can be. A caller with no
     // current presence at all still receives friend-channel signals only.
     const conditions = landletId === null
-      ? ['to_builder_id = ?', 'channel_owner_builder_id IS NOT NULL', blockedSignalGuard]
-      : ['to_builder_id = ?', blockedSignalGuard];
-    const bindings = [sessionBuilder.builder_id];
+      ? ['voice_signaling_messages.to_user_id = ?', 'voice_signaling_messages.channel_owner_user_id IS NOT NULL', blockedSignalGuard]
+      : ['voice_signaling_messages.to_user_id = ?', blockedSignalGuard];
+    const bindings = [sessionBuilder.user_id];
     if (cursor) {
       // Same ascending/"poll forward from here" ordering as
       // handleNearbyChat's own cursor above.
-      conditions.push('(created_at > ? OR (created_at = ? AND message_id > ?))');
+      conditions.push('(voice_signaling_messages.created_at > ? OR (voice_signaling_messages.created_at = ? AND voice_signaling_messages.message_id > ?))');
       bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
     }
+    // #3147: the sender (and, for a channel-tagged signal, the channel owner)
+    // are stored as accounts; the wire names them by their CURRENT builder
+    // profile, so it is looked up here. A sender with no builder profile right
+    // now has nothing for the client to key a peer connection on, so such a
+    // signal is not delivered (a profile reset used to delete it by cascade).
     const { results } = await db.prepare(`
-      SELECT * FROM voice_signaling_messages WHERE ${conditions.join(' AND ')}
-      ORDER BY created_at ASC, message_id ASC LIMIT ?
+      SELECT voice_signaling_messages.*,
+        (SELECT builders.builder_id FROM builders WHERE builders.user_id = voice_signaling_messages.from_user_id) AS from_builder_id,
+        (SELECT builders.builder_id FROM builders WHERE builders.user_id = voice_signaling_messages.channel_owner_user_id) AS channel_owner_builder_id
+      FROM voice_signaling_messages
+      WHERE ${conditions.join(' AND ')}
+        AND EXISTS (SELECT 1 FROM builders WHERE builders.user_id = voice_signaling_messages.from_user_id)
+      ORDER BY voice_signaling_messages.created_at ASC, voice_signaling_messages.message_id ASC LIMIT ?
     `).bind(...bindings, limit).all();
     const last = results.at(-1);
     return json({
@@ -985,8 +1052,8 @@ export async function handleVoiceSignal(request, db, route, url, env) {
   if (request.method === 'POST') {
     const input = await readJson(request);
     const sessionBuilder = await requireIdVerifiedSessionBuilder(request, db, 'ID verification is required to use voice chat.');
-    await checkRateLimit(db, `voice-signal-send:${sessionBuilder.builder_id}`, VOICE_SIGNAL_SEND_RATE_LIMIT_MAX);
-    const landletId = await callersCurrentLandletId(db, sessionBuilder.builder_id);
+    await checkRateLimit(db, `voice-signal-send:${sessionBuilder.user_id}`, VOICE_SIGNAL_SEND_RATE_LIMIT_MAX);
+    const landletId = await callersCurrentLandletId(db, sessionBuilder.user_id);
     if (landletId === null) {
       throw new HttpError('A recent position report is required before sending a voice signal', 400);
     }
@@ -1017,8 +1084,13 @@ export async function handleVoiceSignal(request, db, route, url, env) {
     const channelOwnerBuilderId = (input.channelOwnerBuilderId !== undefined && input.channelOwnerBuilderId !== null)
       ? stringValue(input.channelOwnerBuilderId, 'channelOwnerBuilderId')
       : null;
+    // #3147: the wire names people by builder id; the stored rows and every
+    // check below are on their accounts. An id that resolves to no account is
+    // refused with the same message as one that is simply not in range.
+    const toUserId = await userIdForBuilder(db, toBuilderId);
+    const channelOwnerUserId = channelOwnerBuilderId ? await userIdForBuilder(db, channelOwnerBuilderId) : null;
     if (channelOwnerBuilderId) {
-      const sharedChannel = await sharedActiveFriendVoiceChannelExists(db, sessionBuilder.builder_id, toBuilderId, channelOwnerBuilderId);
+      const sharedChannel = await sharedActiveFriendVoiceChannelExists(db, sessionBuilder.user_id, toUserId, channelOwnerUserId);
       if (!sharedChannel) {
         throw new HttpError('toBuilderId is not a current member of that friend voice channel', 400);
       }
@@ -1028,7 +1100,7 @@ export async function handleVoiceSignal(request, db, route, url, env) {
       // not just a client-side rendering choice -- a caller can only signal
       // a recipient who is themselves, right now, reporting presence in the
       // caller's own current landlet.
-      const recipientLandletId = await callersCurrentLandletId(db, toBuilderId);
+      const recipientLandletId = await callersCurrentLandletId(db, toUserId);
       if (recipientLandletId === null || recipientLandletId !== landletId) {
         throw new HttpError('toBuilderId is not currently in your landlet', 400);
       }
@@ -1036,24 +1108,30 @@ export async function handleVoiceSignal(request, db, route, url, env) {
     const messageId = `voice-signal-${crypto.randomUUID()}`;
     // #3143 (A block is silent): a signal between blocked people is accepted
     // with the usual 201 and simply never stored, so neither side can tell.
-    if (await blockExistsBetween(db, sessionBuilder.builder_id, toBuilderId)) {
+    if (await userBlockExistsBetween(db, sessionBuilder.user_id, toUserId)) {
       return json({
         message: voiceSignalMessageFromRow({
           message_id: messageId,
+          from_user_id: sessionBuilder.user_id,
           from_builder_id: sessionBuilder.builder_id,
           kind,
           payload: serializedPayload,
           created_at: new Date().toISOString(),
+          channel_owner_user_id: channelOwnerUserId,
           channel_owner_builder_id: channelOwnerBuilderId,
         }),
       }, 201);
     }
     await db.prepare(`
-      INSERT INTO voice_signaling_messages (message_id, from_builder_id, to_builder_id, landlet_id, kind, payload, channel_owner_builder_id)
+      INSERT INTO voice_signaling_messages (message_id, from_user_id, to_user_id, landlet_id, kind, payload, channel_owner_user_id)
       VALUES (?, ?, ?, ?, ?, ?, ?)
-    `).bind(messageId, sessionBuilder.builder_id, toBuilderId, landletId, kind, serializedPayload, channelOwnerBuilderId).run();
+    `).bind(messageId, sessionBuilder.user_id, toUserId, landletId, kind, serializedPayload, channelOwnerUserId).run();
     const row = await db.prepare('SELECT * FROM voice_signaling_messages WHERE message_id = ?').bind(messageId).first();
-    return json({ message: voiceSignalMessageFromRow(row) }, 201);
+    return json({
+      message: voiceSignalMessageFromRow({
+        ...row, from_builder_id: sessionBuilder.builder_id, channel_owner_builder_id: channelOwnerBuilderId,
+      }),
+    }, 201);
   }
 
   return json({ error: 'Not found' }, 404);
@@ -1091,6 +1169,9 @@ async function equippedAvatarsByBuilder(db, builderIds) {
 
 function avatarPresenceFromRow(row) {
   return {
+    // #3147: stored against the account; builderId is that person's CURRENT
+    // builder profile (the caller joins it in), userId the stable id.
+    userId: row.user_id,
     builderId: row.builder_id,
     landletId: row.landlet_id,
     x: row.x,
@@ -1366,19 +1447,14 @@ export async function handleFriendships(request, db, route, url) {
     // can never touch a channel's own owner-anchor row (owner_builder_id
     // === member_builder_id).
     if (result.meta.changes === 1) {
-      // friend_voice_channel_members is still keyed by builder profile until
-      // 4/6 of #3141, so resolve each side's current one; a person with no
-      // builder profile at the moment has no membership row to remove.
-      const requesterBuilderId = await builderIdForUser(db, existing.requester_user_id);
-      const recipientBuilderId = await builderIdForUser(db, existing.recipient_user_id);
-      if (requesterBuilderId && recipientBuilderId) {
-        await db.batch([
-          db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?')
-            .bind(requesterBuilderId, recipientBuilderId),
-          db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?')
-            .bind(recipientBuilderId, requesterBuilderId),
-        ]);
-      }
+      // #3147: friend_voice_channel_members is keyed on the same two accounts
+      // as the friendship, so no builder-profile lookup is needed.
+      await db.batch([
+        db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_user_id = ? AND member_user_id = ?')
+          .bind(existing.requester_user_id, existing.recipient_user_id),
+        db.prepare('DELETE FROM friend_voice_channel_members WHERE owner_user_id = ? AND member_user_id = ?')
+          .bind(existing.recipient_user_id, existing.requester_user_id),
+      ]);
     }
     return json({ deleted: true });
   }

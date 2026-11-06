@@ -5080,9 +5080,11 @@ Owner decision (2026-11-05, AGENTS.md): anything about a person as a person keys
 5. Account deletion removes the rows for the deleted `user_id` explicitly.
 6. Tests: the feature survives a builder-profile reset on either side; an unrecoverable (pre-auth) row neither breaks a list nor disappears; counts and ordering are unchanged.
 
+**Ephemeral tables (#3147, 4 of 6).** `avatar_presence`, `nearby_chat_messages`, `voice_signaling_messages` and `friend_voice_channel_members` hold rows that live seconds to minutes (the prune crons in `worker/index.js`), so they follow this pattern with two differences: the migration (`0201_social_ephemeral_user_id.sql`) rebuilds each table without the retired builder-id columns instead of leaving them behind for 6/6 (every reader is switched, and there is no history in them worth keeping), and a row whose builder has no account is not carried over (such a builder cannot have written one through a session, and it would be pruned within minutes anyway). Rate-limit buckets for these endpoints are keyed on the account. A person whose builder profile was just reset has no builder id to be shown under, so their presence, chat lines, signals and channel membership are hidden from other people's reads until they have a profile again (the rows themselves are kept; a reset used to delete them through the foreign-key cascade).
+
 ## Friend requests
 
-docs/SPEC.md §6: "Friend/group systems: standard friend requests; social
+docs/SPEC.md §6: "Friend/group systems": standard friend requests; social
 map shows an accepted friend's location." One `friendships` row (see
 `migrations/0049_friendships.sql`) per relationship, shared by both
 people — direction preserved (`requesterUserId`/`recipientUserId`; the
@@ -5129,9 +5131,8 @@ ends a friendship: the row is stored against `requester_user_id` /
 `recipient_user_id` (migration 0188; the old builder-id columns are kept
 unwritten until 6/6 drops them) and goes away only when the account is deleted
 (`cascadeDeleteAccount`) or a party ends it. The `*BuilderId` fields in the
-response are each person's *current* builder profile, because direct messages,
-voice and presence are still keyed by builder until their own sub-issues land;
-they are `null` for a person who has no builder profile at the moment, in
+response are each person's *current* builder profile (the id the rest of the
+client still names people by); they are `null` for a person who has no builder profile at the moment, in
 which case `otherLabel` falls back to their username. `POST` still takes
 `recipientBuilderId` (the thing a client can see) and the server resolves it to
 the owner's account; a builder with no account cannot be befriended.
@@ -5506,11 +5507,17 @@ an undefined or global scope.
 ```json
 {
   "messageId": "nearby-chat-3f1a9c20-9e44-4b7a-8c3d-1a2b3c4d5e6f",
+  "userId": "user-alice",
   "builderId": "builder-alice",
   "text": "hi!",
   "createdAt": "2026-10-25T00:00:00.000Z"
 }
 ```
+
+A message is stored against the author's account (`userId`, #3147);
+`builderId` is that person's *current* builder profile, which is what the
+client keys mutes and labels on. A message whose author has no builder
+profile at the moment (they just reset it) is left out of the read.
 
 ### `GET /api/nearby-chat`
 
@@ -5620,12 +5627,23 @@ useful for the few seconds a connection is actually being negotiated).
 ```json
 {
   "messageId": "voice-signal-3f1a9c20-9e44-4b7a-8c3d-1a2b3c4d5e6f",
+  "fromUserId": "user-alice",
   "fromBuilderId": "builder-alice",
+  "channelOwnerBuilderId": null,
+  "channelOwnerUserId": null,
   "kind": "offer",
   "payload": { "sdp": "..." },
   "createdAt": "2026-10-27T00:00:00.000Z"
 }
 ```
+
+Signals are stored against the two accounts (#3147): `POST` still takes
+`toBuilderId` (and `channelOwnerBuilderId`) and resolves them to accounts on
+the server, and a builder id that resolves to nobody is refused exactly like
+one that is not in range. `fromBuilderId` / `channelOwnerBuilderId` are those
+people's *current* builder profiles; a signal whose sender has none right now
+is not delivered. `channelOwnerBuilderId` / `channelOwnerUserId` are set only
+for a signal relayed under a friend voice channel (below).
 
 `kind` is one of `"offer"`, `"answer"`, `"ice-candidate"`. `payload` is an
 opaque JSON value (an SDP string/object or an ICE candidate object) — the
@@ -5777,17 +5795,18 @@ and fully reused.
 
 **Model**: `friend_voice_channel_members`
 (`migrations/0159_friend_voice_channel_members.sql`) — one channel per
-owner, keyed by the owner's own `builderId` (no separate channel id).
+owner, keyed by the owner's account (`owner_user_id`, #3147; no separate channel id,
+and a profile reset no longer closes it).
 Any number of that owner's accepted friends can be members; a member only
 needs to be an accepted friend of the *owner*, not of every other member
 — the same "anyone the host invited talks to everyone else the host
 invited" shape an ordinary group call uses, not a stricter "everyone must
 be mutual friends with everyone" requirement. The owner's own row
-(`member_builder_id = owner_builder_id`) is what marks a channel
+(`member_user_id = owner_user_id`) is what marks a channel
 *active* — joining always inserts it (even when some other accepted
 friend is the one joining), so the first join is what opens the channel;
 there is no separate "start" endpoint. The owner leaving deletes every
-row under their `owner_builder_id` at once, closing the channel for
+row under their `owner_user_id` at once, closing the channel for
 everyone (mirrors a host hanging up a group call); anyone else leaving
 only removes their own row.
 
@@ -5801,8 +5820,17 @@ Returns every channel the caller is currently a member of, including one
 they themselves own:
 
 ```json
-{ "channels": [{ "ownerBuilderId": "builder-alice", "members": ["builder-alice", "builder-bob"] }] }
+{ "channels": [{
+  "ownerBuilderId": "builder-alice", "ownerUserId": "user-alice",
+  "members": ["builder-alice", "builder-bob"], "memberUserIds": ["user-alice", "user-bob"]
+}] }
 ```
+
+`ownerBuilderId` / `members` are each person's current builder profile (the
+client's key); `ownerUserId` / `memberUserIds` are the stable account ids, in
+the same order. A suspended or blocked (either direction) person is left out,
+and a person with no builder profile at the moment is left out (for the owner,
+the whole channel).
 
 `429` after 600 requests per 15 minutes from the same calling builder
 (same budget as the signaling relay's own poll).
@@ -5894,8 +5922,15 @@ landlet a `landlets` row models.
 
 ### Avatar presence object
 
+One row per account (`avatar_presence.user_id`, #3147), so a builder-profile
+reset neither deletes the last position nor hands out a new row. `builderId` is
+the account's *current* builder profile (what the client keys avatars on) and
+`userId` the stable id; someone with no builder profile at the moment is not
+returned by `GET /api/presence`.
+
 ```json
 {
+  "userId": "user-3c2b1a90-...",
   "builderId": "builder-3c2b1a90-...",
   "landletId": "landlet-7f3a1c20-...",
   "x": 12.5,
