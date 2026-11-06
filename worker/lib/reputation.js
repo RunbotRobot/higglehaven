@@ -19,7 +19,7 @@
 // requireSessionBuilder itself now lives in ./auth.js (moved there after
 // this module was first written -- see that module's own comment) and is
 // imported directly from there instead, not re-imported back from index.js.
-import { json, HttpError, clientIp } from './http.js';
+import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue } from './validation.js';
 import { fireNotification } from './notifications.js';
@@ -285,7 +285,7 @@ export async function handleProductReviews(request, db, route) {
     const updated = await db.prepare('UPDATE product_reviews SET rating = ?, text = ? WHERE review_id = ? AND user_id = ?')
       .bind(rating, text, reviewId, sessionBuilder.user_id).run();
     if (updated.meta.changes === 0) {
-      throw new HttpError('Review changed concurrently — refetch and retry', 409);
+      throw new HttpError('Review changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     // #1975/#2122: snapshot the pre-edit row for disputes -- logged only
     // after the update is confirmed to have actually happened (a concurrent
@@ -330,7 +330,7 @@ export async function handleProductReviews(request, db, route) {
       const deletedByAuthor = await db.prepare('DELETE FROM product_reviews WHERE review_id = ? AND user_id = ?')
         .bind(reviewId, requester.user_id).run();
       if (deletedByAuthor.meta.changes === 0) {
-        throw new HttpError('Review changed concurrently — refetch and retry', 409);
+        throw new HttpError('Review changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
       }
       // #1975/#2122: logged only after the delete is confirmed to have
       // actually happened, same reasoning as the PATCH branch above.
@@ -1024,7 +1024,7 @@ export async function handleSellerFeedbackEdit(request, env, purchaseId) {
     )
   `).bind(rating, text, purchaseId, sessionBuilder.user_id).run();
   if (updated.meta.changes === 0) {
-    throw new HttpError('Feedback changed concurrently — refetch and retry', 409);
+    throw new HttpError('Feedback changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
   }
   // #1975/#2122: snapshot the pre-edit row for disputes -- logged only
   // after the update is confirmed to have actually happened, same "logged
@@ -1075,7 +1075,7 @@ export async function handleSellerFeedbackDelete(request, env, purchaseId) {
       )
     `).bind(purchaseId, requester.user_id).run();
     if (deletedByAuthor.meta.changes === 0) {
-      throw new HttpError('Feedback changed concurrently — refetch and retry', 409);
+      throw new HttpError('Feedback changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     // #1975/#2122: logged only after the delete is confirmed to have
     // actually happened, same reasoning as the PATCH branch above.

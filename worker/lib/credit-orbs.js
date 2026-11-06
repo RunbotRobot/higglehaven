@@ -8,7 +8,7 @@
 // (#2543/#2528). LANDLET_SIDE_M/PRESENCE_STALE_AFTER_MS below are
 // duplicated from worker/index.js, not imported -- see that duplication's
 // own comment for why.
-import { json, HttpError } from './http.js';
+import { json, HttpError, ERROR_CODES } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import { requireAdmin, requireSessionBuilder } from './auth.js';
 import { readJson, stringValue, finiteNumber } from './validation.js';
@@ -152,7 +152,7 @@ export async function handleCreditOrbs(request, db, route, url) {
       INSERT INTO credit_orbs (orb_id, landlet_id, x_m, y_m, z_m)
       SELECT ?, landlet_id, ?, ?, 0 FROM landlets WHERE landlet_id = ?
     `).bind(orbId, x, y, landletId).run();
-    if (inserted.meta.changes === 0) throw new HttpError('Landlet not found', 404);
+    if (inserted.meta.changes === 0) throw new HttpError('Landlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
     await adminActionLogStatement(db, admin.user_id, 'credit_orb_seed', 'landlet', landletId, { orbId }).run();
     return json({ orbId }, 201);
   }

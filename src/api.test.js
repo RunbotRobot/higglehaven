@@ -471,3 +471,40 @@ describe('fetchCatalog (#1757)', () => {
     expect(urls).toHaveLength(1);
   });
 });
+
+// #1954: a response carrying a known stable `code` shows player copy instead of
+// the server's developer-facing message; anything else keeps its own message.
+describe('server error codes reach the player as copy, not raw server text (#1954)', () => {
+  const failWith = (status, body) => vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+    ok: false, status, json: () => Promise.resolve(body),
+  })));
+
+  it('replaces the message for a known code but keeps the server text, code and status for diagnostics', async () => {
+    failWith(409, { error: 'Landlet changed concurrently — refetch and retry', code: 'changed_concurrently' });
+    const error = await fetchCurrentUser().catch((e) => e);
+    expect(error.message).toBe('That changed while you were working on it. Please try again.');
+    expect(error.serverMessage).toBe('Landlet changed concurrently — refetch and retry');
+    expect(error.code).toBe('changed_concurrently');
+    expect(error.status).toBe(409);
+  });
+
+  it('keeps a validation message that is already written for players when it has no code', async () => {
+    failWith(400, { error: 'Password must be at least 8 characters.' });
+    const error = await fetchCurrentUser().catch((e) => e);
+    expect(error.message).toBe('Password must be at least 8 characters.');
+    expect(error.code).toBeUndefined();
+  });
+
+  it('keeps the server message for a code this client does not know yet', async () => {
+    failWith(409, { error: 'Something new', code: 'a_code_added_later' });
+    const error = await fetchCurrentUser().catch((e) => e);
+    expect(error.message).toBe('Something new');
+  });
+
+  it('maps the server catch-all 500 to a calm line instead of "Internal server error"', async () => {
+    failWith(500, { error: 'Internal server error', code: 'internal_error' });
+    const error = await fetchCurrentUser().catch((e) => e);
+    expect(error.message).toBe('Something went wrong on our end. Please try again in a moment.');
+    expect(error.status).toBe(500);
+  });
+});

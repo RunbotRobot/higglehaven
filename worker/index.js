@@ -7,7 +7,7 @@ import schemaSnapshot from './schema-snapshot.json';
 // #2501/#2528: cross-cutting helpers used from nearly every route handler
 // below, extracted into worker/lib/ -- see each module's own comment for
 // the call-site counts that justified pulling it out of this file.
-import { json, HttpError, JSON_HEADERS, clientIp, htmlResponse } from './lib/http.js';
+import { json, HttpError, JSON_HEADERS, clientIp, htmlResponse, ERROR_CODES } from './lib/http.js';
 import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './lib/rate-limit.js';
 import { adminActionLogStatement } from './lib/admin-log.js';
 import { timingSafeEqual, bytesToHex, hexToBytes } from './lib/crypto.js';
@@ -399,7 +399,7 @@ async function routeRequest(request, env, ctx) {
       const httpError = error instanceof HttpError ? error : databaseHttpError(error);
       if (httpError) return json({ error: httpError.message, ...httpError.extra }, httpError.status);
       console.error(error);
-      return json({ error: 'Internal server error' }, 500);
+      return json({ error: 'Internal server error', code: ERROR_CODES.INTERNAL_ERROR }, 500);
     });
   }
 
@@ -411,7 +411,7 @@ async function routeRequest(request, env, ctx) {
     return handleUploadedAsset(request, env).catch((error) => {
       console.error(error);
       if (error instanceof HttpError) return json({ error: error.message }, error.status);
-      return json({ error: 'Internal server error' }, 500);
+      return json({ error: 'Internal server error', code: ERROR_CODES.INTERNAL_ERROR }, 500);
     });
   }
 
@@ -871,7 +871,7 @@ export function reviewFromRow(row) {
 // instance handlers still in this file).
 export async function requireLandlet(db, landletId) {
   const row = await db.prepare('SELECT * FROM landlets WHERE landlet_id = ?').bind(landletId).first();
-  if (!row) throw new HttpError('Landlet not found', 404);
+  if (!row) throw new HttpError('Landlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
   return row;
 }
 
@@ -910,7 +910,7 @@ export async function requireOwnedLandlets(db, landletIds, builderId) {
   }
   for (const landletId of uniqueIds) {
     const landlet = byId.get(landletId);
-    if (!landlet) throw new HttpError('Landlet not found', 404);
+    if (!landlet) throw new HttpError('Landlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
     assertOwner(landlet.owner_builder_id, builderId, 'Not your landlet');
   }
 }
@@ -3953,12 +3953,12 @@ export async function warnInactiveLandletOwners(db) {
 
 async function explainClaimConflict(db, landletId, builderId) {
   const landlet = await db.prepare('SELECT status, owner_builder_id, landlet_type, landlet_class FROM landlets WHERE landlet_id = ?').bind(landletId).first();
-  if (!landlet) throw new HttpError('Landlet not found', 404);
+  if (!landlet) throw new HttpError('Landlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
   if (landlet.landlet_type === 'water') {
     throw new HttpError('Water cannot be claimed', 409);
   }
   if (landlet.status !== 'greenbelt' || landlet.owner_builder_id !== null) {
-    throw new HttpError('Landlet is not available to claim', 409);
+    throw new HttpError('Landlet is not available to claim', 409, { code: ERROR_CODES.LANDLET_NOT_CLAIMABLE });
   }
   // #1703: a Class 2+ landlet (landlet_class > 1) is never free to claim --
   // only an auction win grants more than the free Class 1 starter size.
@@ -3974,7 +3974,7 @@ async function explainClaimConflict(db, landletId, builderId) {
   `).bind(builderId).first();
   if (owned) throw new HttpError('Builder already owns a claimed landlet', 409);
 
-  throw new HttpError('Landlet could not be claimed', 409);
+  throw new HttpError('Landlet could not be claimed', 409, { code: ERROR_CODES.LANDLET_NOT_CLAIMABLE });
 }
 
 

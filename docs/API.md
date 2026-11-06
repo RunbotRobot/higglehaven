@@ -69,6 +69,23 @@ Errors use this shape:
 }
 ```
 
+An error may also carry a stable, machine-readable `code` (#1954), for example
+`{ "error": "Landlet changed concurrently — refetch and retry", "code":
+"changed_concurrently" }`. The codes are the `ERROR_CODES` in
+`worker/lib/http.js`. The English `error` text is for logs, tests and
+developers and may be reworded at any time, so a client that has to say
+something to a player maps on `code` instead; `src/errorCopy.js` owns that
+player copy (a test fails if a server code has none), and `src/api.js` shows it
+in place of the server text, keeping the original on `error.serverMessage`. An
+error with no `code` keeps showing its own `error` text, which is right for the
+many validation and auth messages that are already written for players. Coded so
+far: the concurrent-edit conflicts (`changed_concurrently`, `409`), the claim,
+ownership and auction-start errors on a lándlet (`landlet_not_found`,
+`landlet_not_claimable`, `landlet_ownership_lost`, `auction_already_active`,
+`auction_not_owner`), and the Worker's catch-all `500` (`internal_error`). New
+codes are added by adding the constant, the copy and the `{ code }` argument
+together.
+
 Malformed JSON and recognized D1 constraint failures are treated as client
 errors rather than generic server failures. Duplicate resources return `409`,
 foreign-key conflicts return `409`, and database check violations return `400`.

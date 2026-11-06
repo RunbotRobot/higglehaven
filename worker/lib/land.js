@@ -34,7 +34,7 @@
 // requires every named export of the main Worker entry module to be a
 // function/class binding, so none of them can be exported from there as a
 // plain const (confirmed the hard way for D1_MAX_BOUND_PARAMETERS in #2535).
-import { json, HttpError, clientIp } from './http.js';
+import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { readJson, stringValue, queryLimit, decodeCursor, encodeCursor } from './validation.js';
@@ -291,7 +291,7 @@ export async function handleLandletVersions(request, db, route, url) {
       `).bind(versionId, landletId, landletId, landlet.owner_builder_id),
     ]);
     if (results[0].meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
 
     const version = await getVersion(db, landletId, versionId);
@@ -324,7 +324,7 @@ export async function handleLandletVersions(request, db, route, url) {
       WHERE landlet_id = ? AND owner_builder_id IS ?
     `).bind(route[3], landletId, landlet.owner_builder_id).run();
     if (result.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     const updatedLandlet = await requireLandlet(db, landletId);
     return json({ landlet: landletFromRow(updatedLandlet), version });
@@ -496,7 +496,7 @@ export async function handleLandletLevels(request, db, route) {
       landletId, landlet.owner_builder_id,
     ).run();
     if (inserted.meta.changes === 0) {
-      throw new HttpError('This landlet\'s levels changed — please retry', 409);
+      throw new HttpError('This landlet\'s levels changed — please retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     await recomputeLandCap(db, landlet.owner_builder_id);
     const row = await db.prepare('SELECT * FROM landlet_levels WHERE level_id = ?').bind(levelId).first();
@@ -508,7 +508,7 @@ export async function handleLandletLevels(request, db, route) {
     // above) -- a genuine race, not an uncaught levelFromRow(undefined)
     // crash. Same idiom as #2334/#2354/#2364/#2391/#2392/#2429/#2430, 409
     // to match this branch's own "changed -- please retry" message above.
-    if (!row) throw new HttpError('This landlet\'s levels changed — please retry', 409);
+    if (!row) throw new HttpError('This landlet\'s levels changed — please retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     return json({ level: levelFromRow(row) }, 201);
   }
 
@@ -587,7 +587,7 @@ export async function handleLandletLevels(request, db, route) {
         AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
     `).bind(landletId, levelIndex, levelIndex, landletId, landletId, landlet.owner_builder_id).run();
     if (deleted.meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     // #2470: minZ/maxZ above were computed from the pre-DELETE snapshot
     // taken before the rate-limit check and the DELETE's own awaited
@@ -745,12 +745,12 @@ async function activeAuctionConflict(db, landletId) {
 
 async function explainClaimConflict(db, landletId, builderId) {
   const landlet = await db.prepare('SELECT status, owner_builder_id, landlet_type, landlet_class FROM landlets WHERE landlet_id = ?').bind(landletId).first();
-  if (!landlet) throw new HttpError('Landlet not found', 404);
+  if (!landlet) throw new HttpError('Landlet not found', 404, { code: ERROR_CODES.LANDLET_NOT_FOUND });
   if (landlet.landlet_type === 'water') {
     throw new HttpError('Water cannot be claimed', 409);
   }
   if (landlet.status !== 'greenbelt' || landlet.owner_builder_id !== null) {
-    throw new HttpError('Landlet is not available to claim', 409);
+    throw new HttpError('Landlet is not available to claim', 409, { code: ERROR_CODES.LANDLET_NOT_CLAIMABLE });
   }
   // #1703: a Class 2+ landlet (landlet_class > 1) is never free to claim --
   // only an auction win grants more than the free Class 1 starter size.
@@ -766,7 +766,7 @@ async function explainClaimConflict(db, landletId, builderId) {
   `).bind(builderId).first();
   if (owned) throw new HttpError('Builder already owns a claimed landlet', 409);
 
-  throw new HttpError('Landlet could not be claimed', 409);
+  throw new HttpError('Landlet could not be claimed', 409, { code: ERROR_CODES.LANDLET_NOT_CLAIMABLE });
 }
 
 function landletParams(landlet) {
@@ -1092,7 +1092,7 @@ export async function handleLandlets(request, db, route, url) {
     if (result.meta.changes === 0) {
       const current = await requireLandlet(db, route[1]);
       if (current.owner_builder_id !== existing.owner_builder_id || current.status !== 'claimed') {
-        throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+        throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
       }
       const oneClaimedConflict = await db.prepare(`
         SELECT 1 FROM landlets AS owned WHERE owned.owner_builder_id = ? AND owned.status = 'claimed'
@@ -1422,7 +1422,7 @@ export async function handleLandlets(request, db, route, url) {
           .bind(landlet.name, route[1]).first();
         if (nameTaken) throw new HttpError('That land name is already taken — names must be unique across all of Higglehaven', 409);
       }
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     return json({ landlet });
   }
@@ -1465,7 +1465,7 @@ export async function handleLiveLandlet(db, landletId) {
   }
 
   const version = await getVersion(db, landletId, landlet.activeVersionId);
-  if (!version) throw new HttpError('Active landlet version not found', 500);
+  if (!version) throw new HttpError('Active landlet version not found', 500, { code: ERROR_CODES.INTERNAL_ERROR });
   // #3033: this is the shopper-facing read, and a published version is a
   // frozen copy that #2986's removal of a suspended seller's placed
   // instances never touches (it only deletes the builder's draft rows) --
@@ -1742,7 +1742,7 @@ export async function handleLandletDraft(request, db, landletId) {
       `).bind(versionId, landletId, landletId, landlet.owner_builder_id),
     ]);
     if (batchResults[0].meta.changes === 0) {
-      throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+      throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     // #1695: same #1022/#1675 cleanup, the third call site sharing this
     // upsert's own is_community_sign/is_community_calendar flip --

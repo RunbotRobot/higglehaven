@@ -19,11 +19,30 @@ export function json(payload, status = 200, extraHeaders) {
   return new Response(JSON.stringify(payload, null, 2), { status, headers });
 }
 
+// #1954: stable, machine-readable error codes. The English `message` on an
+// HttpError is written for logs, tests and developers and may be reworded at
+// any time; a client that needs to say something to a player maps on `code`
+// instead (src/errorCopy.js owns the player-facing copy, and a test fails if a
+// code here has no copy there). Pass one as `{ code: ERROR_CODES.X }` in the
+// third argument: it travels in the response body next to `error`. An error
+// with no code keeps showing its own message, which is right for the many
+// validation and auth messages that are already written for players.
+export const ERROR_CODES = Object.freeze({
+  INTERNAL_ERROR: 'internal_error',
+  CHANGED_CONCURRENTLY: 'changed_concurrently',
+  LANDLET_NOT_FOUND: 'landlet_not_found',
+  LANDLET_NOT_CLAIMABLE: 'landlet_not_claimable',
+  LANDLET_OWNERSHIP_LOST: 'landlet_ownership_lost',
+  AUCTION_ALREADY_ACTIVE: 'auction_already_active',
+  AUCTION_NOT_OWNER: 'auction_not_owner',
+});
+
 export class HttpError extends Error {
   constructor(message, status, extra) {
     super(message);
     this.status = status;
     this.extra = extra;
+    this.code = extra?.code ?? null;
   }
 }
 

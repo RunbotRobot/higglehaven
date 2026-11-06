@@ -36,7 +36,7 @@ import {
 } from '../geometry.js';
 import { GEO_WATER_FINE_GRID_SPACING_M } from '../geoData.js';
 import { generateLandletRing, powerLawPlots } from '../landGenerator.js';
-import { json, HttpError } from './http.js';
+import { json, HttpError, ERROR_CODES } from './http.js';
 import { defaultMosaicBoundaryRadiusM, generateWaterAwareMosaic } from './water-aware-mosaic.js';
 import { generateWaterAwareLandletRing } from './water-aware-ring.js';
 import { discBoundary } from '../weightedVoronoiGenerator.js';
@@ -1161,7 +1161,7 @@ async function handleWorld(request, db, route) {
       ).run();
       if (claimed.meta.changes > 0) break;
       if (attempt >= WORLD_SETTINGS_CONCURRENT_RETRY_LIMIT) {
-        throw new HttpError('World settings are being updated concurrently — please retry', 409);
+        throw new HttpError('World settings are being updated concurrently — please retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
       }
     }
     await adminActionLogStatement(db, admin.user_id, 'update_world_settings', 'world', 'default-world').run();
@@ -1246,7 +1246,7 @@ async function expandWorldOnce(db, adminUserId) {
     `).bind(newRadiusM, previousRadiusM).run();
     if (claimed.meta.changes > 0) break;
     if (attempt >= EXPAND_WORLD_CONCURRENT_RETRY_LIMIT) {
-      throw new HttpError('World expansion is being updated concurrently — please retry', 409);
+      throw new HttpError('World expansion is being updated concurrently — please retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
   }
   const { results } = await db.prepare(`
