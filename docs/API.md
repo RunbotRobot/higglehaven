@@ -8315,6 +8315,17 @@ instance, template, or seller it references is later removed, the same
 "keep the record, drop the live reference" reasoning `notifications.template_id`
 already uses.
 
+`buyer_user_id` (#3195, `migrations/0194`) records the buyer's *account* on
+each purchase when it is written, also without a foreign key. The buyer is a
+person, and `buyer_builder_id` is `ON DELETE SET NULL`, so a purchase loses
+that link whenever the buyer's builder profile is deleted or reset; the
+account link survives, so a buyer's purchase history (the upcoming "My
+Purchases" list, #2115) can be keyed on it. It is `NULL` for a purchase whose
+buyer had no resolvable account, and for a purchase made before the column
+existed whose builder link was already gone (the migration backfills every
+other row through `buyer_builder_id`). It is internal: no purchase response
+exposes it.
+
 ### Commission math
 
 docs/SPEC.md §5's "Universal commission formula": "2% standard for
