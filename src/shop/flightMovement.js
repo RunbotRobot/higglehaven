@@ -58,6 +58,7 @@ import { attentionDistanceAndDot, hasSustainedAttention, nextAttentionElapsedS, 
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from '../itemHandling.js';
 import { meshDimensions, isFlooringTemplate } from '../world/models.js';
 import { footprintsOverlap, footprintCorners } from '../build/scene.js';
+import { isNavigationKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
 import {
   shopAvatar, shopAvatarCollisionHalfM, shopAvatarHeightM, shopCameraAnchorHeightM,
   updateShopAvatarPose, setShopAvatarAnimationState, updateShopAvatarIdle,
@@ -319,6 +320,21 @@ let shopMoveX = 0;
 let shopMoveY = 0;
 let shopLookX = 0;
 let shopLookY = 0;
+// #1319: the joysticks and the keyboard each keep their own raw state; the
+// four shop*X/Y values above are always the merge of the two (see
+// applyShopStickInput), so everything downstream reads them unchanged.
+const shopJoystickMove = { x: 0, y: 0 };
+const shopJoystickLook = { x: 0, y: 0 };
+const shopKeysDown = new Set();
+function applyShopStickInput() {
+  const keys = keyboardAxes(shopKeysDown);
+  const move = mergeStickInput(shopJoystickMove, { x: keys.moveX, y: keys.moveY });
+  const look = mergeStickInput(shopJoystickLook, { x: keys.lookX, y: 0 });
+  shopMoveX = move.x;
+  shopMoveY = move.y;
+  shopLookX = look.x;
+  shopLookY = look.y;
+}
 let shopLastFrameTime = null;
 let shopLastProximityCheck = 0;
 
@@ -520,12 +536,14 @@ function bindShopFlyToggle(el) {
 // ready, rather than left as top-level side effects here.
 export function initShopFlightInputBindings() {
   bindShopJoystick(shopMoveJoystickEl, shopMoveKnobEl, (x, y) => {
-    shopMoveX = x;
-    shopMoveY = y;
+    shopJoystickMove.x = x;
+    shopJoystickMove.y = y;
+    applyShopStickInput();
   });
   bindShopJoystick(shopLookJoystickEl, shopLookKnobEl, (x, y) => {
-    shopLookX = x;
-    shopLookY = y;
+    shopJoystickLook.x = x;
+    shopJoystickLook.y = y;
+    applyShopStickInput();
   });
   bindShopVerticalButton(shopUpBtn, 1);
   bindShopVerticalButton(shopDownBtn, -1);
@@ -535,6 +553,26 @@ export function initShopFlightInputBindings() {
     startGoToLastLocation();
   });
 }
+
+// #1319: keyboard walking/turning (WASD or arrows to move, Q/E to turn).
+// keyup is handled unconditionally (so leaving Shop mode or a dialog opening
+// mid-press can't leave a key stuck down), keydown only while navigating.
+window.addEventListener('keydown', (event) => {
+  if (!shopActive || !isNavigationKeyEvent(event)) return;
+  event.preventDefault(); // arrows would otherwise scroll the page
+  if (shopKeysDown.has(event.code)) return;
+  shopKeysDown.add(event.code);
+  applyShopStickInput();
+});
+window.addEventListener('keyup', (event) => {
+  if (!shopKeysDown.delete(event.code)) return;
+  applyShopStickInput();
+});
+window.addEventListener('blur', () => {
+  if (shopKeysDown.size === 0) return;
+  shopKeysDown.clear();
+  applyShopStickInput();
+});
 
 // A double-tap/double-press, not a single one, so an ordinary spacebar
 // press while, say, a builder is just looking around with keyboard focus

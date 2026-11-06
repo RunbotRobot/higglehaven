@@ -33,12 +33,18 @@ export function ownRequirementsDue(account) {
 // its own step; adds nothing otherwise.
 export function syncStripeStepPrompt(host, role, account) {
   host.querySelector('.stripe-step-prompt')?.remove();
-  if (!account || !account.stripeStepRequirements || account.stripeStepRequirements.length === 0) return;
+  const dueNow = !!(account && account.stripeStepRequirements && account.stripeStepRequirements.length > 0);
+  // Early heads-up (#2928): Stripe will ask for more later. Same step, softer
+  // copy, never a requirement; nothing else on the panel changes for it.
+  const dueLater = !dueNow && !!(account && account.stripeStepEventuallyDue && account.stripeStepEventuallyDue.length > 0);
+  if (!dueNow && !dueLater) return;
   const prompt = document.createElement('div');
   prompt.className = 'stripe-step-prompt';
   const text = document.createElement('div');
   text.className = 'settings-empty-note';
-  text.textContent = 'Stripe needs a bit more information to verify your account. You will finish this on Stripe, then come back here.';
+  text.textContent = dueNow
+    ? 'Stripe needs a bit more information to verify your account. You will finish this on Stripe, then come back here.'
+    : 'Stripe will need a bit more information from you soon. You can finish it now on Stripe, then come back here.';
   prompt.appendChild(text);
   const button = document.createElement('button');
   button.type = 'button';

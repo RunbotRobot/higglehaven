@@ -1773,9 +1773,20 @@ and a derived onboarding status are kept.
   "status": "not_started",
   "requirementsCurrentlyDue": [],
   "stripeStepRequirements": [],
+  "requirementsEventuallyDue": [],
+  "stripeStepEventuallyDue": [],
   "updatedAt": null
 }
 ```
+
+`requirementsEventuallyDue` / `stripeStepEventuallyDue` (#2928) are an early
+heads-up: what Stripe's `requirements.eventually_due` lists that is not yet
+in `currently_due` (volume or time thresholds), and the part of it only
+Stripe may collect. They never affect `status` and block nothing; the
+payout panels use them to offer the same Stripe step a little earlier, with
+softer copy. Stored per row in `stripe_requirements_eventually_due`
+(migration 0193, field names only; `NULL` reads as empty), refreshed by the
+same writes as `stripe_requirements_due`.
 
 `stripeStepRequirements` (#2928) is the part of `requirementsCurrentlyDue`
 that our own forms never collect and Stripe must, such as
@@ -1797,7 +1808,7 @@ the person back (the `?stripe=return` marker on the return URL).
 #2928, "hand off". Returns `{ "url": "https://connect.stripe.com/...",
 "expiresAt": null | "..." }`, a single-use Stripe-hosted onboarding link
 (Accounts v2 Account Link, `use_case.account_onboarding`, collecting
-`currently_due`) for whatever Stripe needs that our own forms never collect.
+`currently_due`, or `eventually_due` when only the early heads-up applies) for whatever Stripe needs that our own forms never collect.
 Stored requirements are refreshed from Stripe first. `409` when no payout
 account exists yet ("Set up your payout account first.") or when Stripe
 needs nothing more that we cannot collect; `503` when Stripe is not
@@ -7728,7 +7739,7 @@ owner's own framing) is later reusing it on a *different* landlet.
 **#1756** (*No silent loss*): `sign_posts` and `calendar_events` cascade-
 delete with their instance, so a swept community sign's posts and a swept
 community calendar's events are copied into `saved_layout_sign_posts` /
-`saved_layout_calendar_events` (migration 0193; author, text, created-at,
+`saved_layout_calendar_events` (migration 0194; author, text, created-at,
 and for events the schedule and triggered state) in the same batch, before
 the instances go. The response is `{ deleted, sweptInstanceIds,
 savedSignPostCount, savedCalendarEventCount }` so the client can tell the
