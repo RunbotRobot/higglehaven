@@ -2472,6 +2472,9 @@
         margin: 0;
         font-size: 17px;
       }
+      #feedback-screenshot-preview[hidden] {
+        display: none;
+      }
       #feedback-screenshot-preview {
         display: block;
         width: 100%;
@@ -5561,7 +5564,7 @@
       <div id="feedback-modal-content">
         <button id="feedback-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2>Submit Feedback</h2>
-        <img id="feedback-screenshot-preview" alt="Screenshot of the current view" />
+        <img id="feedback-screenshot-preview" alt="Screenshot of the current view" hidden />
         <label>Describe what happened (optional)
           <textarea id="feedback-description" maxlength="1000" placeholder="What went wrong? The more detail, the better."></textarea>
         </label>
