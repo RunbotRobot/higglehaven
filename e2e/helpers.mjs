@@ -361,6 +361,16 @@ export async function launchPage({ promptAnswer = 'E2E Tester', viewport = { wid
     if (dialog.type() === 'prompt') await dialog.accept(promptAnswer);
     else await dialog.accept();
   });
+  // #1360: the app now serves an enforcing Content-Security-Policy, so a
+  // blocked resource is a real functional break, not a log line. Record every
+  // securitypolicyviolation event (it fires in the page, so it also catches
+  // violations the console message would clip) as a tagged page error, which
+  // any test that asserts "no page errors" then fails on.
+  await page.addInitScript(() => {
+    document.addEventListener('securitypolicyviolation', (event) => {
+      console.error(`CSP-VIOLATION ${event.effectiveDirective} blocked=${event.blockedURI} source=${event.sourceFile || ''}:${event.lineNumber || 0}`);
+    });
+  });
   await installTransientFailureRetry(page);
   await page.goto(BASE_URL, { waitUntil: 'networkidle' });
   await page.waitForTimeout(1500);
@@ -698,6 +708,13 @@ export async function saveBundleAs(page, name, { shared = false } = {}) {
 // `node e2e/whatever.test.mjs`.
 export async function finish(browser, { pass, label, errors = [] }) {
   console.log('page errors:', errors.length ? errors : 'none');
+  // #1360: a blocked resource under the enforcing CSP fails the test even if
+  // the test's own assertions never looked at page errors.
+  const cspViolations = errors.filter((message) => typeof message === 'string' && message.startsWith('CSP-VIOLATION'));
+  if (cspViolations.length) {
+    console.log('CSP violations (fail the test):', cspViolations);
+    pass = false;
+  }
   console.log(pass ? `PASS: ${label}` : `FAIL: ${label}`);
   await browser.close();
   process.exit(pass ? 0 : 1);

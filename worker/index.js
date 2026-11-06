@@ -162,7 +162,7 @@ import { handleBlocks } from './lib/blocks.js';
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
 import { handleLandlets } from './lib/land.js';
-import { CSP_REPORT_ONLY_POLICY, isHtmlResponse, handleCspReport } from './lib/csp.js';
+import { CSP_POLICY, isHtmlResponse, handleCspReport } from './lib/csp.js';
 // #2538: bundle and land-acquisition-auction route handlers, extracted into
 // worker/lib/auctions.js -- see that module's own header comment for what
 // deliberately stayed here instead (bundleFromRow also used by
@@ -176,10 +176,8 @@ import { LANDLET_RELEASED_VIA_AUCTION_SQL, LAND_CAP_DISPLAY_ROUNDING_BUFFER_M2 }
 // regardless of path — applied in one place (fetch's own wrapper below)
 // rather than threaded through every individual handler/JSON_HEADERS call
 // site, so nothing can accidentally skip it. Content-Security-Policy is
-// deliberately NOT included here: this app's Three.js model loading,
-// canvas/WebGL rendering, and the built Vite bundle's own script/style
-// tags would need real allow-list tuning first, which is a scoping task
-// left to #1360's own tracking, not a mechanical header add like these.
+// not in this static map because it is only meaningful on documents; it is
+// attached separately below.
 // x-frame-options only controls whether other sites can frame OUR pages —
 // it has no effect on this app embedding something else's iframe (e.g. a
 // Stripe Elements widget), so DENY here is unconditionally safe.
@@ -199,8 +197,8 @@ const SECURITY_HEADERS = {
 function withSecurityHeaders(response) {
   const headers = new Headers(response.headers);
   for (const [name, value] of Object.entries(SECURITY_HEADERS)) headers.set(name, value);
-  // #1360: report-only, on documents only; see worker/lib/csp.js.
-  if (isHtmlResponse(response)) headers.set('content-security-policy-report-only', CSP_REPORT_ONLY_POLICY);
+  // #1360: enforcing, on documents only; see worker/lib/csp.js.
+  if (isHtmlResponse(response)) headers.set('content-security-policy', CSP_POLICY);
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
@@ -673,7 +671,7 @@ async function handleApi(request, env, url, ctx) {
   }
 
   // #1360: browsers POST CSP violation reports here (report-uri in the
-  // report-only policy). Log-only; see worker/lib/csp.js.
+  // policy). Log-only; see worker/lib/csp.js.
   if (request.method === 'POST' && route.length === 1 && route[0] === 'csp-report') {
     return handleCspReport(request);
   }

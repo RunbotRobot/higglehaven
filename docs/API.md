@@ -84,11 +84,11 @@ and the admin pages) also carries baseline hardening headers:
 `worker/index.js`'s `SECURITY_HEADERS`/`withSecurityHeaders`, applied once in
 `fetch`'s own wrapper around `routeRequest` rather than per-handler).
 HTML responses (the app shell and the admin pages, not JSON) additionally
-carry `Content-Security-Policy-Report-Only` (#1360; the policy and the reason
-for each source are in `worker/lib/csp.js`). It is report-only on purpose,
-following the owner's decision on that issue: nothing is blocked yet, and the
-enforcing `Content-Security-Policy` header ships in a follow-up once the
-reports show the allow-list is right. Known gaps in it today: `'unsafe-inline'`
+carry an enforcing `Content-Security-Policy` (#1360; the policy and the reason
+for each source are in `worker/lib/csp.js`). It shipped report-only first and
+was switched to enforcing once a real-browser pass over every page found no
+violations; `report-uri /api/csp-report` stays on it, so a violation a real
+user hits is still logged. Known gaps in it today: `'unsafe-inline'`
 for scripts and styles (index.html and the admin pages carry inline blocks),
 and the Stripe/Turnstile sources follow those vendors' published guidance
 without having been exercised in a browser with real keys.
