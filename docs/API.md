@@ -1551,13 +1551,14 @@ bid that's since been outbid, or that was on an auction which has already
 ended (whether or not it won), doesn't block deletion (#1691) — same
 reasoning as the seller case above.
 
-`friendships.requester_builder_id`/`recipient_builder_id` are both `ON
-DELETE CASCADE` (migrations/0093), so every friendship involving this
-builder — pending or already-accepted — is silently removed along with
-it, with no notification to the other side and no guard (#1080). Owner's
-call, 2026-10-01: leave this behavior as is rather than adding a
-notification, consistent with the silent-unfriend decision on #858 — see
-"Notifications" below for the same choice recorded in that catalog.
+Friendships, direct messages and conduct reports are keyed on the account
+(`users.user_id`), not on this builder profile (#3141), so resetting the
+profile does not end any of them; the person simply appears under their new
+builder id. Deleting the whole *account* still removes the friendships it is
+part of — pending or accepted — silently, with no notification to the other
+side and no guard (#1080). Owner's call, 2026-10-01: no notification,
+consistent with the silent-unfriend decision on #858 — see "Notifications"
+below for the same choice recorded in that catalog.
 
 Response:
 
@@ -5323,8 +5324,7 @@ profile. `senderUserId`/`recipientUserId` are the stable ids.
 list, the thread query and the send body still address people by builder id;
 each is that person's **current** builder profile, or `null` if they have none
 (account deleted, or profile reset and not yet recreated). The columns
-`sender_builder_id`/`recipient_builder_id` are retired (nullable, unwritten) and
-are dropped by 6/6 (#3149). A legacy row whose accounts could not be recovered
+`sender_builder_id`/`recipient_builder_id` were dropped by 6/6 (#3149). A legacy row whose accounts could not be recovered
 by the migration (its builder was already reset, or had no account) is left in
 place but belongs to no thread. Account deletion does not delete messages, so
 the other person's history survives, as it did before.
@@ -5407,10 +5407,10 @@ friendship gate, self-send rejection, unknown-recipient rejection, the
 clears-unread happy path, and that message history survives the
 friendship ending (a new send no longer allowed, but nothing already
 sent disappears) or either side resetting their builder profile (#1690
-— `sender_builder_id`/`recipient_builder_id` are plain, non-FK columns,
-same shape `purchases.seller_id` already uses, specifically so the
-surviving party's own copy of a thread is never destroyed by an action
-only the other party took). `e2e/direct-messages-gating.test.mjs` covers what only
+— messages are keyed on the two accounts (`sender_user_id`/
+`recipient_user_id`, no foreign key), specifically so the surviving
+party's own copy of a thread is never destroyed by an action only the
+other party took). `e2e/direct-messages-gating.test.mjs` covers what only
 a real browser can show: since this deployment never configures
 `DIDIT_API_KEY` (same constraint `e2e/didit-verification.test.mjs`
 documents for itself), no e2e session can actually reach

@@ -80,7 +80,7 @@ describe('Voice conduct reports (#2819)', () => {
     const userIdOf = async (person) => (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(person.builderId).first()).user_id;
     expect(row).toMatchObject({
       reporter_user_id: await userIdOf(alice), reported_user_id: await userIdOf(bob),
-      reporter_builder_id: alice.builderId, reported_builder_id: bob.builderId, reason: 'Said something inappropriate',
+      reason: 'Said something inappropriate',
     });
 
     const taskId = `voice-report-${created.body.reportId.slice('voice-report-'.length)}`;
@@ -208,7 +208,7 @@ describe('Voice conduct reports (#2819)', () => {
 
     const row = await env.DB.prepare('SELECT * FROM voice_conduct_reports WHERE report_id = ?')
       .bind(created.body.reportId).first();
-    expect(row).toMatchObject({ reported_builder_id: null, reported_user_id: bobUserId, reason: 'Abusive' });
+    expect(row).toMatchObject({ reported_user_id: bobUserId, reason: 'Abusive' });
 
     const taskId = `voice-report-${created.body.reportId.slice('voice-report-'.length)}`;
     const task = await env.DB.prepare('SELECT note FROM control_room_tasks WHERE task_id = ?').bind(taskId).first();

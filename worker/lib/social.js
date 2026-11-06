@@ -536,14 +536,14 @@ async function reportEvidenceLines(db, reporterUserId, reportedUserId, surfaceAc
 const CONDUCT_REPORT_NOTE_MAX_LENGTH = 4000;
 
 async function fileConductReport(db, {
-  table, kind, reportId, reporterUserId, reporterBuilderId, reportedBuilderId, reportedUserId, reason, title, noteLines, now,
+  table, kind, reportId, reporterUserId, reportedUserId, reason, title, noteLines, now,
 }) {
   const repeatLine = `[${now}] Repeat report from the same reporter against the same account${reason ? `. Reason: ${reason}` : ''}`;
   await db.batch([
     db.prepare(`
-      INSERT OR IGNORE INTO ${table} (report_id, reporter_user_id, reported_user_id, reporter_builder_id, reported_builder_id, reason)
-      VALUES (?, ?, ?, ?, ?, ?)
-    `).bind(reportId, reporterUserId, reportedUserId, reporterBuilderId, reportedBuilderId, reason),
+      INSERT OR IGNORE INTO ${table} (report_id, reporter_user_id, reported_user_id, reason)
+      VALUES (?, ?, ?, ?)
+    `).bind(reportId, reporterUserId, reportedUserId, reason),
     db.prepare(`
       INSERT INTO control_room_tasks (
         task_id, kind, note_number, title, status, session, posted_by,
@@ -621,7 +621,7 @@ async function handleNearbyChatReportCreate(request, db) {
   }));
   const storedReportId = await fileConductReport(db, {
     table: 'nearby_chat_reports', kind: 'nearby-chat-report', reportId,
-    reporterUserId: sessionBuilder.user_id, reporterBuilderId: sessionBuilder.builder_id, reportedBuilderId, reportedUserId, reason,
+    reporterUserId: sessionBuilder.user_id, reportedUserId, reason,
     title: controlRoomTitle, noteLines: controlRoomNoteLines, now,
   });
   return json({ reportId: storedReportId }, 201);
@@ -965,7 +965,7 @@ async function handleVoiceReportCreate(request, db) {
   }));
   const storedReportId = await fileConductReport(db, {
     table: 'voice_conduct_reports', kind: 'voice-report', reportId,
-    reporterUserId: sessionBuilder.user_id, reporterBuilderId: sessionBuilder.builder_id, reportedBuilderId, reportedUserId, reason,
+    reporterUserId: sessionBuilder.user_id, reportedUserId, reason,
     title: controlRoomTitle, noteLines: controlRoomNoteLines, now,
   });
   return json({ reportId: storedReportId }, 201);

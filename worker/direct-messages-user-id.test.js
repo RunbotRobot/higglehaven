@@ -57,8 +57,6 @@ describe('Direct messages keyed on the account (#3146)', () => {
     const row = await env.DB.prepare('SELECT * FROM direct_messages WHERE message_id = ?').bind(sent.body.message.messageId).first();
     expect(row.sender_user_id).toBe(await userIdOf(alice));
     expect(row.recipient_user_id).toBe(await userIdOf(bob));
-    expect(row.sender_builder_id).toBeNull();
-    expect(row.recipient_builder_id).toBeNull();
   });
 
   it('keeps the thread, unread count and mark-read working after the RECIPIENT resets their builder profile', async () => {
@@ -119,10 +117,10 @@ describe('Direct messages keyed on the account (#3146)', () => {
     const bob = await signupIdVerifiedBuilder('dmuid-legacy-bob');
     await becomeFriends(alice, bob);
     await send(alice, bob, 'real');
-    // A pre-migration row for builders that no longer exist: builder ids only.
+    // A legacy row whose accounts could not be recovered: both user ids NULL.
     await env.DB.prepare(`
-      INSERT INTO direct_messages (message_id, sender_builder_id, recipient_builder_id, text)
-      VALUES ('legacy-1', 'builder-gone-a', 'builder-gone-b', 'orphan')
+      INSERT INTO direct_messages (message_id, sender_user_id, recipient_user_id, text)
+      VALUES ('legacy-1', NULL, NULL, 'orphan')
     `).run();
     const thread = await api(`/direct-messages?withBuilderId=${bob.builderId}`, alice.session());
     expect(thread.body.messages.map((m) => m.text)).toEqual(['real']);
