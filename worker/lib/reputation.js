@@ -124,7 +124,7 @@ export async function handleProductReviews(request, db, route) {
     // a verified session (N44), so this is a strict tightening, not a new
     // restriction on anyone who could legitimately review something.
     const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `product-review-create:${sessionBuilder.builder_id}`, PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX);
+    await checkRateLimit(db, `product-review-create:${sessionBuilder.user_id}`, PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const authorLabel = sessionBuilder.label;
     const rating = Number(input.rating);
@@ -914,7 +914,7 @@ export async function handleSellerFeedbackCreate(request, env, purchaseId) {
   // instead of a caller-supplied, non-unique, mutable label matched against
   // purchases.buyer_label.
   const sessionBuilder = await requireSessionBuilder(request, db);
-  await checkRateLimit(db, `seller-feedback-create:${sessionBuilder.builder_id}`, SELLER_FEEDBACK_CREATE_RATE_LIMIT_MAX);
+  await checkRateLimit(db, `seller-feedback-create:${sessionBuilder.user_id}`, SELLER_FEEDBACK_CREATE_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const authorLabel = sessionBuilder.label;
   // Same #357 refunded-purchase exclusion handleProductReviews uses — a

@@ -851,7 +851,7 @@ async function handlePurchaseRefund(request, env, purchaseId) {
 async function handlePurchaseDispute(request, env, purchaseId) {
   const db = env.DB;
   const sessionBuilder = await requireSessionBuilder(request, db);
-  await checkRateLimit(db, `purchase-dispute:${sessionBuilder.builder_id}`, DISPUTE_RATE_LIMIT_MAX);
+  await checkRateLimit(db, `purchase-dispute:${sessionBuilder.user_id}`, DISPUTE_RATE_LIMIT_MAX);
   const purchase = await db.prepare('SELECT * FROM purchases WHERE purchase_id = ?').bind(purchaseId).first();
   if (!purchase) throw new HttpError('Purchase not found', 404);
   // Same buyer-ownership gate handleSellerFeedbackCreate uses (#1123) — a
