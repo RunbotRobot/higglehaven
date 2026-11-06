@@ -51,3 +51,28 @@ export function classifyStripeRequirements(currentlyDue) {
   }
   return { ours, needsStripeStep };
 }
+
+function parseStoredList(stored) {
+  if (Array.isArray(stored)) return stored;
+  try {
+    const parsed = JSON.parse(stored || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+// #2928 (early heads-up): Stripe's `requirements.eventually_due` repeats
+// everything in `currently_due` and adds what it will ask for later (volume
+// or time thresholds). Takes the stored JSON columns (or arrays) and returns
+// only the later-only items, so the heads-up never repeats what is already
+// due. Unknown/NULL columns (rows from before the column existed) read empty.
+export function eventuallyDueOnly(storedCurrentlyDue, storedEventuallyDue) {
+  const dueNow = new Set(parseStoredList(storedCurrentlyDue));
+  return parseStoredList(storedEventuallyDue).filter((item) => typeof item === 'string' && item && !dueNow.has(item));
+}
+
+// The later-only items that only Stripe may collect (same classifier).
+export function stripeStepEventuallyDueOnly(storedCurrentlyDue, storedEventuallyDue) {
+  return classifyStripeRequirements(eventuallyDueOnly(storedCurrentlyDue, storedEventuallyDue)).needsStripeStep;
+}
