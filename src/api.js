@@ -1645,6 +1645,12 @@ export async function fetchSellerFeedback(sellerId) {
   return requestJson(`/sellers/${encodeURIComponent(sellerId)}/feedback`);
 }
 
+// "Report a problem" on a purchase (#3199). Server: POST /api/purchases/:id/dispute,
+// `{ autoResolved, purchase }`; a 409 means the purchase was already paid out.
+export async function disputePurchase(purchaseId) {
+  return requestJson(`/purchases/${encodeURIComponent(purchaseId)}/dispute`, { method: 'POST' });
+}
+
 export async function createSellerFeedback(purchaseId, { rating, text } = {}) {
   const { feedback } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/feedback`, {
     method: 'POST',
@@ -1652,6 +1658,22 @@ export async function createSellerFeedback(purchaseId, { rating, text } = {}) {
     body: JSON.stringify({ rating, text }),
   });
   return feedback;
+}
+
+// "My Purchases" (#3198): author-direct edit/delete of one's own seller
+// feedback (PATCH/DELETE /api/purchases/:id/feedback, #1975). Errors carry
+// error.status so the panel can tell 409 (changed concurrently) apart.
+export async function editSellerFeedback(purchaseId, { rating, text } = {}) {
+  const { feedback } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/feedback`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ rating, text }),
+  });
+  return feedback;
+}
+
+export async function deleteSellerFeedback(purchaseId) {
+  return requestJson(`/purchases/${encodeURIComponent(purchaseId)}/feedback`, { method: 'DELETE' });
 }
 
 // Land acquisition auctions (see migrations/0045_auctions.sql). builderId is

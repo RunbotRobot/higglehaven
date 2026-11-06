@@ -22,9 +22,9 @@ async function signupIdVerifiedBuilder(label) {
 
 async function setPresence(builderId, { landletId, updatedAt = new Date().toISOString() } = {}) {
   await env.DB.prepare(`
-    INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
-    VALUES (?, ?, 0, 0, 0, 0, 0, ?)
-    ON CONFLICT (builder_id) DO UPDATE SET landlet_id = excluded.landlet_id, updated_at = excluded.updated_at
+    INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
+    VALUES ((SELECT user_id FROM builders WHERE builder_id = ?), ?, 0, 0, 0, 0, 0, ?)
+    ON CONFLICT (user_id) DO UPDATE SET landlet_id = excluded.landlet_id, updated_at = excluded.updated_at
   `).bind(builderId, landletId, updatedAt).run();
 }
 
@@ -153,7 +153,7 @@ describe('Voice signaling relay (#2817)', () => {
       await setPresence(alice.builderId, { landletId: 'voice-signal-landlet-rate-limit' });
       await setPresence(bob.builderId, { landletId: 'voice-signal-landlet-rate-limit' });
 
-      const bucketKey = `voice-signal-send:${alice.builderId}`;
+      const bucketKey = `voice-signal-send:${(await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(alice.builderId).first()).user_id}`;
       const now = Date.now();
       await env.DB.batch(Array.from({ length: 299 }, () => env.DB.prepare(
         'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
@@ -301,7 +301,7 @@ describe('Voice signaling relay (#2817)', () => {
     });
   });
 
-  it('indexes voice_signaling_messages on (to_builder_id, landlet_id), covering the poll query\'s own sort', async () => {
+  it('indexes voice_signaling_messages on (to_user_id, landlet_id), covering the poll query\'s own sort', async () => {
     const indexes = (await env.DB.prepare('PRAGMA index_list(voice_signaling_messages)').all()).results;
     expect(indexes.some((idx) => idx.name === 'idx_voice_signaling_messages_recipient')).toBe(true);
   });

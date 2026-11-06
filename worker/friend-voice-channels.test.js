@@ -32,9 +32,9 @@ async function becomeFriends(a, b) {
 
 async function setPresence(builderId, { landletId, updatedAt = new Date().toISOString() } = {}) {
   await env.DB.prepare(`
-    INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
-    VALUES (?, ?, 0, 0, 0, 0, 0, ?)
-    ON CONFLICT (builder_id) DO UPDATE SET landlet_id = excluded.landlet_id, updated_at = excluded.updated_at
+    INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
+    VALUES ((SELECT user_id FROM builders WHERE builder_id = ?), ?, 0, 0, 0, 0, 0, ?)
+    ON CONFLICT (user_id) DO UPDATE SET landlet_id = excluded.landlet_id, updated_at = excluded.updated_at
   `).bind(builderId, landletId, updatedAt).run();
 }
 
@@ -59,7 +59,10 @@ describe('Friend voice channels (#2781)', () => {
       const joined = await api(`/voice/friend-channels/${alice.builderId}/join`, alice.session({ method: 'POST' }));
       expect(joined.response.status).toBe(201);
       const listed = await api('/voice/friend-channels', alice.session());
-      expect(listed.body.channels).toEqual([{ ownerBuilderId: alice.builderId, members: [alice.builderId] }]);
+      expect(listed.body.channels).toEqual([{
+        ownerBuilderId: alice.builderId, ownerUserId: expect.any(String),
+        members: [alice.builderId], memberUserIds: [expect.any(String)],
+      }]);
     });
 
     it('rejects joining a channel owned by someone who is not an accepted friend', async () => {
@@ -91,7 +94,11 @@ describe('Friend voice channels (#2781)', () => {
       // opens it, no separate "start" action required of the owner.
       const aliceView = await api('/voice/friend-channels', alice.session());
       expect(aliceView.body.channels).toEqual([
-        { ownerBuilderId: alice.builderId, members: expect.arrayContaining([alice.builderId, bob.builderId]) },
+        {
+          ownerBuilderId: alice.builderId, ownerUserId: expect.any(String),
+          members: expect.arrayContaining([alice.builderId, bob.builderId]),
+          memberUserIds: expect.any(Array),
+        },
       ]);
       expect(aliceView.body.channels[0].members).toHaveLength(2);
 
@@ -223,7 +230,10 @@ describe('Friend voice channels (#2781)', () => {
       expect(left.response.status).toBe(200);
 
       const aliceView = await api('/voice/friend-channels', alice.session());
-      expect(aliceView.body.channels).toEqual([{ ownerBuilderId: alice.builderId, members: [alice.builderId] }]);
+      expect(aliceView.body.channels).toEqual([{
+        ownerBuilderId: alice.builderId, ownerUserId: expect.any(String),
+        members: [alice.builderId], memberUserIds: [expect.any(String)],
+      }]);
 
       const bobView = await api('/voice/friend-channels', bob.session());
       expect(bobView.body.channels).toEqual([]);
@@ -267,7 +277,10 @@ describe('Friend voice channels (#2781)', () => {
       expect(unfriended.response.status).toBe(200);
 
       const aliceView = await api('/voice/friend-channels', alice.session());
-      expect(aliceView.body.channels).toEqual([{ ownerBuilderId: alice.builderId, members: [alice.builderId] }]);
+      expect(aliceView.body.channels).toEqual([{
+        ownerBuilderId: alice.builderId, ownerUserId: expect.any(String),
+        members: [alice.builderId], memberUserIds: [expect.any(String)],
+      }]);
       const bobView = await api('/voice/friend-channels', bob.session());
       expect(bobView.body.channels).toEqual([]);
     });
@@ -486,10 +499,10 @@ describe('Friend voice channels (#2781)', () => {
 
       // Everyone closes their tab: nothing polls, the rows age out.
       const old = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-      await env.DB.prepare('UPDATE friend_voice_channel_members SET joined_at = ?, last_seen_at = NULL WHERE owner_builder_id = ?')
+      await env.DB.prepare('UPDATE friend_voice_channel_members SET joined_at = ?, last_seen_at = NULL WHERE owner_user_id = (SELECT user_id FROM builders WHERE builder_id = ?)')
         .bind(old, alice.builderId).run();
       await pruneStaleFriendVoiceChannelMembers(env.DB);
-      const gone = await env.DB.prepare('SELECT COUNT(*) AS n FROM friend_voice_channel_members WHERE owner_builder_id = ?')
+      const gone = await env.DB.prepare('SELECT COUNT(*) AS n FROM friend_voice_channel_members WHERE owner_user_id = (SELECT user_id FROM builders WHERE builder_id = ?)')
         .bind(alice.builderId).first();
       expect(gone.n).toBe(0);
 
@@ -503,20 +516,21 @@ describe('Friend voice channels (#2781)', () => {
       await becomeFriends(alice, bob);
       await api(`/voice/friend-channels/${alice.builderId}/join`, bob.session({ method: 'POST' }));
       const old = new Date(Date.now() - 4 * 60 * 1000).toISOString();
-      await env.DB.prepare('UPDATE friend_voice_channel_members SET joined_at = ?, last_seen_at = NULL WHERE owner_builder_id = ?')
+      await env.DB.prepare('UPDATE friend_voice_channel_members SET joined_at = ?, last_seen_at = NULL WHERE owner_user_id = (SELECT user_id FROM builders WHERE builder_id = ?)')
         .bind(old, alice.builderId).run();
 
       await api('/voice/friend-channels', bob.session());
       const old2 = new Date(Date.now() - 6 * 60 * 1000).toISOString();
-      await env.DB.prepare('UPDATE friend_voice_channel_members SET joined_at = ? WHERE owner_builder_id = ?').bind(old2, alice.builderId).run();
+      await env.DB.prepare('UPDATE friend_voice_channel_members SET joined_at = ? WHERE owner_user_id = (SELECT user_id FROM builders WHERE builder_id = ?)').bind(old2, alice.builderId).run();
       await pruneStaleFriendVoiceChannelMembers(env.DB);
 
-      const rows = await env.DB.prepare('SELECT member_builder_id, last_seen_at FROM friend_voice_channel_members WHERE owner_builder_id = ?')
+      const rows = await env.DB.prepare('SELECT member_user_id, last_seen_at FROM friend_voice_channel_members WHERE owner_user_id = (SELECT user_id FROM builders WHERE builder_id = ?)')
         .bind(alice.builderId).all();
-      const bobRow = rows.results.find((r) => r.member_builder_id === bob.builderId);
+      const bobUserId = (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(bob.builderId).first()).user_id;
+      const bobRow = rows.results.find((r) => r.member_user_id === bobUserId);
       expect(bobRow.last_seen_at).not.toBeNull();
       // alice never polled, so only her own anchor row (stale joined_at) is pruned; bob's survives.
-      expect(rows.results.map((r) => r.member_builder_id)).toEqual([bob.builderId]);
+      expect(rows.results.map((r) => r.member_user_id)).toEqual([bobUserId]);
     });
   });
 });

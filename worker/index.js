@@ -3278,6 +3278,24 @@ export async function cascadeDeleteAccount(db, userId) {
     WHERE (requester_user_id = ? OR recipient_user_id = ?) AND ${builderOkClause} AND ${sellerOkClause}
   `).bind(userId, userId, ...guardBinds));
 
+  // #3147: presence, nearby chat, voice signaling and friend voice channel
+  // memberships key on the account and no longer cascade from the builder
+  // profile (a profile reset must not wipe them), so deleting the account
+  // removes them explicitly -- gated like the friendships delete above, so a
+  // blocked deletion leaves them exactly as they were. A friend channel is
+  // keyed by its owner, so deleting the owner closes the whole channel.
+  for (const [table, columns] of [
+    ['avatar_presence', ['user_id']],
+    ['nearby_chat_messages', ['user_id']],
+    ['voice_signaling_messages', ['from_user_id', 'to_user_id', 'channel_owner_user_id']],
+    ['friend_voice_channel_members', ['owner_user_id', 'member_user_id']],
+  ]) {
+    statements.push(db.prepare(`
+      DELETE FROM ${table}
+      WHERE (${columns.map((column) => `${column} = ?`).join(' OR ')}) AND ${builderOkClause} AND ${sellerOkClause}
+    `).bind(...columns.map(() => userId), ...guardBinds));
+  }
+
   const usersUpdateIndex = statements.length;
   statements.push(
     db.prepare(`

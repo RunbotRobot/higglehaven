@@ -86,12 +86,11 @@ export async function handleBlocks(request, db, route) {
       // #3143: a block severs friend voice channel membership the same way it
       // severs the friendship -- the blocked person leaves the blocker's
       // channel and the blocker leaves theirs, silently.
+      // #3147: that table keys on the accounts now, so no builders join.
       db.prepare(`
         DELETE FROM friend_voice_channel_members
-        WHERE (owner_builder_id IN (SELECT builder_id FROM builders WHERE user_id = ?)
-               AND member_builder_id IN (SELECT builder_id FROM builders WHERE user_id = ?))
-           OR (owner_builder_id IN (SELECT builder_id FROM builders WHERE user_id = ?)
-               AND member_builder_id IN (SELECT builder_id FROM builders WHERE user_id = ?))
+        WHERE (owner_user_id = ? AND member_user_id = ?)
+           OR (owner_user_id = ? AND member_user_id = ?)
       `).bind(user.user_id, targetUserId, targetUserId, user.user_id),
     ]);
     return json({ blocked: true, userId: targetUserId }, 201);

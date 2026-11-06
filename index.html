@@ -3901,6 +3901,59 @@
         font-size: 11px;
         color: var(--pill-text-soft);
       }
+      .my-purchase-feedback {
+        margin-top: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .my-purchase-actions {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .my-purchase-action {
+        padding: 5px 12px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.15);
+        color: var(--pill-text);
+        font: 12px/1.4 sans-serif;
+      }
+      .my-purchase-action:disabled {
+        opacity: 0.5;
+      }
+      .my-purchase-feedback-form {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+      }
+      .my-purchase-feedback-form textarea {
+        width: 100%;
+        box-sizing: border-box;
+        font: 13px/1.4 sans-serif;
+      }
+      /* #3199: "Report a problem" -- inline confirm and outcome note. The
+         buttons reuse .my-purchase-action / .my-purchase-actions above. */
+      .my-purchase-dispute {
+        margin-top: 6px;
+      }
+      .my-purchase-confirm {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+      }
+      .my-purchase-note {
+        margin-top: 6px;
+        font-size: 12px;
+        color: var(--pill-text);
+      }
+      .my-purchase-feedback-status {
+        font-size: 12px;
+        color: rgb(var(--ink-rgb) / 0.75);
+      }
       #my-purchases-empty {
         font-size: 13px;
         color: rgb(var(--ink-rgb) / 0.6);

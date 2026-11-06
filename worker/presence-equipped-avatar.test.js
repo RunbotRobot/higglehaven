@@ -17,13 +17,13 @@ beforeAll(async () => {
 
 async function setPresence(builderId, landletId) {
   await env.DB.prepare(`
-    INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
-    VALUES (?, ?, 0, 0, 0, 0, 0, ?)
-    ON CONFLICT (builder_id) DO UPDATE SET landlet_id = excluded.landlet_id, updated_at = excluded.updated_at
+    INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
+    VALUES ((SELECT user_id FROM builders WHERE builder_id = ?), ?, 0, 0, 0, 0, 0, ?)
+    ON CONFLICT (user_id) DO UPDATE SET landlet_id = excluded.landlet_id, updated_at = excluded.updated_at
   `).bind(builderId, landletId, new Date().toISOString()).run();
 }
 
-async function createAvatarTemplate(seller, templateId) {
+async function createAvatarTemplate(seller, templateId, category = 'avatar') {
   const form = new FormData();
   form.set('file', glbFile({ json: `{"presenceEquippedAvatar":"${templateId}"}` }));
   const uploaded = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
@@ -38,7 +38,7 @@ async function createAvatarTemplate(seller, templateId) {
       color: '#123456',
       dimensions: { width: 1, depth: 1, height: 1 },
       priceCents: 500,
-      category: 'avatar',
+      category,
       modelUrl: upload.modelUrl,
       modelSizeBytes: upload.sizeBytes,
     }),
@@ -49,6 +49,11 @@ async function createAvatarTemplate(seller, templateId) {
 
 async function equip(builder, templateId) {
   await env.DB.prepare('UPDATE builders SET equipped_avatar_template_id = ? WHERE builder_id = ?')
+    .bind(templateId, builder.builderId).run();
+}
+
+async function equipAnimation(builder, templateId) {
+  await env.DB.prepare('UPDATE builders SET equipped_animation_template_id = ? WHERE builder_id = ?')
     .bind(templateId, builder.builderId).run();
 }
 
@@ -72,7 +77,7 @@ describe('nearby avatars carry the equipped custom avatar (#2045)', () => {
 
     const avatars = await nearby(viewer, 'pea-landlet');
     const byId = Object.fromEntries(avatars.map((a) => [a.builderId, a]));
-    expect(byId[custom.builderId].equippedAvatar).toEqual({ templateId: 'pea-template', modelUrl });
+    expect(byId[custom.builderId].equippedAvatar).toEqual({ templateId: 'pea-template', modelUrl, skeletonSignature: null });
     expect(byId[plain.builderId].equippedAvatar).toBeNull();
   });
 
@@ -110,5 +115,53 @@ describe('nearby avatars carry the equipped custom avatar (#2045)', () => {
     }));
     expect(lifted.response.status).toBe(200);
     expect(await equippedOf()).toMatchObject({ templateId: 'pea-susp-template' });
+  });
+});
+
+describe('nearby avatars carry the equipped animation (#2045)', () => {
+  it('reports the equipped animation with its skeleton signature, and null when none is equipped', async () => {
+    const seller = await signupSeller('pea-anim-seller');
+    const modelUrl = await createAvatarTemplate(seller, 'pea-anim-template', 'animation');
+    await env.DB.prepare('UPDATE catalog_templates SET skeleton_signature = ? WHERE template_id = ?')
+      .bind('sig-humanoid-v1', 'pea-anim-template').run();
+    const viewer = await signupBuilder('pea-anim-viewer');
+    const animated = await signupBuilder('pea-anim-animated');
+    const plain = await signupBuilder('pea-anim-plain');
+    await equipAnimation(animated, 'pea-anim-template');
+    await setPresence(animated.builderId, 'pea-anim-landlet');
+    await setPresence(plain.builderId, 'pea-anim-landlet');
+
+    const byId = Object.fromEntries((await nearby(viewer, 'pea-anim-landlet')).map((a) => [a.builderId, a]));
+    expect(byId[animated.builderId].equippedAnimation)
+      .toEqual({ templateId: 'pea-anim-template', modelUrl, skeletonSignature: 'sig-humanoid-v1' });
+    expect(byId[plain.builderId].equippedAnimation).toBeNull();
+  });
+
+  it('is null for a deleted animation template, and hidden for a suspended seller until the suspension is lifted', async () => {
+    const seller = await signupSeller('pea-anim-susp-seller');
+    await createAvatarTemplate(seller, 'pea-anim-susp-template', 'animation');
+    const viewer = await signupBuilder('pea-anim-susp-viewer');
+    const other = await signupBuilder('pea-anim-susp-other');
+    await setPresence(other.builderId, 'pea-anim-susp-landlet');
+    const animationOf = async () => (await nearby(viewer, 'pea-anim-susp-landlet'))
+      .find((a) => a.builderId === other.builderId).equippedAnimation;
+
+    await equipAnimation(other, 'pea-anim-deleted-template');
+    expect(await animationOf()).toBeNull();
+
+    await equipAnimation(other, 'pea-anim-susp-template');
+    expect(await animationOf()).toMatchObject({ templateId: 'pea-anim-susp-template' });
+
+    const suspended = await api('/auth/suspend-account', adminSession({
+      method: 'POST', body: JSON.stringify({ email: seller.email, reason: 'pea anim test' }),
+    }));
+    expect(suspended.response.status).toBe(200);
+    expect(await animationOf()).toBeNull();
+
+    const lifted = await api('/auth/unsuspend-account', adminSession({
+      method: 'POST', body: JSON.stringify({ email: seller.email }),
+    }));
+    expect(lifted.response.status).toBe(200);
+    expect(await animationOf()).toMatchObject({ templateId: 'pea-anim-susp-template' });
   });
 });
