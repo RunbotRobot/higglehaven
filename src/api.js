@@ -970,6 +970,15 @@ export async function fetchNotifications({ unreadOnly = false, cursor = null } =
 // undercount if it just read that first page's own .length, same shape
 // as the bug #245/#288 already fixed for the unread badge specifically.
 // This hits a dedicated COUNT query instead, with no page cap at all.
+// "My Purchases" (#3197): the signed-in account's own receipts, newest first,
+// cursor-paginated like fetchNotifications. Server: GET /api/purchases/mine.
+export async function fetchMyPurchases({ cursor = null } = {}) {
+  const query = new URLSearchParams();
+  if (cursor) query.set('cursor', cursor);
+  const suffix = query.toString();
+  return requestJson(`/purchases/mine${suffix ? `?${suffix}` : ''}`);
+}
+
 export async function fetchUnreadNotificationCount() {
   const { count } = await requestJson('/notifications/unread-count');
   return count;

@@ -3837,6 +3837,78 @@
       #saved-layouts-load-more-btn:disabled {
         opacity: 0.5;
       }
+      /* "My Purchases" (#3197): same modal shell as #notifications-modal,
+         opened from #my-purchases-btn. */
+      #my-purchases-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #my-purchases-modal.visible {
+        display: flex;
+      }
+      #my-purchases-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        max-height: 80vh;
+        overflow-y: auto;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #my-purchases-modal-content h2 {
+        margin: 0;
+        font-size: 17px;
+      }
+      #my-purchases-list {
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .my-purchase-row {
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: rgb(var(--ink-rgb) / 0.08);
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.9);
+        overflow-wrap: anywhere;
+      }
+      .my-purchase-name {
+        font-weight: 600;
+      }
+      .my-purchase-meta {
+        margin-top: 4px;
+        font-size: 11px;
+        color: var(--pill-text-soft);
+      }
+      #my-purchases-empty {
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.6);
+      }
+      #my-purchases-load-more-btn {
+        align-self: center;
+        margin-top: 8px;
+        padding: 6px 14px;
+        border-radius: 999px;
+        border: none;
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #my-purchases-load-more-btn:disabled {
+        opacity: 0.5;
+      }
       /* Same modal shell as #notifications-modal — friend requests
          (docs/SPEC.md §2), opened from #friends-btn. Three subsections
          (Requests/Sent/Friends) share one .friend-row look with different
@@ -5001,6 +5073,7 @@
                from the Friends panel) -- distinct from friends-badge's own
                meaning (pending incoming friend requests). -->
           <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span><span id="dm-badge" hidden>0</span></button>
+          <button id="my-purchases-btn" type="button">My Purchases</button>
           <button id="my-lands-btn" type="button">My Lands</button>
           <button id="settings-btn" type="button">Settings</button>
           <div id="account-menu-landcap" hidden></div>
@@ -5436,6 +5509,15 @@
         <div id="notifications-list"></div>
         <button id="notifications-load-more-btn" type="button" hidden>Load more</button>
         <div id="notifications-empty">Nothing here yet.</div>
+      </div>
+    </div>
+    <div id="my-purchases-modal" role="dialog" aria-modal="true" aria-labelledby="my-purchases-title" tabindex="-1">
+      <div id="my-purchases-modal-content">
+        <button id="my-purchases-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2 id="my-purchases-title">My Purchases</h2>
+        <div id="my-purchases-list"></div>
+        <button id="my-purchases-load-more-btn" type="button" hidden>Load more</button>
+        <div id="my-purchases-empty" role="status" aria-live="polite" hidden>You haven't bought anything yet.</div>
       </div>
     </div>
     <div id="friends-modal" role="dialog" aria-modal="true" tabindex="-1">
