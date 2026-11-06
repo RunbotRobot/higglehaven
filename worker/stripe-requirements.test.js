@@ -3,7 +3,7 @@
 // status endpoint's use of it.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { classifyStripeRequirements, isRequirementCollectedByUs } from './lib/stripe-requirements.js';
+import { classifyStripeRequirements, eventuallyDueOnly, isRequirementCollectedByUs, stripeStepEventuallyDueOnly } from './lib/stripe-requirements.js';
 import { api, signupSeller } from './test-helpers.js';
 
 beforeAll(async () => {
@@ -54,6 +54,21 @@ describe('classifyStripeRequirements (#2928)', () => {
   });
 });
 
+describe('eventually_due early heads-up helpers (#2928)', () => {
+  it('keeps only later-only items, and reads NULL/garbage columns as empty', () => {
+    expect(eventuallyDueOnly('["individual.phone"]', '["individual.phone","individual.id_number","company.tax_id"]'))
+      .toEqual(['individual.id_number', 'company.tax_id']);
+    expect(eventuallyDueOnly(null, null)).toEqual([]);
+    expect(eventuallyDueOnly('[]', 'not json')).toEqual([]);
+    expect(eventuallyDueOnly([], [null, 3, '', 'individual.id_number'])).toEqual(['individual.id_number']);
+  });
+
+  it('classifies the later-only items the same way, so only Stripe-collected ones remain', () => {
+    expect(stripeStepEventuallyDueOnly('[]', '["individual.phone","individual.verification.document"]'))
+      .toEqual(['individual.verification.document']);
+  });
+});
+
 describe('GET /sellers/me/stripe-account stripeStepRequirements (#2928)', () => {
   it('is empty with no Stripe account, and lists only what Stripe must collect', async () => {
     const seller = await signupSeller('stripe-step-requirements');
@@ -66,6 +81,21 @@ describe('GET /sellers/me/stripe-account stripeStepRequirements (#2928)', () => 
     const status = await api('/sellers/me/stripe-account', seller.session());
     expect(status.body.requirementsCurrentlyDue).toEqual(['individual.phone', 'individual.id_number']);
     expect(status.body.stripeStepRequirements).toEqual(['individual.id_number']);
+  });
+});
+
+describe('GET /sellers/me/stripe-account early heads-up (#2928)', () => {
+  it('reports eventually_due items without changing status or the due-now list', async () => {
+    const seller = await signupSeller('stripe-eventually-due');
+    await env.DB.prepare(
+      "UPDATE sellers SET stripe_account_id = 'acct_later', stripe_onboarding_status = 'complete', stripe_requirements_due = '[]', stripe_requirements_eventually_due = ? WHERE seller_id = ?",
+    ).bind(JSON.stringify(['individual.phone', 'individual.id_number']), seller.sellerId).run();
+    const status = await api('/sellers/me/stripe-account', seller.session());
+    expect(status.body.status).toBe('complete');
+    expect(status.body.requirementsCurrentlyDue).toEqual([]);
+    expect(status.body.stripeStepRequirements).toEqual([]);
+    expect(status.body.requirementsEventuallyDue).toEqual(['individual.phone', 'individual.id_number']);
+    expect(status.body.stripeStepEventuallyDue).toEqual(['individual.id_number']);
   });
 });
 
@@ -92,9 +122,37 @@ describe('Stripe onboarding hand-off and resume (#2928)', () => {
     }
   }
 
-  const accountWith = (currentlyDue) => ({
+  const accountWith = (currentlyDue, eventuallyDue) => ({
     id: 'acct_handoff', charges_enabled: false, payouts_enabled: false,
-    requirements: { currently_due: currentlyDue },
+    requirements: { currently_due: currentlyDue, ...(eventuallyDue ? { eventually_due: eventuallyDue } : {}) },
+  });
+
+  it('hands off for an eventually_due-only item, collecting eventually_due, and stores it', async () => {
+    const seller = await signupSeller('stripe-handoff-later');
+    await env.DB.prepare("UPDATE sellers SET stripe_account_id = 'acct_handoff', stripe_onboarding_status = 'complete' WHERE seller_id = ?")
+      .bind(seller.sellerId).run();
+    await withStripe((call) => (
+      call.url.endsWith('/v1/accounts/acct_handoff')
+        ? { body: accountWith([], ['individual.id_number']) }
+        : { body: { url: 'https://connect.stripe.com/setup/e/later' } }
+    ), async (calls) => {
+      const res = await api('/sellers/me/stripe-onboarding-link', seller.session({ method: 'POST' }));
+      expect(res.response.status).toBe(200);
+      const link = calls.find((c) => c.url.endsWith('/v2/core/account_links'));
+      expect(link.body.use_case.account_onboarding.collection_options).toEqual({ fields: 'eventually_due' });
+    });
+    const status = await api('/sellers/me/stripe-account', seller.session());
+    expect(status.body.stripeStepEventuallyDue).toEqual(['individual.id_number']);
+    expect(status.body.stripeStepRequirements).toEqual([]);
+  });
+
+  it('still refuses to hand off when eventually_due holds only items our forms collect', async () => {
+    const seller = await signupSeller('stripe-handoff-later-ours');
+    await env.DB.prepare("UPDATE sellers SET stripe_account_id = 'acct_handoff' WHERE seller_id = ?").bind(seller.sellerId).run();
+    const res = await withStripe((call) => (
+      call.url.includes('/v1/accounts/') ? { body: accountWith([], ['individual.phone']) } : { status: 500, body: {} }
+    ), () => api('/sellers/me/stripe-onboarding-link', seller.session({ method: 'POST' })));
+    expect(res.response.status).toBe(409);
   });
 
   it('creates a hosted v2 account link only when Stripe needs a step, never sending configurations', async () => {
