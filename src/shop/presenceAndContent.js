@@ -54,7 +54,7 @@
 // reuses it for an unrelated Build-mode neighbor-outline radius.
 import * as THREE from 'three';
 import { camera, scene } from '../world/scene.js';
-import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance } from '../world/models.js';
+import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, loadModelInstance } from '../world/models.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { isNetworkError } from '../build/scene.js';
 import { currentAuthUser } from '../account/auth.js';
@@ -63,6 +63,7 @@ import {
   fetchCreditOrbs, collectCreditOrb, reportPresence, fetchNearbyPresence,
 } from '../api.js';
 import { createShopAvatar } from './avatar.js';
+import { normalizeEquippedAvatar, chooseAllowedTemplateIds, desiredAvatarFor } from './otherAvatarModels.js';
 import { shopMaxRadiusM, shopFlightState, shopFlightAltitudeM } from './flightMovement.js';
 import { growShopDomeIfNeeded } from './sky.js';
 import {
@@ -251,6 +252,10 @@ let shopLastReportedFlying; // #2043: same undefined-until-first-report shape as
 // comment on why that fixed assumption produces a visible freeze/catch-up
 // snap under an uneven poll cadence) }.
 export const shopOtherAvatars = new Map();
+// #2045: templateId -> when its model last failed to load (fail open: the
+// default body is shown and the load is retried only after
+// CUSTOM_AVATAR_RETRY_AFTER_MS, see otherAvatarModels.js).
+const otherAvatarModelFailedAt = new Map();
 let shopLastPresencePollAt = 0;
 let presencePollToken = 0; // #1911: guards pollNearbyPresenceIfNeeded against a stale out-of-order response
 // #1995: every currently-loaded credit orb: { mesh, group, orbId, landletId }.
@@ -650,17 +655,24 @@ export async function pollNearbyPresenceIfNeeded(now) {
     seenBuilderIds.add(avatar.builderId);
     let entry = shopOtherAvatars.get(avatar.builderId);
     if (!entry) {
-      // Renders every other avatar as the default procedural body
-      // (createShopAvatar) regardless of what they actually have equipped —
-      // fetching and loading each nearby builder's own custom model is
-      // real scope beyond "report-loop, poll-loop, and smoothing," left for
-      // a follow-up rather than silently bundled in here. Limb/arm pose
-      // isn't driven for these either, same reasoning — only root position/
-      // heading, which is all #1098's presence row actually carries.
-      const { group } = createShopAvatar();
+      // #2045: entry.group is a stable outer transform (position/heading are
+      // lerped on it, and flightMovement/voiceChat read it); the visible body
+      // lives inside it as entry.body so it can be swapped for the builder's
+      // equipped custom model without disturbing anything holding the entry.
+      // Always starts as the default procedural body -- a custom model only
+      // replaces it once it has loaded (reconcileOtherAvatarBodies). Limb/arm
+      // pose and animation clips aren't driven for these, only root
+      // position/heading, which is all the presence row carries.
+      const group = new THREE.Group();
+      const body = createShopAvatar().group;
+      group.add(body);
       scene.add(group);
       entry = {
         group,
+        body,
+        bodyTemplateId: null, // the template the visible body was built from; null = default body
+        bodyRequestedTemplateId: null, // latest template asked for (incl. one still loading)
+        bodySwapToken: 0,
         fromX: avatar.x, fromY: avatar.y, fromZ: avatar.z, fromHeading: avatar.heading ?? 0,
         lerpDurationMs: SHOP_PRESENCE_POLL_INTERVAL_MS, // nothing to compare against yet; from === to anyway
       };
@@ -684,6 +696,7 @@ export async function pollNearbyPresenceIfNeeded(now) {
     entry.toHeading = avatar.heading ?? entry.fromHeading;
     entry.receivedAt = now;
     entry.missedPolls = 0; // #2436: seen again -- clear any pending despawn countdown
+    entry.equippedAvatar = normalizeEquippedAvatar(avatar.equippedAvatar); // #2045
   }
   // #2436: a single poll missing an avatar that's genuinely still nearby
   // (report/poll cadence phase gap, or the avatar's own report briefly
@@ -702,7 +715,78 @@ export async function pollNearbyPresenceIfNeeded(now) {
     disposeObject3D(entry.group);
     shopOtherAvatars.delete(builderId);
   }
+  reconcileOtherAvatarBodies(now);
   refreshOtherShopAvatarsDiagnostic();
+}
+
+// #2045: decides, once per poll, which nearby builders get their equipped
+// custom model and which keep (or return to) the default body, then starts
+// whichever swaps are needed. Never awaited and never throws -- fail open.
+function reconcileOtherAvatarBodies(now) {
+  const wanted = new Map();
+  const shown = new Set();
+  for (const [builderId, entry] of shopOtherAvatars) {
+    wanted.set(builderId, entry.equippedAvatar ?? null);
+    if (entry.bodyRequestedTemplateId) shown.add(entry.bodyRequestedTemplateId);
+  }
+  const allowed = chooseAllowedTemplateIds(wanted, shown, otherAvatarModelFailedAt, now);
+  for (const [builderId, entry] of shopOtherAvatars) {
+    const desired = desiredAvatarFor(entry.equippedAvatar ?? null, allowed);
+    const desiredId = desired ? desired.templateId : null;
+    if (desiredId === entry.bodyRequestedTemplateId) continue;
+    entry.bodyRequestedTemplateId = desiredId;
+    const myToken = ++entry.bodySwapToken;
+    if (!desired) {
+      installOtherAvatarBody(entry, createShopAvatar().group, null);
+      continue;
+    }
+    loadOtherAvatarCustomBody(desired.modelUrl)
+      .then((body) => {
+        // Gone, or asked for something else while this was loading: the
+        // result is stale. Only the instance's own cloned materials are freed
+        // (disposeObject3D skips the geometry/textures shared with the
+        // cached model, #1560).
+        if (shopOtherAvatars.get(builderId) !== entry || entry.bodySwapToken !== myToken) {
+          disposeObject3D(body);
+          return;
+        }
+        installOtherAvatarBody(entry, body, desired.templateId);
+        refreshOtherShopAvatarsDiagnostic();
+      })
+      .catch((err) => {
+        otherAvatarModelFailedAt.set(desired.templateId, performance.now());
+        console.warn(`Failed to load another builder's avatar model (${desired.modelUrl}), showing the default body:`, err);
+        if (shopOtherAvatars.get(builderId) === entry && entry.bodySwapToken === myToken) {
+          entry.bodyRequestedTemplateId = null;
+          // A previous custom model may still be showing (the builder switched
+          // avatars and the new one failed): never leave the old one up as if
+          // it were current.
+          if (entry.bodyTemplateId !== null) installOtherAvatarBody(entry, createShopAvatar().group, null);
+          refreshOtherShopAvatarsDiagnostic();
+        }
+      });
+  }
+}
+
+function installOtherAvatarBody(entry, body, templateId) {
+  entry.group.remove(entry.body);
+  disposeObject3D(entry.body);
+  entry.group.add(body);
+  entry.body = body;
+  entry.bodyTemplateId = templateId;
+}
+
+// A cloned custom model with its feet at local z=0, matching the default
+// body's contract (createCustomShopAvatar does the same measurement for the
+// shopper's own avatar). No animation or AFK badge for other players: the
+// presence row carries neither.
+async function loadOtherAvatarCustomBody(modelUrl) {
+  const container = await loadModelInstance(modelUrl);
+  const box = new THREE.Box3().setFromObject(container);
+  container.position.z = Math.max(box.max.z - box.min.z, 0) / 2;
+  const body = new THREE.Group();
+  body.add(container);
+  return body;
 }
 
 function despawnOtherShopAvatars() {
@@ -723,6 +807,7 @@ function despawnOtherShopAvatars() {
 function refreshOtherShopAvatarsDiagnostic() {
   window.__shopOtherAvatars = [...shopOtherAvatars.entries()].map(([builderId, entry]) => ({
     builderId, x: entry.toX, y: entry.toY, z: entry.toZ, heading: entry.toHeading,
+    bodyTemplateId: entry.bodyTemplateId, // added for #2045 -- e2e needs to see which model each other avatar actually drew
   }));
 }
 
