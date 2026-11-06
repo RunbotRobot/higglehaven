@@ -78,6 +78,7 @@ describe('Avatar presence (#1095)', () => {
         heading: 90,
         flying: false,
         updatedAt: expect.any(String),
+        equippedAvatar: null, // #2045: default body when nothing custom is equipped
       }]);
     });
 

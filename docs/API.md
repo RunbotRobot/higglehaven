@@ -5893,6 +5893,18 @@ landlet a `landlets` row models.
 }
 ```
 
+`GET /api/presence` adds one field to each avatar it returns (**#2045**):
+`equippedAvatar`, `{ "templateId", "modelUrl" }` for the custom avatar that
+builder has equipped (#680), or `null` for the default body. It is resolved
+server-side from the builder's own equipped template, never reported by the
+client, so nobody can claim another player's model. It is `null` as well when
+the equipped template has since been deleted, has no model, or belongs to a
+suspended or closed seller (hidden exactly like that seller's other
+listings, and back as soon as a suspension is lifted). `GET /api/presence/me`
+and the POST response are unchanged. Rendering these models (cached by
+`templateId`, with a cap on distinct custom models drawn at once) is the
+client half of #2045.
+
 ### `GET /api/presence`
 
 Requires a session. Returns every *other* builder's current position
