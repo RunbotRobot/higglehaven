@@ -54,7 +54,7 @@
 // reuses it for an unrelated Build-mode neighbor-outline radius.
 import * as THREE from 'three';
 import { camera, scene } from '../world/scene.js';
-import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, loadModelInstance } from '../world/models.js';
+import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, loadModelInstance, loadModelAnimations } from '../world/models.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { isNetworkError } from '../build/scene.js';
 import { currentAuthUser } from '../account/auth.js';
@@ -62,8 +62,11 @@ import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
   fetchCreditOrbs, collectCreditOrb, reportPresence, fetchNearbyPresence,
 } from '../api.js';
-import { createShopAvatar } from './avatar.js';
-import { normalizeEquippedAvatar, chooseAllowedTemplateIds, desiredAvatarFor } from './otherAvatarModels.js';
+import { createShopAvatar, setShopAvatarAnimationState } from './avatar.js';
+import {
+  normalizeEquippedAvatar, normalizeEquippedAnimation, chooseAllowedTemplateIds, desiredAvatarFor,
+  animationForAvatar, locomotionStateFor,
+} from './otherAvatarModels.js';
 import { shopMaxRadiusM, shopFlightState, shopFlightAltitudeM } from './flightMovement.js';
 import { growShopDomeIfNeeded } from './sky.js';
 import {
@@ -256,6 +259,10 @@ export const shopOtherAvatars = new Map();
 // default body is shown and the load is retried only after
 // CUSTOM_AVATAR_RETRY_AFTER_MS, see otherAvatarModels.js).
 const otherAvatarModelFailedAt = new Map();
+// #3230: same idea for applied-animation files that failed to load -- the
+// avatar plays its own clips until the retry window (see
+// CUSTOM_AVATAR_RETRY_AFTER_MS) passes.
+const otherAvatarAnimationFailedAt = new Map();
 let shopLastPresencePollAt = 0;
 let presencePollToken = 0; // #1911: guards pollNearbyPresenceIfNeeded against a stale out-of-order response
 // #1995: every currently-loaded credit orb: { mesh, group, orbId, landletId }.
@@ -673,6 +680,17 @@ export async function pollNearbyPresenceIfNeeded(now) {
         bodyTemplateId: null, // the template the visible body was built from; null = default body
         bodyRequestedTemplateId: null, // latest template asked for (incl. one still loading)
         bodySwapToken: 0,
+        // #3230: per-avatar clip playback. mixer/actions are null until the
+        // custom body's clips have loaded (and stay null for the default body or
+        // a model with no idle/walk clip); clipsFor remembers which (body,
+        // applied animation) pair they were built for so a poll only rebuilds
+        // them when one of those changes.
+        mixer: null,
+        actions: null,
+        animState: null,
+        animationSource: null,
+        clipsFor: null,
+        lastFrameAt: null,
         fromX: avatar.x, fromY: avatar.y, fromZ: avatar.z, fromHeading: avatar.heading ?? 0,
         lerpDurationMs: SHOP_PRESENCE_POLL_INTERVAL_MS, // nothing to compare against yet; from === to anyway
       };
@@ -697,6 +715,7 @@ export async function pollNearbyPresenceIfNeeded(now) {
     entry.receivedAt = now;
     entry.missedPolls = 0; // #2436: seen again -- clear any pending despawn countdown
     entry.equippedAvatar = normalizeEquippedAvatar(avatar.equippedAvatar); // #2045
+    entry.equippedAnimation = normalizeEquippedAnimation(avatar.equippedAnimation); // #3230
   }
   // #2436: a single poll missing an avatar that's genuinely still nearby
   // (report/poll cadence phase gap, or the avatar's own report briefly
@@ -712,10 +731,12 @@ export async function pollNearbyPresenceIfNeeded(now) {
     entry.missedPolls = (entry.missedPolls ?? 0) + 1;
     if (entry.missedPolls < SHOP_OTHER_AVATAR_MISSED_POLLS_BEFORE_DESPAWN) continue;
     scene.remove(entry.group);
+    disposeOtherAvatarClips(entry);
     disposeObject3D(entry.group);
     shopOtherAvatars.delete(builderId);
   }
   reconcileOtherAvatarBodies(now);
+  reconcileOtherAvatarAnimations(now); // #3230: also covers an animation equipped/changed with the body unchanged
   refreshOtherShopAvatarsDiagnostic();
 }
 
@@ -751,6 +772,7 @@ function reconcileOtherAvatarBodies(now) {
           return;
         }
         installOtherAvatarBody(entry, body, desired.templateId);
+        reconcileOtherAvatarAnimations(performance.now());
         refreshOtherShopAvatarsDiagnostic();
       })
       .catch((err) => {
@@ -770,6 +792,7 @@ function reconcileOtherAvatarBodies(now) {
 
 function installOtherAvatarBody(entry, body, templateId) {
   entry.group.remove(entry.body);
+  disposeOtherAvatarClips(entry); // the mixer was bound to the body being removed
   disposeObject3D(entry.body);
   entry.group.add(body);
   entry.body = body;
@@ -781,17 +804,103 @@ function installOtherAvatarBody(entry, body, templateId) {
 // shopper's own avatar). No animation or AFK badge for other players: the
 // presence row carries neither.
 async function loadOtherAvatarCustomBody(modelUrl) {
-  const container = await loadModelInstance(modelUrl);
+  // #3230: skeletonSafe, so each avatar's own AnimationMixer drives only its
+  // own bones even when several nearby players wear the same model.
+  const container = await loadModelInstance(modelUrl, { skeletonSafe: true });
   const box = new THREE.Box3().setFromObject(container);
   container.position.z = Math.max(box.max.z - box.min.z, 0) / 2;
   const body = new THREE.Group();
   body.add(container);
+  body.userData.clipRoot = container.userData.model; // what clips bind against (as createCustomShopAvatar does)
+  body.userData.modelUrl = modelUrl;
   return body;
+}
+
+// #3230: stops and forgets one avatar's clip playback. Safe on an entry that
+// never had any. The clips themselves live in the shared GLTF cache, so there
+// is nothing to free here beyond the mixer's own bindings.
+function disposeOtherAvatarClips(entry) {
+  if (entry.mixer) {
+    entry.mixer.stopAllAction();
+    if (entry.body?.userData?.clipRoot) entry.mixer.uncacheRoot(entry.body.userData.clipRoot);
+  }
+  entry.mixer = null;
+  entry.actions = null;
+  entry.animState = null;
+  entry.animationSource = null;
+  entry.clipsFor = null;
+}
+
+// #3230: decides, per nearby custom-bodied avatar, whose clips it plays: the
+// applied animation's, when it is compatible with the avatar's skeleton
+// (#1162) and within the cap on distinct animation files drawn at once, else
+// the avatar's own idle/walk clips -- the same rule createCustomShopAvatar
+// follows for the shopper's own avatar. Fail open everywhere: a clip file that
+// will not load leaves the avatar with its own clips (or none), never an error.
+// Never awaited and never throws.
+function reconcileOtherAvatarAnimations(now) {
+  const wanted = new Map();
+  const shown = new Set();
+  for (const [builderId, entry] of shopOtherAvatars) {
+    wanted.set(builderId, entry.bodyTemplateId !== null ? animationForAvatar(entry.equippedAvatar, entry.equippedAnimation) : null);
+    if (entry.clipsFor?.animationId) shown.add(entry.clipsFor.animationId);
+  }
+  const allowed = chooseAllowedTemplateIds(wanted, shown, otherAvatarAnimationFailedAt, now);
+  for (const [builderId, entry] of shopOtherAvatars) {
+    if (entry.bodyTemplateId === null) continue; // default body: no clips to play
+    const body = entry.body;
+    const desired = desiredAvatarFor(wanted.get(builderId), allowed);
+    const animationId = desired ? desired.templateId : null;
+    if (entry.clipsFor && entry.clipsFor.body === body && entry.clipsFor.animationId === animationId) continue;
+    entry.clipsFor = { body, animationId };
+    setUpOtherAvatarClips(entry, body, desired, animationId).catch(() => {});
+  }
+}
+
+async function setUpOtherAvatarClips(entry, body, appliedAnimation, animationId) {
+  let animations = [];
+  let source = 'own';
+  if (appliedAnimation) {
+    try {
+      animations = await loadModelAnimations(appliedAnimation.modelUrl);
+      source = 'applied';
+    } catch (err) {
+      otherAvatarAnimationFailedAt.set(appliedAnimation.templateId, performance.now());
+      console.warn(`Failed to load another builder's applied animation (${appliedAnimation.modelUrl}), using the avatar's own clips:`, err);
+    }
+  }
+  if (source === 'own') {
+    try {
+      animations = await loadModelAnimations(body.userData.modelUrl);
+    } catch {
+      animations = [];
+    }
+  }
+  // The body was swapped or the avatar despawned (both reset clipsFor), or a
+  // newer request replaced this one, while the files loaded: nothing to install.
+  if (entry.body !== body || entry.clipsFor?.body !== body || entry.clipsFor.animationId !== animationId) return;
+  let mixer = null;
+  let actions = null;
+  if (animations.length > 0 && body.userData.clipRoot) {
+    mixer = new THREE.AnimationMixer(body.userData.clipRoot);
+    actions = {};
+    for (const state of ['idle', 'walk']) {
+      const clip = THREE.AnimationClip.findByName(animations, state);
+      if (clip) actions[state] = mixer.clipAction(clip);
+    }
+    if (Object.keys(actions).length === 0) { mixer = null; actions = null; }
+  }
+  entry.mixer = mixer;
+  entry.actions = actions;
+  entry.animState = null;
+  entry.animationSource = actions ? source : null;
+  refreshOtherShopAvatarsDiagnostic();
 }
 
 function despawnOtherShopAvatars() {
   for (const entry of shopOtherAvatars.values()) {
     scene.remove(entry.group);
+    disposeOtherAvatarClips(entry);
     disposeObject3D(entry.group);
   }
   shopOtherAvatars.clear();
@@ -808,6 +917,8 @@ function refreshOtherShopAvatarsDiagnostic() {
   window.__shopOtherAvatars = [...shopOtherAvatars.entries()].map(([builderId, entry]) => ({
     builderId, x: entry.toX, y: entry.toY, z: entry.toZ, heading: entry.toHeading,
     bodyTemplateId: entry.bodyTemplateId, // added for #2045 -- e2e needs to see which model each other avatar actually drew
+    animationSource: entry.animationSource, // added for #3230 -- e2e needs to see whether an avatar plays its own clips, an applied animation's, or none
+    animState: entry.animState, // added for #3230 -- idle vs walk, to check clips follow observed movement
   }));
 }
 
@@ -824,6 +935,13 @@ export function updateOtherShopAvatars(now) {
       THREE.MathUtils.lerp(entry.fromZ, entry.toZ, t),
     );
     entry.group.rotation.z = entry.fromHeading + shortestAngleDelta(entry.fromHeading, entry.toHeading) * t;
+    // #3230: clips follow the movement the lerp above is already showing.
+    if (entry.mixer) {
+      setShopAvatarAnimationState(entry, locomotionStateFor(entry.fromX, entry.fromY, entry.toX, entry.toY, entry.lerpDurationMs, t));
+      const dt = entry.lastFrameAt === null ? 0 : Math.min((now - entry.lastFrameAt) / 1000, 0.1); // same clamp the other per-frame dt uses
+      entry.mixer.update(dt);
+    }
+    entry.lastFrameAt = now;
   }
 }
 
