@@ -3395,6 +3395,19 @@ not a replacement for `scripts/check-migration-drift.mjs` (#492), which
 still catches the same drift immediately at deploy time; this catches it
 within the next 10-minute cron tick even when nobody deploys for a while.
 
+**#805 (phase 1): applied migrations are content-pinned.** Everything above
+compares filenames only, so editing an already-applied migration after the
+fact left every check green. `scripts/migration-checksums.json` pins each
+`migrations/*.sql` file's SHA-256, and `scripts/check-migration-checksums.mjs`
+runs as a `pretest` check: it fails on an edited pinned file (put the change
+in a new migration), on a migration with no pin yet (`npm run
+generate:migration-checksums` adds missing pins and refuses to touch an
+existing one), and on a pin whose file is gone. The lock is repo-side, not a
+D1 table: deploys run from `main`, so a file that still matches the pin from
+the PR that added it is what was applied. Phase 2 (diffing the live D1
+schema against a fresh apply, to catch an out-of-band `ALTER TABLE`) is a
+separate follow-up.
+
 The same cron also runs `checkWebhookSecrets` (#1793): when a provider is
 configured (Stripe: `STRIPE_SECRET_KEY`; Didit: `DIDIT_API_KEY` and
 `DIDIT_WORKFLOW_ID`; Tripo: `TRIPO_API_KEY`) but its webhook secret
@@ -4713,6 +4726,20 @@ deleted; a deliberate recreate (Undo of a delete) uses `POST`. Without the
 flag `PUT` behaves exactly as described above. An invalid reference, or the caller never owning a touched
 landlet at all, returns `400`/`403` and leaves the entire batch unchanged.
 
+**`expectedUpdatedAt` (#1062, server half).** On `PUT`, each item may carry
+`"expectedUpdatedAt"`, the `updatedAt` the caller last saw for that instance.
+An instance whose stored `updatedAt` differs is **not** overwritten: it is
+skipped, and the response adds `staleInstanceIds` plus `staleInstances` (each
+one's current stored state) so the caller can reconcile instead of clobbering
+a newer edit (another tab, another request). The check is repeated inside the
+write itself, so a write landing in between is reported through
+`rejectedInstanceIds` as described below. An id with no stored row is a create
+and has nothing to be stale against; the field is ignored on `POST`. Without
+the field `PUT` is last-write-wins exactly as before, and the response gains
+no new fields (`staleInstanceIds`/`staleInstances` appear only when at least
+one item sent the field). A non-string or empty value is `400`. Combines with
+`updateOnly`.
+
 **Partial rejection (#1772).** The batch spans an arbitrary set of distinct
 landlets, each independently re-guarded at write time against the
 possibility that its ownership changed in the moment between the up-front
@@ -4782,6 +4809,13 @@ Requires a session logged in as the owner of the instance's current
 landlet, and (if the update moves it) its new target landlet too (`403`
 otherwise). Updates a placed instance. The current implementation merges
 request fields with the existing instance before validation.
+
+**`expectedUpdatedAt` (#1062, server half).** The body may carry
+`"expectedUpdatedAt"`, the `updatedAt` the caller last saw. If the stored
+`updatedAt` differs the write is refused with `409`, nothing is changed, and
+the body carries `staleInstanceId` and `instance` (the current stored state)
+next to `error`, so the caller can reconcile. Absent the field the write is
+last-write-wins as before. A non-string or empty value is `400`.
 
 ### `DELETE /api/instances/:instanceId`
 
