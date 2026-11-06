@@ -126,6 +126,7 @@
       "stripe_event_created_at": "INTEGER|0||0",
       "stripe_onboarding_status": "TEXT|1|'not_started'|0",
       "stripe_requirements_due": "TEXT|0||0",
+      "stripe_requirements_eventually_due": "TEXT|0||0",
       "stripe_updated_at": "TEXT|0||0",
       "updated_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "user_id": "TEXT|0||0",
@@ -635,6 +636,7 @@
       "stripe_event_created_at": "INTEGER|0||0",
       "stripe_onboarding_status": "TEXT|1|'not_started'|0",
       "stripe_requirements_due": "TEXT|0||0",
+      "stripe_requirements_eventually_due": "TEXT|0||0",
       "stripe_updated_at": "TEXT|0||0",
       "updated_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "user_id": "TEXT|0||0"
