@@ -21,11 +21,7 @@ import {
 } from './validation.js';
 import { checkRateLimit } from './rate-limit.js';
 import {
-<<<<<<< HEAD
-  requireCurrentUser, assertOwner, requireSessionBuilder,
-=======
-  requireCurrentUser, assertOwner, requireSessionBuilder, builderNotSuspendedSql, suspendedSellerTemplateIds,
->>>>>>> origin/main
+  requireCurrentUser, assertOwner, requireSessionBuilder, suspendedSellerTemplateIds,
   userIdForBuilder, builderIdForUser, builderIdsForUsers, RESOLVER_CHUNK_SIZE,
   notBlockedBySql, notBlockedByUserSql,
   notBlockedEitherWayByUserSql, userNotSuspendedSql, userBlockExistsBetween,
