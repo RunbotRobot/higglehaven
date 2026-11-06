@@ -590,6 +590,16 @@
       "stripe_account_id": "TEXT|1||0",
       "stripe_onboarding_status": "TEXT|0||0"
     },
+    "saved_layout_calendar_events": {
+      "author_label": "TEXT|1||0",
+      "created_at": "TEXT|1||0",
+      "saved_layout_id": "TEXT|1||0",
+      "scheduled_at": "TEXT|0||0",
+      "source_instance_id": "TEXT|1||0",
+      "text": "TEXT|1||0",
+      "triggered_at": "TEXT|0||0",
+      "user_id": "TEXT|0||0"
+    },
     "saved_layout_instances": {
       "crop_json": "TEXT|1|'{}'|0",
       "is_community_calendar": "INTEGER|1|0|0",
@@ -605,6 +615,14 @@
       "x_m": "REAL|1||0",
       "y_m": "REAL|1||0",
       "z_m": "REAL|1||0"
+    },
+    "saved_layout_sign_posts": {
+      "author_label": "TEXT|1||0",
+      "created_at": "TEXT|1||0",
+      "saved_layout_id": "TEXT|1||0",
+      "source_instance_id": "TEXT|1||0",
+      "text": "TEXT|1||0",
+      "user_id": "TEXT|0||0"
     },
     "saved_level_layouts": {
       "builder_id": "TEXT|1||0",
@@ -1243,6 +1261,14 @@
     "index:idx_retained_stripe_accounts_source": {
       "tbl": "retained_stripe_accounts",
       "sql": "CREATE INDEX idx_retained_stripe_accounts_source ON retained_stripe_accounts(source, source_id)"
+    },
+    "index:idx_saved_layout_calendar_events_instance": {
+      "tbl": "saved_layout_calendar_events",
+      "sql": "CREATE INDEX idx_saved_layout_calendar_events_instance ON saved_layout_calendar_events(saved_layout_id, source_instance_id, created_at)"
+    },
+    "index:idx_saved_layout_sign_posts_instance": {
+      "tbl": "saved_layout_sign_posts",
+      "sql": "CREATE INDEX idx_saved_layout_sign_posts_instance ON saved_layout_sign_posts(saved_layout_id, source_instance_id, created_at)"
     },
     "index:idx_saved_level_layouts_builder_created": {
       "tbl": "saved_level_layouts",

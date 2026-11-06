@@ -8,6 +8,7 @@
 // below is only ever reached from inside this module's own account-menu
 // panel/modals.
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
+import { createPurchaseRow } from './myPurchases.js';
 import { builderId, currentMode } from '../world/state.js';
 import { currentAuthUser } from './auth.js';
 import { formatArea } from '../settings.js';
@@ -31,6 +32,7 @@ import {
   fetchMyBuilder,
   fetchTaxSummary,
   fetchNotifications,
+  fetchMyPurchases,
   fetchUnreadNotificationCount,
   markNotificationRead,
   markAllNotificationsRead,
@@ -1151,6 +1153,82 @@ function closeMyLandsModal() {
   closeModalA11y(myLandsModalEl);
 }
 myLandsCloseBtn.addEventListener('click', closeMyLandsModal);
+
+// "My Purchases" (#3197): the signed-in account's own receipts, newest first.
+// Same load-token guard as the Notices panel so a response that lands after
+// the panel was closed (or reopened) never paints into it.
+const myPurchasesBtn = document.getElementById('my-purchases-btn');
+const myPurchasesModalEl = document.getElementById('my-purchases-modal');
+const myPurchasesCloseBtn = document.getElementById('my-purchases-close-btn');
+const myPurchasesListEl = document.getElementById('my-purchases-list');
+const myPurchasesEmptyEl = document.getElementById('my-purchases-empty');
+const myPurchasesLoadMoreBtn = document.getElementById('my-purchases-load-more-btn');
+let myPurchasesLoadToken = 0;
+let myPurchasesNextCursor = null;
+
+// A row updates itself from the API's own response (onChanged); anything the
+// local copy can't be trusted for -- a delete, a 409 -- reloads the list.
+function appendMyPurchaseRow(purchase) {
+  const row = createPurchaseRow(purchase, {
+    onChanged: () => {},
+    onReload: () => renderMyPurchases(),
+  });
+  myPurchasesListEl.appendChild(row);
+}
+
+function showMyPurchasesMessage(text) {
+  myPurchasesEmptyEl.textContent = text;
+  myPurchasesEmptyEl.hidden = false;
+}
+
+async function renderMyPurchases() {
+  const myLoadToken = ++myPurchasesLoadToken;
+  myPurchasesListEl.innerHTML = '';
+  myPurchasesLoadMoreBtn.hidden = true;
+  myPurchasesEmptyEl.hidden = true;
+  myPurchasesNextCursor = null;
+  let page;
+  try {
+    page = await fetchMyPurchases();
+  } catch (err) {
+    if (myLoadToken !== myPurchasesLoadToken) return;
+    showMyPurchasesMessage(err.message || 'Could not load your purchases.');
+    return;
+  }
+  if (myLoadToken !== myPurchasesLoadToken) return;
+  if (page.purchases.length === 0) showMyPurchasesMessage("You haven't bought anything yet.");
+  for (const purchase of page.purchases) appendMyPurchaseRow(purchase);
+  myPurchasesNextCursor = page.nextCursor;
+  myPurchasesLoadMoreBtn.hidden = !myPurchasesNextCursor;
+}
+
+myPurchasesLoadMoreBtn.addEventListener('click', async () => {
+  const myLoadToken = myPurchasesLoadToken;
+  myPurchasesLoadMoreBtn.disabled = true;
+  try {
+    const page = await fetchMyPurchases({ cursor: myPurchasesNextCursor });
+    if (myLoadToken !== myPurchasesLoadToken) return;
+    for (const purchase of page.purchases) appendMyPurchaseRow(purchase);
+    myPurchasesNextCursor = page.nextCursor;
+    myPurchasesLoadMoreBtn.hidden = !myPurchasesNextCursor;
+  } catch (err) {
+    console.warn('Could not load more purchases:', err);
+  } finally {
+    myPurchasesLoadMoreBtn.disabled = false;
+  }
+});
+
+function closeMyPurchasesModal() {
+  myPurchasesLoadToken += 1; // discard any response still in flight
+  myPurchasesModalEl.classList.remove('visible');
+  closeModalA11y(myPurchasesModalEl);
+}
+myPurchasesBtn.addEventListener('click', () => {
+  myPurchasesModalEl.classList.add('visible');
+  openModalA11y(myPurchasesModalEl, closeMyPurchasesModal);
+  renderMyPurchases();
+});
+myPurchasesCloseBtn.addEventListener('click', closeMyPurchasesModal);
 
 function closeFriendsModal() {
   friendsModalEl.classList.remove('visible');
