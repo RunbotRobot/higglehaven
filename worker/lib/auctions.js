@@ -669,7 +669,7 @@ export async function handleAuctionBids(request, db, route) {
       if (currentHighest && currentHighest.amount_cents >= amountCents) {
         throw new HttpError(`amountCents must be at least ${currentHighest.amount_cents + 1}`, 400);
       }
-      throw new HttpError('This would put you over your land cap — please retry', 409);
+      throw new HttpError('This would put you over your land cap — please retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     await db.prepare(`UPDATE auctions SET updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE auction_id = ?`).bind(auctionId).run();
     // Re-derived after the insert (excluding the bid just inserted) rather

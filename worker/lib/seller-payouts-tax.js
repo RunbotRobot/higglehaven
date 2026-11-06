@@ -16,7 +16,7 @@
 // is duplicated rather than imported, matching worker/lib/stripe.js's own
 // precedent (workerd requires every named export of the main Worker entry
 // module to be a function/class binding, not a plain const).
-import { json, HttpError } from './http.js';
+import { json, HttpError, ERROR_CODES } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue, labelValue } from './validation.js';
 import { requireCurrentUser, sha256Hex } from './auth.js';
@@ -101,7 +101,7 @@ const TAX_ID_FORM_RATE_LIMIT_MAX = 20;
 // resubmission as a conflict.
 async function handleTaxIdForm(request, env, db, user) {
   if (!taxIdEncryptionConfigured(env)) {
-    throw new HttpError('Tax-ID collection is not configured on this server yet.', 503);
+    throw new HttpError('Tax-ID collection is not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
   }
   await checkRateLimit(db, `tax-id-form:${user.user_id}`, TAX_ID_FORM_RATE_LIMIT_MAX);
   const input = await readJson(request);
@@ -313,7 +313,7 @@ export async function handleBuilderRedeem(request, env, db) {
     }
 
     if (!stripeConfigured(env)) {
-      throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+      throw new HttpError('Stripe payouts are not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
     }
     if (!sessionBuilder.stripe_account_id || sessionBuilder.stripe_onboarding_status !== 'complete') {
       throw new HttpError('Complete Stripe onboarding before redeeming higgles for cash.', 400);
@@ -330,7 +330,7 @@ export async function handleBuilderRedeem(request, env, db) {
     // reaches Stripe on both the original attempt and the retry.
     const { redemption, resumed } = await claimOrResumeBuilderRedemption(db, sessionBuilder.builder_id, amountCents);
     if (!redemption) {
-      throw new HttpError('Your higgles balance changed — try again.', 409);
+      throw new HttpError('Your higgles balance changed — try again.', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     if (resumed) {
       return resumeBuilderRedemption(env, db, sessionBuilder, redemption);
@@ -366,7 +366,7 @@ export async function handleBuilderRedeem(request, env, db) {
       const liveBuilder = await db.prepare('SELECT stripe_account_id FROM builders WHERE builder_id = ?')
         .bind(sessionBuilder.builder_id).first();
       if (liveBuilder?.stripe_account_id !== sessionBuilder.stripe_account_id) {
-        throw new HttpError('Your connected Stripe account changed — refetch and retry.', 409);
+        throw new HttpError('Your connected Stripe account changed — refetch and retry.', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
       }
       // Two real Stripe calls, unlike a seller's own payout: higgles were
       // never sitting in any per-builder Stripe balance to begin with (a
@@ -693,7 +693,7 @@ export async function claimOrResumeSellerPayout(db, sellerId) {
 // today.
 async function resumeSellerPayout(env, db, sessionSeller, claimed) {
   if (!stripeConfigured(env)) {
-    throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+    throw new HttpError('Stripe payouts are not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
   }
   const claimedCents = claimed.reduce((sum, p) => sum + purchaseSellerShareCents(p), 0);
   const idempotencyKey = await sellerPayoutIdempotencyKey(sessionSeller.seller_id, claimed.map((p) => p.purchase_id));
@@ -795,7 +795,7 @@ export async function handleSellerPayouts(request, env, db) {
     }
 
     if (!stripeConfigured(env)) {
-      throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+      throw new HttpError('Stripe payouts are not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
     }
     if (!sessionSeller.stripe_account_id || sessionSeller.stripe_onboarding_status !== 'complete') {
       throw new HttpError('Complete Stripe onboarding before requesting a payout.', 400);
@@ -1319,7 +1319,7 @@ export async function handleTax(request, env, db, route, url) {
   if (request.method === 'GET' && route.length === 2 && route[1] === 'efiling-connection-test') {
     if (!user.is_admin) throw new HttpError('Admin access required', 403);
     if (!tax1099EfilingCredentialsConfigured(env)) {
-      throw new HttpError('1099 e-filing vendor credentials are not configured on this server yet.', 503);
+      throw new HttpError('1099 e-filing vendor credentials are not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
     }
     await fetchTax1099EfilingToken(env);
     return json({ connected: true });
@@ -1456,10 +1456,10 @@ export async function handleTax(request, env, db, route, url) {
     // the Stripe seller-account route validating its payload before ever
     // reaching stripeConfigured.
     if (!taxIdEncryptionConfigured(env)) {
-      throw new HttpError('Tax-ID collection is not configured on this server yet.', 503);
+      throw new HttpError('Tax-ID collection is not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
     }
     if (!tax1099EfilingConfigured(env)) {
-      throw new HttpError('1099 e-filing is not configured on this server yet.', 503);
+      throw new HttpError('1099 e-filing is not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
     }
     const claimedAt = new Date().toISOString();
     const claim = await db.prepare(`

@@ -35,6 +35,10 @@ export const ERROR_CODES = Object.freeze({
   LANDLET_OWNERSHIP_LOST: 'landlet_ownership_lost',
   AUCTION_ALREADY_ACTIVE: 'auction_already_active',
   AUCTION_NOT_OWNER: 'auction_not_owner',
+  SERVICE_UNAVAILABLE: 'service_unavailable',
+  UPSTREAM_FAILED: 'upstream_failed',
+  STALE_REFERENCE: 'stale_reference',
+  SELLER_SUSPENDED: 'seller_suspended',
 });
 
 export class HttpError extends Error {

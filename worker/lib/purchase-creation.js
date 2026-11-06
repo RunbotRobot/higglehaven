@@ -26,7 +26,7 @@
 // it turns out nothing in this file actually calls it (only
 // handleSoldOutMarkers does, which stayed behind per the paragraph above),
 // so it's left untouched rather than exported speculatively.
-import { json, HttpError, clientIp } from './http.js';
+import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { refreshStoredStripeStatus } from './seller-profile.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue, labelValue, positiveInteger } from './validation.js';
@@ -218,10 +218,10 @@ export async function handleInstancePurchase(request, env, instanceId) {
   // user_id lookup above comes back null and the suspension check below
   // would pass -- check the closure record directly.
   if (template.seller_id && await db.prepare('SELECT 1 AS closed FROM closed_sellers WHERE seller_id = ?').bind(template.seller_id).first()) {
-    throw new HttpError('This product is currently unavailable because its seller is suspended.', 400);
+    throw new HttpError('This product is currently unavailable because its seller is suspended.', 400, { code: ERROR_CODES.SELLER_SUSPENDED });
   }
   if (await isUserSuspended(db, seller?.user_id)) {
-    throw new HttpError('This product is currently unavailable because its seller is suspended.', 400);
+    throw new HttpError('This product is currently unavailable because its seller is suspended.', 400, { code: ERROR_CODES.SELLER_SUSPENDED });
   }
   // #3065: a template that names a seller_id whose sellers row no longer
   // exists belongs to a seller who deleted their profile or account (every
@@ -497,7 +497,7 @@ export async function handlePurchaseFinalize(request, env) {
   await checkRateLimit(db, `purchase-finalize:${clientIp(request)}`, PURCHASE_FINALIZE_RATE_LIMIT_MAX);
 
   if (!stripeConfigured(env)) {
-    throw new HttpError('Stripe payments are not configured on this server yet.', 503);
+    throw new HttpError('Stripe payments are not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
   }
   const paymentIntent = await stripeRequest(env, 'GET', `payment_intents/${encodeURIComponent(paymentIntentId)}`);
   if (paymentIntent.status !== 'succeeded') {

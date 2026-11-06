@@ -501,6 +501,18 @@ describe('server error codes reach the player as copy, not raw server text (#195
     expect(error.message).toBe('Something new');
   });
 
+  // src/build/scene.js recognises a suspended seller's rejected save by this
+  // code (falling back to the original text), not by the player copy that
+  // replaces `message`, so both must survive on the error.
+  it('keeps the code and the original server text that the suspended-seller reconcile relies on', async () => {
+    failWith(400, { error: 'This product is currently unavailable because its seller is suspended.', code: 'seller_suspended' });
+    const error = await fetchCurrentUser().catch((e) => e);
+    expect(error.message).toBe("That product isn't available right now.");
+    expect(error.code).toBe('seller_suspended');
+    expect(error.serverMessage).toMatch(/seller is suspended/);
+    expect(error.status).toBe(400);
+  });
+
   it('maps the server catch-all 500 to a calm line instead of "Internal server error"', async () => {
     failWith(500, { error: 'Internal server error', code: 'internal_error' });
     const error = await fetchCurrentUser().catch((e) => e);

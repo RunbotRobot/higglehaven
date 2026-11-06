@@ -1516,7 +1516,10 @@ async function syncDelete(instanceId) {
 // "couldn't save moved item(s) ... may not survive a reload". Recognise that
 // rejection (and only that one) so the caller can reconcile instead.
 function isSuspendedSellerSyncError(err) {
-  return err?.status === 400 && /seller is suspended/.test(err.message || '');
+  // #1954: match on the stable code; the original server text (kept on
+  // serverMessage, since message is now player copy) is the fallback for a
+  // Worker that predates the code.
+  return err?.status === 400 && (err.code === 'seller_suspended' || /seller is suspended/.test(err.serverMessage || err.message || ''));
 }
 
 // Drops, from the given meshes, every one the server no longer has (the

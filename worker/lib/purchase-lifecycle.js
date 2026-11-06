@@ -12,7 +12,7 @@
 // creation" leaf, #2614, since this leaf's own functions only call it, not
 // the other way around): purchaseFromRow, handlePurchaseFinalize, and
 // every other helper exclusive to that leaf.
-import { json, HttpError, clientIp } from './http.js';
+import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import {
   readJson, stringValue, queryLimit, decodeCursor, encodeCursor,
@@ -699,7 +699,7 @@ async function finalizeRefundReversal(env, purchase) {
   if (purchase.payment_intent_id) {
     if (!stripeConfigured(env)) {
       await db.prepare('UPDATE purchases SET refunded_at = NULL WHERE purchase_id = ?').bind(purchase.purchase_id).run();
-      throw new HttpError('Stripe payments are not configured on this server yet.', 503);
+      throw new HttpError('Stripe payments are not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
     }
     const refundAmountCents = Math.round(purchase.total_cents * REFUND_PAYOUT_RATE);
     try {

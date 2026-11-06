@@ -1588,7 +1588,7 @@ async function handleBuilders(request, env, db, route, url) {
       WHERE builder_id = ? AND stripe_account_id = ?
     `).bind(nowIso, nowIso, route[1], previousAccountId).run();
     if (result.meta.changes === 0) {
-      throw new HttpError('This builder\'s Stripe account changed concurrently -- refetch and retry', 409);
+      throw new HttpError('This builder\'s Stripe account changed concurrently -- refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     await adminActionLogStatement(db, admin.user_id, 'stripe_account_reset', 'builder', route[1], { previousAccountId }).run();
     const updated = await requireBuilder(db, route[1]);
@@ -3025,7 +3025,7 @@ export async function encryptTaxIdPayload(env, payload) {
 
 export async function decryptTaxIdPayload(env, stored) {
   const parts = stored.split('$');
-  if (parts.length !== 3 || parts[0] !== 'aesgcm') throw new HttpError('Stored tax data is corrupt', 500);
+  if (parts.length !== 3 || parts[0] !== 'aesgcm') throw new HttpError('Stored tax data is corrupt', 500, { code: ERROR_CODES.INTERNAL_ERROR });
   const [, ivHex, ciphertextHex] = parts;
   const key = await importTaxIdEncryptionKey(env);
   const plaintext = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: hexToBytes(ivHex) }, key, hexToBytes(ciphertextHex));
