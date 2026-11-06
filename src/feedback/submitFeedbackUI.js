@@ -101,6 +101,10 @@ async function openFeedbackModal() {
   setFeedbackStatus('', false);
   feedbackDescriptionEl.value = '';
   feedbackScreenshotPreview.removeAttribute('src');
+  // Hidden until there is a picture to show: an <img> with no src paints a
+  // broken-image icon and its alt text, which is what the builder saw while
+  // the capture was still running (or for good if it produced nothing).
+  feedbackScreenshotPreview.hidden = true;
   feedbackModalEl.classList.add('visible');
   openModalA11y(feedbackModalEl, closeFeedbackModal);
   let screenshotBlob;
@@ -118,12 +122,18 @@ async function openFeedbackModal() {
   if (feedbackScreenshotBlob) {
     feedbackScreenshotUrl = URL.createObjectURL(feedbackScreenshotBlob);
     feedbackScreenshotPreview.src = feedbackScreenshotUrl;
+    feedbackScreenshotPreview.hidden = false;
+  } else {
+    // A missing screenshot is a quiet gap otherwise: the report would go without one
+    // and the person would never know (No silent loss). Still sendable.
+    setFeedbackStatus("We couldn't capture a picture of your view, but you can still send your report.", false);
   }
 }
 
 function closeFeedbackModal() {
   feedbackModalToken++;
   feedbackModalEl.classList.remove('visible');
+  feedbackScreenshotPreview.hidden = true;
   closeModalA11y(feedbackModalEl);
   if (feedbackScreenshotUrl) {
     URL.revokeObjectURL(feedbackScreenshotUrl);
