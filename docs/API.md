@@ -6083,7 +6083,10 @@ batch-insert count like the instance batch endpoints below still have).
 `dx`/`dy`/`dz` and the rotation fields may be negative
 or zero — only `crop`/`scale` reuse the stricter validation a placed
 instance itself gets (`validateCropShape`/`validateScale`), since those two
-are genuinely sign-constrained.
+are genuinely sign-constrained. **#921:** `name` gets the same baseline
+prohibited-content phrase check catalog templates use (`400`, "This bundle
+appears to violate ... (matched \"...\")"); the phrase list lives in
+`worker/lib/prohibited-content.js`, shared by both surfaces.
 
 ### `PATCH /api/bundles/:bundleId`
 
@@ -6092,13 +6095,25 @@ otherwise). Updates `name` and/or `shared` — both optional and independent;
 omitting one leaves it at its current value rather than requiring the full
 object back — the frontend's Rename button only ever sends `{ name }`.
 There's no way to edit a saved bundle's `items` — the frontend has no
-UI for that; delete and re-save from a fresh selection instead.
+UI for that; delete and re-save from a fresh selection instead. **#921:** a
+`name` in the body gets the same prohibited-content check as `POST` (a
+request that omits `name` is not re-checked).
 
 ### `DELETE /api/bundles/:bundleId`
 
 Requires a session logged in as the bundle's own builder (`403`
 otherwise). Deletes a bundle. Response: `{ "deleted": true }`. Returns `404` if it
 doesn't exist.
+
+**#921: admin removal.** An admin in good standing can delete any bundle
+that is not their own (shared bundles carry community-visible text, and
+before this only the author could remove one). The body must be
+`{ "category" }`, one of `harassment`/`spam`/`scam`/`sexual_content`/`other`
+(`400` otherwise); the removal leaves a `moderation_removal_snapshots` row
+(`source_table: 'bundles'`, nothing retained for `sexual_content`, #2388) and
+an `admin_action_log` row (`action_type: 'delete_bundle_override'`), and is
+rate-limited per admin. An admin deleting their own bundle is an ordinary
+self-delete: no body, no category, no snapshot.
 
 ### Frontend wiring
 
