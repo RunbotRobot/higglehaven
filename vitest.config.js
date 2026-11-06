@@ -1,7 +1,12 @@
 import { cloudflareTest, readD1Migrations } from '@cloudflare/vitest-pool-workers';
 import { defineConfig } from 'vitest/config';
+import { writeMigrationsManifest } from './scripts/generate-migrations-manifest.mjs';
 
 export default defineConfig(async () => {
+  // #3210: the Worker imports worker/migrations-manifest.json, which is
+  // generated rather than committed, so make sure it exists (and is current)
+  // even when vitest is run directly instead of through `npm test`.
+  writeMigrationsManifest();
   const migrations = await readD1Migrations('./migrations');
 
   return {

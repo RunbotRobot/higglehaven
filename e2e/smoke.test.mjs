@@ -33,7 +33,7 @@ await page.waitForSelector('#account-menu-toggle', { timeout: 10000 });
 await page.waitForTimeout(2000);
 
 // The camera's default position/target is deterministic across a reload
-// (confirmed via #camera-debug-panel), but the tree's own clickable
+// (confirmed earlier via the admin-only #camera-debug-panel, #3219), but the tree's own clickable
 // footprint on screen is smaller now that it's not wearing the selection
 // gizmo/highlight that made a wider area hit it right after placing it —
 // scan a small vertical range rather than retrying the exact same pixel.

@@ -27,6 +27,7 @@ import {
   currentUser, requireAdmin, assertOwner, requireSessionBuilder, adminInGoodStanding,
 } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
+import { sessionIsPurchaseBuyer, purchaseBuyerUserIdSql } from './purchase-buyer.js';
 import { removeSuspendedSellerPlacedInstances, SUSPENSION_SPARES_LAST_ADMIN_SQL } from './account-moderation.js';
 import { moderationRemovalCategory, recordModerationRemovalSnapshot } from './content-moderation.js';
 import {
@@ -160,10 +161,16 @@ export async function handleProductReviews(request, db, route) {
     // purchase at all" into a clean 400 instead of a confusing 409.
     const purchase = await db.prepare(`
       SELECT purchase_id FROM purchases
-      WHERE template_id = ? AND buyer_builder_id = ? AND refunded_at IS NULL
+      WHERE template_id = ? AND refunded_at IS NULL
+        AND (buyer_user_id = ? OR (buyer_user_id IS NULL AND buyer_builder_id = ?))
         AND NOT EXISTS (SELECT 1 FROM product_reviews WHERE purchase_id = purchases.purchase_id)
       ORDER BY created_at ASC LIMIT 1
-    `).bind(templateId, sessionBuilder.builder_id).first();
+    `).bind(templateId, sessionBuilder.user_id, sessionBuilder.builder_id).first();
+    // #3217: a purchase belongs to the account (purchases.buyer_user_id,
+    // #3195), not the resettable builder profile -- buyer_builder_id is
+    // ON DELETE SET NULL (migration 0099), so matching only on it stranded
+    // a buyer's right to review after a builder-profile reset. The builder
+    // match stays as a fallback only for a purchase with no buyer_user_id.
     if (!purchase) {
       throw new HttpError('Only a shopper who has purchased this product, and not yet reviewed that purchase, can review it', 400);
     }
@@ -884,11 +891,14 @@ const SELLER_FEEDBACK_CREATE_RATE_LIMIT_MAX = 20;
 // deletes their account nulls buyer_builder_id (ON DELETE SET NULL) —
 // same as every other precedent's "legacy/no author on record" case, such
 // a row can never be claimed by anyone as their own.
+// #3214: the buyer is resolved on the account (purchases.buyer_user_id,
+// migration 0194) first, so a buyer whose builder profile was later reset or
+// deleted (buyer_builder_id NULL) still owns their feedback; the builder join
+// only fills in for a purchase recorded before that column existed.
 const SELLER_FEEDBACK_SELECT_WITH_BUYER = `
-  SELECT f.*, bld.user_id AS buyer_user_id, bu.username AS current_author_label FROM seller_feedback f
+  SELECT f.*, ${purchaseBuyerUserIdSql('p')} AS buyer_user_id, bu.username AS current_author_label FROM seller_feedback f
   JOIN purchases p ON p.purchase_id = f.purchase_id
-  LEFT JOIN builders bld ON bld.builder_id = p.buyer_builder_id
-  LEFT JOIN users bu ON bu.user_id = bld.user_id
+  LEFT JOIN users bu ON bu.user_id = ${purchaseBuyerUserIdSql('p')}
 `;
 
 export async function handleSellerFeedbackCreate(request, env, purchaseId) {
@@ -910,7 +920,7 @@ export async function handleSellerFeedbackCreate(request, env, purchaseId) {
   // Same #357 refunded-purchase exclusion handleProductReviews uses — a
   // shopper made whole by a refund has no standing to also rate that same
   // transaction's service.
-  if (purchase.buyer_builder_id !== sessionBuilder.builder_id || purchase.refunded_at) {
+  if (!sessionIsPurchaseBuyer(purchase, sessionBuilder) || purchase.refunded_at) {
     throw new HttpError('Only the buyer of this purchase can leave feedback', 400);
   }
   const rating = Number(input.rating);
@@ -1009,8 +1019,8 @@ export async function handleSellerFeedbackEdit(request, env, purchaseId) {
   // the same join authorization used above, not just the eager read.
   const updated = await db.prepare(`
     UPDATE seller_feedback SET rating = ?, text = ? WHERE purchase_id = ? AND EXISTS (
-      SELECT 1 FROM purchases p JOIN builders bld ON bld.builder_id = p.buyer_builder_id
-      WHERE p.purchase_id = seller_feedback.purchase_id AND bld.user_id = ?
+      SELECT 1 FROM purchases p
+      WHERE p.purchase_id = seller_feedback.purchase_id AND ${purchaseBuyerUserIdSql('p')} = ?
     )
   `).bind(rating, text, purchaseId, sessionBuilder.user_id).run();
   if (updated.meta.changes === 0) {
@@ -1060,8 +1070,8 @@ export async function handleSellerFeedbackDelete(request, env, purchaseId) {
     await checkRateLimit(db, `seller-feedback-delete:${requester.user_id}`, SELLER_FEEDBACK_DELETE_RATE_LIMIT_MAX);
     const deletedByAuthor = await db.prepare(`
       DELETE FROM seller_feedback WHERE purchase_id = ? AND EXISTS (
-        SELECT 1 FROM purchases p JOIN builders bld ON bld.builder_id = p.buyer_builder_id
-        WHERE p.purchase_id = seller_feedback.purchase_id AND bld.user_id = ?
+        SELECT 1 FROM purchases p
+        WHERE p.purchase_id = seller_feedback.purchase_id AND ${purchaseBuyerUserIdSql('p')} = ?
       )
     `).bind(purchaseId, requester.user_id).run();
     if (deletedByAuthor.meta.changes === 0) {

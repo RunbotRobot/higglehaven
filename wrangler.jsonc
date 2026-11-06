@@ -2,6 +2,9 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "higglehaven",
   "main": "worker/index.js",
+  // #3210: worker/migrations-manifest.json is generated, not committed; this
+  // runs before `wrangler dev` and `wrangler deploy` bundle the Worker.
+  "build": { "command": "node scripts/generate-migrations-manifest.mjs" },
   "compatibility_date": "2026-07-25",
   "workers_dev": true,
   "assets": {
