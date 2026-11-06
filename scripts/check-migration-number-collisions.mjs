@@ -4,7 +4,7 @@
 // picking the same next number is common, not rare — and nothing catches it
 // until GitHub reports `mergeable_state: "dirty"` after the fact (as
 // happened twice on PR #1017 alone). Run as `pretest` (see package.json),
-// alongside check-migrations-manifest-fresh.mjs, so merging `main` into a
+// before the tests, so merging `main` into a
 // branch that already has a same-numbered migration fails loudly and
 // immediately via `npm test`, right at the point AGENTS.md already expects
 // a "merge main in and resolve" step to happen.
@@ -41,8 +41,7 @@ function main() {
       console.error(`  ${number}: ${names.join(', ')}`);
     }
     console.error(
-      'Renumber all but one file in each group to the next free number, then run ' +
-      '`npm run generate:migrations-manifest` and commit the result.',
+      'Renumber all but one file in each group to the next free number.',
     );
     process.exit(1);
   }

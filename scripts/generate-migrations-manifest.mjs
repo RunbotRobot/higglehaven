@@ -8,11 +8,13 @@
 // imports natively) and checkMigrationDrift() compares against a live
 // `SELECT name FROM d1_migrations` on every cron tick.
 //
-// Usage: node scripts/generate-migrations-manifest.mjs
-// Run via `npm run generate:migrations-manifest`, wired into `deploy` and
-// `deploy:ci` so the bundled manifest can never go stale at deploy time.
-// A `pretest` check (scripts/check-migrations-manifest-fresh.mjs) catches
-// the case of a migration file added without regenerating it.
+// #3210: the manifest is NOT committed (it is gitignored). Every PR that
+// added a migration appended a line to the same end of one committed file, so
+// any two such PRs conflicted and each conflict cost a full CI cycle. It is
+// regenerated wherever it is consumed instead: `wrangler dev`/`deploy` (the
+// `build.command` in wrangler.jsonc), vitest (vitest.config.js, at config
+// load), and `pretest` (the Node-side import check). Run by hand with
+// `npm run generate:migrations-manifest`.
 import { readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,10 +30,16 @@ export function listMigrationFiles(dir) {
     .sort();
 }
 
-function main() {
+// Exported so vitest.config.js can regenerate it at load without a subprocess.
+export function writeMigrationsManifest() {
   const manifest = listMigrationFiles(migrationsDir);
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  console.log(`Wrote ${manifest.length} migration name(s) to ${manifestPath}`);
+  return { manifest, manifestPath };
+}
+
+function main() {
+  const { manifest, manifestPath: written } = writeMigrationsManifest();
+  console.log(`Wrote ${manifest.length} migration name(s) to ${written}`);
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {
