@@ -4835,7 +4835,7 @@ request fields with the existing instance before validation.
 `"expectedUpdatedAt"`, the `updatedAt` the caller last saw. If the stored
 `updatedAt` differs the write is refused with `409`, nothing is changed, and
 the body carries `staleInstanceId` and `instance` (the current stored state)
-next to `error`, so the caller can reconcile. Absent the field the write is
+next to `error` (`"This item was changed somewhere else."`), so the caller can reconcile. Absent the field the write is
 last-write-wins as before. A non-string or empty value is `400`.
 
 ### `DELETE /api/instances/:instanceId`
@@ -6083,7 +6083,10 @@ batch-insert count like the instance batch endpoints below still have).
 `dx`/`dy`/`dz` and the rotation fields may be negative
 or zero — only `crop`/`scale` reuse the stricter validation a placed
 instance itself gets (`validateCropShape`/`validateScale`), since those two
-are genuinely sign-constrained.
+are genuinely sign-constrained. **#921:** `name` gets the same baseline
+prohibited-content phrase check catalog templates use (`400`, "This bundle
+appears to violate ... (matched \"...\")"); the phrase list lives in
+`worker/lib/prohibited-content.js`, shared by both surfaces.
 
 ### `PATCH /api/bundles/:bundleId`
 
@@ -6092,13 +6095,25 @@ otherwise). Updates `name` and/or `shared` — both optional and independent;
 omitting one leaves it at its current value rather than requiring the full
 object back — the frontend's Rename button only ever sends `{ name }`.
 There's no way to edit a saved bundle's `items` — the frontend has no
-UI for that; delete and re-save from a fresh selection instead.
+UI for that; delete and re-save from a fresh selection instead. **#921:** a
+`name` in the body gets the same prohibited-content check as `POST` (a
+request that omits `name` is not re-checked).
 
 ### `DELETE /api/bundles/:bundleId`
 
 Requires a session logged in as the bundle's own builder (`403`
 otherwise). Deletes a bundle. Response: `{ "deleted": true }`. Returns `404` if it
 doesn't exist.
+
+**#921: admin removal.** An admin in good standing can delete any bundle
+that is not their own (shared bundles carry community-visible text, and
+before this only the author could remove one). The body must be
+`{ "category" }`, one of `harassment`/`spam`/`scam`/`sexual_content`/`other`
+(`400` otherwise); the removal leaves a `moderation_removal_snapshots` row
+(`source_table: 'bundles'`, nothing retained for `sexual_content`, #2388) and
+an `admin_action_log` row (`action_type: 'delete_bundle_override'`), and is
+rate-limited per admin. An admin deleting their own bundle is an ordinary
+self-delete: no body, no category, no snapshot.
 
 ### Frontend wiring
 
@@ -8306,6 +8321,40 @@ seller's own "did my product sell" view, used by the Seller modal's "Sales"
 panel (see "Refunds" below). If the template has a `sellerId`, this
 requires a session logged in as that seller (`403` otherwise) — a
 seller-less template stays open to unauthenticated reads.
+
+`GET /api/purchases/mine` (#3196, "My Purchases") is the buyer's own list: it
+requires a session (`401` otherwise; a base-tier account is enough, since
+seeing your own receipts is not a social feature) and returns the purchases
+whose `buyer_user_id` (#3195) is the caller's account, newest first,
+cursor-paginated (`limit` default 50, max 100; `nextCursor` is `null` on the
+last page; `400` for a bad `limit` or `cursor`). Rate-limited per account
+(`purchases-mine`, 60 per window). Because it keys on the account, a receipt
+is still listed after the buyer's builder profile was deleted or reset.
+Each row carries only what the buyer already saw in the purchase flow, plus
+three flags the server computes with the same rules the actions themselves
+enforce:
+
+```json
+{ "purchases": [ {
+  "purchaseId": "...", "createdAt": "...",
+  "productName": "A Lovely Lamp", "sellerName": "...",
+  "quantity": 2, "totalCents": 1000, "isDigitalGood": false,
+  "shippedAt": null, "refundedAt": null, "refundedAmountCents": 0,
+  "canLeaveFeedback": true, "feedback": null, "canDispute": true
+} ], "nextCursor": null }
+```
+
+`productName` is `"(removed product)"` and `sellerName` is `"(former seller)"`
+when the product or seller no longer exists. `canLeaveFeedback` is true when
+the purchase has a seller on record, is not refunded, and has no feedback yet
+(`feedback` then carries the caller's own `rating`/`text` for an edit control
+to prefill); `canDispute` is true while the purchase is neither refunded nor
+paid out (it says a dispute *can be raised*, never whether it will auto-resolve,
+which stays internal). Feedback and dispute still authorise by
+`purchases.buyer_builder_id`, so a receipt whose builder link was cleared by a
+profile reset is listed with both flags `false`. Deliberately absent: payment
+intent ids, delivery-confirmation tokens, the hosting builder, and commission
+figures.
 
 `GET /api/purchases?danglingSeller=1` requires an admin session (`403`
 otherwise); lists every purchase whose `seller_id` is non-null but no

@@ -14,8 +14,12 @@
 // every other helper exclusive to that leaf.
 import { json, HttpError, clientIp } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
-import { readJson, stringValue } from './validation.js';
-import { requireSessionBuilder, requireAdmin, assertOwner, sha256Hex } from './auth.js';
+import {
+  readJson, stringValue, queryLimit, decodeCursor, encodeCursor,
+} from './validation.js';
+import {
+  requireSessionBuilder, requireCurrentUser, requireAdmin, assertOwner, sha256Hex,
+} from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { fireNotification } from './notifications.js';
 import { handlePurchaseFinalize, purchaseFromRow } from './purchase-creation.js';
@@ -63,8 +67,92 @@ const DISPUTE_RATE_LIMIT_MAX = 20;
 // rather than a builder/seller id.
 const CONFIRM_DELIVERY_RATE_LIMIT_MAX = 20;
 
+// #3196: the one place the dispute endpoint's "this purchase can no longer be
+// disputed" rule lives, shared with GET /api/purchases/mine's `canDispute` so
+// the list can never promise an action the endpoint then refuses. Returns null
+// when the purchase is still open to a dispute, else the endpoint's refusal.
+function disputeBlock(purchase) {
+  if (purchase.refunded_at) {
+    return { status: 409, message: 'This purchase has already been refunded' };
+  }
+  if (purchase.paid_out_at) {
+    return { status: 409, message: 'This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.' };
+  }
+  return null;
+}
+
+const MY_PURCHASES_RATE_LIMIT_MAX = 60;
+const MY_PURCHASES_DEFAULT_LIMIT = 50;
+
+// #3196 (2/5 of #2115, "My Purchases"): the buyer's own list, keyed on the
+// account (purchases.buyer_user_id, #3195), not the resettable builder
+// profile. Returns only what the buyer already saw in the purchase flow plus
+// three computed flags: no payment-intent id, no delivery token, no host
+// builder, no commission figures. Actions (feedback, dispute) still authorise
+// by purchases.buyer_builder_id, so a receipt whose builder link was cleared
+// by a profile reset lists fine but reports those flags as false.
+async function handleMyPurchases(request, env, url) {
+  const db = env.DB;
+  const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `purchases-mine:${user.user_id}`, MY_PURCHASES_RATE_LIMIT_MAX);
+  const limit = queryLimit(url.searchParams.get('limit'), MY_PURCHASES_DEFAULT_LIMIT);
+  const cursor = decodeCursor(url.searchParams.get('cursor'));
+  const builder = await db.prepare('SELECT builder_id FROM builders WHERE user_id = ?').bind(user.user_id).first();
+  const conditions = ['p.buyer_user_id = ?'];
+  const bindings = [user.user_id];
+  if (cursor) {
+    conditions.push('(p.created_at < ? OR (p.created_at = ? AND p.purchase_id < ?))');
+    bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
+  }
+  const { results } = await db.prepare(`
+    SELECT p.purchase_id, p.created_at, p.seller_id, p.quantity, p.total_cents, p.is_digital_good,
+           p.shipped_at, p.refunded_at, p.refunded_amount_cents, p.paid_out_at, p.buyer_builder_id,
+           t.name AS product_name, s.label AS seller_name,
+           f.rating AS feedback_rating, f.text AS feedback_text
+    FROM purchases p
+    LEFT JOIN catalog_templates t ON t.template_id = p.template_id
+    LEFT JOIN sellers s ON s.seller_id = p.seller_id
+    LEFT JOIN seller_feedback f ON f.purchase_id = p.purchase_id
+    WHERE ${conditions.join(' AND ')}
+    ORDER BY p.created_at DESC, p.purchase_id DESC LIMIT ?
+  `).bind(...bindings, limit + 1).all();
+  const hasMore = results.length > limit;
+  const page = results.slice(0, limit);
+  const last = page.at(-1);
+  return json({
+    purchases: page.map((row) => {
+      const actable = !!builder && row.buyer_builder_id === builder.builder_id;
+      const hasFeedback = row.feedback_rating !== null && row.feedback_rating !== undefined;
+      return {
+        purchaseId: row.purchase_id,
+        createdAt: row.created_at,
+        productName: row.product_name || '(removed product)',
+        sellerName: row.seller_name || '(former seller)',
+        quantity: row.quantity,
+        totalCents: row.total_cents,
+        isDigitalGood: !!row.is_digital_good,
+        shippedAt: row.shipped_at,
+        refundedAt: row.refunded_at,
+        refundedAmountCents: row.refunded_amount_cents,
+        // Same rules handleSellerFeedbackCreate / handlePurchaseDispute apply:
+        // a seller on record, not refunded, no feedback yet / not already
+        // refunded or paid out.
+        canLeaveFeedback: actable && !!row.seller_id && !row.refunded_at && !hasFeedback,
+        feedback: hasFeedback ? { rating: row.feedback_rating, text: row.feedback_text } : null,
+        canDispute: actable && disputeBlock(row) === null,
+      };
+    }),
+    nextCursor: hasMore ? encodeCursor(last.created_at, last.purchase_id) : null,
+  });
+}
+
 export async function handlePurchases(request, env, route, url) {
   const db = env.DB;
+
+  // Ahead of the generic GET below: /mine is its own two-segment route.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'mine') {
+    return handleMyPurchases(request, env, url);
+  }
 
   if (request.method === 'POST' && route.length === 2 && route[1] === 'finalize') {
     return handlePurchaseFinalize(request, env);
@@ -772,12 +860,8 @@ async function handlePurchaseDispute(request, env, purchaseId) {
   if (!sessionIsPurchaseBuyer(purchase, sessionBuilder)) {
     throw new HttpError('Only the buyer of this purchase can dispute it', 400);
   }
-  if (purchase.refunded_at) {
-    throw new HttpError('This purchase has already been refunded', 409);
-  }
-  if (purchase.paid_out_at) {
-    throw new HttpError('This purchase has already been paid out and can no longer be refunded automatically — contact support for manual reconciliation.', 409);
-  }
+  const block = disputeBlock(purchase);
+  if (block) throw new HttpError(block.message, block.status);
 
   const history = await db.prepare(`
     SELECT

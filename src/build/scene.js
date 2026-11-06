@@ -1207,6 +1207,7 @@ export async function addInstanceToScene(instance) {
   // included.
   landletElevationGroup.add(object);
   productMeshes.push(object);
+  adoptVersion(instance); // #1062: a mesh built from a server instance starts at that version
   // #1950: covers every way a new mesh can appear -- bootstrap()'s initial
   // batch, placing a fresh item from the catalog, and undo/redo recreating
   // one -- through this one choke point, so a low-stock filter that was
@@ -1265,6 +1266,25 @@ function instanceFromMesh(mesh) {
     // server to restore it, instead of coming back permanently ungrouped.
     groupId: mesh.userData.groupId ?? null,
   };
+}
+
+// #1062 (client half) / #3101: the last server version (updatedAt) this tab
+// has seen for each instance, keyed by id so it survives a mesh being rebuilt
+// (crop change, undo). Sent with every save as expectedUpdatedAt; the server
+// then refuses to overwrite an instance another tab or request has changed
+// since, instead of silently clobbering it. A version is only ever recorded
+// from a server response or a state this tab has actually applied -- adopting
+// one for a state that was NOT applied would let the next save overwrite the
+// newer edit it was meant to protect. An unknown id sends no precondition
+// (plain last-write-wins, as before).
+const instanceVersions = new Map();
+function adoptVersion(instance) {
+  if (instance?.instanceId && instance.updatedAt) instanceVersions.set(instance.instanceId, instance.updatedAt);
+}
+function instanceForSave(mesh) {
+  const instance = instanceFromMesh(mesh);
+  const version = instanceVersions.get(instance.instanceId);
+  return version ? { ...instance, expectedUpdatedAt: version } : instance;
 }
 
 // #545: the batch siblings below already surface a sync failure loudly via
@@ -1412,7 +1432,7 @@ async function handleRejectedSingleSync(err, action) {
 async function syncCreate(mesh) {
   const attemptId = nextSyncAttempt();
   try {
-    await createInstanceRemote(instanceFromMesh(mesh));
+    adoptVersion(await createInstanceRemote(instanceFromMesh(mesh)));
     reportSyncResult(attemptId, true);
   } catch (err) {
     console.warn('Failed to sync new instance to backend:', err);
@@ -1428,7 +1448,19 @@ async function syncCreate(mesh) {
 // server-side. Saves for one instance now run one at a time through
 // src/coalescingSaveQueue.js, which reads the mesh's state only when a save
 // actually starts.
-const updateQueue = createCoalescingSaveQueue(sendInstanceUpdate);
+//
+// #1062 (client half): update writes, single or batch, also run one at a time
+// tab-wide (inOrder). Each save carries the version returned by the previous
+// one, so a batch (group move, Undo/Redo) and a single drag of the same item
+// racing each other would otherwise send a version the other is about to
+// replace, and read as a conflict with this tab's own edit.
+let updateWriteChain = Promise.resolve();
+function inOrder(task) {
+  const run = updateWriteChain.then(task);
+  updateWriteChain = run.catch(() => {});
+  return run;
+}
+const updateQueue = createCoalescingSaveQueue((mesh) => inOrder(() => sendInstanceUpdate(mesh)));
 
 export function syncUpdate(mesh) {
   // Counted from queueing, not only from sending (see #3101 above).
@@ -1440,8 +1472,8 @@ export function syncUpdate(mesh) {
 async function sendInstanceUpdate(mesh) {
   const attemptId = ++syncAttemptSeq;
   try {
-    const { instanceId, ...patch } = instanceFromMesh(mesh);
-    await updateInstanceRemote(instanceId, patch);
+    const { instanceId, ...patch } = instanceForSave(mesh);
+    adoptVersion(await updateInstanceRemote(instanceId, patch));
     reportSyncResult(attemptId, true);
   } catch (err) {
     console.warn('Failed to sync instance update to backend:', err);
@@ -1551,7 +1583,7 @@ async function syncBatchCreate(meshes) {
   if (meshes.length === 0) return;
   const attemptId = nextSyncAttempt();
   try {
-    await createInstancesRemote(meshes.map(instanceFromMesh));
+    (await createInstancesRemote(meshes.map(instanceFromMesh))).forEach(adoptVersion);
     reportSyncResult(attemptId, true);
   } catch (err) {
     console.warn('Failed to sync new instances to backend:', err);
@@ -1576,14 +1608,62 @@ async function syncBatchCreate(meshes) {
   }
 }
 
-async function syncBatchUpdate(meshes) {
-  if (meshes.length === 0) return;
-  const attemptId = nextSyncAttempt();
+// #1062 (client half) / #3101: the server skipped these instances because
+// another tab or request changed them after this tab last saw them -- their
+// current stored state comes back with the report. Shows that state on the
+// matching meshes (the same reshaping Undo/Redo and the refocus reconcile use)
+// and only then records the new versions, so this tab's next save carries the
+// version it is actually showing. gateHeld: the caller already owns the scene
+// mutation gate (Undo/Redo). If the gate is busy with something else nothing
+// is applied and no version is adopted, so the next save is simply refused again
+// rather than overwriting the newer edit. Returns whether it was applied.
+async function applyStaleInstances(staleInstances, { gateHeld = false } = {}) {
+  const gate = gateHeld ? false : beginSceneMutation();
+  if (!gateHeld && !gate) return false;
+  try {
+    const staleById = new Map(staleInstances.map((instance) => [instance.instanceId, instance]));
+    await applySnapshotLocally(captureSnapshot().map((inst) => staleById.get(inst.instanceId) ?? inst));
+    for (const mesh of productMeshes) {
+      const instance = staleById.get(mesh.userData.instanceId);
+      if (!instance) continue;
+      mesh.userData.groupId = instance.groupId ?? null;
+      adoptVersion(instance);
+    }
+    updateSelectionUI();
+    persistLayout();
+  } finally {
+    if (gate) endSceneMutation();
+  }
+  // Undo/Redo history describes a layout the other edit has since changed:
+  // replaying it would quietly overwrite that edit.
+  undoStack.length = 0;
+  redoStack.length = 0;
+  return true;
+}
+
+function syncBatchUpdate(meshes, options) {
+  if (meshes.length === 0) return Promise.resolve();
+  syncsInFlight += 1; // counted from queueing, like syncUpdate (see inOrder)
+  return inOrder(() => runBatchUpdate(meshes, options));
+}
+
+async function runBatchUpdate(meshes, { gateHeld = false } = {}) {
+  const attemptId = ++syncAttemptSeq;
   try {
     // #3101: updateOnly -- a mesh the server no longer has was deleted from
     // another tab/window; saving this tab's copy must not bring it back.
-    const result = await upsertInstancesRemote(meshes.map(instanceFromMesh), { updateOnly: true });
+    const result = await upsertInstancesRemote(meshes.map(instanceForSave), {
+      updateOnly: true,
+      onChunkStored: (stored) => stored.forEach(adoptVersion),
+    });
     reportSyncResult(attemptId, true);
+    if (result.staleInstances?.length) {
+      const applied = await applyStaleInstances(result.staleInstances, { gateHeld });
+      const count = result.staleInstances.length;
+      alert(applied
+        ? `${count} item(s) you changed here had already been changed in another tab or window, so your change was not saved. They now show the latest version.`
+        : `${count} item(s) you changed here had already been changed in another tab or window, so your change was not saved. Switch away from this tab and back to see the latest version.`);
+    }
     const missing = new Set(result.missingInstanceIds ?? []);
     if (missing.size > 0) {
       const suspended = new Set(result.suspendedSellerInstanceIds ?? []);
@@ -1612,7 +1692,12 @@ async function syncBatchUpdate(meshes) {
       if (removed > 0) {
         alert(suspendedSellerRemovalNotice(removed));
         // The rejected batch also held items that are fine; save those now.
-        if (remaining.length > 0) await syncBatchUpdate(remaining);
+        if (remaining.length > 0) {
+          // Already inside the update chain, so run directly (queueing behind
+          // ourselves would never finish); it settles its own in-flight count.
+          syncsInFlight += 1;
+          await runBatchUpdate(remaining);
+        }
         return;
       }
     }
@@ -1698,6 +1783,7 @@ function deleteInstance(mesh, { sync = true } = {}) {
   if (index === -1) return;
   const instanceId = mesh.userData.instanceId;
   productMeshes.splice(index, 1);
+  instanceVersions.delete(instanceId); // #1062: a removed instance has no version to protect
   // #1950: unlike selectionOutlines (cleared by the caller via
   // clearSelection() before every delete path), the low-stock highlight
   // isn't selection-coupled, so this one true removal choke point is where
@@ -2052,7 +2138,7 @@ async function restoreSnapshot(snapshot) {
   // there's no ordering to get wrong running them together.
   await Promise.all([
     syncBatchDelete(deletedIds),
-    syncBatchUpdate(updatedMeshes),
+    syncBatchUpdate(updatedMeshes, { gateHeld: true }),
     syncBatchCreate(createdMeshes),
   ]);
 }
@@ -2200,7 +2286,13 @@ async function applyServerInstances(serverInstances) {
   const anyChanged = membershipChanged
     || productMeshes.some((mesh) => meshDiffersFromInstance(mesh, serverById.get(mesh.userData.instanceId)));
   const nothing = { deletedIds: [], slots: null };
-  if (!anyChanged) return nothing;
+  // #1062: the scene already matches the server, so its versions can be
+  // recorded without applying anything -- the next save then carries the
+  // version the server has now, not one an identical write has since replaced.
+  if (!anyChanged) {
+    serverInstances.forEach(adoptVersion);
+    return nothing;
+  }
 
   if (!beginSceneMutation()) return nothing;
   let deletedIds = [];
@@ -2212,6 +2304,7 @@ async function applyServerInstances(serverInstances) {
       const inst = serverById.get(mesh.userData.instanceId);
       if (inst) mesh.userData.groupId = inst.groupId ?? null;
     }
+    serverInstances.forEach(adoptVersion); // #1062: only now that the server's state is what the scene shows
     updateSelectionUI();
     persistLayout();
     // Undo/Redo history describes a layout that no longer exists once items
@@ -3701,6 +3794,12 @@ function addEverythingInBrushAtClientPos(x, y) {
 window.__testSyncBatchUpdate = (instanceIds) => syncBatchUpdate(
   productMeshes.filter((mesh) => instanceIds.includes(mesh.userData.instanceId)),
 );
+
+// #1062: same convention, for the single-item save (what a one-item drag calls).
+window.__testSyncUpdate = (instanceId) => {
+  const mesh = productMeshes.find((m) => m.userData.instanceId === instanceId);
+  return mesh ? syncUpdate(mesh) : undefined;
+};
 
 window.__testProductScreenPositions = () => productMeshes.map((mesh) => ({
   instanceId: mesh.userData.instanceId,
