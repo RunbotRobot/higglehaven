@@ -33,6 +33,7 @@ import {
   fetchTaxSummary,
   fetchNotifications,
   fetchMyPurchases,
+  disputePurchase,
   fetchUnreadNotificationCount,
   markNotificationRead,
   markAllNotificationsRead,
@@ -1172,6 +1173,7 @@ function appendMyPurchaseRow(purchase) {
   const row = createPurchaseRow(purchase, {
     onChanged: () => {},
     onReload: () => renderMyPurchases(),
+    dispute: disputePurchase, // #3199
   });
   myPurchasesListEl.appendChild(row);
 }

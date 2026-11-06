@@ -1645,6 +1645,12 @@ export async function fetchSellerFeedback(sellerId) {
   return requestJson(`/sellers/${encodeURIComponent(sellerId)}/feedback`);
 }
 
+// "Report a problem" on a purchase (#3199). Server: POST /api/purchases/:id/dispute,
+// `{ autoResolved, purchase }`; a 409 means the purchase was already paid out.
+export async function disputePurchase(purchaseId) {
+  return requestJson(`/purchases/${encodeURIComponent(purchaseId)}/dispute`, { method: 'POST' });
+}
+
 export async function createSellerFeedback(purchaseId, { rating, text } = {}) {
   const { feedback } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/feedback`, {
     method: 'POST',

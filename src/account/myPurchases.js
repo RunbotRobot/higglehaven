@@ -1,7 +1,10 @@
-// "My Purchases" (#3197/#3198): row rendering for the account-menu panel.
+// "My Purchases" (#3197/#3198/#3199): row rendering for the account-menu panel.
 // Kept out of menu.js so the plain-language wording is testable. Copy
 // describes what the buyer sees, never internals.
 import { createSellerFeedback, editSellerFeedback, deleteSellerFeedback } from '../api.js';
+import {
+  DISPUTE_PROMPT_TEXT, disputeSuccessText, disputeErrorText, purchaseAfterDispute,
+} from './disputeOutcome.js';
 
 const money = (cents) => (cents / 100).toLocaleString('en-US', { style: 'currency', currency: 'USD' });
 
@@ -34,8 +37,10 @@ function button(label, onClick) {
 
 // callbacks: { onChanged(updatedPurchase) } -- a local update from the API's
 // own response; { onReload() } -- re-fetch the list from the server (after a
-// delete, or a 409, when the local copy can't be trusted).
-export function createPurchaseRow(purchase, { onChanged = () => {}, onReload = () => {} } = {}) {
+// delete, or a 409, when the local copy can't be trusted). `dispute(purchaseId)`
+// is the "Report a problem" API call (#3199), passed in by menu.js; without it
+// no such control is offered.
+export function createPurchaseRow(purchase, { onChanged = () => {}, onReload = () => {}, dispute = null } = {}) {
   const row = document.createElement('div');
   row.className = 'my-purchase-row';
   row.dataset.purchaseId = purchase.purchaseId;
@@ -45,7 +50,10 @@ export function createPurchaseRow(purchase, { onChanged = () => {}, onReload = (
   const meta = document.createElement('div');
   meta.className = 'my-purchase-meta';
   const date = new Date(purchase.createdAt).toLocaleDateString();
-  meta.textContent = `${purchase.sellerName} · ${date} · Qty ${purchase.quantity} · ${money(purchase.totalCents)} · ${purchaseStatusText(purchase)}`;
+  const renderMeta = () => {
+    meta.textContent = `${purchase.sellerName} · ${date} · Qty ${purchase.quantity} · ${money(purchase.totalCents)} · ${purchaseStatusText(purchase)}`;
+  };
+  renderMeta();
   row.append(name, meta);
 
   const feedbackArea = document.createElement('div');
@@ -145,6 +153,74 @@ export function createPurchaseRow(purchase, { onChanged = () => {}, onReload = (
     select.focus();
   }
 
+  // "Report a problem" (#3199): a two-step inline confirm (a dispute can move
+  // real money), a confirm button that disables while the request is in flight
+  // so a double click sends one request, and a plain-words outcome afterwards.
+  const disputeArea = document.createElement('div');
+  disputeArea.className = 'my-purchase-dispute';
+  const disputeNote = document.createElement('div');
+  disputeNote.className = 'my-purchase-note';
+  disputeNote.setAttribute('role', 'status');
+  disputeNote.setAttribute('aria-live', 'polite');
+  disputeNote.hidden = true;
+
+  function showDisputeIdle() {
+    disputeArea.textContent = '';
+    if (purchase.canDispute && dispute) {
+      const actions = document.createElement('div');
+      actions.className = 'my-purchase-actions';
+      const reportBtn = button('Report a problem', () => showDisputeConfirm());
+      reportBtn.classList.add('my-purchase-dispute-btn');
+      actions.appendChild(reportBtn);
+      disputeArea.appendChild(actions);
+    }
+    disputeArea.appendChild(disputeNote);
+  }
+
+  function showDisputeConfirm() {
+    disputeArea.textContent = '';
+    disputeNote.hidden = true;
+    const confirmBox = document.createElement('div');
+    confirmBox.className = 'my-purchase-confirm';
+    const prompt = document.createElement('span');
+    prompt.textContent = DISPUTE_PROMPT_TEXT;
+    const yesBtn = button('Yes, report it', () => sendDispute(yesBtn, noBtn));
+    yesBtn.classList.add('my-purchase-dispute-confirm-btn');
+    const noBtn = button('Never mind', () => showDisputeIdle());
+    noBtn.classList.add('my-purchase-dispute-cancel-btn');
+    confirmBox.append(prompt, yesBtn, noBtn);
+    disputeArea.append(confirmBox, disputeNote);
+    yesBtn.focus();
+  }
+
+  let disputeInFlight = false;
+  async function sendDispute(yesBtn, noBtn) {
+    if (disputeInFlight) return;
+    disputeInFlight = true;
+    yesBtn.disabled = true;
+    noBtn.disabled = true;
+    try {
+      const result = await dispute(purchase.purchaseId);
+      // A refund turns this row into a "Refunded" one (and takes the rating
+      // option away, as the server's list would); a non-refund keeps the
+      // order as it was but stops offering the same button again.
+      purchase = purchaseAfterDispute(purchase, result);
+      onChanged(purchase);
+      renderMeta();
+      showSummary();
+      showDisputeIdle();
+      disputeNote.textContent = disputeSuccessText(result);
+      disputeNote.hidden = false;
+    } catch (err) {
+      disputeInFlight = false;
+      showDisputeIdle();
+      disputeNote.textContent = disputeErrorText(err);
+      disputeNote.hidden = false;
+    }
+  }
+
+  row.appendChild(disputeArea);
+  showDisputeIdle();
   showSummary();
   return row;
 }

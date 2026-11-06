@@ -8433,6 +8433,18 @@ available. Deliberately absent: payment
 intent ids, delivery-confirmation tokens, the hosting builder, and commission
 figures.
 
+**Frontend (#3199):** the My Purchases panel shows a "Report a problem" control
+on each row where `canDispute` is true (`src/account/myPurchases.js`, wording in
+`src/account/disputeOutcome.js`). It confirms inline before sending
+`POST /api/purchases/:id/dispute`, disables itself while the request is in
+flight, and then says what happened in plain words: an `autoResolved: true`
+answer turns the row into "Refunded" ("Your refund has been issued."); an
+`autoResolved: false` answer says the order can't be refunded automatically and
+to contact the seller or support, and stops offering the button; a `409` says the
+order was already paid out and to contact support. The copy never states the
+eligibility rule behind the answer. `e2e/my-purchases-dispute.test.mjs` covers
+it with the endpoints mocked at the route.
+
 `GET /api/purchases?danglingSeller=1` requires an admin session (`403`
 otherwise); lists every purchase whose `seller_id` is non-null but no
 longer points at a live seller (the account was deleted) — the admin
