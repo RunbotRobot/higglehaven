@@ -27,6 +27,7 @@
 // handleSoldOutMarkers does, which stayed behind per the paragraph above),
 // so it's left untouched rather than exported speculatively.
 import { json, HttpError, clientIp } from './http.js';
+import { refreshStoredStripeStatus } from './seller-profile.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue, labelValue, positiveInteger } from './validation.js';
 import { requireVerifiedSession, sha256Hex, builderHasActiveSuspension, suspendedSellerTemplateIds } from './auth.js';
@@ -99,6 +100,9 @@ const PURCHASE_FINALIZE_RATE_LIMIT_MAX = 20;
 
 // Exported: worker/index.js's own top-level dispatcher routes
 // POST /api/instances/:id/purchase here.
+// #3237: how stale a stored 'complete' Stripe status may be at checkout before it is re-read.
+const STRIPE_STATUS_MAX_AGE_MS = 60 * 60 * 1000;
+
 export async function handleInstancePurchase(request, env, instanceId) {
   const db = env.DB;
   // N44 (owner, 2026-09-12): shopping/purchasing — real-money or simulated —
@@ -183,9 +187,23 @@ export async function handleInstancePurchase(request, env, instanceId) {
   // STRIPE_SECRET_KEY at all (local dev, this test suite, or simply a
   // fresh install before the platform owner adds it) should still have a
   // working storefront, exactly as before this feature existed.
-  const seller = template.seller_id
-    ? await db.prepare('SELECT user_id, stripe_account_id, stripe_onboarding_status FROM sellers WHERE seller_id = ?').bind(template.seller_id).first()
+  let seller = template.seller_id
+    ? await db.prepare('SELECT seller_id, user_id, stripe_account_id, stripe_onboarding_status, stripe_updated_at FROM sellers WHERE seller_id = ?').bind(template.seller_id).first()
     : null;
+  // #3237 interim guard: account-status webhooks can be missed, and a stored
+  // 'complete' older than the bound is re-read from Stripe before real money
+  // moves, so a since-disabled account cannot stay purchasable. Best-effort:
+  // if Stripe is unreachable the stored status stands, as it did before.
+  if (
+    seller?.stripe_account_id && seller.stripe_onboarding_status === 'complete' && stripeConfigured(env)
+    && !(Date.now() - Date.parse(seller.stripe_updated_at) < STRIPE_STATUS_MAX_AGE_MS)
+  ) {
+    try {
+      seller = await refreshStoredStripeStatus(env, db, 'sellers', 'seller_id', seller);
+    } catch (error) {
+      console.error('Failed to re-check seller Stripe status at checkout', seller.stripe_account_id, error);
+    }
+  }
   // #2985 (1/5 of #2305): a suspended seller's existing listings must be
   // fully blocked from new purchases, not just left purchasable the way
   // this app's suspension gate otherwise only touches the SUSPENDED

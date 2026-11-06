@@ -772,4 +772,4 @@ async function handleStripeOnboardingLink(request, env, db, kind) {
   return json({ url: link.url, expiresAt: link.expires_at || null });
 }
 
-export { handleSellers, handleMySeller, handleSellerStripeAccount, handleBuilderStripeAccount, handleStripeOnboardingLink };
+export { refreshStoredStripeStatus, handleSellers, handleMySeller, handleSellerStripeAccount, handleBuilderStripeAccount, handleStripeOnboardingLink };
