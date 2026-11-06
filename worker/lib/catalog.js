@@ -33,6 +33,7 @@
 // LANDLET_SIDE_M/PRESENCE_STALE_AFTER_MS) workerd requires every named
 // export of the main Worker entry module (worker/index.js) to be a
 // function/class binding, not a plain const.
+import { assertNotProhibitedContent } from './prohibited-content.js';
 import { json, HttpError, clientIp } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue, labelValue, assertReferencesExist, queryLimit } from './validation.js';
@@ -57,33 +58,6 @@ const EXTENSIBLE_DIMENSION_KEY_BY_AXIS = { x: 'width', y: 'depth', z: 'height' }
 const MAX_THUMBNAIL_BYTES = 300 * 1024;
 const THUMBNAIL_DATA_URL_PREFIX = 'data:image/png;base64,';
 
-
-// Baseline prohibited-content policy (docs/SPEC.md §4: "Prohibited
-// categories (baseline, eBay/Etsy-referenced): weapons capable of serious
-// harm, controlled substances/paraphernalia, adult content,
-// counterfeit/unauthorized trademarked goods, live animals."). A plain
-// phrase blocklist checked against name/category/subcategory — not real
-// content moderation (no image/AI review exists anywhere in this dev-mode
-// backend), just the same "honest simplest form" baseline this project
-// applies elsewhere. Deliberately phrase-based rather than single loose
-// words ("firearm," not "gun" alone) to keep false positives low against a
-// catalog that's mostly ordinary placeholder/furniture names.
-const PROHIBITED_CONTENT_PHRASES = [
-  'firearm', 'handgun', 'assault rifle', 'ammunition', 'explosive device',
-  'illegal drug', 'narcotic', 'drug paraphernalia', 'cocaine', 'heroin', 'methamphetamine',
-  'adult content', 'pornographic', 'explicit sexual content',
-  'counterfeit', 'knockoff replica',
-  'live animal', 'live pet sale',
-];
-
-function assertNotProhibitedContent(template) {
-  const haystack = [template.name, template.category, template.subcategory]
-    .filter(Boolean).join(' ').toLowerCase();
-  const match = PROHIBITED_CONTENT_PHRASES.find((phrase) => haystack.includes(phrase));
-  if (match) {
-    throw new HttpError(`This listing appears to violate higglehaven's prohibited-categories policy (matched "${match}")`, 400);
-  }
-}
 
 // Digital goods (docs/SPEC.md §4: "Digital goods — narrow, conditional
 // exception ... permitted if the listing includes (a) a representative 3D
