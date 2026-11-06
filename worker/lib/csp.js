@@ -1,16 +1,17 @@
-// #1360: Content-Security-Policy, in report-only mode first (owner decision
-// on the issue: ship `Content-Security-Policy-Report-Only` with a reasoned
-// starting allow-list, prove it in a real browser, then switch to the
-// enforcing header in a follow-up once nothing legitimate is reported).
+// #1360: Content-Security-Policy. It shipped report-only first (#3165, owner
+// decision on the issue) and is now the enforcing header (owner un-gated the
+// switch on 2026-11-06: production has no real traffic to wait on, and a
+// real-browser pass over every page under the enforcing header found 0
+// violations). `report-uri` stays on it, so a violation a real user ever hits
+// still surfaces in the Worker log.
 //
 // Every entry below is a source this app actually uses today:
 //   - script-src: its own Vite bundle; Stripe.js and Cloudflare Turnstile,
 //     both injected as <script> tags at runtime (src/main.js loadStripeJs /
 //     loadTurnstileJs). 'unsafe-inline' is a known gap, not a choice:
 //     index.html and the admin pages (public/admin-*.html) carry inline
-//     <script> blocks, so the enforcing version needs those moved to files
-//     or hashed first (the report-only phase tells us nothing else is
-//     inline).
+//     <script> blocks; moving those to files (or hashing them) so this can
+//     be dropped is the remaining follow-up on #1360.
 //   - style-src: 'unsafe-inline' for the same reason (large inline <style>
 //     blocks and style="" attributes in index.html and the admin pages).
 //   - img-src / media-src / connect-src: 'self' (built-in /models and R2
@@ -25,7 +26,7 @@
 //   - frame-ancestors 'none' repeats X-Frame-Options: DENY in CSP form.
 // WebRTC peer connections (voice chat) are not governed by any fetch
 // directive, so they need no entry.
-export const CSP_REPORT_ONLY_POLICY = [
+export const CSP_POLICY = [
   "default-src 'self'",
   "script-src 'self' 'unsafe-inline' https://js.stripe.com https://challenges.cloudflare.com",
   "style-src 'self' 'unsafe-inline'",
