@@ -3381,11 +3381,12 @@ real 4-day production outage where `wrangler d1 migrations apply --remote`
 silently failed partway through a batch and nothing noticed until an owner
 bug report). It compares a live `SELECT name FROM d1_migrations` against
 `worker/migrations-manifest.json` — a list of `migrations/*.sql` filenames
-generated at build/deploy time (`npm run generate:migrations-manifest`,
-wired into `deploy`/`deploy:ci`) since `scheduled()` has no filesystem
-access to read `migrations/` directly. `scripts/check-migrations-manifest-
-fresh.mjs` runs as a `pretest` check so the checked-in manifest can't
-silently drift from `migrations/` itself. On finding production missing any
+generated wherever it is consumed (`wrangler dev`/`deploy` via the
+`build.command` in `wrangler.jsonc`, vitest via `vitest.config.js`, and
+`pretest`; `npm run generate:migrations-manifest` by hand) since
+`scheduled()` has no filesystem access to read `migrations/` directly. It is
+gitignored (#3210): committing it made every two migration-adding PRs
+conflict on the same last line. On finding production missing any
 migration the manifest expects, it logs a loud `console.error` (always
 visible in `wrangler tail`/the dashboard) and, if the optional `OPS_ALERT_EMAIL`
 Worker secret is configured, also emails that address via the existing
@@ -6953,6 +6954,14 @@ themself; the only UI surfacing it today (below) happens to be the
 Seller modal, which reads as "seller-facing" in practice without the API
 itself needing to restrict who can ask.
 
+**Buyer standing is decided on the account (#3214):** `POST`/`PATCH`/`DELETE`
+`.../feedback` treat the session as the buyer when its `user_id` equals
+`purchases.buyer_user_id` (migration 0194), so a buyer whose builder profile
+was reset (`buyer_builder_id` NULL) keeps the right to leave, edit and delete
+their feedback; only a purchase with no `buyer_user_id` falls back to the old
+`buyer_builder_id` match (`worker/lib/purchase-buyer.js`). The read-time join
+below resolves the author the same way (`buyer_user_id`, else via the builder).
+
 **`userId` (#1975) and why it's a join, not a column:** unlike sign posts/
 product reviews/calendar events, `seller_feedback` got no new `user_id`
 column of its own — the feedback's real author (the purchase's buyer) was
@@ -8337,6 +8346,41 @@ panel (see "Refunds" below). If the template has a `sellerId`, this
 requires a session logged in as that seller (`403` otherwise) — a
 seller-less template stays open to unauthenticated reads.
 
+`GET /api/purchases/mine` (#3196, "My Purchases") is the buyer's own list: it
+requires a session (`401` otherwise; a base-tier account is enough, since
+seeing your own receipts is not a social feature) and returns the purchases
+whose `buyer_user_id` (#3195) is the caller's account, newest first,
+cursor-paginated (`limit` default 50, max 100; `nextCursor` is `null` on the
+last page; `400` for a bad `limit` or `cursor`). Rate-limited per account
+(`purchases-mine`, 60 per window). Because it keys on the account, a receipt
+is still listed after the buyer's builder profile was deleted or reset.
+Each row carries only what the buyer already saw in the purchase flow, plus
+three flags the server computes with the same rules the actions themselves
+enforce:
+
+```json
+{ "purchases": [ {
+  "purchaseId": "...", "createdAt": "...",
+  "productName": "A Lovely Lamp", "sellerName": "...",
+  "quantity": 2, "totalCents": 1000, "isDigitalGood": false,
+  "shippedAt": null, "refundedAt": null, "refundedAmountCents": 0,
+  "canLeaveFeedback": true, "feedback": null, "canDispute": true
+} ], "nextCursor": null }
+```
+
+`productName` is `"(removed product)"` and `sellerName` is `"(former seller)"`
+when the product or seller no longer exists. `canLeaveFeedback` is true when
+the purchase has a seller on record, is not refunded, and has no feedback yet
+(`feedback` then carries the caller's own `rating`/`text` for an edit control
+to prefill); `canDispute` is true while the purchase is neither refunded nor
+paid out (it says a dispute *can be raised*, never whether it will auto-resolve,
+which stays internal). Feedback and dispute authorise on the account
+(`purchases.buyer_user_id`, #3214), the same key this list uses, so a receipt
+whose builder profile was later reset is still listed with both actions
+available. Deliberately absent: payment
+intent ids, delivery-confirmation tokens, the hosting builder, and commission
+figures.
+
 `GET /api/purchases?danglingSeller=1` requires an admin session (`403`
 otherwise); lists every purchase whose `seller_id` is non-null but no
 longer points at a live seller (the account was deleted) — the admin
@@ -8766,9 +8810,16 @@ is seller- or admin-initiated (see "Refunding is seller-initiated, not
 shopper self-service" above); a shopper had no way to raise one themselves.
 
 `POST /api/purchases/:purchaseId/dispute` requires a session, and requires
-that session's own `builderId` match the purchase's `buyerBuilderId`
-(`400` otherwise — "Only the buyer of this purchase can dispute it"), the
-same real-buyer-session gate `POST .../feedback` uses (#1123). `404` if the
+that session to be the purchase's buyer (`400` otherwise — "Only the buyer of
+this purchase can dispute it"), the same real-buyer-session gate
+`POST .../feedback` uses (#1123). "Is the buyer" is decided on the account
+since #3214: the session's `user_id` against `purchases.buyer_user_id`
+(migration 0194), so a buyer who has reset their builder profile
+(`buyer_builder_id` goes NULL) can still dispute; a purchase with no
+`buyer_user_id` (recorded before that column, with its builder already gone
+or never resolvable) falls back to the old `buyer_builder_id` match, and one
+with neither has no buyer who can act. The "established buyer" count of
+earlier completed/refunded purchases uses the same account-or-builder match. `404` if the
 purchase doesn't exist, `400` if already refunded, `409` if already paid
 out (same "contact support for manual reconciliation" case `.../refund`
 itself rejects).

@@ -387,15 +387,21 @@
       #layout-preview-marquee.visible {
         display: block;
       }
+      /* #3219: a raw camera-pose readout is a developer aid, not something an
+         ordinary builder should see; hidden unless src/build/scene.js's
+         updateCameraDebug adds .admin-visible for an admin account. */
       #camera-debug-panel {
         position: fixed;
         bottom: 44px;
         right: 8px;
         z-index: 10;
-        display: flex;
+        display: none;
         flex-direction: column;
         align-items: flex-end;
         gap: 4px;
+      }
+      #camera-debug-panel.admin-visible {
+        display: flex;
       }
       /* #545: only shown when a sync to the backend has failed with a real
          network-level error (server unreachable) — Build mode's own edits
@@ -2471,6 +2477,9 @@
       #feedback-modal-content h2 {
         margin: 0;
         font-size: 17px;
+      }
+      #feedback-screenshot-preview[hidden] {
+        display: none;
       }
       #feedback-screenshot-preview {
         display: block;
@@ -5561,7 +5570,7 @@
       <div id="feedback-modal-content">
         <button id="feedback-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2>Submit Feedback</h2>
-        <img id="feedback-screenshot-preview" alt="Screenshot of the current view" />
+        <img id="feedback-screenshot-preview" alt="Screenshot of the current view" hidden />
         <label>Describe what happened (optional)
           <textarea id="feedback-description" maxlength="1000" placeholder="What went wrong? The more detail, the better."></textarea>
         </label>

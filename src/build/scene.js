@@ -4092,9 +4092,18 @@ const cameraDebugCopyBtn = document.getElementById('camera-debug-copy');
 const cameraDirection = new THREE.Vector3();
 let lastDebugUpdate = 0;
 
+const cameraDebugPanelEl = document.getElementById('camera-debug-panel');
+
 function updateCameraDebug(now) {
   if (now - lastDebugUpdate < 200) return;
   lastDebugUpdate = now;
+  // #3219: developer-vocabulary pose readout, shown to admins only (an
+  // ordinary builder has Submit Feedback, which captures the camera pose in
+  // its diagnostic payload). Checked each tick because the account settles
+  // after this module loads; nothing to format while hidden.
+  const visible = Boolean(currentAuthUser?.isAdmin);
+  cameraDebugPanelEl.classList.toggle('admin-visible', visible);
+  if (!visible) return;
   camera.getWorldDirection(cameraDirection);
   const fmt = (v) => v.toFixed(2);
   cameraDebugEl.textContent =

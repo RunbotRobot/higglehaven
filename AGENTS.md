@@ -162,6 +162,13 @@ Only ever run `wrangler deploy` or `wrangler d1 migrations apply
 --remote` from `main`, after merging — never from your own session
 branch before its PR has merged.
 
+`worker/migrations-manifest.json` is generated and gitignored (#3210); never
+commit it. It is rebuilt by `wrangler dev`/`deploy`, vitest and `pretest`
+from `migrations/`, so adding a migration needs no manifest step. If merging
+`main` into a branch from before #3210 reports a conflict on that file,
+resolve it with `git rm --cached worker/migrations-manifest.json` (the file
+stays on disk, ignored) and finish the merge.
+
 Applying migrations remotely means `npm run db:migrate:remote`, not the
 bare `wrangler d1 migrations apply --remote` command — the npm script
 chains a drift check (`scripts/check-migration-drift.mjs`) after the
