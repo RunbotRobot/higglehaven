@@ -102,12 +102,24 @@ await alicePage.waitForTimeout(300);
 // Canceling a still-pending outgoing request: Carol is created directly via
 // the API (a full second browser session isn't needed just to exist as a
 // name to look up), then Alice sends and immediately cancels a request to
-// her through the real UI.
-const carol = (await fetchJson(alicePage, '/api/builders', {
+// her through the real UI. #3145: friendships are between accounts, so
+// Carol has to be her own account -- a second builder profile created in
+// Alice's session would be Alice befriending herself. A bare Node-side
+// fetch keeps Carol's cookie jar separate from Alice's page.
+const baseUrl = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
+const carolSignup = await fetch(`${baseUrl}/api/auth/signup`, {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ email: `e2e-friends-carol-${Date.now()}@e2e.test`, password: 'e2e-friends-carol-password-123', username: CAROL, ageAttested: true }),
+});
+const carolCookie = carolSignup.headers.get('set-cookie')?.match(/hh_session=([^;]+)/)?.[0];
+// Signup may already have provisioned a builder labelled with the username;
+// a 409 here just means it exists.
+await fetch(`${baseUrl}/api/builders`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', cookie: carolCookie },
   body: JSON.stringify({ label: CAROL }),
-})).body.builder;
+});
 
 await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
@@ -138,7 +150,7 @@ console.log('Alice\'s outgoing list no longer includes Carol after canceling (sh
 // own, so this checks the same fact from Alice's own (permitted) list
 // instead: no friendship record involving Carol survives the cancel.
 const aliceFriendshipsAfterCancel = (await fetchJson(alicePage, '/api/friendships')).body.friendships;
-const carolFriendshipsAfterCancel = aliceFriendshipsAfterCancel.filter((f) => f.otherBuilderId === carol.builderId);
+const carolFriendshipsAfterCancel = aliceFriendshipsAfterCancel.filter((f) => f.otherLabel === CAROL);
 console.log('Alice has no friendship record with Carol after the cancel (should be 0):', carolFriendshipsAfterCancel.length);
 
 // #1187 ("all accounts should be unique even when ignoring case") closed

@@ -91,8 +91,13 @@ export async function handleProductReviews(request, db, route) {
     // same #356 already fixed for sign_posts/calendar_events). DESC picks
     // the right window (always the newest 200); .reverse() restores the
     // response's own ascending (oldest-of-the-window-first) order.
+    // #3142 (one alias per person): current username where the account
+    // still exists, else the name snapshotted when the review was written
+    // (see reviewFromRow).
     const { results } = await db.prepare(`
-      SELECT * FROM product_reviews WHERE template_id = ? ORDER BY created_at DESC LIMIT 200
+      SELECT r.*, u.username AS current_author_label FROM product_reviews r
+      LEFT JOIN users u ON u.user_id = r.user_id
+      WHERE r.template_id = ? ORDER BY r.created_at DESC LIMIT 200
     `).bind(templateId).all();
     const reviews = results.reverse().map(reviewFromRow);
     // averageRating/count are the product's real, all-time summary, not
@@ -880,9 +885,10 @@ const SELLER_FEEDBACK_CREATE_RATE_LIMIT_MAX = 20;
 // same as every other precedent's "legacy/no author on record" case, such
 // a row can never be claimed by anyone as their own.
 const SELLER_FEEDBACK_SELECT_WITH_BUYER = `
-  SELECT f.*, bld.user_id AS buyer_user_id FROM seller_feedback f
+  SELECT f.*, bld.user_id AS buyer_user_id, bu.username AS current_author_label FROM seller_feedback f
   JOIN purchases p ON p.purchase_id = f.purchase_id
   LEFT JOIN builders bld ON bld.builder_id = p.buyer_builder_id
+  LEFT JOIN users bu ON bu.user_id = bld.user_id
 `;
 
 export async function handleSellerFeedbackCreate(request, env, purchaseId) {
