@@ -188,7 +188,7 @@ async function performReinstatementReset(db, subjectType, subjectId, currentStri
   const nowIso = new Date().toISOString();
   const result = await db.prepare(`
     UPDATE ${table}
-    SET stripe_account_id = NULL, stripe_onboarding_status = 'not_started', stripe_requirements_due = NULL, stripe_updated_at = ?, updated_at = ?
+    SET stripe_account_id = NULL, stripe_onboarding_status = 'not_started', stripe_requirements_due = NULL, stripe_requirements_eventually_due = NULL, stripe_updated_at = ?, updated_at = ?
     WHERE ${idColumn} = ? AND stripe_account_id = ? AND ${inFlightRealMoneyClause(subjectType)}
   `).bind(nowIso, nowIso, subjectId, currentStripeAccountId, subjectId).run();
   return result.meta.changes > 0;
