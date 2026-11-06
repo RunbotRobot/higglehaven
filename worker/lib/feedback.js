@@ -7,7 +7,7 @@
 // exact shape). See migrations/0151_bug_reports.sql's own comment for why
 // the screenshot goes to a dedicated FEEDBACK R2 bucket rather than the
 // shared MODELS one.
-import { json, HttpError, clientIp } from './http.js';
+import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { currentUser, requireAdmin } from './auth.js';
 import { checkRateLimit } from './rate-limit.js';
 import { formatBytes } from './storage.js';
@@ -177,7 +177,7 @@ export async function handleFeedbackBugReportCreate(request, env, db) {
     if (screenshot.size > MAX_SCREENSHOT_BYTES) {
       throw new HttpError(`Screenshot is ${formatBytes(screenshot.size)}, over the ${formatBytes(MAX_SCREENSHOT_BYTES)} limit`, 413);
     }
-    if (!env.FEEDBACK) throw new HttpError('R2 binding FEEDBACK is not configured', 500);
+    if (!env.FEEDBACK) throw new HttpError('R2 binding FEEDBACK is not configured', 500, { code: ERROR_CODES.INTERNAL_ERROR });
     const bytes = await screenshot.arrayBuffer();
     await env.FEEDBACK.put(screenshotKey(reportId), bytes, { httpMetadata: { contentType: 'image/png' } });
     screenshotUrl = `/api/feedback/bug-reports/${reportId}/screenshot`;
@@ -237,7 +237,7 @@ function screenshotKey(reportId) {
 // hold admin-only tooling to.
 export async function handleFeedbackBugReportScreenshot(request, env, db, reportId) {
   await requireAdmin(request, db);
-  if (!env.FEEDBACK) throw new HttpError('R2 binding FEEDBACK is not configured', 500);
+  if (!env.FEEDBACK) throw new HttpError('R2 binding FEEDBACK is not configured', 500, { code: ERROR_CODES.INTERNAL_ERROR });
   const row = await db.prepare('SELECT screenshot_url FROM bug_reports WHERE report_id = ?').bind(reportId).first();
   if (!row || !row.screenshot_url) return json({ error: 'Not found' }, 404);
   const object = await env.FEEDBACK.get(screenshotKey(reportId));

@@ -82,7 +82,11 @@ many validation and auth messages that are already written for players. Coded so
 far: the concurrent-edit conflicts (`changed_concurrently`, `409`), the claim,
 ownership and auction-start errors on a lándlet (`landlet_not_found`,
 `landlet_not_claimable`, `landlet_ownership_lost`, `auction_already_active`,
-`auction_not_owner`), and the Worker's catch-all `500` (`internal_error`). New
+`auction_not_owner`), the Worker's catch-all `500` and every other `500`
+(`internal_error`), every `503` "not configured on this server yet"
+(`service_unavailable`), a failed upstream call (`upstream_failed`, `502`), a
+stale reference after a reload (`stale_reference`), and a suspended seller's
+product (`seller_suspended`; the client matches this code, not the text). New
 codes are added by adding the constant, the copy and the `{ code }` argument
 together.
 

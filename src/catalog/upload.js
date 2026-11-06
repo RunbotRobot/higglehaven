@@ -803,7 +803,8 @@ async function handleUploadVideoStep() {
     await startVideoGeneration(videoFile, myFlowToken);
   } catch (err) {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
-    console.error('Video-to-3D generation failed:', err);
+    // #1954: err.message is player copy for a coded server error; keep the server's own text in the log for diagnosis.
+    console.error('Video-to-3D generation failed:', err, err.serverMessage || '');
     // #2440: previously a generic "Something went wrong starting video generation."
     setUploadStatus(err.message || "Couldn't start turning that video into a 3D model — please try again in a moment.", true);
     uploadSubmitBtn.disabled = false;

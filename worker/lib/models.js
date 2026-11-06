@@ -25,7 +25,7 @@
 // not a circular import, just worker/index.js importing one more name
 // from this module the same way it already imports handleModelUpload etc.
 import { isNcmecEvidenceKey } from './ncmec-evidence.js';
-import { json, HttpError, clientIp } from './http.js';
+import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { requireAdmin, requireSessionBuilder, assertOwner } from './auth.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, queryLimit, decodeCursor, encodeCursor, stringValue, positiveInteger } from './validation.js';
@@ -60,7 +60,7 @@ async function handleUploadedAsset(request, env) {
   if (isNcmecEvidenceKey(key)) return json({ error: 'Not found' }, 404);
 
   if (request.method === 'DELETE') {
-    if (!env.DB) throw new HttpError('D1 binding DB is not configured', 500);
+    if (!env.DB) throw new HttpError('D1 binding DB is not configured', 500, { code: ERROR_CODES.INTERNAL_ERROR });
     // Same admin-only bar as /api/models/cleanup below (and every other
     // maintenance-tooling endpoint gated by requireAdmin) — deleting an R2
     // object outright, unlike every other mutating endpoint in this file,
@@ -147,7 +147,7 @@ async function handleUploadedAsset(request, env) {
 }
 
 async function handleModelUpload(request, env) {
-  if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
+  if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500, { code: ERROR_CODES.INTERNAL_ERROR });
 
   // Unauthenticated on purpose (see the removed-URL-import comment above),
   // but unlike POST /api/builders/sellers this isn't just a spoof-nothing
@@ -303,7 +303,7 @@ async function selectModelUrlReferencesChunked(db, urls) {
 // it. Not a builder/seller-facing endpoint at all.
 async function handleModelListing(request, env, url) {
   await requireAdmin(request, env.DB);
-  if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
+  if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500, { code: ERROR_CODES.INTERNAL_ERROR });
   const limit = queryLimit(url.searchParams.get('limit'), 100);
   const cursorParam = url.searchParams.get('cursor');
   const cursor = cursorParam === null ? undefined : stringValue(cursorParam, 'cursor');
@@ -379,7 +379,7 @@ async function handleModelListing(request, env, url) {
 // shopper/builder/seller session has any business reading.
 async function handleModelStorage(request, env) {
   await requireAdmin(request, env.DB);
-  if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
+  if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500, { code: ERROR_CODES.INTERNAL_ERROR });
   const usage = await getStorageUsage(env.MODELS);
   return json({
     ...usage,
@@ -395,7 +395,7 @@ async function handleModelStorage(request, env) {
 const MODEL_CLEANUP_RATE_LIMIT_MAX = 20;
 
 async function handleModelCleanup(request, env) {
-  if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500);
+  if (!env.MODELS) throw new HttpError('R2 binding MODELS is not configured', 500, { code: ERROR_CODES.INTERNAL_ERROR });
   // Admin-only: this bulk-deletes any unreferenced upload in the shared R2
   // bucket, including another builder's in-progress upload that just
   // hasn't been registered via POST /api/catalog yet (the two are

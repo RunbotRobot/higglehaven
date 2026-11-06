@@ -10,7 +10,7 @@
 // imported back below -- same shape worker/lib/builder-profile.js's own
 // comment documents for its own templateFromRow/recomputeLandCap imports
 // (#2535).
-import { json, HttpError } from './http.js';
+import { json, HttpError, ERROR_CODES } from './http.js';
 import { timingSafeEqual, bytesToHex } from './crypto.js';
 import { checkRateLimit } from './rate-limit.js';
 import { requireCurrentUser } from './auth.js';
@@ -117,7 +117,7 @@ export async function handleDiditVerificationSession(request, env, db) {
     throw new HttpError('This account is already ID-verified.', 400);
   }
   if (!diditConfigured(env)) {
-    throw new HttpError('Government-ID verification is not configured on this server yet.', 503);
+    throw new HttpError('Government-ID verification is not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
   }
   // #607: idx_didit_verification_sessions_user_id's own migration comment
   // says this table is "looked up by user_id when starting a new session
@@ -205,7 +205,7 @@ export async function handleDiditVerificationSession(request, env, db) {
     // session_id's TEXT PRIMARY KEY below, which D1 throws on synchronously,
     // surfacing as a generic 500 instead of this clean 502.
     if (!session?.session_id || !session?.url) {
-      throw new HttpError('Didit session creation failed — please try again', 502);
+      throw new HttpError('Didit session creation failed — please try again', 502, { code: ERROR_CODES.UPSTREAM_FAILED });
     }
     billedSessionId = session.session_id;
     // The reservation's own session_id was only ever a local placeholder --
@@ -398,7 +398,7 @@ export async function handleDiditVerificationStatus(request, env, db) {
 const DIDIT_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 5 * 60;
 
 export async function handleDiditWebhook(request, env, db) {
-  if (!env.DIDIT_WEBHOOK_SECRET) throw new HttpError('Didit webhook is not configured on this server yet.', 503);
+  if (!env.DIDIT_WEBHOOK_SECRET) throw new HttpError('Didit webhook is not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
   const rawBody = await request.text();
   const signatureHeader = request.headers.get('x-signature') || '';
   const key = await crypto.subtle.importKey(

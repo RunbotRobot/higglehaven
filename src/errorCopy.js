@@ -16,6 +16,10 @@ export const PLAYER_ERROR_COPY = Object.freeze({
   landlet_ownership_lost: "You don't own this lándlet any more. Reload to see its current state.",
   auction_already_active: 'This lándlet already has an auction running.',
   auction_not_owner: 'Only the current owner of a claimed lándlet can start an auction on it.',
+  service_unavailable: "That isn't available right now. Please try again later.",
+  upstream_failed: "That didn't go through on our side. Please try again in a moment.",
+  stale_reference: 'Something you were working with was removed or changed. Reload and try again.',
+  seller_suspended: "That product isn't available right now.",
 });
 
 // The player-facing text for a server error: the mapped copy for a known code,

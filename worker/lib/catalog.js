@@ -34,7 +34,7 @@
 // export of the main Worker entry module (worker/index.js) to be a
 // function/class binding, not a plain const.
 import { assertNotProhibitedContent } from './prohibited-content.js';
-import { json, HttpError, clientIp } from './http.js';
+import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue, labelValue, assertReferencesExist, queryLimit } from './validation.js';
 import { assertOwner, requireSessionBuilder } from './auth.js';
@@ -868,7 +868,7 @@ async function notifyOwnersOfAvatarOrAnimationDeletion(db, templates) {
 
 async function assertUploadedModelExists(bucket, modelUrl) {
   if (!modelUrl?.startsWith('/uploads/')) return;
-  if (!bucket) throw new HttpError('R2 binding MODELS is not configured', 500);
+  if (!bucket) throw new HttpError('R2 binding MODELS is not configured', 500, { code: ERROR_CODES.INTERNAL_ERROR });
   let key;
   try {
     key = decodeURIComponent(modelUrl.slice('/uploads/'.length));
@@ -930,7 +930,7 @@ async function generateConceptImageBytes(env, prompt) {
   // unexpected shape throws an uncaught TypeError instead of a clean 502.
   if (!response.ok || !data?.data?.[0]?.b64_json) {
     console.error('OpenAI image generation failed', response.status, JSON.stringify(data));
-    throw new HttpError('Concept-image generation failed — please try again', 502);
+    throw new HttpError('Concept-image generation failed — please try again', 502, { code: ERROR_CODES.UPSTREAM_FAILED });
   }
   return Uint8Array.from(atob(data.data[0].b64_json), (character) => character.charCodeAt(0));
 }
@@ -1001,7 +1001,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
       SELECT template_id, seller_id, name FROM catalog_templates WHERE template_id IN (${placeholders})
     `).bind(...templateIds).all();
     if (existing.results.length !== templateIds.length) {
-      throw new HttpError('Every templateId must reference an existing catalog template', 404);
+      throw new HttpError('Every templateId must reference an existing catalog template', 404, { code: ERROR_CODES.STALE_REFERENCE });
     }
     // See sellerExists' own comment (below): a dangling seller_id (its
     // seller self-deleted) counts as unowned, same as this endpoint's
@@ -1222,7 +1222,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
     if (prompt.length > 2000) throw new HttpError('prompt must be 2000 characters or fewer', 400);
     await checkRateLimit(db, `concept-image:${sessionBuilder.builder_id}`, CONCEPT_IMAGE_RATE_LIMIT_MAX);
     if (!openaiConfigured(env)) {
-      throw new HttpError('Concept-image generation is not configured on this server yet.', 503);
+      throw new HttpError('Concept-image generation is not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
     }
     const bytes = await generateConceptImageBytes(env, prompt);
     const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
@@ -1681,7 +1681,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
     if (priceCents == null) throw new HttpError('priceCents is required', 400);
     const stockQuantity = optionalStockQuantity(input.stockQuantity);
     const product = await db.prepare('SELECT * FROM products WHERE product_id = ?').bind(productId).first();
-    if (!product) throw new HttpError('productId must reference an existing product', 404);
+    if (!product) throw new HttpError('productId must reference an existing product', 404, { code: ERROR_CODES.STALE_REFERENCE });
     // Same guard/message purchase-creation.js's own handleInstancePurchase
     // already uses for a *listing's* flagged_hidden_at -- here it's the
     // shared product-level moderation state instead, blocking a brand new

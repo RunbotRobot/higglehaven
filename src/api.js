@@ -6,6 +6,19 @@ import { playerErrorMessage } from './errorCopy.js';
 
 const API_BASE = '/api';
 
+// #1954: one place that turns a failed response into a thrown Error, so every
+// request path agrees on what the error carries. `message` is what a player
+// may see: player copy for a known stable `code` (src/errorCopy.js), else the
+// server's own text, else `fallback`. The server's original text stays on
+// `serverMessage` for logs and diagnostics, with `code` and the HTTP `status`.
+function apiError(response, body, fallback) {
+  const error = new Error(playerErrorMessage(body.code, body.error || fallback));
+  error.serverMessage = body.error;
+  error.code = body.code;
+  error.status = response.status;
+  return error;
+}
+
 async function requestJson(path, options) {
   const response = await fetch(`${API_BASE}${path}`, options);
   if (!response.ok) {
@@ -19,15 +32,12 @@ async function requestJson(path, options) {
     // #1954: a response with a known stable `code` shows player copy
     // (src/errorCopy.js) instead of the server's developer-facing message,
     // which stays available as `serverMessage` for logging and diagnostics.
-    const error = new Error(playerErrorMessage(body.code, body.error || "Couldn't complete that — higglehaven ran into a problem on its end. Please try again in a moment."));
-    error.serverMessage = body.error;
-    error.code = body.code;
     // #2222: collectCreditOrb's own caller needs to tell a 403 ("not
     // actually near it yet, by the server's own record") apart from a 404
     // ("someone else already collected it") -- the former is worth
-    // retrying once presence catches up, the latter isn't.
-    error.status = response.status;
-    throw error;
+    // retrying once presence catches up, the latter isn't. apiError sets
+    // `error.status` for exactly that.
+    throw apiError(response, body, "Couldn't complete that — higglehaven ran into a problem on its end. Please try again in a moment.");
   }
   return response.json();
 }
@@ -788,7 +798,7 @@ export async function uploadModelFile(file) {
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     // #2440: previously `Model upload failed with HTTP ${response.status}` -- see requestJson's own #2440 comment above.
-    throw new Error(playerErrorMessage(body.code, body.error || "Couldn't upload that model — higglehaven ran into a problem on its end. Please try again in a moment."));
+    throw apiError(response, body, "Couldn't upload that model — higglehaven ran into a problem on its end. Please try again in a moment.");
   }
   return response.json(); // { modelUrl, sourceName, sizeBytes }
 }
@@ -811,7 +821,7 @@ export async function submitFeedbackBugReport(form) {
   const response = await fetch(`${API_BASE}/feedback/bug-report`, { method: 'POST', body: form });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(playerErrorMessage(body.code, body.error || "Couldn't submit that feedback — higglehaven ran into a problem on its end. Please try again in a moment."));
+    throw apiError(response, body, "Couldn't submit that feedback — higglehaven ran into a problem on its end. Please try again in a moment.");
   }
   return response.json();
 }
@@ -826,7 +836,7 @@ export async function createVideoGenerationJob(framesForm) {
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     // #2440: previously `Video generation request failed with HTTP ${response.status}` -- see requestJson's own #2440 comment above.
-    throw new Error(playerErrorMessage(body.code, body.error || "Couldn't start turning that video into a 3D model — higglehaven ran into a problem on its end. Please try again in a moment."));
+    throw apiError(response, body, "Couldn't start turning that video into a 3D model — higglehaven ran into a problem on its end. Please try again in a moment.");
   }
   return response.json(); // { jobId, status }
 }

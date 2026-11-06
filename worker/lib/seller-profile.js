@@ -20,7 +20,7 @@
 // worker/lib/stripe.js already set for STRIPE_RATE_LIMIT_MAX -- each is
 // a plain rate-limit cap shared with code that stays in index.js, not
 // something worth threading an export through.
-import { json, HttpError, clientIp } from './http.js';
+import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { checkRateLimit } from './rate-limit.js';
 import { adminActionLogStatement } from './admin-log.js';
 import {
@@ -263,7 +263,7 @@ async function handleSellers(request, env, db, route, url) {
       WHERE seller_id = ? AND stripe_account_id = ?
     `).bind(nowIso, nowIso, route[1], previousAccountId).run();
     if (result.meta.changes === 0) {
-      throw new HttpError('This seller\'s Stripe account changed concurrently -- refetch and retry', 409);
+      throw new HttpError('This seller\'s Stripe account changed concurrently -- refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     await adminActionLogStatement(db, admin.user_id, 'stripe_account_reset', 'seller', route[1], { previousAccountId }).run();
     const updated = await requireSeller(db, route[1]);
@@ -544,7 +544,7 @@ async function handleSellerStripeAccount(request, env, db) {
     // exercisable in a test suite that never configures Stripe at all.
     await checkRateLimit(db, `stripe-account:${sessionSeller.seller_id}`, STRIPE_RATE_LIMIT_MAX);
     if (!stripeConfigured(env)) {
-      throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+      throw new HttpError('Stripe payouts are not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
     }
 
     const { account, createdNewAccount } = await createOrUpdateStripeAccount(
@@ -634,7 +634,7 @@ async function handleBuilderStripeAccount(request, env, db) {
     // handler's own comment above.
     await checkRateLimit(db, `stripe-account:${sessionBuilder.builder_id}`, STRIPE_RATE_LIMIT_MAX);
     if (!stripeConfigured(env)) {
-      throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+      throw new HttpError('Stripe payouts are not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
     }
 
     const { account, createdNewAccount } = await createOrUpdateStripeAccount(
@@ -742,7 +742,7 @@ async function handleStripeOnboardingLink(request, env, db, kind) {
   const table = isSeller ? 'sellers' : 'builders';
   const idColumn = isSeller ? 'seller_id' : 'builder_id';
   await checkRateLimit(db, `stripe-onboarding-link:${row[idColumn]}`, STRIPE_RATE_LIMIT_MAX);
-  if (!stripeConfigured(env)) throw new HttpError('Stripe payouts are not configured on this server yet.', 503);
+  if (!stripeConfigured(env)) throw new HttpError('Stripe payouts are not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
   if (!row.stripe_account_id) {
     throw new HttpError('Set up your payout account first.', 409);
   }
@@ -768,7 +768,7 @@ async function handleStripeOnboardingLink(request, env, db, kind) {
       },
     },
   });
-  if (!link?.url) throw new HttpError('Stripe did not return an onboarding link.', 502);
+  if (!link?.url) throw new HttpError('Stripe did not return an onboarding link.', 502, { code: ERROR_CODES.UPSTREAM_FAILED });
   return json({ url: link.url, expiresAt: link.expires_at || null });
 }
 

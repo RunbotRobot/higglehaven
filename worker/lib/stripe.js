@@ -14,7 +14,7 @@
 // directional-except-for-genuinely-shared-state shape
 // worker/lib/builder-profile.js's own comment documents for its own
 // templateFromRow/recomputeLandCap imports (#2535).
-import { json, HttpError } from './http.js';
+import { json, HttpError, ERROR_CODES } from './http.js';
 import { timingSafeEqual, bytesToHex } from './crypto.js';
 import { checkRateLimit } from './rate-limit.js';
 import { requireCurrentUser } from './auth.js';
@@ -131,7 +131,7 @@ const STRIPE_V2_ACCOUNT_EVENT_TYPES = new Set([
 ]);
 
 export async function handleStripeV2Webhook(request, env, db) {
-  if (!env.STRIPE_WEBHOOK_SECRET_V2) throw new HttpError('Stripe v2 webhook is not configured on this server yet.', 503);
+  if (!env.STRIPE_WEBHOOK_SECRET_V2) throw new HttpError('Stripe v2 webhook is not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
   const rawBody = await readVerifiedStripeBody(request, env.STRIPE_WEBHOOK_SECRET_V2);
   let event;
   try {
@@ -159,7 +159,7 @@ export async function handleStripeV2Webhook(request, env, db) {
 }
 
 export async function handleStripeWebhook(request, env, db) {
-  if (!env.STRIPE_WEBHOOK_SECRET) throw new HttpError('Stripe webhook is not configured on this server yet.', 503);
+  if (!env.STRIPE_WEBHOOK_SECRET) throw new HttpError('Stripe webhook is not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
   const rawBody = await readVerifiedStripeBody(request, env.STRIPE_WEBHOOK_SECRET);
   let event;
   try {

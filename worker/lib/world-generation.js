@@ -404,7 +404,7 @@ async function generateLandletMosaicCandidates(db, { prefix, count, radiusM }, a
     { x: 0, y: 0 },
     candidate.polygon.map((point) => ({ x: point.x + candidate.center.x, y: point.y + candidate.center.y })),
   ));
-  if (centralIndex === -1) throw new HttpError('Generated mosaic does not cover the world origin', 500);
+  if (centralIndex === -1) throw new HttpError('Generated mosaic does not cover the world origin', 500, { code: ERROR_CODES.INTERNAL_ERROR });
   const central = generated[centralIndex];
   const landlets = generated.filter((_candidate, index) => index !== centralIndex);
 
@@ -1178,7 +1178,7 @@ async function handleWorld(request, db, route) {
 
 async function getWorldSettings(db) {
   const row = await db.prepare("SELECT * FROM world_settings WHERE world_id = 'default-world'").first();
-  if (!row) throw new HttpError('World settings are not initialized', 500);
+  if (!row) throw new HttpError('World settings are not initialized', 500, { code: ERROR_CODES.INTERNAL_ERROR });
   return row;
 }
 

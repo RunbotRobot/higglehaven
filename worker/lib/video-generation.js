@@ -15,7 +15,7 @@
 // cap), so they live in worker/lib/storage.js, not worker/index.js -- imported
 // from there directly rather than duplicated or routed back through
 // worker/index.js.
-import { json, HttpError } from './http.js';
+import { json, HttpError, ERROR_CODES } from './http.js';
 import { timingSafeEqual, bytesToHex } from './crypto.js';
 import { checkRateLimit } from './rate-limit.js';
 import { assertOwner, requireSessionBuilder } from './auth.js';
@@ -511,7 +511,7 @@ export async function handleVideoGenerationJobCreate(request, env, db) {
   }
 
   if (!tripoConfigured(env)) {
-    throw new HttpError('Video-to-3D generation is not configured on this server yet.', 503);
+    throw new HttpError('Video-to-3D generation is not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
   }
   // #1783: a repeat call while a job is already in flight is the common
   // case, not the rare one -- the frontend's own disabled-button guard
@@ -587,7 +587,7 @@ export async function handleVideoGenerationJobCreate(request, env, db) {
       model: TRIPO_MODEL_VERSION,
     });
     if (!task?.task_id) {
-      throw new HttpError('Video-to-3D job creation failed — please try again', 502);
+      throw new HttpError('Video-to-3D job creation failed — please try again', 502, { code: ERROR_CODES.UPSTREAM_FAILED });
     }
     billedTaskId = task.task_id;
     await db.prepare(`
@@ -669,7 +669,7 @@ export async function handleVideoGenerationJobStatus(request, env, db, jobId) {
 const TRIPO_WEBHOOK_TIMESTAMP_TOLERANCE_SECONDS = 5 * 60;
 
 export async function handleVideoGenerationWebhook(request, env, db) {
-  if (!env.TRIPO_WEBHOOK_SECRET) throw new HttpError('Video-to-3D webhook is not configured on this server yet.', 503);
+  if (!env.TRIPO_WEBHOOK_SECRET) throw new HttpError('Video-to-3D webhook is not configured on this server yet.', 503, { code: ERROR_CODES.SERVICE_UNAVAILABLE });
   const rawBody = await request.text();
   const signatureHeader = request.headers.get('tripo-webhook-signature') || '';
   const match = /^t=(\d+),v1=([0-9a-f]+)$/.exec(signatureHeader);

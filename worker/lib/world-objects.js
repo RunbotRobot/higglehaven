@@ -65,7 +65,7 @@ const INSTANCE_WRITE_RATE_LIMIT_MAX = 500;
 async function assertTemplatesFromActiveSellers(db, instances) {
   if (instances.length === 0) return;
   const suspended = await suspendedSellerTemplateIds(db, instances.map((instance) => instance.templateId));
-  if (suspended.size > 0) throw new HttpError(SUSPENDED_SELLER_PLACEMENT_ERROR, 400);
+  if (suspended.size > 0) throw new HttpError(SUSPENDED_SELLER_PLACEMENT_ERROR, 400, { code: ERROR_CODES.SELLER_SUSPENDED });
 }
 
 export async function handleInstances(request, env, route, url) {
@@ -91,7 +91,7 @@ export async function handleInstances(request, env, route, url) {
       SELECT instance_id, landlet_id FROM placed_instances WHERE instance_id IN (${placeholders})
     `).bind(...instanceIds).all();
     if (results.length !== instanceIds.length) {
-      throw new HttpError('Every instanceId must reference an existing placed instance', 404);
+      throw new HttpError('Every instanceId must reference an existing placed instance', 404, { code: ERROR_CODES.STALE_REFERENCE });
     }
     await requireOwnedLandlets(db, results.map((row) => row.landlet_id), sessionBuilder.builder_id);
     const landletIdByInstanceId = new Map(results.map((row) => [row.instance_id, row.landlet_id]));
@@ -153,7 +153,7 @@ export async function handleInstances(request, env, route, url) {
       SELECT instance_id, landlet_id, group_id FROM placed_instances WHERE instance_id IN (${placeholders})
     `).bind(...instanceIds).all();
     if (results.length !== instanceIds.length) {
-      throw new HttpError('Every instanceId must reference an existing placed instance', 404);
+      throw new HttpError('Every instanceId must reference an existing placed instance', 404, { code: ERROR_CODES.STALE_REFERENCE });
     }
     await requireOwnedLandlets(db, results.map((row) => row.landlet_id), sessionBuilder.builder_id);
     const landletIdByInstanceId = new Map(results.map((row) => [row.instance_id, row.landlet_id]));

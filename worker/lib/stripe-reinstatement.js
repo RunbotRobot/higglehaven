@@ -53,7 +53,7 @@
 //   'approved' -- #1404's own design note is explicit that the two failure
 //   modes aren't symmetric for a money/trust decision (a wrongful delay is
 //   recoverable, a wrongful approval risks real fraud).
-import { json, HttpError } from './http.js';
+import { json, HttpError, ERROR_CODES } from './http.js';
 import { readJson, stringValue } from './validation.js';
 import { requireAdmin, requireSessionBuilder } from './auth.js';
 import { checkRateLimit } from './rate-limit.js';
@@ -339,7 +339,7 @@ export async function handleStripeReinstatementRequest(request, env, db, subject
       if (await hasInFlightRealMoney(db, subjectType, subjectId)) {
         throw new HttpError('Reinstatement is approved, but a redemption/payout is still in flight on this account -- retry once it completes.', 409);
       }
-      throw new HttpError('This account\'s Stripe linkage changed concurrently -- refetch and retry', 409);
+      throw new HttpError('This account\'s Stripe linkage changed concurrently -- refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
   }
   await recordDecision(db, { subjectType, subjectId, outcome, reasoning });

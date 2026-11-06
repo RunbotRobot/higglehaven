@@ -109,12 +109,13 @@ const [submitResponse] = await Promise.all([
 console.log('tax/id-form submit responded (should be 503, "not configured"):', submitResponse.status());
 
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('not configured on this server yet')),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('available right now')),
   null,
   { timeout: 5000 },
 );
 const formStatusText = await taxField.locator('.settings-empty-note').last().textContent();
-console.log('Form status after submitting (should surface the real "not configured" 503):', formStatusText);
+// #1954: the 503 "not configured" text is internal; the player sees src/errorCopy.js's service_unavailable copy instead.
+console.log('Form status after submitting (should surface the real 503 as the calm "not available right now" copy):', formStatusText);
 
 // The failed submission shouldn't have changed the on-file status note.
 const afterStatus = await taxField.locator('.settings-empty-note').first().textContent();
@@ -128,7 +129,7 @@ const unexpectedErrors = errors.filter((e) => !e.includes('Failed to load resour
 const pass = beforeStatus.includes('No tax paperwork on file yet') &&
   ssnVisibleBeforeSwitch && !foreignTaxIdVisibleBeforeSwitch &&
   !ssnVisibleAfterSwitch && foreignTaxIdVisibleAfterSwitch &&
-  formStatusText.includes('Tax-ID collection is not configured on this server yet') &&
+  formStatusText.includes('available right now') && !formStatusText.includes('not configured') &&
   afterStatus.includes('No tax paperwork on file yet') &&
   unexpectedErrors.length === 0;
 await finish(browser, { pass, label: 'Settings > General "Tax Paperwork" field submits a real W-9/W-8BEN form (#614)', errors });
