@@ -257,6 +257,43 @@ describe('upsertInstancesRemote updateOnly (#3101)', () => {
   });
 });
 
+describe('upsertInstancesRemote stale-version reporting (#1062)', () => {
+  it('sends expectedUpdatedAt through, reports the stale instances, and hands each chunk to onChunkStored', async () => {
+    const bodies = [];
+    vi.stubGlobal('fetch', vi.fn((url, options) => {
+      const body = JSON.parse(options.body);
+      bodies.push(body);
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({
+          instances: body.instances.filter((i) => i.instanceId !== 'old').map((i) => ({ ...i, updatedAt: 'v2' })),
+          rejectedInstanceIds: [],
+          staleInstanceIds: ['old'],
+          staleInstances: [{ instanceId: 'old', x: 9, updatedAt: 'v9' }],
+        }),
+      });
+    }));
+    const adopted = [];
+    const updated = await upsertInstancesRemote([
+      { instanceId: 'fresh', x: 0, y: 0, z: 0, expectedUpdatedAt: 'v1' },
+      { instanceId: 'old', x: 1, y: 0, z: 0, expectedUpdatedAt: 'v1' },
+    ], { updateOnly: true, onChunkStored: (stored) => adopted.push(...stored.map((i) => i.instanceId)) });
+    expect(bodies[0].instances.map((i) => i.expectedUpdatedAt)).toEqual(['v1', 'v1']);
+    expect(updated.map((i) => i.instanceId)).toEqual(['fresh']);
+    expect(updated.staleInstances).toEqual([{ instanceId: 'old', x: 9, updatedAt: 'v9' }]);
+    expect(adopted).toEqual(['fresh']);
+  });
+
+  it('adds no staleInstances property when nothing was stale', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ instances: [{ instanceId: 'a' }], rejectedInstanceIds: [], staleInstanceIds: [], staleInstances: [] }),
+    })));
+    const updated = await upsertInstancesRemote([{ instanceId: 'a', x: 0, y: 0, z: 0 }]);
+    expect('staleInstances' in updated).toBe(false);
+  });
+});
+
 describe('deleteInstancesRemote', () => {
   it('attaches how many instances succeeded before a chunk failure', async () => {
     let call = 0;

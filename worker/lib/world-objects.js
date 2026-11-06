@@ -634,7 +634,7 @@ export async function handleInstances(request, env, route, url) {
       throw new HttpError('expectedUpdatedAt must be a non-empty string', 400);
     }
     if (expectedUpdatedAt !== null && existing.updated_at !== expectedUpdatedAt) {
-      throw new HttpError('This item was changed somewhere else — refresh to see the latest version.', 409, {
+      throw new HttpError('This item was changed somewhere else.', 409, {
         staleInstanceId: route[1],
         instance: instanceFromRow(existing),
       });

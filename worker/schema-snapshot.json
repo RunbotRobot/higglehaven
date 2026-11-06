@@ -552,6 +552,7 @@
       "builder_share_cents": "INTEGER|1||0",
       "buyer_builder_id": "TEXT|0||0",
       "buyer_label": "TEXT|0||0",
+      "buyer_user_id": "TEXT|0||0",
       "commission_cents": "INTEGER|1||0",
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "delivery_confirm_token_hash": "TEXT|0||0",
@@ -1222,6 +1223,10 @@
     "index:idx_purchases_builder_id": {
       "tbl": "purchases",
       "sql": "CREATE INDEX idx_purchases_builder_id ON purchases(builder_id, created_at)"
+    },
+    "index:idx_purchases_buyer_user_id": {
+      "tbl": "purchases",
+      "sql": "CREATE INDEX idx_purchases_buyer_user_id ON purchases(buyer_user_id, created_at) WHERE buyer_user_id IS NOT NULL"
     },
     "index:idx_purchases_delivery_confirm_token_hash": {
       "tbl": "purchases",

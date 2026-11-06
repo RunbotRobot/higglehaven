@@ -191,6 +191,7 @@
   "0191_direct_messages_user_id.sql",
   "0192_friendships_user_id.sql",
   "0193_stripe_requirements_eventually_due.sql",
-  "0194_saved_layout_sign_calendar_content.sql",
+  "0194_purchases_buyer_user_id.sql",
+  "0195_saved_layout_sign_calendar_content.sql",
   "0200_auction_resolution_resumable.sql"
 ]
