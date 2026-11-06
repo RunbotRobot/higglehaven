@@ -75,7 +75,9 @@ describe('Nearby chat conduct reports (#2956)', () => {
 
     const row = await env.DB.prepare('SELECT * FROM nearby_chat_reports WHERE report_id = ?')
       .bind(created.body.reportId).first();
+    const userIdOf = async (person) => (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(person.builderId).first()).user_id;
     expect(row).toMatchObject({
+      reporter_user_id: await userIdOf(alice), reported_user_id: await userIdOf(bob),
       reporter_builder_id: alice.builderId, reported_builder_id: bob.builderId, reason: 'Said something inappropriate',
     });
 
