@@ -1654,6 +1654,22 @@ export async function createSellerFeedback(purchaseId, { rating, text } = {}) {
   return feedback;
 }
 
+// "My Purchases" (#3198): author-direct edit/delete of one's own seller
+// feedback (PATCH/DELETE /api/purchases/:id/feedback, #1975). Errors carry
+// error.status so the panel can tell 409 (changed concurrently) apart.
+export async function editSellerFeedback(purchaseId, { rating, text } = {}) {
+  const { feedback } = await requestJson(`/purchases/${encodeURIComponent(purchaseId)}/feedback`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ rating, text }),
+  });
+  return feedback;
+}
+
+export async function deleteSellerFeedback(purchaseId) {
+  return requestJson(`/purchases/${encodeURIComponent(purchaseId)}/feedback`, { method: 'DELETE' });
+}
+
 // Land acquisition auctions (see migrations/0045_auctions.sql). builderId is
 // never sent — the server derives "who's starting this auction" from the
 // session cookie (and requires it to be the landlet's current owner).
