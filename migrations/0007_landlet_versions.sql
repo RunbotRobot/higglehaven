@@ -1,4 +1,8 @@
--- Immutable layout snapshots and an active-version pointer for each landlet.
+-- Layout snapshots (position/rotation/label of each placed product, fixed once
+-- saved) and an active-version pointer for each landlet. A snapshot records
+-- WHERE a seller's product was placed, not the product itself: the product
+-- stays live-linked through template_id, so a seller's later edit shows up in
+-- an already-published version, and the builder is notified (#797).
 --
 -- version_instances carries rotation_x_rad/rotation_y_rad alongside
 -- rotation_z_rad (unlike the original design) so a published snapshot
