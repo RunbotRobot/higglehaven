@@ -424,7 +424,7 @@ export async function handleProductFlags(request, db, route) {
     const template = await db.prepare('SELECT template_id, flagged_hidden_at, seller_id, product_id FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     if (!template) return json({ error: 'Catalog template not found' }, 404);
     const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `product-flag-create:${sessionBuilder.builder_id}`, PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX);
+    await checkRateLimit(db, `product-flag-create:${sessionBuilder.user_id}`, PRODUCT_FLAG_CREATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const reason = input.reason === undefined || input.reason === null || input.reason === ''
       ? null
