@@ -20,6 +20,7 @@ import { adminActionLogStatement } from './admin-log.js';
 import { fireNotification } from './notifications.js';
 import { handlePurchaseFinalize, purchaseFromRow } from './purchase-creation.js';
 import { purchaseSellerShareCents } from './seller-payouts-tax.js';
+import { sessionIsPurchaseBuyer, BUYER_PURCHASES_MATCH_SQL } from './purchase-buyer.js';
 import { handleSellerFeedbackCreate, handleSellerFeedbackEdit, handleSellerFeedbackDelete } from './reputation.js';
 import {
   stripeConfigured, stripeRequest, sellerExists, requireSessionSeller, formatCents,
@@ -768,7 +769,7 @@ async function handlePurchaseDispute(request, env, purchaseId) {
   // Same buyer-ownership gate handleSellerFeedbackCreate uses (#1123) — a
   // dispute is the buyer's own standing to raise, not the seller's, the
   // hosting builder's, or an onlooker's.
-  if (purchase.buyer_builder_id !== sessionBuilder.builder_id) {
+  if (!sessionIsPurchaseBuyer(purchase, sessionBuilder)) {
     throw new HttpError('Only the buyer of this purchase can dispute it', 400);
   }
   if (purchase.refunded_at) {
@@ -780,9 +781,9 @@ async function handlePurchaseDispute(request, env, purchaseId) {
 
   const history = await db.prepare(`
     SELECT
-      (SELECT COUNT(*) FROM purchases WHERE buyer_builder_id = ? AND purchase_id != ? AND refunded_at IS NULL) AS completedCount,
-      (SELECT COUNT(*) FROM purchases WHERE buyer_builder_id = ? AND refunded_at IS NOT NULL) AS refundedCount
-  `).bind(sessionBuilder.builder_id, purchaseId, sessionBuilder.builder_id).first();
+      (SELECT COUNT(*) FROM purchases WHERE ${BUYER_PURCHASES_MATCH_SQL} AND purchase_id != ? AND refunded_at IS NULL) AS completedCount,
+      (SELECT COUNT(*) FROM purchases WHERE ${BUYER_PURCHASES_MATCH_SQL} AND refunded_at IS NOT NULL) AS refundedCount
+  `).bind(sessionBuilder.user_id, sessionBuilder.builder_id, purchaseId, sessionBuilder.user_id, sessionBuilder.builder_id).first();
   const established = history.completedCount > 0 && history.refundedCount === 0;
   const lowValue = purchase.total_cents <= DISPUTE_AUTO_RESOLVE_THRESHOLD_CENTS;
   if (!established || !lowValue) {

@@ -6931,6 +6931,14 @@ themself; the only UI surfacing it today (below) happens to be the
 Seller modal, which reads as "seller-facing" in practice without the API
 itself needing to restrict who can ask.
 
+**Buyer standing is decided on the account (#3214):** `POST`/`PATCH`/`DELETE`
+`.../feedback` treat the session as the buyer when its `user_id` equals
+`purchases.buyer_user_id` (migration 0194), so a buyer whose builder profile
+was reset (`buyer_builder_id` NULL) keeps the right to leave, edit and delete
+their feedback; only a purchase with no `buyer_user_id` falls back to the old
+`buyer_builder_id` match (`worker/lib/purchase-buyer.js`). The read-time join
+below resolves the author the same way (`buyer_user_id`, else via the builder).
+
 **`userId` (#1975) and why it's a join, not a column:** unlike sign posts/
 product reviews/calendar events, `seller_feedback` got no new `user_id`
 column of its own — the feedback's real author (the purchase's buyer) was
@@ -8728,9 +8736,16 @@ is seller- or admin-initiated (see "Refunding is seller-initiated, not
 shopper self-service" above); a shopper had no way to raise one themselves.
 
 `POST /api/purchases/:purchaseId/dispute` requires a session, and requires
-that session's own `builderId` match the purchase's `buyerBuilderId`
-(`400` otherwise — "Only the buyer of this purchase can dispute it"), the
-same real-buyer-session gate `POST .../feedback` uses (#1123). `404` if the
+that session to be the purchase's buyer (`400` otherwise — "Only the buyer of
+this purchase can dispute it"), the same real-buyer-session gate
+`POST .../feedback` uses (#1123). "Is the buyer" is decided on the account
+since #3214: the session's `user_id` against `purchases.buyer_user_id`
+(migration 0194), so a buyer who has reset their builder profile
+(`buyer_builder_id` goes NULL) can still dispute; a purchase with no
+`buyer_user_id` (recorded before that column, with its builder already gone
+or never resolvable) falls back to the old `buyer_builder_id` match, and one
+with neither has no buyer who can act. The "established buyer" count of
+earlier completed/refunded purchases uses the same account-or-builder match. `404` if the
 purchase doesn't exist, `400` if already refunded, `409` if already paid
 out (same "contact support for manual reconciliation" case `.../refund`
 itself rejects).
