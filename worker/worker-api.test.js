@@ -2369,11 +2369,11 @@ describe('Worker API', () => {
 
     const unavailable = await api('/landlets/contested-landlet/claim', otherBuilder.session({ method: 'POST' }));
     expect(unavailable.response.status).toBe(409);
-    expect(unavailable.body).toEqual({ error: 'Landlet is not available to claim' });
+    expect(unavailable.body).toEqual({ error: 'Landlet is not available to claim', code: 'landlet_not_claimable' });
 
     const missing = await api('/landlets/does-not-exist/claim', otherBuilder.session({ method: 'POST' }));
     expect(missing.response.status).toBe(404);
-    expect(missing.body).toEqual({ error: 'Landlet not found' });
+    expect(missing.body).toEqual({ error: 'Landlet not found', code: 'landlet_not_found' });
 
     // builderId is no longer a client-suppliable field at all — claiming
     // always acts as whoever is logged in — so the "malformed claim" case

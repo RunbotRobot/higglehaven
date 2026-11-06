@@ -14,7 +14,7 @@
 // leaf's; see #2613's own issue body for the full reasoning on why the
 // original #2540 2-way split estimate didn't hold up once every call site
 // was actually traced.
-import { json, HttpError } from './http.js';
+import { json, HttpError, ERROR_CODES } from './http.js';
 import { readJson, stringValue } from './validation.js';
 import { checkRateLimit } from './rate-limit.js';
 import { adminActionLogStatement } from './admin-log.js';
@@ -131,7 +131,7 @@ async function handleSoldOutMarkers(request, db, route) {
       const stillOwned = await db.prepare('SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?')
         .bind(landletId, sessionBuilder.builder_id).first();
       if (!stillOwned) {
-        throw new HttpError('Landlet changed concurrently — refetch and retry', 409);
+        throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
       }
       throw new HttpError('Marker not found or already dismissed', 404);
     }
