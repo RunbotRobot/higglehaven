@@ -288,9 +288,13 @@ export async function handlePresence(request, db, route, url) {
     // themselves (irrelevant here, this query already excludes user_id =
     // self) or from GET .../me (that endpoint is "where was I," unaffected).
     const visible = results.filter((row) => !row.flying);
-    const equipped = await equippedAvatarsByBuilder(db, visible.map((row) => row.builder_id));
+    const visibleIds = visible.map((row) => row.builder_id);
+    const [equipped, animations] = await Promise.all([
+      equippedAvatarsByBuilder(db, visibleIds),
+      equippedAnimationsByBuilder(db, visibleIds),
+    ]);
     return json({
-      avatars: visible.map((row) => ({ ...avatarPresenceFromRow(row), equippedAvatar: equipped.get(row.builder_id) ?? null })),
+      avatars: visible.map((row) => ({ ...avatarPresenceFromRow(row), equippedAvatar: equipped.get(row.builder_id) ?? null, equippedAnimation: animations.get(row.builder_id) ?? null })),
     });
   }
 
@@ -1127,35 +1131,46 @@ export async function handleVoiceSignal(request, db, route, url, env) {
   return json({ error: 'Not found' }, 404);
 }
 
-// #2045: which custom avatar each nearby builder has equipped, resolved here
-// from their own equipped_avatar_template_id (#680) rather than carried on the
-// presence report, so a client can never claim someone else's model and the
-// value is always current. A builder with the default body, a template that
-// has since been deleted (same fall-back-to-default myAvatarJson uses), or a
-// template whose seller is suspended or closed (**Nothing that isn't actively
-// for sale is visible to shoppers or builders**) gets no entry, and the client
-// draws the generic body for them.
-async function equippedAvatarsByBuilder(db, builderIds) {
+// #2045: which custom avatar and animation each nearby builder has equipped,
+// resolved here from their own equipped_avatar_template_id (#680) and
+// equipped_animation_template_id (#1164) rather than carried on the presence
+// report, so a client can never claim someone else's model and the value is
+// always current. A builder with the default body, a template that has since
+// been deleted (same fall-back-to-default myAvatarJson uses), or a template
+// whose seller is suspended or closed (**Nothing that isn't actively for sale
+// is visible to shoppers or builders**) gets no entry, and the client draws
+// the generic body / the avatar's own clips for them. skeletonSignature rides
+// along so the client can apply the same animation-compatibility check
+// (#1162) it applies to the shopper's own avatar, without another request.
+// `column` is a fixed identifier chosen below, never user input.
+async function equippedTemplatesByBuilder(db, builderIds, column) {
   const found = new Map();
   const unique = [...new Set(builderIds)];
   for (let i = 0; i < unique.length; i += RESOLVER_CHUNK_SIZE) {
     const chunk = unique.slice(i, i + RESOLVER_CHUNK_SIZE);
     const { results } = await db.prepare(`
       SELECT builders.builder_id AS builder_id, catalog_templates.template_id AS template_id,
-        catalog_templates.model_url AS model_url
-      FROM builders JOIN catalog_templates ON catalog_templates.template_id = builders.equipped_avatar_template_id
+        catalog_templates.model_url AS model_url, catalog_templates.skeleton_signature AS skeleton_signature
+      FROM builders JOIN catalog_templates ON catalog_templates.template_id = builders.${column}
       WHERE builders.builder_id IN (${chunk.map(() => '?').join(', ')})
         AND catalog_templates.model_url IS NOT NULL
     `).bind(...chunk).all();
-    for (const row of results) found.set(row.builder_id, { templateId: row.template_id, modelUrl: row.model_url });
+    for (const row of results) {
+      found.set(row.builder_id, {
+        templateId: row.template_id, modelUrl: row.model_url, skeletonSignature: row.skeleton_signature || null,
+      });
+    }
   }
   if (found.size === 0) return found;
-  const hidden = await suspendedSellerTemplateIds(db, [...found.values()].map((avatar) => avatar.templateId));
-  for (const [builderId, avatar] of found) {
-    if (hidden.has(avatar.templateId)) found.delete(builderId);
+  const hidden = await suspendedSellerTemplateIds(db, [...found.values()].map((template) => template.templateId));
+  for (const [builderId, template] of found) {
+    if (hidden.has(template.templateId)) found.delete(builderId);
   }
   return found;
 }
+
+const equippedAvatarsByBuilder = (db, builderIds) => equippedTemplatesByBuilder(db, builderIds, 'equipped_avatar_template_id');
+const equippedAnimationsByBuilder = (db, builderIds) => equippedTemplatesByBuilder(db, builderIds, 'equipped_animation_template_id');
 
 function avatarPresenceFromRow(row) {
   return {
