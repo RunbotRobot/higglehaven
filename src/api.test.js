@@ -1,7 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  confirmCard, createInstancesRemote, deleteInstancesRemote, deleteLandletLevel, fetchAllAuctions, fetchAllLandlets,
-  fetchBundles, fetchCatalog, fetchCurrentUser, fetchSharedBundles, replaceLandletDraft, upsertInstancesRemote,
+  confirmCard, createInstancesRemote, createVideoGenerationJob, deleteInstancesRemote, deleteLandletLevel, fetchAllAuctions, fetchAllLandlets,
+  fetchBundles, fetchCatalog, fetchCurrentUser, fetchSharedBundles, replaceLandletDraft, submitFeedbackBugReport,
+  uploadModelFile, upsertInstancesRemote,
 } from './api.js';
 
 // fetchAllLandlets makes real fetch() calls against /api/... — mock the
@@ -511,6 +512,21 @@ describe('server error codes reach the player as copy, not raw server text (#195
     expect(error.code).toBe('seller_suspended');
     expect(error.serverMessage).toMatch(/seller is suspended/);
     expect(error.status).toBe(400);
+  });
+
+  // The upload, feedback and video requests build their errors from the response
+  // by hand (they send multipart bodies), so they must carry the same fields.
+  it.each([
+    ['uploadModelFile', () => uploadModelFile(new Blob(['x']))],
+    ['submitFeedbackBugReport', () => submitFeedbackBugReport(new FormData())],
+    ['createVideoGenerationJob', () => createVideoGenerationJob(new FormData())],
+  ])('%s shows player copy and keeps the server text, code and status', async (_name, call) => {
+    failWith(503, { error: 'Video-to-3D generation is not configured on this server yet.', code: 'service_unavailable' });
+    const error = await call().catch((e) => e);
+    expect(error.message).toBe("That isn't available right now. Please try again later.");
+    expect(error.serverMessage).toBe('Video-to-3D generation is not configured on this server yet.');
+    expect(error.code).toBe('service_unavailable');
+    expect(error.status).toBe(503);
   });
 
   it('maps the server catch-all 500 to a calm line instead of "Internal server error"', async () => {

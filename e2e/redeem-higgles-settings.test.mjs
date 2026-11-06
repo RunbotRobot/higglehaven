@@ -82,12 +82,13 @@ console.log('Redeem button visible (should be true, since the granted balance is
 const redeemFormField = page.locator('.settings-field').filter({ has: redeemBtn });
 await redeemBtn.click();
 await page.waitForFunction(
-  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('not configured on this server yet')),
+  () => [...document.querySelectorAll('.settings-field')].some((f) => f.textContent.includes('available right now')),
   null,
   { timeout: 60000 },
 );
 const afterClickText = await redeemFormField.locator('.settings-empty-note').last().textContent();
-console.log('Status after clicking Redeem (should surface the real "Stripe not configured" 503):', afterClickText);
+// #1954: the 503 "not configured" text is internal; the player sees src/errorCopy.js's service_unavailable copy instead.
+console.log('Status after clicking Redeem (should surface the real 503 as the calm "not available right now" copy):', afterClickText);
 
 // The Redeem click above deliberately triggers a real 503 (Stripe isn't
 // configured on this dev server) — Chromium logs any non-2xx fetch
@@ -100,6 +101,6 @@ const unexpectedErrors = errors.filter((e) => !e.includes('Failed to load resour
 const pass = statusText.includes(`$${(GRANT_CENTS / 100).toFixed(2)}`) &&
   statusText.includes("Stripe payouts aren't set up on this server yet") &&
   redeemBtnVisible &&
-  afterClickText.includes('Stripe payouts are not configured on this server yet') &&
+  afterClickText.includes('available right now') && !afterClickText.includes('not configured') &&
   unexpectedErrors.length === 0;
 await finish(browser, { pass, label: 'Settings > Build "Redeem Higgles" field shows real balance and surfaces the real Stripe-not-configured 503 (#723, #653)', errors });

@@ -53,11 +53,12 @@ console.log('ID-instead button visible once in the card step (should be true):',
 
 await page.click('#verify-id-instead-btn');
 const statusAfterClick = await page.waitForFunction(
-  () => document.getElementById('verify-status').textContent.includes('not configured'),
+  () => document.getElementById('verify-status').textContent.includes('available right now'),
   null,
   { timeout: 15000 },
 ).then(() => page.textContent('#verify-status'));
-console.log('verify-status text after clicking "Verify by government ID instead" (should mention "not configured" -- Didit is unconfigured in this deployment):', statusAfterClick);
+// #1954: the 503 "not configured" text is internal; the player sees src/errorCopy.js's service_unavailable copy instead.
+console.log('verify-status text after clicking "Verify by government ID instead" (should show the calm "not available right now" copy -- Didit is unconfigured in this deployment):', statusAfterClick);
 
 // The 503 above is a real, deliberate HTTP error response, logged to the
 // console independent of this app's own code -- same filtering
@@ -76,7 +77,7 @@ console.log('Gate still clearable via the normal card path after trying ID-inste
 
 const pass = idBtnHiddenDuringAgeStep &&
   idBtnVisibleDuringCardStep &&
-  statusAfterClick.includes('not configured') &&
+  statusAfterClick.includes('available right now') && !statusAfterClick.includes('not configured') &&
   stillGatedAfterFailedIdAttempt &&
   clearedViaCardPathAfterward &&
   unexpectedErrorsSoFar.length === 0;
