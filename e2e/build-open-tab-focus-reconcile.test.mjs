@@ -116,6 +116,20 @@ if (suspend.response.status !== 200) {
   throw new Error(`suspend-account failed (${suspend.response.status}): ${JSON.stringify(suspend.body)}`);
 }
 
+// #3192: a tab refocus runs two handlers (the #3095 pending-restoration one
+// and #3103's general reconcile). Delay the FIRST pending-restoration fetch so
+// the general reconcile drops the phantom and refreshes again first, which is
+// the order that used to leave the builder with the product gone and no
+// explanation (the superseded first fetch returned null, and the winner
+// announced nothing). The builder must be told whichever handler wins.
+let pendingRestorationFetches = 0;
+await page.route('**/api/instances/pending-restoration', async (route) => {
+  if (route.request().method() === 'GET' && pendingRestorationFetches++ === 0) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+  await route.continue();
+});
+
 // Still no reload, no save: the tab just becomes visible again.
 const phantomsBeforeFocus = (await page.evaluate(() => window.__testProductScreenPositions()))
   .filter((p) => p.instanceId.startsWith('open-tab-focus-instance-')).length;
