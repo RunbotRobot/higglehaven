@@ -578,10 +578,12 @@ export async function addLandletLevel(landletId, direction) {
 // a result (#901) — the caller still needs to prune its own local scene for
 // those, since the server has no way to reach into it.
 export async function deleteLandletLevel(landletId, levelIndex) {
-  const { sweptInstanceIds } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/levels/${encodeURIComponent(levelIndex)}`, {
+  const { sweptInstanceIds, savedSignPostCount, savedCalendarEventCount } = await requestJson(`/landlets/${encodeURIComponent(landletId)}/levels/${encodeURIComponent(levelIndex)}`, {
     method: 'DELETE',
   });
-  return sweptInstanceIds;
+  // #1756: how many sign posts / calendar events the saved layout kept, so the
+  // caller can tell the builder (an older server omits both: treated as 0).
+  return { sweptInstanceIds, savedSignPostCount: savedSignPostCount ?? 0, savedCalendarEventCount: savedCalendarEventCount ?? 0 };
 }
 
 // #1150: PATCH merges onto the existing record server-side (handleLandlets'
@@ -970,6 +972,15 @@ export async function fetchNotifications({ unreadOnly = false, cursor = null } =
 // undercount if it just read that first page's own .length, same shape
 // as the bug #245/#288 already fixed for the unread badge specifically.
 // This hits a dedicated COUNT query instead, with no page cap at all.
+// "My Purchases" (#3197): the signed-in account's own receipts, newest first,
+// cursor-paginated like fetchNotifications. Server: GET /api/purchases/mine.
+export async function fetchMyPurchases({ cursor = null } = {}) {
+  const query = new URLSearchParams();
+  if (cursor) query.set('cursor', cursor);
+  const suffix = query.toString();
+  return requestJson(`/purchases/mine${suffix ? `?${suffix}` : ''}`);
+}
+
 export async function fetchUnreadNotificationCount() {
   const { count } = await requestJson('/notifications/unread-count');
   return count;

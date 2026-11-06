@@ -21,7 +21,11 @@ import {
 } from './validation.js';
 import { checkRateLimit } from './rate-limit.js';
 import {
+<<<<<<< HEAD
   requireCurrentUser, assertOwner, requireSessionBuilder,
+=======
+  requireCurrentUser, assertOwner, requireSessionBuilder, builderNotSuspendedSql, suspendedSellerTemplateIds,
+>>>>>>> origin/main
   userIdForBuilder, builderIdForUser, builderIdsForUsers, RESOLVER_CHUNK_SIZE,
   notBlockedBySql, notBlockedByUserSql,
   notBlockedEitherWayByUserSql, userNotSuspendedSql, userBlockExistsBetween,
@@ -287,7 +291,11 @@ export async function handlePresence(request, db, route, url) {
     // own discretion to respect. Never withhold the caller's own row from
     // themselves (irrelevant here, this query already excludes user_id =
     // self) or from GET .../me (that endpoint is "where was I," unaffected).
-    return json({ avatars: results.filter((row) => !row.flying).map(avatarPresenceFromRow) });
+    const visible = results.filter((row) => !row.flying);
+    const equipped = await equippedAvatarsByBuilder(db, visible.map((row) => row.builder_id));
+    return json({
+      avatars: visible.map((row) => ({ ...avatarPresenceFromRow(row), equippedAvatar: equipped.get(row.builder_id) ?? null })),
+    });
   }
 
   // #1098: upserts the caller's own live position into avatar_presence
@@ -1121,6 +1129,36 @@ export async function handleVoiceSignal(request, db, route, url, env) {
   }
 
   return json({ error: 'Not found' }, 404);
+}
+
+// #2045: which custom avatar each nearby builder has equipped, resolved here
+// from their own equipped_avatar_template_id (#680) rather than carried on the
+// presence report, so a client can never claim someone else's model and the
+// value is always current. A builder with the default body, a template that
+// has since been deleted (same fall-back-to-default myAvatarJson uses), or a
+// template whose seller is suspended or closed (**Nothing that isn't actively
+// for sale is visible to shoppers or builders**) gets no entry, and the client
+// draws the generic body for them.
+async function equippedAvatarsByBuilder(db, builderIds) {
+  const found = new Map();
+  const unique = [...new Set(builderIds)];
+  for (let i = 0; i < unique.length; i += RESOLVER_CHUNK_SIZE) {
+    const chunk = unique.slice(i, i + RESOLVER_CHUNK_SIZE);
+    const { results } = await db.prepare(`
+      SELECT builders.builder_id AS builder_id, catalog_templates.template_id AS template_id,
+        catalog_templates.model_url AS model_url
+      FROM builders JOIN catalog_templates ON catalog_templates.template_id = builders.equipped_avatar_template_id
+      WHERE builders.builder_id IN (${chunk.map(() => '?').join(', ')})
+        AND catalog_templates.model_url IS NOT NULL
+    `).bind(...chunk).all();
+    for (const row of results) found.set(row.builder_id, { templateId: row.template_id, modelUrl: row.model_url });
+  }
+  if (found.size === 0) return found;
+  const hidden = await suspendedSellerTemplateIds(db, [...found.values()].map((avatar) => avatar.templateId));
+  for (const [builderId, avatar] of found) {
+    if (hidden.has(avatar.templateId)) found.delete(builderId);
+  }
+  return found;
 }
 
 function avatarPresenceFromRow(row) {

@@ -41,11 +41,22 @@ async function openAuthModal(page) {
   // signup/login does, so Playwright's own click-retry just times out
   // against it -- treat an intercepted click the same as the early-return
   // above instead of waiting that out.
-  try {
-    await page.click('#account-menu-toggle', { timeout: 5000 });
-  } catch (error) {
-    if ((await page.locator('#auth-modal.visible').count()) > 0) return;
-    throw error;
+  // #3224: right after another modal (e.g. the seller modal) closes, a toggle
+  // click can be swallowed under CI load -- the click succeeds but the panel
+  // never gains .expanded, and one 5s wait just times out. Re-click only when
+  // the panel is still collapsed after a short wait (never when it already
+  // expanded, which would toggle it shut again).
+  let expanded = false;
+  for (let attempt = 0; attempt < 3 && !expanded; attempt++) {
+    try {
+      await page.click('#account-menu-toggle', { timeout: 5000 });
+    } catch (error) {
+      if ((await page.locator('#auth-modal.visible').count()) > 0) return;
+      throw error;
+    }
+    expanded = await page.waitForSelector('#account-menu-panel.expanded', { timeout: 3000 })
+      .then(() => true, () => false);
+    if (!expanded && (await page.locator('#auth-modal.visible').count()) > 0) return;
   }
   await page.waitForSelector('#account-menu-panel.expanded', { timeout: 5000 });
   // #2586 (follow-up to #2087): the same N44 gate can just as easily pop
@@ -205,6 +216,7 @@ await firstSellerFetch;
 const sellerStatusForFirstAccount = await waitForText(page, '#seller-status', 'No custom products yet');
 console.log('seller status for the first account (should say no products yet):', sellerStatusForFirstAccount);
 await page.click('#seller-close-btn');
+await page.waitForSelector('#seller-modal:not(.visible)', { state: 'attached', timeout: 5000 });
 await page.waitForTimeout(200);
 
 await openAuthModal(page);
