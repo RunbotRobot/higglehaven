@@ -33,6 +33,7 @@ import {
   fetchTaxSummary,
   fetchNotifications,
   fetchMyPurchases,
+  disputePurchase,
   fetchUnreadNotificationCount,
   markNotificationRead,
   markAllNotificationsRead,
@@ -1187,7 +1188,7 @@ async function renderMyPurchases() {
   }
   if (myLoadToken !== myPurchasesLoadToken) return;
   if (page.purchases.length === 0) showMyPurchasesMessage("You haven't bought anything yet.");
-  for (const purchase of page.purchases) myPurchasesListEl.appendChild(createPurchaseRow(purchase));
+  for (const purchase of page.purchases) myPurchasesListEl.appendChild(createPurchaseRow(purchase, { dispute: disputePurchase }));
   myPurchasesNextCursor = page.nextCursor;
   myPurchasesLoadMoreBtn.hidden = !myPurchasesNextCursor;
 }
@@ -1198,7 +1199,7 @@ myPurchasesLoadMoreBtn.addEventListener('click', async () => {
   try {
     const page = await fetchMyPurchases({ cursor: myPurchasesNextCursor });
     if (myLoadToken !== myPurchasesLoadToken) return;
-    for (const purchase of page.purchases) myPurchasesListEl.appendChild(createPurchaseRow(purchase));
+    for (const purchase of page.purchases) myPurchasesListEl.appendChild(createPurchaseRow(purchase, { dispute: disputePurchase }));
     myPurchasesNextCursor = page.nextCursor;
     myPurchasesLoadMoreBtn.hidden = !myPurchasesNextCursor;
   } catch (err) {
