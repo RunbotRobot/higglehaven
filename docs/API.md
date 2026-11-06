@@ -2872,8 +2872,8 @@ else still depends on it." from D1's foreign-key behavior), or with a
 specific `409` if the template is referenced only by a
 `saved_layout_instances` row (a builder's saved layout, possibly one that
 isn't visible to the caller at all — see #729) or a `version_instances` row
-(a landlet's past published version history) — both of those are immutable
-snapshot tables, kept on `ON DELETE RESTRICT` deliberately, so the template
+(a landlet's past published version history) — both of those are layout
+snapshot tables (where a template was placed, not the template itself), kept on `ON DELETE RESTRICT` deliberately, so the template
 can't be deleted out from under them even after every live instance is gone.
 
 #1291: deleting an avatar/animation template is never blocked by builders
@@ -4364,7 +4364,9 @@ Response:
 
 Returns the layout selected for the shopper-facing landlet without exposing the
 builder's mutable draft. The response includes the landlet, a `published`
-boolean, active version metadata, and the immutable snapshotted instances.
+boolean, active version metadata, and the snapshotted instances (their
+position/rotation are fixed; each product itself is the seller's live template,
+so a seller's later edit shows here too, #797).
 
 When no version has been activated yet, the endpoint still returns `200` with
 `published: false`, `version: null`, and an empty `instances` array. Once a
@@ -4430,7 +4432,7 @@ the complete mutable draft. The request body is:
 `landletId` values supplied on individual entries are ignored in favor of the
 route landlet. Instance IDs must be unique within the request, and a request may
 contain at most 250 instances. An empty array clears the draft. D1 applies the
-draft replacement and immutable version snapshot as one batch, so a validation
+draft replacement and version layout snapshot as one batch, so a validation
 or foreign-key failure leaves both the previous draft and version history
 intact. `versionName` and `versionMetadata` are optional; the default name is
 `Version N`. `versionName` is capped at 100 characters (`400` past that,
@@ -4497,7 +4499,12 @@ history.
 
 ## Landlet versions
 
-Landlet versions are immutable snapshots of a landlet's placed instances. The
+Landlet versions are layout snapshots of a landlet's placed instances: where each
+product sits and how it is rotated is fixed once saved, but the product itself
+stays the seller's live template (#797): a seller may change it at any time, and
+the builder is notified (`notifyBuildersOfDimensionChange` covers both the draft
+and the landlet's active version, one notification per builder with the larger
+of the two copy counts per landlet). The
 mutable `placed_instances` rows remain the builder's current draft, while a
 landlet's `activeVersionId` points at the snapshot intended for shoppers.
 
@@ -4530,7 +4537,7 @@ The response includes `nextCursor`, which is `null` after the oldest version.
 ### `POST /api/landlets/:landletId/versions`
 
 Requires a session logged in as the landlet's owner (`403` otherwise).
-Saves the landlet's current placed instances as a new immutable snapshot.
+Saves the landlet's current placed instances as a new layout snapshot.
 Rate-limited per builder (20 per 15-minute window, `429` past that, #796),
 sharing the same `landlet-version:<builderId>` bucket as `PUT .../draft`
 above — each save duplicates every placed instance into a new
@@ -9606,7 +9613,7 @@ The migrations currently create twenty main backend tables:
   scale").
 - `world_settings`: singleton dev world settings for circular expansion and
   shared world constants.
-- `landlet_versions`: immutable layout snapshot metadata.
+- `landlet_versions`: layout snapshot metadata (placement is fixed; products stay live, #797).
 - `version_instances`: instance transforms captured within each snapshot.
 - `landlet_candidates`: lightweight planned plots awaiting first circle overlap,
   with optional generated-ring membership.

@@ -541,8 +541,8 @@ async function existingSellerIds(db, sellerIds) {
 }
 
 // #729: saved_layout_instances (migrations/0080) and version_instances
-// (migrations/0007) both keep an immutable historical snapshot of a
-// template's placement, and both intentionally use ON DELETE RESTRICT (a
+// (migrations/0007) both keep a historical snapshot of where a template was
+// placed (position/rotation only -- the product itself stays live, #797), and both intentionally use ON DELETE RESTRICT (a
 // snapshot should never silently lose which template it depicted) — so a
 // template referenced only by one of these, with zero live
 // placed_instances left, still fell through to catalog delete's generic
@@ -672,6 +672,47 @@ function placementRelevantMetadataChanged(oldMetadata, newMetadata) {
   return !!oldMetadata?.flooring !== !!newMetadata?.flooring;
 }
 
+// (migrations/0007's header still calls version_instances "immutable"; that
+// file is checksum-pinned, so read it as "layout fixed, product live".)
+// #797 (owner decision, 2026-10-28): a landlet's placed products link live
+// to the seller's template, on purpose -- the builder chooses where a
+// product sits and how it's rotated, and the seller stays free to change
+// the product itself. So the builder must hear about a change wherever the
+// product is on show: in the landlet they're editing (placed_instances)
+// AND in the version shoppers currently see (the landlet's
+// active_version_id snapshot in version_instances), which can differ once
+// the draft has been edited after publishing. Per landlet the larger of
+// the two counts is used (a published, unedited landlet is the same copy
+// in both, not two). Returns one row per (template, builder).
+async function findBuildersWithPlacedTemplates(db, templateIds) {
+  const placeholders = templateIds.map(() => '?').join(', ');
+  const { results } = await db.prepare(`
+    SELECT per_landlet.template_id AS templateId, l.owner_builder_id AS builderId,
+      SUM(per_landlet.n) AS instanceCount
+    FROM (
+      SELECT template_id, landlet_id, MAX(n) AS n
+      FROM (
+        SELECT pi.template_id AS template_id, pi.landlet_id AS landlet_id, COUNT(*) AS n
+        FROM placed_instances pi
+        WHERE pi.template_id IN (${placeholders})
+        GROUP BY pi.template_id, pi.landlet_id
+        UNION ALL
+        SELECT vi.template_id AS template_id, lv.landlet_id AS landlet_id, COUNT(*) AS n
+        FROM version_instances vi
+        JOIN landlet_versions lv ON lv.version_id = vi.version_id
+        JOIN landlets al ON al.landlet_id = lv.landlet_id AND al.active_version_id = vi.version_id
+        WHERE vi.template_id IN (${placeholders})
+        GROUP BY vi.template_id, lv.landlet_id
+      )
+      GROUP BY template_id, landlet_id
+    ) per_landlet
+    JOIN landlets l ON l.landlet_id = per_landlet.landlet_id
+    WHERE l.owner_builder_id IS NOT NULL
+    GROUP BY per_landlet.template_id, l.owner_builder_id
+  `).bind(...templateIds, ...templateIds).all();
+  return results;
+}
+
 // A seller changing a product's real-world size after it's already been
 // placed somewhere leaves every existing instance still looking like the
 // old size (createMeshForInstance never re-scales an already-placed
@@ -688,13 +729,7 @@ async function notifyBuildersOfDimensionChange(db, template, oldDimensions, oldM
   // count, so a builder with several placed copies of the resized template
   // (e.g. bought/placed the same decorative item more than once) sees an
   // accurate count instead of a hardcoded, always-singular "one placed".
-  const { results } = await db.prepare(`
-    SELECT l.owner_builder_id AS builderId, COUNT(*) AS instanceCount
-    FROM placed_instances pi
-    JOIN landlets l ON l.landlet_id = pi.landlet_id
-    WHERE pi.template_id = ? AND l.owner_builder_id IS NOT NULL
-    GROUP BY l.owner_builder_id
-  `).bind(template.templateId).all();
+  const results = await findBuildersWithPlacedTemplates(db, [template.templateId]);
   if (results.length === 0) return;
 
   const fmt = (m) => `${m.toFixed(2)}m`;
@@ -731,17 +766,11 @@ async function notifyBuildersOfDimensionChangeBatch(db, candidates) {
 
   const templateIds = changed.map(({ template }) => template.templateId);
   const placeholders = templateIds.map(() => '?').join(', ');
-  // #920's own grouping reasoning applies per template here too — grouped
-  // by (template_id, builder_id) so a builder with several placed copies
-  // of the same resized template still gets one accurate count, not a
-  // hardcoded singular.
-  const { results } = await db.prepare(`
-    SELECT pi.template_id AS templateId, l.owner_builder_id AS builderId, COUNT(*) AS instanceCount
-    FROM placed_instances pi
-    JOIN landlets l ON l.landlet_id = pi.landlet_id
-    WHERE pi.template_id IN (${placeholders}) AND l.owner_builder_id IS NOT NULL
-    GROUP BY pi.template_id, l.owner_builder_id
-  `).bind(...templateIds).all();
+  // #920's own grouping reasoning applies per template here too -- one row
+  // per (template, builder), so a builder with several placed copies of the
+  // same resized template still gets one accurate count, not a hardcoded
+  // singular. #797: includes a published (active) version's copies too.
+  const results = await findBuildersWithPlacedTemplates(db, templateIds);
   if (results.length === 0) return;
 
   const changedById = new Map(changed.map((c) => [c.template.templateId, c]));
