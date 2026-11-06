@@ -19,8 +19,10 @@ function createGreenbeltLandlet(landletId) {
   return createGreenbeltLandletAs(adminSession, landletId);
 }
 
+// #3147: avatar_presence is keyed on the account; tests still hold builder ids.
 async function presenceRow(builderId) {
-  return env.DB.prepare('SELECT * FROM avatar_presence WHERE builder_id = ?').bind(builderId).first();
+  return env.DB.prepare('SELECT * FROM avatar_presence WHERE user_id = (SELECT user_id FROM builders WHERE builder_id = ?)')
+    .bind(builderId).first();
 }
 
 describe('POST /api/presence', () => {
@@ -62,14 +64,15 @@ describe('POST /api/presence', () => {
     // Exactly one row for this builder — the second report replaced the
     // first rather than adding a second one.
     const { results } = await env.DB.prepare(
-      'SELECT * FROM avatar_presence WHERE builder_id = ?',
+      'SELECT * FROM avatar_presence WHERE user_id = (SELECT user_id FROM builders WHERE builder_id = ?)',
     ).bind(builder.builderId).all();
     expect(results.length).toBe(1);
     expect(results[0].x).toBe(10);
   });
 
-  // #2492: not found here means a concurrent self-delete (migrations/0100's
-  // own ON DELETE CASCADE on builder_id) landed in the single await gap
+  // #2492: not found here means a concurrent account deletion (cascadeDeleteAccount
+  // removes the row explicitly since #3147; it used to be migrations/0100's own
+  // ON DELETE CASCADE on builder_id) landed in the single await gap
   // between the upsert and this handler's own re-SELECT -- same race shape
   // #2334/#2354/#2391/#2428/#2429 already cover elsewhere, previously an
   // uncaught null-dereference crash instead of a clean 404. Same
@@ -82,9 +85,10 @@ describe('POST /api/presence', () => {
     const originalPrepare = env.DB.prepare.bind(env.DB);
     let armed = true;
     env.DB.prepare = (sql) => {
-      if (armed && sql === 'SELECT * FROM avatar_presence WHERE builder_id = ?') {
+      if (armed && sql === 'SELECT * FROM avatar_presence WHERE user_id = ?') {
         armed = false;
-        originalPrepare('DELETE FROM builders WHERE builder_id = ?').bind(builder.builderId).run();
+        originalPrepare('DELETE FROM avatar_presence WHERE user_id = (SELECT user_id FROM builders WHERE builder_id = ?)')
+          .bind(builder.builderId).run();
       }
       return originalPrepare(sql);
     };
@@ -166,7 +170,7 @@ describe('POST /api/presence', () => {
   // needlessly slow for the same assertion.
   it('rate-limits repeated position reports from the same builder', async () => {
     const builder = await signupBuilder('presence-rate-limit');
-    const bucketKey = `presence-report:${builder.builderId}`;
+    const bucketKey = `presence-report:${(await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(builder.builderId).first()).user_id}`;
     const now = Date.now();
     await env.DB.batch(Array.from({ length: 599 }, () => env.DB.prepare(
       'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',

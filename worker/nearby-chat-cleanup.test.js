@@ -11,11 +11,15 @@ beforeAll(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
 });
 
+async function userIdOf(builder) {
+  return (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(builder.builderId).first()).user_id;
+}
+
 async function seedMessage(builderId, ageMs) {
   const createdAt = new Date(Date.now() - ageMs).toISOString();
   await env.DB.prepare(`
-    INSERT INTO nearby_chat_messages (message_id, builder_id, landlet_id, text, created_at)
-    VALUES (?, ?, 'landlet-1', 'hi', ?)
+    INSERT INTO nearby_chat_messages (message_id, user_id, landlet_id, text, created_at)
+    VALUES (?, (SELECT user_id FROM builders WHERE builder_id = ?), 'landlet-1', 'hi', ?)
   `).bind(`nearby-chat-cleanup-${builderId}`, builderId, createdAt).run();
 }
 
@@ -28,10 +32,10 @@ describe('pruneStaleNearbyChatMessages (#2779)', () => {
 
     await pruneStaleNearbyChatMessages(env.DB);
 
-    const remaining = await env.DB.prepare('SELECT builder_id FROM nearby_chat_messages').all();
-    const remainingIds = remaining.results.map((row) => row.builder_id);
-    expect(remainingIds).not.toContain(stale.builderId);
-    expect(remainingIds).toContain(fresh.builderId);
+    const remaining = await env.DB.prepare('SELECT user_id FROM nearby_chat_messages').all();
+    const remainingIds = remaining.results.map((row) => row.user_id);
+    expect(remainingIds).not.toContain(await userIdOf(stale));
+    expect(remainingIds).toContain(await userIdOf(fresh));
   });
 
   it('is a no-op when nearby_chat_messages has no stale rows', async () => {
@@ -40,8 +44,8 @@ describe('pruneStaleNearbyChatMessages (#2779)', () => {
 
     await pruneStaleNearbyChatMessages(env.DB);
 
-    const row = await env.DB.prepare('SELECT builder_id FROM nearby_chat_messages WHERE builder_id = ?')
-      .bind(fresh.builderId).first();
+    const row = await env.DB.prepare('SELECT user_id FROM nearby_chat_messages WHERE user_id = ?')
+      .bind(await userIdOf(fresh)).first();
     expect(row).toBeTruthy();
   });
 });

@@ -116,14 +116,14 @@ describe('Voice conduct reports (#2819)', () => {
       const alice = await signupIdVerifiedBuilder('voice-report-evidence-yes-alice');
       const bob = await signupIdVerifiedBuilder('voice-report-evidence-yes-bob');
       await env.DB.prepare(`
-        INSERT INTO voice_signaling_messages (message_id, from_builder_id, to_builder_id, landlet_id, kind, payload)
-        VALUES (?, ?, ?, 'landlet-evidence', 'offer', '{}')
+        INSERT INTO voice_signaling_messages (message_id, from_user_id, to_user_id, landlet_id, kind, payload)
+        VALUES (?, (SELECT user_id FROM builders WHERE builder_id = ?), (SELECT user_id FROM builders WHERE builder_id = ?), 'landlet-evidence', 'offer', '{}')
       `).bind(`voice-signal-${crypto.randomUUID()}`, bob.builderId, alice.builderId).run();
       const now = new Date().toISOString();
       for (const builder of [alice, bob]) {
         await env.DB.prepare(`
-          INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
-          VALUES (?, 'landlet-evidence', 0, 0, 0, 0, 0, ?)
+          INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
+          VALUES ((SELECT user_id FROM builders WHERE builder_id = ?), 'landlet-evidence', 0, 0, 0, 0, 0, ?)
         `).bind(builder.builderId, now).run();
       }
       const created = await api('/voice/report', alice.session({
@@ -141,8 +141,8 @@ describe('Voice conduct reports (#2819)', () => {
       const longAgo = new Date(Date.now() - 60_000).toISOString();
       for (const builder of [alice, bob]) {
         await env.DB.prepare(`
-          INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
-          VALUES (?, 'landlet-evidence-stale', 0, 0, 0, 0, 0, ?)
+          INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
+          VALUES ((SELECT user_id FROM builders WHERE builder_id = ?), 'landlet-evidence-stale', 0, 0, 0, 0, 0, ?)
         `).bind(builder.builderId, longAgo).run();
       }
       const created = await api('/voice/report', alice.session({

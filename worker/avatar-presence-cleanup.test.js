@@ -13,11 +13,15 @@ beforeAll(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
 });
 
+async function userIdOf(builder) {
+  return (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(builder.builderId).first()).user_id;
+}
+
 async function seedPresence(builderId, ageMs) {
   const updatedAt = new Date(Date.now() - ageMs).toISOString();
   await env.DB.prepare(`
-    INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, updated_at)
-    VALUES (?, 'landlet-1', 1, 2, 3, 0, ?)
+    INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, updated_at)
+    VALUES ((SELECT user_id FROM builders WHERE builder_id = ?), 'landlet-1', 1, 2, 3, 0, ?)
   `).bind(builderId, updatedAt).run();
 }
 
@@ -30,10 +34,10 @@ describe('pruneStaleAvatarPresence (#1101)', () => {
 
     await pruneStaleAvatarPresence(env.DB);
 
-    const remaining = await env.DB.prepare('SELECT builder_id FROM avatar_presence').all();
-    const remainingIds = remaining.results.map((row) => row.builder_id);
-    expect(remainingIds).not.toContain(stale.builderId);
-    expect(remainingIds).toContain(fresh.builderId);
+    const remaining = await env.DB.prepare('SELECT user_id FROM avatar_presence').all();
+    const remainingIds = remaining.results.map((row) => row.user_id);
+    expect(remainingIds).not.toContain(await userIdOf(stale));
+    expect(remainingIds).toContain(await userIdOf(fresh));
   });
 
   it('is a no-op when avatar_presence has no stale rows', async () => {
@@ -42,8 +46,8 @@ describe('pruneStaleAvatarPresence (#1101)', () => {
 
     await pruneStaleAvatarPresence(env.DB);
 
-    const row = await env.DB.prepare('SELECT builder_id FROM avatar_presence WHERE builder_id = ?')
-      .bind(fresh.builderId).first();
+    const row = await env.DB.prepare('SELECT user_id FROM avatar_presence WHERE user_id = ?')
+      .bind(await userIdOf(fresh)).first();
     expect(row).toBeTruthy();
   });
 });

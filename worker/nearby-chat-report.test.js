@@ -108,13 +108,13 @@ describe('Nearby chat conduct reports (#2956)', () => {
     const now = new Date().toISOString();
     for (const builder of [alice, bob]) {
       await env.DB.prepare(`
-        INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
-        VALUES (?, 'landlet-nearby-evidence', 0, 0, 0, 0, 0, ?)
+        INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
+        VALUES ((SELECT user_id FROM builders WHERE builder_id = ?), 'landlet-nearby-evidence', 0, 0, 0, 0, 0, ?)
       `).bind(builder.builderId, now).run();
     }
     await env.DB.prepare(`
-      INSERT INTO nearby_chat_messages (message_id, builder_id, landlet_id, text)
-      VALUES (?, ?, 'landlet-nearby-evidence', 'hello there')
+      INSERT INTO nearby_chat_messages (message_id, user_id, landlet_id, text)
+      VALUES (?, (SELECT user_id FROM builders WHERE builder_id = ?), 'landlet-nearby-evidence', 'hello there')
     `).bind(`nearby-chat-${crypto.randomUUID()}`, bob.builderId).run();
     const created = await api('/nearby-chat/report', alice.session({
       method: 'POST', body: JSON.stringify({ reportedBuilderId: bob.builderId }),
