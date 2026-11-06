@@ -64,9 +64,9 @@ async function seedOrb(landletId, { collected = false, spawnedAgeMs = 0, x = 0, 
 async function seedPresence(builderId, { x = 0, y = 0, ageMs = 0 } = {}) {
   const updatedAt = new Date(Date.now() - ageMs).toISOString();
   await env.DB.prepare(`
-    INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, updated_at)
-    VALUES (?, NULL, ?, ?, 0, 0, ?)
-    ON CONFLICT (builder_id) DO UPDATE SET
+    INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, updated_at)
+    VALUES ((SELECT user_id FROM builders WHERE builder_id = ?), NULL, ?, ?, 0, 0, ?)
+    ON CONFLICT (user_id) DO UPDATE SET
       x = excluded.x, y = excluded.y, updated_at = excluded.updated_at
   `).bind(builderId, x, y, updatedAt).run();
 }

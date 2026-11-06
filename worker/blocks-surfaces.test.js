@@ -19,9 +19,9 @@ async function signupIdVerifiedBuilder(label) {
 
 async function setPresence(builderId, landletId) {
   await env.DB.prepare(`
-    INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
-    VALUES (?, ?, 0, 0, 0, 0, 0, ?)
-    ON CONFLICT (builder_id) DO UPDATE SET landlet_id = excluded.landlet_id, updated_at = excluded.updated_at
+    INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
+    VALUES ((SELECT user_id FROM builders WHERE builder_id = ?), ?, 0, 0, 0, 0, 0, ?)
+    ON CONFLICT (user_id) DO UPDATE SET landlet_id = excluded.landlet_id, updated_at = excluded.updated_at
   `).bind(builderId, landletId, new Date().toISOString()).run();
 }
 
@@ -130,14 +130,20 @@ describe('Blocks apply on every social surface (#3143)', () => {
     expect((await join(alice, dave)).response.status).toBeLessThan(300);
 
     await block(alice, bob);
-    const members = await env.DB.prepare('SELECT owner_builder_id, member_builder_id FROM friend_voice_channel_members WHERE member_builder_id = ? OR owner_builder_id = ?')
-      .bind(bob.builderId, bob.builderId).all();
+    const members = await env.DB.prepare(`
+      SELECT owner_user_id, member_user_id FROM friend_voice_channel_members
+      WHERE member_user_id = (SELECT user_id FROM builders WHERE builder_id = ?1)
+         OR owner_user_id = (SELECT user_id FROM builders WHERE builder_id = ?1)
+    `).bind(bob.builderId).all();
     expect(members.results).toEqual([]);
 
     // Blocking the owner also removes the blocker from that owner's channel.
     await block(alice, dave);
-    const left = await env.DB.prepare('SELECT 1 FROM friend_voice_channel_members WHERE owner_builder_id = ? AND member_builder_id = ?')
-      .bind(dave.builderId, alice.builderId).first();
+    const left = await env.DB.prepare(`
+      SELECT 1 FROM friend_voice_channel_members
+      WHERE owner_user_id = (SELECT user_id FROM builders WHERE builder_id = ?)
+        AND member_user_id = (SELECT user_id FROM builders WHERE builder_id = ?)
+    `).bind(dave.builderId, alice.builderId).first();
     expect(left).toBeNull();
   });
 

@@ -192,8 +192,9 @@ export async function handleCreditOrbs(request, db, route, url) {
     // report landlet_id: null here. World-position proximity (below) is
     // the actual "walked up to it" signal, independent of land ownership.
     const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
-    const presence = await db.prepare('SELECT x, y, updated_at FROM avatar_presence WHERE builder_id = ?')
-      .bind(sessionBuilder.builder_id).first();
+    // #3147: avatar_presence is keyed on the account.
+    const presence = await db.prepare('SELECT x, y, updated_at FROM avatar_presence WHERE user_id = ?')
+      .bind(sessionBuilder.user_id).first();
     const nearby = presence
       && presence.updated_at >= staleBefore
       && Math.hypot(presence.x - orb.world_x, presence.y - orb.world_y) <= CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M;

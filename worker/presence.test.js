@@ -18,13 +18,18 @@ beforeAll(async () => {
   await applyD1Migrations(env.DB, env.TEST_MIGRATIONS);
 });
 
+// #3147: rate-limit buckets and stored rows are keyed on the account.
+async function userIdOf(builder) {
+  return (await env.DB.prepare('SELECT user_id FROM builders WHERE builder_id = ?').bind(builder.builderId).first()).user_id;
+}
+
 async function setPresence(builderId, {
   landletId, x = 0, y = 0, z = 0, heading = 0, flying = false, updatedAt = new Date().toISOString(),
 } = {}) {
   await env.DB.prepare(`
-    INSERT INTO avatar_presence (builder_id, landlet_id, x, y, z, heading, flying, updated_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT (builder_id) DO UPDATE SET
+    INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
+    VALUES ((SELECT user_id FROM builders WHERE builder_id = ?), ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (user_id) DO UPDATE SET
       landlet_id = excluded.landlet_id, x = excluded.x, y = excluded.y, z = excluded.z,
       heading = excluded.heading, flying = excluded.flying, updated_at = excluded.updated_at
   `).bind(builderId, landletId, x, y, z, heading, flying ? 1 : 0, updatedAt).run();
@@ -70,6 +75,7 @@ describe('Avatar presence (#1095)', () => {
       const got = await api('/presence', viewer.session());
       expect(got.response.status).toBe(200);
       expect(got.body.avatars).toEqual([{
+        userId: await userIdOf(other),
         builderId: other.builderId,
         landletId: 'presence-landlet-1',
         x: 4,
@@ -145,8 +151,14 @@ describe('Avatar presence (#1095)', () => {
       // a real write would have, skip the expensive path" shortcut this
       // file's own setPresence already takes for avatar_presence itself.
       const otherBuilderIds = Array.from({ length: 205 }, () => `builder-presence-cap-${crypto.randomUUID()}`);
+      // #3147: presence is keyed on the account, so each fabricated builder
+      // needs a users row behind it (a builder with no account has no presence).
       for (const builderId of otherBuilderIds) {
-        await env.DB.prepare('INSERT INTO builders (builder_id, label) VALUES (?, ?)').bind(builderId, builderId).run();
+        const fabricatedUserId = `user-${builderId}`;
+        await env.DB.prepare('INSERT INTO users (user_id, email, username, password_hash) VALUES (?, ?, ?, ?)')
+          .bind(fabricatedUserId, `${builderId}@example.test`, builderId, 'x').run();
+        await env.DB.prepare('INSERT INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
+          .bind(builderId, builderId, fabricatedUserId).run();
       }
       const base = Date.now();
       for (const [i, builderId] of otherBuilderIds.entries()) {
@@ -174,7 +186,7 @@ describe('Avatar presence (#1095)', () => {
     // exhaust the window would be needlessly slow).
     it('rate-limits repeated nearby-avatar polls from the same builder', async () => {
       const viewer = await signupBuilder('presence-nearby-rate-limit');
-      const bucketKey = `presence-nearby:${viewer.builderId}`;
+      const bucketKey = `presence-nearby:${await userIdOf(viewer)}`;
       const now = Date.now();
       await env.DB.batch(Array.from({ length: 599 }, () => env.DB.prepare(
         'INSERT INTO rate_limit_events (bucket_key, created_at) VALUES (?, ?)',
@@ -215,6 +227,7 @@ describe('Avatar presence (#1095)', () => {
       const got = await api('/presence/me', builder.session());
       expect(got.response.status).toBe(200);
       expect(got.body.presence).toEqual({
+        userId: await userIdOf(builder),
         builderId: builder.builderId,
         landletId: 'presence-me-landlet',
         x: 7,
