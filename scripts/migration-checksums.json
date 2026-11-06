@@ -192,5 +192,6 @@
   "0192_friendships_user_id.sql": "3076eb42a8f4b9ba83389a58718d1fccaa2de053d9a9b0e648d09106aa9399ae",
   "0193_stripe_requirements_eventually_due.sql": "b64fa5cfb68e031bc1c900e081a457668bc89f4cc907db2dfe825fb5bb5653e2",
   "0194_purchases_buyer_user_id.sql": "09462f8beed0d54ad5cabf5a1c80d9dd290901e777d75914e87e5531fc2e9e3d",
+  "0195_saved_layout_sign_calendar_content.sql": "3d7c7fd824e3285db20d0fea11fabe33d81d622b5f8e737094334c7c8b4f4fbf",
   "0200_auction_resolution_resumable.sql": "2f6fd6fdcece1aaf8072777ad08d882da6f735f914ae718d12e248462ea62866"
 }

@@ -4737,7 +4737,14 @@ referenced catalog template and landlet is validated with bounded set
 queries before insertion. `POST` is create-only and returns `201`; a
 duplicate stored ID returns `409`. `PUT` replaces stored IDs, creates
 missing IDs, and returns `200`, making bounded draft synchronization
-idempotent. **`updateOnly` (#3101).** A `PUT` body may also carry
+idempotent. **`restoreContentFrom` (#1756).** A `POST` item may carry
+`"restoreContentFrom": { "savedLayoutId", "sourceInstanceId" }` (what a
+saved-layout paste sends, see `GET /api/saved-layouts/:id`): once the
+instance is created, the sign posts / calendar events snapshotted for that
+saved instance are copied onto it. Each copy re-checks live that the saved
+layout belongs to the caller, that the new instance carries the matching
+community flag, and that it has no content yet; otherwise it is silently a
+no-op (the instance itself is created either way). **`updateOnly` (#3101).** A `PUT` body may also carry
 `"updateOnly": true` (only meaningful on `PUT`): any `instanceId` with no
 stored row is then skipped instead of created, and the response adds
 `missingInstanceIds` listing them (every other item is written as usual; if
@@ -7827,6 +7834,16 @@ own snapshot column shape (`template_id`, `x_m`/`y_m`/`z_m`, rotation,
 meant to outlive its source landlet, since the whole point (per the
 owner's own framing) is later reusing it on a *different* landlet.
 
+**#1756** (*No silent loss*): `sign_posts` and `calendar_events` cascade-
+delete with their instance, so a swept community sign's posts and a swept
+community calendar's events are copied into `saved_layout_sign_posts` /
+`saved_layout_calendar_events` (migration 0195; author, text, created-at,
+and for events the schedule and triggered state) in the same batch, before
+the instances go. The response is `{ deleted, sweptInstanceIds,
+savedSignPostCount, savedCalendarEventCount }` so the client can tell the
+builder what was kept. Pasting restores them: see `restoreContentFrom`
+under `POST /api/instances/batch`.
+
 ### `GET /api/builders/me/saved-layouts`
 
 #634 (sub-issue of #631): lists the session-authenticated builder's own
@@ -7894,6 +7911,12 @@ parented to (`401` with no session) — same ownership check as the
   }
 }
 ```
+
+A community sign or calendar instance also carries
+`restoreContentFrom: { savedLayoutId, sourceInstanceId }` (#1756). The
+paste spreads each saved instance straight into its `POST
+/api/instances/batch` body, so that field is what tells the server to copy
+the snapshotted posts/events back onto the newly created instance.
 
 ### `DELETE /api/saved-layouts/:savedLayoutId`
 

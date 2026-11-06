@@ -639,6 +639,14 @@ export async function handleLandletLevels(request, db, route) {
     const freshOutOfRange = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)')
       .bind(landletId, freshMinZ, freshMaxZ).all();
     const statements = [];
+    // #1756 (*No silent loss*): sign_posts/calendar_events cascade-delete with
+    // their instance, so the authored text on every swept community sign or
+    // calendar is copied into the saved layout first (in this same batch,
+    // before the DELETE at its end) and put back when the layout is pasted.
+    // The statement indexes let the counts come back, so the builder is told
+    // what was kept.
+    const signPostStatementIndexes = [];
+    const calendarEventStatementIndexes = [];
     if (freshOutOfRange.results.length > 0) {
       const savedLayoutId = `saved-layout-${crypto.randomUUID()}`;
       statements.push(db.prepare(`
@@ -661,17 +669,46 @@ export async function handleLandletLevels(request, db, route) {
           instance.crop_json, instance.scale, instance.is_community_sign, instance.is_community_calendar,
         ));
       }
+      for (const instance of freshOutOfRange.results) {
+        if (instance.is_community_sign) {
+          signPostStatementIndexes.push(statements.length);
+          statements.push(db.prepare(`
+            INSERT INTO saved_layout_sign_posts
+              (saved_layout_id, source_instance_id, author_label, text, created_at, user_id)
+            SELECT ?, instance_id, author_label, text, created_at, user_id
+            FROM sign_posts WHERE instance_id = ?
+          `).bind(savedLayoutId, instance.instance_id));
+        }
+        if (instance.is_community_calendar) {
+          calendarEventStatementIndexes.push(statements.length);
+          statements.push(db.prepare(`
+            INSERT INTO saved_layout_calendar_events
+              (saved_layout_id, source_instance_id, author_label, text, created_at, scheduled_at, triggered_at, user_id)
+            SELECT ?, instance_id, author_label, text, created_at, scheduled_at, triggered_at, user_id
+            FROM calendar_events WHERE instance_id = ?
+          `).bind(savedLayoutId, instance.instance_id));
+        }
+      }
     }
     statements.push(
       db.prepare('DELETE FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)').bind(landletId, freshMinZ, freshMaxZ),
     );
-    await db.batch(statements);
+    const batchResults = await db.batch(statements);
+    const sumChanges = (indexes) => indexes.reduce((total, i) => total + (batchResults[i].meta.changes ?? 0), 0);
+    const savedSignPostCount = sumChanges(signPostStatementIndexes);
+    const savedCalendarEventCount = sumChanges(calendarEventStatementIndexes);
     await recomputeLandCap(db, landlet.owner_builder_id);
     // #901: the caller's own local scene still has meshes for whatever just
     // got swept above -- without reporting which instance ids those were,
     // nothing tells the frontend to prune them, leaving stale/unselectable
     // "ghost" meshes that can later block an unrelated batch sync.
-    return json({ deleted: true, sweptInstanceIds: freshOutOfRange.results.map((instance) => instance.instance_id) });
+    return json({
+      deleted: true,
+      sweptInstanceIds: freshOutOfRange.results.map((instance) => instance.instance_id),
+      // #1756: posts/events kept in the saved layout, so the UI can say so.
+      savedSignPostCount,
+      savedCalendarEventCount,
+    });
   }
 
   return json({ error: 'Not found' }, 404);
