@@ -3381,11 +3381,12 @@ real 4-day production outage where `wrangler d1 migrations apply --remote`
 silently failed partway through a batch and nothing noticed until an owner
 bug report). It compares a live `SELECT name FROM d1_migrations` against
 `worker/migrations-manifest.json` — a list of `migrations/*.sql` filenames
-generated at build/deploy time (`npm run generate:migrations-manifest`,
-wired into `deploy`/`deploy:ci`) since `scheduled()` has no filesystem
-access to read `migrations/` directly. `scripts/check-migrations-manifest-
-fresh.mjs` runs as a `pretest` check so the checked-in manifest can't
-silently drift from `migrations/` itself. On finding production missing any
+generated wherever it is consumed (`wrangler dev`/`deploy` via the
+`build.command` in `wrangler.jsonc`, vitest via `vitest.config.js`, and
+`pretest`; `npm run generate:migrations-manifest` by hand) since
+`scheduled()` has no filesystem access to read `migrations/` directly. It is
+gitignored (#3210): committing it made every two migration-adding PRs
+conflict on the same last line. On finding production missing any
 migration the manifest expects, it logs a loud `console.error` (always
 visible in `wrangler tail`/the dashboard) and, if the optional `OPS_ALERT_EMAIL`
 Worker secret is configured, also emails that address via the existing

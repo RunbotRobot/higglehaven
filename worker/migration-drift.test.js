@@ -52,10 +52,9 @@ describe('checkMigrationDrift (#561)', () => {
   it('reports no drift when d1_migrations matches the real bundled manifest', async () => {
     // The test-pool D1 has every migrations/*.sql file applied via
     // applyD1Migrations above, and worker/migrations-manifest.json (what
-    // checkMigrationDrift actually imports) is kept in sync with that same
-    // directory by the pretest freshness check (scripts/check-migrations-
-    // manifest-fresh.mjs) — so this is the real, currently-true happy path,
-    // not a hand-built fixture.
+    // checkMigrationDrift actually imports) is regenerated from that same
+    // directory at vitest config load (#3210) — so this is the real,
+    // currently-true happy path, not a hand-built fixture.
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     await checkMigrationDrift(env);
     expect(errorSpy).not.toHaveBeenCalled();
