@@ -672,6 +672,8 @@ function placementRelevantMetadataChanged(oldMetadata, newMetadata) {
   return !!oldMetadata?.flooring !== !!newMetadata?.flooring;
 }
 
+// (migrations/0007's header still calls version_instances "immutable"; that
+// file is checksum-pinned, so read it as "layout fixed, product live".)
 // #797 (owner decision, 2026-10-28): a landlet's placed products link live
 // to the seller's template, on purpose -- the builder chooses where a
 // product sits and how it's rotated, and the seller stays free to change
