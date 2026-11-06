@@ -3395,6 +3395,19 @@ not a replacement for `scripts/check-migration-drift.mjs` (#492), which
 still catches the same drift immediately at deploy time; this catches it
 within the next 10-minute cron tick even when nobody deploys for a while.
 
+**#805 (phase 1): applied migrations are content-pinned.** Everything above
+compares filenames only, so editing an already-applied migration after the
+fact left every check green. `scripts/migration-checksums.json` pins each
+`migrations/*.sql` file's SHA-256, and `scripts/check-migration-checksums.mjs`
+runs as a `pretest` check: it fails on an edited pinned file (put the change
+in a new migration), on a migration with no pin yet (`npm run
+generate:migration-checksums` adds missing pins and refuses to touch an
+existing one), and on a pin whose file is gone. The lock is repo-side, not a
+D1 table: deploys run from `main`, so a file that still matches the pin from
+the PR that added it is what was applied. Phase 2 (diffing the live D1
+schema against a fresh apply, to catch an out-of-band `ALTER TABLE`) is a
+separate follow-up.
+
 The same cron also runs `checkWebhookSecrets` (#1793): when a provider is
 configured (Stripe: `STRIPE_SECRET_KEY`; Didit: `DIDIT_API_KEY` and
 `DIDIT_WORKFLOW_ID`; Tripo: `TRIPO_API_KEY`) but its webhook secret
@@ -3406,6 +3419,27 @@ provider (`ops-webhook-secret-<provider>`, `waitingOn: "owner"`, no email).
 The card resolves itself once the secret is set, and is not re-opened if the
 owner marks it done. Environments with no provider keys (dev, tests) raise
 nothing.
+
+The once-daily cron (`0 3 * * *`, the same trigger as the D1 backup) also runs
+`checkSchemaDrift` (#3203, Phase 2 of #805). `checkMigrationDrift` only knows
+which migration *files* were applied; it cannot see a manual hotfix
+`ALTER TABLE`/`CREATE INDEX` run against production outside the migrations
+system. This compares production's live schema against
+`worker/schema-snapshot.json`, a normalized snapshot of what a fresh apply of
+`migrations/` produces (`npm run generate:schema-snapshot`, which applies the
+migrations to a scratch in-memory SQLite database via `node:sqlite`; wired into
+`deploy`/`deploy:ci`, and kept honest by `scripts/check-schema-snapshot-fresh.mjs`
+as a `pretest` check — so **any PR that adds or changes a migration must run
+`npm run generate:schema-snapshot` and commit the result**). Tables are compared
+structurally (a set of columns: name, declared type, `NOT NULL`, default,
+primary-key position; column order is not significant) and indexes, triggers
+and views by name plus whitespace-collapsed SQL; `sqlite_*`, `_cf_*` and `d1_*`
+objects are ignored. On a difference it logs a `console.error` every run, raises
+one Control Room card (`ops-schema-drift`, `waitingOn: "owner"`) that resolves
+itself once production matches again, and — only when the card is first raised or
+re-opened, and only if `OPS_ALERT_EMAIL` is configured — emails that address.
+`worker/schema-drift.test.js` asserts the snapshot built under `node:sqlite` shows
+no drift against a migrated D1, which is the guard against false positives.
 
 ### World object
 
@@ -4706,6 +4740,20 @@ deleted; a deliberate recreate (Undo of a delete) uses `POST`. Without the
 flag `PUT` behaves exactly as described above. An invalid reference, or the caller never owning a touched
 landlet at all, returns `400`/`403` and leaves the entire batch unchanged.
 
+**`expectedUpdatedAt` (#1062, server half).** On `PUT`, each item may carry
+`"expectedUpdatedAt"`, the `updatedAt` the caller last saw for that instance.
+An instance whose stored `updatedAt` differs is **not** overwritten: it is
+skipped, and the response adds `staleInstanceIds` plus `staleInstances` (each
+one's current stored state) so the caller can reconcile instead of clobbering
+a newer edit (another tab, another request). The check is repeated inside the
+write itself, so a write landing in between is reported through
+`rejectedInstanceIds` as described below. An id with no stored row is a create
+and has nothing to be stale against; the field is ignored on `POST`. Without
+the field `PUT` is last-write-wins exactly as before, and the response gains
+no new fields (`staleInstanceIds`/`staleInstances` appear only when at least
+one item sent the field). A non-string or empty value is `400`. Combines with
+`updateOnly`.
+
 **Partial rejection (#1772).** The batch spans an arbitrary set of distinct
 landlets, each independently re-guarded at write time against the
 possibility that its ownership changed in the moment between the up-front
@@ -4775,6 +4823,13 @@ Requires a session logged in as the owner of the instance's current
 landlet, and (if the update moves it) its new target landlet too (`403`
 otherwise). Updates a placed instance. The current implementation merges
 request fields with the existing instance before validation.
+
+**`expectedUpdatedAt` (#1062, server half).** The body may carry
+`"expectedUpdatedAt"`, the `updatedAt` the caller last saw. If the stored
+`updatedAt` differs the write is refused with `409`, nothing is changed, and
+the body carries `staleInstanceId` and `instance` (the current stored state)
+next to `error`, so the caller can reconcile. Absent the field the write is
+last-write-wins as before. A non-string or empty value is `400`.
 
 ### `DELETE /api/instances/:instanceId`
 
@@ -5010,7 +5065,7 @@ Owner decision (2026-11-05, AGENTS.md): anything about a person as a person keys
 5. Account deletion removes the rows for the deleted `user_id` explicitly.
 6. Tests: the feature survives a builder-profile reset on either side; an unrecoverable (pre-auth) row neither breaks a list nor disappears; counts and ordering are unchanged.
 
-**Ephemeral tables (#3147, 4 of 6).** `avatar_presence`, `nearby_chat_messages`, `voice_signaling_messages` and `friend_voice_channel_members` hold rows that live seconds to minutes (the prune crons in `worker/index.js`), so they follow this pattern with two differences: the migration (`0194_social_ephemeral_user_id.sql`) rebuilds each table without the retired builder-id columns instead of leaving them behind for 6/6 (every reader is switched, and there is no history in them worth keeping), and a row whose builder has no account is not carried over (such a builder cannot have written one through a session, and it would be pruned within minutes anyway). Rate-limit buckets for these endpoints are keyed on the account. A person whose builder profile was just reset has no builder id to be shown under, so their presence, chat lines, signals and channel membership are hidden from other people's reads until they have a profile again (the rows themselves are kept; a reset used to delete them through the foreign-key cascade).
+**Ephemeral tables (#3147, 4 of 6).** `avatar_presence`, `nearby_chat_messages`, `voice_signaling_messages` and `friend_voice_channel_members` hold rows that live seconds to minutes (the prune crons in `worker/index.js`), so they follow this pattern with two differences: the migration (`0201_social_ephemeral_user_id.sql`) rebuilds each table without the retired builder-id columns instead of leaving them behind for 6/6 (every reader is switched, and there is no history in them worth keeping), and a row whose builder has no account is not carried over (such a builder cannot have written one through a session, and it would be pruned within minutes anyway). Rate-limit buckets for these endpoints are keyed on the account. A person whose builder profile was just reset has no builder id to be shown under, so their presence, chat lines, signals and channel membership are hidden from other people's reads until they have a profile again (the rows themselves are kept; a reset used to delete them through the foreign-key cascade).
 
 ## Friend requests
 

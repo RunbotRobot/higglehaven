@@ -1,6 +1,6 @@
 // #3147 (4/6 of #3141): presence, nearby chat, voice signaling and friend voice
 // channel membership are stored against the account (users.user_id), not the
-// resettable builder profile (migrations/0194). The wire still names people by
+// resettable builder profile (migrations/0201). The wire still names people by
 // their CURRENT builder id and adds the stable user ids.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, describe, expect, it } from 'vitest';

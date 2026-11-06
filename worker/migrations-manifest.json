@@ -191,5 +191,6 @@
   "0191_direct_messages_user_id.sql",
   "0192_friendships_user_id.sql",
   "0193_stripe_requirements_eventually_due.sql",
-  "0194_social_ephemeral_user_id.sql"
+  "0200_auction_resolution_resumable.sql",
+  "0201_social_ephemeral_user_id.sql"
 ]
