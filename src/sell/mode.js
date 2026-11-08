@@ -1162,11 +1162,44 @@ function renderSellerList() {
     deleteBtn.className = 'seller-row-action-btn danger';
     deleteBtn.type = 'button';
     deleteBtn.textContent = 'Delete';
-    deleteBtn.addEventListener('click', async () => {
-      if (!confirm(`Delete "${template.name}"? This can't be undone.`)) return;
+    // #3249: an in-app two-step confirm instead of window.confirm(). A
+    // browser can suppress native dialogs (Chrome's "prevent this page from
+    // creating additional dialogs", some embedded/PWA contexts), and a
+    // suppressed confirm() returns false at once -- Delete then did nothing
+    // at all and said nothing (found on Android Chrome). Same inline
+    // Yes/Never mind shape as My Purchases' "Report a problem" (#3199).
+    const deleteConfirmBox = document.createElement('span');
+    deleteConfirmBox.className = 'seller-row-confirm';
+    deleteConfirmBox.hidden = true;
+    const deleteConfirmText = document.createElement('span');
+    deleteConfirmText.textContent = `Delete "${template.name}"? This can't be undone.`;
+    const deleteYesBtn = document.createElement('button');
+    deleteYesBtn.className = 'seller-row-action-btn danger seller-row-delete-confirm-btn';
+    deleteYesBtn.type = 'button';
+    deleteYesBtn.textContent = 'Yes, delete';
+    const deleteNoBtn = document.createElement('button');
+    deleteNoBtn.className = 'seller-row-action-btn seller-row-delete-cancel-btn';
+    deleteNoBtn.type = 'button';
+    deleteNoBtn.textContent = 'Never mind';
+    deleteConfirmBox.append(deleteConfirmText, deleteYesBtn, deleteNoBtn);
+    deleteNoBtn.addEventListener('click', () => {
+      deleteConfirmBox.hidden = true;
+      deleteBtn.hidden = false;
+      deleteBtn.focus();
+    });
+    deleteBtn.addEventListener('click', () => {
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
-      deleteBtn.disabled = true;
+      deleteBtn.hidden = true;
+      deleteConfirmBox.hidden = false;
+      deleteYesBtn.focus();
+    });
+    deleteYesBtn.addEventListener('click', async () => {
+      if (deleteYesBtn.disabled) return;
+      rowStatus.textContent = '';
+      rowStatus.classList.remove('error');
+      deleteYesBtn.disabled = true;
+      deleteNoBtn.disabled = true;
       try {
         await deleteCatalogTemplate(template.templateId);
         setActiveCatalog(activeCatalog.filter((t) => t.templateId !== template.templateId));
@@ -1193,10 +1226,11 @@ function renderSellerList() {
           rowStatus.textContent = err.message || 'Could not delete.';
         }
         rowStatus.classList.add('error');
-        deleteBtn.disabled = false;
+        deleteYesBtn.disabled = false;
+        deleteNoBtn.disabled = false;
       }
     });
-    actions.appendChild(deleteBtn);
+    actions.append(deleteBtn, deleteConfirmBox);
 
     // Ground/flooring (docs/SPEC.md §3, see isFlooringTemplate in this
     // file) — a single opt-in flag, not a numeric form like Extensibility

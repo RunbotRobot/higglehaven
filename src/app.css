@@ -2914,6 +2914,14 @@
       .seller-save-btn:disabled {
         opacity: 0.5;
       }
+      /* #3249: inline Delete confirm in Sell > Manage. */
+      .seller-row-confirm {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
+      }
       .seller-row-status {
         font-size: 11px;
         color: rgb(var(--ink-rgb) / 0.65);
