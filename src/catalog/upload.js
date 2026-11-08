@@ -30,7 +30,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from '../modelOptimizer.js';
-import { describeAvatarClips } from '../avatarClipNames.js';
+import { describeAvatarClips, describeNoAnimationsForAvatar } from '../avatarClipNames.js';
 import { unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from '../settings.js';
 import { ensureSellerIdentity } from '../account/identity.js';
 import {
@@ -73,6 +73,15 @@ const uploadStepFileEl = document.getElementById('upload-step-file');
 const uploadStepDimensionsEl = document.getElementById('upload-step-dimensions');
 const uploadDimensionsPreviewEl = document.getElementById('upload-dimensions-preview');
 const uploadAnimationsDetectedEl = document.getElementById('upload-animations-detected');
+const uploadNoAnimationsNoteEl = document.getElementById('upload-no-animations-note');
+// #2744: how many animation clips the model in the wizard carries (null until
+// known), so the "no animations" note below can react to the avatar checkbox.
+let uploadModelClipCount = null;
+function refreshNoAnimationsNote() {
+  const text = describeNoAnimationsForAvatar(uploadModelClipCount, uploadAvatarCategoryCheckbox.checked);
+  uploadNoAnimationsNoteEl.textContent = text ?? '';
+  uploadNoAnimationsNoteEl.hidden = text === null;
+}
 const uploadNameInput = document.getElementById('upload-name');
 const uploadPriceInput = document.getElementById('upload-price');
 const uploadDigitalGoodCheckbox = document.getElementById('upload-digital-good-checkbox');
@@ -87,9 +96,11 @@ const uploadAnimationCategoryCheckbox = document.getElementById('upload-animatio
 // whichever it happens to check first.
 uploadAvatarCategoryCheckbox.addEventListener('change', () => {
   if (uploadAvatarCategoryCheckbox.checked) uploadAnimationCategoryCheckbox.checked = false;
+  refreshNoAnimationsNote();
 });
 uploadAnimationCategoryCheckbox.addEventListener('change', () => {
   if (uploadAnimationCategoryCheckbox.checked) uploadAvatarCategoryCheckbox.checked = false;
+  refreshNoAnimationsNote(); // clearing the avatar box above fires no change event of its own
 });
 
 uploadDigitalGoodCheckbox.addEventListener('change', () => {
@@ -195,6 +206,8 @@ function formatBytes(bytes) {
 function disposeUploadDimensionPreview() {
   uploadDimensionsPreviewEl.innerHTML = '';
   uploadAnimationsDetectedEl.hidden = true;
+  uploadModelClipCount = null;
+  refreshNoAnimationsNote();
   if (!uploadDimensionPreview) return;
   uploadDimensionPreview.resizeObserver?.disconnect();
   uploadDimensionPreview.controls.dispose();
@@ -475,7 +488,10 @@ async function showUploadDimensionPreview(modelUrl, revealStep) {
   // clip names, rather than a seller silently discovering that gap only
   // once it's equipped in-world.
   loadModelAnimations(modelUrl).then((animations) => {
-    if (myFlowToken !== uploadFlowToken || animations.length === 0) return;
+    if (myFlowToken !== uploadFlowToken) return;
+    uploadModelClipCount = animations.length;
+    refreshNoAnimationsNote();
+    if (animations.length === 0) return;
     // #2744: the wording (and the names of the clips actually found) lives in
     // avatarClipNames.js so it is unit-tested without three.js.
     uploadAnimationsDetectedEl.textContent = describeAvatarClips(animations.map((clip) => clip.name));
