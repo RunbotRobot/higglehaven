@@ -39,6 +39,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
+import { confirmDestructive } from '../ui/confirmModal.js';
 import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
 import {
   activeCatalog, setActiveCatalog, sellerId, setSellerId, currentMode,
@@ -1160,75 +1161,54 @@ function renderSellerList() {
     deleteBtn.className = 'seller-row-action-btn danger';
     deleteBtn.type = 'button';
     deleteBtn.textContent = 'Delete';
-    // #3249: an in-app two-step confirm instead of window.confirm(). A
-    // browser can suppress native dialogs (Chrome's "prevent this page from
-    // creating additional dialogs", some embedded/PWA contexts), and a
-    // suppressed confirm() returns false at once -- Delete then did nothing
-    // at all and said nothing (found on Android Chrome). Same inline
-    // Yes/Never mind shape as My Purchases' "Report a problem" (#3199).
-    const deleteConfirmBox = document.createElement('span');
-    deleteConfirmBox.className = 'seller-row-confirm';
-    deleteConfirmBox.hidden = true;
-    const deleteConfirmText = document.createElement('span');
-    deleteConfirmText.textContent = `Delete "${template.name}"? This can't be undone.`;
-    const deleteYesBtn = document.createElement('button');
-    deleteYesBtn.className = 'seller-row-action-btn danger seller-row-delete-confirm-btn';
-    deleteYesBtn.type = 'button';
-    deleteYesBtn.textContent = 'Yes, delete';
-    const deleteNoBtn = document.createElement('button');
-    deleteNoBtn.className = 'seller-row-action-btn seller-row-delete-cancel-btn';
-    deleteNoBtn.type = 'button';
-    deleteNoBtn.textContent = 'Never mind';
-    deleteConfirmBox.append(deleteConfirmText, deleteYesBtn, deleteNoBtn);
-    deleteNoBtn.addEventListener('click', () => {
-      deleteConfirmBox.hidden = true;
-      deleteBtn.hidden = false;
-      deleteBtn.focus();
-    });
-    deleteBtn.addEventListener('click', () => {
+    // #3249/#3278: confirming a delete is its own in-app modal (never the
+    // browser's native confirm(), which a browser can suppress and which then
+    // silently did nothing on Android Chrome, and not an inline control the
+    // owner almost missed). The delete itself runs inside the modal, so a
+    // refusal (still placed somewhere, still in a saved layout) is shown
+    // right where the person just tapped instead of in a row-status line that
+    // can be off-screen on a phone.
+    deleteBtn.addEventListener('click', async () => {
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
-      deleteBtn.hidden = true;
-      deleteConfirmBox.hidden = false;
-      deleteYesBtn.focus();
+      const deleted = await confirmDestructive({
+        title: 'Delete this product?',
+        message: `Delete "${template.name}"? This can't be undone.`,
+        confirmLabel: 'Delete',
+        returnFocusEl: deleteBtn,
+        restoreModalEl: sellerModalEl,
+        restoreCloseFn: closeSellerModal,
+        onConfirm: async () => {
+          try {
+            await deleteCatalogTemplate(template.templateId);
+          } catch (err) {
+            // #729: a saved-layout or landlet-version-history block (see the
+            // worker's assertCatalogTemplatesDeletable) has nothing placed to
+            // remove -- "remove those instances first" would send the seller
+            // looking for a fix that doesn't exist, so those get their own
+            // wording distinct from the generic "still in use" FK message.
+            if (err.message?.includes('referenced by a saved layout')) {
+              throw new Error("Still saved in someone's layout library — it can't be deleted until that saved layout is removed or no longer references it.");
+            } else if (err.message?.includes("referenced by a landlet's version history")) {
+              throw new Error("Used in a lándlet's past published version — it can't be deleted while that version history exists.");
+            } else if (err.message?.includes('still in use')) {
+              throw new Error('Still placed somewhere — remove those instances first, or Duplicate to edit a copy instead.');
+            }
+            throw new Error(err.message || 'Could not delete.');
+          }
+        },
+      });
+      if (!deleted) return;
+      setActiveCatalog(activeCatalog.filter((t) => t.templateId !== template.templateId));
+      buildCatalogPickerButtons();
+      refreshSellerShowcase();
+      // #1342: same fix as Duplicate's own handler above -- renderActiveSellerView()
+      // instead of renderSellerList() directly, so a deleted product
+      // doesn't keep showing (and staying tappable) in List view if that
+      // was the active view when this await resolved.
+      renderActiveSellerView();
     });
-    deleteYesBtn.addEventListener('click', async () => {
-      if (deleteYesBtn.disabled) return;
-      rowStatus.textContent = '';
-      rowStatus.classList.remove('error');
-      deleteYesBtn.disabled = true;
-      deleteNoBtn.disabled = true;
-      try {
-        await deleteCatalogTemplate(template.templateId);
-        setActiveCatalog(activeCatalog.filter((t) => t.templateId !== template.templateId));
-        buildCatalogPickerButtons();
-        refreshSellerShowcase();
-        // #1342: same fix as Duplicate's own handler above -- renderActiveSellerView()
-        // instead of renderSellerList() directly, so a deleted product
-        // doesn't keep showing (and staying tappable) in List view if that
-        // was the active view when this await resolved.
-        renderActiveSellerView();
-      } catch (err) {
-        // #729: a saved-layout or landlet-version-history block (see the
-        // worker's assertCatalogTemplatesDeletable) has nothing placed to
-        // remove -- "remove those instances first" would send the seller
-        // looking for a fix that doesn't exist, so those get their own
-        // wording distinct from the generic "still in use" FK message.
-        if (err.message?.includes('referenced by a saved layout')) {
-          rowStatus.textContent = "Still saved in someone's layout library — it can't be deleted until that saved layout is removed or no longer references it.";
-        } else if (err.message?.includes("referenced by a landlet's version history")) {
-          rowStatus.textContent = "Used in a lándlet's past published version — it can't be deleted while that version history exists.";
-        } else if (err.message?.includes('still in use')) {
-          rowStatus.textContent = 'Still placed somewhere — remove those instances first, or Duplicate to edit a copy instead.';
-        } else {
-          rowStatus.textContent = err.message || 'Could not delete.';
-        }
-        rowStatus.classList.add('error');
-        deleteYesBtn.disabled = false;
-        deleteNoBtn.disabled = false;
-      }
-    });
-    actions.append(deleteBtn, deleteConfirmBox);
+    actions.append(deleteBtn);
 
     // Ground/flooring (docs/SPEC.md §3, see isFlooringTemplate in this
     // file) — a single opt-in flag, not a numeric form like Extensibility

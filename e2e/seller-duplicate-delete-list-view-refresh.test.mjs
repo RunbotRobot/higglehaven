@@ -58,13 +58,16 @@ await page.route('**/api/catalog/*', async (route) => {
 });
 
 await deleteRow.locator('.seller-row-action-btn.danger', { hasText: /^Delete$/ }).click();
-await deleteRow.locator('.seller-row-delete-confirm-btn').click(); // #3249: in-app confirm
+await page.click('#confirm-modal-confirm-btn'); // #3278: in-app confirm modal
 await page.waitForTimeout(300); // DELETE is now in flight, delayed by the route above
 
 // Switch to List view *while the delete is still in flight* -- renders List
 // view fresh, showing the still-undeleted product (server hasn't processed
-// the delete yet).
-await page.click('.seller-view-btn[data-view="list"]');
+// the delete yet). #3278: the delete now runs inside its confirm modal, whose
+// backdrop blocks a real tap on the view switcher, so a person can no longer
+// reach this window; the click is dispatched straight at the button to keep
+// exercising the handler's own renderActiveSellerView() contract regardless.
+await page.evaluate(() => document.querySelector('.seller-view-btn[data-view="list"]').click());
 await page.waitForTimeout(300);
 const cardPresentBeforeDeleteResolves = await page.locator('.seller-card').filter({ hasText: DELETE_PRODUCT_NAME }).isVisible();
 console.log('deleted product\'s card visible in List view before the delete resolves (should be true -- sanity check):', cardPresentBeforeDeleteResolves);

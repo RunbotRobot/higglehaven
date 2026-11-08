@@ -256,6 +256,23 @@
         </div>
       </div>
     </div>
+    <!-- #3278 (owner decision): a confirmation for a destructive action is its
+         own in-app modal that takes focus, names the thing, and offers a clear
+         destructive button and a cancel -- never the browser's native confirm()
+         and never an inline control elsewhere on the page. See
+         src/ui/confirmModal.js. -->
+    <div id="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title" tabindex="-1">
+      <div id="confirm-modal-content">
+        <button id="confirm-modal-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2 id="confirm-modal-title">Are you sure?</h2>
+        <p id="confirm-modal-message"></p>
+        <div id="confirm-modal-status" role="alert"></div>
+        <div id="confirm-modal-actions">
+          <button id="confirm-modal-cancel-btn" type="button">Never mind</button>
+          <button id="confirm-modal-confirm-btn" type="button">Delete</button>
+        </div>
+      </div>
+    </div>
     <!-- #2388: the themed modal a moderator/admin/seller now sees before any
          moderation delete of a sign post, calendar event, or product review
          -- the server requires this category on every such delete (see
