@@ -11037,8 +11037,21 @@ until when): every rate-limit `429` (this endpoint and every other
 "retryAfterSeconds" }` beside `error`. `retryAfterSeconds` (at least 1) is
 the time until the bucket's oldest in-window attempt ages out, i.e. when the
 next attempt is allowed. The orb notice in Shop mode builds its sentence
-from these (`src/rateLimitNotice.js`) instead of hard-coding the limit. Other
-user-visible rate-limit notices are tracked as follow-ups.
+from these (`src/rateLimitNotice.js`) instead of hard-coding the limit.
+
+**#3275**: every other place a player can hit a limit gets the same treatment
+in one spot: `apiError` (`src/api.js`) sets the message of any `429` that
+carries those numbers to "You've reached the limit for this (20 every 15
+minutes). Try again in about 7 minutes." (`rateLimitMessage`), so each caller
+that shows `err.message` reads right without its own sentence (the server's
+original text stays on `error.serverMessage`). Auth endpoints (signup,
+password-reset request, resend-verification) go through the same
+`checkRateLimit`; the numbers are fixed constants and the bucket is keyed on
+the caller's IP and the targeted email (signup, password-reset request) or on
+the caller's own user id (resend-verification) whether or not an account
+exists for that email, so showing them confirms nothing about an account and
+those flows were not special-cased. Login's own per-account lockout is a different mechanism and
+unchanged. A `429` without the numbers still shows the server's text.
 
 **#2222**: also requires the caller's own `avatar_presence` row (#1097/#1098)
 to be fresh (within `PRESENCE_STALE_AFTER_MS`, the same freshness bar the

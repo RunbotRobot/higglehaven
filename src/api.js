@@ -3,6 +3,7 @@
 // expected to catch and fall back to layoutStorage.js's localStorage
 // functions, not this module; nothing in here retries or caches.
 import { playerErrorMessage } from './errorCopy.js';
+import { rateLimitMessage } from './rateLimitNotice.js';
 
 const API_BASE = '/api';
 
@@ -20,6 +21,10 @@ function apiError(response, body, fallback) {
   // so a notice can say how much and until when (see worker/lib/rate-limit.js).
   if (response.status === 429 && typeof body.limit === 'number') {
     error.rateLimit = { limit: body.limit, windowSeconds: body.windowSeconds, retryAfterSeconds: body.retryAfterSeconds };
+    // #3275: every caller that shows `message` states the limit and when it
+    // lifts, instead of the server's generic "Too many attempts" text (still on
+    // `serverMessage`).
+    error.message = rateLimitMessage(error.rateLimit);
   }
   return error;
 }

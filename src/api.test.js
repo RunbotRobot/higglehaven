@@ -536,3 +536,25 @@ describe('server error codes reach the player as copy, not raw server text (#195
     expect(error.status).toBe(500);
   });
 });
+
+describe('a rate-limit 429 (#3275)', () => {
+  function failWith(status, body) {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: false, status, json: () => Promise.resolve(body) })));
+  }
+
+  it('words the error with the limit and when it lifts, keeping the server text', async () => {
+    failWith(429, { error: 'Too many attempts. Please wait a while and try again.', limit: 20, windowSeconds: 900, retryAfterSeconds: 400 });
+    const error = await fetchBundles().catch((err) => err);
+    expect(error.status).toBe(429);
+    expect(error.message).toBe("You've reached the limit for this (20 every 15 minutes). Try again in about 7 minutes.");
+    expect(error.serverMessage).toBe('Too many attempts. Please wait a while and try again.');
+    expect(error.rateLimit).toEqual({ limit: 20, windowSeconds: 900, retryAfterSeconds: 400 });
+  });
+
+  it('leaves a 429 without numbers showing the server text', async () => {
+    failWith(429, { error: 'Slow down.' });
+    const error = await fetchBundles().catch((err) => err);
+    expect(error.message).toBe('Slow down.');
+    expect(error.rateLimit).toBeUndefined();
+  });
+});
