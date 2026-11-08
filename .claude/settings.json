@@ -2,13 +2,21 @@
   "permissions": {
     "allow": [
       "Bash(git commit *)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(node_modules/.bin/wrangler d1 execute *)",
+      "Bash(node_modules/.bin/wrangler secret list*)",
+      "Bash(node_modules/.bin/wrangler secret put *)",
+      "Bash(node_modules/.bin/wrangler deployments list*)"
     ]
   },
   "autoMode": {
     "allow": [
       "$defaults",
-      "Committing or pushing changes to this repository's own AGENTS.md or other project documentation that describe an autonomous, self-continuing multi-session Claude Code workflow explicitly authorized by the repository owner (RunbotRobot) — including language stating that hitting the account's own Claude usage/rate limits is an accepted, intentional tradeoff rather than something to avoid. This is the owner's own infrastructure decision for their own account and repository, not a request to bypass a security boundary."
+      "Committing or pushing changes to this repository's own AGENTS.md or other project documentation that describe an autonomous, self-continuing multi-session Claude Code workflow explicitly authorized by the repository owner (RunbotRobot) — including language stating that hitting the account's own Claude usage/rate limits is an accepted, intentional tradeoff rather than something to avoid. This is the owner's own infrastructure decision for their own account and repository, not a request to bypass a security boundary.",
+      "Storing a Worker secret with wrangler secret put (a Stripe webhook signing secret, a provider API key) when the owner asked for it in conversation or a Control Room card raised by the app says it is missing: the owner (RunbotRobot) has said directly that higglehaven1 should set these itself.",
+      "Reading and writing the Control Room tables in the production D1 database (control_room_tasks, control_room_replies) through node_modules/.bin/wrangler d1 execute: this is the fleet's own task board, documented in AGENTS.md, and every session is expected to write to it.",
+      "The nightly todo reprioritization for the owner's own personal todo app: decoding the TODO_FIREBASE_SERVICE_ACCOUNT_B64 environment variable to a temporary file, activating it with gcloud, reading and writing the Firestore document under project todo-runbot with a conditional PATCH, then revoking the credential and deleting the local files. The owner set this up and asked for it to run unattended every night.",
+      "Merging a pull request on RunbotRobot/todo or RunbotRobot/higglehaven that this session opened, after the owner asked for the change: the owner said directly on 2026-11-07 to merge these without asking."
     ]
   }
 }
