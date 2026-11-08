@@ -70,6 +70,9 @@ import {
 import { shopMaxRadiusM, shopFlightState, shopFlightAltitudeM } from './flightMovement.js';
 import { growShopDomeIfNeeded } from './sky.js';
 import {
+  SHOP_BASE_LOAD_RADIUS_M, SHOP_BASE_UNLOAD_RADIUS_M, shopUnloadRadiusM, horizontalDistanceM, pickLandletsToLoad,
+} from './loadRadius.js';
+import {
   shopAvatarPosition, shopAvatarFacing, pointInPolygonXY, plotColorKeyForLandlet,
 } from '../main.js';
 // #2629: disposeObject3D/unloadShopLandletInstances now live in
@@ -110,8 +113,12 @@ const SHOP_SPAWN_LOCATION_MAX_ATTEMPTS = 20;
 // #2626: exported -- main.js's own addBuildModeNeighborOutlines (Build
 // mode, unrelated to Shop presence) reuses this same radius for its own
 // neighbor-outline cutoff.
-export const SHOP_LOAD_RADIUS_M = 60;
-const SHOP_UNLOAD_RADIUS_M = 90;
+// #3261: these two are the GROUND-LEVEL radii (see src/shop/loadRadius.js for
+// the altitude-scaled ones updateShopProximity actually uses for claimed
+// landlets' content, and why). They still anchor the middle-LOD band below
+// and the credit-orb load, and SHOP_LOAD_RADIUS_M is still what main.js reuses.
+export const SHOP_LOAD_RADIUS_M = SHOP_BASE_LOAD_RADIUS_M;
+const SHOP_UNLOAD_RADIUS_M = SHOP_BASE_UNLOAD_RADIUS_M;
 // #2378: a middle LOD band between the near (full detail, above) and far
 // (unload, above) radii, giving the simplified-proxy swap its own
 // enter/exit hysteresis gap — the same enter-at-one-distance/exit-at-a-
@@ -274,20 +281,29 @@ let presencePollToken = 0; // #1911: guards pollNearbyPresenceIfNeeded against a
 // userData, but torn down the identical way in unloadShopLandletInstances.
 const shopCreditOrbs = [];
 
+// #3261: distance is measured from the AVATAR (horizontal), not the camera --
+// in flight the chase camera trails well behind and above the avatar, so a
+// camera-based distance left the plot directly under the shopper unloaded. A
+// claimed landlet's content loads inside an altitude-scaled radius
+// (loadRadius.js: 60 m on the ground, wider from up high, hard-capped, and at
+// most SHOP_MAX_LOADED_LANDLETS at once, nearest first) and unloads past that
+// radius plus a hysteresis band. Content that loads from far away starts in
+// the simplified middle LOD (its distance is already past the enter
+// threshold), so flying high doesn't mean full-detail meshes for everything
+// in view. Credit orbs keep the ground-level 60/90 m radii.
 export function updateShopProximity() {
+  const avatarX = shopAvatarPosition.x;
+  const avatarY = shopAvatarPosition.y;
+  const unloadRadiusM = shopUnloadRadiusM(shopFlightAltitudeM);
+  let loadedCount = 0;
+  const loadCandidates = [];
   for (const entry of shopLandlets.values()) {
-    const distance = Math.hypot(entry.record.center.x - camera.position.x, entry.record.center.y - camera.position.y);
+    const distance = horizontalDistanceM(entry.record.center.x, entry.record.center.y, avatarX, avatarY);
     if (entry.record.status === 'claimed') {
-      if (!entry.loaded && distance < SHOP_LOAD_RADIUS_M) {
-        entry.loaded = true; // set before awaiting so a second tick can't double-load
-        entry.lod = 'near'; // SHOP_LOAD_RADIUS_M < SHOP_MIDDLE_LOD_EXIT_RADIUS_M, so a fresh load always starts near
-        // Each load gets its own token (see loadShopLandletInstances) so a
-        // fast unload-then-reload cycle can't let an earlier, still in-flight
-        // fetch resurrect itself once entry.loaded flips back to true.
-        loadShopLandletInstances(entry, ++entry.loadToken);
-      } else if (entry.loaded && distance > SHOP_UNLOAD_RADIUS_M) {
+      if (entry.loaded && distance > unloadRadiusM) {
         unloadShopLandletInstances(entry);
       } else if (entry.loaded) {
+        loadedCount += 1;
         // #2378: the middle LOD band's own enter/exit hysteresis, same
         // "only flip once past the gap, not right at a shared boundary"
         // shape the near/far load-unload check above already uses.
@@ -298,6 +314,8 @@ export function updateShopProximity() {
           entry.lod = 'near';
           for (const object of entry.objects) setInstanceLodState(object, false);
         }
+      } else {
+        loadCandidates.push({ entry, distance });
       }
     } else if (entry.record.status === 'greenbelt') {
       // #1995: credit orbs only ever spawn into greenbelt landlets
@@ -315,6 +333,17 @@ export function updateShopProximity() {
         unloadCreditOrbsForLandlet(entry);
       }
     }
+  }
+  // Unloads above already ran, so loadedCount is what remains loaded.
+  for (const { entry, distance } of pickLandletsToLoad(loadCandidates, loadedCount, shopFlightAltitudeM)) {
+    entry.loaded = true; // set before awaiting so a second tick can't double-load
+    // A fresh load starts at the LOD its distance calls for, so a landlet loaded
+    // from altitude never builds full detail only to swap down a tick later.
+    entry.lod = distance > SHOP_MIDDLE_LOD_ENTER_RADIUS_M ? 'middle' : 'near';
+    // Each load gets its own token (see loadShopLandletInstances) so a
+    // fast unload-then-reload cycle can't let an earlier, still in-flight
+    // fetch resurrect itself once entry.loaded flips back to true.
+    loadShopLandletInstances(entry, ++entry.loadToken);
   }
 }
 
