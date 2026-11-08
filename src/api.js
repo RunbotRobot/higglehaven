@@ -16,6 +16,11 @@ function apiError(response, body, fallback) {
   error.serverMessage = body.error;
   error.code = body.code;
   error.status = response.status;
+  // #3258: a rate-limit 429 carries { limit, windowSeconds, retryAfterSeconds }
+  // so a notice can say how much and until when (see worker/lib/rate-limit.js).
+  if (response.status === 429 && typeof body.limit === 'number') {
+    error.rateLimit = { limit: body.limit, windowSeconds: body.windowSeconds, retryAfterSeconds: body.retryAfterSeconds };
+  }
   return error;
 }
 

@@ -49,6 +49,20 @@ export async function checkRateLimit(db, bucketKey, maxAttempts) {
     WHERE (SELECT COUNT(*) FROM rate_limit_events WHERE bucket_key = ?1 AND created_at >= ?3) < ?4
   `).bind(bucketKey, now, now - RATE_LIMIT_WINDOW_MS, maxAttempts).run();
   if (result.meta.changes === 0) {
-    throw new HttpError('Too many attempts. Please wait a while and try again.', 429);
+    // #3258 (owner decision: a message that limits an action states how much
+    // and until when): the 429 body carries the numbers so no client has to
+    // hard-code a limit the server owns. The bucket is back under its limit
+    // once its oldest in-window event ages out, so that is the wait. Only the
+    // failure path pays for this extra read.
+    const oldest = await db.prepare(
+      'SELECT MIN(created_at) AS oldest FROM rate_limit_events WHERE bucket_key = ? AND created_at >= ?',
+    ).bind(bucketKey, now - RATE_LIMIT_WINDOW_MS).first();
+    const oldestMs = oldest?.oldest ?? now;
+    const retryAfterSeconds = Math.max(1, Math.ceil((oldestMs + RATE_LIMIT_WINDOW_MS - now) / 1000));
+    throw new HttpError('Too many attempts. Please wait a while and try again.', 429, {
+      limit: maxAttempts,
+      windowSeconds: RATE_LIMIT_WINDOW_MS / 1000,
+      retryAfterSeconds,
+    });
   }
 }
