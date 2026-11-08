@@ -79,6 +79,7 @@ import {
 // header comment already documents for shop/avatar.js and itself.
 import { disposeObject3D, unloadShopLandletInstances, buildShopGroundMesh } from './mode.js';
 import { registerShopSign, registerShopCalendar, registerShopReview } from './worldSprites.js';
+import { rateLimitNoticeText } from '../rateLimitNotice.js';
 
 const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
 const shopCreditOrbOfflineNoticeEl = document.getElementById('shop-credit-orb-offline-notice');
@@ -1208,7 +1209,7 @@ export function updateCreditOrbs(dt) {
       if (error.status === 429) {
         markCreditOrbCollectReachedServer();
         creditOrbRateLimitedUntilMs = performance.now() + CREDIT_ORB_RATE_LIMIT_RETRY_COOLDOWN_MS;
-        showCreditOrbRateLimitNotice();
+        showCreditOrbRateLimitNotice(error.rateLimit);
         orb.collecting = false;
         return;
       }
@@ -1288,7 +1289,9 @@ let creditOrbToastHideTimer = null;
 // Same auto-hide shape as showCreditOrbToast just above, timed to
 // CREDIT_ORB_RATE_LIMIT_RETRY_COOLDOWN_MS so it clears right as collection
 // attempts actually resume, rather than on its own unrelated schedule.
-function showCreditOrbRateLimitNotice() {
+function showCreditOrbRateLimitNotice(rateLimit) {
+  const text = rateLimitNoticeText('orbs', rateLimit);
+  if (text) shopCreditOrbRateLimitNoticeEl.textContent = text;
   shopCreditOrbRateLimitNoticeEl.classList.add('visible');
   clearTimeout(creditOrbRateLimitNoticeHideTimer);
   creditOrbRateLimitNoticeHideTimer = setTimeout(() => {

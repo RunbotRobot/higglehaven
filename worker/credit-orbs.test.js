@@ -344,8 +344,14 @@ describe('POST /api/credit-orbs/:orbId/collect (#1995)', () => {
       expect(response.status).toBe(404);
     }
 
-    const { response } = await api('/credit-orbs/not-a-real-orb/collect', builder.session({ method: 'POST' }));
+    const { response, body } = await api('/credit-orbs/not-a-real-orb/collect', builder.session({ method: 'POST' }));
     expect(response.status).toBe(429);
+    // #3258: the 429 says how much and for how long, so the client never
+    // hard-codes the limit.
+    expect(body.limit).toBe(20);
+    expect(body.windowSeconds).toBe(900);
+    expect(body.retryAfterSeconds).toBeGreaterThan(0);
+    expect(body.retryAfterSeconds).toBeLessThanOrEqual(900);
   });
 });
 

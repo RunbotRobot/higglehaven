@@ -11026,6 +11026,15 @@ a bogus or already-collected orb id still 404s cheaply but counts against
 the limit, since the cost is the D1 batch round-trip, not a successful
 collect specifically.
 
+**#3258** (owner decision: a message that limits an action says how much and
+until when): every rate-limit `429` (this endpoint and every other
+`checkRateLimit` caller) now carries `{ "limit", "windowSeconds",
+"retryAfterSeconds" }` beside `error`. `retryAfterSeconds` (at least 1) is
+the time until the bucket's oldest in-window attempt ages out, i.e. when the
+next attempt is allowed. The orb notice in Shop mode builds its sentence
+from these (`src/rateLimitNotice.js`) instead of hard-coding the limit. Other
+user-visible rate-limit notices are tracked as follow-ups.
+
 **#2222**: also requires the caller's own `avatar_presence` row (#1097/#1098)
 to be fresh (within `PRESENCE_STALE_AFTER_MS`, the same freshness bar the
 "who's nearby" `GET /presence` endpoint already uses) and within
