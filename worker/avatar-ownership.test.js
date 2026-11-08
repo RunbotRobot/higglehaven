@@ -616,42 +616,108 @@ describe('Refund revokes avatar ownership (#754)', () => {
   });
 });
 
-// #1291 (decided under AGENTS.md's "No silent loss" default): deleting an
-// avatar/animation template used to tell nobody. It still proceeds (notify,
-// don't block), but equipped builders are unequipped and every owner is told,
-// and the owned_* record is kept as the path back.
-describe('Deleting an owned/equipped avatar template (#1291)', () => {
-  it('unequips, notifies equipped and merely-owning builders, and keeps the ownership record', async () => {
-    await createAvatarTemplate('avatar-delete-notify-template');
-    const equipper = await signupBuilder('avatar-delete-notify-equipper');
-    const owner = await signupBuilder('avatar-delete-notify-owner');
-    for (const b of [equipper, owner]) {
-      await env.DB.prepare(
-        'INSERT INTO owned_avatars (builder_id, template_id, purchased_at) VALUES (?, ?, ?)',
-      ).bind(b.builderId, 'avatar-delete-notify-template', '2026-11-02T00:00:00Z').run();
-    }
+// #3279 (owner decision, 2026-11-08; supersedes #1291): a seller removing an
+// avatar/animation product that shoppers own DELISTS it. Owners keep it
+// unchanged -- owned, equipped, model served -- and are told nothing. Only a
+// product nobody owns is hard-deleted.
+async function ownAvatar(builder, templateId) {
+  await env.DB.prepare(
+    'INSERT INTO owned_avatars (builder_id, template_id, purchased_at) VALUES (?, ?, ?)',
+  ).bind(builder.builderId, templateId, '2026-11-02T00:00:00Z').run();
+}
+
+describe('Deleting an owned/equipped avatar template delists it (#3279)', () => {
+  it('keeps ownership and the equipped avatar, tells nobody, and hides the listing', async () => {
+    await createAvatarTemplate('avatar-delist-template');
+    const equipper = await signupBuilder('avatar-delist-equipper');
+    const owner = await signupBuilder('avatar-delist-owner');
+    await ownAvatar(equipper, 'avatar-delist-template');
+    await ownAvatar(owner, 'avatar-delist-template');
     await env.DB.prepare(
       'UPDATE builders SET equipped_avatar_template_id = ? WHERE builder_id = ?',
-    ).bind('avatar-delete-notify-template', equipper.builderId).run();
+    ).bind('avatar-delist-template', equipper.builderId).run();
 
-    const deleted = await api('/catalog/avatar-delete-notify-template', { method: 'DELETE' });
+    const deleted = await api('/catalog/avatar-delist-template', { method: 'DELETE' });
     expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true, delisted: true });
 
     const row = await env.DB.prepare(
       'SELECT equipped_avatar_template_id AS e FROM builders WHERE builder_id = ?',
     ).bind(equipper.builderId).first();
-    expect(row.e).toBeNull();
+    expect(row.e).toBe('avatar-delist-template');
     const kept = await env.DB.prepare(
       'SELECT COUNT(*) AS n FROM owned_avatars WHERE template_id = ?',
-    ).bind('avatar-delete-notify-template').first();
+    ).bind('avatar-delist-template').first();
     expect(kept.n).toBe(2);
 
     const equipperNotices = await api('/notifications', equipper.session());
-    expect(equipperNotices.body.notifications).toHaveLength(1);
-    expect(equipperNotices.body.notifications[0].message).toContain('was removed from the catalog');
-    expect(equipperNotices.body.notifications[0].message).toContain('equipped avatar');
+    expect(equipperNotices.body.notifications).toHaveLength(0);
     const ownerNotices = await api('/notifications', owner.session());
-    expect(ownerNotices.body.notifications).toHaveLength(1);
-    expect(ownerNotices.body.notifications[0].message).toContain('purchase record is kept');
+    expect(ownerNotices.body.notifications).toHaveLength(0);
+
+    // The owner's own view still shows it, equipped and with its model.
+    await env.DB.prepare('UPDATE catalog_templates SET model_url = ? WHERE template_id = ?')
+      .bind('/uploads/avatar-delist-template.glb', 'avatar-delist-template').run();
+    const mine = await api('/builders/me/avatar', equipper.session());
+    expect(mine.body.avatar).toMatchObject({
+      equippedTemplateId: 'avatar-delist-template', modelUrl: '/uploads/avatar-delist-template.glb',
+    });
+
+    // Gone from browsing, and a second delete reads as already gone.
+    const browse = await api('/catalog?limit=100');
+    expect(browse.body.templates.some((t) => t.templateId === 'avatar-delist-template')).toBe(false);
+    const again = await api('/catalog/avatar-delist-template', { method: 'DELETE' });
+    expect(again.response.status).toBe(404);
+    const edit = await api('/catalog/avatar-delist-template', {
+      method: 'PATCH', body: JSON.stringify({ name: 'Renamed' }),
+    });
+    expect(edit.response.status).toBe(404);
+  });
+
+  it('still hard-deletes an avatar nobody owns', async () => {
+    await createAvatarTemplate('avatar-unowned-delete-template');
+    const deleted = await api('/catalog/avatar-unowned-delete-template', { method: 'DELETE' });
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body).toEqual({ deleted: true, delisted: false });
+    const row = await env.DB.prepare(
+      'SELECT 1 AS x FROM catalog_templates WHERE template_id = ?',
+    ).bind('avatar-unowned-delete-template').first();
+    expect(row).toBeNull();
+  });
+
+  it('delists the owned ones and deletes the rest of a batch, naming both', async () => {
+    await createAvatarTemplate('avatar-batch-owned-template');
+    await createAvatarTemplate('avatar-batch-unowned-template');
+    const owner = await signupBuilder('avatar-batch-owner');
+    await ownAvatar(owner, 'avatar-batch-owned-template');
+
+    const deleted = await api('/catalog/batch', {
+      method: 'DELETE',
+      body: JSON.stringify({ templateIds: ['avatar-batch-owned-template', 'avatar-batch-unowned-template'] }),
+    });
+    expect(deleted.response.status).toBe(200);
+    expect(deleted.body.deletedTemplateIds).toEqual(['avatar-batch-owned-template', 'avatar-batch-unowned-template']);
+    expect(deleted.body.delistedTemplateIds).toEqual(['avatar-batch-owned-template']);
+    const rows = await env.DB.prepare(
+      "SELECT template_id, delisted_at FROM catalog_templates WHERE template_id LIKE 'avatar-batch-%'",
+    ).all();
+    expect(rows.results.map((r) => r.template_id)).toEqual(['avatar-batch-owned-template']);
+    expect(rows.results[0].delisted_at).not.toBeNull();
+  });
+
+  it('a delisted template can no longer be bought', async () => {
+    await createAvatarTemplate('avatar-delist-purchase-template');
+    const landletId = 'avatar-delist-purchase-landlet';
+    await createGreenbeltLandlet(landletId);
+    const host = await signupBuilder('avatar-delist-purchase-host');
+    await claim(landletId, host);
+    await placeInstance('avatar-delist-purchase-instance', landletId, 'avatar-delist-purchase-template', host);
+    await env.DB.prepare(
+      "UPDATE catalog_templates SET delisted_at = '2026-11-08T00:00:00Z' WHERE template_id = ?",
+    ).bind('avatar-delist-purchase-template').run();
+    const buyer = await signupBuilder('avatar-delist-purchase-buyer');
+    const bought = await purchase('avatar-delist-purchase-instance', buyer);
+    expect(bought.response.status).toBe(400);
+    expect(bought.body.error).toContain('no longer for sale');
   });
 });
