@@ -195,6 +195,7 @@ function disposeUploadDimensionPreview() {
   uploadDimensionsPreviewEl.innerHTML = '';
   uploadAnimationsDetectedEl.hidden = true;
   if (!uploadDimensionPreview) return;
+  uploadDimensionPreview.resizeObserver?.disconnect();
   uploadDimensionPreview.controls.dispose();
   uploadDimensionPreview.renderer.dispose();
   disposeObject(uploadDimensionPreview.previewObject);
@@ -406,7 +407,12 @@ function makeDimensionLabelSprite(text, colorHex) {
 // dimension edits are always proportion-preserving (a uniform scale),
 // every possible edit renders identically, so only the label text needs
 // to change as the seller types (see updateUploadDimensionLabels).
-async function showUploadDimensionPreview(modelUrl) {
+// #3251: `revealStep` shows the Confirm Dimensions step. It is called only
+// once the model has loaded, immediately before the canvas is measured and
+// the renderer created: that step is `hidden` (display: none) until now, so
+// measuring earlier gave a 0x0 rect and a 0-sized WebGL buffer, which is the
+// empty grey box the owner saw above the size fields.
+async function showUploadDimensionPreview(modelUrl, revealStep) {
   const myFlowToken = uploadFlowToken;
   disposeUploadDimensionPreview();
 
@@ -481,6 +487,7 @@ async function showUploadDimensionPreview(modelUrl) {
   const sphere = box.getBoundingSphere(new THREE.Sphere());
   const radius = Math.max(sphere.radius, 0.05);
 
+  revealStep();
   const rect = canvas.getBoundingClientRect();
   const camera = new THREE.PerspectiveCamera(45, rect.width / Math.max(rect.height, 1), 0.01, 100);
   camera.up.set(0, 0, 1);
@@ -500,6 +507,21 @@ async function showUploadDimensionPreview(modelUrl) {
   controls.maxDistance = dist * 3;
   const render = () => renderer.render(scene, camera);
   controls.addEventListener('change', render);
+  // #3251: keep the buffer and aspect in step with the canvas's real size, so
+  // a layout change after the step opens (rotating the phone, the on-screen
+  // keyboard resizing the modal) never leaves it stretched or blank.
+  let resizeObserver = null;
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => {
+      const { width, height } = canvas.getBoundingClientRect();
+      if (width < 1 || height < 1) return;
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      render();
+    });
+    resizeObserver.observe(canvas);
+  }
 
   const axisDims = { x: size.x, y: size.y, z: size.z };
   const dirs = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
@@ -519,7 +541,7 @@ async function showUploadDimensionPreview(modelUrl) {
     labels.push(label);
   }
 
-  uploadDimensionPreview = { renderer, scene, camera, controls, previewObject, arrows, labels, render };
+  uploadDimensionPreview = { renderer, scene, camera, controls, previewObject, arrows, labels, render, resizeObserver };
   updateUploadDimensionLabels();
 }
 
@@ -618,15 +640,17 @@ async function handleUploadFileStep() {
     refreshUploadDimensionUnits();
 
     setUploadStatus('Loading preview…');
-    await showUploadDimensionPreview(modelUrl);
+    // #3251: the step is revealed from inside, right before the canvas is
+    // measured, rather than after (see showUploadDimensionPreview).
+    await showUploadDimensionPreview(modelUrl, () => {
+      uploadStep = 'dimensions';
+      uploadModalTitleEl.textContent = 'Confirm Dimensions';
+      uploadStepFileEl.hidden = true;
+      uploadStepDimensionsEl.hidden = false;
+      uploadSubmitBtn.textContent = 'Create Product';
+      uploadRetryVideoBtn.hidden = uploadModelSource !== 'video';
+    });
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while loading the preview
-
-    uploadStep = 'dimensions';
-    uploadModalTitleEl.textContent = 'Confirm Dimensions';
-    uploadStepFileEl.hidden = true;
-    uploadStepDimensionsEl.hidden = false;
-    uploadSubmitBtn.textContent = 'Create Product';
-    uploadRetryVideoBtn.hidden = uploadModelSource !== 'video';
     setUploadStatus('');
   } catch (err) {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state
