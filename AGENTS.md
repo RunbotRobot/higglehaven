@@ -465,6 +465,16 @@ most likely to come up again.
   hybrid" applied to movement: one movement and camera system, mounted
   wherever a person walks around.
 
+- **A message that limits or refuses an action states the limit and
+  when it lifts.** (2026-11-08, orb rate-limit notice.) "You've
+  collected the max orbs for now, try again in a bit" becomes "You can
+  collect up to 20 orbs every 15 minutes. Try again in about 7
+  minutes." The owner's word was transparency: a person who hits a
+  wall should be told where the wall is and when it moves. The numbers
+  come from the server response, never a second copy in the client, so
+  the copy stays true when the limit changes. Applies to every
+  rate-limit, quota and cooldown notice a user can read.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
