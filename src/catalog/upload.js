@@ -533,12 +533,42 @@ function updateUploadDimensionLabels() {
   uploadDimensionPreview.render();
 }
 
+// #1601: price is required at upload time -- a free digital good is entered
+// as an explicit 0, not left blank. priceCents can still end up null later
+// via the separate "Edit Price" panel (docs/API.md's "Seller-side: setting a
+// price"), which keeps its own null-means-unset convention; this is just the
+// one-time creation step. #3252: checked on the step that has the price
+// field (file/video), so the error appears where the seller can act on it;
+// the dimensions step re-runs it as a backstop. Returns cents, or null after
+// reporting the problem.
+function validateUploadPrice() {
+  const priceInput = uploadPriceInput.value.trim();
+  if (!priceInput) {
+    setUploadStatus('Enter a price — use 0 for a free product.', true);
+    uploadPriceInput.focus();
+    return null;
+  }
+  const dollars = parsePriceInputDollars(priceInput);
+  if (!Number.isFinite(dollars) || dollars < 0) {
+    setUploadStatus('Price must be a non-negative number.', true);
+    uploadPriceInput.focus();
+    return null;
+  }
+  if (Math.round(dollars * 100) > MAX_MONEY_CENTS) {
+    setUploadStatus(`Price must be ${formatPriceCents(MAX_MONEY_CENTS)} or less.`, true);
+    uploadPriceInput.focus();
+    return null;
+  }
+  return Math.round(dollars * 100);
+}
+
 async function handleUploadFileStep() {
   const name = uploadNameInput.value.trim();
   if (!name) {
     setUploadStatus('Name is required.', true);
     return;
   }
+  if (validateUploadPrice() === null) return;
   const file = uploadFileInput.files[0];
   if (!file) {
     setUploadStatus('Choose a .glb or .fbx file first.', true);
@@ -788,6 +818,7 @@ async function handleUploadVideoStep() {
     setUploadStatus('Name is required.', true);
     return;
   }
+  if (validateUploadPrice() === null) return;
   const videoFile = uploadVideoInput.files[0];
   if (!videoFile) {
     setUploadStatus('Choose a video first.', true);
@@ -832,26 +863,8 @@ async function handleUploadDimensionsStep() {
     setUploadStatus('Enter a positive size for each dimension.', true);
     return;
   }
-  // #1601: price is required at upload time — a free digital good is
-  // entered as an explicit $0, not left blank. priceCents can still end up
-  // null later via the separate "Edit Price" panel (docs/API.md's "Seller-
-  // side: setting a price"), which keeps its own null-means-unset
-  // convention; this is just the one-time creation step.
-  const priceInput = uploadPriceInput.value.trim();
-  if (!priceInput) {
-    setUploadStatus('Enter a price — use 0 for a free product.', true);
-    return;
-  }
-  const dollars = parsePriceInputDollars(priceInput);
-  if (!Number.isFinite(dollars) || dollars < 0) {
-    setUploadStatus('Price must be a non-negative number.', true);
-    return;
-  }
-  if (Math.round(dollars * 100) > MAX_MONEY_CENTS) {
-    setUploadStatus(`Price must be ${formatPriceCents(MAX_MONEY_CENTS)} or less.`, true);
-    return;
-  }
-  const priceCents = Math.round(dollars * 100);
+  const priceCents = validateUploadPrice();
+  if (priceCents === null) return;
 
   // #423: same uploadFlowToken idiom as handleUploadFileStep above — this
   // step's own await chain (rescale/upload/create) is just as cancelable

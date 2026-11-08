@@ -291,7 +291,8 @@
           </label>
           <label>
             Price
-            <input id="upload-price" type="text" inputmode="decimal" placeholder="0.00" />
+            <input id="upload-price" type="text" inputmode="decimal" aria-describedby="upload-price-hint" />
+            <span id="upload-price-hint" class="field-hint">Enter 0 for a free product.</span>
           </label>
           <label id="upload-digital-good-label">
             <input id="upload-digital-good-checkbox" type="checkbox" />
