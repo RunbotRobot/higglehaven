@@ -520,7 +520,10 @@ export async function handleShopProductBuyClick() {
         : 'Purchase complete — thank you!');
     } else {
       clearPurchaseIdempotencyKey(instanceId);
-      alert('Purchase simulated — the seller has been credited.');
+      // #3255: real payments are live, so this branch (free / zero-price items
+      // and any path that returns the purchase directly) reads the same as the
+      // paid branch above rather than the dev-era "simulated" wording.
+      alert('Purchase complete — thank you!');
     }
     // #3256 (owner report): no immediate "Leave feedback for the seller?"
     // prompt here. Right after buying is too early to judge accuracy,
