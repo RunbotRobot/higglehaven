@@ -30,6 +30,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from '../modelOptimizer.js';
+import { describeAvatarClips } from '../avatarClipNames.js';
 import { unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from '../settings.js';
 import { ensureSellerIdentity } from '../account/identity.js';
 import {
@@ -469,10 +470,9 @@ async function showUploadDimensionPreview(modelUrl) {
   // once it's equipped in-world.
   loadModelAnimations(modelUrl).then((animations) => {
     if (myFlowToken !== uploadFlowToken || animations.length === 0) return;
-    const matched = ['idle', 'walk', 'fly'].filter((name) => THREE.AnimationClip.findByName(animations, name));
-    uploadAnimationsDetectedEl.textContent = matched.length > 0
-      ? `Avatar animations detected: ${matched.join(', ')} — these play automatically if this is equipped as an avatar.`
-      : `This model has ${animations.length} animation clip${animations.length === 1 ? '' : 's'}, but none named idle/walk/fly — if equipped as an avatar it'll still move, just without playing them.`;
+    // #2744: the wording (and the names of the clips actually found) lives in
+    // avatarClipNames.js so it is unit-tested without three.js.
+    uploadAnimationsDetectedEl.textContent = describeAvatarClips(animations.map((clip) => clip.name));
     uploadAnimationsDetectedEl.hidden = false;
   }).catch(() => {});
 

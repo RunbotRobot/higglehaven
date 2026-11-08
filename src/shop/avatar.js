@@ -227,6 +227,10 @@ export function createShopAvatar() {
 // matches this issue's own scope: a custom avatar moves correctly as a
 // rigid whole (root position/rotation on `group`), but per-bone limb
 // animation on its own skeleton is #682's job, not this one's.
+// #2744: see createCustomShopAvatar. Shared with the other-players' avatar
+// bodies in presenceAndContent.js so both turn a model the same way.
+export const CUSTOM_AVATAR_FRONT_YAW_RAD = Math.PI;
+
 export async function createCustomShopAvatar(modelUrl, appliedAnimation = null) {
   // #982: lets an e2e test simulate a slow model load (a real network fetch
   // + GLTF parse can take a while) deterministically, without depending on
@@ -250,6 +254,15 @@ export async function createCustomShopAvatar(modelUrl, appliedAnimation = null) 
   const box = new THREE.Box3().setFromObject(container);
   const height = Math.max(box.max.z - box.min.z, 0);
   container.position.z = height / 2;
+  // #2744: face the way the avatar travels. The default body's front is its
+  // local +Y (see createShopAvatar), and updateShopMovement turns the group so
+  // that +Y points along travel. A glTF model's front is +Z (Y-up), which
+  // loadModelInstance's Y-up to Z-up conversion lands on world -Y: the
+  // opposite end, so a standard avatar walked with its face toward the
+  // follow-camera. Turn the model half a revolution about its own vertical
+  // axis (it is already centred on it, so it stays put). Applies to any model
+  // that follows the glTF convention, which is what exporters produce.
+  container.rotation.z = CUSTOM_AVATAR_FRONT_YAW_RAD;
   // #1091: real horizontal footprint (approximated as a square, same
   // SHOP_AVATAR_COLLISION_HALF_M convention as the default body) so
   // collision/camera code can scale to this specific model's own measured
@@ -325,6 +338,14 @@ export async function createCustomShopAvatar(modelUrl, appliedAnimation = null) 
     // __shopAvatarModelUrl/__shopAvatarMetrics already use — null when
     // `actions` itself is null (no clips from either source).
     animationSource: !actions ? null : (animationIsCompatible ? 'applied' : 'own'),
+    // #2744: where the model's own glTF front (+Z) points in the world right
+    // now, for the e2e diagnostic in flightMovement.js -- a function, not a
+    // stored value, since the group turns every frame.
+    modelFrontWorld: () => {
+      const model = container.userData.model;
+      model.updateWorldMatrix(true, false);
+      return new THREE.Vector3(0, 0, 1).transformDirection(model.matrixWorld).toArray();
+    },
   };
 }
 

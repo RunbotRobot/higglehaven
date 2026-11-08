@@ -138,6 +138,7 @@ console.log('facing before any movement input:', orientationBeforeMove?.facingRa
 await dragMoveJoystick(0, -40);
 const animStateWhileMovingForward = await page.evaluate(() => window.__shopAvatarAnimState);
 const orientationForward = await page.evaluate(() => window.__shopAvatarOrientation);
+const cameraYawDuringForward = await page.evaluate(() => window.__shopCameraYaw);
 await releaseMoveJoystick();
 const animStateAfterStopping = await page.evaluate(() => window.__shopAvatarAnimState);
 console.log('animation state while walking forward (should be "walk"):', animStateWhileMovingForward);
@@ -164,8 +165,19 @@ console.log('facing changed between forward and strafe-right drags, radians (sho
 const facingMatchesCameraRad = Math.abs(shortestAngleDeltaRad(orientationRight.facingRad, cameraYawDuringStrafe));
 console.log('facing vs. camera yaw during the strafe (bug would read ~0 here; correct behavior reads close to the real turn angle):', facingMatchesCameraRad);
 
+// #2744 (owner, 2026-11-08): the equipped model "faces the camera rather than
+// facing the direction of travel". Dragging the stick forward walks the avatar
+// along the camera's forward direction (-sin(yaw), cos(yaw)) in the Z-up world,
+// so the model's own glTF front (+Z) must point the same way. Before the fix a
+// standard glTF model's front landed on the opposite end, so this read about -1.
+const frontWorld = orientationForward.modelFrontWorld;
+const travelDir = [-Math.sin(cameraYawDuringForward), Math.cos(cameraYawDuringForward)];
+const frontDotTravel = frontWorld ? frontWorld[0] * travelDir[0] + frontWorld[1] * travelDir[1] : null;
+console.log('model front (glTF +Z) in world while walking forward:', frontWorld, '| dot with the direction of travel (should be near +1, -1 would be facing the camera):', frontDotTravel);
+
 const pass =
   avatarTemplate?.skeletonSignature != null &&
+  frontDotTravel !== null && frontDotTravel > 0.8 &&
   purchaseResult.status === 201 &&
   animationSource === 'own' &&
   animStateWhileMovingForward === 'walk' &&
