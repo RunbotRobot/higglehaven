@@ -426,6 +426,21 @@ most likely to come up again.
   the same shape to any future provider that needs data we have no
   reason to hold (a tax-filing vendor, an identity verifier).
 
+- **Identity verification is one-time; a lapsed re-check window is not
+  a violation and never downgrades anyone.** (2026-11-08, #2404.)
+  Didit can be configured with a periodic re-verification window and
+  then emits `Kyc Expired` for a session it previously approved; that
+  exists for businesses with recurring KYC obligations, which this
+  platform does not have. So `Kyc Expired` is logged and otherwise
+  ignored: `trust_tier` stays `id_verified`, nothing gated on it
+  (direct messages and the like) is withdrawn, and the Didit workflow
+  should have no re-verification period set. The principle is the one
+  behind "Anti-abuse signals never degrade a legitimate user's visible
+  experience": a hard change to what a person can do follows a
+  confirmed violation, never the passage of time or a provider's
+  housekeeping status. If a real legal re-verification duty ever
+  arrives, it comes back as its own decision.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
