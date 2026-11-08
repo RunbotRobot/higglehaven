@@ -662,10 +662,10 @@ const shopCameraAnchor = new THREE.Vector3();
 // mode's own per-frame positionShopCamera() derives camera.position fresh
 // from shopAvatarPosition every single frame (see its own definition), so
 // writing camera.position here would just be silently overwritten on the
-// very next frame. updateShopProximity reads camera.position.x/y, and
-// positionShopCamera runs unconditionally ahead of it in the same
-// updateShopMovement tick, so this still lands before the next proximity
-// check sees it. Always inert unless a test calls it, same convention as
+// very next frame. updateShopProximity reads shopAvatarPosition x/y (#3261:
+// it used to read camera.position, which trails the avatar in flight) and the
+// altitude, which this hook's optional z sets, so this still lands before the
+// next proximity check sees it. Always inert unless a test calls it, same convention as
 // window.__testAvatarLoadDelayMs.
 window.__testTeleportShopAvatar = (x, y, z) => {
   shopAvatarPosition.x = x;
