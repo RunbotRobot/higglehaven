@@ -7134,15 +7134,10 @@ review averages are already shown" — a full shopper-facing "my orders"
 history to leave feedback from later doesn't exist in this app at all
 (see "Product reviews"' own `#454` comment on why — the server never
 stores a raw token/receipt a shopper could come back to), so submission
-instead happens at the one moment a shopper is guaranteed to still have
-their own purchase in hand: immediately after the preview modal's Buy
-button (`handleShopProductBuyClick`) completes a purchase (both the
-real-money and simulated paths), via a `confirm()` then the same
-two-`prompt()` rating+comment flow the modal's own Review button
-(`handleShopProductReviewClick`) already uses. `promptSellerFeedback`
-silently no-ops when the purchase has no `sellerId` (nothing to rate) or
-no `buyerLabel` (the purchase predates a real buyer identity) — never
-shown for a product with no seller or an unidentified buyer. The seller's
+originally happened immediately after the preview modal's Buy button
+completed a purchase. **#3256 removed that immediate prompt** (too early
+to judge accuracy, timeliness or communication); feedback is now left
+only from My Purchases' per-row "Rate this seller" action (#3198). The seller's
 own aggregate — `#seller-feedback-summary` in the Seller modal, right
 below `#seller-hint` — is fetched fresh on every modal open
 (`renderSellerFeedbackSummary`) and stays hidden entirely until that
@@ -7153,13 +7148,11 @@ invisible" convention the preview modal's own info text documents.
 no frontend wiring in this PR.** The structural gap this section's own
 first paragraph already describes (no "my orders" page, no receipt to come
 back to) applies just as much to editing/deleting feedback already left as
-it does to leaving it in the first place: `promptSellerFeedback` fires
-exactly once, immediately after a purchase, with no later re-entry point
-the way the preview modal's Review button offers for product reviews
-(tap the same in-world product again any time). Exposing this to buyers
-for real needs a genuine "my purchases"/order-history view to revisit —
-a separate, larger piece of frontend work this issue doesn't scope, flagged
-as its own backlog item rather than built here.
+it does to leaving it in the first place (historical: the then-only
+entry point fired exactly once, immediately after a purchase, with no
+later re-entry point the way the preview modal's Review button offers for product reviews
+(tap the same in-world product again any time)). That gap is closed: My
+Purchases (#3198) now offers leave/edit/delete per purchase.
 
 ## Scheduled calendar events + creative-tool trigger
 

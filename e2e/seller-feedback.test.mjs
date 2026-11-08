@@ -1,13 +1,10 @@
 // Seller feedback (#1096, docs/API.md's "Seller feedback") — distinct from
 // product reviews: rates a specific seller's own service (listing
 // accuracy, timeliness, communication) for one specific purchase from
-// them, not the product itself. Submission happens via a confirm()+two-
-// prompt() flow right after the preview modal's Buy button completes a
-// purchase (promptSellerFeedback, src/main.js), which — like the preview
-// modal's Review button (see product-reviews.test.mjs's own comment) —
-// isn't reachable without real in-world camera movement, so this exercises
-// the feedback API directly (the same one that flow calls,
-// createSellerFeedback in src/api.js) and covers the Seller modal's own
+// them, not the product itself. Submission happens from My Purchases
+// (#3198; the immediate post-purchase prompt was removed in #3256), so
+// this exercises the feedback API directly (createSellerFeedback in
+// src/api.js) and covers the Seller modal's own
 // rendering of it: the aggregate display (#seller-feedback-summary) and,
 // since #2286, the individual entries themselves (#seller-feedback-list),
 // both via renderSellerFeedbackSummary, fetched fresh on every modal open.
@@ -84,8 +81,8 @@ const purchase1 = (await fetchJson(`/api/instances/${instanceId}/purchase`, { me
 const purchase2 = (await fetchJson(`/api/instances/${instanceId}/purchase`, { method: 'POST' })).body.purchase;
 console.log('two distinct purchase ids created:', purchase1.purchaseId !== purchase2.purchaseId);
 
-// Leave feedback on each purchase directly via the API the confirm()/
-// prompt() flow calls (createSellerFeedback in src/api.js) — 5 and 3 stars,
+// Leave feedback on each purchase directly via the API My
+// Purchases calls (createSellerFeedback in src/api.js) — 5 and 3 stars,
 // averaging to 4.0.
 const feedback1 = await fetchJson(`/api/purchases/${purchase1.purchaseId}/feedback`, {
   method: 'POST',
