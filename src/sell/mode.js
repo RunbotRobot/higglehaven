@@ -22,9 +22,7 @@
 // directly; since that becomes a module-private binding here, it now
 // calls resetSellerView() instead (see that function's own comment).
 //
-// promptSellerFeedback looks Sell-related by name but is invoked from the
-// Shop-mode buyer post-purchase flow, not from any Sell-mode UI -- stays
-// in main.js. renderSellerIdentityField/renderSellSettingsSection
+// renderSellerIdentityField/renderSellSettingsSection
 // (Settings > Sell tab) now live here too (#2565, Option A per owner
 // decision 2026-10-28) -- settings/modal.js's renderSettingsSection just
 // calls renderSellSettingsSection() rather than reaching into this
