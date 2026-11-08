@@ -12373,8 +12373,12 @@ The last of #679's sub-issues. `createCustomShopAvatar` now also loads
 the equipped model's `AnimationClip`s (via a new `loadModelAnimations`,
 sharing the same cached parsed-GLTF promise `loadModelScene` already uses
 for the same URL — one fetch/parse either way, not two) and looks up
-`idle`, `walk`, and `fly` by exact name (`THREE.AnimationClip.
-findByName`). Any that exist become a `THREE.AnimationMixer` action,
+`idle`, `walk`, and `fly` with `pickAvatarClips` (`src/avatarClipNames.js`,
+#3287: case-insensitive, exact name first, then the usual aliases such as
+`Walking`/`Standing`/`Flying`, then any name containing the word; the part
+after the last `|` of an armature-prefixed name; a lone `mixamo.com` clip as
+`idle`; one clip per role), the same function other players' bodies and the
+upload wizard use. Any that exist become a `THREE.AnimationMixer` action,
 bound to `container.userData.model` — the actual loaded node the clip's
 tracks were authored against, not the wrapping container
 `createCustomShopAvatar` adds around it (see `loadModelInstance`'s own
