@@ -441,6 +441,30 @@ most likely to come up again.
   housekeeping status. If a real legal re-verification duty ever
   arrives, it comes back as its own decision.
 
+- **A required field never shows a placeholder that reads as a value,
+  and is validated on the step that holds it.** (2026-11-08, #3252.)
+  The upload wizard's price field showed `$0` as a placeholder; the
+  owner read it as filled in, left it blank, and was then refused on a
+  later step that has no price field. Twice. Required inputs start
+  empty with a helper line beside them ("Enter 0 for a free product"),
+  and the check runs before the user can leave the step that contains
+  the input, so the error appears where it can be acted on. Applies to
+  every form, not just upload.
+
+- **Ask a buyer for feedback after they have had the item, from My
+  Purchases, never at checkout.** (2026-11-08, #3256.) The post-purchase
+  "Leave feedback for the seller?" prompt fired before the owner had
+  equipped what they bought. A rating given before the item has been
+  used measures nothing. My Purchases already offers "Rate this seller"
+  per order, which is the right moment; the immediate prompt goes.
+
+- **One way to move through the world: Sell mode's in-world catalog
+  view uses Shop mode's navigation and the seller's own avatar.**
+  (2026-11-08, #3253.) The owner did not want a second set of controls
+  for walking among their own products. This is "One model, not a
+  hybrid" applied to movement: one movement and camera system, mounted
+  wherever a person walks around.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
