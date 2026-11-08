@@ -74,9 +74,8 @@ await page.click('#upload-model-btn');
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-name', 'Suite Blank-Price Rejection Crate');
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
-await page.click('#upload-submit-btn');
-await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
-await page.waitForTimeout(300);
+// #3252: the blank price is refused on this first step (the one that has the
+// price field), so the wizard never advances to Confirm Dimensions.
 await page.click('#upload-submit-btn');
 await page.waitForTimeout(500);
 const blankPriceStatus = await page.locator('#upload-status').textContent();
