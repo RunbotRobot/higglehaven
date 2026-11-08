@@ -3822,10 +3822,26 @@
         background: rgb(var(--ink-rgb) / 0.16);
         cursor: pointer;
       }
-      .notification-row-time {
+      .notification-row-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
         margin-top: 4px;
+      }
+      .notification-row-time {
         font-size: 11px;
         color: var(--pill-text-soft);
+      }
+      .notification-row-delete {
+        min-height: 32px;
+        padding: 4px 10px;
+        border: 0;
+        border-radius: 8px;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: inherit;
+        font-size: 11px;
+        cursor: pointer;
       }
       #notifications-empty {
         font-size: 13px;

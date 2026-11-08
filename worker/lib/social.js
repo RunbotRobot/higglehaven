@@ -58,8 +58,9 @@ import {
 
 // Builder-facing notifications (see notifyBuildersOfDimensionChange) — a
 // plain read-and-acknowledge list, not a full inbox: cursor-paginated
-// (#320, see GET below) but no DELETE, since a read notification is still
-// useful history for "wait, when did that change?"
+// (#320, see GET below); #3280 adds a per-notification DELETE at the owner's
+// request (the earlier "no DELETE, a read notification is still useful
+// history" call is superseded).
 // #984: the mark-read (PATCH) and mark-all-read (POST) branches below had
 // no checkRateLimit call at all, unlike this file's other authenticated
 // mutation resources (BUNDLE_MUTATE_RATE_LIMIT_MAX #892,
@@ -117,6 +118,23 @@ export async function handleNotifications(request, db, route, url) {
       notifications: page.map(notificationFromRow),
       nextCursor: hasMore ? encodeCursor(last.created_at, last.notification_id) : null,
     });
+  }
+
+  // #3280 (owner request: delete a notification, not only mark it read). A
+  // notification is the user's own copy of a message and nothing else depends
+  // on it, so the row is removed rather than flagged. Same owner check and
+  // rate limit as the mark-read PATCH below. The DELETE itself is also scoped
+  // to the owner's builder_id, so a concurrent profile reset can't delete
+  // someone else's row.
+  if (request.method === 'DELETE' && route.length === 2) {
+    const existing = await db.prepare('SELECT builder_id FROM notifications WHERE notification_id = ?').bind(route[1]).first();
+    if (!existing) return json({ error: 'Notification not found' }, 404);
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    assertOwner(existing.builder_id, sessionBuilder.builder_id, 'Not your notification');
+    await checkRateLimit(db, `notification-mutate:${sessionBuilder.builder_id}`, NOTIFICATION_MUTATE_RATE_LIMIT_MAX);
+    await db.prepare('DELETE FROM notifications WHERE notification_id = ? AND builder_id = ?')
+      .bind(route[1], sessionBuilder.builder_id).run();
+    return json({ ok: true });
   }
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {

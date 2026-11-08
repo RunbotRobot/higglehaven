@@ -5108,6 +5108,18 @@ Requires a session. Marks every one of the calling account's own unread
 notifications read at once. No body — `builderId` is derived from the
 session, never a client-supplied field.
 
+### `DELETE /api/notifications/:notificationId`
+
+#3280 (owner request: delete a notification, not only mark it read). Requires
+a session and removes the caller's own notification outright (the row is
+deleted, not flagged: it is the user's own copy of a message and nothing else
+depends on it). `200 { "ok": true }`; `403` for another account's
+notification (the row stays); `404` if it does not exist, which includes a
+second delete of the same id. Rate-limited with the same bucket as marking
+read. The Notices panel shows a Delete button on each row (no confirmation for
+a single notice); a "clear all read" action is deferred until the in-app
+confirmation-modal convention from #3278 exists.
+
 ### How a notification gets created
 
 `PATCH /api/catalog/:templateId` (see "Catalog templates" above) compares
