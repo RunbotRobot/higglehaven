@@ -2045,6 +2045,9 @@
       /* Same grid idiom as #seller-list-view's own tiles (reuses that
          view's .seller-card/-thumb/-name/-price classes directly, see
          src/sell/mode.js's renderSellThisTooGrid). */
+      #sell-this-too-grid[hidden] {
+        display: none;
+      }
       #sell-this-too-grid {
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
@@ -2956,6 +2959,22 @@
       }
       .seller-save-btn:disabled {
         opacity: 0.5;
+      }
+      /* #3249: "Sell This Too" price/stock form. */
+      #sell-this-too-form label {
+        display: block;
+        margin-top: 10px;
+        font-size: 13px;
+      }
+      .sell-this-too-help {
+        margin: 4px 0 0;
+        font-size: 11px;
+        color: rgb(var(--ink-rgb) / 0.65);
+      }
+      .sell-this-too-form-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 12px;
       }
       /* #3249: inline Delete confirm in Sell > Manage. */
       .seller-row-confirm {

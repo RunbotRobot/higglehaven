@@ -2201,6 +2201,14 @@ const sellThisTooGridEl = document.getElementById('sell-this-too-grid');
 const sellThisTooEmptyEl = document.getElementById('sell-this-too-empty');
 const sellThisTooSearchInput = document.getElementById('sell-this-too-search-input');
 const sellThisTooCloseBtn = document.getElementById('sell-this-too-close-btn');
+const sellThisTooFormEl = document.getElementById('sell-this-too-form');
+const sellThisTooFormTitleEl = document.getElementById('sell-this-too-form-title');
+const sellThisTooFormNoteEl = document.getElementById('sell-this-too-form-note');
+const sellThisTooPriceInput = document.getElementById('sell-this-too-price-input');
+const sellThisTooStockInput = document.getElementById('sell-this-too-stock-input');
+const sellThisTooFormErrorEl = document.getElementById('sell-this-too-form-error');
+const sellThisTooAddBtn = document.getElementById('sell-this-too-add-btn');
+const sellThisTooBackBtn = document.getElementById('sell-this-too-back-btn');
 
 // One tile per distinct *product*, not per existing listing -- a product
 // several sellers already list would otherwise show up once per seller,
@@ -2225,72 +2233,101 @@ function distinctSellableProducts() {
   return [...byProductId.values()];
 }
 
-// #2795: alreadyMine below reads activeCatalog, which only gets this
+// #2795: the duplicate check below reads activeCatalog, which only gets this
 // listing pushed into it *after* createCatalogListing's await resolves --
-// without this guard, a second click on the same (or any) tile while that
-// request is still in flight runs its own alreadyMine check against the
-// same stale, not-yet-updated array, so the "Add another one anyway?"
-// confirmation never catches the duplicate. Module-level (not per-template)
-// since a seller could otherwise race two DIFFERENT tiles' requests against
+// without a guard, a second submit while that request is still in flight
+// would create the same listing twice. Module-level (not per-template) since
+// a seller could otherwise race two DIFFERENT products' requests against
 // each other too, both still safe individually but not worth the added
-// complexity to allow concurrently. Checked first and wraps the whole
-// function (same disable-before-await/re-enable-in-finally idiom used
-// throughout this file, e.g. setMetadataSaveBusy above) so every early
-// `return` below (a cancelled prompt, a validation failure) still clears it.
+// complexity to allow concurrently.
 let attachListingInFlight = false;
 
-// Shared by both prompts below -- #2748's own two-prompt flow mirrors the
-// Edit Price panel's exact validation (parsePriceInputDollars/
-// MAX_MONEY_CENTS) since priceCents is required here the same way it's
-// required on this seller's own new listing (#1601's own catalog-create
-// requirement, which POST /api/catalog/listings shares).
-async function attachListingTo(template) {
-  if (attachListingInFlight) return;
+// #3249: the price and stock questions used to be two native prompt() calls
+// plus a confirm() for "you already have one", which a browser that
+// suppresses native dialogs skipped silently. They are now a small form in
+// the Sell This Too modal. The validation mirrors the Edit Price panel's
+// (parsePriceInputDollars/MAX_MONEY_CENTS) since priceCents is required here
+// the same way it's required on this seller's own new listing (#1601's own
+// catalog-create requirement, which POST /api/catalog/listings shares). The
+// price starts empty and is checked here, on the step that holds it.
+let attachFormTemplate = null;
+
+function showSellThisTooGrid() {
+  attachFormTemplate = null;
+  sellThisTooFormEl.hidden = true;
+  sellThisTooSearchInput.hidden = false;
+  sellThisTooGridEl.hidden = false;
+  renderSellThisTooGrid();
+}
+
+function attachListingTo(template) {
+  attachFormTemplate = template;
+  sellThisTooSearchInput.hidden = true;
+  sellThisTooGridEl.hidden = true;
+  sellThisTooEmptyEl.hidden = true;
+  sellThisTooFormEl.hidden = false;
+  sellThisTooFormTitleEl.textContent = template.name;
+  const alreadyMine = myProducts().some((p) => p.productId === template.productId);
+  sellThisTooFormNoteEl.hidden = !alreadyMine;
+  sellThisTooFormNoteEl.textContent = alreadyMine
+    ? `You already have a listing for "${template.name}". Adding this creates a second one.`
+    : '';
+  sellThisTooAddBtn.textContent = alreadyMine ? 'Add another listing' : 'Add listing';
+  sellThisTooPriceInput.value = '';
+  sellThisTooStockInput.value = '';
+  sellThisTooFormErrorEl.hidden = true;
+  sellThisTooPriceInput.focus();
+}
+
+async function submitAttachListing(event) {
+  event.preventDefault();
+  const template = attachFormTemplate;
+  if (!template || attachListingInFlight) return;
+  const fail = (message) => {
+    sellThisTooFormErrorEl.textContent = message;
+    sellThisTooFormErrorEl.hidden = false;
+  };
+  sellThisTooFormErrorEl.hidden = true;
+  const dollars = parsePriceInputDollars(sellThisTooPriceInput.value);
+  if (!Number.isFinite(dollars) || dollars < 0) {
+    fail('Enter a price of 0 or more.');
+    sellThisTooPriceInput.focus();
+    return;
+  }
+  if (Math.round(dollars * 100) > MAX_MONEY_CENTS) {
+    fail(`Price must be ${formatPriceCents(MAX_MONEY_CENTS)} or less.`);
+    sellThisTooPriceInput.focus();
+    return;
+  }
+  const priceCents = Math.round(dollars * 100);
+  const trimmedStock = sellThisTooStockInput.value.trim();
+  let stockQuantity;
+  if (trimmedStock) {
+    stockQuantity = Number(trimmedStock);
+    if (!Number.isInteger(stockQuantity) || stockQuantity < 0) {
+      fail('Stock must be a whole number of 0 or more, or left blank.');
+      sellThisTooStockInput.focus();
+      return;
+    }
+  }
   attachListingInFlight = true;
+  sellThisTooAddBtn.disabled = true;
   try {
-    const alreadyMine = myProducts().some((p) => p.productId === template.productId);
-    if (alreadyMine && !confirm(`You already have a listing for "${template.name}". Add another one anyway?`)) {
-      return;
-    }
-    const priceInput = prompt(`Your price for "${template.name}" (e.g. 19.99)`, '');
-    if (priceInput === null) return; // cancelled
-    const dollars = parsePriceInputDollars(priceInput);
-    if (!Number.isFinite(dollars) || dollars < 0) {
-      alert('Price must be a non-negative number.');
-      return;
-    }
-    if (Math.round(dollars * 100) > MAX_MONEY_CENTS) {
-      alert(`Price must be ${formatPriceCents(MAX_MONEY_CENTS)} or less.`);
-      return;
-    }
-    const priceCents = Math.round(dollars * 100);
-    const stockInput = prompt('Stock quantity (leave blank for unlimited)', '');
-    if (stockInput === null) return; // cancelled
-    const trimmedStock = stockInput.trim();
-    let stockQuantity;
-    if (trimmedStock) {
-      stockQuantity = Number(trimmedStock);
-      if (!Number.isInteger(stockQuantity) || stockQuantity < 0) {
-        alert('Stock quantity must be a non-negative whole number, or left blank.');
-        return;
-      }
-    }
-    try {
-      const listing = await createCatalogListing({ productId: template.productId, priceCents, stockQuantity });
-      activeCatalog.push(listing);
-      // #327: same fire-and-forget reasoning as Duplicate's own call to this
-      // above -- without it, this listing's imageUrl/imageEmbedding stay
-      // permanently null.
-      persistCatalogThumbnail(listing);
-      buildCatalogPickerButtons();
-      refreshSellerShowcase();
-      closeSellThisTooModal();
-      renderActiveSellerView();
-    } catch (err) {
-      alert(err.message || 'Could not attach this listing.');
-    }
+    const listing = await createCatalogListing({ productId: template.productId, priceCents, stockQuantity });
+    activeCatalog.push(listing);
+    // #327: same fire-and-forget reasoning as Duplicate's own call to this
+    // above -- without it, this listing's imageUrl/imageEmbedding stay
+    // permanently null.
+    persistCatalogThumbnail(listing);
+    buildCatalogPickerButtons();
+    refreshSellerShowcase();
+    closeSellThisTooModal();
+    renderActiveSellerView();
+  } catch (err) {
+    fail(err.message || 'Could not attach this listing.');
   } finally {
     attachListingInFlight = false;
+    sellThisTooAddBtn.disabled = false;
   }
 }
 
@@ -2341,7 +2378,7 @@ function renderSellThisTooGrid() {
 
 function openSellThisTooModal() {
   sellThisTooSearchInput.value = '';
-  renderSellThisTooGrid();
+  showSellThisTooGrid();
   sellThisTooModalEl.classList.add('visible');
   openModalA11y(sellThisTooModalEl, closeSellThisTooModal);
 }
@@ -2356,6 +2393,8 @@ function closeSellThisTooModal() {
 sellThisTooBtn.addEventListener('click', openSellThisTooModal);
 sellThisTooCloseBtn.addEventListener('click', closeSellThisTooModal);
 sellThisTooSearchInput.addEventListener('input', renderSellThisTooGrid);
+sellThisTooFormEl.addEventListener('submit', submitAttachListing);
+sellThisTooBackBtn.addEventListener('click', showSellThisTooGrid);
 
 // #2565 (leaf of #2504/#2500, Option A per owner decision 2026-10-28): the
 // Settings modal's Sell tab -- extracted wholesale from src/main.js.
