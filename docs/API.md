@@ -533,7 +533,12 @@ its signatures, so it is not trusted); a body with no numeric `timestamp` is
 processed as before. `503` if `DIDIT_WEBHOOK_SECRET` isn't
 configured. Idempotent against a repeat delivery for the same session —
 only the first delivery (webhook or a status poll, whichever gets there
-first) applies the resulting `trustTier` change.
+first) applies the resulting `trustTier` change. Identity verification is
+one-time: Didit's `Kyc Expired` status (a re-verification window lapsing on an
+earlier approval) is logged (`didit-status-ignored`) and otherwise ignored, by
+the webhook and the status poll alike, so it never changes `trustTier` or a
+session's recorded outcome (#2404). The Didit workflow should have no
+re-verification period configured.
 
 ### `POST /api/auth/login`
 
