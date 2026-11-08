@@ -6959,7 +6959,7 @@ server-side, never from the request body), and one review per purchase
 re-reviewed — including the `404` for posting to a template that doesn't
 exist. `e2e/product-reviews.test.mjs` uploads a real seller-owned priced
 product (same flow as `e2e/flooring.test.mjs`), "buys" it via the same API
-the in-world "Simulate Purchase" hint calls (twice, under the one logged-in
+the in-world "Purchase" hint calls (twice, under the one logged-in
 session the whole test runs as — two purchases still grant two independent
 review slots for the same buyer), posts reviews directly via the API, and
 confirms the Seller modal's own "Reviews" row panel displays and moderates
@@ -8151,7 +8151,7 @@ purchase has no other required input beyond which instance is being
 bought. When present, `buyerLabel` is capped at 100 characters, same
 as sign-post/review `authorLabel`. When absent, `buyerLabel` defaults to
 the caller's own session builder's label (#761) — not left anonymous —
-since the in-world "Simulate Purchase" button (the only real purchase
+since the in-world "Purchase" button (the only real purchase
 path this app ships) never sends an explicit `buyerLabel` at all;
 defaulting to blank there meant no real purchase could ever back a
 product review (see "Product reviews" above's exact-`buyer_label`-match
@@ -8648,7 +8648,7 @@ Refund/reversal against a real-money purchase's PaymentIntent is handled by
 Shop mode's isolated product preview modal (its action buttons' visibility
 is driven by `updateReviewFade` in `src/main.js`, shared with "Product
 reviews" and "Product pricing" above — see "Product reviews"' own note on
-why this is tap-driven, not proximity) gains a "Simulate Purchase" button
+why this is tap-driven, not proximity) gains a "Purchase" button
 (`#shop-product-preview-buy-btn`, `handleShopProductBuyClick`), shown only
 when the tapped instance's template has a price set. Clicking it
 confirms the purchase, then calls `purchaseInstance` (`src/api.js`). If
@@ -8890,7 +8890,7 @@ client-side (no new route, no schema change).
 A "Return Policy" button inside the preview modal
 (`#shop-product-preview-return-policy-btn`, `handleShopReturnPolicyClick`)
 shares that same tap-gated `shopTappedProduct`/`canBuy` visibility state as
-the modal's own "Simulate Purchase" button (see "Shop-side: seeing a
+the modal's own "Purchase" button (see "Shop-side: seeing a
 price" above) — both toggle together off one shared `canBuy` boolean in
 `updateReviewFade()`, so the button only ever appears once a shopper has
 actually tapped a buyable product. Clicking it opens `#refund-policy-modal`

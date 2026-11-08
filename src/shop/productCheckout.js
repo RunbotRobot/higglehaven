@@ -555,7 +555,10 @@ export async function handleShopProductBuyClick() {
     } else {
       purchase = result.purchase;
       clearPurchaseIdempotencyKey(instanceId);
-      alert('Purchase simulated — the seller has been credited.');
+      // #3255: real payments are live, so this branch (free / zero-price items
+      // and any path that returns the purchase directly) reads the same as the
+      // paid branch above rather than the dev-era "simulated" wording.
+      alert('Purchase complete — thank you!');
     }
     // #1096: right after the purchase, while the shopper's own buyer_label
     // (locked into the purchase row at checkout -- see #761's own comment
