@@ -1072,10 +1072,18 @@
         color: var(--pill-text);
         font-size: 16px;
         line-height: 1;
-        display: flex;
         align-items: center;
         justify-content: center;
         cursor: pointer;
+      }
+      /* #3248: display lives under .visible, not on the bare id rule. An id
+         selector outranks the base .shop-ui { display: none } gate, so a
+         bare "display: flex" above painted this button from first paint,
+         before the rest of the Shop HUD, and it alone led on page load.
+         Same specificity as the id rule's own state classes below, so the
+         .shop-ui gate stays authoritative until .visible is added. */
+      #shop-voice-btn.visible {
+        display: flex;
       }
       /* Current-state convention (#2778's resolution) -- background color
          always reflects what the mic is doing right now. */
@@ -2913,6 +2921,14 @@
       }
       .seller-save-btn:disabled {
         opacity: 0.5;
+      }
+      /* #3249: inline Delete confirm in Sell > Manage. */
+      .seller-row-confirm {
+        display: inline-flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        font-size: 12px;
       }
       .seller-row-status {
         font-size: 11px;

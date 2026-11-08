@@ -29,7 +29,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { createMeshForInstance, disposeObject } from '../world/models.js';
 import {
-  createProductReview, editProductReview, deleteProductReview, createSellerFeedback,
+  createProductReview, editProductReview, deleteProductReview,
   purchaseInstance, clearPurchaseIdempotencyKey, finalizePurchase,
 } from '../api.js';
 import { ensureBuilderIdentity } from '../account/identity.js';
@@ -481,38 +481,6 @@ export function handleShopReturnPolicyClick() {
   openModalA11y(refundPolicyModalEl, closeRefundPolicyModal);
 }
 
-// #1096: distinct from handleShopProductReviewClick's product review above
-// -- this rates the seller's own service (listing accuracy, timeliness,
-// communication) for one specific purchase, not the product itself, so it
-// only ever fires right after that purchase rather than from a standalone
-// in-world tap. Same lightweight prompt()-based rating+comment flow as the
-// review handler, for the same reason that handler uses it -- a star
-// rating is already a complete, useful piece of feedback, and the comment
-// is an optional extra.
-async function promptSellerFeedback(purchase) {
-  if (!purchase?.sellerId || !purchase.buyerLabel) return;
-  if (!confirm('Leave feedback for the seller? (listing accuracy, timeliness, communication)')) return;
-  const ratingInput = prompt('Rate this seller 1-5 stars:', '5');
-  if (!ratingInput || !ratingInput.trim()) return;
-  const rating = Number(ratingInput.trim());
-  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-    alert('Please enter a whole number from 1 to 5.');
-    return;
-  }
-  const text = prompt('Add a comment (up to 280 characters), or leave blank:', '');
-  // #2005: same missing client-side check as the product review prompt
-  // above -- see its own comment for why this matters.
-  if (text && text.trim().length > 280) {
-    alert('Keep it to 280 characters or fewer.');
-    return;
-  }
-  try {
-    await createSellerFeedback(purchase.purchaseId, { rating, text: text?.trim() || undefined });
-  } catch (err) {
-    alert(err.message || 'Could not leave feedback for this seller.');
-  }
-}
-
 export async function handleShopProductBuyClick() {
   const review = shopTappedProduct;
   if (!review) return;
@@ -534,10 +502,8 @@ export async function handleShopProductBuyClick() {
   const instanceId = review.mesh.userData.instanceId;
   try {
     const result = await purchaseInstance(instanceId);
-    let purchase;
     if (result.requiresPayment) {
       const finalized = await runCheckoutFlow(result, { name, totalCents: priceCents });
-      purchase = finalized.purchase;
       // #473: only clear the persisted idempotency key (see purchaseInstance
       // in src/api.js) once the purchase has genuinely finalized -- a
       // network failure anywhere before this point should leave it in
@@ -553,21 +519,17 @@ export async function handleShopProductBuyClick() {
         ? `Purchase complete — thank you! Once you receive it, confirm delivery here so the seller gets paid:\n${finalized.deliveryConfirmUrl}`
         : 'Purchase complete — thank you!');
     } else {
-      purchase = result.purchase;
       clearPurchaseIdempotencyKey(instanceId);
-      alert('Purchase simulated — the seller has been credited.');
+      // #3255: real payments are live, so this branch (free / zero-price items
+      // and any path that returns the purchase directly) reads the same as the
+      // paid branch above rather than the dev-era "simulated" wording.
+      alert('Purchase complete — thank you!');
     }
-    // #1096: right after the purchase, while the shopper's own buyer_label
-    // (locked into the purchase row at checkout -- see #761's own comment
-    // on why the in-world buy flow never sends an explicit one) is already
-    // known, is the only moment this dev-mode identity system can offer a
-    // "leave feedback" prompt at all -- there's no "my orders" page to
-    // come back to later (#454's own comment above). sellerId/buyerLabel
-    // are both required server-side (handleSellerFeedbackCreate), so a
-    // seller-less product or a null buyer_label (shouldn't happen via this
-    // flow, but defends the same way the review gate does) just skips the
-    // prompt rather than offering feedback that would only 400.
-    await promptSellerFeedback(purchase);
+    // #3256 (owner report): no immediate "Leave feedback for the seller?"
+    // prompt here. Right after buying is too early to judge accuracy,
+    // timeliness or communication (the buyer had not even equipped the
+    // item); My Purchases offers "Rate this seller" per purchase for when
+    // they actually know how it went (#3198).
   } catch (err) {
     if (err.message !== 'Checkout cancelled.') alert(err.message || 'Could not complete this purchase.');
   } finally {

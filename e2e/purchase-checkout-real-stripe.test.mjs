@@ -408,8 +408,7 @@ try {
   throw err;
 }
 
-// handleShopProductBuyClick's own confirm() dialog, and later
-// promptSellerFeedback's confirm()/prompt() pair, are all auto-accepted by
+// handleShopProductBuyClick's own confirm() dialog is auto-accepted by
 // launchPage's own default dialog handler -- this file only adds a second
 // listener (same convention as e2e/purchase-shipping.test.mjs's own
 // dialogMessages capture) to read back the "Purchase complete" alert as

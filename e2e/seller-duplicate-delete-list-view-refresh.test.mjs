@@ -57,7 +57,8 @@ await page.route('**/api/catalog/*', async (route) => {
   await route.continue();
 });
 
-await deleteRow.locator('.seller-row-action-btn.danger', { hasText: 'Delete' }).click();
+await deleteRow.locator('.seller-row-action-btn.danger', { hasText: /^Delete$/ }).click();
+await deleteRow.locator('.seller-row-delete-confirm-btn').click(); // #3249: in-app confirm
 await page.waitForTimeout(300); // DELETE is now in flight, delayed by the route above
 
 // Switch to List view *while the delete is still in flight* -- renders List

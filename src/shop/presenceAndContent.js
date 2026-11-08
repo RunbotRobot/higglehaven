@@ -62,7 +62,7 @@ import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
   fetchCreditOrbs, collectCreditOrb, reportPresence, fetchNearbyPresence,
 } from '../api.js';
-import { createShopAvatar, setShopAvatarAnimationState } from './avatar.js';
+import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD } from './avatar.js';
 import {
   normalizeEquippedAvatar, normalizeEquippedAnimation, chooseAllowedTemplateIds, desiredAvatarFor,
   animationForAvatar, locomotionStateFor,
@@ -82,6 +82,7 @@ import {
 // header comment already documents for shop/avatar.js and itself.
 import { disposeObject3D, unloadShopLandletInstances, buildShopGroundMesh } from './mode.js';
 import { registerShopSign, registerShopCalendar, registerShopReview } from './worldSprites.js';
+import { rateLimitNoticeText } from '../rateLimitNotice.js';
 
 const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
 const shopCreditOrbOfflineNoticeEl = document.getElementById('shop-credit-orb-offline-notice');
@@ -838,6 +839,7 @@ async function loadOtherAvatarCustomBody(modelUrl) {
   const container = await loadModelInstance(modelUrl, { skeletonSafe: true });
   const box = new THREE.Box3().setFromObject(container);
   container.position.z = Math.max(box.max.z - box.min.z, 0) / 2;
+  container.rotation.z = CUSTOM_AVATAR_FRONT_YAW_RAD; // #2744: same turn as the shopper's own avatar, so the model's front leads
   const body = new THREE.Group();
   body.add(container);
   body.userData.clipRoot = container.userData.model; // what clips bind against (as createCustomShopAvatar does)
@@ -1236,7 +1238,7 @@ export function updateCreditOrbs(dt) {
       if (error.status === 429) {
         markCreditOrbCollectReachedServer();
         creditOrbRateLimitedUntilMs = performance.now() + CREDIT_ORB_RATE_LIMIT_RETRY_COOLDOWN_MS;
-        showCreditOrbRateLimitNotice();
+        showCreditOrbRateLimitNotice(error.rateLimit);
         orb.collecting = false;
         return;
       }
@@ -1316,7 +1318,9 @@ let creditOrbToastHideTimer = null;
 // Same auto-hide shape as showCreditOrbToast just above, timed to
 // CREDIT_ORB_RATE_LIMIT_RETRY_COOLDOWN_MS so it clears right as collection
 // attempts actually resume, rather than on its own unrelated schedule.
-function showCreditOrbRateLimitNotice() {
+function showCreditOrbRateLimitNotice(rateLimit) {
+  const text = rateLimitNoticeText('orbs', rateLimit);
+  if (text) shopCreditOrbRateLimitNoticeEl.textContent = text;
   shopCreditOrbRateLimitNoticeEl.classList.add('visible');
   clearTimeout(creditOrbRateLimitNoticeHideTimer);
   creditOrbRateLimitNoticeHideTimer = setTimeout(() => {

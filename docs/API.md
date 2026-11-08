@@ -6959,7 +6959,7 @@ server-side, never from the request body), and one review per purchase
 re-reviewed — including the `404` for posting to a template that doesn't
 exist. `e2e/product-reviews.test.mjs` uploads a real seller-owned priced
 product (same flow as `e2e/flooring.test.mjs`), "buys" it via the same API
-the in-world "Simulate Purchase" hint calls (twice, under the one logged-in
+the in-world "Purchase" hint calls (twice, under the one logged-in
 session the whole test runs as — two purchases still grant two independent
 review slots for the same buyer), posts reviews directly via the API, and
 confirms the Seller modal's own "Reviews" row panel displays and moderates
@@ -7134,15 +7134,10 @@ review averages are already shown" — a full shopper-facing "my orders"
 history to leave feedback from later doesn't exist in this app at all
 (see "Product reviews"' own `#454` comment on why — the server never
 stores a raw token/receipt a shopper could come back to), so submission
-instead happens at the one moment a shopper is guaranteed to still have
-their own purchase in hand: immediately after the preview modal's Buy
-button (`handleShopProductBuyClick`) completes a purchase (both the
-real-money and simulated paths), via a `confirm()` then the same
-two-`prompt()` rating+comment flow the modal's own Review button
-(`handleShopProductReviewClick`) already uses. `promptSellerFeedback`
-silently no-ops when the purchase has no `sellerId` (nothing to rate) or
-no `buyerLabel` (the purchase predates a real buyer identity) — never
-shown for a product with no seller or an unidentified buyer. The seller's
+originally happened immediately after the preview modal's Buy button
+completed a purchase. **#3256 removed that immediate prompt** (too early
+to judge accuracy, timeliness or communication); feedback is now left
+only from My Purchases' per-row "Rate this seller" action (#3198). The seller's
 own aggregate — `#seller-feedback-summary` in the Seller modal, right
 below `#seller-hint` — is fetched fresh on every modal open
 (`renderSellerFeedbackSummary`) and stays hidden entirely until that
@@ -7153,13 +7148,11 @@ invisible" convention the preview modal's own info text documents.
 no frontend wiring in this PR.** The structural gap this section's own
 first paragraph already describes (no "my orders" page, no receipt to come
 back to) applies just as much to editing/deleting feedback already left as
-it does to leaving it in the first place: `promptSellerFeedback` fires
-exactly once, immediately after a purchase, with no later re-entry point
-the way the preview modal's Review button offers for product reviews
-(tap the same in-world product again any time). Exposing this to buyers
-for real needs a genuine "my purchases"/order-history view to revisit —
-a separate, larger piece of frontend work this issue doesn't scope, flagged
-as its own backlog item rather than built here.
+it does to leaving it in the first place (historical: the then-only
+entry point fired exactly once, immediately after a purchase, with no
+later re-entry point the way the preview modal's Review button offers for product reviews
+(tap the same in-world product again any time)). That gap is closed: My
+Purchases (#3198) now offers leave/edit/delete per purchase.
 
 ## Scheduled calendar events + creative-tool trigger
 
@@ -8151,7 +8144,7 @@ purchase has no other required input beyond which instance is being
 bought. When present, `buyerLabel` is capped at 100 characters, same
 as sign-post/review `authorLabel`. When absent, `buyerLabel` defaults to
 the caller's own session builder's label (#761) — not left anonymous —
-since the in-world "Simulate Purchase" button (the only real purchase
+since the in-world "Purchase" button (the only real purchase
 path this app ships) never sends an explicit `buyerLabel` at all;
 defaulting to blank there meant no real purchase could ever back a
 product review (see "Product reviews" above's exact-`buyer_label`-match
@@ -8648,7 +8641,7 @@ Refund/reversal against a real-money purchase's PaymentIntent is handled by
 Shop mode's isolated product preview modal (its action buttons' visibility
 is driven by `updateReviewFade` in `src/main.js`, shared with "Product
 reviews" and "Product pricing" above — see "Product reviews"' own note on
-why this is tap-driven, not proximity) gains a "Simulate Purchase" button
+why this is tap-driven, not proximity) gains a "Purchase" button
 (`#shop-product-preview-buy-btn`, `handleShopProductBuyClick`), shown only
 when the tapped instance's template has a price set. Clicking it
 confirms the purchase, then calls `purchaseInstance` (`src/api.js`). If
@@ -8890,7 +8883,7 @@ client-side (no new route, no schema change).
 A "Return Policy" button inside the preview modal
 (`#shop-product-preview-return-policy-btn`, `handleShopReturnPolicyClick`)
 shares that same tap-gated `shopTappedProduct`/`canBuy` visibility state as
-the modal's own "Simulate Purchase" button (see "Shop-side: seeing a
+the modal's own "Purchase" button (see "Shop-side: seeing a
 price" above) — both toggle together off one shared `canBuy` boolean in
 `updateReviewFade()`, so the button only ever appears once a shopper has
 actually tapped a buyable product. Clicking it opens `#refund-policy-modal`
@@ -11032,6 +11025,15 @@ every other authenticated repeatable-write endpoint in this file (#2092) —
 a bogus or already-collected orb id still 404s cheaply but counts against
 the limit, since the cost is the D1 batch round-trip, not a successful
 collect specifically.
+
+**#3258** (owner decision: a message that limits an action says how much and
+until when): every rate-limit `429` (this endpoint and every other
+`checkRateLimit` caller) now carries `{ "limit", "windowSeconds",
+"retryAfterSeconds" }` beside `error`. `retryAfterSeconds` (at least 1) is
+the time until the bucket's oldest in-window attempt ages out, i.e. when the
+next attempt is allowed. The orb notice in Shop mode builds its sentence
+from these (`src/rateLimitNotice.js`) instead of hard-coding the limit. Other
+user-visible rate-limit notices are tracked as follow-ups.
 
 **#2222**: also requires the caller's own `avatar_presence` row (#1097/#1098)
 to be fresh (within `PRESENCE_STALE_AFTER_MS`, the same freshness bar the

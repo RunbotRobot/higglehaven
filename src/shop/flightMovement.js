@@ -1794,7 +1794,14 @@ export function updateShopMovement(now) {
   // rather than staying fixed. leanBlend (#2479) lets a test confirm the
   // lean pose is actually easing in/out rather than just checking the
   // position/facing ended up in the right place.
-  window.__shopAvatarOrientation = { facingRad: shopAvatarFacing, pitchRad: shopAvatarPitch, quaternion: shopAvatar.group.quaternion.toArray(), leanBlend: shopLeanBlend };
+  window.__shopAvatarOrientation = {
+    facingRad: shopAvatarFacing, pitchRad: shopAvatarPitch, quaternion: shopAvatar.group.quaternion.toArray(), leanBlend: shopLeanBlend,
+    // added for #2744 -- owner report: an equipped custom avatar faced the camera
+    // instead of its direction of travel. The model's own glTF front (+Z) in
+    // world space ([x, y, z], null for the default body), so a test can tell the
+    // face leads from the face trails without reading pixels.
+    modelFrontWorld: shopAvatar.modelFrontWorld ? shopAvatar.modelFrontWorld() : null,
+  };
   // #2744: same reasoning as window.__shopAvatarOrientation above — a
   // custom avatar's own idle/walk/fly crossfade (setShopAvatarAnimationState)
   // has no other way for a test to confirm it's actually transitioning
