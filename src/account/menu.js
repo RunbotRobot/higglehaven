@@ -36,6 +36,7 @@ import {
   disputePurchase,
   fetchUnreadNotificationCount,
   markNotificationRead,
+  deleteNotification,
   markAllNotificationsRead,
   fetchFriendships,
   sendFriendRequest,
@@ -122,7 +123,36 @@ function appendNotificationRow(notification) {
   const time = document.createElement('div');
   time.className = 'notification-row-time';
   time.textContent = formatNotificationTime(notification.createdAt);
-  row.appendChild(time);
+  // #3280: the time and a Delete button share one footer line.
+  const footer = document.createElement('div');
+  footer.className = 'notification-row-footer';
+  footer.appendChild(time);
+  const deleteBtn = document.createElement('button');
+  deleteBtn.type = 'button';
+  deleteBtn.className = 'notification-row-delete';
+  deleteBtn.textContent = 'Delete';
+  deleteBtn.setAttribute('aria-label', `Delete notification: ${notification.message}`);
+  deleteBtn.addEventListener('click', async (event) => {
+    // Deleting must not also fire the row's tap-to-mark-read handler.
+    event.stopPropagation();
+    deleteBtn.disabled = true;
+    try {
+      await deleteNotification(notification.notificationId);
+    } catch (err) {
+      // 404 means it is already gone (a double tap, or another tab): the row
+      // should go either way. Anything else leaves it in place, visibly.
+      if (err.status !== 404) {
+        deleteBtn.disabled = false;
+        deleteBtn.textContent = "Couldn't delete — try again";
+        return;
+      }
+    }
+    row.remove();
+    notificationsEmptyEl.hidden = notificationsListEl.children.length > 0;
+    refreshNotificationsBadge();
+  });
+  footer.appendChild(deleteBtn);
+  row.appendChild(footer);
   // Tapping any notice marks just that one read — simpler than a
   // separate per-row dismiss button, and "Mark all read" still exists
   // for clearing the whole list at once.

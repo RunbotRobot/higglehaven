@@ -1017,6 +1017,11 @@ export async function markNotificationRead(notificationId) {
   return notification;
 }
 
+// #3280: removes the caller's own notification (rather than flagging it).
+export async function deleteNotification(notificationId) {
+  await requestJson(`/notifications/${encodeURIComponent(notificationId)}`, { method: 'DELETE' });
+}
+
 export async function markAllNotificationsRead() {
   await requestJson('/notifications/mark-all-read', { method: 'POST' });
 }
