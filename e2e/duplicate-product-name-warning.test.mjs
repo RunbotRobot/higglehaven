@@ -69,29 +69,28 @@ const bothWidgetsListed = (sellerListText.match(new RegExp(FIRST_NAME, 'g')) ?? 
 console.log('both same-named products still created despite the warning (should be true):', bothWidgetsListed);
 
 // Rename flow: renaming SECOND_UNIQUE_NAME to also collide with FIRST_NAME
-// should warn too, scoped the same way. launchPage's dialog handler always
-// answers prompt() with the fixed LABEL (useless here, same issue
-// bundles.test.mjs's own rename test hits) -- monkey-patch window.prompt
-// directly instead, same fix as that test uses, and leave window.confirm
-// alone so the duplicate-name warning still fires as a real dialog our
-// listener above captures.
+// should warn too, scoped the same way. Rename now uses the in-app name modal
+// (#3249) and an inline confirm for the warning, so there is no native dialog
+// to capture -- fill the modal and read the inline confirm's text.
 await page.waitForTimeout(300);
-await page.evaluate((name) => { window.prompt = () => name; }, FIRST_NAME);
 const rows = page.locator('.seller-row');
 const rowCount = await rows.count();
 let renamed = false;
+let dupRenameWarning = null;
 for (let i = 0; i < rowCount; i++) {
   const row = rows.nth(i);
   const text = await row.textContent();
   if (text.includes(SECOND_UNIQUE_NAME)) {
     await row.locator('.seller-row-toggle').click();
     await row.locator('.seller-row-action-btn:has-text("Rename")').click();
+    await page.fill('#bundle-name-input', FIRST_NAME);
+    await page.click('#bundle-name-save-btn');
+    await row.locator('.inline-confirm').waitFor({ timeout: 5000 });
+    dupRenameWarning = await row.locator('.inline-confirm').textContent();
     renamed = true;
     break;
   }
 }
-await page.waitForTimeout(500);
-const dupRenameWarning = dialogMessages[dialogMessages.length - 1] ?? null;
 console.log('duplicate-name warning on rename (should mention the name):', dupRenameWarning);
 
 const pass = dialogsAfterFirstUpload === 0 &&

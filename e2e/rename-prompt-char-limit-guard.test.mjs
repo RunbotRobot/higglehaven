@@ -186,15 +186,21 @@ await productRow().locator('.seller-row-toggle').click();
 await page.waitForTimeout(300);
 const productRenameBtn = productRow().locator('button', { hasText: 'Rename' });
 
-dialogScript = [OVERLONG];
+// #3249: product rename now uses the themed name modal (maxlength 100), like
+// bundles, instead of a native prompt() + alert().
 await productRenameBtn.click();
+await page.waitForSelector('#bundle-name-modal.visible', { timeout: 10000 });
+await page.fill('#bundle-name-input', OVERLONG);
+const productRenameInputTruncated = (await page.inputValue('#bundle-name-input')).length === 100;
+console.log('product rename input truncates at 100 chars (should be true):', productRenameInputTruncated);
+await page.click('#bundle-name-cancel-btn');
 await page.waitForTimeout(300);
 const productNameAfterOverlong = await productRow().textContent();
-console.log('product name unchanged after an over-100-char rename attempt (should be true):', productNameAfterOverlong.includes(PRODUCT_NAME));
+console.log('product name unchanged after cancelling the overlong rename attempt (should be true):', productNameAfterOverlong.includes(PRODUCT_NAME));
 
 const NEW_PRODUCT_NAME = 'Renamed Valid Crate';
-dialogScript = [NEW_PRODUCT_NAME];
 await productRenameBtn.click();
+await fillBundleNameModal(page, NEW_PRODUCT_NAME);
 await page.waitForFunction(
   (name) => [...document.querySelectorAll('.seller-row')].some((el) => el.textContent.includes(name)),
   NEW_PRODUCT_NAME,
@@ -203,11 +209,11 @@ await page.waitForFunction(
 const productRowAfterValidRename = await page.locator('.seller-row').filter({ hasText: NEW_PRODUCT_NAME }).count();
 console.log('product renamed normally with a valid value (should be 1):', productRowAfterValidRename);
 
-// Only 3 of the 5 flows still go through a native alert() guard -- bundle
-// create/rename (above) moved to the themed modal's own maxlength="100"
-// instead, which never produces a dialog at all.
+// Only 2 of the 5 flows still go through a native alert() guard -- bundle
+// create/rename and product rename moved to the themed modal's own
+// maxlength="100" instead, which never produces a dialog at all.
 const guardAlerts = dialogLog.filter((msg) => /100 characters/.test(msg));
-console.log('total over-100-char guard alerts seen across the 3 still-native flows (should be 3):', guardAlerts.length);
+console.log('total over-100-char guard alerts seen across the 2 still-native flows (should be 2):', guardAlerts.length);
 
 const pass = builderLabelAfterOverlong.trim() === LABEL &&
   builderLabelAfterValidRename.trim() === NEW_BUILDER_LABEL &&
@@ -218,9 +224,10 @@ const pass = builderLabelAfterOverlong.trim() === LABEL &&
   bundleRenameInputTruncated &&
   bundleNameAfterOverlong.includes(NEW_BUNDLE_NAME) &&
   bundleNameAfterValidRename.includes(RENAMED_BUNDLE_NAME) &&
+  productRenameInputTruncated &&
   productNameAfterOverlong.includes(PRODUCT_NAME) &&
   productRowAfterValidRename === 1 &&
-  guardAlerts.length === 3 &&
+  guardAlerts.length === 2 &&
   errors.length === 0;
 await finish(browser, {
   pass,
