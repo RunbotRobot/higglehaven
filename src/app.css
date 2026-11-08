@@ -1307,6 +1307,32 @@
       #gizmo-mode-controls button:disabled {
         opacity: 0.4;
       }
+      /* #3264: a Group/Ungroup refusal is shown here, just under the toolbar
+         the tap happened in. It used to go to #product-info, which
+         updateSelectionUI() rewrites with "N items selected" in the same
+         tick, so on a phone the message was never visible. Absolutely
+         positioned and click-through on purpose: as a normal flex row it
+         made the toolbar one row taller, and that taller box sat on top of
+         the 3D canvas and swallowed taps meant for the items under it (the
+         hazard the width rule above describes). */
+      #selection-action-status {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        margin-top: 6px;
+        pointer-events: none;
+        box-sizing: border-box;
+        text-align: center;
+        padding: 6px 12px;
+        border-radius: 12px;
+        background: rgb(var(--pill-rgb) / 0.85);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #selection-action-status[hidden] {
+        display: none;
+      }
       /* Tactile press feedback (Copy button) — the button's own pill
          background flashes to the brand color and back, the same surface
          a physical button's own material would visibly depress into,
