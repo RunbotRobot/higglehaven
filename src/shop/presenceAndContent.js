@@ -62,7 +62,7 @@ import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
   fetchCreditOrbs, collectCreditOrb, reportPresence, fetchNearbyPresence,
 } from '../api.js';
-import { createShopAvatar, setShopAvatarAnimationState } from './avatar.js';
+import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD } from './avatar.js';
 import {
   normalizeEquippedAvatar, normalizeEquippedAnimation, chooseAllowedTemplateIds, desiredAvatarFor,
   animationForAvatar, locomotionStateFor,
@@ -809,6 +809,7 @@ async function loadOtherAvatarCustomBody(modelUrl) {
   const container = await loadModelInstance(modelUrl, { skeletonSafe: true });
   const box = new THREE.Box3().setFromObject(container);
   container.position.z = Math.max(box.max.z - box.min.z, 0) / 2;
+  container.rotation.z = CUSTOM_AVATAR_FRONT_YAW_RAD; // #2744: same turn as the shopper's own avatar, so the model's front leads
   const body = new THREE.Group();
   body.add(container);
   body.userData.clipRoot = container.userData.model; // what clips bind against (as createCustomShopAvatar does)
