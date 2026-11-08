@@ -1958,6 +1958,17 @@
       .modal-close-btn:hover {
         background: rgb(var(--ink-rgb) / 0.22);
       }
+      /* #3245: the modal moves focus to its close button on open, and iPadOS
+         Safari (once a hardware keyboard or trackpad has been used) paints
+         its default blue focus ring there. On this 28px round button that
+         ring showed as a stray partial arc against the panel's rounded
+         corner. An explicit, whole ring in the app's own ink colour reads as
+         a deliberate focus indicator instead, and stays visible for keyboard
+         users (the outline is restyled, not suppressed). */
+      .modal-close-btn:focus-visible {
+        outline: 2px solid rgb(var(--ink-rgb) / 0.75);
+        outline-offset: 2px;
+      }
       #upload-modal-content h2 {
         margin: 0;
         font-size: 17px;

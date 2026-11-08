@@ -56,15 +56,28 @@ const wrappedInsideModal = await page.evaluate(() =>
   document.getElementById('settings-modal').contains(document.activeElement));
 console.log('Shift+Tab from the first focusable element stays trapped inside the modal (should be true):', wrappedInsideModal);
 
+// #3245: the close button gets an explicit, whole focus ring (not the
+// browser default, which iPadOS Safari painted as a stray blue arc on the
+// round button) whenever keyboard focus lands on it. The Shift+Tab above
+// just used the keyboard, so a programmatic focus here matches :focus-visible.
+await page.focus('#settings-close-btn');
+const closeBtnRing = await page.evaluate(() => {
+  const cs = getComputedStyle(document.getElementById('settings-close-btn'));
+  return { style: cs.outlineStyle, width: cs.outlineWidth, offset: cs.outlineOffset };
+});
+console.log('Close button focus ring (should be a 2px solid ring offset 2px):', JSON.stringify(closeBtnRing));
+const closeBtnRingOk = closeBtnRing.style === 'solid' && closeBtnRing.width === '2px' && closeBtnRing.offset === '2px';
+
 const pass = role === 'dialog' &&
   ariaModal === 'true' &&
   focusInsideModalOnOpen &&
   closedViaEscape &&
   focusRestoredToTrigger &&
   wrappedInsideModal &&
+  closeBtnRingOk &&
   errors.length === 0;
 await finish(browser, {
   pass,
-  label: 'Modals get real keyboard accessibility: role/aria-modal, focus management, Escape-to-close, Tab trap (#1316)',
+  label: 'Modals get real keyboard accessibility: role/aria-modal, focus management, Escape-to-close, Tab trap (#1316), and a whole focus ring on the close button (#3245)',
   errors,
 });
