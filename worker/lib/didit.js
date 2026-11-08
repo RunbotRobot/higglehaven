@@ -288,12 +288,30 @@ export async function reserveDiditSession(db, userId) {
 
 // Didit's own decision statuses (https://docs.didit.me/): 'Approved' is
 // the only one that raises trust_tier; every other terminal status
-// ('Declined', 'Abandoned', 'Expired', 'Kyc Expired') is recorded as
-// declined so a stuck 'pending' row doesn't linger forever — a builder can
-// always just start a fresh session afterward. 'In Review'/'In Progress'
-// leave the row pending (absent from this map, handled by callers as
-// "nothing to resolve yet").
-const DIDIT_TERMINAL_STATUSES = { Approved: true, Declined: false, Abandoned: false, Expired: false, 'Kyc Expired': false };
+// ('Declined', 'Abandoned', 'Expired') is recorded as declined so a stuck
+// 'pending' row doesn't linger forever — a builder can always just start a
+// fresh session afterward. 'In Review'/'In Progress' leave the row pending
+// (absent from this map, handled by callers as "nothing to resolve yet").
+const DIDIT_TERMINAL_STATUSES = { Approved: true, Declined: false, Abandoned: false, Expired: false };
+
+// #2404 (owner decision 2026-11-08, AGENTS.md: "Identity verification is
+// one-time; a lapsed re-check window is not a violation and never downgrades
+// anyone"): 'Kyc Expired' is what Didit sends for a session it approved
+// earlier once a configured re-verification window lapses. This platform has
+// no recurring-KYC duty, so the status is logged and otherwise ignored:
+// trust_tier stays id_verified and nothing gated on it is withdrawn. It is
+// deliberately not in DIDIT_TERMINAL_STATUSES above: that map would record a
+// still-pending session as 'declined', and after an approval the
+// processed_at guard already makes it a no-op, so the only thing the old
+// entry could ever do was the wrong one. The Didit workflow itself should
+// have no re-verification period set, so this should never fire in practice.
+const DIDIT_IGNORED_STATUSES = new Set(['Kyc Expired']);
+
+function ignoreDiditStatus(status, sessionId) {
+  if (!DIDIT_IGNORED_STATUSES.has(status)) return false;
+  console.warn('didit-status-ignored', JSON.stringify({ status, sessionId }));
+  return true;
+}
 
 // Shared by the webhook and the status-poll fallback below, so "a builder
 // finishes verification but the webhook is slow or never arrives" doesn't
@@ -354,6 +372,7 @@ export async function reconcileDiditSession(env, db, latest, userId) {
   if (!diditConfigured(env)) return latest.status;
   const decision = await diditRequest(env, 'GET', `v3/session/${encodeURIComponent(latest.session_id)}/decision/`);
   const overallStatus = decision.status;
+  if (ignoreDiditStatus(overallStatus, latest.session_id)) return latest.status;
   if (!Object.prototype.hasOwnProperty.call(DIDIT_TERMINAL_STATUSES, overallStatus)) {
     return 'pending';
   }
@@ -428,6 +447,7 @@ export async function handleDiditWebhook(request, env, db) {
   }
   const sessionId = payload.session_id;
   const overallStatus = payload.status;
+  if (ignoreDiditStatus(overallStatus, sessionId)) return json({ received: true });
   if (!sessionId || !Object.prototype.hasOwnProperty.call(DIDIT_TERMINAL_STATUSES, overallStatus)) {
     return json({ received: true });
   }
