@@ -169,6 +169,35 @@ describe('POST /api/feedback/bug-report surfaces a Control Room card (#2720)', (
     expect(task.note_number).toBeGreaterThan(0);
   });
 
+  it('puts the last messages the person was shown into the card (#3303)', async () => {
+    const response = await postBugReport({
+      metadata: metadataFor({
+        recentUserVisibleMessages: [
+          { text: "Couldn't group these items. Too many items at once.", shownAt: '2026-11-09T01:00:00.000Z' },
+          { text: '   ', shownAt: 'x' },
+          { notText: true },
+        ],
+      }),
+    });
+    const task = await controlRoomTaskFor((await response.json()).reportId);
+    expect(task.note).toContain('Last messages shown to the person');
+    expect(task.note).toContain("[2026-11-09T01:00:00.000Z] Couldn't group these items. Too many items at once.");
+  });
+
+  it('keeps only the last five messages, bounds each, and tolerates a malformed field (#3303)', async () => {
+    const many = Array.from({ length: 8 }, (_, i) => ({ text: `message-${i}-${'x'.repeat(600)}`, shownAt: '' }));
+    const task = await controlRoomTaskFor((await (await postBugReport({ metadata: metadataFor({ recentUserVisibleMessages: many }) })).json()).reportId);
+    expect(task.note).not.toContain('message-2-');
+    expect(task.note).toContain('message-3-');
+    expect(task.note).toContain('message-7-');
+    expect(task.note).not.toContain('x'.repeat(520));
+
+    const response = await postBugReport({ metadata: metadataFor({ recentUserVisibleMessages: 'not an array' }) });
+    expect(response.status).toBe(201);
+    const bare = await controlRoomTaskFor((await response.json()).reportId);
+    expect(bare.note).not.toContain('Last messages shown to the person');
+  });
+
   it('defaults the card title when no description was given', async () => {
     const response = await postBugReport({ metadata: metadataFor({ description: undefined }) });
     const body = await response.json();

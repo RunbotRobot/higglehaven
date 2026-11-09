@@ -44,7 +44,7 @@ const CONTROL_ROOM_BUG_REPORT_POSTED_BY = 'bug-report';
 // blow up this row the same way MAX_METADATA_JSON_BYTES above already
 // guards the request itself).
 const CONTROL_ROOM_NOTE_MAX_LENGTH = 20000;
-function bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platform, submittedAt, renderStateBuffer }) {
+function bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platform, submittedAt, renderStateBuffer, recentUserVisibleMessages = [] }) {
   const lines = [];
   if (webglRenderer || webglVendor) {
     lines.push(`WebGL renderer: ${webglRenderer || '(unknown)'}${webglVendor ? ` (${webglVendor})` : ''}`);
@@ -52,6 +52,11 @@ function bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platf
   if (userAgent) lines.push(`User agent: ${userAgent}`);
   if (platform) lines.push(`Platform: ${platform}`);
   if (submittedAt) lines.push(`Submitted: ${submittedAt}`);
+  // #3303: the last error/refusal strings the person was shown, oldest first.
+  if (recentUserVisibleMessages.length) {
+    lines.push('Last messages shown to the person (oldest first):');
+    for (const entry of recentUserVisibleMessages) lines.push(`- ${entry.shownAt ? `[${entry.shownAt}] ` : ''}${entry.text}`);
+  }
   lines.push(`Render-state buffer (${renderStateBuffer.length} sample${renderStateBuffer.length === 1 ? '' : 's'}, ~1Hz, camera/avatar state + shader uniforms):`);
   lines.push(JSON.stringify(renderStateBuffer, null, 2));
   let note = lines.join('\n');
@@ -161,6 +166,16 @@ export async function handleFeedbackBugReportCreate(request, env, db) {
   // malformed client payload degrades to "no buffer" rather than storing
   // something #2720's own rendering can't rely on being iterable.
   const renderStateBuffer = Array.isArray(metadata.renderStateBuffer) ? metadata.renderStateBuffer : [];
+  // #3303: display-only like the buffer above (shown in the Control Room card,
+  // not stored in bug_reports), so no migration: keep the last few well-formed
+  // entries and bound each string.
+  const recentUserVisibleMessages = (Array.isArray(metadata.recentUserVisibleMessages) ? metadata.recentUserVisibleMessages : [])
+    .filter((entry) => entry && typeof entry.text === 'string' && entry.text.trim())
+    .slice(-5)
+    .map((entry) => ({
+      text: entry.text.trim().slice(0, 500),
+      shownAt: typeof entry.shownAt === 'string' ? entry.shownAt.slice(0, 64) : '',
+    }));
 
   const reportId = `report-${crypto.randomUUID()}`;
 
@@ -192,7 +207,7 @@ export async function handleFeedbackBugReportCreate(request, env, db) {
   const controlRoomTaskId = `bug-report-${reportId.slice('report-'.length)}`;
   const now = new Date().toISOString();
   const controlRoomTitle = description || 'Bug report (no description)';
-  const controlRoomNote = bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platform, submittedAt, renderStateBuffer });
+  const controlRoomNote = bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platform, submittedAt, renderStateBuffer, recentUserVisibleMessages });
 
   await db.batch([
     db.prepare(`

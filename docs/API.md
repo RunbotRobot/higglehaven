@@ -12721,6 +12721,19 @@ before this binding resolves to anything live; the endpoint 500s with a
 clear message if `env.FEEDBACK` isn't configured, same as every other R2
 binding check in this codebase.
 
+**#3303**: `metadata` may also carry `recentUserVisibleMessages`, an array of
+`{ text, shownAt }` — the last few error/refusal strings the person was
+actually shown (`src/ui/visibleMessages.js`), so a report has the exact words
+even when they could not copy them. It is display-only like
+`renderStateBuffer`: not stored in `bug_reports` (no migration), only written
+into the report's Control Room card note under "Last messages shown to the
+person". The server keeps the last five well-formed entries and bounds each
+`text` to 500 characters; anything malformed is dropped. On the client, the
+Build-mode Group/Ungroup refusal (`#selection-action-status`) now stays until
+dismissed, is selectable, and has a Copy button (`src/ui/copyText.js`, shared
+with the admin camera readout); the Shop orb notices and `#shop-status` are
+selectable while shown.
+
 **`GET /api/feedback/bug-reports/:reportId/screenshot`** — admin-gated
 (`requireAdmin`), not public. #2715's own body flags, as a still-open
 owner question, that these screenshots could incidentally capture other
