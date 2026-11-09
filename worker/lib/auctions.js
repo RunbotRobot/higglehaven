@@ -127,15 +127,22 @@ export async function handleBundles(request, db, route, url) {
       conditions.push('(created_at < ? OR (created_at = ? AND bundle_id < ?))');
       bindings.push(cursor.createdAt, cursor.createdAt, cursor.id);
     }
+    // #3330: placementCount (creator's own list only) is how many placed
+    // bundle instances, on anyone's landlet, are linked to this template, so
+    // the delete confirmation can say how many will become ordinary unlinked
+    // bundles. An aggregate only; no other builder's landlet is identified.
     const { results } = await db.prepare(`
-      SELECT * FROM bundles WHERE ${conditions.join(' AND ')}
+      SELECT bundles.*, (
+        SELECT COUNT(DISTINCT group_id) FROM placed_instances WHERE placed_instances.bundle_id = bundles.bundle_id
+      ) AS placement_count
+      FROM bundles WHERE ${conditions.join(' AND ')}
       ORDER BY created_at DESC, bundle_id DESC LIMIT ?
     `).bind(...bindings, limit + 1).all();
     const hasMore = results.length > limit;
     const page = results.slice(0, limit);
     const last = page.at(-1);
     return json({
-      bundles: page.map(bundleFromRow),
+      bundles: page.map((row) => ({ ...bundleFromRow(row), placementCount: row.placement_count ?? 0 })),
       nextCursor: hasMore ? encodeCursor(last.created_at, last.bundle_id) : null,
     });
   }

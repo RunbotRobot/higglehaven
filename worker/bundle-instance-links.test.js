@@ -215,6 +215,29 @@ describe('deleting a saved bundle leaves its placements in the world, unlinked (
   });
 });
 
+describe('the creator\'s bundle list reports how many placements a delete would unlink (#3330)', () => {
+  it('counts linked placed copies once each, and drops to 0 after Unbundle', async () => {
+    const { builder, place } = await builderWithLandlet('count');
+    await place('bil-count-1');
+    await place('bil-count-2');
+    await place('bil-count-3');
+    await place('bil-count-4');
+    const bundle = await createBundleAs(builder);
+    const countOf = async () => {
+      const list = await api('/bundles', builder.session());
+      return list.body.bundles.find((b) => b.bundleId === bundle.bundleId).placementCount;
+    };
+    expect(await countOf()).toBe(0);
+    const first = await group(builder, ['bil-count-1', 'bil-count-2'], bundle.bundleId);
+    expect(await countOf()).toBe(1);
+    await group(builder, ['bil-count-3', 'bil-count-4'], bundle.bundleId);
+    expect(await countOf()).toBe(2);
+    const ungrouped = await api('/instances/ungroup', builder.session({ method: 'POST', body: JSON.stringify({ groupId: first.body.groupId }) }));
+    expect(ungrouped.response.status).toBe(200);
+    expect(await countOf()).toBe(1);
+  });
+});
+
 describe('version snapshots and Restore to Editor carry the link (#3327)', () => {
   async function snapshotThenReplace(label, { deleteBundleBeforeRestore }) {
     const { builder, landletId, place } = await builderWithLandlet(label);

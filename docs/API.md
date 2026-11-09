@@ -8459,38 +8459,44 @@ product (name, category, image, position, whether the seller is still
 suspended) with a per-row "Clear" action behind a confirm prompt. Covered by
 `e2e/build-pending-restoration.test.mjs`.
 
-### Group/Ungroup (#2764)
+### Bundle instances: Bundle / Unbundle (#2764, #3323)
 
-The base layer of #2763 (owner-requested, tracking issue for the full
-"Group"/"Ungroup" feature — defaulting a saved/placed bundle to grouped is
-separate, later sub-issue scope, not covered here). See "`POST
-/api/instances/group`"/"`POST /api/instances/ungroup`" above for the
-backend; this section is the Build-mode (`src/build/scene.js`, `#group-item`/
-`#ungroup-item` toolbar buttons) behavior those endpoints are wired to.
+Groups and bundles are one feature, called bundles (#3323). A placed bundle
+is "the rows sharing one `group_id`" and behaves as one item; it may also be
+*linked* to a saved bundle (a live template, `placed_instances.bundle_id`,
+see `POST /api/instances/group`). The Build-mode behaviour
+(`src/build/scene.js`, `#group-item` "Bundle" / `#ungroup-item` "Unbundle"
+toolbar buttons) wired to `POST /api/instances/group`/`ungroup`:
 
-- **Selection always expands to whole groups.** Tapping any one placed
+- **Selection always expands to whole bundles.** Tapping any one placed
   item (`selectOnly`) or adding one to a multi-select (`toggleInSelection`)
-  looks up every other currently-loaded instance sharing its `groupId`
-  (via `mesh.userData.groupId`, set from the instance's own `groupId` field
-  whenever a mesh is built — `createMeshForInstance`, `src/world/models.js`)
-  and selects/deselects the whole set together, not just the tapped item.
-  An ungrouped item (`groupId: null`) is unaffected — it behaves as a
-  "group of one" for this purpose.
-- **Group** (toolbar button, enabled whenever 2+ items are selected) calls
-  `POST /api/instances/group` with the current selection's instance ids.
-- **Ungroup** (enabled whenever the selection includes any grouped item)
-  calls `POST /api/instances/ungroup` with that group's `groupId`.
-- **Moving any member moves the whole group** — this needed no new
-  movement code: Move mode already attaches the shared `groupMovePivot`
-  (rather than a single item's own gizmo) whenever `selectedMeshes.size >
-  1`, regardless of how that multi-item selection came to exist. Once
-  selection expansion makes a grouped tap always produce a 2+-item
-  selection, the existing group-move math takes over unchanged.
-- Selection-expansion and the toolbar buttons are this sub-issue's whole
-  scope. What clicking one grouped member while *not* wanting the whole
-  group selected looks like, how Group interacts with Save Bundle, and
-  whether Ungroup should ever be partial are #2763's own open "owner-
-  judgment items" — deliberately not decided here.
+  selects/deselects every currently-loaded instance sharing its `groupId`
+  (`mesh.userData.groupId`, set in `createMeshForInstance`,
+  `src/world/models.js`). An unbundled item behaves as a bundle of one.
+- **Bundle** (enabled whenever 2+ items are selected) calls
+  `POST /api/instances/group` with the selection's instance ids. The result
+  is an unsaved, unlinked bundle.
+- **Unbundle** (enabled whenever the selection includes any bundled item)
+  calls `POST /api/instances/ungroup` with that bundle's `groupId`. It
+  clears `group_id` and `bundle_id` together, so on a linked placement it
+  detaches the placement from its template for *any* builder, the creator
+  included, and the members stay selected as loose items. The template and
+  every other placement are untouched. To make an editable copy of someone
+  else's bundle: Unbundle, then Bundle, then Save Bundle (two taps after
+  Unbundle; the owner chose this two-step path over a one-step copy).
+- **Deleting a saved bundle** unlinks its placements (`ON DELETE SET NULL`);
+  every placed instance stays in the world ("No silent loss"). The
+  creator's own `GET /api/bundles` list carries `placementCount`, the number
+  of linked placements on anyone's landlet (an aggregate; no landlet is
+  identified), and the Delete confirmation modal states it before the
+  creator confirms. The community listing never includes it.
+- **Moving any member moves the whole bundle**: Move mode attaches the
+  shared `groupMovePivot` whenever `selectedMeshes.size > 1`, so selection
+  expansion is all it needed.
+- The questions #2763 listed as open owner-judgment items (what a selected
+  bundle looks like, how Bundle relates to Save Bundle, whether Unbundle is
+  ever partial) are resolved by #3323: one selection box, a saved bundle is
+  a live template, Unbundle is never partial.
 
 #### Stock indicator in the catalog picker (#1951)
 
