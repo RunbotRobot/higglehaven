@@ -45,6 +45,7 @@
 // in main.js.
 import * as THREE from 'three';
 import { disposeOwnedMeshResources } from '../sharedModelResources.js';
+import { shopGroundUsesBiomeTexture } from './groundLook.js';
 import { landlet, createGroundTexture, normalizeGroundShapeUVs, disposeObject, disposeMaterialTextures } from '../world/models.js';
 import { scene, camera, renderer, registerModeFrameUpdate, registerFacingOverride } from '../world/scene.js';
 import { activeCatalog, setActiveCatalog } from '../world/state.js';
@@ -352,20 +353,19 @@ export function unloadShopLandletInstances(entry) {
 // caller owns adding/removing the result from its own group; this never
 // touches the scene graph itself.
 export function buildShopGroundMesh(record) {
-  // #220/#2371: only an unclaimed 'greenbelt' plot gets the textured
-  // ground — claimed/generating/water keep their own flat
-  // SHOP_PLOT_COLORS fill, since those are ownership-status indicators,
-  // not a ground biome, and need to stay instantly readable as a single
-  // solid color at a glance across the whole world. A greenbelt plot's
-  // own texture now varies by its real biome (#2370's ingested data),
-  // falling back to the same default/unclassified look #220 originally
-  // shipped when no real classification exists at its location yet.
+  // #220/#2371: a greenbelt plot's texture varies by its real biome (#2370's
+  // ingested data), falling back to the default/unclassified look when no real
+  // classification exists at its location yet.
+  // #3262 (owner decision 2026-11-08): a claimed plot gets the same ground, so
+  // the shopper sees what the builder sees (see groundLook.js). Only
+  // generating and water plots keep their flat SHOP_PLOT_COLORS fill.
   const plotColorKey = plotColorKeyForLandlet(record);
-  const groundMaterial = plotColorKey === 'greenbelt'
+  const texturedGround = shopGroundUsesBiomeTexture(plotColorKey);
+  const groundMaterial = texturedGround
     ? new THREE.MeshStandardMaterial({ map: createGroundTexture(record.biome) })
     : new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[plotColorKey] ?? 0x4caf50 });
   const groundGeometry = new THREE.ShapeGeometry(shapeForLandlet(record));
-  if (plotColorKey === 'greenbelt') normalizeGroundShapeUVs(groundGeometry);
+  if (texturedGround) normalizeGroundShapeUVs(groundGeometry);
   const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
   // #2851: Shop mode's own ground mesh never called curveGroundGeometry
   // (world-curvature *between* landlets is a separate, unaddressed

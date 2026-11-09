@@ -107,3 +107,15 @@ export function describeAvatarClips(clipNames) {
   return `This model has ${count} animation clip${count === 1 ? '' : 's'} (${shown}${more}), but none that look like idle, walk or fly (names like Idle, Walking or Flying work) — `
     + "if equipped as an avatar it'll still move, just without playing them. Rename them in your 3D tool and upload again to use them.";
 }
+
+// #2744 (owner, 2026-11-08): a model with no animation clips at all is a static
+// mesh, and the wizard said nothing, which is what sent everyone looking for a
+// naming problem instead. When the seller lists such a model as an equippable
+// avatar, say so plainly. Stays quiet for an ordinary product (a chair has no
+// walk cycle and does not need telling) and until the file's clips are known
+// (clipCount null). Without clips the avatar still moves, as a rigid whole:
+// it slides around rather than walking.
+export function describeNoAnimationsForAvatar(clipCount, listedAsAvatar) {
+  if (!listedAsAvatar || clipCount !== 0) return null;
+  return 'This model has no animations. As an avatar it will slide around without walking, unless a buyer applies an animation to it.';
+}

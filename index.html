@@ -357,6 +357,7 @@
             <input id="upload-avatar-category-checkbox" type="checkbox" />
             List as an equippable avatar (buyers can equip it as their own in-world character)
           </label>
+          <div id="upload-no-animations-note" hidden></div>
           <label id="upload-animation-category-label">
             <input id="upload-animation-category-checkbox" type="checkbox" />
             List as a standalone animation (buyers can apply it to whichever avatar they have equipped)
@@ -395,6 +396,30 @@
         <input type="text" id="sell-this-too-search-input" class="seller-filter-control" placeholder="Search products…" autocomplete="off" aria-label="Search products">
         <div id="sell-this-too-grid"></div>
         <div id="sell-this-too-empty" hidden>No products match your search.</div>
+        <!-- #3249: the price and stock questions that used to be two native
+             prompt() calls (silently skipped by a browser that suppresses
+             native dialogs). Shown in place of the grid once a product is
+             picked. The price starts empty with a helper line, not a
+             placeholder that reads as a value. -->
+        <form id="sell-this-too-form" hidden novalidate>
+          <h3 id="sell-this-too-form-title"></h3>
+          <p id="sell-this-too-form-note" class="sell-this-too-help" hidden></p>
+          <label>
+            Your price
+            <input type="text" id="sell-this-too-price-input" class="seller-filter-control" inputmode="decimal" autocomplete="off">
+          </label>
+          <p class="sell-this-too-help">Enter 0 for a free product.</p>
+          <label>
+            Stock quantity (optional)
+            <input type="text" id="sell-this-too-stock-input" class="seller-filter-control" inputmode="numeric" autocomplete="off">
+          </label>
+          <p class="sell-this-too-help">Leave blank for unlimited.</p>
+          <div id="sell-this-too-form-error" class="seller-row-status error" role="alert" hidden></div>
+          <div class="sell-this-too-form-actions">
+            <button type="submit" id="sell-this-too-add-btn" class="seller-save-btn">Add listing</button>
+            <button type="button" id="sell-this-too-back-btn" class="seller-row-action-btn">Back</button>
+          </div>
+        </form>
       </div>
     </div>
     <!-- #659 (owner, Control Room, 2026-09-11): the plain-language refund

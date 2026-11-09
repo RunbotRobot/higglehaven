@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeAvatarClips, matchAvatarClips, pickAvatarClips, AVATAR_CLIP_NAMES } from './avatarClipNames.js';
+import { describeAvatarClips, describeNoAnimationsForAvatar, matchAvatarClips, pickAvatarClips, AVATAR_CLIP_NAMES } from './avatarClipNames.js';
 
 describe('describeAvatarClips (#2744)', () => {
   it('says nothing for a model with no clips (an ordinary product)', () => {
@@ -115,5 +115,32 @@ describe('pickAvatarClips (#3287)', () => {
   it('copes with no clips', () => {
     expect(pickAvatarClips([])).toEqual({ idle: null, walk: null, fly: null });
     expect(pickAvatarClips(undefined)).toEqual({ idle: null, walk: null, fly: null });
+  });
+});
+
+describe('describeNoAnimationsForAvatar (#2744)', () => {
+  it('says so plainly when a clip-less model is listed as an avatar', () => {
+    const text = describeNoAnimationsForAvatar(0, true);
+    expect(text).toContain('no animations');
+    expect(text).toContain('slide around without walking');
+    expect(text).toContain('applies an animation');
+  });
+
+  it('stays quiet for an ordinary product that is not listed as an avatar', () => {
+    expect(describeNoAnimationsForAvatar(0, false)).toBeNull();
+  });
+
+  it('stays quiet while the file\'s clips are not known yet', () => {
+    expect(describeNoAnimationsForAvatar(null, true)).toBeNull();
+    expect(describeNoAnimationsForAvatar(undefined, true)).toBeNull();
+  });
+
+  it('stays quiet when the model has clips (describeAvatarClips speaks for those)', () => {
+    expect(describeNoAnimationsForAvatar(1, true)).toBeNull();
+    expect(describeNoAnimationsForAvatar(5, true)).toBeNull();
+  });
+
+  it('never leaks internals into the text', () => {
+    expect(describeNoAnimationsForAvatar(0, true)).not.toMatch(/#\d|SPEC|API\.md|findByName/);
   });
 });
