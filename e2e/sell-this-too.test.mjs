@@ -64,23 +64,32 @@ await sellerBSession.page.waitForTimeout(300);
 const sellThisTooBtnVisible = await sellerBSession.page.locator('#sell-this-too-btn').isVisible();
 console.log('"Sell This Too" button visible in the Seller modal (should be true):', sellThisTooBtnVisible);
 
-// Replace launchPage's own single-answer dialog handler (it would accept
-// every prompt with the label text, which isn't a valid price) -- this
-// flow shows exactly two prompts in strict sequence: price, then stock.
+// #3249: price and stock are a form in the modal now, not two native prompts.
+// Refuse every native dialog to prove nothing depends on one.
 const dialogMessages = [];
-let dialogCount = 0;
 sellerBSession.page.removeAllListeners('dialog');
 sellerBSession.page.on('dialog', (dialog) => {
   dialogMessages.push(dialog.message());
-  dialogCount += 1;
-  if (dialogCount === 1) return dialog.accept('24.99');
-  if (dialogCount === 2) return dialog.accept('5');
-  return dialog.accept();
+  return dialog.dismiss();
 });
 
 await sellerBSession.page.click('#sell-this-too-btn');
 await sellerBSession.page.waitForSelector('#sell-this-too-modal.visible', { timeout: 10000 });
 await sellerBSession.page.locator('#sell-this-too-grid .seller-card').filter({ hasText: PRODUCT_NAME }).click();
+await sellerBSession.page.waitForSelector('#sell-this-too-form:not([hidden])', { timeout: 5000 });
+
+// The price field starts empty (no value-looking placeholder), and an empty
+// price is refused on this step with a message, without leaving it.
+const priceStartsEmpty = (await sellerBSession.page.inputValue('#sell-this-too-price-input')) === '' &&
+  !(await sellerBSession.page.getAttribute('#sell-this-too-price-input', 'placeholder'));
+await sellerBSession.page.click('#sell-this-too-add-btn');
+const emptyPriceRefused = await sellerBSession.page.locator('#sell-this-too-form-error').isVisible() &&
+  await sellerBSession.page.locator('#sell-this-too-modal.visible').count() === 1;
+console.log('price starts empty, no placeholder (should be true):', priceStartsEmpty);
+console.log('an empty price is refused in place with a message (should be true):', emptyPriceRefused);
+await sellerBSession.page.fill('#sell-this-too-price-input', '24.99');
+await sellerBSession.page.fill('#sell-this-too-stock-input', '5');
+await sellerBSession.page.click('#sell-this-too-add-btn');
 
 // A successful attach closes #sell-this-too-modal and re-arms the Seller
 // modal's own focus trap (closeSellThisTooModal, src/sell/mode.js) --
@@ -91,7 +100,7 @@ await sellerBSession.page.waitForFunction(
   null,
   { timeout: 10000 },
 );
-console.log('dialogs shown (should be exactly 2 -- price, stock):', dialogMessages.length);
+console.log('native dialogs shown (should be 0):', dialogMessages.length);
 
 const { templates } = (await fetchJson(sellerBSession.page, '/api/catalog?limit=100')).body;
 const sellerBListing = templates.find((t) => t.name === PRODUCT_NAME && t.templateId !== originalTemplateId);
@@ -99,8 +108,8 @@ const sellerAListingStillThere = templates.find((t) => t.templateId === original
 
 console.log('a second, distinct listing was created (should be truthy):', Boolean(sellerBListing));
 console.log('the new listing is attached to the same shared product (should be true):', sellerBListing?.productId === productId);
-console.log('the new listing carries the price entered in the prompt (should be 2499):', sellerBListing?.priceCents);
-console.log('the new listing carries the stock entered in the prompt (should be 5):', sellerBListing?.stockQuantity);
+console.log('the new listing carries the price entered in the form (should be 2499):', sellerBListing?.priceCents);
+console.log('the new listing carries the stock entered in the form (should be 5):', sellerBListing?.stockQuantity);
 console.log('the new listing is owned by seller B, not seller A (should be true):', sellerBListing?.sellerId !== sellerA.sellerId);
 console.log('every shared field was copied from the product, not re-entered (color should still be #ffcc66):', sellerBListing?.color);
 console.log('seller A\'s original listing is untouched (should still exist, unchanged price 1500):', sellerAListingStillThere?.priceCents === 1500);
@@ -113,7 +122,9 @@ const errors = [...sellerASession.errors, ...sellerBSession.errors];
 const pass =
   created.status === 201 &&
   !!productId &&
-  dialogMessages.length === 2 &&
+  dialogMessages.length === 0 &&
+  priceStartsEmpty &&
+  emptyPriceRefused &&
   Boolean(sellerBListing) &&
   sellerBListing?.productId === productId &&
   sellerBListing?.priceCents === 2499 &&
