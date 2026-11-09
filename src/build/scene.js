@@ -3869,6 +3869,19 @@ window.__testSyncUpdate = (instanceId) => {
   return mesh ? syncUpdate(mesh) : undefined;
 };
 
+// #3304: selects every placed product at once (outlines and selection UI
+// included), so an e2e can run Group over more than 100 items without clicking
+// each one. Same "inert unless a test calls it" convention as the hooks above.
+window.__testSelectAllProducts = () => {
+  for (const mesh of productMeshes) {
+    if (selectedMeshes.has(mesh)) continue;
+    selectedMeshes.add(mesh);
+    addSelectionOutline(mesh);
+  }
+  updateSelectionUI();
+  return selectedMeshes.size;
+};
+
 window.__testProductScreenPositions = () => productMeshes.map((mesh) => ({
   instanceId: mesh.userData.instanceId,
   ...projectMeshToScreen(mesh),
