@@ -259,6 +259,13 @@
       body.sell-world-view #seller-showcase-manage-btn {
         bottom: 140px;
       }
+      /* #3296: the pager's usual bottom-centre spot sits under the left joystick
+         on a phone-width screen (and next to the fly button); move it to the top
+         centre, below the mode switcher's strip. */
+      body.sell-world-view #seller-showcase-pager {
+        bottom: auto;
+        top: 60px;
+      }
       /* #635 (sub-issue of #631): the faux-layout preview's own small
          toolbar — top-center, since bottom-center is already
          #seller-showcase-pager's spot and this mode is never active at
