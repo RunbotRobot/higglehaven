@@ -253,6 +253,12 @@
       #seller-showcase-manage-btn.visible {
         display: block;
       }
+      /* #3295: with Shop's movement HUD up on the showcase page, the right-hand
+         look joystick (108px, 24px off the bottom) covers this button's usual
+         spot; lift it clear above the joystick. */
+      body.sell-world-view #seller-showcase-manage-btn {
+        bottom: 140px;
+      }
       /* #635 (sub-issue of #631): the faux-layout preview's own small
          toolbar — top-center, since bottom-center is already
          #seller-showcase-pager's spot and this mode is never active at

@@ -331,7 +331,10 @@ const SHOP_WHEEL_ZOOM_SENSITIVITY = 0.05;
 const SHOP_PINCH_ZOOM_SENSITIVITY = 0.05;
 
 let shopYaw = 0;
-let shopPitch = -0.12;
+// #3295: the grounded look pitch (shopPitch's own default), named so
+// beginShopStanding can reset to it without a second copy of the number.
+const SHOP_STANDING_PITCH = -0.12;
+let shopPitch = SHOP_STANDING_PITCH;
 // The avatar's own facing (docs/SPEC.md §2) — deliberately separate from
 // shopYaw (the camera's look direction, right-stick-driven): the left
 // stick turns the avatar to face wherever it's actually walking, while the
@@ -855,8 +858,8 @@ function shopAvatarFlightLeanClearanceM() {
   return (SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_HEAD_RADIUS_M * 2) * Math.sin(Math.abs(SHOP_AVATAR_FLIGHT_PITCH_RAD));
 }
 
-function clampShopRadius(position, maxRadius) {
-  clampRadiusIn(movementWorld(), position, maxRadius);
+function clampShopRadius(position, maxRadius, isCamera = false) {
+  clampRadiusIn(movementWorld(), position, maxRadius, isCamera);
 }
 
 // #1828: shopMaxRadiusM/shopAvatarMaxRadiusM above are each one flat
@@ -1291,7 +1294,7 @@ export function positionShopCamera() {
   shopCameraAnchor.z += shopCameraAnchorHeightM();
   camera.position.copy(shopCameraAnchor).addScaledVector(shopViewDirection, -SHOP_CAMERA_FOLLOW_DISTANCE_M);
   clampShopCameraHeight();
-  clampShopRadius(camera.position, shopMaxRadiusAtWorldZM(camera.position.z, shopMaxRadiusM()));
+  clampShopRadius(camera.position, shopMaxRadiusAtWorldZM(camera.position.z, shopMaxRadiusM()), true);
   // #1631: e2e-only hook (same "expose computed state purely for
   // verification" convention as window.__shopInstanceDisposedCount) --
   // lets a test confirm the avatar/camera's real world z stays under the
@@ -1347,6 +1350,15 @@ function shopPositionBlocked(x, y, z) {
   // #3293: the obstacle walk lives in movementWorld.js, over whichever world
   // the core is registered against (Shop's loaded landlets by default).
   return positionBlockedIn(movementWorld(), SHOP_MOVEMENT_GEOMETRY, shopAvatarFootprintCorners(x, y), z, shopAvatarHeightM());
+}
+
+// #3295: would the avatar, standing on the ground at (x, y), already overlap a
+// solid obstacle of the active world? A spot that does is no place to start (any
+// step from inside an overlap is also blocked, so the avatar could not move),
+// so a world picking a spawn asks this first.
+export function isShopStandingSpotBlocked(x, y) {
+  const z = groundHeightAtM(x, y) - curvatureDropM(Math.hypot(x, y));
+  return shopPositionBlocked(x, y, z);
 }
 
 // #1090: shopPositionBlocked above only ever gets consulted for horizontal
@@ -1992,6 +2004,42 @@ let lastScheduledEventCheck = 0;
 // precedent: an exported reset function in place of enterShopMode directly
 // assigning ~15 of this leaf's own now-private fields, which an ES import
 // binding can't do from outside this module.
+// #3295 (leaf 4/6 of #3291, part of #3253): the same reset beginShopSpawn does,
+// for a world with no spawn flyover -- the avatar starts standing on the
+// ground at (x, y) facing `yaw`, grounded, with no orbit, no "Go to Last
+// Location" button and the ordinary grounded look pitch. Sell mode's world view
+// calls this on entry and on every showcase page turn (the avatar goes back to
+// the page's start). Everything it resets is the same state beginShopSpawn
+// resets, so both leave the movement core in a state its frame loop handles
+// identically.
+export function beginShopStanding(x, y, yaw) {
+  shopSpawnRotating = false;
+  shopSpawnOrbitRadiusM = 0;
+  shopYaw = yaw;
+  shopAvatarPosition.x = x;
+  shopAvatarPosition.y = y;
+  shopFlightState = 'grounded';
+  shopFlightTransitionElapsedS = 0;
+  shopFlightAltitudeM = 0;
+  shopAvatarPosition.z = groundHeightAtM(x, y) - curvatureDropM(Math.hypot(x, y));
+  shopUpHeld = false;
+  shopDownHeld = false;
+  shopVerticalInput = 0;
+  setShopFlyBtnFlying(false);
+  shopLastLocationHideTimerS = null;
+  shopGoToLastLocationPhase = null;
+  shopGoToLastLocationElapsedS = 0;
+  shopLastLocationBtn.classList.remove('visible');
+  shopPitch = SHOP_STANDING_PITCH;
+  setShopAvatarFacing(shopYaw);
+  shopAvatarPitch = 0;
+  applyShopCameraOrientation();
+  positionShopCamera();
+  setShopFov(camera.fov);
+  shopLastFrameTime = null;
+  shopLastProximityCheck = 0;
+}
+
 export function beginShopSpawn(spawnOrbitRadiusM, yaw) {
   shopSpawnOrbitRadiusM = spawnOrbitRadiusM;
   shopYaw = yaw;
