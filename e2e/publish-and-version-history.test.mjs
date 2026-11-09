@@ -5,7 +5,7 @@
 // frozen published snapshot, not the builder's own further live edits —
 // plus Set Live (repoint without touching the editor) and Restore to
 // Editor (replace the live draft with an older snapshot).
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, acceptConfirmModal } from './helpers.mjs';
 
 const LABEL = 'Publish Suite Tester';
 
@@ -126,6 +126,7 @@ await page.click('.settings-tab-btn[data-section="build"]'); // re-render after 
 await page.waitForTimeout(300);
 const treeOnlyRow = page.locator('.version-row').filter({ hasText: '1 item' }).last();
 await treeOnlyRow.locator('button', { hasText: 'Restore to Editor' }).click();
+await acceptConfirmModal(page); // #3278: in-app confirm modal
 await page.waitForFunction(() => !document.getElementById('claim-modal')?.classList.contains('visible'), null, { timeout: 25000 }).catch(() => {});
 await page.waitForLoadState('networkidle', { timeout: 15000 });
 await page.waitForTimeout(1500);

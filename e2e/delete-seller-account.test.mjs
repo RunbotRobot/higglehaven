@@ -13,8 +13,7 @@
 // proceeds case is already covered server-side by worker/commerce.test.js's
 // "Seller deletion (#732)" suite).
 import {
-  launchPage, chooseIdentity, openAccountMenu, waitForText, finish,
-} from './helpers.mjs';
+  launchPage, chooseIdentity, openAccountMenu, waitForText, finish, acceptConfirmModal } from './helpers.mjs';
 
 const LABEL = 'Delete Seller Suite Tester';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
@@ -42,6 +41,7 @@ console.log('Reset Profile button present in Settings > Sell (should be true -- 
 
 // --- Reset Profile (launchPage's own dialog handler auto-accepts confirm()) ---
 await page.click('#settings-section button:has-text("Reset Profile")');
+await acceptConfirmModal(page); // #3278: in-app confirm modal
 const deleteStatus = await waitForText(page, '#settings-section', 'Reset', { timeout: 8000 });
 console.log('Settings section text right after delete (should mention "Reset"):', deleteStatus);
 

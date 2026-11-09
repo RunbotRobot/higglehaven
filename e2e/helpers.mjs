@@ -719,3 +719,13 @@ export async function finish(browser, { pass, label, errors = [] }) {
   await browser.close();
   process.exit(pass ? 0 : 1);
 }
+
+// #3278: destructive actions confirm in the shared in-app modal
+// (src/ui/confirmModal.js), not a native confirm(). Waits for it, optionally
+// returns its message text, and presses its confirm button.
+export async function acceptConfirmModal(page, { timeout = 10000 } = {}) {
+  await page.waitForSelector('#confirm-modal.visible', { timeout });
+  const message = await page.textContent('#confirm-modal-message');
+  await page.click('#confirm-modal-confirm-btn');
+  return message;
+}
