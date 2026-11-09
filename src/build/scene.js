@@ -73,6 +73,7 @@ import {
   fetchSavedLayouts, deleteSavedLayout, fetchInstances,
 } from '../api.js';
 import { refresh as refreshPendingRestorations } from './pendingRestoration.js';
+import { planSelectionBoxes } from './selectionBoxes.js';
 import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
 import { toDisplayLength, fromDisplayLength, formatLength, formatArea } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
@@ -948,10 +949,7 @@ async function updateTrimPreview(object) {
   // live (still-stretching) scale, out of step with the correctly-cropped
   // preview sitting right where the object used to be.
   const outline = selectionOutlines.get(object);
-  if (outline) {
-    outline.helper.visible = false;
-    outline.fill.visible = false;
-  }
+  if (outline) outline.hidden = true;
   trimInputEl(trimAxis).value = toDisplayLength(clampedLength).toFixed(2);
 }
 
@@ -969,10 +967,7 @@ function clearTrimPreview(object) {
   if (object) {
     object.visible = true;
     const outline = selectionOutlines.get(object);
-    if (outline) {
-      outline.helper.visible = true;
-      outline.fill.visible = true;
-    }
+    if (outline) outline.hidden = false;
   }
 }
 
@@ -1031,10 +1026,7 @@ trimControls.addEventListener('dragging-changed', (event) => {
     // worst, briefly nothing at all — is ever visible instead.
     object.visible = false;
     const outline = selectionOutlines.get(object);
-    if (outline) {
-      outline.helper.visible = false;
-      outline.fill.visible = false;
-    }
+    if (outline) outline.hidden = true;
     updateTrimPreview(object);
     return;
   }
@@ -2514,7 +2506,7 @@ function setGizmoMode(mode) {
     return;
   }
   if (selectedMeshes.size > 1 && mode === 'translate') {
-    groupMovePivot.position.copy(getSelectionPivot());
+    groupMovePivot.position.copy(getSelectionBoundsCentre());
     translateControls.space = 'world';
     translateControls.attach(groupMovePivot);
   }
@@ -2945,7 +2937,12 @@ renderer.domElement.addEventListener('pointerleave', () => {
 // higglehaven brand (--brand-green in index.html) rather than an arbitrary
 // accent color.
 const SELECTION_OUTLINE_COLOR = 0x6ca42e;
-const selectionOutlines = new Map(); // mesh -> { helper: THREE.BoxHelper, fill: THREE.Mesh }
+// #3324: the SET of selected meshes that should draw a highlight (mesh ->
+// { hidden }); the boxes actually drawn live in selectionBoxes below, one per
+// bundle (every member sharing a groupId) or loose item, not one per mesh.
+const selectionOutlines = new Map();
+// key (a groupId, or the mesh for a loose item) -> { helper: THREE.Box3Helper, fill: THREE.Mesh }
+const selectionBoxes = new Map();
 
 // A row of touching, identically-shaped items (a brick course, say) makes a
 // wireframe-only outline ambiguous — the shared edge between a selected
@@ -2966,9 +2963,20 @@ const scratchBoxCenter = new THREE.Vector3();
 
 export function addSelectionOutline(mesh) {
   if (selectionOutlines.has(mesh)) return;
-  const helper = new THREE.BoxHelper(mesh, SELECTION_OUTLINE_COLOR);
-  scene.add(helper);
+  selectionOutlines.set(mesh, { hidden: false });
+}
 
+export function removeSelectionOutline(mesh) {
+  selectionOutlines.delete(mesh);
+}
+
+function createSelectionBox() {
+  // Box3Helper reads its own mutable `box`, so one helper follows a whole
+  // bundle's union bounds with no per-member geometry (BoxHelper, one per
+  // mesh, is what an 863-brick wall used to cost).
+  const helper = new THREE.Box3Helper(new THREE.Box3(), SELECTION_OUTLINE_COLOR);
+  helper.frustumCulled = false;
+  scene.add(helper);
   const fillMaterial = new THREE.MeshBasicMaterial({
     color: SELECTION_OUTLINE_COLOR,
     transparent: true,
@@ -2976,21 +2984,67 @@ export function addSelectionOutline(mesh) {
     depthWrite: false,
   });
   const fill = new THREE.Mesh(selectionFillGeometry, fillMaterial);
+  fill.frustumCulled = false;
   scene.add(fill);
-
-  selectionOutlines.set(mesh, { helper, fill });
+  return { helper, fill };
 }
 
-export function removeSelectionOutline(mesh) {
-  const entry = selectionOutlines.get(mesh);
-  if (!entry) return;
+function disposeSelectionBox(entry) {
   scene.remove(entry.helper);
   entry.helper.geometry.dispose();
   entry.helper.material.dispose();
   scene.remove(entry.fill);
   entry.fill.material.dispose();
-  selectionOutlines.delete(mesh);
 }
+
+// #3324: reconciles the drawn boxes with the current selection and tracks
+// the members' live bounds (a gizmo drag moves them every frame). One box
+// per bundle plus one per loose item; a mesh being previewed elsewhere
+// (the trim preview hides the real one) is left out of the union.
+function updateSelectionBoxes() {
+  if (selectionOutlines.size === 0 && selectionBoxes.size === 0) return;
+  const visibleMeshes = [];
+  for (const [mesh, outline] of selectionOutlines) {
+    if (!outline.hidden) visibleMeshes.push(mesh);
+  }
+  const plan = planSelectionBoxes(visibleMeshes);
+  const live = new Set();
+  for (const { key, members } of plan) {
+    live.add(key);
+    let entry = selectionBoxes.get(key);
+    if (!entry) {
+      entry = createSelectionBox();
+      selectionBoxes.set(key, entry);
+    }
+    const unionBox = entry.helper.box;
+    unionBox.makeEmpty();
+    for (const member of members) {
+      scratchBox.setFromObject(member);
+      unionBox.union(scratchBox);
+    }
+    unionBox.getSize(scratchBoxSize);
+    unionBox.getCenter(scratchBoxCenter);
+    entry.fill.scale.copy(scratchBoxSize).multiplyScalar(SELECTION_FILL_PADDING);
+    entry.fill.position.copy(scratchBoxCenter);
+  }
+  for (const [key, entry] of selectionBoxes) {
+    if (live.has(key)) continue;
+    disposeSelectionBox(entry);
+    selectionBoxes.delete(key);
+  }
+}
+
+// #3324: test-only hook (the window.__test* convention used throughout this
+// file) -- how many selection boxes are drawn right now, with the bounds of
+// each, so an e2e can assert "one box around a bundle", not just that the
+// members are selected.
+window.__testSelectionBoxes = () => {
+  updateSelectionBoxes();
+  return [...selectionBoxes.values()].map(({ helper }) => ({
+    min: [helper.box.min.x, helper.box.min.y, helper.box.min.z],
+    max: [helper.box.max.x, helper.box.max.y, helper.box.max.z],
+  }));
+};
 
 // #1950 (sub-issue of #1947): a second, independent highlight for placed
 // items matching the active low-stock filter in Settings > Build --
@@ -3329,6 +3383,22 @@ function getSelectionPivot() {
   const centroid = new THREE.Vector3();
   for (const mesh of selectedMeshes) centroid.add(mesh.position);
   return centroid.divideScalar(selectedMeshes.size);
+}
+
+// #3324: where the move gizmo sits for a multi-item selection -- the centre
+// of the selection's own bounding box, which for a single bundle is the
+// centre of the one box drawn around it. (getSelectionPivot's centroid of
+// member positions is kept for the camera tween and paste anchor, which want
+// that point, and is skewed by wherever the densest cluster of members is.)
+const scratchPivotBox = new THREE.Box3();
+const scratchMemberBox = new THREE.Box3();
+function getSelectionBoundsCentre() {
+  scratchPivotBox.makeEmpty();
+  for (const mesh of selectedMeshes) {
+    scratchMemberBox.setFromObject(mesh);
+    scratchPivotBox.union(scratchMemberBox);
+  }
+  return scratchPivotBox.isEmpty() ? getSelectionPivot() : scratchPivotBox.getCenter(new THREE.Vector3());
 }
 
 multiSelectBtn.addEventListener('click', () => {
@@ -4344,23 +4414,11 @@ export function buildModeFrameUpdate(now) {
   applyEdgePanWhileDraggingProduct();
   controls.update();
   updateCameraDebug(now);
-  // A selected item's outline must track it live while the translate/rotate
-  // gizmo drags it — BoxHelper doesn't auto-update, so it's recomputed here
-  // every frame rather than only on selection change. The fill mesh reuses
-  // the helper's own freshly-computed box rather than recomputing its own,
-  // so the two never drift out of sync with each other.
-  for (const [mesh, { helper, fill }] of selectionOutlines) {
-    helper.update();
-    // BoxHelper computes its world-aligned box internally without exposing
-    // it (no public `.box` on this three.js version), so the fill mesh
-    // recomputes the same box independently rather than reading it back off
-    // the helper.
-    scratchBox.setFromObject(mesh);
-    scratchBox.getSize(scratchBoxSize);
-    scratchBox.getCenter(scratchBoxCenter);
-    fill.scale.copy(scratchBoxSize).multiplyScalar(SELECTION_FILL_PADDING);
-    fill.position.copy(scratchBoxCenter);
-  }
+  // A selected item's box must track it live while the translate/rotate
+  // gizmo drags it, so the boxes are recomputed here every frame rather than
+  // only on selection change (#3324: one union box per bundle, the fill
+  // reading the very same box so the two never drift apart).
+  updateSelectionBoxes();
   // #1950: same "recomputed every frame, not just on change" reasoning as
   // selectionOutlines just above -- a highlighted item being dragged by the
   // gizmo (it can be selected and low-stock-matching at once) needs its
