@@ -502,7 +502,6 @@ export async function handleShopProductBuyClick() {
       await showNotice({
         title: "Purchase didn't go through",
         message: err.message || 'Could not complete this purchase.',
-        copyText: err.message || null,
         returnFocusEl: shopProductPreviewBuyBtn,
       });
     }

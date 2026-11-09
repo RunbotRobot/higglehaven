@@ -5,16 +5,16 @@
 // one-time delivery-confirm link (the server stores only its hash). Unlike a
 // toast, it stays until the person closes it (#3303: an error or refusal is
 // never timed out), its text is selectable, and `copyText` (a link, an error
-// to send on) gets a Copy button.
+// to send on) sits in a read-only field the person selects from themselves
+// (#3303 as amended: copying is the platform's own selection, never a Copy
+// button).
 import { openModalA11y, closeModalA11y } from './modal.js';
-import { copyTextWithFeedback } from './copyText.js';
 
 const modalEl = document.getElementById('notice-modal');
 const titleEl = document.getElementById('notice-modal-title');
 const messageEl = document.getElementById('notice-modal-message');
 const copyRowEl = document.getElementById('notice-modal-copy-row');
 const copyFieldEl = document.getElementById('notice-modal-copy-field');
-const copyBtn = document.getElementById('notice-modal-copy-btn');
 const closeBtn = document.getElementById('notice-modal-close-btn');
 const okBtn = document.getElementById('notice-modal-ok-btn');
 
@@ -34,12 +34,9 @@ function finish() {
 
 closeBtn.addEventListener('click', finish);
 okBtn.addEventListener('click', finish);
-copyBtn.addEventListener('click', () => {
-  copyTextWithFeedback(copyBtn, copyFieldEl.value);
-});
 
 // Resolves once the person closes it. `copyText` (optional) is shown in a
-// selectable field with a Copy button.
+// read-only, selectable field.
 export function showNotice({ title, message, copyText = null, okLabel = 'OK', returnFocusEl = null } = {}) {
   if (session) finish();
   return new Promise((resolve) => {
@@ -48,7 +45,6 @@ export function showNotice({ title, message, copyText = null, okLabel = 'OK', re
     messageEl.textContent = message;
     copyRowEl.hidden = !copyText;
     copyFieldEl.value = copyText || '';
-    copyBtn.textContent = 'Copy';
     okBtn.textContent = okLabel;
     modalEl.classList.add('visible');
     openModalA11y(modalEl, finish);

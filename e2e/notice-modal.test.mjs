@@ -1,6 +1,6 @@
 // #3249: Shop's Buy no longer depends on native dialogs. The purchase result
 // is an in-app notice (src/ui/noticeModal.js) that stays until closed, can be
-// selected, and gives the one-time delivery-confirm link a Copy button -- a
+// selected, and puts the one-time delivery-confirm link in a selectable field (no Copy button, #3303 as amended) -- a
 // suppressed alert() would have lost that link for good. Buy's confirmation is
 // the shared confirm modal with a neutral (green) button, not the red
 // destructive one. The real Buy flow needs a Stripe-backed sale, so it is
@@ -41,8 +41,8 @@ const selectable = await page.evaluate(() => {
   const field = getComputedStyle(document.getElementById('notice-modal-copy-field'));
   return msg.userSelect !== 'none' && msg.pointerEvents !== 'none' && field.userSelect !== 'none';
 });
-await page.click('#notice-modal-copy-btn');
-const copyBtnLabel = await page.textContent('#notice-modal-copy-btn');
+// #3303 as amended: no Copy control; the person selects the text themselves.
+const noCopyButton = (await page.locator('#notice-modal button', { hasText: /copy/i }).count()) === 0;
 // Still there well past the old 8-second auto-dismiss.
 await page.waitForTimeout(9000);
 const stillOpenAfterWait = await visible('#notice-modal');
@@ -77,9 +77,9 @@ await page.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
 await page.click('#confirm-modal-cancel-btn');
 await page.waitForFunction(() => window.__confirmResult === false, null, { timeout: 5000 });
 
-console.log({ title, copyRowShown, fieldValue, selectable, copyBtnLabel, stillOpenAfterWait, closedByEscape, copyRowHiddenWhenPlain, neutralClass, neutralBg, confirmLabel, nativeDialogs });
+console.log({ title, copyRowShown, fieldValue, selectable, noCopyButton, stillOpenAfterWait, closedByEscape, copyRowHiddenWhenPlain, neutralClass, neutralBg, confirmLabel, nativeDialogs });
 const pass = title === 'Purchase complete' && copyRowShown && fieldValue === LINK && selectable &&
-  (copyBtnLabel === 'Copied!' || copyBtnLabel === "Couldn't copy") &&
+  noCopyButton &&
   stillOpenAfterWait && closedByEscape && copyRowHiddenWhenPlain &&
   neutralClass && neutralBg !== 'rgb(168, 58, 39)' && confirmLabel === 'Buy' &&
   nativeDialogs.length === 0 && errors.length === 0;
