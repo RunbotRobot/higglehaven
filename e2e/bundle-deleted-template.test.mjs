@@ -15,7 +15,7 @@
 // the test can authenticate as.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, finish, saveBundleAs } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, captureNotices, finish, saveBundleAs } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -149,10 +149,8 @@ await page.waitForTimeout(500);
 
 // Placing the bundle now should hit the #469 case: every item's template
 // has been deleted out from under it.
-let alertMessage = null;
-page.on('dialog', (dialog) => {
-  if (dialog.type() === 'alert') alertMessage = dialog.message();
-});
+// #3359: the message is an in-app notice (src/ui/noticeModal.js), not alert().
+await captureNotices(page);
 
 await page.click('#add-item-btn');
 await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
@@ -160,6 +158,7 @@ await page.locator('.bundle-tile-place').first().click();
 await page.waitForTimeout(300);
 await page.mouse.click(210, 550);
 await page.waitForTimeout(1000);
+const alertMessage = (await page.evaluate(() => window.__alerts))[0] ?? null;
 console.log('alert shown when placing a bundle whose only template was deleted (should mention "2" and "no longer exists"):', alertMessage);
 
 const pass = deleteOk &&
