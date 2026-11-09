@@ -600,6 +600,20 @@
         color: var(--pill-text-soft);
         font: 12px/1.4 sans-serif;
       }
+      /* #3303: the Copy button main.js's copyableErrors.js adds after a modal
+         status line while it shows an error. */
+      .copy-error-btn {
+        margin: 4px 0 0;
+        padding: 3px 10px;
+        border-radius: 6px;
+        border: none;
+        background: rgb(var(--pill-rgb) / 0.6);
+        color: var(--pill-text-soft);
+        font: 12px/1.4 sans-serif;
+      }
+      .copy-error-btn[hidden] {
+        display: none;
+      }
       /* Same treatment as #shop-sign-hint just above (see its own comment),
          stacked one slot higher so both can show at once near an
          overlapping sign+calendar without colliding. */
@@ -1274,7 +1288,12 @@
         border-radius: 8px;
         font: 14px/1.4 sans-serif;
         text-align: center;
-        pointer-events: none;
+        /* #3303: its text (a product's name and size, a hint) is readable, so
+           it is selectable; it is hidden when empty, so it never sits there
+           swallowing taps. */
+        pointer-events: auto;
+        user-select: text;
+        -webkit-user-select: text;
         z-index: 10;
       }
       /* Whatever this hint currently says (a selected item's name, a
