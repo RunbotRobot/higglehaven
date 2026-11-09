@@ -540,9 +540,6 @@
         border-radius: 8px;
         color: var(--pill-text);
         font: 13px/1.4 sans-serif;
-        display: flex;
-        align-items: center;
-        gap: 8px;
         max-width: 90vw;
         pointer-events: none;
         opacity: 0;
@@ -575,9 +572,6 @@
         border-radius: 8px;
         color: var(--pill-text);
         font: 13px/1.4 sans-serif;
-        display: flex;
-        align-items: center;
-        gap: 8px;
         max-width: 90vw;
         pointer-events: none;
         opacity: 0;
@@ -593,9 +587,27 @@
       }
       /* #3303: Copy (and, on the rate-limit notice, dismiss) controls. Only
          interactive while the notice is shown, like the text itself. */
+      /* #3335: one layout for every copyable notice (orb notices, the Build
+         selection-action status): the text takes the full width and the
+         actions sit in a small right-aligned row beneath it, so a phone-width
+         notice is not squeezed into a few short lines by its own buttons. */
+      .shop-notice {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 6px;
+      }
+      .shop-notice[hidden] {
+        display: none;
+      }
       .shop-notice-text {
         min-width: 0;
         overflow-wrap: anywhere;
+      }
+      .shop-notice-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
       }
       .shop-notice-btn {
         flex: 0 0 auto;
@@ -1387,10 +1399,6 @@
         /* #3303: selectable on purpose (no pointer-events: none). A refusal the
            person cannot long-press or copy cannot be sent on; it stays until
            dismissed, so sitting over the canvas for that time is the cost. */
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 8px;
         user-select: text;
         -webkit-user-select: text;
         box-sizing: border-box;
@@ -1400,24 +1408,6 @@
         background: rgb(var(--pill-rgb) / 0.85);
         color: var(--pill-text);
         font: 13px/1.4 sans-serif;
-      }
-      #selection-action-status-text {
-        flex: 0 1 auto;
-        min-width: 0;
-        overflow-wrap: anywhere;
-      }
-      #selection-action-status-copy,
-      #selection-action-status-dismiss {
-        flex: 0 0 auto;
-        padding: 3px 10px;
-        border-radius: 6px;
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.6);
-        color: var(--pill-text-soft);
-        font: 12px/1.4 sans-serif;
-      }
-      #selection-action-status[hidden] {
-        display: none;
       }
       /* Tactile press feedback (Copy button) — the button's own pill
          background flashes to the brand color and back, the same surface
