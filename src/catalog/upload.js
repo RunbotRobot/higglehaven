@@ -29,6 +29,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
+import { inlineConfirm } from '../ui/inlineConfirm.js';
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from '../modelOptimizer.js';
 import { describeAvatarClips, describeNoAnimationsForAvatar } from '../avatarClipNames.js';
 import { unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from '../settings.js';
@@ -584,6 +585,22 @@ function updateUploadDimensionLabels() {
   uploadDimensionPreview.render();
 }
 
+// #3249: the duplicate-name warning is a soft confirm shown next to the submit
+// button, not window.confirm() -- a browser that suppresses native dialogs
+// answers one with "no" at once, which made Add Product do nothing with no
+// message. Submit is disabled while the question is up so a second tap can't
+// stack a second one.
+async function confirmDuplicateProductName(name) {
+  if (!hasDuplicateProductName(name, null)) return true;
+  const host = document.getElementById('upload-modal-actions') || uploadSubmitBtn.parentElement;
+  uploadSubmitBtn.disabled = true;
+  try {
+    return await inlineConfirm(host, `You already have a product named "${name}". Continue anyway?`, { yesLabel: 'Continue anyway' });
+  } finally {
+    uploadSubmitBtn.disabled = false;
+  }
+}
+
 // #1601: price is required at upload time -- a free digital good is entered
 // as an explicit 0, not left blank. priceCents can still end up null later
 // via the separate "Edit Price" panel (docs/API.md's "Seller-side: setting a
@@ -625,9 +642,7 @@ async function handleUploadFileStep() {
     setUploadStatus('Choose a .glb or .fbx file first.', true);
     return;
   }
-  if (hasDuplicateProductName(name, null) && !confirm(`You already have a product named "${name}". Continue anyway?`)) {
-    return;
-  }
+  if (!(await confirmDuplicateProductName(name))) return;
 
   const myFlowToken = ++uploadFlowToken;
   uploadSubmitBtn.disabled = true;
@@ -887,9 +902,7 @@ async function handleUploadVideoStep() {
     setUploadStatus('Choose a video first.', true);
     return;
   }
-  if (hasDuplicateProductName(name, null) && !confirm(`You already have a product named "${name}". Continue anyway?`)) {
-    return;
-  }
+  if (!(await confirmDuplicateProductName(name))) return;
 
   const myFlowToken = ++uploadFlowToken;
   uploadSubmitBtn.disabled = true;
