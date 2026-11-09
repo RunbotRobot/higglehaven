@@ -776,10 +776,10 @@ export async function deleteInstancesRemote(instanceIds) {
 }
 
 // #2764: groups 2+ placed instances under one freshly minted, persistent
-// groupId. Unlike the batch endpoints above, this isn't chunked — Group is
-// only ever called with the current Build-mode selection (already capped
-// well under the worker's own 100-item request limit by what a builder can
-// realistically select at once), not an arbitrary bulk list.
+// groupId. Unlike the batch endpoints above, this isn't chunked on the client:
+// it is one request for the whole selection, because one group id has to be
+// minted for all of it. The server chunks the work under D1's bound-parameter
+// limit and accepts up to 5,000 items (#3304).
 export async function groupInstancesRemote(instanceIds) {
   const { groupId, instances } = await requestJson('/instances/group', {
     method: 'POST',

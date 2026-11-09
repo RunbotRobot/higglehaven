@@ -55,6 +55,31 @@ import { handleInstancePurchase } from './purchase-creation.js';
 // while leaving generous headroom for real interactive editing.
 const INSTANCE_WRITE_RATE_LIMIT_MAX = 500;
 
+// #3304: D1 allows at most 100 bound parameters per statement, so a lookup or
+// update over many instance ids runs in chunks. The ceiling on one Group
+// request is a product limit, not that bound; it is far above any real wall,
+// and the refusal says what it is.
+const D1_STATEMENT_BIND_LIMIT = 100;
+const INSTANCE_GROUP_MAX_ITEMS = 5000;
+// An UPDATE chunk binds its ids plus the new group id and the owner id.
+const INSTANCE_GROUP_UPDATE_CHUNK = D1_STATEMENT_BIND_LIMIT - 10;
+
+function chunked(items, size) {
+  const chunks = [];
+  for (let i = 0; i < items.length; i += size) chunks.push(items.slice(i, i + size));
+  return chunks;
+}
+
+// A request that touches n instances counts as ceil(n / 100) writes against
+// the shared instance-write bucket, so the accounting above ("a batch of up to
+// 100 counts as one hit") stays true for a larger one (#3304).
+async function chargeInstanceWrites(db, builderId, instanceCount) {
+  const hits = Math.max(1, Math.ceil(instanceCount / D1_STATEMENT_BIND_LIMIT));
+  for (let i = 0; i < hits; i += 1) {
+    await checkRateLimit(db, `instance-write:${builderId}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
+  }
+}
+
 // #3034: "nothing that isn't actively for sale is visible to shoppers or
 // builders" / "suspension is a hard removal" (AGENTS.md standing owner
 // decisions) -- #2986 removes a suspended seller's already-placed
@@ -142,33 +167,43 @@ export async function handleInstances(request, env, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'group') {
     const input = await readJson(request);
     if (!Array.isArray(input.instanceIds)) throw new HttpError('instanceIds must be an array', 400);
-    if (input.instanceIds.length < 2) throw new HttpError('instanceIds must contain at least 2 items', 400);
-    if (input.instanceIds.length > 100) throw new HttpError('instanceIds must contain at most 100 items', 400);
+    if (input.instanceIds.length < 2) throw new HttpError('Select at least 2 items to group.', 400);
+    if (input.instanceIds.length > INSTANCE_GROUP_MAX_ITEMS) {
+      throw new HttpError(`You can group up to ${INSTANCE_GROUP_MAX_ITEMS.toLocaleString('en-US')} items at once.`, 400);
+    }
     const instanceIds = input.instanceIds.map((id) => stringValue(id, 'instanceIds item'));
     if (new Set(instanceIds).size !== instanceIds.length) throw new HttpError('instanceIds must be unique', 400);
     const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `instance-write:${sessionBuilder.builder_id}`, INSTANCE_WRITE_RATE_LIMIT_MAX);
-    const placeholders = instanceIds.map(() => '?').join(', ');
-    const { results } = await db.prepare(`
-      SELECT instance_id, landlet_id, group_id FROM placed_instances WHERE instance_id IN (${placeholders})
-    `).bind(...instanceIds).all();
+    await chargeInstanceWrites(db, sessionBuilder.builder_id, instanceIds.length);
+    // #3304: the lookup and the writes run in chunks under D1's 100-bound-
+    // parameter limit; the UPDATEs go in one db.batch (a transaction), so the
+    // all-or-nothing handling below still holds.
+    const results = [];
+    for (const idChunk of chunked(instanceIds, D1_STATEMENT_BIND_LIMIT)) {
+      const placeholders = idChunk.map(() => '?').join(', ');
+      const { results: rows } = await db.prepare(`
+        SELECT instance_id, landlet_id, group_id FROM placed_instances WHERE instance_id IN (${placeholders})
+      `).bind(...idChunk).all();
+      results.push(...rows);
+    }
     if (results.length !== instanceIds.length) {
       throw new HttpError('Every instanceId must reference an existing placed instance', 404, { code: ERROR_CODES.STALE_REFERENCE });
     }
     await requireOwnedLandlets(db, results.map((row) => row.landlet_id), sessionBuilder.builder_id);
-    const landletIdByInstanceId = new Map(results.map((row) => [row.instance_id, row.landlet_id]));
     const priorGroupIdByInstanceId = new Map(results.map((row) => [row.instance_id, row.group_id]));
     const groupId = crypto.randomUUID();
     // #929 idiom: fold the ownership re-check into each write, same as the
     // DELETE/POST/PUT batch endpoints above -- requireOwnedLandlets is a
-    // point-in-time check.
-    const batchResults = await db.batch(instanceIds.map((instanceId) => db.prepare(`
+    // point-in-time check. A row on a landlet the caller no longer owns simply
+    // isn't updated, which the total below catches.
+    const updateChunks = chunked(instanceIds, INSTANCE_GROUP_UPDATE_CHUNK);
+    const batchResults = await db.batch(updateChunks.map((idChunk) => db.prepare(`
       UPDATE placed_instances SET group_id = ?
-      WHERE instance_id = ?
-        AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
-    `).bind(groupId, instanceId, landletIdByInstanceId.get(instanceId), sessionBuilder.builder_id)));
-    const rejectedInstanceIds = instanceIds.filter((_, i) => batchResults[i].meta.changes === 0);
-    if (rejectedInstanceIds.length > 0) {
+      WHERE instance_id IN (${idChunk.map(() => '?').join(', ')})
+        AND landlet_id IN (SELECT landlet_id FROM landlets WHERE owner_builder_id IS ?)
+    `).bind(groupId, ...idChunk, sessionBuilder.builder_id)));
+    const updatedCount = batchResults.reduce((sum, result) => sum + result.meta.changes, 0);
+    if (updatedCount !== instanceIds.length) {
       // Unlike the DELETE/POST/PUT batch endpoints above (#1772/#1773,
       // which report a partial success since they're writing rows that
       // already independently existed), this call mints one brand new
@@ -180,12 +215,23 @@ export async function handleInstances(request, env, route, url) {
       // see #2788) rather than blanket-nulling it, since blanket-null would
       // silently dissolve a pre-existing group the caller never asked to
       // touch, as a side effect of a request reported as a total failure.
-      const succeededInstanceIds = instanceIds.filter((_, i) => batchResults[i].meta.changes > 0);
-      if (succeededInstanceIds.length > 0) {
-        await db.batch(succeededInstanceIds.map((instanceId) => db.prepare(`
-          UPDATE placed_instances SET group_id = ? WHERE instance_id = ? AND group_id = ?
-        `).bind(priorGroupIdByInstanceId.get(instanceId), instanceId, groupId)));
+      // Members that share a prior group_id are restored together.
+      const idsByPriorGroup = new Map();
+      for (const instanceId of instanceIds) {
+        const prior = priorGroupIdByInstanceId.get(instanceId) ?? null;
+        if (!idsByPriorGroup.has(prior)) idsByPriorGroup.set(prior, []);
+        idsByPriorGroup.get(prior).push(instanceId);
       }
+      const restores = [];
+      for (const [prior, ids] of idsByPriorGroup) {
+        for (const idChunk of chunked(ids, INSTANCE_GROUP_UPDATE_CHUNK)) {
+          restores.push(db.prepare(`
+            UPDATE placed_instances SET group_id = ?
+            WHERE group_id = ? AND instance_id IN (${idChunk.map(() => '?').join(', ')})
+          `).bind(prior, groupId, ...idChunk));
+        }
+      }
+      await db.batch(restores);
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     const stored = await getInstancesById(db, instanceIds);

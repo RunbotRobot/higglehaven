@@ -472,3 +472,80 @@ describe('Group/Ungroup (#2764)', () => {
     expect(firstForeign.body.instance.groupId).toBe(foreignGroup.body.groupId);
   });
 });
+
+// #3304: the 100-item ceiling was D1's bound-parameter limit leaking into the
+// product; Group now chunks its lookups and writes, with a real ceiling.
+describe('Group with more than 100 items (#3304)', () => {
+  it('groups, rolls back and reports limits for a large selection', async () => {
+    const builder = await signupBuilder('groups-large-builder');
+    const landletId = 'instance-groups-large-landlet';
+    await createGreenbeltLandlet(landletId);
+    const claimed = await api(`/landlets/${landletId}/claim`, builder.session({ method: 'POST' }));
+    expect(claimed.response.status).toBe(200);
+
+    const COUNT = 250;
+    const ids = Array.from({ length: COUNT }, (_, i) => `group-large-${i}`);
+    for (let start = 0; start < COUNT; start += 100) {
+      const created = await api('/instances/batch', builder.session({
+        method: 'POST',
+        body: JSON.stringify({
+          instances: ids.slice(start, start + 100).map((instanceId, k) => {
+            const i = start + k;
+            return { instanceId, landletId, templateId: 'placeholder-tree', x: (i % 25) - 12, y: Math.floor(i / 25) - 5 };
+          }),
+        }),
+      }));
+      expect(created.response.status).toBe(201);
+    }
+
+    const grouped = await api('/instances/group', builder.session({
+      method: 'POST', body: JSON.stringify({ instanceIds: ids }),
+    }));
+    expect(grouped.response.status).toBe(201);
+    expect(grouped.body.instances).toHaveLength(COUNT);
+    const sharedGroup = grouped.body.groupId;
+    expect(grouped.body.instances.every((instance) => instance.groupId === sharedGroup)).toBe(true);
+    const stored = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM placed_instances WHERE instance_id LIKE 'group-large-%' AND group_id = ?",
+    ).bind(sharedGroup).first();
+    expect(stored.n).toBe(COUNT);
+
+    // Another builder cannot group these (nothing changes), and a stale id in
+    // a large selection is a clean 404.
+    const other = await signupBuilder('groups-large-other');
+    const foreign = await api('/instances/group', other.session({
+      method: 'POST', body: JSON.stringify({ instanceIds: ids }),
+    }));
+    expect(foreign.response.status).toBe(403);
+    const stale = await api('/instances/group', builder.session({
+      method: 'POST', body: JSON.stringify({ instanceIds: [...ids, 'group-large-missing'] }),
+    }));
+    expect(stale.response.status).toBe(404);
+    const after = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM placed_instances WHERE instance_id LIKE 'group-large-%' AND group_id = ?",
+    ).bind(sharedGroup).first();
+    expect(after.n).toBe(COUNT);
+
+    // Ungroup dissolves all of them.
+    const ungrouped = await api('/instances/ungroup', builder.session({
+      method: 'POST', body: JSON.stringify({ groupId: sharedGroup }),
+    }));
+    expect(ungrouped.response.status).toBe(200);
+    expect(ungrouped.body.ungroupedInstanceIds).toHaveLength(COUNT);
+  });
+
+  it('refuses past the ceiling with a message that states it, and a single item with a plain one', async () => {
+    const builder = await signupBuilder('groups-ceiling-builder');
+    const tooMany = await api('/instances/group', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ instanceIds: Array.from({ length: 5001 }, (_, i) => `ceiling-${i}`) }),
+    }));
+    expect(tooMany.response.status).toBe(400);
+    expect(tooMany.body.error).toBe('You can group up to 5,000 items at once.');
+    const one = await api('/instances/group', builder.session({
+      method: 'POST', body: JSON.stringify({ instanceIds: ['only-one'] }),
+    }));
+    expect(one.response.status).toBe(400);
+    expect(one.body.error).toBe('Select at least 2 items to group.');
+  });
+});

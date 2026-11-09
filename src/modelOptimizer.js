@@ -25,6 +25,8 @@
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { TGALoader } from 'three/addons/loaders/TGALoader.js';
+import { LoadingManager } from 'three';
 // A locally patched copy, not the stock addon — see its own doc comment.
 // The stock SimplifyModifier silently drops any geometry attribute outside
 // position/uv/normal/tangent/color, including a secondary UV set some
@@ -71,7 +73,6 @@ const MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION = 0.6;
 
 const gltfLoader = new GLTFLoader();
 const gltfExporter = new GLTFExporter();
-const fbxLoader = new FBXLoader();
 const simplifier = new SimplifyModifier();
 
 function countTriangles(geometry) {
@@ -91,7 +92,46 @@ function countTriangles(geometry) {
 // here leaves nothing usable to fall back to (there's no original .glb
 // underneath an .fbx pick), so the caller must treat a thrown error as
 // fatal to this upload attempt, not a degrade-gracefully case.
-export async function convertFbxToGlb(file, onProgress) {
+// #3300: FBXLoader.parse() is synchronous but the textures it builds load
+// asynchronously (embedded images become blob:/data: URLs the browser
+// decodes later), so exporting straight away hit GLTFExporter with images
+// that had no pixel data yet: "No valid image data found". The converter
+// now waits for its own LoadingManager to go idle first, then drops any
+// texture that still has no usable image so one bad map can't sink the
+// whole upload. onTexturesSkipped(count) lets the caller tell the seller.
+const FBX_TEXTURE_WAIT_MS = 30000;
+
+function textureIsUsable(tex) {
+  const img = tex.image;
+  if (!img) return false;
+  if (tex.isDataTexture || tex.isCompressedTexture) return !!img.data;
+  if (typeof HTMLImageElement !== 'undefined' && img instanceof HTMLImageElement) {
+    return img.complete && img.naturalWidth > 0;
+  }
+  if (typeof ImageBitmap !== 'undefined' && img instanceof ImageBitmap) return img.width > 0;
+  return (img.width || 0) > 0;
+}
+
+function dropUnusableTextures(group) {
+  const dropped = new Set();
+  group.traverse((obj) => {
+    const mats = Array.isArray(obj.material) ? obj.material : obj.material ? [obj.material] : [];
+    for (const mat of mats) {
+      for (const key of Object.keys(mat)) {
+        const tex = mat[key];
+        if (!tex || !tex.isTexture) continue;
+        if (!textureIsUsable(tex)) {
+          dropped.add(tex);
+          mat[key] = null;
+          mat.needsUpdate = true;
+        }
+      }
+    }
+  });
+  return dropped.size;
+}
+
+export async function convertFbxToGlb(file, onProgress, { onTexturesSkipped } = {}) {
   onProgress?.('Reading file…');
   // #2977: lets an e2e test simulate a slow conversion deterministically,
   // same reasoning as window.__testUploadPreviewLoadDelayMs (#1465) --
@@ -104,13 +144,25 @@ export async function convertFbxToGlb(file, onProgress) {
   const arrayBuffer = await file.arrayBuffer();
 
   onProgress?.('Converting from FBX…');
-  // Empty path (second arg): matches gltfLoader.parseAsync's own use below
-  // -- there's no server URL for FBXLoader to resolve a relative external
-  // texture reference against here, so an .fbx whose textures aren't
-  // embedded in the file itself may convert without them. Geometry,
-  // skeleton, and animation data (none of which depend on that path) carry
-  // over regardless.
+  // A manager per call, so waiting for "all textures loaded" can't be
+  // confused by another conversion's loads.
+  const manager = new LoadingManager();
+  manager.addHandler(/\.tga$/i, new TGALoader(manager));
+  let idle = Promise.resolve();
+  manager.onStart = () => {
+    idle = new Promise((resolve) => { manager.onLoad = resolve; });
+  };
+  const fbxLoader = new FBXLoader(manager);
+  // Empty path (second arg): there's no server URL for FBXLoader to
+  // resolve a relative external texture reference against here, so an .fbx
+  // whose textures aren't embedded in the file itself converts without
+  // them. Geometry, skeleton, and animation data carry over regardless.
   const group = fbxLoader.parse(arrayBuffer, '');
+  // A failed texture still ends its manager item, so onLoad fires either
+  // way. The timeout is only a backstop.
+  await Promise.race([idle, new Promise((resolve) => setTimeout(resolve, FBX_TEXTURE_WAIT_MS))]);
+  const skipped = dropUnusableTextures(group);
+  if (skipped > 0) onTexturesSkipped?.(skipped);
 
   onProgress?.('Re-encoding as glTF…');
   // #2744: GLTFExporter only writes the animation clips it's explicitly
