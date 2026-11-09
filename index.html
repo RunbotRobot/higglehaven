@@ -18,8 +18,15 @@
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <div id="shop-credit-orb-toast" role="status" aria-live="polite">You collected a free model-generation credit!</div>
-    <div id="shop-credit-orb-offline-notice" role="status" aria-live="polite">Can't collect orbs right now — you appear to be offline.</div>
-    <div id="shop-credit-orb-rate-limit-notice" role="status" aria-live="polite">You've reached the orb limit for now — try again in a bit.</div>
+    <div id="shop-credit-orb-offline-notice" role="status" aria-live="polite">
+      <span class="shop-notice-text">Can't collect orbs right now — you appear to be offline.</span>
+      <button class="shop-notice-btn shop-notice-copy-btn" type="button">Copy</button>
+    </div>
+    <div id="shop-credit-orb-rate-limit-notice" role="status" aria-live="polite">
+      <span class="shop-notice-text">You've reached the orb limit for now — try again in a bit.</span>
+      <button class="shop-notice-btn shop-notice-copy-btn" type="button">Copy</button>
+      <button class="shop-notice-btn shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
+    </div>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <!-- #506/N45 history (see this button's own CSS comment below for the
