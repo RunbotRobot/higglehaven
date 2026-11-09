@@ -611,7 +611,7 @@ async function handleUploadFileStep() {
     // to fall back to, so it aborts this upload attempt outright with a
     // clear error pointing back at the manual Blender path, rather than
     // silently uploading something broken (or the raw .fbx).
-    uploadConversionNoticeCount = 0;
+    let skippedTextureCount = 0;
     if (/\.fbx$/i.test(file.name)) {
       setUploadStatus('Converting from FBX…');
       try {
@@ -624,7 +624,7 @@ async function handleUploadFileStep() {
           if (myFlowToken === uploadFlowToken) setUploadStatus(status);
         }, {
           onTexturesSkipped: (count) => {
-            if (myFlowToken === uploadFlowToken) uploadConversionNoticeCount = count;
+            skippedTextureCount = count;
           },
         });
         if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while converting
@@ -685,6 +685,8 @@ async function handleUploadFileStep() {
       uploadStepDimensionsEl.hidden = false;
       uploadSubmitBtn.textContent = 'Create Product';
       uploadRetryVideoBtn.hidden = uploadModelSource !== 'video';
+      // Set here, not earlier: showUploadDimensionPreview resets the notice first.
+      uploadConversionNoticeCount = skippedTextureCount;
       refreshConversionNotice();
     });
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while loading the preview
