@@ -8,7 +8,7 @@
 //      the stale tab ends up showing it, and is told;
 //   2. single-item save (a one-item drag): same, via the 409 recovery;
 //   3. after either resolution the tab's next save goes through.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, captureNotices, finish } from './helpers.mjs';
 
 const LABEL = 'Stale Save Two Tabs Builder';
 const { browser, page: tabA, errors } = await launchPage({ promptAnswer: LABEL });
@@ -19,8 +19,11 @@ await chooseIdentity(tabA, { mode: 'build', label: LABEL, isNew: true });
 await tabA.waitForSelector('#undo-redo-panel', { state: 'attached', timeout: 15000 });
 await tabA.waitForTimeout(1500);
 
-const dialogsA = [];
-tabA.on('dialog', (dialog) => dialogsA.push(dialog.message()));
+// #3359: the conflict messages are an in-app notice (src/ui/noticeModal.js), no
+// longer a native alert(); record each one's text and close it as it appears.
+await captureNotices(tabA);
+const noticesA = () => tabA.evaluate(() => window.__alerts);
+const clearNoticesA = () => tabA.evaluate(() => { window.__alerts.length = 0; });
 
 async function pageFetchJson(page, pathAndQuery, options) {
   return page.evaluate(async ([p, opts]) => {
@@ -54,7 +57,7 @@ await tabA.evaluate((id) => window.__testSyncBatchUpdate([id]), itemX);
 await tabA.evaluate((id) => window.__testSyncUpdate(id), itemX);
 await tabA.evaluate((id) => window.__testSyncBatchUpdate([id]), itemX);
 await tabA.waitForTimeout(500);
-const noSelfConflict = dialogsA.length === 0;
+const noSelfConflict = (await noticesA()).length === 0;
 console.log('no conflict notice from tab A\'s own repeated saves (should be true):', noSelfConflict);
 
 // --- Tab B: a second tab in the same session. ---
@@ -80,43 +83,43 @@ const moveElsewhere = async (dx) => {
 // --- 1. Batch save from the stale tab. ---
 const afterB1 = await moveElsewhere(1);
 const aStillShowsOld = Math.abs((await localX(tabA, itemX)) - start.x) < 1e-3;
-dialogsA.length = 0;
+await clearNoticesA();
 await tabA.evaluate((id) => window.__testSyncBatchUpdate([id]), itemX);
 await tabA.waitForTimeout(1500);
 const serverAfterBatch = await serverInstance(itemX);
 const batchKeptOther = Math.abs(serverAfterBatch.x - afterB1.x) < 1e-3;
 const aNowShowsOther = Math.abs((await localX(tabA, itemX)) - afterB1.x) < 1e-3;
-const batchNotice = dialogsA.some((m) => /changed in another tab or window/.test(m) && /latest version/.test(m));
+const batchNotice = (await noticesA()).some((m) => /changed in another tab or window/.test(m) && /latest version/.test(m));
 console.log('tab A still showed its old position before saving (should be true):', aStillShowsOld);
 console.log('server kept tab B\'s move after A\'s stale batch save (should be true):', batchKeptOther);
 console.log('tab A now shows tab B\'s version (should be true):', aNowShowsOther);
 console.log('tab A was told, in words (should be true):', batchNotice);
 
 // --- 3a. A's next save after the batch resolution goes through (version adopted). ---
-dialogsA.length = 0;
+await clearNoticesA();
 await tabA.evaluate((id) => window.__testSyncBatchUpdate([id]), itemX);
 await tabA.waitForTimeout(800);
-const nextBatchClean = dialogsA.length === 0;
+const nextBatchClean = (await noticesA()).length === 0;
 console.log('tab A\'s next batch save raises no conflict (should be true):', nextBatchClean);
 
 // --- 2. Single-item save from the stale tab. ---
 const afterB2 = await moveElsewhere(1);
-dialogsA.length = 0;
+await clearNoticesA();
 await tabA.evaluate((id) => window.__testSyncUpdate(id), itemX);
 await tabA.waitForTimeout(2000);
 const serverAfterSingle = await serverInstance(itemX);
 const singleKeptOther = Math.abs(serverAfterSingle.x - afterB2.x) < 1e-3;
 const aShowsOtherAfterSingle = Math.abs((await localX(tabA, itemX)) - afterB2.x) < 1e-3;
-const singleNotice = dialogsA.some((m) => /changed somewhere else/.test(m) && /put back the way it is saved/.test(m));
+const singleNotice = (await noticesA()).some((m) => /changed somewhere else/.test(m) && /put back the way it is saved/.test(m));
 console.log('server kept tab B\'s move after A\'s stale single save (should be true):', singleKeptOther);
 console.log('tab A shows tab B\'s version after the single-save conflict (should be true):', aShowsOtherAfterSingle);
 console.log('tab A was told, in words (should be true):', singleNotice);
 
 // --- 3b. And its next single save goes through. ---
-dialogsA.length = 0;
+await clearNoticesA();
 await tabA.evaluate((id) => window.__testSyncUpdate(id), itemX);
 await tabA.waitForTimeout(1000);
-const nextSingleClean = dialogsA.length === 0;
+const nextSingleClean = (await noticesA()).length === 0;
 console.log('tab A\'s next single save raises no conflict (should be true):', nextSingleClean);
 
 await finish(browser, {
