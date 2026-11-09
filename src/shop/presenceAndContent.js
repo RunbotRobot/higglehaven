@@ -84,6 +84,8 @@ import {
 import { disposeObject3D, unloadShopLandletInstances, buildShopGroundMesh } from './mode.js';
 import { registerShopSign, registerShopCalendar, registerShopReview } from './worldSprites.js';
 import { rateLimitNoticeText } from '../rateLimitNotice.js';
+import { copyTextWithFeedback } from '../ui/copyText.js';
+import { recordVisibleMessage } from '../ui/visibleMessages.js';
 
 const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
 const shopCreditOrbOfflineNoticeEl = document.getElementById('shop-credit-orb-offline-notice');
@@ -1208,6 +1210,7 @@ export function updateCreditOrbs(dt) {
       markCreditOrbCollectReachedServer();
       spawnCreditOrbPopEffect(orb);
       removeCreditOrb(orb);
+      hideCreditOrbRateLimitNotice(); // #3303: a successful collect means the limit lifted
       showCreditOrbToast();
     }).catch((error) => {
       // #2222: a 403 means the server's own avatar_presence record hasn't
@@ -1285,6 +1288,7 @@ function markCreditOrbCollectFailedToReachServer() {
     return;
   }
   if (now - creditOrbOfflineStreakStartedAt >= CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS) {
+    if (!shopCreditOrbOfflineNoticeEl.classList.contains('visible')) recordVisibleMessage(shopCreditOrbOfflineNoticeTextEl.textContent); // #3303
     shopCreditOrbOfflineNoticeEl.classList.add('visible');
   }
 }
@@ -1317,16 +1321,26 @@ function showCreditOrbToast() {
 }
 let creditOrbToastHideTimer = null;
 
-// Same auto-hide shape as showCreditOrbToast just above, timed to
-// CREDIT_ORB_RATE_LIMIT_RETRY_COOLDOWN_MS so it clears right as collection
-// attempts actually resume, rather than on its own unrelated schedule.
+// #3303 (owner decision: an error or refusal stays until the person dismisses
+// it): unlike the toast above, this no longer fades on a timer. It stays until
+// the person dismisses it or a collect succeeds again (the limit has plainly
+// lifted by then), and carries Copy and dismiss controls. Mode switches reload
+// the page, so it cannot linger into Build/Sell.
+const shopCreditOrbRateLimitNoticeTextEl = shopCreditOrbRateLimitNoticeEl.querySelector('.shop-notice-text');
+const shopCreditOrbOfflineNoticeTextEl = shopCreditOrbOfflineNoticeEl.querySelector('.shop-notice-text');
 function showCreditOrbRateLimitNotice(rateLimit) {
   const text = rateLimitNoticeText('orbs', rateLimit);
-  if (text) shopCreditOrbRateLimitNoticeEl.textContent = text;
+  if (text) shopCreditOrbRateLimitNoticeTextEl.textContent = text;
   shopCreditOrbRateLimitNoticeEl.classList.add('visible');
-  clearTimeout(creditOrbRateLimitNoticeHideTimer);
-  creditOrbRateLimitNoticeHideTimer = setTimeout(() => {
-    shopCreditOrbRateLimitNoticeEl.classList.remove('visible');
-  }, CREDIT_ORB_RATE_LIMIT_RETRY_COOLDOWN_MS);
+  recordVisibleMessage(shopCreditOrbRateLimitNoticeTextEl.textContent);
 }
-let creditOrbRateLimitNoticeHideTimer = null;
+function hideCreditOrbRateLimitNotice() {
+  shopCreditOrbRateLimitNoticeEl.classList.remove('visible');
+}
+shopCreditOrbRateLimitNoticeEl.querySelector('.shop-notice-copy-btn').addEventListener('click', (event) => {
+  copyTextWithFeedback(event.currentTarget, shopCreditOrbRateLimitNoticeTextEl.textContent);
+});
+shopCreditOrbRateLimitNoticeEl.querySelector('.shop-notice-dismiss-btn').addEventListener('click', hideCreditOrbRateLimitNotice);
+shopCreditOrbOfflineNoticeEl.querySelector('.shop-notice-copy-btn').addEventListener('click', (event) => {
+  copyTextWithFeedback(event.currentTarget, shopCreditOrbOfflineNoticeTextEl.textContent);
+});

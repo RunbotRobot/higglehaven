@@ -12732,7 +12732,9 @@ person". The server keeps the last five well-formed entries and bounds each
 Build-mode Group/Ungroup refusal (`#selection-action-status`) now stays until
 dismissed, is selectable, and has a Copy button (`src/ui/copyText.js`, shared
 with the admin camera readout); the Shop orb notices and `#shop-status` are
-selectable while shown.
+selectable while shown. The orb rate-limit notice no longer fades on a timer: it
+stays until dismissed or a collect succeeds, with Copy and dismiss buttons, and
+the offline notice has a Copy button.
 
 **`GET /api/feedback/bug-reports/:reportId/screenshot`** — admin-gated
 (`requireAdmin`), not public. #2715's own body flags, as a still-open
