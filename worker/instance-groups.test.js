@@ -546,6 +546,6 @@ describe('Group with more than 100 items (#3304)', () => {
       method: 'POST', body: JSON.stringify({ instanceIds: ['only-one'] }),
     }));
     expect(one.response.status).toBe(400);
-    expect(one.body.error).toBe('Select at least 2 items to group.');
+    expect(one.body.error).toBe('Select at least 2 items to bundle.');
   });
 });

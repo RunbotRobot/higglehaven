@@ -792,8 +792,8 @@ saveBundleBtn.addEventListener('click', async () => {
   if (selectedMeshes.size === 0) return;
   const meshes = [...selectedMeshes];
   // #2761: one themed modal now covers both the name prompt and the
-  // "share to Community" choice (private by default, per docs/SPEC.md's
-  // Bundles section, so the checkbox starts unchecked) — replacing what
+  // "who can place it" choice (public by default, the owner's 2026-11-09
+  // ruling on #3323/#3326, so the public radio starts selected) — replacing what
   // used to be a native prompt() immediately followed by a native
   // confirm().
   const result = await promptBundleName({ title: 'Name this bundle', showShare: true });
@@ -835,7 +835,7 @@ saveBundleBtn.addEventListener('click', async () => {
         // primary, already-expected action, so a grouping failure doesn't
         // roll it back or block the success message, only appends to it.
         console.error('Bundle saved, but could not group its items:', groupErr);
-        statusMessage += ' (could not group the items in place)';
+        statusMessage += ' (could not bundle the items in place)';
       }
     }
     setProductInfo(statusMessage);
