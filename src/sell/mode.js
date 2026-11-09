@@ -36,7 +36,6 @@
 // catalog-thumbnail pipeline) -- stay in main.js, imported back.
 // updateSelectionUI moved to src/build/scene.js (#2559, landed after this
 // leaf's own work started) -- imported from there directly.
-import { setSellWorldModalOpen } from './worldView.js';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
@@ -2150,14 +2149,12 @@ export async function openSellerModal() {
   renderActiveSellerView();
   sellerModalEl.classList.add('visible');
   openModalA11y(sellerModalEl, closeSellerModal);
-  setSellWorldModalOpen(true); // #3295: the page's HUD and movement input go quiet while the modal is up
 }
 // Exported for src/catalog/upload.js (#2557) -- its own closeUploadModal
 // needs this same handler to re-arm the Seller modal's focus trap.
 export function closeSellerModal() {
   sellerModalEl.classList.remove('visible');
   closeModalA11y(sellerModalEl);
-  setSellWorldModalOpen(false); // #3295: back to walking the page
   disposeAxisPreview();
   // An Edit Size save while this modal was open can have just created a
   // notification for this same builder identity — refresh the badge now
