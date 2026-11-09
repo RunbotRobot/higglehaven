@@ -495,6 +495,25 @@ most likely to come up again.
   does not either. Hard deletion remains only for a product nobody
   owns and nothing references.
 
+- **The world's HUD carries only what moving through and acting on the
+  world needs; utilities live in Settings, in every mode.** (2026-11-09,
+  #3302.) The Submit Feedback button sat as a pill on the Shop HUD and
+  did not exist in Build or Sell. The owner: move it into Settings "to
+  reduce clutter around the beautiful world we're trying to create", and
+  offer it in Build and Sell as well. A control that is not about the
+  thing in front of the person (moving, placing, buying, talking to
+  someone nearby) goes behind the Settings/account entry, and anything
+  offered in one mode is offered in all three unless the mode makes it
+  meaningless.
+
+- **Any text a user can read, they can copy.** (2026-11-09, #3303.) The
+  owner hit a Group refusal and could not copy its text to report it:
+  the status line blocked pointer events and vanished after eight
+  seconds. No text surface disables selection or pointer events; an
+  error or refusal stays until the person dismisses it (a success note
+  may still fade); and a message a person might need to send on (an
+  error, a refusal, an id) gets a Copy control.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
