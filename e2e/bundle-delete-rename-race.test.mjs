@@ -4,7 +4,7 @@
 // could resolve after a delete and overwrite myBundles/communityBundles
 // with a stale refetched snapshot that still contains the already-deleted
 // bundle, resurrecting it in the UI.
-import { launchPage, chooseIdentity, claimLandlet, finish, saveBundleAs, fillBundleNameModal } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, saveBundleAs, fillBundleNameModal, acceptConfirmModal } from './helpers.mjs';
 
 const LABEL = 'Bundle Delete Race Tester';
 const BUNDLE_A = 'Delete Race Bundle A';
@@ -70,10 +70,11 @@ const tile = (name) => page.locator('.bundle-tile').filter({ hasText: name });
 await tile(BUNDLE_A).locator('.bundle-tile-rename').click();
 await fillBundleNameModal(page, BUNDLE_A_RENAMED);
 // Don't wait for A's rename to settle -- fire B's delete right away, while
-// A's own (delayed) refetch is still in flight. launchPage's own dialog
-// handler already auto-accepts the delete confirm().
+// A's own (delayed) refetch is still in flight. #3278: the delete confirm
+// is the in-app modal now.
 await page.waitForTimeout(200);
 await tile(BUNDLE_B).locator('.bundle-tile-delete').click();
+await acceptConfirmModal(page);
 
 // B's delete (its own DELETE call + local filter, undelayed) should land
 // first -- its tile disappears immediately.

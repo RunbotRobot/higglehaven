@@ -2,7 +2,7 @@
 // flow was the last holdout still using (Save Bundle's name prompt plus
 // its own follow-up share confirm in src/main.js, and the bundle-tile
 // rename prompt in src/catalog/picker.js). One small reusable modal
-// covers both call sites -- the share checkbox only shown for the Save
+// covers both call sites -- the public/private choice (public selected by default, #3326) only shown for the Save
 // Bundle case.
 import { openModalA11y, closeModalA11y } from './modal.js';
 
@@ -11,7 +11,8 @@ const titleEl = document.getElementById('bundle-name-modal-title');
 const cancelBtn = document.getElementById('bundle-name-cancel-btn');
 const inputEl = document.getElementById('bundle-name-input');
 const shareLabelEl = document.getElementById('bundle-name-share-label');
-const shareCheckboxEl = document.getElementById('bundle-name-share-checkbox');
+const sharePublicEl = document.getElementById('bundle-name-share-public');
+const sharePrivateEl = document.getElementById('bundle-name-share-private');
 const saveBtn = document.getElementById('bundle-name-save-btn');
 
 let resolvePrompt = null;
@@ -27,7 +28,7 @@ function close(result) {
 function trySave() {
   const name = inputEl.value.trim();
   if (!name) return;
-  close({ name, shared: shareLabelEl.hidden ? undefined : shareCheckboxEl.checked });
+  close({ name, shared: shareLabelEl.hidden ? undefined : sharePublicEl.checked });
 }
 
 cancelBtn.addEventListener('click', () => close(null));
@@ -42,13 +43,14 @@ inputEl.addEventListener('keydown', (event) => {
 // Resolves to `{ name, shared }` (`shared` only set when `showShare` is
 // true) on Save, or `null` on Cancel/Escape -- same "null means cancelled"
 // shape the native prompt() this replaces returned.
-export function promptBundleName({ title, initialName = '', showShare = false, initialShared = false } = {}) {
+export function promptBundleName({ title, initialName = '', showShare = false, initialShared = true } = {}) {
   return new Promise((resolve) => {
     resolvePrompt = resolve;
     titleEl.textContent = title;
     inputEl.value = initialName;
     shareLabelEl.hidden = !showShare;
-    shareCheckboxEl.checked = initialShared;
+    sharePublicEl.checked = initialShared;
+    sharePrivateEl.checked = !initialShared;
     modalEl.classList.add('visible');
     openModalA11y(modalEl, () => close(null));
     inputEl.focus();

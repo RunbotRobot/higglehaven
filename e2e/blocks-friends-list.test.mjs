@@ -4,7 +4,7 @@
 // make a block take effect are #3143; the API itself is covered by
 // worker/blocks.test.js.) launchPage's own dialog handler accepts every
 // confirm()/alert() the Block flow raises.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, acceptConfirmModal } from './helpers.mjs';
 
 const ALICE = 'Blocks Suite Alice';
 const BOB = 'Blocks Suite Bob';
@@ -49,6 +49,7 @@ console.log('"You haven\'t blocked anyone" shown before blocking (should be true
 // Block Bob from his friend row.
 const bobNoteCountBefore = (await fetchJson(bobPage, '/api/notifications')).body.notifications.length;
 await alicePage.locator('#friends-accepted-list .friend-row').filter({ hasText: BOB }).locator('button', { hasText: 'Block' }).click();
+await acceptConfirmModal(alicePage); // #3278: in-app confirm modal
 await alicePage.waitForFunction(() => document.querySelectorAll('#friends-blocked-list .friend-row').length === 1, null, { timeout: 30000 });
 const friendRowsAfterBlock = await alicePage.locator('#friends-accepted-list .friend-row').count();
 const blockedRowText = await alicePage.locator('#friends-blocked-list .friend-row').first().textContent();

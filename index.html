@@ -172,8 +172,8 @@
       <button id="toggle-snap" type="button">Snap</button>
       <button id="copy-item" type="button">Copy</button>
       <button id="save-bundle-item" type="button">Save Bundle</button>
-      <button id="group-item" type="button">Group</button>
-      <button id="ungroup-item" type="button">Ungroup</button>
+      <button id="group-item" type="button">Bundle</button>
+      <button id="ungroup-item" type="button">Unbundle</button>
       <button id="toggle-community-sign" type="button">Community Sign</button>
       <button id="toggle-community-calendar" type="button">Community Calendar</button>
       <button id="toggle-backup-chain" type="button">Backup Chain</button>
@@ -254,12 +254,47 @@
           Name
           <input id="bundle-name-input" type="text" maxlength="100" />
         </label>
-        <label id="bundle-name-share-label" hidden>
-          <input id="bundle-name-share-checkbox" type="checkbox" />
-          Share this bundle to the Community tab so any builder can use it too
-        </label>
+        <!-- #3326 (owner decision "Bundle sharing defaults to public on save"):
+             the choice is a pair of radios with public selected, not an opt-in
+             checkbox. -->
+        <fieldset id="bundle-name-share-label" hidden>
+          <legend>Who can place this bundle?</legend>
+          <label><input id="bundle-name-share-public" name="bundle-name-share" type="radio" value="public" checked /> Anyone can place this bundle</label>
+          <label><input id="bundle-name-share-private" name="bundle-name-share" type="radio" value="private" /> Only you can place this bundle</label>
+        </fieldset>
         <div id="bundle-name-modal-actions">
           <button id="bundle-name-save-btn" type="button">Save</button>
+        </div>
+      </div>
+    </div>
+    <!-- #3249: the product review modal Shop's "Rate this Product" opens
+         (write, edit, delete), replacing a chain of native prompt()/alert()
+         calls. See src/ui/productReviewModal.js. -->
+    <div id="product-review-modal" role="dialog" aria-modal="true" aria-labelledby="product-review-modal-title" tabindex="-1">
+      <div id="product-review-modal-content">
+        <button id="product-review-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2 id="product-review-modal-title">Review this product</h2>
+        <fieldset id="product-review-rating">
+          <legend>Rating</legend>
+          <label><input type="radio" name="product-review-rating" value="1" />1 &#9733;</label>
+          <label><input type="radio" name="product-review-rating" value="2" />2 &#9733;</label>
+          <label><input type="radio" name="product-review-rating" value="3" />3 &#9733;</label>
+          <label><input type="radio" name="product-review-rating" value="4" />4 &#9733;</label>
+          <label><input type="radio" name="product-review-rating" value="5" checked />5 &#9733;</label>
+        </fieldset>
+        <label id="product-review-text-label">
+          Comment (optional)
+          <textarea id="product-review-text" rows="4"></textarea>
+          <span id="product-review-count">0/280</span>
+        </label>
+        <div id="product-review-status" role="alert" hidden>
+          <span id="product-review-status-text"></span>
+          <button id="product-review-status-copy-btn" type="button">Copy</button>
+        </div>
+        <div id="product-review-actions">
+          <button id="product-review-delete-btn" type="button" hidden>Delete review</button>
+          <button id="product-review-cancel-btn" type="button">Cancel</button>
+          <button id="product-review-save-btn" type="button">Post review</button>
         </div>
       </div>
     </div>

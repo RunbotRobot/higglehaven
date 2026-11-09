@@ -187,7 +187,7 @@ describe('POST /api/feedback/bug-report surfaces a Control Room card (#2720)', (
     const response = await postBugReport({
       metadata: metadataFor({
         recentUserVisibleMessages: [
-          { text: "Couldn't group these items. Too many items at once.", shownAt: '2026-11-09T01:00:00.000Z' },
+          { text: "Couldn't bundle these items. Too many items at once.", shownAt: '2026-11-09T01:00:00.000Z' },
           { text: '   ', shownAt: 'x' },
           { notText: true },
         ],
@@ -195,7 +195,7 @@ describe('POST /api/feedback/bug-report surfaces a Control Room card (#2720)', (
     });
     const task = await controlRoomTaskFor((await response.json()).reportId);
     expect(task.note).toContain('Last messages shown to the person');
-    expect(task.note).toContain("[2026-11-09T01:00:00.000Z] Couldn't group these items. Too many items at once.");
+    expect(task.note).toContain("[2026-11-09T01:00:00.000Z] Couldn't bundle these items. Too many items at once.");
   });
 
   it('keeps only the last five messages, bounds each, and tolerates a malformed field (#3303)', async () => {

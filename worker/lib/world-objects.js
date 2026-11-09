@@ -167,7 +167,7 @@ export async function handleInstances(request, env, route, url) {
   if (request.method === 'POST' && route.length === 2 && route[1] === 'group') {
     const input = await readJson(request);
     if (!Array.isArray(input.instanceIds)) throw new HttpError('instanceIds must be an array', 400);
-    if (input.instanceIds.length < 2) throw new HttpError('Select at least 2 items to group.', 400);
+    if (input.instanceIds.length < 2) throw new HttpError('Select at least 2 items to bundle.', 400);
     if (input.instanceIds.length > INSTANCE_GROUP_MAX_ITEMS) {
       throw new HttpError(`You can group up to ${INSTANCE_GROUP_MAX_ITEMS.toLocaleString('en-US')} items at once.`, 400);
     }

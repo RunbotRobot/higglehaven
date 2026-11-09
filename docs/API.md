@@ -4950,6 +4950,8 @@ Response:
 
 ### `POST /api/instances/group`
 
+(#3326: the app calls this feature **Bundle** / **Unbundle**; the route and `groupId` names are internal and unchanged.)
+
 #2764 (sub-issue of #2763, owner-requested). Requires a session; every
 referenced instance's `landletId` must belong to the calling session's
 builder (`403` otherwise). Groups 2–5,000 placed instances together under a

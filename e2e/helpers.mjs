@@ -698,7 +698,7 @@ export async function fillBundleNameModal(page, name) {
 export async function saveBundleAs(page, name, { shared = false } = {}) {
   await page.click('#save-bundle-item');
   await page.waitForSelector('#bundle-name-modal.visible', { timeout: 10000 });
-  if (shared) await page.check('#bundle-name-share-checkbox');
+  await page.check(shared ? '#bundle-name-share-public' : '#bundle-name-share-private');
   await page.fill('#bundle-name-input', name);
   await page.click('#bundle-name-save-btn');
 }
