@@ -26,6 +26,8 @@
 // back here for refreshUnitDisplays' own repaint.
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
+import { promptBundleName } from '../ui/bundleNameModal.js';
+import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { openFeedbackModal } from '../feedback/submitFeedbackUI.js';
 import { getUnits, setUnits, unitSuffix } from '../settings.js';
 import { currentMode } from '../world/state.js';
@@ -279,11 +281,13 @@ async function renderNotificationPreferencesField() {
   checkbox.addEventListener('change', async () => {
     const desired = checkbox.checked;
     checkbox.disabled = true;
+    showInlineActionStatus(row, '');
     try {
       await updateNotificationPreferences({ notifySoldOutEmail: desired });
     } catch (err) {
       checkbox.checked = !desired;
-      alert(err.message || 'Could not update this preference.');
+      // #3359: shown beside the checkbox, not in a window.alert() a browser can drop.
+      showInlineActionStatus(row, err.message || 'Could not update this preference.');
     } finally {
       checkbox.disabled = false;
     }
@@ -537,17 +541,16 @@ export async function renderIdentityField(kind, { fetchProfile, idKey, renamePro
   }
 
   renameBtn.addEventListener('click', async () => {
-    const next = prompt(copy.renamePrompt, profile.label);
-    if (!next || !next.trim() || next.trim() === profile.label) return;
-    if (next.trim().length > 100) {
-      alert('Keep it to 100 characters or fewer.');
-      return;
-    }
+    // #3359: the shared in-app name modal instead of window.prompt() (see the
+    // land rename in src/account/menu.js); its input is maxlength 100.
+    const result = await promptBundleName({ title: copy.renamePrompt, initialName: profile.label });
+    if (!result || result.name === profile.label) return;
+    const next = result.name;
     status.textContent = '';
     status.classList.remove('error');
     renameBtn.disabled = true;
     try {
-      profile = await renameProfile(profile[idKey], next.trim());
+      profile = await renameProfile(profile[idKey], next);
       renderName();
       // #741: shopBuilderLabels (a Shop-mode-only cache) has no other way
       // to learn about a rename that happens mid-session — let the caller

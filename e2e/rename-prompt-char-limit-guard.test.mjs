@@ -31,19 +31,13 @@ const OVERLONG = 'x'.repeat(101);
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
-// Scripted, in-order answers to every dialog this test triggers -- a plain
-// string accepts a prompt() with that value, `true` accepts a confirm()/
-// alert() with no value. Each dialog's own message is logged first, so an
-// unexpected extra/missing dialog shows up as a script/log length mismatch
-// rather than silently answering the wrong one.
+// #3359: no flow here should raise a native dialog any more; any that does is
+// logged (and accepted so the run continues) and fails the test below.
 const dialogLog = [];
-let dialogScript = [];
 page.removeAllListeners('dialog');
 page.on('dialog', (dialog) => {
   dialogLog.push(dialog.message());
-  const action = dialogScript.shift();
-  if (typeof action === 'string') return dialog.accept(action);
-  return dialog.accept();
+  return dialog.dismiss();
 });
 
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
@@ -58,15 +52,20 @@ const builderIdentityField = page.locator('.settings-field').filter({ hasText: '
 await builderIdentityField.waitFor({ timeout: 10000 });
 const builderRenameBtn = builderIdentityField.locator('button', { hasText: 'Rename' });
 
-dialogScript = [OVERLONG];
+// #3359: the identity rename uses the shared name modal (maxlength 100).
 await builderRenameBtn.click();
+await page.waitForSelector('#bundle-name-modal.visible', { timeout: 10000 });
+await page.fill('#bundle-name-input', OVERLONG);
+const builderRenameInputTruncated = (await page.inputValue('#bundle-name-input')).length === 100;
+console.log('identity rename input truncates at 100 chars (should be true):', builderRenameInputTruncated);
+await page.click('#bundle-name-cancel-btn');
 await page.waitForTimeout(300);
 const builderLabelAfterOverlong = await builderIdentityField.locator('div').first().textContent();
-console.log('builder identity label unchanged after an over-100-char rename attempt (should be true):', builderLabelAfterOverlong.trim() === LABEL);
+console.log('builder identity label unchanged after cancelling the overlong rename (should be true):', builderLabelAfterOverlong.trim() === LABEL);
 
 const NEW_BUILDER_LABEL = 'Renamed Builder Identity';
-dialogScript = [NEW_BUILDER_LABEL];
 await builderRenameBtn.click();
+await fillBundleNameModal(page, NEW_BUILDER_LABEL);
 await page.waitForFunction(
   (name) => document.querySelector('.settings-field')?.textContent.includes(name),
   NEW_BUILDER_LABEL,
@@ -87,15 +86,19 @@ await myLandsRow.waitFor({ timeout: 10000 });
 const ORIGINAL_LAND_NAME = (await myLandsRow.locator('.my-lands-open-link').textContent()).trim();
 const myLandsRenameBtn = myLandsRow.locator('.version-action-btn', { hasText: 'Rename' });
 
-dialogScript = [OVERLONG];
 await myLandsRenameBtn.click();
+await page.waitForSelector('#bundle-name-modal.visible', { timeout: 10000 });
+await page.fill('#bundle-name-input', OVERLONG);
+const landRenameInputTruncated = (await page.inputValue('#bundle-name-input')).length === 100;
+console.log('landlet rename input truncates at 100 chars (should be true):', landRenameInputTruncated);
+await page.click('#bundle-name-cancel-btn');
 await page.waitForTimeout(300);
 const landNameAfterOverlong = await myLandsRow.locator('.my-lands-open-link').textContent();
-console.log('landlet name unchanged after an over-100-char rename attempt (should be true):', landNameAfterOverlong.trim() === ORIGINAL_LAND_NAME);
+console.log('landlet name unchanged after cancelling the overlong rename (should be true):', landNameAfterOverlong.trim() === ORIGINAL_LAND_NAME);
 
 const NEW_LAND_NAME = 'Renamed Valid Land';
-dialogScript = [NEW_LAND_NAME];
 await myLandsRenameBtn.click();
+await fillBundleNameModal(page, NEW_LAND_NAME);
 await page.waitForFunction(
   (name) => document.querySelector('#my-lands-list .my-lands-open-link')?.textContent === name,
   NEW_LAND_NAME,
@@ -209,13 +212,14 @@ await page.waitForFunction(
 const productRowAfterValidRename = await page.locator('.seller-row').filter({ hasText: NEW_PRODUCT_NAME }).count();
 console.log('product renamed normally with a valid value (should be 1):', productRowAfterValidRename);
 
-// Only 2 of the 5 flows still go through a native alert() guard -- bundle
-// create/rename and product rename moved to the themed modal's own
-// maxlength="100" instead, which never produces a dialog at all.
-const guardAlerts = dialogLog.filter((msg) => /100 characters/.test(msg));
-console.log('total over-100-char guard alerts seen across the 2 still-native flows (should be 2):', guardAlerts.length);
+// #3359: every one of the 5 flows now uses the themed modal's own
+// maxlength="100", which never produces a native dialog at all.
+const nativeDialogs = dialogLog.length;
+console.log('native dialogs raised across all 5 flows (should be 0):', nativeDialogs);
 
-const pass = builderLabelAfterOverlong.trim() === LABEL &&
+const pass = builderRenameInputTruncated &&
+  landRenameInputTruncated &&
+  builderLabelAfterOverlong.trim() === LABEL &&
   builderLabelAfterValidRename.trim() === NEW_BUILDER_LABEL &&
   landNameAfterOverlong.trim() === ORIGINAL_LAND_NAME &&
   landNameAfterValidRename.trim() === NEW_LAND_NAME &&
@@ -227,10 +231,10 @@ const pass = builderLabelAfterOverlong.trim() === LABEL &&
   productRenameInputTruncated &&
   productNameAfterOverlong.includes(PRODUCT_NAME) &&
   productRowAfterValidRename === 1 &&
-  guardAlerts.length === 2 &&
+  nativeDialogs === 0 &&
   errors.length === 0;
 await finish(browser, {
   pass,
-  label: '#2345/#2463: builder identity/landlet/bundle create/bundle rename/product rename all enforce a 100-char client-side guard, matching #1920\'s established pattern',
+  label: '#2345/#2463/#3359: builder identity/landlet/bundle create/bundle rename/product rename all enforce the 100-char cap through the in-app name modal, with no native dialog',
   errors,
 });
