@@ -92,10 +92,16 @@ console.log('Next disabled on the only page (should be true):', nextDisabled);
 // on-screen position of a showcase item depends on real model geometry
 // this test doesn't hand-compute.
 let opened = false;
-for (const [fx, fy] of [[0.5, 0.55], [0.45, 0.5], [0.55, 0.5], [0.4, 0.55], [0.6, 0.55], [0.5, 0.45], [0.5, 0.6]]) {
-  await page.mouse.click(420 * fx, 860 * fy);
-  await page.waitForTimeout(300);
-  if (await page.locator('#seller-modal.visible').isVisible()) { opened = true; break; }
+// #3295: the page is now seen through the follow camera behind the seller's
+// own avatar (Shop's movement), not the old orbit view, so the product sits
+// ahead of and above the avatar rather than at the screen centre: scan the
+// whole open canvas above the movement joysticks.
+scan: for (const fy of [0.5, 0.45, 0.55, 0.4, 0.6, 0.35, 0.65, 0.3, 0.7]) {
+  for (const fx of [0.5, 0.4, 0.6, 0.3, 0.7, 0.2, 0.8]) {
+    await page.mouse.click(420 * fx, 860 * fy);
+    await page.waitForTimeout(250);
+    if (await page.locator('#seller-modal.visible').isVisible()) { opened = true; break scan; }
+  }
 }
 console.log('clicking a showcase item opened the modal (should be true):', opened);
 const modalOnManageAfterClick = await page.locator('#seller-list').isVisible();

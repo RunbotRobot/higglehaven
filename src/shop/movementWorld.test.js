@@ -5,7 +5,7 @@
 import { describe, expect, it } from 'vitest';
 import flightSource from './flightMovement.js?raw';
 import {
-  setMovementWorld, movementWorld, createShopMovementWorld,
+  setMovementWorld, movementWorld, createShopMovementWorld, createSellMovementWorld,
   positionBlockedIn, landingObstructionTopZIn, clampRadiusIn,
 } from './movementWorld.js';
 
@@ -203,5 +203,91 @@ describe('flightMovement.js reads its world through the adapter', () => {
       .join('\n');
     expect(code.match(/shopTerrainHeightAtM\(/g) ?? []).toHaveLength(1);
     expect(code.match(/\bshopWorldRadiusM\b/g) ?? []).toHaveLength(2); // the import and the getter
+  });
+});
+
+// #3295: Sell's world. A rectangular ground, products at the scene origin, flat.
+describe('createSellMovementWorld', () => {
+  const bounds = { minX: -5, maxX: 5, minY: -3, maxY: 3 };
+  const make = (meshes = [], b = bounds) => createSellMovementWorld({ showcaseMeshes: () => meshes, groundBounds: () => b });
+
+  it('visits every showcase mesh with a zero origin and stops early on true', () => {
+    const meshes = [mesh({ x: 1 }), mesh({ x: 2 })];
+    const world = make(meshes);
+    const seen = [];
+    expect(world.forEachObstacle((m, ox, oy, oz) => { seen.push([m.position.x, ox, oy, oz]); return false; })).toBe(false);
+    expect(seen).toEqual([[1, 0, 0, 0], [2, 0, 0, 0]]);
+    expect(world.forEachObstacle(() => true)).toBe(true);
+  });
+
+  it('reads the current page each call, not a snapshot', () => {
+    let meshes = [mesh()];
+    const world = createSellMovementWorld({ showcaseMeshes: () => meshes, groundBounds: () => bounds });
+    meshes = [];
+    let count = 0;
+    world.forEachObstacle(() => { count++; return false; });
+    expect(count).toBe(0);
+  });
+
+  it('has flat ground and a radius through the ground corners', () => {
+    const world = make();
+    expect(world.groundHeightAt(3, -2)).toBe(0);
+    expect(world.worldRadiusM()).toBeCloseTo(Math.hypot(10, 6) / 2);
+  });
+
+  it('has no boundary until a ground exists', () => {
+    const world = make([], null);
+    expect(world.worldRadiusM()).toBeNull();
+    const position = { x: 99, y: 99 };
+    clampRadiusIn(world, position, 5);
+    expect(position).toEqual({ x: 99, y: 99 });
+  });
+
+  it('clamps to the rectangle, clearance in from each edge', () => {
+    const world = make();
+    // Same call shape the movement core uses: radius minus clearance.
+    const radius = world.worldRadiusM();
+    const position = { x: 40, y: -40 };
+    clampRadiusIn(world, position, radius - 0.5);
+    expect(position.x).toBeCloseTo(4.5);
+    expect(position.y).toBeCloseTo(-2.5);
+  });
+
+  it('does not bound the follow camera, only the avatar', () => {
+    const world = make();
+    const camera = { x: 40, y: -40 };
+    clampRadiusIn(world, camera, -10, true);
+    expect(camera).toEqual({ x: 40, y: -40 });
+    const avatar = { x: 40, y: -40 };
+    clampRadiusIn(world, avatar, world.worldRadiusM() - 0.5);
+    expect(avatar.x).toBeCloseTo(4.5);
+  });
+
+  it('still bounds the camera in a world that does not opt out (Shop)', () => {
+    const shopLike = { forEachObstacle: () => false, groundHeightAt: () => 0, worldRadiusM: () => 10 };
+    const camera = { x: 40, y: 0 };
+    clampRadiusIn(shopLike, camera, 8, true);
+    expect(camera.x).toBeCloseTo(8);
+  });
+
+  it('leaves a position already inside untouched', () => {
+    const world = make();
+    const position = { x: 1, y: 1 };
+    clampRadiusIn(world, position, world.worldRadiusM() - 0.5);
+    expect(position).toEqual({ x: 1, y: 1 });
+  });
+
+  it('collapses to the centre line when the ground is narrower than the clearance', () => {
+    const world = make([], { minX: -0.2, maxX: 0.2, minY: -3, maxY: 3 });
+    const position = { x: 5, y: 0 };
+    clampRadiusIn(world, position, world.worldRadiusM() - 1);
+    expect(position.x).toBeCloseTo(0);
+  });
+
+  it('is blocked by and lands on a showcase product through the shared functions', () => {
+    const world = make([mesh({ x: 2, y: 0, height: 2 })]);
+    expect(positionBlockedIn(world, geometry, avatarCorners(2, 0), 0, 1.7)).toBe(true);
+    expect(positionBlockedIn(world, geometry, avatarCorners(-3, 0), 0, 1.7)).toBe(false);
+    expect(landingObstructionTopZIn(world, geometry, avatarCorners(2, 0))).toBe(1);
   });
 });
