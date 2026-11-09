@@ -4456,6 +4456,8 @@ export function templateFromRow(row) {
     // handleInstancePurchase's own guard and this column's migration
     // comment for why it never affects browse/picker visibility.
     flaggedHiddenAt: row.flagged_hidden_at,
+    // #3279: set when a seller removed a product shoppers had already bought.
+    delistedAt: row.delisted_at ?? null,
     // #1948: NULL = unlimited (the default); a set value is remaining
     // stock, decremented atomically at purchase-finalize time.
     stockQuantity: row.stock_quantity,

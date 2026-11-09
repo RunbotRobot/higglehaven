@@ -228,9 +228,13 @@ const NEAR_OFFSET_M = 30; // < SHOP_LOAD_RADIUS_M (60m), generous margin
 // window.__testForceShopProximityCheck, rather than relying on the next
 // real requestAnimationFrame tick to notice the new position on its own
 // (see that hook's own comment in src/main.js).
+// #3261: z = 0 lands the avatar on the ground. Shop mode's spawn leaves the
+// avatar airborne, and the load/unload radii now grow with altitude (see
+// src/shop/loadRadius.js), so this test -- which is about the 60 m / 90 m
+// GROUND-LEVEL radii -- has to be on the ground for them to apply.
 async function teleportShopAvatar(x, y) {
   await page.evaluate(([tx, ty]) => {
-    window.__testTeleportShopAvatar(tx, ty);
+    window.__testTeleportShopAvatar(tx, ty, 0);
     window.__testForceShopProximityCheck();
   }, [x, y]);
 }

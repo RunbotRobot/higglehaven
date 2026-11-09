@@ -1,3 +1,17 @@
+#3279 (supersedes #1291): removing a template that any builder owns as an
+avatar or animation (`owned_avatars`/`owned_animations`) **delists** it
+instead of deleting it. The row stays, with `delisted_at` set (exposed as
+`delistedAt` on the template); every owner keeps it exactly as it was -- still
+owned, still equipped, model still served -- and nobody is notified, because
+nothing changed for them. A delisted template leaves `GET /api/catalog`
+(browsing, search and the seller's own list), is `404` to its seller for
+further `PATCH`/`PUT`/`DELETE`, and cannot be purchased (`400`, "This product
+is no longer for sale"); `GET /api/catalog/:templateId` still returns it so
+owners' lookups keep working. A template nobody owns is hard-deleted as
+before. The placed-instance, saved-layout, version-history, backup-chain and
+archived-version `409`s above apply either way. `DELETE /api/catalog/batch`
+does the same per id.
+
 # higglehaven backend API
 
 This document describes the current dev-only Cloudflare Worker + D1 API contract.
@@ -533,7 +547,12 @@ its signatures, so it is not trusted); a body with no numeric `timestamp` is
 processed as before. `503` if `DIDIT_WEBHOOK_SECRET` isn't
 configured. Idempotent against a repeat delivery for the same session —
 only the first delivery (webhook or a status poll, whichever gets there
-first) applies the resulting `trustTier` change.
+first) applies the resulting `trustTier` change. Identity verification is
+one-time: Didit's `Kyc Expired` status (a re-verification window lapsing on an
+earlier approval) is logged (`didit-status-ignored`) and otherwise ignored, by
+the webhook and the status poll alike, so it never changes `trustTier` or a
+session's recorded outcome (#2404). The Didit workflow should have no
+re-verification period configured.
 
 ### `POST /api/auth/login`
 
@@ -1745,11 +1764,12 @@ leaving the old `seller_id` — and the unpaid purchases still pointing at
 it — with no session that can ever reach them again. Request a payout
 first, then delete.
 
-Response:
+Response (`delisted` is `true` when the template was delisted rather than deleted):
 
 ```json
 {
-  "deleted": true
+  "deleted": true,
+  "delisted": false
 }
 ```
 
@@ -2720,7 +2740,10 @@ must also set a non-null `priceCents`, or the whole batch is rejected with
 before deletion; a missing ID returns `404`, and a foreign-key conflict returns
 `409` with the entire D1 batch rolled back. Every template being deleted that
 has a non-null `sellerId` requires a session logged in as that seller (`403`
-otherwise). Success returns `deletedTemplateIds` in request order.
+otherwise). Success returns `deletedTemplateIds` in request order (every id
+that left the seller's list) and `delistedTemplateIds`, the subset that was
+delisted rather than deleted because shoppers own it (#3279, see the single-item
+`DELETE` below). An id that is already delisted reads as missing (`404`).
 
 ### `POST /api/catalog`
 
@@ -5103,6 +5126,18 @@ Requires a session. Marks every one of the calling account's own unread
 notifications read at once. No body — `builderId` is derived from the
 session, never a client-supplied field.
 
+### `DELETE /api/notifications/:notificationId`
+
+#3280 (owner request: delete a notification, not only mark it read). Requires
+a session and removes the caller's own notification outright (the row is
+deleted, not flagged: it is the user's own copy of a message and nothing else
+depends on it). `200 { "ok": true }`; `403` for another account's
+notification (the row stays); `404` if it does not exist, which includes a
+second delete of the same id. Rate-limited with the same bucket as marking
+read. The Notices panel shows a Delete button on each row (no confirmation for
+a single notice); a "clear all read" action is deferred until the in-app
+confirmation-modal convention from #3278 exists.
+
 ### How a notification gets created
 
 `PATCH /api/catalog/:templateId` (see "Catalog templates" above) compares
@@ -6959,7 +6994,7 @@ server-side, never from the request body), and one review per purchase
 re-reviewed — including the `404` for posting to a template that doesn't
 exist. `e2e/product-reviews.test.mjs` uploads a real seller-owned priced
 product (same flow as `e2e/flooring.test.mjs`), "buys" it via the same API
-the in-world "Simulate Purchase" hint calls (twice, under the one logged-in
+the in-world "Purchase" hint calls (twice, under the one logged-in
 session the whole test runs as — two purchases still grant two independent
 review slots for the same buyer), posts reviews directly via the API, and
 confirms the Seller modal's own "Reviews" row panel displays and moderates
@@ -7134,15 +7169,10 @@ review averages are already shown" — a full shopper-facing "my orders"
 history to leave feedback from later doesn't exist in this app at all
 (see "Product reviews"' own `#454` comment on why — the server never
 stores a raw token/receipt a shopper could come back to), so submission
-instead happens at the one moment a shopper is guaranteed to still have
-their own purchase in hand: immediately after the preview modal's Buy
-button (`handleShopProductBuyClick`) completes a purchase (both the
-real-money and simulated paths), via a `confirm()` then the same
-two-`prompt()` rating+comment flow the modal's own Review button
-(`handleShopProductReviewClick`) already uses. `promptSellerFeedback`
-silently no-ops when the purchase has no `sellerId` (nothing to rate) or
-no `buyerLabel` (the purchase predates a real buyer identity) — never
-shown for a product with no seller or an unidentified buyer. The seller's
+originally happened immediately after the preview modal's Buy button
+completed a purchase. **#3256 removed that immediate prompt** (too early
+to judge accuracy, timeliness or communication); feedback is now left
+only from My Purchases' per-row "Rate this seller" action (#3198). The seller's
 own aggregate — `#seller-feedback-summary` in the Seller modal, right
 below `#seller-hint` — is fetched fresh on every modal open
 (`renderSellerFeedbackSummary`) and stays hidden entirely until that
@@ -7153,13 +7183,11 @@ invisible" convention the preview modal's own info text documents.
 no frontend wiring in this PR.** The structural gap this section's own
 first paragraph already describes (no "my orders" page, no receipt to come
 back to) applies just as much to editing/deleting feedback already left as
-it does to leaving it in the first place: `promptSellerFeedback` fires
-exactly once, immediately after a purchase, with no later re-entry point
-the way the preview modal's Review button offers for product reviews
-(tap the same in-world product again any time). Exposing this to buyers
-for real needs a genuine "my purchases"/order-history view to revisit —
-a separate, larger piece of frontend work this issue doesn't scope, flagged
-as its own backlog item rather than built here.
+it does to leaving it in the first place (historical: the then-only
+entry point fired exactly once, immediately after a purchase, with no
+later re-entry point the way the preview modal's Review button offers for product reviews
+(tap the same in-world product again any time)). That gap is closed: My
+Purchases (#3198) now offers leave/edit/delete per purchase.
 
 ## Scheduled calendar events + creative-tool trigger
 
@@ -8151,7 +8179,7 @@ purchase has no other required input beyond which instance is being
 bought. When present, `buyerLabel` is capped at 100 characters, same
 as sign-post/review `authorLabel`. When absent, `buyerLabel` defaults to
 the caller's own session builder's label (#761) — not left anonymous —
-since the in-world "Simulate Purchase" button (the only real purchase
+since the in-world "Purchase" button (the only real purchase
 path this app ships) never sends an explicit `buyerLabel` at all;
 defaulting to blank there meant no real purchase could ever back a
 product review (see "Product reviews" above's exact-`buyer_label`-match
@@ -8648,7 +8676,7 @@ Refund/reversal against a real-money purchase's PaymentIntent is handled by
 Shop mode's isolated product preview modal (its action buttons' visibility
 is driven by `updateReviewFade` in `src/main.js`, shared with "Product
 reviews" and "Product pricing" above — see "Product reviews"' own note on
-why this is tap-driven, not proximity) gains a "Simulate Purchase" button
+why this is tap-driven, not proximity) gains a "Purchase" button
 (`#shop-product-preview-buy-btn`, `handleShopProductBuyClick`), shown only
 when the tapped instance's template has a price set. Clicking it
 confirms the purchase, then calls `purchaseInstance` (`src/api.js`). If
@@ -8890,7 +8918,7 @@ client-side (no new route, no schema change).
 A "Return Policy" button inside the preview modal
 (`#shop-product-preview-return-policy-btn`, `handleShopReturnPolicyClick`)
 shares that same tap-gated `shopTappedProduct`/`canBuy` visibility state as
-the modal's own "Simulate Purchase" button (see "Shop-side: seeing a
+the modal's own "Purchase" button (see "Shop-side: seeing a
 price" above) — both toggle together off one shared `canBuy` boolean in
 `updateReviewFade()`, so the button only ever appears once a shopper has
 actually tapped a buyable product. Clicking it opens `#refund-policy-modal`
@@ -11032,6 +11060,28 @@ every other authenticated repeatable-write endpoint in this file (#2092) —
 a bogus or already-collected orb id still 404s cheaply but counts against
 the limit, since the cost is the D1 batch round-trip, not a successful
 collect specifically.
+
+**#3258** (owner decision: a message that limits an action says how much and
+until when): every rate-limit `429` (this endpoint and every other
+`checkRateLimit` caller) now carries `{ "limit", "windowSeconds",
+"retryAfterSeconds" }` beside `error`. `retryAfterSeconds` (at least 1) is
+the time until the bucket's oldest in-window attempt ages out, i.e. when the
+next attempt is allowed. The orb notice in Shop mode builds its sentence
+from these (`src/rateLimitNotice.js`) instead of hard-coding the limit.
+
+**#3275**: every other place a player can hit a limit gets the same treatment
+in one spot: `apiError` (`src/api.js`) sets the message of any `429` that
+carries those numbers to "You've reached the limit for this (20 every 15
+minutes). Try again in about 7 minutes." (`rateLimitMessage`), so each caller
+that shows `err.message` reads right without its own sentence (the server's
+original text stays on `error.serverMessage`). Auth endpoints (signup,
+password-reset request, resend-verification) go through the same
+`checkRateLimit`; the numbers are fixed constants and the bucket is keyed on
+the caller's IP and the targeted email (signup, password-reset request) or on
+the caller's own user id (resend-verification) whether or not an account
+exists for that email, so showing them confirms nothing about an account and
+those flows were not special-cased. Login's own per-account lockout is a different mechanism and
+unchanged. A `429` without the numbers still shows the server's text.
 
 **#2222**: also requires the caller's own `avatar_presence` row (#1097/#1098)
 to be fresh (within `PRESENCE_STALE_AFTER_MS`, the same freshness bar the

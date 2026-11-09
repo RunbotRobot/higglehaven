@@ -19,7 +19,7 @@
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <div id="shop-credit-orb-toast" role="status" aria-live="polite">You collected a free model-generation credit!</div>
     <div id="shop-credit-orb-offline-notice" role="status" aria-live="polite">Can't collect orbs right now — you appear to be offline.</div>
-    <div id="shop-credit-orb-rate-limit-notice" role="status" aria-live="polite">You've collected the max orbs for now — try again in a bit.</div>
+    <div id="shop-credit-orb-rate-limit-notice" role="status" aria-live="polite">You've reached the orb limit for now — try again in a bit.</div>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <!-- #506/N45 history (see this button's own CSS comment below for the
@@ -176,6 +176,7 @@
       <button id="toggle-community-calendar" type="button">Community Calendar</button>
       <button id="toggle-backup-chain" type="button">Backup Chain</button>
       <button id="delete-item" type="button">Delete</button>
+      <div id="selection-action-status" role="status" aria-live="polite" hidden></div>
     </div>
     <div id="level-controls">
       <button id="level-menu-toggle" type="button" aria-expanded="false"><span id="level-label">Ground</span></button>
@@ -357,6 +358,7 @@
             <input id="upload-avatar-category-checkbox" type="checkbox" />
             List as an equippable avatar (buyers can equip it as their own in-world character)
           </label>
+          <div id="upload-no-animations-note" hidden></div>
           <label id="upload-animation-category-label">
             <input id="upload-animation-category-checkbox" type="checkbox" />
             List as a standalone animation (buyers can apply it to whichever avatar they have equipped)
@@ -395,6 +397,30 @@
         <input type="text" id="sell-this-too-search-input" class="seller-filter-control" placeholder="Search products…" autocomplete="off" aria-label="Search products">
         <div id="sell-this-too-grid"></div>
         <div id="sell-this-too-empty" hidden>No products match your search.</div>
+        <!-- #3249: the price and stock questions that used to be two native
+             prompt() calls (silently skipped by a browser that suppresses
+             native dialogs). Shown in place of the grid once a product is
+             picked. The price starts empty with a helper line, not a
+             placeholder that reads as a value. -->
+        <form id="sell-this-too-form" hidden novalidate>
+          <h3 id="sell-this-too-form-title"></h3>
+          <p id="sell-this-too-form-note" class="sell-this-too-help" hidden></p>
+          <label>
+            Your price
+            <input type="text" id="sell-this-too-price-input" class="seller-filter-control" inputmode="decimal" autocomplete="off">
+          </label>
+          <p class="sell-this-too-help">Enter 0 for a free product.</p>
+          <label>
+            Stock quantity (optional)
+            <input type="text" id="sell-this-too-stock-input" class="seller-filter-control" inputmode="numeric" autocomplete="off">
+          </label>
+          <p class="sell-this-too-help">Leave blank for unlimited.</p>
+          <div id="sell-this-too-form-error" class="seller-row-status error" role="alert" hidden></div>
+          <div class="sell-this-too-form-actions">
+            <button type="submit" id="sell-this-too-add-btn" class="seller-save-btn">Add listing</button>
+            <button type="button" id="sell-this-too-back-btn" class="seller-row-action-btn">Back</button>
+          </div>
+        </form>
       </div>
     </div>
     <!-- #659 (owner, Control Room, 2026-09-11): the plain-language refund
@@ -659,7 +685,7 @@
         <div id="shop-product-preview-info"></div>
         <div id="shop-product-preview-actions">
           <button id="shop-product-preview-review-btn" type="button">Rate this Product</button>
-          <button id="shop-product-preview-buy-btn" type="button">Simulate Purchase</button>
+          <button id="shop-product-preview-buy-btn" type="button">Purchase</button>
           <button id="shop-product-preview-return-policy-btn" type="button">Return Policy</button>
         </div>
       </div>

@@ -141,6 +141,11 @@ export async function handleInstancePurchase(request, env, instanceId) {
   if (template.flagged_hidden_at) {
     throw new HttpError('This product is temporarily unavailable pending review', 400);
   }
+  // #3279: removed by its seller after others had bought it -- existing
+  // owners keep it, but nobody new can.
+  if (template.delisted_at) {
+    throw new HttpError('This product is no longer for sale', 400);
+  }
   // #1948: a quick, non-atomic pre-check so an obviously sold-out item gets a
   // clear rejection before a buyer goes through checkout (real-money) or the
   // simulated write below -- the actual race-safe enforcement (the last unit

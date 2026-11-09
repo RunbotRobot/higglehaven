@@ -82,31 +82,34 @@ const template = templates.find((t) => t.name === PRODUCT_NAME);
 // from any other, genuinely unexpected one.
 const errorsBeforeFailureSimulation = [...errors];
 
-// Force only the very first GET to this model's own file to fail -- every
-// later request for the exact same URL (including the second placement
-// below) goes through untouched. Same "count then abort once" shape
+// Force the first TWO GETs to this model's own file to fail -- the first
+// attempt and createMeshForInstance's one automatic retry (#3254) -- so the
+// first placement genuinely ends as the box. Every later request for the exact
+// same URL (including the second placement below) goes through untouched.
+// Same "count then abort" shape
 // e2e/review-empty-state-stale-error.test.mjs's own route interception
 // already uses for an unrelated endpoint.
 let modelFetchCount = 0;
 await page.route(`**${template.modelUrl}`, async (route) => {
   modelFetchCount++;
-  if (modelFetchCount === 1) {
+  if (modelFetchCount <= 2) {
     await route.abort('failed');
     return;
   }
   await route.continue();
 });
 
-async function placeAt(x, y) {
+async function placeAt(x, y, settleMs = 800) {
   await page.click('#add-item-btn');
   await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
   await page.locator('#catalog-picker-grid button').filter({ hasText: PRODUCT_NAME }).click();
   await page.waitForTimeout(300);
   await page.mouse.click(x, y);
-  await page.waitForTimeout(800);
+  await page.waitForTimeout(settleMs);
 }
 
-await placeAt(160, 400);
+// 1s retry delay (#3254) + the second failed fetch, so wait past both.
+await placeAt(160, 400, 3000);
 const warningsAfterFirst = boxFallbackWarnings.length;
 console.log('box-fallback warnings after the first placement (forced failure, expect exactly 1):', warningsAfterFirst);
 
@@ -116,7 +119,7 @@ console.log('box-fallback warnings after the second placement (same model, untou
 
 const newErrors = errors.slice(errorsBeforeFailureSimulation.length);
 const pass = warningsAfterFirst === 1 && warningsAfterSecond === 1
-  && newErrors.length === 1 && newErrors[0].includes('net::ERR_FAILED');
+  && newErrors.length === 2 && newErrors.every((e) => e.includes('net::ERR_FAILED'));
 await finish(browser, {
   pass,
   label: '#2438: a failed model load must not permanently poison that URL for the rest of the tab\'s session',

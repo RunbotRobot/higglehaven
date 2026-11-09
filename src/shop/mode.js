@@ -45,6 +45,7 @@
 // in main.js.
 import * as THREE from 'three';
 import { disposeOwnedMeshResources } from '../sharedModelResources.js';
+import { shopGroundUsesBiomeTexture } from './groundLook.js';
 import { landlet, createGroundTexture, normalizeGroundShapeUVs, disposeObject, disposeMaterialTextures } from '../world/models.js';
 import { scene, camera, renderer, registerModeFrameUpdate, registerFacingOverride } from '../world/scene.js';
 import { activeCatalog, setActiveCatalog } from '../world/state.js';
@@ -82,6 +83,7 @@ import {
   beginShopSpawn, updateShopMovement,
   getShopCameraLockToFacing, setShopCameraLockToFacing,
 } from './flightMovement.js';
+import { mountShopAvatar } from './mountShopAvatar.js';
 import { settingsSectionEl } from '../settings/modal.js';
 import {
   shopDomeRiseM, resetShopDomeRiseM, paintVerticalGradient,
@@ -352,20 +354,19 @@ export function unloadShopLandletInstances(entry) {
 // caller owns adding/removing the result from its own group; this never
 // touches the scene graph itself.
 export function buildShopGroundMesh(record) {
-  // #220/#2371: only an unclaimed 'greenbelt' plot gets the textured
-  // ground — claimed/generating/water keep their own flat
-  // SHOP_PLOT_COLORS fill, since those are ownership-status indicators,
-  // not a ground biome, and need to stay instantly readable as a single
-  // solid color at a glance across the whole world. A greenbelt plot's
-  // own texture now varies by its real biome (#2370's ingested data),
-  // falling back to the same default/unclassified look #220 originally
-  // shipped when no real classification exists at its location yet.
+  // #220/#2371: a greenbelt plot's texture varies by its real biome (#2370's
+  // ingested data), falling back to the default/unclassified look when no real
+  // classification exists at its location yet.
+  // #3262 (owner decision 2026-11-08): a claimed plot gets the same ground, so
+  // the shopper sees what the builder sees (see groundLook.js). Only
+  // generating and water plots keep their flat SHOP_PLOT_COLORS fill.
   const plotColorKey = plotColorKeyForLandlet(record);
-  const groundMaterial = plotColorKey === 'greenbelt'
+  const texturedGround = shopGroundUsesBiomeTexture(plotColorKey);
+  const groundMaterial = texturedGround
     ? new THREE.MeshStandardMaterial({ map: createGroundTexture(record.biome) })
     : new THREE.MeshStandardMaterial({ color: SHOP_PLOT_COLORS[plotColorKey] ?? 0x4caf50 });
   const groundGeometry = new THREE.ShapeGeometry(shapeForLandlet(record));
-  if (plotColorKey === 'greenbelt') normalizeGroundShapeUVs(groundGeometry);
+  if (texturedGround) normalizeGroundShapeUVs(groundGeometry);
   const groundMesh = new THREE.Mesh(groundGeometry, groundMaterial);
   // #2851: Shop mode's own ground mesh never called curveGroundGeometry
   // (world-curvature *between* landlets is a separate, unaddressed
@@ -497,29 +498,9 @@ export async function enterShopMode() {
   // regardless of the try/catch (found via e2e/auth.test.mjs's own
   // logout -> reset-password reload tripping its errors.length === 0
   // check).
-  let equippedAvatarModelUrl = null;
-  setShopEquippedAvatarSkeletonSignature(null);
-  // #1165: the applied animation (if any and still owned), fetched
-  // alongside the equipped avatar — createCustomShopAvatar needs both
-  // together to decide whether this animation's own clips actually apply
-  // here (#1162's compatibility check) or this avatar falls back to its
-  // own.
-  let equippedAnimation = null;
-  if (currentAuthUser) {
-    try {
-      const avatar = await fetchMyEquippedAvatar();
-      equippedAvatarModelUrl = avatar.modelUrl;
-      setShopEquippedAvatarSkeletonSignature(avatar.skeletonSignature);
-    } catch (err) {
-      console.warn('Could not fetch equipped avatar, using the default avatar:', err);
-    }
-    try {
-      const animation = await fetchMyEquippedAnimation();
-      if (animation.equippedTemplateId) equippedAnimation = animation;
-    } catch (err) {
-      console.warn('Could not fetch applied animation, falling back to the equipped avatar\'s own clips:', err);
-    }
-  }
+  // #3294: the equipped avatar and applied animation are fetched, and the
+  // avatar built and mounted, together by mountShopAvatar below (the same
+  // function the Sell world view uses); it only fetches when logged in.
 
   // #1176: the shopper's own last-reported position, if any — powers the
   // "Go to Last Location" button shown during the spawn orbit below. Never
@@ -721,33 +702,18 @@ export async function enterShopMode() {
     });
   }
 
-  // Shop mode can be (re-)entered without a reload (see this function's own
-  // opening comment) — remove any avatar left over from a previous round
-  // trip before building a fresh one, rather than ending up with two
-  // overlapping bodies.
-  // #1358: also dispose it, not just detach it from the scene graph — left
-  // over from a previous round trip means its geometry/material (and any
-  // custom GLTF avatar's textures) would otherwise leak every time Shop
-  // mode is re-entered without a page reload.
-  if (shopAvatar) {
-    scene.remove(shopAvatar.group);
-    disposeObject3D(shopAvatar.group);
-  }
-  setShopAvatar(null);
-  if (equippedAvatarModelUrl) {
-    try {
-      setShopAvatar(await createCustomShopAvatar(equippedAvatarModelUrl, equippedAnimation));
-    } catch (err) {
-      console.warn(`Failed to load equipped avatar model (${equippedAvatarModelUrl}), falling back to the default avatar:`, err);
-    }
-  }
-  if (!shopAvatar) setShopAvatar(createShopAvatar());
-  scene.add(shopAvatar.group);
-  window.__shopAvatarModelUrl = shopAvatar.modelUrl; // see refreshEquippedShopAvatar's own comment on this (#982)
-  window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() }; // see refreshEquippedShopAvatar's own comment on this (#1091)
-  window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null; // see createCustomShopAvatar's own comment on this (#1165)
+  // #3294: one shared function builds and mounts the avatar (see
+  // src/shop/mountShopAvatar.js for the behaviour it keeps, including the
+  // #1358 dispose of a previous round trip's avatar and the fallbacks).
+  await mountShopAvatar({ scene, isLoggedIn: Boolean(currentAuthUser) }, {
+    fetchMyEquippedAvatar, fetchMyEquippedAnimation,
+    setEquippedAvatarSkeletonSignature: setShopEquippedAvatarSkeletonSignature,
+    getShopAvatar: () => shopAvatar, setShopAvatar, disposeObject3D,
+    createCustomShopAvatar, createShopAvatar,
+    shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM,
+    resetShopAvatarIdleState,
+  });
   await reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
-  resetShopAvatarIdleState(); // src/shop/avatar.js (#2623) — zeroes every idle/sway/sit/lean field it owns
   // #1175 (docs/SPEC.md §1/§2): every spawn — not just a first-ever visit —
   // starts already flying, above a random world location, facing the
   // world center, and slowly orbiting it clockwise until the shopper gives

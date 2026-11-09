@@ -30,6 +30,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from '../modelOptimizer.js';
+import { describeAvatarClips, describeNoAnimationsForAvatar } from '../avatarClipNames.js';
 import { unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from '../settings.js';
 import { ensureSellerIdentity } from '../account/identity.js';
 import {
@@ -72,6 +73,15 @@ const uploadStepFileEl = document.getElementById('upload-step-file');
 const uploadStepDimensionsEl = document.getElementById('upload-step-dimensions');
 const uploadDimensionsPreviewEl = document.getElementById('upload-dimensions-preview');
 const uploadAnimationsDetectedEl = document.getElementById('upload-animations-detected');
+const uploadNoAnimationsNoteEl = document.getElementById('upload-no-animations-note');
+// #2744: how many animation clips the model in the wizard carries (null until
+// known), so the "no animations" note below can react to the avatar checkbox.
+let uploadModelClipCount = null;
+function refreshNoAnimationsNote() {
+  const text = describeNoAnimationsForAvatar(uploadModelClipCount, uploadAvatarCategoryCheckbox.checked);
+  uploadNoAnimationsNoteEl.textContent = text ?? '';
+  uploadNoAnimationsNoteEl.hidden = text === null;
+}
 const uploadNameInput = document.getElementById('upload-name');
 const uploadPriceInput = document.getElementById('upload-price');
 const uploadDigitalGoodCheckbox = document.getElementById('upload-digital-good-checkbox');
@@ -86,9 +96,11 @@ const uploadAnimationCategoryCheckbox = document.getElementById('upload-animatio
 // whichever it happens to check first.
 uploadAvatarCategoryCheckbox.addEventListener('change', () => {
   if (uploadAvatarCategoryCheckbox.checked) uploadAnimationCategoryCheckbox.checked = false;
+  refreshNoAnimationsNote();
 });
 uploadAnimationCategoryCheckbox.addEventListener('change', () => {
   if (uploadAnimationCategoryCheckbox.checked) uploadAvatarCategoryCheckbox.checked = false;
+  refreshNoAnimationsNote(); // clearing the avatar box above fires no change event of its own
 });
 
 uploadDigitalGoodCheckbox.addEventListener('change', () => {
@@ -194,7 +206,10 @@ function formatBytes(bytes) {
 function disposeUploadDimensionPreview() {
   uploadDimensionsPreviewEl.innerHTML = '';
   uploadAnimationsDetectedEl.hidden = true;
+  uploadModelClipCount = null;
+  refreshNoAnimationsNote();
   if (!uploadDimensionPreview) return;
+  uploadDimensionPreview.resizeObserver?.disconnect();
   uploadDimensionPreview.controls.dispose();
   uploadDimensionPreview.renderer.dispose();
   disposeObject(uploadDimensionPreview.previewObject);
@@ -406,7 +421,12 @@ function makeDimensionLabelSprite(text, colorHex) {
 // dimension edits are always proportion-preserving (a uniform scale),
 // every possible edit renders identically, so only the label text needs
 // to change as the seller types (see updateUploadDimensionLabels).
-async function showUploadDimensionPreview(modelUrl) {
+// #3251: `revealStep` shows the Confirm Dimensions step. It is called only
+// once the model has loaded, immediately before the canvas is measured and
+// the renderer created: that step is `hidden` (display: none) until now, so
+// measuring earlier gave a 0x0 rect and a 0-sized WebGL buffer, which is the
+// empty grey box the owner saw above the size fields.
+async function showUploadDimensionPreview(modelUrl, revealStep) {
   const myFlowToken = uploadFlowToken;
   disposeUploadDimensionPreview();
 
@@ -468,11 +488,13 @@ async function showUploadDimensionPreview(modelUrl) {
   // clip names, rather than a seller silently discovering that gap only
   // once it's equipped in-world.
   loadModelAnimations(modelUrl).then((animations) => {
-    if (myFlowToken !== uploadFlowToken || animations.length === 0) return;
-    const matched = ['idle', 'walk', 'fly'].filter((name) => THREE.AnimationClip.findByName(animations, name));
-    uploadAnimationsDetectedEl.textContent = matched.length > 0
-      ? `Avatar animations detected: ${matched.join(', ')} — these play automatically if this is equipped as an avatar.`
-      : `This model has ${animations.length} animation clip${animations.length === 1 ? '' : 's'}, but none named idle/walk/fly — if equipped as an avatar it'll still move, just without playing them.`;
+    if (myFlowToken !== uploadFlowToken) return;
+    uploadModelClipCount = animations.length;
+    refreshNoAnimationsNote();
+    if (animations.length === 0) return;
+    // #2744: the wording (and the names of the clips actually found) lives in
+    // avatarClipNames.js so it is unit-tested without three.js.
+    uploadAnimationsDetectedEl.textContent = describeAvatarClips(animations.map((clip) => clip.name));
     uploadAnimationsDetectedEl.hidden = false;
   }).catch(() => {});
 
@@ -481,6 +503,7 @@ async function showUploadDimensionPreview(modelUrl) {
   const sphere = box.getBoundingSphere(new THREE.Sphere());
   const radius = Math.max(sphere.radius, 0.05);
 
+  revealStep();
   const rect = canvas.getBoundingClientRect();
   const camera = new THREE.PerspectiveCamera(45, rect.width / Math.max(rect.height, 1), 0.01, 100);
   camera.up.set(0, 0, 1);
@@ -500,6 +523,21 @@ async function showUploadDimensionPreview(modelUrl) {
   controls.maxDistance = dist * 3;
   const render = () => renderer.render(scene, camera);
   controls.addEventListener('change', render);
+  // #3251: keep the buffer and aspect in step with the canvas's real size, so
+  // a layout change after the step opens (rotating the phone, the on-screen
+  // keyboard resizing the modal) never leaves it stretched or blank.
+  let resizeObserver = null;
+  if (typeof ResizeObserver !== 'undefined') {
+    resizeObserver = new ResizeObserver(() => {
+      const { width, height } = canvas.getBoundingClientRect();
+      if (width < 1 || height < 1) return;
+      renderer.setSize(width, height, false);
+      camera.aspect = width / height;
+      camera.updateProjectionMatrix();
+      render();
+    });
+    resizeObserver.observe(canvas);
+  }
 
   const axisDims = { x: size.x, y: size.y, z: size.z };
   const dirs = { x: new THREE.Vector3(1, 0, 0), y: new THREE.Vector3(0, 1, 0), z: new THREE.Vector3(0, 0, 1) };
@@ -519,7 +557,7 @@ async function showUploadDimensionPreview(modelUrl) {
     labels.push(label);
   }
 
-  uploadDimensionPreview = { renderer, scene, camera, controls, previewObject, arrows, labels, render };
+  uploadDimensionPreview = { renderer, scene, camera, controls, previewObject, arrows, labels, render, resizeObserver };
   updateUploadDimensionLabels();
 }
 
@@ -648,15 +686,17 @@ async function handleUploadFileStep() {
     refreshUploadDimensionUnits();
 
     setUploadStatus('Loading preview…');
-    await showUploadDimensionPreview(modelUrl);
+    // #3251: the step is revealed from inside, right before the canvas is
+    // measured, rather than after (see showUploadDimensionPreview).
+    await showUploadDimensionPreview(modelUrl, () => {
+      uploadStep = 'dimensions';
+      uploadModalTitleEl.textContent = 'Confirm Dimensions';
+      uploadStepFileEl.hidden = true;
+      uploadStepDimensionsEl.hidden = false;
+      uploadSubmitBtn.textContent = 'Create Product';
+      uploadRetryVideoBtn.hidden = uploadModelSource !== 'video';
+    });
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while loading the preview
-
-    uploadStep = 'dimensions';
-    uploadModalTitleEl.textContent = 'Confirm Dimensions';
-    uploadStepFileEl.hidden = true;
-    uploadStepDimensionsEl.hidden = false;
-    uploadSubmitBtn.textContent = 'Create Product';
-    uploadRetryVideoBtn.hidden = uploadModelSource !== 'video';
     setUploadStatus('');
   } catch (err) {
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report this call's own error over a newer flow's state

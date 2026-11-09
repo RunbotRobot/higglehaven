@@ -662,10 +662,10 @@ const shopCameraAnchor = new THREE.Vector3();
 // mode's own per-frame positionShopCamera() derives camera.position fresh
 // from shopAvatarPosition every single frame (see its own definition), so
 // writing camera.position here would just be silently overwritten on the
-// very next frame. updateShopProximity reads camera.position.x/y, and
-// positionShopCamera runs unconditionally ahead of it in the same
-// updateShopMovement tick, so this still lands before the next proximity
-// check sees it. Always inert unless a test calls it, same convention as
+// very next frame. updateShopProximity reads shopAvatarPosition x/y (#3261:
+// it used to read camera.position, which trails the avatar in flight) and the
+// altitude, which this hook's optional z sets, so this still lands before the
+// next proximity check sees it. Always inert unless a test calls it, same convention as
 // window.__testAvatarLoadDelayMs.
 window.__testTeleportShopAvatar = (x, y, z) => {
   shopAvatarPosition.x = x;
@@ -1579,10 +1579,26 @@ function moveShopAvatarWithCollision(dx, dy) {
 // test calls it, same convention as window.__testForceShopProximityCheck.
 window.__testMoveShopAvatarWithCollision = (dx, dy) => moveShopAvatarWithCollision(dx, dy);
 
+// #3292 (leaf 1/6 of #3291, part of #3253): the per-frame work is split in
+// two so Sell mode's world view can reuse Shop's movement without Shop's
+// world. updateShopMovementCore is look/flight/walk-with-collision/avatar
+// pose/camera -- everything that moves and shows the avatar; the
+// Shop-world services (landlet loading, presence, chat, voice, fades,
+// orbs, attention) are updateShopWorldServices, called after it with the
+// frame's dt. Shop's updateShopMovement runs both in the same order it
+// always has, so Shop behaves exactly as before.
 export function updateShopMovement(now) {
+  const frame = updateShopMovementCore(now);
+  if (frame === null) return;
+  updateShopWorldServices(now, frame.dt);
+}
+
+// Returns null on the very first frame (no dt yet), otherwise
+// { dt, moveMagnitude, airborne } for this frame.
+export function updateShopMovementCore(now) {
   if (shopLastFrameTime === null) {
     shopLastFrameTime = now;
-    return;
+    return null;
   }
   const dt = Math.min((now - shopLastFrameTime) / 1000, 0.1); // clamp against tab-switch-sized gaps
   shopLastFrameTime = now;
@@ -1794,7 +1810,14 @@ export function updateShopMovement(now) {
   // rather than staying fixed. leanBlend (#2479) lets a test confirm the
   // lean pose is actually easing in/out rather than just checking the
   // position/facing ended up in the right place.
-  window.__shopAvatarOrientation = { facingRad: shopAvatarFacing, pitchRad: shopAvatarPitch, quaternion: shopAvatar.group.quaternion.toArray(), leanBlend: shopLeanBlend };
+  window.__shopAvatarOrientation = {
+    facingRad: shopAvatarFacing, pitchRad: shopAvatarPitch, quaternion: shopAvatar.group.quaternion.toArray(), leanBlend: shopLeanBlend,
+    // added for #2744 -- owner report: an equipped custom avatar faced the camera
+    // instead of its direction of travel. The model's own glTF front (+Z) in
+    // world space ([x, y, z], null for the default body), so a test can tell the
+    // face leads from the face trails without reading pixels.
+    modelFrontWorld: shopAvatar.modelFrontWorld ? shopAvatar.modelFrontWorld() : null,
+  };
   // #2744: same reasoning as window.__shopAvatarOrientation above — a
   // custom avatar's own idle/walk/fly crossfade (setShopAvatarAnimationState)
   // has no other way for a test to confirm it's actually transitioning
@@ -1820,7 +1843,14 @@ export function updateShopMovement(now) {
   shopAvatar.group.position.y += shopLeanPositionOffset.y;
   shopAvatar.group.position.z += shopLeanPositionOffset.z;
   positionShopCamera();
+  return { dt, moveMagnitude, airborne };
+}
 
+// The Shop-world half of a frame (#3292): everything that depends on the
+// shared Shop world (shopLandlets, other avatars, presence, chat, voice,
+// signs/calendars/reviews, credit orbs, confetti, attention). Takes the
+// same `now` and the dt updateShopMovementCore computed for this frame.
+export function updateShopWorldServices(now, dt) {
   if (now - shopLastProximityCheck >= SHOP_PROXIMITY_INTERVAL_MS) {
     shopLastProximityCheck = now;
     updateShopProximity();

@@ -1336,8 +1336,32 @@ function nextSyncAttempt() {
   syncsInFlight += 1;
   return ++syncAttemptSeq;
 }
+// #3264: Group needs every selected item's id to exist on the server, and a
+// just-placed item's save is still in flight for a moment. Resolves true as
+// soon as no sync is in flight, false if that takes longer than timeoutMs.
+const syncSettleWaiters = new Set();
+function waitForSyncsToSettle(timeoutMs) {
+  if (syncsInFlight === 0) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const waiter = () => {
+      clearTimeout(timer);
+      resolve(true);
+    };
+    const timer = setTimeout(() => {
+      syncSettleWaiters.delete(waiter);
+      resolve(false);
+    }, timeoutMs);
+    syncSettleWaiters.add(waiter);
+  });
+}
 function syncSettled() {
   syncsInFlight -= 1;
+  if (syncsInFlight === 0) {
+    for (const waiter of [...syncSettleWaiters]) {
+      syncSettleWaiters.delete(waiter);
+      waiter();
+    }
+  }
 }
 function noteSyncFailure(err) {
   if (err?.status !== 404) syncFailedSinceLoad = true;
@@ -1813,6 +1837,23 @@ export function setProductInfo(text) {
   productInfoEl.hidden = !text;
 }
 productInfoEl.hidden = true;
+
+// #3264: where Group/Ungroup report a refusal. Its own line inside the
+// toolbar, not #product-info: updateSelectionUI() (run in each handler's
+// finally) rewrites #product-info with the selection summary in the same
+// tick, which used to erase the error before anyone could read it. Cleared
+// by the next Group/Ungroup tap, when the selection empties, or after a while.
+const selectionActionStatusEl = document.getElementById('selection-action-status');
+const SELECTION_ACTION_STATUS_MS = 8000;
+const GROUP_SAVE_WAIT_MS = 10000;
+let selectionActionStatusTimer = null;
+function showSelectionActionStatus(text) {
+  clearTimeout(selectionActionStatusTimer);
+  selectionActionStatusEl.textContent = text;
+  selectionActionStatusEl.hidden = !text;
+  if (text) selectionActionStatusTimer = setTimeout(() => showSelectionActionStatus(''), SELECTION_ACTION_STATUS_MS);
+}
+
 
 const modeControlsEl = document.getElementById('gizmo-mode-controls');
 const modeMoveBtn = document.getElementById('mode-move');
@@ -3111,6 +3152,7 @@ export function updateSelectionUI() {
   }
   const count = selectedMeshes.size;
   if (count === 0) {
+    showSelectionActionStatus('');
     setProductInfo('');
     modeControlsEl.classList.remove('visible');
     trimLengthControlEl.classList.remove('visible');
@@ -3343,20 +3385,33 @@ deleteBtn.addEventListener('click', () => {
 // just happened.
 groupBtn.addEventListener('click', async () => {
   if (selectedMeshes.size < 2 || sceneMutationBusy) return;
-  const meshes = [...selectedMeshes];
-  const instanceIds = meshes.map((mesh) => mesh.userData.instanceId);
+  showSelectionActionStatus('');
   groupBtn.disabled = true;
-  syncsInFlight += 1; // #3101: a refocus reconcile must not land mid-request
   try {
-    const { groupId } = await groupInstancesRemote(instanceIds);
-    for (const mesh of meshes) mesh.userData.groupId = groupId;
-    groupBtn.classList.add('pressed');
-    setTimeout(() => groupBtn.classList.remove('pressed'), 150);
-  } catch (err) {
-    console.error('Could not group selection:', err);
-    setProductInfo(err.message || 'Could not group selection.');
+    // #3264: item ids are minted here and reach the server asynchronously, so
+    // grouping right after placing would name ids it has not stored yet (a
+    // 404). Let the pending saves land first; say so if they take too long.
+    if (!(await waitForSyncsToSettle(GROUP_SAVE_WAIT_MS))) {
+      showSelectionActionStatus('Still saving your items. Try Group again in a moment.');
+      return;
+    }
+    // The selection may have changed while waiting.
+    if (selectedMeshes.size < 2 || sceneMutationBusy) return;
+    const meshes = [...selectedMeshes];
+    const instanceIds = meshes.map((mesh) => mesh.userData.instanceId);
+    syncsInFlight += 1; // #3101: a refocus reconcile must not land mid-request
+    try {
+      const { groupId } = await groupInstancesRemote(instanceIds);
+      for (const mesh of meshes) mesh.userData.groupId = groupId;
+      groupBtn.classList.add('pressed');
+      setTimeout(() => groupBtn.classList.remove('pressed'), 150);
+    } catch (err) {
+      console.error('Could not group selection:', err);
+      showSelectionActionStatus(`Couldn't group these items. ${err.message || 'Please try again.'}`);
+    } finally {
+      syncSettled();
+    }
   } finally {
-    syncSettled();
     updateSelectionUI();
   }
 });
@@ -3365,6 +3420,7 @@ ungroupBtn.addEventListener('click', async () => {
   const groupedMesh = [...selectedMeshes].find((mesh) => mesh.userData.groupId);
   if (!groupedMesh || sceneMutationBusy) return;
   const groupId = groupedMesh.userData.groupId;
+  showSelectionActionStatus('');
   ungroupBtn.disabled = true;
   syncsInFlight += 1; // #3101: a refocus reconcile must not land mid-request
   try {
@@ -3379,7 +3435,7 @@ ungroupBtn.addEventListener('click', async () => {
     setTimeout(() => ungroupBtn.classList.remove('pressed'), 150);
   } catch (err) {
     console.error('Could not ungroup selection:', err);
-    setProductInfo(err.message || 'Could not ungroup selection.');
+    showSelectionActionStatus(`Couldn't ungroup these items. ${err.message || 'Please try again.'}`);
   } finally {
     syncSettled();
     updateSelectionUI();
