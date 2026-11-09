@@ -70,8 +70,9 @@ import {
   fetchLowStock, fetchSoldOutMarkers, dismissSoldOutMarker,
   fetchLandletVersions, saveLandletVersion, clearVersionIdempotencyKey,
   fetchLandletVersion, activateLandletVersion, replaceLandletDraft, clearDraftIdempotencyKey,
-  fetchSavedLayouts, deleteSavedLayout, fetchInstances,
+  fetchSavedLayouts, deleteSavedLayout, fetchInstances, fetchBundles,
 } from '../api.js';
+import { bundleEditDecision } from './bundleEdit.js';
 import { refresh as refreshPendingRestorations } from './pendingRestoration.js';
 import { planSelectionBoxes } from './selectionBoxes.js';
 import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
@@ -1950,6 +1951,10 @@ const backupChainBtn = document.getElementById('toggle-backup-chain');
 // #2764
 const groupBtn = document.getElementById('group-item');
 const ungroupBtn = document.getElementById('ungroup-item');
+// #3328: Edit opens the selected bundle so its members can be picked one at
+// a time; the same button reads Done while open.
+const editBundleBtn = document.getElementById('edit-bundle-item');
+const editBundleReasonEl = document.getElementById('edit-bundle-reason');
 
 const deleteBtn = document.getElementById('delete-item');
 const multiSelectBtn = document.getElementById('toggle-multiselect');
@@ -3274,6 +3279,10 @@ window.__testSoldOutMarkerMeshIds = () => [...soldOutMarkerMeshes.keys()];
 // applied by the caller — this only handles text/panels/gizmo) with the
 // current selectedMeshes set. Called after any change to that set.
 export function updateSelectionUI() {
+  // #3328: edit mode ends as soon as nothing from the bundle is selected.
+  if (editingGroupId && ![...selectedMeshes].some((mesh) => mesh.userData.groupId === editingGroupId)) {
+    editingGroupId = null;
+  }
   if (measureMode) {
     // Measure is its own exclusive mode (see exitMeasureMode) — the gizmo
     // stays fully detached and hidden the whole time it's on, the same
@@ -3356,6 +3365,7 @@ export function updateSelectionUI() {
   // own expansion above, so this always targets a whole group).
   groupBtn.disabled = count < 2;
   ungroupBtn.disabled = ![...selectedMeshes].some((mesh) => mesh.userData.groupId);
+  syncBundleEditUI();
   if (multiSelectMode) {
     // Multi-Select and Move/Rotate are sibling tools, not simultaneous ones
     // — the gizmo stays hidden the whole time multi-select is on, so it
@@ -3412,6 +3422,8 @@ export function clearSelection() {
 // Ungroup action, or a different landlet's instances loading in).
 function groupMembers(mesh) {
   if (!mesh.userData.groupId) return [mesh];
+  // #3328: inside edit mode the open bundle's members are picked one by one.
+  if (mesh.userData.groupId === editingGroupId) return [mesh];
   return productMeshes.filter((other) => other.userData.groupId === mesh.userData.groupId);
 }
 
@@ -3440,6 +3452,11 @@ export function selectOnly(mesh) {
 // of an existing group, which Group (see its own worker-side comment)
 // isn't designed to split cleanly.
 export function toggleInSelection(mesh) {
+  // #3328: multi-selecting something outside the open bundle leaves edit mode.
+  if (editingGroupId && mesh.userData.groupId !== editingGroupId) {
+    editingGroupId = null;
+    clearSelection();
+  }
   const members = groupMembers(mesh);
   const nowSelected = !selectedMeshes.has(mesh);
   for (const member of members) {
@@ -3585,6 +3602,125 @@ groupBtn.addEventListener('click', async () => {
   } finally {
     updateSelectionUI();
   }
+});
+
+// ---- #3328: edit mode for a bundle -------------------------------------
+// A selected bundle is one unit (leaf 1). Edit opens it: members select
+// individually and the single-item tools apply. Done, Escape, or selecting
+// something else returns to the unit. Opening a *linked* bundle (one saved
+// as a template) is creator-only and confirmed first; see bundleEdit.js.
+// NOTE (leaf 6/7, #3329): a member edit still only changes that placement.
+// Rewriting the template and every other copy is not built yet.
+let editingGroupId = null;
+const ownBundleIds = new Set(); // bundles this builder saved
+const checkedBundleIds = new Set(); // bundleIds already resolved against that list
+let ownBundlesLoading = null;
+const acknowledgedBundleIds = new Set(); // confirmed this session
+
+function loadOwnBundles() {
+  if (!ownBundlesLoading) {
+    ownBundlesLoading = fetchBundles()
+      .then((bundles) => { for (const b of bundles) ownBundleIds.add(b.bundleId); })
+      .finally(() => { ownBundlesLoading = null; });
+  }
+  return ownBundlesLoading;
+}
+
+// true / false once known, null while the list hasn't answered for this id.
+function creatorOfBundle(bundleId) {
+  if (ownBundleIds.has(bundleId)) return true;
+  if (checkedBundleIds.has(bundleId)) return false;
+  return null;
+}
+
+function selectedBundleInfo() {
+  if (!isSingleBundleSelection() && !editingGroupId) return null;
+  const mesh = [...selectedMeshes].find((m) => m.userData.groupId);
+  if (!mesh) return null;
+  return { groupId: mesh.userData.groupId, bundleId: mesh.userData.bundleId || null };
+}
+
+function syncBundleEditUI() {
+  const info = editingGroupId
+    ? { groupId: editingGroupId, bundleId: null }
+    : (isSingleBundleSelection() ? selectedBundleInfo() : null);
+  if (!info) {
+    editBundleBtn.disabled = true;
+    editBundleBtn.textContent = 'Edit';
+    editBundleReasonEl.hidden = true;
+    editBundleReasonEl.textContent = '';
+    return;
+  }
+  if (editingGroupId) {
+    editBundleBtn.disabled = false;
+    editBundleBtn.textContent = 'Done';
+    editBundleReasonEl.hidden = true;
+    editBundleReasonEl.textContent = '';
+    return;
+  }
+  editBundleBtn.textContent = 'Edit';
+  const linked = !!info.bundleId;
+  let isCreator = linked ? creatorOfBundle(info.bundleId) : undefined;
+  if (linked && isCreator === null && !ownBundlesLoading) {
+    const id = info.bundleId;
+    loadOwnBundles().then(() => { checkedBundleIds.add(id); updateSelectionUI(); }).catch(() => {});
+    isCreator = null;
+  }
+  const decision = bundleEditDecision({ linked, isCreator, acknowledged: acknowledgedBundleIds.has(info.bundleId) });
+  editBundleBtn.disabled = !decision.canEdit;
+  editBundleReasonEl.textContent = decision.reason;
+  editBundleReasonEl.hidden = !decision.reason;
+}
+
+function enterBundleEdit(groupId) {
+  editingGroupId = groupId;
+  // Stay on the same selection (the whole bundle) until a member is tapped;
+  // the next tap picks one member instead of the unit.
+  updateSelectionUI();
+}
+
+function exitBundleEdit() {
+  if (!editingGroupId) return;
+  const groupId = editingGroupId;
+  editingGroupId = null;
+  const member = productMeshes.find((m) => m.userData.groupId === groupId);
+  clearSelection();
+  if (member) selectOnly(member); else updateSelectionUI();
+}
+
+editBundleBtn.addEventListener('click', async () => {
+  if (editingGroupId) { exitBundleEdit(); return; }
+  const info = selectedBundleInfo();
+  if (!info || !isSingleBundleSelection()) return;
+  let isCreator;
+  if (info.bundleId) {
+    isCreator = creatorOfBundle(info.bundleId);
+    if (isCreator === null) {
+      try { await loadOwnBundles(); } catch (err) { showSelectionActionStatus("Couldn't check who saved this bundle. Please try again."); return; }
+      checkedBundleIds.add(info.bundleId);
+      isCreator = creatorOfBundle(info.bundleId);
+    }
+  }
+  const decision = bundleEditDecision({ linked: !!info.bundleId, isCreator, acknowledged: acknowledgedBundleIds.has(info.bundleId) });
+  if (!decision.canEdit) { updateSelectionUI(); return; }
+  if (decision.needsConfirm) {
+    const ok = await confirmDestructive({
+      title: 'Edit this bundle?',
+      message: "This bundle is saved, so changing it will change every other copy of it too — on your lándlet and on other builders' lándlets.",
+      confirmLabel: 'Confirm',
+      variant: 'primary',
+      returnFocusEl: editBundleBtn,
+    });
+    if (!ok) return;
+    acknowledgedBundleIds.add(info.bundleId);
+  }
+  // The selection may have changed while the modal was open.
+  if (![...selectedMeshes].some((m) => m.userData.groupId === info.groupId)) return;
+  enterBundleEdit(info.groupId);
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && editingGroupId && !event.defaultPrevented) exitBundleEdit();
 });
 
 ungroupBtn.addEventListener('click', async () => {

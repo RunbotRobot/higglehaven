@@ -6309,8 +6309,12 @@ object back — the frontend's Rename button only ever sends `{ name }`.
 including that every `templateId` must exist) is creator-only like the rest of
 this endpoint, so another builder is refused with `403` even for a shared
 bundle. It is the server half of editing a linked bundle; no client sends it
-yet (leaves 5/7–6/7 of #3323), and rewriting the placements that are linked to
-the bundle is also still to come. **#921:** a
+yet, and rewriting the placements that are linked to the bundle is also still
+to come (leaf 6/7, #3329). **#3328 (5/7):** Build mode's Edit button opens a
+selected bundle for member-by-member editing; for a linked bundle it is
+creator-only (the client decides "creator" by the bundle id being in its own
+`GET /api/bundles` list) and asks for confirmation first. Edit mode itself
+sends nothing to this endpoint. **#921:** a
 `name` in the body gets the same prohibited-content check as `POST` (a
 request that omits `name` is not re-checked).
 

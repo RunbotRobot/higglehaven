@@ -1390,6 +1390,25 @@
          made the toolbar one row taller, and that taller box sat on top of
          the 3D canvas and swallowed taps meant for the items under it (the
          hazard the width rule above describes). */
+      /* #3328: why Edit is disabled; positioned like the status line (a
+         normal flex row would grow the toolbar over the canvas). Selectable. */
+      #edit-bundle-reason {
+        position: absolute;
+        top: 100%;
+        left: 0;
+        right: 0;
+        margin-top: 6px;
+        user-select: text;
+        -webkit-user-select: text;
+        box-sizing: border-box;
+        text-align: center;
+        padding: 6px 12px;
+        border-radius: 12px;
+        background: rgb(var(--pill-rgb) / 0.85);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #edit-bundle-reason[hidden] { display: none; }
       #selection-action-status {
         position: absolute;
         top: 100%;
