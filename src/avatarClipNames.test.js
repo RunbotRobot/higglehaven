@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeAvatarClips, describeNoAnimationsForAvatar, matchAvatarClips, pickAvatarClips, AVATAR_CLIP_NAMES } from './avatarClipNames.js';
+import { describeAvatarClips, describeNoAnimationsForAvatar, matchAvatarClips, pickAvatarClips, AVATAR_CLIP_NAMES, defaultClipPicks, pickClipRole, clipRolesFromPicks } from './avatarClipNames.js';
 
 describe('describeAvatarClips (#2744)', () => {
   it('says nothing for a model with no clips (an ordinary product)', () => {
@@ -142,5 +142,38 @@ describe('describeNoAnimationsForAvatar (#2744)', () => {
 
   it('never leaks internals into the text', () => {
     expect(describeNoAnimationsForAvatar(0, true)).not.toMatch(/#\d|SPEC|API\.md|findByName/);
+  });
+});
+
+describe('clip role picks (#3315)', () => {
+  it('start as the name matcher decided, one pick per clip', () => {
+    expect(defaultClipPicks(['Idle', 'Walking', 'Dance'])).toEqual(['idle', 'walk', 'none']);
+    expect(defaultClipPicks(['mixamo.com'])).toEqual(['idle']);
+    expect(defaultClipPicks([])).toEqual([]);
+  });
+
+  it('picking a role another clip holds moves it', () => {
+    const picks = defaultClipPicks(['Idle', 'Walking', 'Dance']);
+    expect(pickClipRole(picks, 2, 'walk')).toEqual(['idle', 'none', 'walk']);
+    expect(pickClipRole(picks, 1, 'none')).toEqual(['idle', 'none', 'none']);
+    expect(picks).toEqual(['idle', 'walk', 'none']); // the input is not changed
+  });
+
+  it('send nothing while the picks are still the matcher\'s own', () => {
+    const names = ['Idle', 'Walking', 'Dance'];
+    expect(clipRolesFromPicks(names, defaultClipPicks(names))).toBeNull();
+    expect(clipRolesFromPicks(['mixamo.com'], ['idle'])).toBeNull();
+  });
+
+  it('send the chosen clip names once a pick changes, with Not used as null', () => {
+    expect(clipRolesFromPicks(['mixamo.com'], ['walk'])).toEqual({ idle: null, walk: 'mixamo.com', fly: null });
+    expect(clipRolesFromPicks(['mixamo.com'], ['none'])).toEqual({ idle: null, walk: null, fly: null });
+    expect(clipRolesFromPicks(['Idle', 'Walking', 'Dance'], ['idle', 'none', 'walk']))
+      .toEqual({ idle: 'Idle', walk: 'Dance', fly: null });
+  });
+
+  it('leave out a name the server would refuse or that two roles would share', () => {
+    expect(clipRolesFromPicks(['x'.repeat(201)], ['walk'])).toEqual({ idle: null, walk: null, fly: null });
+    expect(clipRolesFromPicks(['a', 'a'], ['walk', 'fly'])).toEqual({ idle: null, walk: 'a', fly: null });
   });
 });

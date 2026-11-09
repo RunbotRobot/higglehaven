@@ -119,3 +119,53 @@ export function describeNoAnimationsForAvatar(clipCount, listedAsAvatar) {
   if (!listedAsAvatar || clipCount !== 0) return null;
   return 'This model has no animations. As an avatar it will slide around without walking, unless a buyer applies an animation to it.';
 }
+
+// #3315 (part of #3301): the upload wizard's "Which motion is this clip?"
+// picker. A pick per clip is one of idle/walk/fly/none ("Not used"). The
+// starting picks are what the name matcher decided, so a correctly named file
+// needs no interaction; only when the seller changes something does the wizard
+// send a clipRoles at all (otherwise name matching keeps applying, and a later
+// improvement to it still reaches the product).
+export const CLIP_PICK_CHOICES = [...AVATAR_CLIP_NAMES, 'none'];
+const MAX_CLIP_ROLE_NAME_CHARS = 200; // the server's own cap on a stored clip name
+
+// One entry per clip, in file order: the role the name matcher gives it, or 'none'.
+export function defaultClipPicks(clipNames) {
+  const picks = (Array.isArray(clipNames) ? clipNames : []).map(() => 'none');
+  const indexes = matchAvatarClips(clipNames);
+  for (const role of AVATAR_CLIP_NAMES) {
+    if (indexes[role] !== null) picks[indexes[role]] = role;
+  }
+  return picks;
+}
+
+// Sets one clip's pick. A role holds one clip, so picking a role another clip
+// holds moves it (that clip becomes 'none'). Returns a new array.
+export function pickClipRole(picks, clipIndex, role) {
+  const next = picks.slice();
+  if (role !== 'none') {
+    next.forEach((held, index) => { if (held === role) next[index] = 'none'; });
+  }
+  next[clipIndex] = role;
+  return next;
+}
+
+// What to send as clipRoles: null while the picks are still the matcher's own,
+// otherwise { idle, walk, fly } holding a clip NAME (the form the server stores)
+// or null per role. A clip name the server would refuse (empty, too long) or a
+// name already given to another role is left out rather than failing the whole
+// upload over it.
+export function clipRolesFromPicks(clipNames, picks) {
+  const defaults = defaultClipPicks(clipNames);
+  if (picks.length === defaults.length && picks.every((pick, index) => pick === defaults[index])) return null;
+  const roles = { idle: null, walk: null, fly: null };
+  const used = new Set();
+  picks.forEach((role, index) => {
+    if (role === 'none') return;
+    const name = String(clipNames[index] ?? '');
+    if (name.trim() === '' || name.length > MAX_CLIP_ROLE_NAME_CHARS || used.has(name)) return;
+    used.add(name);
+    roles[role] = name;
+  });
+  return roles;
+}

@@ -30,7 +30,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from '../modelOptimizer.js';
-import { describeAvatarClips, describeNoAnimationsForAvatar } from '../avatarClipNames.js';
+import { describeAvatarClips, describeNoAnimationsForAvatar, defaultClipPicks, pickClipRole, clipRolesFromPicks } from '../avatarClipNames.js';
 import { unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from '../settings.js';
 import { ensureSellerIdentity } from '../account/identity.js';
 import {
@@ -92,6 +92,42 @@ function refreshNoAnimationsNote() {
   const text = describeNoAnimationsForAvatar(uploadModelClipCount, uploadAvatarCategoryCheckbox.checked);
   uploadNoAnimationsNoteEl.textContent = text ?? '';
   uploadNoAnimationsNoteEl.hidden = text === null;
+  refreshClipRolePicker();
+}
+// #3315: the clip-role picker ("Which motion is this clip?"). The names are the
+// model's clips in file order; the picks start as the name matcher's decision.
+const uploadClipRolesEl = document.getElementById('upload-clip-roles');
+const uploadClipRolesListEl = document.getElementById('upload-clip-roles-list');
+let uploadClipNames = [];
+let uploadClipPicks = [];
+const CLIP_PICK_LABELS = { idle: 'Idle', walk: 'Walk', fly: 'Fly', none: 'Not used' };
+function refreshClipRolePicker() {
+  const show = uploadAvatarCategoryCheckbox.checked && uploadClipNames.length > 0;
+  uploadClipRolesEl.hidden = !show;
+  uploadClipRolesListEl.replaceChildren();
+  if (!show) return;
+  uploadClipNames.forEach((name, index) => {
+    const row = document.createElement('label');
+    row.className = 'upload-clip-role-row';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'upload-clip-role-name';
+    nameEl.textContent = String(name).trim() || '(unnamed)';
+    const select = document.createElement('select');
+    select.className = 'upload-clip-role-select';
+    for (const choice of ['idle', 'walk', 'fly', 'none']) {
+      const option = document.createElement('option');
+      option.value = choice;
+      option.textContent = CLIP_PICK_LABELS[choice];
+      select.appendChild(option);
+    }
+    select.value = uploadClipPicks[index];
+    select.addEventListener('change', () => {
+      uploadClipPicks = pickClipRole(uploadClipPicks, index, select.value);
+      refreshClipRolePicker(); // a role moved from another clip shows there too
+    });
+    row.append(nameEl, select);
+    uploadClipRolesListEl.appendChild(row);
+  });
 }
 const uploadNameInput = document.getElementById('upload-name');
 const uploadPriceInput = document.getElementById('upload-price');
@@ -218,6 +254,8 @@ function disposeUploadDimensionPreview() {
   uploadDimensionsPreviewEl.innerHTML = '';
   uploadAnimationsDetectedEl.hidden = true;
   uploadModelClipCount = null;
+  uploadClipNames = [];
+  uploadClipPicks = [];
   refreshNoAnimationsNote();
   uploadConversionNoticeCount = 0;
   refreshConversionNotice();
@@ -503,6 +541,8 @@ async function showUploadDimensionPreview(modelUrl, revealStep) {
   loadModelAnimations(modelUrl).then((animations) => {
     if (myFlowToken !== uploadFlowToken) return;
     uploadModelClipCount = animations.length;
+    uploadClipNames = animations.map((clip) => clip.name);
+    uploadClipPicks = defaultClipPicks(uploadClipNames);
     refreshNoAnimationsNote();
     if (animations.length === 0) return;
     // #2744: the wording (and the names of the clips actually found) lives in
@@ -992,6 +1032,11 @@ async function handleUploadDimensionsStep() {
         : uploadAnimationCategoryCheckbox.checked ? 'animation' : undefined,
       priceCents,
       metadata,
+      // #3315: only for an avatar listing, and only when the seller changed a
+      // pick -- left alone, name matching keeps deciding.
+      ...(uploadAvatarCategoryCheckbox.checked && clipRolesFromPicks(uploadClipNames, uploadClipPicks)
+        ? { clipRoles: clipRolesFromPicks(uploadClipNames, uploadClipPicks) }
+        : {}),
     });
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — the template still exists server-side, but nothing here should act on it
 
