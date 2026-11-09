@@ -2538,6 +2538,85 @@
       #product-review-actions button:disabled {
         opacity: 0.5;
       }
+      /* #3249: the shared notice modal (src/ui/noticeModal.js). z-index 27 so a
+         notice raised from inside another modal's flow sits above it. */
+      #notice-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 27;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.35);
+        padding: 16px;
+      }
+      #notice-modal.visible {
+        display: flex;
+      }
+      #notice-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 380px;
+        background: rgb(var(--panel-rgb) / 0.99);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #notice-modal-content h2 {
+        margin: 0 32px 0 0;
+        font-size: 17px;
+      }
+      #notice-modal-message {
+        margin: 0;
+        overflow-wrap: anywhere;
+        user-select: text;
+      }
+      #notice-modal-copy-row {
+        display: flex;
+        gap: 8px;
+      }
+      #notice-modal-copy-row[hidden] {
+        display: none;
+      }
+      #notice-modal-copy-field {
+        flex: 1;
+        min-width: 0;
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+      }
+      #notice-modal-copy-btn,
+      #notice-modal-ok-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+      }
+      #notice-modal-copy-btn {
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+      }
+      #notice-modal-ok-btn {
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      #notice-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+      }
+      /* #3249: confirmAction() -- the confirm modal asking about a choice that
+         is not destructive (Buy) gets the green button, not the red one. */
+      #confirm-modal-confirm-btn.neutral {
+        background: var(--brand-green);
+        color: #16240a;
+      }
       /* #3278: the shared destructive-confirm modal (src/ui/confirmModal.js),
          same shell as #bundle-name-modal. */
       #confirm-modal {

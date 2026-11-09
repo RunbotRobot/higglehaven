@@ -408,12 +408,14 @@ try {
   throw err;
 }
 
-// handleShopProductBuyClick's own confirm() dialog is auto-accepted by
-// launchPage's own default dialog handler -- this file only adds a second
-// listener (same convention as e2e/purchase-shipping.test.mjs's own
-// dialogMessages capture) to read back the "Purchase complete" alert as
-// this test's actual pass signal, not to change any dialog's outcome.
+// #3249: Buy asks in the in-app confirm modal (not a native confirm()), and
+// the result is the in-app notice modal (not an alert()), so this test clicks
+// the one and reads the other. dialogMessages stays wired as a tripwire: any
+// native dialog here means a purchase step regressed to window.confirm/alert.
 await page.click('#shop-product-preview-buy-btn');
+await page.waitForSelector('#confirm-modal.visible', { timeout: 15000 });
+const buyConfirmTitle = await page.textContent('#confirm-modal-title');
+await page.click('#confirm-modal-confirm-btn');
 
 await page.waitForSelector('#checkout-modal.visible', { timeout: 15000 });
 await page.waitForFunction(() => !document.getElementById('checkout-pay-btn').disabled, null, { timeout: 30000 });
@@ -430,8 +432,10 @@ await page.click('#checkout-pay-btn');
 // verify-card-real-stripe.test.mjs's own #verify-modal close wait gives.
 await page.waitForSelector('#checkout-modal:not(.visible)', { state: 'attached', timeout: 60000 });
 
-console.log('dialog messages seen (should include a "Purchase complete" alert):', dialogMessages);
-const purchaseCompleted = dialogMessages.some((message) => message.includes('Purchase complete'));
+await page.waitForSelector('#notice-modal.visible', { timeout: 30000 });
+const noticeTitle = await page.textContent('#notice-modal-title');
+console.log('buy confirm title:', buyConfirmTitle, '| result notice title:', noticeTitle, '| native dialogs (should be none):', dialogMessages);
+const purchaseCompleted = noticeTitle === 'Purchase complete' && buyConfirmTitle.startsWith('Buy ') && dialogMessages.length === 0;
 
 const pass = stripeAccountComplete && purchaseCompleted && errors.length === 0 && sellerErrors.length === 0;
 await page.close();

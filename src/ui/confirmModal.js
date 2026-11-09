@@ -87,6 +87,7 @@ confirmBtn.addEventListener('click', confirm);
 export function confirmDestructive({
   title,
   message,
+  tone = 'destructive',
   confirmLabel = 'Delete',
   cancelLabel = 'Never mind',
   onConfirm = null,
@@ -104,6 +105,9 @@ export function confirmDestructive({
     statusEl.textContent = '';
     cancelBtn.textContent = cancelLabel;
     confirmBtn.textContent = confirmLabel;
+    // #3249: the same modal confirms a non-destructive choice (buying) with a
+    // green button instead of the red one -- see confirmAction below.
+    confirmBtn.classList.toggle('neutral', tone === 'neutral');
     setBusy(false);
     modalEl.classList.add('visible');
     openModalA11y(modalEl, cancel);
@@ -111,3 +115,14 @@ export function confirmDestructive({
     cancelBtn.focus({ preventScroll: true });
   });
 }
+
+// #3249: the same in-app confirmation for an action that is not destructive
+// (Shop's Buy). A native confirm() that the browser suppresses answers "no" at
+// once, so Buy silently did nothing. Same focus, error-in-modal and
+// stacking behaviour as confirmDestructive; only the button colour differs.
+export function confirmAction(options = {}) {
+  return confirmDestructive({ confirmLabel: 'Confirm', ...options, tone: 'neutral' });
+}
+
+// E2E hook, same idea as window.__openProductReviewModal.
+window.__confirmAction = confirmAction;

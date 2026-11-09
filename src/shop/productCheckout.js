@@ -28,6 +28,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { openProductReviewModal } from '../ui/productReviewModal.js';
+import { confirmAction } from '../ui/confirmModal.js';
+import { showNotice } from '../ui/noticeModal.js';
 import { createMeshForInstance, disposeObject } from '../world/models.js';
 import {
   createProductReview, editProductReview, deleteProductReview,
@@ -445,10 +447,16 @@ export async function handleShopProductBuyClick() {
   if (isTestModel) return;
   // #659: a one-line mention right at the moment of buying, alongside the
   // full Return Policy button this same tapped product already surfaces
-  // (#shop-product-preview-return-policy-btn) -- this dialog is a native
-  // confirm(), so it can't carry an actual link, just the fact worth
-  // knowing before saying yes.
-  const confirmed = confirm(`Buy "${name}" for ${formatPriceCents(priceCents)}? (Refunds return 99% — see Return Policy.)`);
+  // (#shop-product-preview-return-policy-btn). #3249: an in-app confirmation,
+  // not window.confirm() -- a browser that suppresses native dialogs answered
+  // that with "no" at once, so Buy silently did nothing.
+  const confirmed = await confirmAction({
+    title: `Buy "${name}"?`,
+    message: `${formatPriceCents(priceCents)}. Refunds return 99% — see Return Policy.`,
+    confirmLabel: 'Buy',
+    cancelLabel: 'Never mind',
+    returnFocusEl: shopProductPreviewBuyBtn,
+  });
   if (!confirmed) return;
   shopProductPreviewBuyBtn.disabled = true;
   const instanceId = review.mesh.userData.instanceId;
@@ -467,15 +475,22 @@ export async function handleShopProductBuyClick() {
       // page to come back and find it later. Present for a physical
       // (non-digital-good) purchase only; a digital good pays the seller
       // out instantly with nothing to confirm.
-      alert(finalized.deliveryConfirmUrl
-        ? `Purchase complete — thank you! Once you receive it, confirm delivery here so the seller gets paid:\n${finalized.deliveryConfirmUrl}`
-        : 'Purchase complete — thank you!');
+      // #3249: a notice the buyer can select and copy from, not alert() --
+      // a suppressed alert would also have lost the link for good.
+      await showNotice(finalized.deliveryConfirmUrl
+        ? {
+          title: 'Purchase complete',
+          message: 'Thank you! Once you receive it, confirm delivery with this link so the seller gets paid. It is shown only once, so copy it now.',
+          copyText: finalized.deliveryConfirmUrl,
+          returnFocusEl: shopProductPreviewBuyBtn,
+        }
+        : { title: 'Purchase complete', message: 'Thank you!', returnFocusEl: shopProductPreviewBuyBtn });
     } else {
       clearPurchaseIdempotencyKey(instanceId);
       // #3255: real payments are live, so this branch (free / zero-price items
       // and any path that returns the purchase directly) reads the same as the
       // paid branch above rather than the dev-era "simulated" wording.
-      alert('Purchase complete — thank you!');
+      await showNotice({ title: 'Purchase complete', message: 'Thank you!', returnFocusEl: shopProductPreviewBuyBtn });
     }
     // #3256 (owner report): no immediate "Leave feedback for the seller?"
     // prompt here. Right after buying is too early to judge accuracy,
@@ -483,7 +498,14 @@ export async function handleShopProductBuyClick() {
     // item); My Purchases offers "Rate this seller" per purchase for when
     // they actually know how it went (#3198).
   } catch (err) {
-    if (err.message !== 'Checkout cancelled.') alert(err.message || 'Could not complete this purchase.');
+    if (err.message !== 'Checkout cancelled.') {
+      await showNotice({
+        title: "Purchase didn't go through",
+        message: err.message || 'Could not complete this purchase.',
+        copyText: err.message || null,
+        returnFocusEl: shopProductPreviewBuyBtn,
+      });
+    }
   } finally {
     shopProductPreviewBuyBtn.disabled = false;
   }

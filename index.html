@@ -303,6 +303,23 @@
         </div>
       </div>
     </div>
+    <!-- #3249: an in-app notice for an outcome the person must be able to read
+         and copy (a purchase result with its one-time delivery link, a refusal),
+         replacing window.alert(). See src/ui/noticeModal.js. -->
+    <div id="notice-modal" role="dialog" aria-modal="true" aria-labelledby="notice-modal-title" tabindex="-1">
+      <div id="notice-modal-content">
+        <button id="notice-modal-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2 id="notice-modal-title"></h2>
+        <p id="notice-modal-message"></p>
+        <div id="notice-modal-copy-row" hidden>
+          <input id="notice-modal-copy-field" type="text" readonly aria-label="Text to copy" />
+          <button id="notice-modal-copy-btn" type="button">Copy</button>
+        </div>
+        <div id="notice-modal-actions">
+          <button id="notice-modal-ok-btn" type="button">OK</button>
+        </div>
+      </div>
+    </div>
     <!-- #3278 (owner decision): a confirmation for a destructive action is its
          own in-app modal that takes focus, names the thing, and offers a clear
          destructive button and a cancel -- never the browser's native confirm()
