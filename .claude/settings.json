@@ -6,7 +6,22 @@
       "Bash(node_modules/.bin/wrangler d1 execute *)",
       "Bash(node_modules/.bin/wrangler secret list*)",
       "Bash(node_modules/.bin/wrangler secret put *)",
-      "Bash(node_modules/.bin/wrangler deployments list*)"
+      "Bash(node_modules/.bin/wrangler deployments list*)",
+      "Bash(git fetch *)",
+"Bash(git grep *)",
+"Bash(git show *)",
+"Bash(git ls-tree *)",
+"Bash(git log *)",
+"Bash(git diff *)",
+"Bash(git status*)",
+"Bash(git merge *)",
+"Bash(git checkout *)",
+"Bash(python3 -c *)",
+"Bash(sed *)",
+"Bash(cat *)",
+"Bash(grep *)",
+"Bash(date *)",
+"Bash(node -e *)"
     ]
   },
   "autoMode": {
