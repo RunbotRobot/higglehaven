@@ -1,3 +1,17 @@
+#3279 (supersedes #1291): removing a template that any builder owns as an
+avatar or animation (`owned_avatars`/`owned_animations`) **delists** it
+instead of deleting it. The row stays, with `delisted_at` set (exposed as
+`delistedAt` on the template); every owner keeps it exactly as it was -- still
+owned, still equipped, model still served -- and nobody is notified, because
+nothing changed for them. A delisted template leaves `GET /api/catalog`
+(browsing, search and the seller's own list), is `404` to its seller for
+further `PATCH`/`PUT`/`DELETE`, and cannot be purchased (`400`, "This product
+is no longer for sale"); `GET /api/catalog/:templateId` still returns it so
+owners' lookups keep working. A template nobody owns is hard-deleted as
+before. The placed-instance, saved-layout, version-history, backup-chain and
+archived-version `409`s above apply either way. `DELETE /api/catalog/batch`
+does the same per id.
+
 # higglehaven backend API
 
 This document describes the current dev-only Cloudflare Worker + D1 API contract.
@@ -533,7 +547,12 @@ its signatures, so it is not trusted); a body with no numeric `timestamp` is
 processed as before. `503` if `DIDIT_WEBHOOK_SECRET` isn't
 configured. Idempotent against a repeat delivery for the same session —
 only the first delivery (webhook or a status poll, whichever gets there
-first) applies the resulting `trustTier` change.
+first) applies the resulting `trustTier` change. Identity verification is
+one-time: Didit's `Kyc Expired` status (a re-verification window lapsing on an
+earlier approval) is logged (`didit-status-ignored`) and otherwise ignored, by
+the webhook and the status poll alike, so it never changes `trustTier` or a
+session's recorded outcome (#2404). The Didit workflow should have no
+re-verification period configured.
 
 ### `POST /api/auth/login`
 
@@ -1745,11 +1764,12 @@ leaving the old `seller_id` — and the unpaid purchases still pointing at
 it — with no session that can ever reach them again. Request a payout
 first, then delete.
 
-Response:
+Response (`delisted` is `true` when the template was delisted rather than deleted):
 
 ```json
 {
-  "deleted": true
+  "deleted": true,
+  "delisted": false
 }
 ```
 
@@ -2720,7 +2740,10 @@ must also set a non-null `priceCents`, or the whole batch is rejected with
 before deletion; a missing ID returns `404`, and a foreign-key conflict returns
 `409` with the entire D1 batch rolled back. Every template being deleted that
 has a non-null `sellerId` requires a session logged in as that seller (`403`
-otherwise). Success returns `deletedTemplateIds` in request order.
+otherwise). Success returns `deletedTemplateIds` in request order (every id
+that left the seller's list) and `delistedTemplateIds`, the subset that was
+delisted rather than deleted because shoppers own it (#3279, see the single-item
+`DELETE` below). An id that is already delisted reads as missing (`404`).
 
 ### `POST /api/catalog`
 
@@ -5102,6 +5125,18 @@ Returns `404` if the notification doesn't exist.
 Requires a session. Marks every one of the calling account's own unread
 notifications read at once. No body — `builderId` is derived from the
 session, never a client-supplied field.
+
+### `DELETE /api/notifications/:notificationId`
+
+#3280 (owner request: delete a notification, not only mark it read). Requires
+a session and removes the caller's own notification outright (the row is
+deleted, not flagged: it is the user's own copy of a message and nothing else
+depends on it). `200 { "ok": true }`; `403` for another account's
+notification (the row stays); `404` if it does not exist, which includes a
+second delete of the same id. Rate-limited with the same bucket as marking
+read. The Notices panel shows a Delete button on each row (no confirmation for
+a single notice); a "clear all read" action is deferred until the in-app
+confirmation-modal convention from #3278 exists.
 
 ### How a notification gets created
 
@@ -11032,8 +11067,21 @@ until when): every rate-limit `429` (this endpoint and every other
 "retryAfterSeconds" }` beside `error`. `retryAfterSeconds` (at least 1) is
 the time until the bucket's oldest in-window attempt ages out, i.e. when the
 next attempt is allowed. The orb notice in Shop mode builds its sentence
-from these (`src/rateLimitNotice.js`) instead of hard-coding the limit. Other
-user-visible rate-limit notices are tracked as follow-ups.
+from these (`src/rateLimitNotice.js`) instead of hard-coding the limit.
+
+**#3275**: every other place a player can hit a limit gets the same treatment
+in one spot: `apiError` (`src/api.js`) sets the message of any `429` that
+carries those numbers to "You've reached the limit for this (20 every 15
+minutes). Try again in about 7 minutes." (`rateLimitMessage`), so each caller
+that shows `err.message` reads right without its own sentence (the server's
+original text stays on `error.serverMessage`). Auth endpoints (signup,
+password-reset request, resend-verification) go through the same
+`checkRateLimit`; the numbers are fixed constants and the bucket is keyed on
+the caller's IP and the targeted email (signup, password-reset request) or on
+the caller's own user id (resend-verification) whether or not an account
+exists for that email, so showing them confirms nothing about an account and
+those flows were not special-cased. Login's own per-account lockout is a different mechanism and
+unchanged. A `429` without the numbers still shows the server's text.
 
 **#2222**: also requires the caller's own `avatar_presence` row (#1097/#1098)
 to be fresh (within `PRESENCE_STALE_AFTER_MS`, the same freshness bar the

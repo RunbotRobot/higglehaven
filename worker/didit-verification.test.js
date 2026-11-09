@@ -1,5 +1,5 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { diditReservationStillUsable, latestDiditSession, reconcileDiditSession, reserveDiditSession } from './lib/didit.js';
 import { api, signupBuilder, signupSeller } from './test-helpers.js';
 
@@ -135,6 +135,52 @@ describe('Didit verification webhook (#589)', () => {
     const session = await env.DB.prepare('SELECT status, processed_at FROM didit_verification_sessions WHERE session_id = ?').bind(sessionId).first();
     expect(session.status).toBe('pending');
     expect(session.processed_at).toBeNull();
+  });
+
+  // #2404 (owner decision 2026-11-08): 'Kyc Expired' is Didit's re-verification
+  // window lapsing on a session it approved earlier. This platform has no
+  // recurring-KYC duty, so it is logged and otherwise ignored.
+  it('leaves an approved account verified when a "Kyc Expired" webhook follows (#2404)', async () => {
+    const builder = await signupBuilder('didit-webhook-kyc-expired-after-approval');
+    const sessionId = await insertPendingSession(builder.email);
+    expect((await postDiditWebhook({ session_id: sessionId, status: 'Approved' })).status).toBe(200);
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const response = await postDiditWebhook({ session_id: sessionId, status: 'Kyc Expired' });
+      expect(response.status).toBe(200);
+      expect(warn.mock.calls.some((call) => call[0] === 'didit-status-ignored' && String(call[1]).includes('Kyc Expired'))).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+
+    const user = await env.DB.prepare('SELECT trust_tier FROM users WHERE email = ?').bind(builder.email).first();
+    expect(user.trust_tier).toBe('id_verified');
+    const session = await env.DB.prepare('SELECT status, processed_at FROM didit_verification_sessions WHERE session_id = ?').bind(sessionId).first();
+    expect(session.status).toBe('approved');
+    expect(session.processed_at).not.toBeNull();
+    const status = await api('/auth/didit-verification-status', builder.session());
+    expect(status.body).toEqual({ status: 'approved' });
+  });
+
+  // The case the old entry actually got wrong: 'Kyc Expired' arriving while the
+  // session is still locally pending used to record it as 'declined'.
+  it('does not record a still-pending session as declined on a "Kyc Expired" webhook (#2404)', async () => {
+    const builder = await signupBuilder('didit-webhook-kyc-expired-pending');
+    const sessionId = await insertPendingSession(builder.email);
+
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect((await postDiditWebhook({ session_id: sessionId, status: 'Kyc Expired' })).status).toBe(200);
+    } finally {
+      warn.mockRestore();
+    }
+
+    const session = await env.DB.prepare('SELECT status, processed_at FROM didit_verification_sessions WHERE session_id = ?').bind(sessionId).first();
+    expect(session.status).toBe('pending');
+    expect(session.processed_at).toBeNull();
+    const user = await env.DB.prepare('SELECT trust_tier FROM users WHERE email = ?').bind(builder.email).first();
+    expect(user.trust_tier).toBe('credit_card');
   });
 
   it('is a safe no-op for an unknown session_id', async () => {

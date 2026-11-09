@@ -196,5 +196,6 @@
   "0196_conduct_reports_user_id.sql": "1c9eacde1965bc8771aa9ce2d429f6e71eb2041054280773e5b28b0ee38b176c",
   "0200_auction_resolution_resumable.sql": "2f6fd6fdcece1aaf8072777ad08d882da6f735f914ae718d12e248462ea62866",
   "0201_social_ephemeral_user_id.sql": "85c51e0a3b23ed731698284ac4e01ea0ceadd6cd109048e87b7b35fcbe88971d",
-  "0202_social_drop_builder_id_columns.sql": "83646f239cae2ae45178711735779c26ece9f2dac28de8a15d96f0afd1742186"
+  "0202_social_drop_builder_id_columns.sql": "83646f239cae2ae45178711735779c26ece9f2dac28de8a15d96f0afd1742186",
+  "0203_catalog_template_delisted_at.sql": "fece36ad7f239c589815883bcde8128a353b783a847f1cd4e07fbf4a69bd81c4"
 }

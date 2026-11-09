@@ -2697,7 +2697,11 @@
         align-items: center;
         justify-content: center;
         background: rgb(0 0 0 / 0.22);
-        padding: 16px;
+        /* #3250: #mode-nav (z-index 21) floats above this modal, so a tall
+           expanded product row used to run up underneath the Shop/Build/Sell
+           pills on a phone. Reserve the nav's strip at the top; the panel's
+           height below is capped to what is left. */
+        padding: 56px 16px 16px;
       }
       #seller-modal.visible {
         display: flex;
@@ -2707,6 +2711,11 @@
         width: 100%;
         max-width: 420px;
         max-height: 90vh;
+        /* 56px nav strip + 16px bottom padding above + this panel's own
+           18px padding top and bottom (content-box, so max-height does not
+           include it); dvh follows the browser's visible area on a phone,
+           where vh includes the part hidden behind the address bar. */
+        max-height: min(90vh, calc(100dvh - 108px));
         overflow-y: auto;
         background: rgb(var(--panel-rgb) / 0.97);
         border-radius: 14px;
@@ -3871,10 +3880,26 @@
         background: rgb(var(--ink-rgb) / 0.16);
         cursor: pointer;
       }
-      .notification-row-time {
+      .notification-row-footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
         margin-top: 4px;
+      }
+      .notification-row-time {
         font-size: 11px;
         color: var(--pill-text-soft);
+      }
+      .notification-row-delete {
+        min-height: 32px;
+        padding: 4px 10px;
+        border: 0;
+        border-radius: 8px;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: inherit;
+        font-size: 11px;
+        cursor: pointer;
       }
       #notifications-empty {
         font-size: 13px;

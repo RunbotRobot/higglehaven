@@ -41,6 +41,8 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
+import { promptBundleName } from '../ui/bundleNameModal.js';
+import { inlineConfirm } from '../ui/inlineConfirm.js';
 import {
   activeCatalog, setActiveCatalog, sellerId, setSellerId, currentMode,
 } from '../world/state.js';
@@ -1051,15 +1053,24 @@ function renderSellerList() {
     renameBtn.type = 'button';
     renameBtn.textContent = 'Rename';
     renameBtn.addEventListener('click', async () => {
-      const next = prompt('Rename this product', template.name);
-      if (!next || !next.trim() || next.trim() === template.name) return;
-      const trimmedNext = next.trim();
-      if (trimmedNext.length > 100) {
-        alert('Keep it to 100 characters or fewer.');
-        return;
+      // #3249: the in-app name modal (same one bundles use, #2761) instead
+      // of window.prompt(), and an inline confirm instead of
+      // window.confirm() for the duplicate-name warning -- a browser that
+      // suppresses native dialogs made both silently do nothing. The
+      // modal's input is maxlength 100, so the old length alert is gone.
+      const result = await promptBundleName({ title: 'Rename this product', initialName: template.name });
+      if (!result || result.name === template.name) return;
+      const trimmedNext = result.name;
+      if (hasDuplicateProductName(trimmedNext, template.templateId)) {
+        renameBtn.disabled = true;
+        const proceed = await inlineConfirm(
+          actions,
+          `You already have another product named "${trimmedNext}". Rename anyway?`,
+          { yesLabel: 'Rename anyway' },
+        );
+        renameBtn.disabled = false;
+        if (!proceed) return;
       }
-      if (hasDuplicateProductName(trimmedNext, template.templateId) &&
-        !confirm(`You already have another product named "${trimmedNext}". Rename anyway?`)) return;
       rowStatus.textContent = '';
       rowStatus.classList.remove('error');
       renameBtn.disabled = true;
