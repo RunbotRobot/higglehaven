@@ -5194,8 +5194,15 @@ depends on it). `200 { "ok": true }`; `403` for another account's
 notification (the row stays); `404` if it does not exist, which includes a
 second delete of the same id. Rate-limited with the same bucket as marking
 read. The Notices panel shows a Delete button on each row (no confirmation for
-a single notice); a "clear all read" action is deferred until the in-app
-confirmation-modal convention from #3278 exists.
+a single notice).
+
+### `POST /api/notifications/clear-read`
+
+#3280. Requires a session. Removes every notification the caller has already
+read (`readAt` set); unread ones are never touched. No body. `200 { "ok": true,
+"deleted": N }` (`N` may be `0`). Rate-limited with the same bucket as marking
+read, one hit however many rows go. The Notices panel's "Clear read" button
+calls it after confirming in the in-app confirmation modal.
 
 ### How a notification gets created
 

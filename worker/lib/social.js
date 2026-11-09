@@ -178,6 +178,19 @@ export async function handleNotifications(request, db, route, url) {
     return json({ ok: true });
   }
 
+  // #3280: "clear all read" -- removes every notification the caller has
+  // already read (unread ones are never touched, so nothing the person has not
+  // seen can disappear). builderId comes from the session, same as
+  // mark-all-read above; one rate-limit hit however many rows go. Reports how
+  // many were removed so the client can say so.
+  if (request.method === 'POST' && route.length === 2 && route[1] === 'clear-read') {
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    await checkRateLimit(db, `notification-mutate:${sessionBuilder.builder_id}`, NOTIFICATION_MUTATE_RATE_LIMIT_MAX);
+    const result = await db.prepare('DELETE FROM notifications WHERE builder_id = ? AND read_at IS NOT NULL')
+      .bind(sessionBuilder.builder_id).run();
+    return json({ ok: true, deleted: result.meta?.changes ?? 0 });
+  }
+
   return json({ error: 'Not found' }, 404);
 }
 
