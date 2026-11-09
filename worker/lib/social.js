@@ -1170,15 +1170,21 @@ export async function handleVoiceSignal(request, db, route, url, env) {
 // the generic body / the avatar's own clips for them. skeletonSignature rides
 // along so the client can apply the same animation-compatibility check
 // (#1162) it applies to the shopper's own avatar, without another request.
+// #3313: an avatar's entry also carries clipRoles (the seller's chosen
+// idle/walk/fly clips, or null), so another player's body plays the same
+// clips the owner's own does; an animation product cannot have one, so those
+// entries stay as they were.
 // `column` is a fixed identifier chosen below, never user input.
 async function equippedTemplatesByBuilder(db, builderIds, column) {
+  const withClipRoles = column === 'equipped_avatar_template_id';
   const found = new Map();
   const unique = [...new Set(builderIds)];
   for (let i = 0; i < unique.length; i += RESOLVER_CHUNK_SIZE) {
     const chunk = unique.slice(i, i + RESOLVER_CHUNK_SIZE);
     const { results } = await db.prepare(`
       SELECT builders.builder_id AS builder_id, catalog_templates.template_id AS template_id,
-        catalog_templates.model_url AS model_url, catalog_templates.skeleton_signature AS skeleton_signature
+        catalog_templates.model_url AS model_url, catalog_templates.skeleton_signature AS skeleton_signature,
+        catalog_templates.clip_roles AS clip_roles
       FROM builders JOIN catalog_templates ON catalog_templates.template_id = builders.${column}
       WHERE builders.builder_id IN (${chunk.map(() => '?').join(', ')})
         AND catalog_templates.model_url IS NOT NULL
@@ -1186,6 +1192,7 @@ async function equippedTemplatesByBuilder(db, builderIds, column) {
     for (const row of results) {
       found.set(row.builder_id, {
         templateId: row.template_id, modelUrl: row.model_url, skeletonSignature: row.skeleton_signature || null,
+        ...(withClipRoles ? { clipRoles: row.clip_roles ? JSON.parse(row.clip_roles) : null } : {}),
       });
     }
   }

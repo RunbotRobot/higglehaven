@@ -261,11 +261,23 @@ describe('Equip endpoint (GET/PUT /api/builders/me/avatar, #680)', () => {
     expect(equipped.body.avatar).toMatchObject({
       equippedTemplateId: 'avatar-equip-owned-template', modelUrl: '/uploads/avatar-equip-owned-template.glb',
     });
+    // #3313: nobody chose which clips play which motion, so the field is there but null.
+    expect(equipped.body.avatar.clipRoles).toBeNull();
 
+    // ... and once the seller has chosen, the equip and read responses carry it.
+    await env.DB.prepare('UPDATE catalog_templates SET clip_roles = ? WHERE template_id = ?')
+      .bind('{"idle":null,"walk":"mixamo.com","fly":null}', 'avatar-equip-owned-template').run();
     const got = await api('/builders/me/avatar', seller.session());
     expect(got.body.avatar).toMatchObject({
       equippedTemplateId: 'avatar-equip-owned-template', modelUrl: '/uploads/avatar-equip-owned-template.glb',
+      clipRoles: { idle: null, walk: 'mixamo.com', fly: null },
     });
+  });
+
+  it('reports no clipRoles when nothing is equipped (#3313)', async () => {
+    const account = await signupBuilder('avatar-equip-noroles-account');
+    const got = await api('/builders/me/avatar', account.session());
+    expect(got.body.avatar).toEqual({ equippedTemplateId: null, modelUrl: null, skeletonSignature: null, clipRoles: null });
   });
 
   it('reverts to the default avatar when equipped with a null templateId', async () => {

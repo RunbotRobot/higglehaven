@@ -252,13 +252,13 @@ export async function handleMyAvatar(request, db) {
 
 async function myAvatarJson(db, builder) {
   if (!builder.equipped_avatar_template_id) {
-    return { equippedTemplateId: null, modelUrl: null, skeletonSignature: null };
+    return { equippedTemplateId: null, modelUrl: null, skeletonSignature: null, clipRoles: null };
   }
   // A template can vanish after being equipped (its seller later deletes
   // it) — falls back to the default the same way a dangling seller_id/
   // templateId elsewhere in this app already does, rather than erroring.
   const template = await db.prepare(
-    'SELECT model_url, skeleton_signature FROM catalog_templates WHERE template_id = ?',
+    'SELECT model_url, skeleton_signature, clip_roles FROM catalog_templates WHERE template_id = ?',
   ).bind(builder.equipped_avatar_template_id).first();
   return {
     equippedTemplateId: template ? builder.equipped_avatar_template_id : null,
@@ -270,6 +270,11 @@ async function myAvatarJson(db, builder) {
     // (no equipped template at all) or a custom avatar with no skeleton —
     // either way, nothing for an animation to ever compare equal to.
     skeletonSignature: template?.skeleton_signature || null,
+    // #3313 (part of #3301): which of the avatar's clips the seller said play
+    // as idle/walk/fly ({ idle, walk, fly }, each a clip name or null), or null
+    // when nobody chose and the client matches clips by name. Avatar-only: an
+    // animation product cannot carry one (see myAnimationJson below).
+    clipRoles: template?.clip_roles ? JSON.parse(template.clip_roles) : null,
   };
 }
 
