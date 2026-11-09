@@ -2602,6 +2602,10 @@
         background: #a83a27;
         color: #fff;
       }
+      #confirm-modal-confirm-btn[data-variant="primary"] {
+        background: var(--brand-green);
+        color: #16240a;
+      }
       #confirm-modal-actions button:disabled {
         opacity: 0.5;
       }

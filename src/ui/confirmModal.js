@@ -89,6 +89,9 @@ export function confirmDestructive({
   message,
   confirmLabel = 'Delete',
   cancelLabel = 'Never mind',
+  // 'danger' (red) for removals; 'primary' (brand green) for a plain
+  // are-you-sure that isn't destructive, such as a purchase.
+  variant = 'danger',
   onConfirm = null,
   restoreModalEl = null,
   restoreCloseFn = null,
@@ -104,6 +107,7 @@ export function confirmDestructive({
     statusEl.textContent = '';
     cancelBtn.textContent = cancelLabel;
     confirmBtn.textContent = confirmLabel;
+    confirmBtn.dataset.variant = variant;
     setBusy(false);
     modalEl.classList.add('visible');
     openModalA11y(modalEl, cancel);
