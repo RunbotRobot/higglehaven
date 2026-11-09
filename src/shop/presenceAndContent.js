@@ -275,6 +275,7 @@ const otherAvatarModelFailedAt = new Map();
 // CUSTOM_AVATAR_RETRY_AFTER_MS) passes.
 const otherAvatarAnimationFailedAt = new Map();
 let shopLastPresencePollAt = 0;
+let presenceAppliedToken = 0; // #3349: token of the newest poll response applied so far
 let presencePollToken = 0; // #1911: guards pollNearbyPresenceIfNeeded against a stale out-of-order response
 // #1995: every currently-loaded credit orb: { mesh, group, orbId, landletId }.
 // Unlike shopSigns/shopCalendars (main.js, worldSprites.js's own not-yet-
@@ -689,7 +690,13 @@ export async function pollNearbyPresenceIfNeeded(now) {
   } catch {
     return; // best-effort -- try again next poll tick, same as a dropped report
   }
-  if (myPresencePollToken !== presencePollToken) return; // a newer poll already landed
+  // #3349: drop only a response OLDER than one already applied. The old test
+  // (`!== presencePollToken`) dropped every response while a newer poll had
+  // merely been *issued*, so whenever GET latency exceeded the 1 s poll
+  // interval each response was discarded as stale and nothing was ever
+  // applied (a livelock; seen as the flaky background-tab despawn e2e).
+  if (myPresencePollToken < presenceAppliedToken) return;
+  presenceAppliedToken = myPresencePollToken;
   const seenBuilderIds = new Set();
   for (const avatar of avatars) {
     seenBuilderIds.add(avatar.builderId);
