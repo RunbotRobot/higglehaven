@@ -23,7 +23,7 @@ async function setPresence(builderId, landletId) {
   `).bind(builderId, landletId, new Date().toISOString()).run();
 }
 
-async function createAvatarTemplate(seller, templateId, category = 'avatar') {
+async function createAvatarTemplate(seller, templateId, category = 'avatar', extra = {}) {
   const form = new FormData();
   form.set('file', glbFile({ json: `{"presenceEquippedAvatar":"${templateId}"}` }));
   const uploaded = await SELF.fetch('https://higglehaven.test/api/models', { method: 'POST', body: form });
@@ -41,6 +41,7 @@ async function createAvatarTemplate(seller, templateId, category = 'avatar') {
       category,
       modelUrl: upload.modelUrl,
       modelSizeBytes: upload.sizeBytes,
+      ...extra,
     }),
   }));
   expect(created.response.status).toBe(201);
@@ -77,8 +78,23 @@ describe('nearby avatars carry the equipped custom avatar (#2045)', () => {
 
     const avatars = await nearby(viewer, 'pea-landlet');
     const byId = Object.fromEntries(avatars.map((a) => [a.builderId, a]));
-    expect(byId[custom.builderId].equippedAvatar).toEqual({ templateId: 'pea-template', modelUrl, skeletonSignature: null });
+    expect(byId[custom.builderId].equippedAvatar).toEqual({ templateId: 'pea-template', modelUrl, skeletonSignature: null, clipRoles: null });
     expect(byId[plain.builderId].equippedAvatar).toBeNull();
+  });
+
+  it('carries the seller\'s chosen clip roles, so other players\' bodies play the same clips as the owner\'s (#3313)', async () => {
+    const seller = await signupSeller('pea-roles-seller');
+    const modelUrl = await createAvatarTemplate(seller, 'pea-roles-template', 'avatar', { clipRoles: { walk: 'mixamo.com' } });
+    const viewer = await signupBuilder('pea-roles-viewer');
+    const custom = await signupBuilder('pea-roles-custom');
+    await equip(custom, 'pea-roles-template');
+    await setPresence(custom.builderId, 'pea-roles-landlet');
+
+    const avatars = await nearby(viewer, 'pea-roles-landlet');
+    expect(avatars.find((a) => a.builderId === custom.builderId).equippedAvatar).toEqual({
+      templateId: 'pea-roles-template', modelUrl, skeletonSignature: null,
+      clipRoles: { idle: null, walk: 'mixamo.com', fly: null },
+    });
   });
 
   it('falls back to the default body when the equipped template no longer exists', async () => {

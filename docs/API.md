@@ -6048,8 +6048,10 @@ returned by `GET /api/presence`.
 ```
 
 `GET /api/presence` adds two fields to each avatar it returns (**#2045**):
-`equippedAvatar`, `{ "templateId", "modelUrl", "skeletonSignature" }` for the
-custom avatar that builder has equipped (#680), or `null` for the default
+`equippedAvatar`, `{ "templateId", "modelUrl", "skeletonSignature", "clipRoles" }`
+for the custom avatar that builder has equipped (#680; `clipRoles` is the
+seller's chosen idle/walk/fly clips or `null`, #3313, so another player's body
+plays the same clips the owner's does), or `null` for the default
 body, and `equippedAnimation`, the same shape for the animation they have
 applied (#1164), or `null` for the avatar's own clips (`skeletonSignature`
 lets a client run the same compatibility check as for its own avatar, #1162,
@@ -12376,8 +12378,14 @@ directions respond with the same shape, resolving the equipped
 template's live `model_url`:
 
 ```json
-{ "avatar": { "equippedTemplateId": "avatar-...", "modelUrl": "/uploads/avatar-....glb" } }
+{ "avatar": { "equippedTemplateId": "avatar-...", "modelUrl": "/uploads/avatar-....glb", "skeletonSignature": null, "clipRoles": null } }
 ```
+
+`clipRoles` (#3313, part of #3301) is the seller's own choice of which of the
+model's clips plays as idle/walk/fly, `{ "idle": <clip name|null>, "walk": ...,
+"fly": ... }`, or `null` when nobody chose and the client matches clips by name
+(see `clipRoles` on the catalog endpoints). It is `null` too when no avatar is
+equipped.
 
 `equippedTemplateId`/`modelUrl` are both `null` for a fresh account (no
 avatar equipped — the existing hardcoded default from `createShopAvatar`
