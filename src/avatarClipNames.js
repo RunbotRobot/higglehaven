@@ -43,15 +43,42 @@ function matchRank(normalized, role) {
   return null;
 }
 
+// #3314 (part of #3301): the seller's own choice of which clip plays as idle,
+// walk and fly, as the server hands it over with the equipped avatar:
+// { idle, walk, fly }, each a clip name or null, or null as a whole when nobody
+// chose. Anything malformed (an older server without the field, a wrong type)
+// is "nobody chose", so name matching keeps applying.
+export function normalizeClipRoles(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  const roles = {};
+  for (const role of AVATAR_CLIP_NAMES) {
+    roles[role] = typeof raw[role] === 'string' && raw[role] !== '' ? raw[role] : null;
+  }
+  return roles;
+}
+
 // clipNames: every animation clip name in the model, in file order.
 // roles: which roles the caller can use (other players' bodies have no fly).
+// clipRoles: the seller's stored choice for THIS model file, if any. A stored
+// choice is authoritative: each role plays the clip with the stored name (the
+// first, if the file repeats it), and a role stored as null, or naming a clip
+// the file does not have, plays nothing; names are not consulted at all, so
+// "Not used" sticks. Without one, clips are matched by name as below.
 // Returns { idle, walk, fly }, each the index into clipNames of the clip that
 // plays for that role, or null. A clip serves at most one role, so "walk_idle"
 // cannot be both; better fits are settled first, ties go in idle, walk, fly
 // order and then file order.
-export function matchAvatarClips(clipNames, roles = AVATAR_CLIP_NAMES) {
+export function matchAvatarClips(clipNames, roles = AVATAR_CLIP_NAMES, clipRoles = null) {
   const result = { idle: null, walk: null, fly: null };
   if (!Array.isArray(clipNames) || clipNames.length === 0) return result;
+  const stored = normalizeClipRoles(clipRoles);
+  if (stored) {
+    for (const role of roles) {
+      const index = stored[role] === null ? -1 : clipNames.indexOf(stored[role]);
+      result[role] = index === -1 ? null : index;
+    }
+    return result;
+  }
   const candidates = [];
   clipNames.forEach((name, index) => {
     const normalized = normalizedName(name);
@@ -78,10 +105,12 @@ export function matchAvatarClips(clipNames, roles = AVATAR_CLIP_NAMES) {
 }
 
 // clips: objects with a `name` (THREE.AnimationClip). Returns { idle, walk, fly }
-// holding the clip for each role, or null.
-export function pickAvatarClips(clips, roles = AVATAR_CLIP_NAMES) {
+// holding the clip for each role, or null. clipRoles: see matchAvatarClips; pass
+// it only for the avatar's OWN clips (an applied animation's clips come from a
+// different file, whose names the stored choice knows nothing about).
+export function pickAvatarClips(clips, roles = AVATAR_CLIP_NAMES, clipRoles = null) {
   const list = Array.isArray(clips) ? clips : [];
-  const indexes = matchAvatarClips(list.map((clip) => clip?.name), roles);
+  const indexes = matchAvatarClips(list.map((clip) => clip?.name), roles, clipRoles);
   const picked = {};
   for (const role of AVATAR_CLIP_NAMES) picked[role] = indexes[role] === null ? null : list[indexes[role]];
   return picked;

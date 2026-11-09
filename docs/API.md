@@ -12438,7 +12438,13 @@ for the same URL — one fetch/parse either way, not two) and looks up
 `Walking`/`Standing`/`Flying`, then any name containing the word; the part
 after the last `|` of an armature-prefixed name; a lone `mixamo.com` clip as
 `idle`; one clip per role), the same function other players' bodies and the
-upload wizard use. Any that exist become a `THREE.AnimationMixer` action,
+upload wizard use. When the equipped avatar carries a seller-chosen `clipRoles`
+(#3301; `GET /builders/me/avatar` and each nearby avatar's `equippedAvatar`
+return it), `pickAvatarClips` plays exactly those named clips and skips name
+matching (#3314): a role stored as `null`, or naming a clip the file does not
+have, plays nothing. It applies only when the avatar plays its own clips, never
+to an applied animation's, and another player's body rebuilds its clips when the
+roles it is polled with change. Any that exist become a `THREE.AnimationMixer` action,
 bound to `container.userData.model` — the actual loaded node the clip's
 tracks were authored against, not the wrapping container
 `createCustomShopAvatar` adds around it (see `loadModelInstance`'s own

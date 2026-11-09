@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { describeAvatarClips, describeNoAnimationsForAvatar, matchAvatarClips, pickAvatarClips, AVATAR_CLIP_NAMES } from './avatarClipNames.js';
+import { describeAvatarClips, describeNoAnimationsForAvatar, matchAvatarClips, pickAvatarClips, normalizeClipRoles, AVATAR_CLIP_NAMES } from './avatarClipNames.js';
 
 describe('describeAvatarClips (#2744)', () => {
   it('says nothing for a model with no clips (an ordinary product)', () => {
@@ -142,5 +142,54 @@ describe('describeNoAnimationsForAvatar (#2744)', () => {
 
   it('never leaks internals into the text', () => {
     expect(describeNoAnimationsForAvatar(0, true)).not.toMatch(/#\d|SPEC|API\.md|findByName/);
+  });
+});
+
+describe('a seller\'s stored clip roles (#3314)', () => {
+  it('normalizes what the server sends, reading anything malformed as nobody having chosen', () => {
+    expect(normalizeClipRoles({ idle: 'Stand', walk: '', fly: 3, extra: 'x' })).toEqual({ idle: 'Stand', walk: null, fly: null });
+    for (const bad of [undefined, null, 'walk', 7, ['walk']]) expect(normalizeClipRoles(bad)).toBeNull();
+  });
+
+  it('plays exactly the stored clips, whatever the names say', () => {
+    // The names would match idle/walk the other way round; the seller said otherwise.
+    expect(matchAvatarClips(['Idle', 'Walk'], AVATAR_CLIP_NAMES, { idle: 'Walk', walk: 'Idle', fly: null }))
+      .toEqual({ idle: 1, walk: 0, fly: null });
+  });
+
+  it('is authoritative: a role stored as null plays nothing even when a clip is named for it', () => {
+    expect(matchAvatarClips(['Idle', 'Walk'], AVATAR_CLIP_NAMES, { idle: null, walk: 'Walk', fly: null }))
+      .toEqual({ idle: null, walk: 1, fly: null });
+    expect(matchAvatarClips(['Idle', 'Walk'], AVATAR_CLIP_NAMES, { idle: null, walk: null, fly: null }))
+      .toEqual({ idle: null, walk: null, fly: null });
+  });
+
+  it('does not apply the lone mixamo.com rule once the seller has chosen', () => {
+    expect(matchAvatarClips(['mixamo.com'], AVATAR_CLIP_NAMES, { idle: null, walk: 'mixamo.com', fly: null }))
+      .toEqual({ idle: null, walk: 0, fly: null });
+  });
+
+  it('plays nothing for a role naming a clip the file does not have, and takes the first of a repeated name', () => {
+    expect(matchAvatarClips(['Walk'], AVATAR_CLIP_NAMES, { idle: 'Gone', walk: null, fly: null }))
+      .toEqual({ idle: null, walk: null, fly: null });
+    expect(matchAvatarClips(['mixamo.com', 'mixamo.com'], AVATAR_CLIP_NAMES, { idle: null, walk: 'mixamo.com', fly: null }))
+      .toEqual({ idle: null, walk: 0, fly: null });
+  });
+
+  it('only fills the roles the caller can use', () => {
+    expect(matchAvatarClips(['A', 'B', 'C'], ['idle', 'walk'], { idle: 'A', walk: 'B', fly: 'C' }))
+      .toEqual({ idle: 0, walk: 1, fly: null });
+  });
+
+  it('behaves exactly as before when nobody chose', () => {
+    expect(matchAvatarClips(['Idle', 'Walk'], AVATAR_CLIP_NAMES, null)).toEqual(matchAvatarClips(['Idle', 'Walk']));
+    expect(matchAvatarClips(['Idle', 'Walk'], AVATAR_CLIP_NAMES, 'junk')).toEqual({ idle: 0, walk: 1, fly: null });
+  });
+
+  it('pickAvatarClips returns the chosen clip objects', () => {
+    const a = { name: 'mixamo.com' };
+    const picked = pickAvatarClips([a], ['idle', 'walk'], { idle: null, walk: 'mixamo.com', fly: null });
+    expect(picked.walk).toBe(a);
+    expect(picked.idle).toBeNull();
   });
 });

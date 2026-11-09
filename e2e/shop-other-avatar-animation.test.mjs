@@ -102,7 +102,7 @@ await pageA.route('**/api/presence*', async (route) => {
 
 const stateOf = (builderId) => pageA.evaluate((id) => {
   const a = (window.__shopOtherAvatars ?? []).find((x) => x.builderId === id);
-  return a ? { body: a.bodyTemplateId, source: a.animationSource, anim: a.animState } : null;
+  return a ? { body: a.bodyTemplateId, source: a.animationSource, anim: a.animState, clip: a.playingClip } : null;
 }, builderId);
 const waitFor = (fn, arg) => pageA.waitForFunction(fn, arg, { timeout: 20000 }).then(() => true).catch(() => false);
 const waitSource = (id, source) => waitFor(([builderId, s]) => (window.__shopOtherAvatars ?? []).find((a) => a.builderId === builderId)?.animationSource === s, [id, source]);
@@ -142,7 +142,25 @@ const walkerWalks = await waitFor(() => (window.__shopOtherAvatars ?? []).find((
 const bStillIdle = (await stateOf(builderB.builderId))?.anim;
 console.log('moving avatar plays walk (should be true):', walkerWalks, '| the still one beside it stays idle (should be idle):', bStillIdle);
 
-// 6. Back to the default body: clips are dropped.
+// 6. The seller's chosen clip roles (#3314) beat name matching, and follow a
+// change on an avatar that is already drawn. B stands still, so its idle role
+// plays: normally the clip named idle; with the roles swapped, the clip named walk.
+walkerOn = false;
+const waitClip = (clip) => waitFor(([id, c]) => (window.__shopOtherAvatars ?? []).find((a) => a.builderId === id)?.playingClip === c, [builderB.builderId, clip]);
+const byNameClip = await waitClip('idle');
+equippedAvatarForB = { ...AVATAR, clipRoles: { idle: 'walk', walk: 'idle', fly: null } };
+const swappedClip = await waitClip('walk');
+equippedAvatarForB = { ...AVATAR, clipRoles: { idle: null, walk: null, fly: null } };
+const notUsed = await waitFor((id) => {
+  const a = (window.__shopOtherAvatars ?? []).find((x) => x.builderId === id);
+  return a && a.animationSource === null && a.playingClip === null;
+}, builderB.builderId);
+equippedAvatarForB = AVATAR;
+const backToNames = await waitClip('idle');
+console.log('by name, standing plays idle (should be true):', byNameClip, '| roles swapped plays the walk clip (should be true):', swappedClip,
+  '| everything "not used" plays nothing (should be true):', notUsed, '| no roles back to name matching (should be true):', backToNames);
+
+// 7. Back to the default body: clips are dropped.
 walkerOn = false;
 equippedAvatarForB = null;
 const droppedClips = await waitFor((id) => {
@@ -159,6 +177,7 @@ const pass =
   appliedClips && incompatibleFallsBack &&
   brokenState?.source === 'own' && brokenState?.body === AVATAR.templateId &&
   walkerWalks && bStillIdle === 'idle' &&
+  byNameClip && swappedClip && notUsed && backToNames &&
   droppedClips &&
   errors.length === 0;
 
