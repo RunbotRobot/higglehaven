@@ -6315,13 +6315,53 @@ object back — the frontend's Rename button only ever sends `{ name }`.
 **#3327:** `items` (the bundle's members, same shape and validation as `POST`,
 including that every `templateId` must exist) is creator-only like the rest of
 this endpoint, so another builder is refused with `403` even for a shared
-bundle. It is the server half of editing a linked bundle; no client sends it
-yet, and rewriting the placements that are linked to the bundle is also still
-to come (leaf 6/7, #3329). **#3328 (5/7):** Build mode's Edit button opens a
-selected bundle for member-by-member editing; for a linked bundle it is
-creator-only (the client decides "creator" by the bundle id being in its own
-`GET /api/bundles` list) and asks for confirmation first. Edit mode itself
-sends nothing to this endpoint. **#921:** a
+bundle. **#3328 (5/7):** Build mode's Edit button opens a selected bundle for
+member-by-member editing; for a linked bundle it is creator-only (the client
+decides "creator" by the bundle id being in its own `GET /api/bundles` list)
+and asks for confirmation first. **#3329 (6/7):** leaving Edit mode sends the
+edited members here, and the server lays every other linked placement out
+again:
+
+- Body: `{ items, placement?: { groupId, baselineItems } }`. `placement` says
+  "`items` is what the copy with this `groupId` looks like now, and
+  `baselineItems` is what it looked like when Edit opened". The copy may have
+  been turned as a unit, so the server recovers that yaw by matching
+  `baselineItems` to the bundle's current members and undoes it, storing the
+  template in its own frame. The copy itself is not re-laid (it already shows
+  the edit). `409` if the group is not the caller's or not linked to this
+  bundle, or if the baseline does not match the saved members (a copy that was
+  turned about a horizontal axis or rearranged by hand): unbundle it to keep
+  those changes. Without `placement`, `items` is taken as the template's own
+  frame, as in 4/7.
+- The write is a compare-and-swap on the members the request read, so two
+  edits from the same starting point are serialized: the second gets `409`
+  ("reopen it and try again") instead of laying out over the first.
+- Every other placement (`placed_instances.bundle_id` = this bundle, draft
+  state only; published versions are history and are not rewritten) is
+  recovered as a yaw plus a translation of the old members and laid out again
+  from the new ones, keeping its own anchor and yaw. A member at the same list
+  position that is the same product keeps its instance id; the rest are added
+  or removed. One transactional batch per landlet, each statement guarded on
+  the template still holding these members.
+- A copy that no longer matches (a member nudged by hand, deleted, tilted,
+  carrying its own label or community flag) or whose new layout would not fit
+  its landlet is **detached**: nothing is changed on it, it simply stops being
+  linked and becomes that builder's own bundle. No placement is ever deleted
+  because it failed to match.
+- Every builder other than the editor who had a linked placement gets a
+  notification naming the editor, the bundle and the landlet(s) ("Unbundle it
+  if you want to keep your own copy."). Rapid successive edits coalesce to one
+  such notice per bundle per builder per 10 minutes; a detach notice is never
+  coalesced.
+- Bounded work: more than 25 landlets or 20,000 placed rows linked to one
+  bundle is refused up front with `409`, before anything is written. A
+  members edit costs one `bundle-mutate` rate-limit hit.
+- Response: `{ bundle, relayout? }` with `relayout` =
+  `{ relaidCount, detachedCount, notifiedBuilders, ownLandletIds }`
+  (`ownLandletIds`: the caller's own landlets whose copies were re-laid, so an
+  open Build tab can refetch them).
+
+**#921:** a
 `name` in the body gets the same prohibited-content check as `POST` (a
 request that omits `name` is not re-checked).
 

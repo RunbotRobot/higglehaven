@@ -70,7 +70,7 @@ import {
   fetchLowStock, fetchSoldOutMarkers, dismissSoldOutMarker,
   fetchLandletVersions, saveLandletVersion, clearVersionIdempotencyKey,
   fetchLandletVersion, activateLandletVersion, replaceLandletDraft, clearDraftIdempotencyKey,
-  fetchSavedLayouts, deleteSavedLayout, fetchInstances, fetchBundles,
+  fetchSavedLayouts, deleteSavedLayout, fetchInstances, fetchBundles, updateBundle,
 } from '../api.js';
 import { bundleEditDecision } from './bundleEdit.js';
 import { refresh as refreshPendingRestorations } from './pendingRestoration.js';
@@ -3281,7 +3281,7 @@ window.__testSoldOutMarkerMeshIds = () => [...soldOutMarkerMeshes.keys()];
 export function updateSelectionUI() {
   // #3328: edit mode ends as soon as nothing from the bundle is selected.
   if (editingGroupId && ![...selectedMeshes].some((mesh) => mesh.userData.groupId === editingGroupId)) {
-    editingGroupId = null;
+    endBundleEditSession();
   }
   if (measureMode) {
     // Measure is its own exclusive mode (see exitMeasureMode) — the gizmo
@@ -3454,7 +3454,7 @@ export function selectOnly(mesh) {
 export function toggleInSelection(mesh) {
   // #3328: multi-selecting something outside the open bundle leaves edit mode.
   if (editingGroupId && mesh.userData.groupId !== editingGroupId) {
-    editingGroupId = null;
+    endBundleEditSession();
     clearSelection();
   }
   const members = groupMembers(mesh);
@@ -3609,9 +3609,12 @@ groupBtn.addEventListener('click', async () => {
 // individually and the single-item tools apply. Done, Escape, or selecting
 // something else returns to the unit. Opening a *linked* bundle (one saved
 // as a template) is creator-only and confirmed first; see bundleEdit.js.
-// NOTE (leaf 6/7, #3329): a member edit still only changes that placement.
-// Rewriting the template and every other copy is not built yet.
+// #3329 (leaf 6/7): leaving edit mode on a linked bundle saves what changed
+// to the template, and the server re-lays every other copy (and tells their
+// builders). See syncBundleTemplate.
 let editingGroupId = null;
+let editBaseline = null; // { groupId, bundleId, items } as the bundle looked when Edit opened
+let bundleSyncChain = Promise.resolve();
 const ownBundleIds = new Set(); // bundles this builder saved
 const checkedBundleIds = new Set(); // bundleIds already resolved against that list
 let ownBundlesLoading = null;
@@ -3674,15 +3677,53 @@ function syncBundleEditUI() {
 
 function enterBundleEdit(groupId) {
   editingGroupId = groupId;
+  const members = productMeshes.filter((m) => m.userData.groupId === groupId);
+  const bundleId = members.find((m) => m.userData.bundleId)?.userData.bundleId ?? null;
+  editBaseline = bundleId && members.length > 0
+    ? { groupId, bundleId, items: relativeItemsForMeshes(members) }
+    : null;
   // Stay on the same selection (the whole bundle) until a member is tapped;
   // the next tap picks one member instead of the unit.
   updateSelectionUI();
 }
 
+// Every way out of edit mode comes through here so none can skip the save.
+function endBundleEditSession() {
+  const baseline = editBaseline;
+  editBaseline = null;
+  editingGroupId = null;
+  if (!baseline) return;
+  // One at a time, so a quick second Edit cannot race the first save.
+  bundleSyncChain = bundleSyncChain.then(() => syncBundleTemplate(baseline)).catch(() => {});
+}
+
+// #3329: sends the edited members to the saved bundle (as the template's own
+// members, with this copy's starting shape so the server can undo any turn),
+// then refreshes this tab if the server re-laid another copy on the open lándlet.
+async function syncBundleTemplate(baseline) {
+  const members = productMeshes.filter((m) => m.userData.groupId === baseline.groupId);
+  if (members.length === 0) return;
+  const items = relativeItemsForMeshes(members);
+  if (JSON.stringify(items) === JSON.stringify(baseline.items)) return;
+  try {
+    const { relayout } = await updateBundle(baseline.bundleId, {
+      items,
+      placement: { groupId: baseline.groupId, baselineItems: baseline.items },
+    });
+    if (relayout?.ownLandletIds?.includes(currentLandletId)) {
+      await applyServerInstances(await fetchInstances(currentLandletId));
+    }
+    showSelectionActionStatus('Saved. This bundle now looks the same everywhere it is placed.');
+  } catch (err) {
+    console.error('Could not save the bundle edit:', err);
+    showSelectionActionStatus(`Couldn't save your changes to this bundle everywhere. ${err.message || 'Please try again.'}`);
+  }
+}
+
 function exitBundleEdit() {
   if (!editingGroupId) return;
   const groupId = editingGroupId;
-  editingGroupId = null;
+  endBundleEditSession();
   const member = productMeshes.find((m) => m.userData.groupId === groupId);
   clearSelection();
   if (member) selectOnly(member); else updateSelectionUI();
@@ -4194,6 +4235,12 @@ window.__testSelectAllProducts = () => {
   return selectedMeshes.size;
 };
 
+// #3329: test-only (the window.__test* convention): moves whatever is selected
+// along x by `dx` metres, the way a member drag in edit mode would, so a test
+// can change a bundle's members without simulating a gizmo drag.
+window.__testNudgeSelected = (dx) => {
+  for (const mesh of selectedMeshes) mesh.position.x += dx;
+};
 window.__testProductScreenPositions = () => productMeshes.map((mesh) => ({
   instanceId: mesh.userData.instanceId,
   ...projectMeshToScreen(mesh),
