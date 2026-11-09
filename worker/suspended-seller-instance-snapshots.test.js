@@ -161,6 +161,43 @@ describe('Suspended seller content: remove + snapshot + auto-restore placed inst
     expect(restoredRow.group_id).toBe(groupId);
   });
 
+  it('keeps a bundle link across suspension, and restores unlinked if the bundle was deleted meanwhile (#3327)', async () => {
+    const seller = await signupSeller('sss-link-seller');
+    const builder = await signupAdmin('sss-link-builder');
+    await createGreenbeltLandlet('sss-link-landlet');
+    await claim('sss-link-landlet', builder);
+    const templateId = await createSellerTemplate(seller, 'sss-link-template');
+    const member = await placeInstance('sss-link-instance-suspended', 'sss-link-landlet', templateId, builder, { x: 1, y: 1 });
+    const surviving = await placeInstance('sss-link-instance-surviving', 'sss-link-landlet', 'placeholder-tree', builder, { x: 2, y: 2 });
+    const bundleCreated = await api('/bundles', builder.session({
+      method: 'POST',
+      body: JSON.stringify({ name: 'SSS link', items: [{ templateId: 'placeholder-tree', dx: 0, dy: 0, dz: 0 }, { templateId: 'placeholder-tree', dx: 1, dy: 0, dz: 0 }] }),
+    }));
+    expect(bundleCreated.response.status).toBe(201);
+    const bundleId = bundleCreated.body.bundle.bundleId;
+    const grouped = await api('/instances/group', builder.session({
+      method: 'POST', body: JSON.stringify({ instanceIds: [member.instanceId, surviving.instanceId], bundleId }),
+    }));
+    expect(grouped.response.status).toBe(201);
+
+    await suspend(seller.email);
+    await unsuspend(seller.email);
+    const restored = await env.DB.prepare('SELECT group_id, bundle_id FROM placed_instances WHERE template_id = ? AND landlet_id = ?')
+      .bind(templateId, 'sss-link-landlet').first();
+    expect(restored.group_id).toBe(grouped.body.groupId);
+    expect(restored.bundle_id).toBe(bundleId);
+
+    // Suspend again, delete the saved bundle while the member is away.
+    await suspend(seller.email);
+    const deleted = await api(`/bundles/${bundleId}`, builder.session({ method: 'DELETE' }));
+    expect(deleted.response.status).toBe(200);
+    await unsuspend(seller.email);
+    const afterDelete = await env.DB.prepare('SELECT group_id, bundle_id FROM placed_instances WHERE template_id = ? AND landlet_id = ?')
+      .bind(templateId, 'sss-link-landlet').first();
+    expect(afterDelete.group_id).toBe(grouped.body.groupId);
+    expect(afterDelete.bundle_id).toBe(null);
+  });
+
   it('does not restore a snapshot the affected builder has permanently cleared', async () => {
     const seller = await signupSeller('sss-cleared-seller');
     const builder = await signupAdmin('sss-cleared-builder');

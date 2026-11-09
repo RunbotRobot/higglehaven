@@ -820,15 +820,24 @@ saveBundleBtn.addEventListener('click', async () => {
     // just the bundle *definition* createBundle persisted above — same
     // groupInstancesRemote mechanism #2764's own Group button
     // (src/build/scene.js) uses. Skipped when there's nothing to group (a
-    // lone item) or the selection is already one single group, same as
-    // groupBtn's own min-size guard and ungroupBtn's own "already grouped"
-    // read of mesh.userData.groupId.
-    const alreadyOneGroup = meshes.length >= 2 && meshes[0].userData.groupId
-      && meshes.every((mesh) => mesh.userData.groupId === meshes[0].userData.groupId);
-    if (meshes.length >= 2 && !alreadyOneGroup) {
+    // lone item), same as groupBtn's own min-size guard.
+    //
+    // #3327: the saved-from instance becomes *linked* to the bundle just
+    // saved, so a later edit of the template can reach it. That is the same
+    // request that groups: it is sent even when the selection is already one
+    // group (the server re-mints the group id over the same members), since
+    // an unlinked group still needs the link. A lone item has no group to
+    // link and stays an ordinary item.
+    if (meshes.length >= 2) {
       try {
-        const { groupId } = await groupInstancesRemote(meshes.map((mesh) => mesh.userData.instanceId));
-        for (const mesh of meshes) mesh.userData.groupId = groupId;
+        const { groupId, bundleId: linkedBundleId } = await groupInstancesRemote(
+          meshes.map((mesh) => mesh.userData.instanceId),
+          { bundleId: bundle.bundleId },
+        );
+        for (const mesh of meshes) {
+          mesh.userData.groupId = groupId;
+          mesh.userData.bundleId = linkedBundleId;
+        }
       } catch (groupErr) {
         // The bundle itself already saved successfully above — that's the
         // primary, already-expected action, so a grouping failure doesn't

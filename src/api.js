@@ -780,13 +780,19 @@ export async function deleteInstancesRemote(instanceIds) {
 // it is one request for the whole selection, because one group id has to be
 // minted for all of it. The server chunks the work under D1's bound-parameter
 // limit and accepts up to 5,000 items (#3304).
-export async function groupInstancesRemote(instanceIds) {
-  const { groupId, instances } = await requestJson('/instances/group', {
+//
+// #3327: `bundleId` (optional) links the new group to a saved bundle -- Save
+// Bundle sends it for the instance that was just saved, and placing a bundle
+// from the picker sends it for the placement. A plain Group sends none, which
+// is a new unsaved bundle instance. The response's `bundleId` is the link the
+// server actually stored (null if it was not asked for or the bundle vanished).
+export async function groupInstancesRemote(instanceIds, { bundleId = null } = {}) {
+  const { groupId, bundleId: linkedBundleId, instances } = await requestJson('/instances/group', {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ instanceIds }),
+    body: JSON.stringify(bundleId ? { instanceIds, bundleId } : { instanceIds }),
   });
-  return { groupId, instances };
+  return { groupId, bundleId: linkedBundleId ?? null, instances };
 }
 
 // #2764: dissolves a group back to independent items.

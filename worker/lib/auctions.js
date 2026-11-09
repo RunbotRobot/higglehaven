@@ -39,10 +39,10 @@ import {
 // Saved groups a builder can stamp down together in one tap (see
 // docs/API.md's "Bundles") — a named, persisted version of the same
 // relative-offset shape the frontend's own Copy/Paste already builds in
-// memory (copySelection/placeClipboardItems in src/main.js). No rename of
-// a bundle's *contents* here — only its name/shared flag — since there's no
-// frontend flow for editing a saved bundle's items; delete and re-save
-// covers that.
+// memory (copySelection/placeClipboardItems in src/main.js). #3327: PATCH
+// accepts `items` too (creator-only), the server half of editing a linked
+// bundle; there is still no client flow that sends it until leaf 5/7-6/7 of
+// #3323 land.
 //
 // `shared` (see migrations/0040_bundle_sharing.sql) only controls
 // visibility — a shared bundle is still owned by whoever created it, and
@@ -208,6 +208,18 @@ export async function handleBundles(request, db, route, url) {
     const name = input.name === undefined ? null : labelValue(input.name, 'name');
     if (name !== null) assertNotProhibitedContent({ name }, 'bundle'); // #921
     const shared = input.shared === undefined ? null : (input.shared === true ? 1 : 0);
+    // #3327 (leaf 4/7 of #3323): the creator may rewrite a saved bundle's
+    // members, which is what lets editing one linked placement update the
+    // template (leaf 6/7). Same validation as create; assertOwner above is the
+    // creator-only gate, so another builder (even for a shared bundle) is
+    // refused before this point. Resolved via COALESCE like the other fields,
+    // so a concurrent rename/share-toggle is not clobbered by a stale read.
+    let itemsJson = null;
+    if (input.items !== undefined) {
+      const items = validateBundleItems(input.items);
+      await assertReferencesExist(db, 'catalog_templates', 'template_id', items.map((item) => item.templateId), 'items[].templateId');
+      itemsJson = JSON.stringify(items);
+    }
     // Found via backlog audit: without checking this UPDATE's own
     // meta.changes, a concurrent DELETE of this bundle landing between the
     // existence check above and this UPDATE would silently affect 0 rows —
@@ -215,8 +227,8 @@ export async function handleBundles(request, db, route, url) {
     // bundleFromRow(undefined) throws an uncaught TypeError (a 500) instead
     // of the clean 404 this should be. Same shape as #288's friendship fix.
     const result = await db.prepare(`
-      UPDATE bundles SET name = COALESCE(?, name), shared = COALESCE(?, shared), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE bundle_id = ?
-    `).bind(name, shared, route[1]).run();
+      UPDATE bundles SET name = COALESCE(?, name), shared = COALESCE(?, shared), items_json = COALESCE(?, items_json), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE bundle_id = ?
+    `).bind(name, shared, itemsJson, route[1]).run();
     if (result.meta.changes === 0) return json({ error: 'Bundle not found' }, 404);
     // #2426: result.meta.changes === 0 only proves the UPDATE matched a row
     // at the moment it ran -- a concurrent DELETE landing in the single

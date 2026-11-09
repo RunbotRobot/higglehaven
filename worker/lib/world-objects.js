@@ -36,6 +36,7 @@ import {
 // worker/lib/purchase-creation.js -- import it from there directly instead
 // of via the '../index.js' circular-import path above.
 import { handleInstancePurchase } from './purchase-creation.js';
+import { verifyOwnedGroupLinks, honoredGroupLink } from './bundle-links.js';
 
 // #827: unlike almost every other authenticated write in this file
 // (landlet-version, bundle-create, saved-layout-create, friend-request,
@@ -173,7 +174,21 @@ export async function handleInstances(request, env, route, url) {
     }
     const instanceIds = input.instanceIds.map((id) => stringValue(id, 'instanceIds item'));
     if (new Set(instanceIds).size !== instanceIds.length) throw new HttpError('instanceIds must be unique', 400);
+    // #3327: an optional link to a saved bundle. Sent by Save Bundle (the
+    // saved-from instance becomes linked) and by placing a bundle from the
+    // picker; a plain Group never sends it, and a fresh group_id with no link
+    // is exactly "a new unsaved bundle instance".
+    const bundleId = input.bundleId === undefined || input.bundleId === null ? null : stringValue(input.bundleId, 'bundleId');
     const sessionBuilder = await requireSessionBuilder(request, db);
+    if (bundleId !== null) {
+      // The caller's own bundle, or a shared one (anyone may place a shared
+      // bundle). A private bundle of someone else's is "not found", not
+      // "forbidden", so ids cannot be probed.
+      const bundle = await db.prepare('SELECT builder_id, shared FROM bundles WHERE bundle_id = ?').bind(bundleId).first();
+      if (!bundle || (bundle.builder_id !== sessionBuilder.builder_id && !bundle.shared)) {
+        throw new HttpError('Bundle not found', 404);
+      }
+    }
     await chargeInstanceWrites(db, sessionBuilder.builder_id, instanceIds.length);
     // #3304: the lookup and the writes run in chunks under D1's 100-bound-
     // parameter limit; the UPDATEs go in one db.batch (a transaction), so the
@@ -182,7 +197,7 @@ export async function handleInstances(request, env, route, url) {
     for (const idChunk of chunked(instanceIds, D1_STATEMENT_BIND_LIMIT)) {
       const placeholders = idChunk.map(() => '?').join(', ');
       const { results: rows } = await db.prepare(`
-        SELECT instance_id, landlet_id, group_id FROM placed_instances WHERE instance_id IN (${placeholders})
+        SELECT instance_id, landlet_id, group_id, bundle_id FROM placed_instances WHERE instance_id IN (${placeholders})
       `).bind(...idChunk).all();
       results.push(...rows);
     }
@@ -191,6 +206,7 @@ export async function handleInstances(request, env, route, url) {
     }
     await requireOwnedLandlets(db, results.map((row) => row.landlet_id), sessionBuilder.builder_id);
     const priorGroupIdByInstanceId = new Map(results.map((row) => [row.instance_id, row.group_id]));
+    const priorBundleIdByInstanceId = new Map(results.map((row) => [row.instance_id, row.bundle_id ?? null]));
     const groupId = crypto.randomUUID();
     // #929 idiom: fold the ownership re-check into each write, same as the
     // DELETE/POST/PUT batch endpoints above -- requireOwnedLandlets is a
@@ -198,10 +214,16 @@ export async function handleInstances(request, env, route, url) {
     // isn't updated, which the total below catches.
     const updateChunks = chunked(instanceIds, INSTANCE_GROUP_UPDATE_CHUNK);
     const batchResults = await db.batch(updateChunks.map((idChunk) => db.prepare(`
-      UPDATE placed_instances SET group_id = ?
+      UPDATE placed_instances
+      SET group_id = ?,
+          -- #3327: a freshly minted group is a new bundle instance; it is
+          -- linked only when this request names a bundle. Evaluated live at
+          -- the write (a bundle deleted since the check above just leaves the
+          -- group unlinked rather than failing the foreign key).
+          bundle_id = (SELECT bundle_id FROM bundles WHERE bundle_id = ? AND (builder_id = ? OR shared = 1))
       WHERE instance_id IN (${idChunk.map(() => '?').join(', ')})
         AND landlet_id IN (SELECT landlet_id FROM landlets WHERE owner_builder_id IS ?)
-    `).bind(groupId, ...idChunk, sessionBuilder.builder_id)));
+    `).bind(groupId, bundleId, sessionBuilder.builder_id, ...idChunk, sessionBuilder.builder_id)));
     const updatedCount = batchResults.reduce((sum, result) => sum + result.meta.changes, 0);
     if (updatedCount !== instanceIds.length) {
       // Unlike the DELETE/POST/PUT batch endpoints above (#1772/#1773,
@@ -216,26 +238,34 @@ export async function handleInstances(request, env, route, url) {
       // silently dissolve a pre-existing group the caller never asked to
       // touch, as a side effect of a request reported as a total failure.
       // Members that share a prior group_id are restored together.
-      const idsByPriorGroup = new Map();
+      // #3327: the prior link is restored with the prior group (members of one
+      // group share one link, so (group, bundle) is the restore key).
+      const idsByPriorLink = new Map();
       for (const instanceId of instanceIds) {
         const prior = priorGroupIdByInstanceId.get(instanceId) ?? null;
-        if (!idsByPriorGroup.has(prior)) idsByPriorGroup.set(prior, []);
-        idsByPriorGroup.get(prior).push(instanceId);
+        const priorBundle = priorBundleIdByInstanceId.get(instanceId) ?? null;
+        const key = JSON.stringify([prior, priorBundle]);
+        if (!idsByPriorLink.has(key)) idsByPriorLink.set(key, { prior, priorBundle, ids: [] });
+        idsByPriorLink.get(key).ids.push(instanceId);
       }
       const restores = [];
-      for (const [prior, ids] of idsByPriorGroup) {
+      for (const { prior, priorBundle, ids } of idsByPriorLink.values()) {
         for (const idChunk of chunked(ids, INSTANCE_GROUP_UPDATE_CHUNK)) {
           restores.push(db.prepare(`
-            UPDATE placed_instances SET group_id = ?
+            UPDATE placed_instances
+            SET group_id = ?, bundle_id = (SELECT bundle_id FROM bundles WHERE bundle_id = ?)
             WHERE group_id = ? AND instance_id IN (${idChunk.map(() => '?').join(', ')})
-          `).bind(prior, groupId, ...idChunk));
+          `).bind(prior, priorBundle, groupId, ...idChunk));
         }
       }
       await db.batch(restores);
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
     const stored = await getInstancesById(db, instanceIds);
-    return json({ groupId, instances: instanceIds.map((instanceId) => stored.get(instanceId)) }, 201);
+    const storedInstances = instanceIds.map((instanceId) => stored.get(instanceId));
+    // The link actually stored, not the one asked for: null when no bundle was
+    // named, or it vanished between the check and the write.
+    return json({ groupId, bundleId: storedInstances[0]?.bundleId ?? null, instances: storedInstances }, 201);
   }
 
   // #2764: Ungroup fully dissolves a group back to independent items (no
@@ -259,7 +289,9 @@ export async function handleInstances(request, env, route, url) {
     // #929 idiom, same as every other write in this file — requireOwnedLandlets
     // above is a point-in-time check.
     const batchResults = await db.batch(instanceIds.map((instanceId) => db.prepare(`
-      UPDATE placed_instances SET group_id = NULL
+      -- #3327: dissolving the group dissolves its link too (a link without a
+      -- group would leave loose items that a template edit could still rewrite).
+      UPDATE placed_instances SET group_id = NULL, bundle_id = NULL
       WHERE instance_id = ? AND group_id = ?
         AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
     `).bind(instanceId, groupId, landletIdByInstanceId.get(instanceId), sessionBuilder.builder_id)));
@@ -433,17 +465,9 @@ export async function handleInstances(request, env, route, url) {
     // letting restoreSnapshot's undo-recreate (src/build/scene.js, the only
     // real caller that ever sends a non-null groupId) restore an instance's
     // own group membership after a Delete+Undo cycle.
-    const candidateGroupIds = [...new Set(instances.map((instance) => instance.groupId).filter(Boolean))];
-    let verifiedGroupIds = new Set();
-    if (candidateGroupIds.length > 0) {
-      const placeholders = candidateGroupIds.map(() => '?').join(', ');
-      const { results: ownedGroups } = await db.prepare(`
-        SELECT DISTINCT group_id FROM placed_instances
-        WHERE group_id IN (${placeholders})
-          AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = placed_instances.landlet_id AND owner_builder_id = ?)
-      `).bind(...candidateGroupIds, sessionBuilder.builder_id).all();
-      verifiedGroupIds = new Set(ownedGroups.map((row) => row.group_id));
-    }
+    // #3327: the same rule now also decides whether the instance may carry the
+    // bundle link its group has (worker/lib/bundle-links.js).
+    const verifiedLinks = await verifyOwnedGroupLinks(db, instances, sessionBuilder.builder_id);
     // The trailing WHERE is the atomic form of the expectedUpdatedAt check
     // above: a write landing between that pre-read and this statement makes
     // the conflict update match no row, which the rejectedInstanceIds
@@ -464,12 +488,12 @@ export async function handleInstances(request, env, route, url) {
     // point-in-time requireOwnedLandlets check above alone.
     const batchResults = await db.batch(instances.map((instance) => db.prepare(`
       INSERT INTO placed_instances
-        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id, bundle_id)
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT bundle_id FROM bundles WHERE bundle_id = ?)
       WHERE EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
       ${conflictClauseFor(instance)}
     `).bind(
-      ...instanceParams(instance), verifiedGroupIds.has(instance.groupId) ? instance.groupId : null, instance.landletId, sessionBuilder.builder_id,
+      ...instanceParams(instance), honoredGroupLink(instance, verifiedLinks).groupId, honoredGroupLink(instance, verifiedLinks).bundleId, instance.landletId, sessionBuilder.builder_id,
       ...(request.method === 'PUT' && expectedUpdatedAtById.has(instance.instanceId) ? [expectedUpdatedAtById.get(instance.instanceId)] : []),
     )));
     // #1772: a batch can span multiple landlets (requireOwnedLandlets above

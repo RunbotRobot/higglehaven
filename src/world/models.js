@@ -674,6 +674,8 @@ export async function createMeshForInstance(instance) {
     // selectOnly/toggleInSelection (src/build/scene.js) to expand a
     // selection to every mesh sharing the same groupId.
     object.userData.groupId = instance.groupId ?? null;
+    // #3327: the saved bundle this placement is linked to, if any.
+    object.userData.bundleId = instance.bundleId ?? null;
     return object;
   }
   const width = effectiveLength(template, instance, 'x', 'width');
@@ -722,6 +724,8 @@ export async function createMeshForInstance(instance) {
   // #2764: same reasoning as the flooring branch's own groupId comment
   // above.
   object.userData.groupId = instance.groupId ?? null;
+  // #3327: the saved bundle this placement is linked to, if any.
+  object.userData.bundleId = instance.bundleId ?? null;
   // Not editable anywhere in Build mode yet (#1294) — carried through
   // purely so a value already on the row (set directly via the API)
   // survives being rebuilt into a mesh and round-tripped back out again,
