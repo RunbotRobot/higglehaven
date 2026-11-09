@@ -1,52 +1,44 @@
-// #3303 (owner decision: any text a user can read, they can copy; an error or
-// refusal gets a Copy control). One mechanism for every modal status line
-// instead of a Copy button wired into each surface: each element below keeps
-// its own wording and its own `error` class convention, and this adds a single
-// small Copy button right after it while it holds error text. A message the
-// person was shown is also recorded for bug reports (src/ui/visibleMessages.js).
-// The decision itself lives in copyableErrorRule.js (unit-tested); the DOM
-// wiring here is covered by e2e/copyable-error-lines.test.mjs.
-import { copyTextWithFeedback } from './copyText.js';
+// #3303/#3348 (owner decision: any text a user can read, they can copy, by
+// selecting it with the platform's own selection; no Copy control anywhere).
+// What remains of the original per-modal mechanism: a message the person was
+// shown in a modal status line is recorded for bug reports
+// (src/ui/visibleMessages.js), so a report carries the exact words even when
+// they could not be read back. One observer per line instead of a call in each
+// surface. The error decision lives in copyableErrorRule.js (unit-tested).
 import { recordVisibleMessage } from './visibleMessages.js';
-import { shouldOfferCopy } from './copyableErrorRule.js';
+import { isErrorLine } from './copyableErrorRule.js';
 
 // The status lines that show an error or refusal inside a modal (or the account
 // menu). Each toggles an `error` class when what it shows is an error; the two
 // role="alert" lines are errors whenever they have text.
-const COPYABLE_STATUS_IDS = [
+const ERROR_STATUS_IDS = [
   'auth-status', 'claim-status', 'upload-status', 'checkout-status', 'verify-status',
   'seller-status', 'feedback-status', 'friends-status', 'dm-status', 'my-lands-status',
   'confirm-modal-status', 'sell-this-too-form-error',
 ];
 
-function installCopyButton(statusEl) {
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.className = 'copy-error-btn';
-  button.textContent = 'Copy';
-  button.hidden = true;
-  statusEl.insertAdjacentElement('afterend', button);
+function watchStatusLine(statusEl) {
   let lastRecorded = '';
   const refresh = () => {
     const text = statusEl.textContent;
-    const offer = shouldOfferCopy({
+    if (isErrorLine({
       text, hasErrorClass: statusEl.classList.contains('error'), role: statusEl.getAttribute('role'),
-    });
-    button.hidden = !offer;
-    if (offer && text.trim() !== lastRecorded) {
-      lastRecorded = text.trim();
-      recordVisibleMessage(text);
+    })) {
+      if (text.trim() !== lastRecorded) {
+        lastRecorded = text.trim();
+        recordVisibleMessage(text);
+      }
+    } else {
+      lastRecorded = '';
     }
-    if (!offer) lastRecorded = '';
   };
-  button.addEventListener('click', () => copyTextWithFeedback(button, statusEl.textContent.trim()));
   new MutationObserver(refresh).observe(statusEl, {
     childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ['class', 'hidden'],
   });
   refresh();
 }
 
-for (const id of COPYABLE_STATUS_IDS) {
+for (const id of ERROR_STATUS_IDS) {
   const el = document.getElementById(id);
-  if (el) installCopyButton(el);
+  if (el) watchStatusLine(el);
 }

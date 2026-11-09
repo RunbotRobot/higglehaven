@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest';
-import { shouldOfferCopy } from './copyableErrorRule.js';
+import { isErrorLine } from './copyableErrorRule.js';
 
-describe('shouldOfferCopy (#3303)', () => {
-  it('offers Copy for text on an error line', () => {
-    expect(shouldOfferCopy({ text: 'Wrong email or password.', hasErrorClass: true, role: 'status' })).toBe(true);
+describe('isErrorLine (#3303/#3348)', () => {
+  it('counts as an error: text on an error line', () => {
+    expect(isErrorLine({ text: 'Wrong email or password.', hasErrorClass: true, role: 'status' })).toBe(true);
   });
-  it('offers Copy for any text on a role=alert line', () => {
-    expect(shouldOfferCopy({ text: 'Could not delete this product.', hasErrorClass: false, role: 'alert' })).toBe(true);
+  it('counts as an error: any text on a role=alert line', () => {
+    expect(isErrorLine({ text: 'Could not delete this product.', hasErrorClass: false, role: 'alert' })).toBe(true);
   });
-  it('does not offer Copy for an empty line or a plain progress note', () => {
-    expect(shouldOfferCopy({ text: '   ', hasErrorClass: true, role: 'alert' })).toBe(false);
-    expect(shouldOfferCopy({ text: '', hasErrorClass: true, role: 'status' })).toBe(false);
-    expect(shouldOfferCopy({ text: 'Uploading…', hasErrorClass: false, role: 'status' })).toBe(false);
-    expect(shouldOfferCopy({ text: undefined, hasErrorClass: false, role: 'alert' })).toBe(false);
+  it('is not an error: an empty line or a plain progress note', () => {
+    expect(isErrorLine({ text: '   ', hasErrorClass: true, role: 'alert' })).toBe(false);
+    expect(isErrorLine({ text: '', hasErrorClass: true, role: 'status' })).toBe(false);
+    expect(isErrorLine({ text: 'Uploading…', hasErrorClass: false, role: 'status' })).toBe(false);
+    expect(isErrorLine({ text: undefined, hasErrorClass: false, role: 'alert' })).toBe(false);
   });
 });

@@ -585,9 +585,7 @@
         user-select: text;
         -webkit-user-select: text;
       }
-      /* #3303: Copy (and, on the rate-limit notice, dismiss) controls. Only
-         interactive while the notice is shown, like the text itself. */
-      /* #3335: one layout for every copyable notice (orb notices, the Build
+      /* #3335: one layout for every dismissible notice (orb notices, the Build
          selection-action status): the text takes the full width and the
          actions sit in a small right-aligned row beneath it, so a phone-width
          notice is not squeezed into a few short lines by its own buttons. */
@@ -617,20 +615,6 @@
         background: rgb(var(--pill-rgb) / 0.6);
         color: var(--pill-text-soft);
         font: 12px/1.4 sans-serif;
-      }
-      /* #3303: the Copy button main.js's copyableErrors.js adds after a modal
-         status line while it shows an error. */
-      .copy-error-btn {
-        margin: 4px 0 0;
-        padding: 3px 10px;
-        border-radius: 6px;
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.6);
-        color: var(--pill-text-soft);
-        font: 12px/1.4 sans-serif;
-      }
-      .copy-error-btn[hidden] {
-        display: none;
       }
       /* Same treatment as #shop-sign-hint just above (see its own comment),
          stacked one slot higher so both can show at once near an

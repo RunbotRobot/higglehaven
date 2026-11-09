@@ -637,7 +637,7 @@ export async function persistCatalogThumbnail(template) {
 // same check, not just this modal's own handleUploadDimensionsStep.
 import { dimensionsChanged } from './catalog/upload.js';
 import { promptBundleName } from './ui/bundleNameModal.js';
-import './ui/copyableErrors.js'; // #3303: a Copy button on every modal error line
+import './ui/copyableErrors.js'; // #3303: record modal error lines for bug reports
 
 // #2558: the catalog/bundle picker modal (Build's add-item flow, "prompt
 // mode" concept-image search, and the bundle picker's own tabs/rename/

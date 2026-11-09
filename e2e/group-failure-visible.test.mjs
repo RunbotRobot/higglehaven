@@ -62,10 +62,9 @@ check(await page.locator('#selection-action-status').isVisible(), 'status still 
 check((await page.textContent('#product-info')).includes('2 items selected'), 'selection summary still shown separately');
 check(await page.locator('#group-item').isEnabled(), 'Group is usable again after a refusal');
 
-// #3303 (owner decision: any text a user can read, they can copy). On a phone
+// #3303 (owner decision: any text a user can read, they can copy; #3348: by selecting it). On a phone
 // the refusal used to be click-through (pointer-events: none) and vanished
 // after 8 seconds, so there was no time or way to copy it.
-await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
 await page.waitForTimeout(8500); // past the old 8s auto-clear
 check(await page.locator('#selection-action-status').isVisible(), 'the refusal is still shown after 8.5 seconds');
 const statusStyle = await page.evaluate(() => {
@@ -74,11 +73,10 @@ const statusStyle = await page.evaluate(() => {
 });
 check(statusStyle.pointerEvents !== 'none', `the refusal accepts pointer events (${statusStyle.pointerEvents})`);
 check(statusStyle.userSelect !== 'none', `the refusal text is selectable (${statusStyle.userSelect})`);
-await page.click('#selection-action-status-copy');
-await page.waitForTimeout(300);
-const copiedText = await page.evaluate(() => navigator.clipboard.readText());
-check(/Couldn't group/.test(copiedText) && /removed or changed/.test(copiedText), `Copy puts the refusal on the clipboard: ${copiedText}`);
-check((await page.textContent('#selection-action-status-copy')) === 'Copied!', 'Copy button confirms with "Copied!"');
+await page.locator('#selection-action-status-text').click({ clickCount: 3 });
+const selectedText = await page.evaluate(() => String(window.getSelection()).trim());
+check(/Couldn't group/.test(selectedText) && /removed or changed/.test(selectedText), `triple-click selects the refusal: ${selectedText}`);
+check((await page.locator('#selection-action-status-copy').count()) === 0, 'the refusal has no Copy button (#3348)');
 await page.click('#selection-action-status-dismiss');
 check(await page.locator('#selection-action-status').isHidden(), 'dismissing hides the refusal');
 

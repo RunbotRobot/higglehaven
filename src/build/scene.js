@@ -1898,13 +1898,12 @@ productInfoEl.hidden = true;
 // tick, which used to erase the error before anyone could read it. Cleared
 // by the next Group/Ungroup tap, when the selection empties, or when the
 // person dismisses it.
-// #3303 (owner decision: any text a user can read, they can copy): a refusal
+// #3303/#3348 (owner decision: any text a user can read, they can copy, by
+// selecting it with the platform's own selection; no Copy button): a refusal
 // stays until dismissed (it used to vanish after 8 seconds, too soon to long-
-// press it on a phone), the text is selectable, and a Copy button puts it on
-// the clipboard.
+// press it on a phone) and the text is selectable.
 const selectionActionStatusEl = document.getElementById('selection-action-status');
 const selectionActionStatusTextEl = document.getElementById('selection-action-status-text');
-const selectionActionStatusCopyBtn = document.getElementById('selection-action-status-copy');
 const selectionActionStatusDismissBtn = document.getElementById('selection-action-status-dismiss');
 const GROUP_SAVE_WAIT_MS = 10000;
 // #3302 -- added so a feedback report sent from Build carries the last
@@ -1917,9 +1916,6 @@ function showSelectionActionStatus(text) {
   selectionActionStatusEl.hidden = !text;
   if (text) recordVisibleMessage(text); // #3303: so a bug report carries it
 }
-selectionActionStatusCopyBtn.addEventListener('click', () => {
-  copyTextWithFeedback(selectionActionStatusCopyBtn, selectionActionStatusTextEl.textContent);
-});
 selectionActionStatusDismissBtn.addEventListener('click', () => showSelectionActionStatus(''));
 
 

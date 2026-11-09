@@ -141,7 +141,6 @@ console.log('orb still active server-side (should be true, the 429 never actuall
 // it, and any text a user can read, they can copy): the notice no longer fades
 // after the 30s cooldown. Walk out of range first so no retry can re-show it,
 // then wait past the old auto-hide, then Copy and dismiss.
-await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
 await page.evaluate(([x, y]) => {
   window.__testTeleportShopAvatar(x, y);
   window.__testForceShopProximityCheck();
@@ -155,11 +154,12 @@ const noticeStyle = await page.evaluate(() => {
 });
 const noticeSelectable = noticeStyle.pointerEvents !== 'none' && noticeStyle.userSelect !== 'none';
 console.log('rate-limit notice is selectable while shown (should be true):', noticeSelectable, noticeStyle);
-await page.click('#shop-credit-orb-rate-limit-notice .shop-notice-copy-btn');
-await page.waitForTimeout(300);
-const copiedNotice = await page.evaluate(() => navigator.clipboard.readText());
-const copiedOk = /orbs every/.test(copiedNotice) && /Try again/.test(copiedNotice);
-console.log('Copy puts the notice text on the clipboard (should be true):', copiedOk, copiedNotice);
+await page.locator('#shop-credit-orb-rate-limit-notice .shop-notice-text').click({ clickCount: 3 });
+const selectedNotice = await page.evaluate(() => String(window.getSelection()).trim());
+const selectedOk = /orbs every/.test(selectedNotice) && /Try again/.test(selectedNotice);
+console.log('triple-click selects the notice text (should be true):', selectedOk, selectedNotice);
+const noCopyButton = (await page.locator('#shop-credit-orb-rate-limit-notice .shop-notice-copy-btn').count()) === 0;
+console.log('the notice has no Copy button (should be true):', noCopyButton);
 await page.click('#shop-credit-orb-rate-limit-notice .shop-notice-dismiss-btn');
 await page.waitForTimeout(300);
 const noticeDismissed = !(await page.isVisible('#shop-credit-orb-rate-limit-notice.visible'));
@@ -176,7 +176,7 @@ const pass = !!myLandlet &&
   activeBeforeWalkingOver.includes(orbId) &&
   !toastVisible &&
   rateLimitNoticeVisible &&
-  noticeStillVisible && noticeSelectable && copiedOk && noticeDismissed &&
+  noticeStillVisible && noticeSelectable && selectedOk && noCopyButton && noticeDismissed &&
   activeAfterFailedCollect.includes(orbId) &&
   collectRequestsDuringCooldown === 0 &&
   listedOnServer.body.orbs.some((o) => o.orbId === orbId) &&
