@@ -76,9 +76,12 @@ import {
   settingsSectionEl, settingsRenderToken, renderSettingsSection, renderIdentityField,
 } from '../settings/modal.js';
 import {
-  loadSellerShowcasePage, refreshSellerShowcase, sellerShowcasePageIndex,
+  loadSellerShowcasePage, refreshSellerShowcase, sellerShowcasePageIndex, sellerShowcaseFeedbackState,
   isSellerShowcaseMeshesStale, clearSellerShowcaseMeshesStale,
 } from '../sell/showcase.js';
+
+import { camera as worldCamera } from '../world/scene.js';
+import { recordRenderStateSample } from '../feedback/renderStateBuffer.js';
 
 export const sellerModalEl = document.getElementById('seller-modal');
 const sellerFeedbackSummaryEl = document.getElementById('seller-feedback-summary');
@@ -1873,6 +1876,21 @@ let sellerActiveView = 'manage';
 // that itself right after, same two-step shape as before this leaf moved.
 export function resetSellerView() {
   sellerActiveView = 'manage';
+}
+
+// #3302: Sell has no per-frame work of its own, but a Submit Feedback report
+// sent from Sell still needs the camera pose and what the seller was looking
+// at. Registered as Sell's frame callback by enterSellMode (src/main.js);
+// recordRenderStateSample throttles it to ~1Hz. Every field was added for
+// #3302 so a report from Sell says where it came from.
+export function recordSellFeedbackSample(now) {
+  recordRenderStateSample(now, {
+    mode: 'sell', // #3302: which mode the report came from
+    cameraPosition: { x: worldCamera.position.x, y: worldCamera.position.y, z: worldCamera.position.z }, // #3302: showcase camera pose
+    sellerView: sellerActiveView, // #3302: 'manage' or 'list' view of the seller modal
+    sellerModalOpen: sellerModalEl.classList.contains('visible'), // #3302: whether a modal was covering the showcase
+    showcase: sellerShowcaseFeedbackState(), // #3302: which showcase page / how many products were showing
+  });
 }
 
 // #1503: the .active class alone communicated "current view" visually but

@@ -949,28 +949,13 @@
         border-radius: 50%;
         background: rgb(var(--pill-rgb) / 0.65);
       }
-      /* #2718 (sub-issue of #2715): "Submit Feedback" trigger. Same
-         right-hand stacked-pill shape #mode-nav (top: 10)/#compass-panel
-         (top: 86, 48px tall) above already use -- this continues that
-         stack one slot down (86 + 48 + 8 gap = 142). Shop-only (class
-         shop-ui, like #shop-fly-btn), hidden until src/shop/mode.js's
-         enterShopMode reveals it. */
-      #shop-feedback-btn {
-        top: 142px;
-        right: 8px;
-        padding: 6px 12px;
-        border-radius: 999px;
-        border: none;
-        background: rgb(var(--pill-rgb) / 0.65);
-        color: var(--pill-text);
-        font: 12px/1.4 sans-serif;
-        cursor: pointer;
-      }
       /* #2779: a small collapsed toggle, same shape/position column as
-         #compass-panel (top: 86px) and #shop-feedback-btn (top: 142px)
-         above -- next free slot in that right-edge stack. */
+         #compass-panel (top: 86px) above -- next free slot in that right-edge
+         stack. #3302: the Submit Feedback pill that used to sit between the
+         two moved into Settings, so this and everything below it moved up one
+         40px slot. */
       #shop-nearby-chat-btn {
-        top: 182px;
+        top: 142px;
         right: 8px;
         padding: 6px 12px;
         border-radius: 999px;
@@ -988,7 +973,7 @@
         display: none;
         position: fixed;
         z-index: 16;
-        top: 262px;
+        top: 222px;
         right: 8px;
         width: 220px;
         background: rgb(var(--pill-rgb) / 0.85);
@@ -1101,12 +1086,12 @@
         cursor: pointer;
       }
       /* #2818: next free slot in the same right-edge stack as
-         #shop-feedback-btn/#shop-nearby-chat-btn above -- a small round
+         #shop-nearby-chat-btn above -- a small round
          icon button (no text pill) rather than matching their shape, since
          its state is carried entirely by the icon/background color, not a
          label. */
       #shop-voice-btn {
-        top: 222px;
+        top: 182px;
         right: 8px;
         width: 32px;
         height: 32px;
@@ -1145,7 +1130,7 @@
         opacity: 0.6;
         cursor: wait;
       }
-      /* #2819: anchored to the left of #shop-voice-btn (top: 222px, 32px
+      /* #2819: anchored to the left of #shop-voice-btn (top: 182px, 32px
          tall, right: 8px) rather than stacked into the #shop-nearby-chat-
          panel's own vertical slot below it, so the two never collide when
          both happen to be open at once. Same display:none/.open toggle
@@ -1155,7 +1140,7 @@
         display: none;
         position: fixed;
         z-index: 16;
-        top: 222px;
+        top: 182px;
         right: 48px;
         width: 180px;
         background: rgb(var(--pill-rgb) / 0.85);
@@ -3387,6 +3372,29 @@
         flex-direction: column;
         gap: 14px;
         min-height: 80px;
+        /* #3302: with a row below it, a tall tab (Sell) used to shrink this
+           box under its own content and paint over that row, swallowing
+           clicks on the last controls. Keep its natural height; the modal
+           (overflow-y: auto) scrolls instead. */
+        flex-shrink: 0;
+      }
+      /* #3302: mode-independent utilities (Send feedback), below whichever
+         tab is showing. */
+      #settings-utilities {
+        flex-shrink: 0;
+        display: flex;
+        justify-content: flex-start;
+        border-top: 1px solid rgb(var(--ink-rgb) / 0.15);
+        padding-top: 10px;
+      }
+      #settings-feedback-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: transparent;
+        color: rgb(var(--ink-rgb) / 0.85);
+        font: 13px/1.4 sans-serif;
+        cursor: pointer;
       }
       .settings-field {
         display: flex;
