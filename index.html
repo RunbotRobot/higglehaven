@@ -262,6 +262,37 @@
         </div>
       </div>
     </div>
+    <!-- #3249: the product review modal Shop's "Rate this Product" opens
+         (write, edit, delete), replacing a chain of native prompt()/alert()
+         calls. See src/ui/productReviewModal.js. -->
+    <div id="product-review-modal" role="dialog" aria-modal="true" aria-labelledby="product-review-modal-title" tabindex="-1">
+      <div id="product-review-modal-content">
+        <button id="product-review-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2 id="product-review-modal-title">Review this product</h2>
+        <fieldset id="product-review-rating">
+          <legend>Rating</legend>
+          <label><input type="radio" name="product-review-rating" value="1" />1 &#9733;</label>
+          <label><input type="radio" name="product-review-rating" value="2" />2 &#9733;</label>
+          <label><input type="radio" name="product-review-rating" value="3" />3 &#9733;</label>
+          <label><input type="radio" name="product-review-rating" value="4" />4 &#9733;</label>
+          <label><input type="radio" name="product-review-rating" value="5" checked />5 &#9733;</label>
+        </fieldset>
+        <label id="product-review-text-label">
+          Comment (optional)
+          <textarea id="product-review-text" rows="4"></textarea>
+          <span id="product-review-count">0/280</span>
+        </label>
+        <div id="product-review-status" role="alert" hidden>
+          <span id="product-review-status-text"></span>
+          <button id="product-review-status-copy-btn" type="button">Copy</button>
+        </div>
+        <div id="product-review-actions">
+          <button id="product-review-delete-btn" type="button" hidden>Delete review</button>
+          <button id="product-review-cancel-btn" type="button">Cancel</button>
+          <button id="product-review-save-btn" type="button">Post review</button>
+        </div>
+      </div>
+    </div>
     <!-- #3278 (owner decision): a confirmation for a destructive action is its
          own in-app modal that takes focus, names the thing, and offers a clear
          destructive button and a cancel -- never the browser's native confirm()

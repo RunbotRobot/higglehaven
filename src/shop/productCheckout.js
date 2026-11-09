@@ -27,6 +27,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
+import { openProductReviewModal } from '../ui/productReviewModal.js';
 import { createMeshForInstance, disposeObject } from '../world/models.js';
 import {
   createProductReview, editProductReview, deleteProductReview,
@@ -243,89 +244,40 @@ export async function handleShopProductReviewClick() {
   // exactly, using review.userId (reviewFromRow, populated server-side from
   // the posting session) rather than a free-text author match.
   const myReview = currentAuthUser && review.reviews.find((r) => r.userId === currentAuthUser.userId);
-  if (myReview) {
-    const stars = '★'.repeat(myReview.rating) + '☆'.repeat(5 - myReview.rating);
-    const choice = (prompt(
-      `Your review: ${stars}${myReview.text ? ` "${myReview.text}"` : ''}\n\nType "edit" to change it, or "delete" to remove it. Leave blank to cancel.`,
-      '',
-    ) || '').trim().toLowerCase();
-    if (choice === 'delete') {
-      shopProductPreviewReviewBtn.disabled = true;
-      try {
+  // #3249: one in-app modal for write / edit / delete, not a chain of native
+  // prompt()/alert() calls (a suppressed native dialog answered each with
+  // "cancel", so Rate this Product did nothing and said nothing). Failures
+  // are thrown out of these callbacks and shown inside the modal.
+  shopProductPreviewReviewBtn.disabled = true;
+  try {
+    await openProductReviewModal({
+      existing: myReview ? { rating: myReview.rating, text: myReview.text || '' } : null,
+      returnFocusEl: shopProductPreviewReviewBtn,
+      onSubmit: async ({ rating, text }) => {
+        if (myReview) {
+          // An empty string clears the comment, same as before: the server's
+          // `text !== undefined` check keeps the old value only when omitted.
+          const updated = await editProductReview(review.templateId, myReview.reviewId, { rating, text });
+          if (!shopReviews.includes(review)) return;
+          const index = review.reviews.findIndex((r) => r.reviewId === myReview.reviewId);
+          if (index !== -1) review.reviews[index] = updated;
+        } else {
+          // A star rating alone is already a complete, useful review.
+          const posted = await createProductReview(review.templateId, { rating, text: text || undefined });
+          // Same unloaded-landlet guard as the sign-post and calendar
+          // handlers (#426) -- registerShopReview's own fetch checks this.
+          if (!shopReviews.includes(review)) return;
+          review.reviews.push(posted);
+        }
+        rebuildReviewSprites(review);
+      },
+      onDelete: async () => {
         await deleteProductReview(review.templateId, myReview.reviewId);
         if (!shopReviews.includes(review)) return;
         review.reviews = review.reviews.filter((r) => r.reviewId !== myReview.reviewId);
         rebuildReviewSprites(review);
-      } catch (err) {
-        alert(err.message || 'Could not delete this review.');
-      } finally {
-        shopProductPreviewReviewBtn.disabled = false;
-      }
-    } else if (choice === 'edit') {
-      const ratingInput = prompt('Rate this product 1-5 stars:', String(myReview.rating));
-      if (!ratingInput || !ratingInput.trim()) return;
-      const rating = Number(ratingInput.trim());
-      if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-        alert('Please enter a whole number from 1 to 5.');
-        return;
-      }
-      const text = prompt('Add a comment (up to 280 characters), or leave blank:', myReview.text || '');
-      // #2005's own fix only covered the create path right below this one
-      // -- same missing guard, same data-loss consequence on edit.
-      if (text && text.trim().length > 280) {
-        alert('Keep it to 280 characters or fewer.');
-        return;
-      }
-      shopProductPreviewReviewBtn.disabled = true;
-      try {
-        // Cancelling (null) omits `text` entirely so the server keeps the
-        // existing value -- an explicit empty string (OK clicked with the
-        // field cleared) is sent as-is, clearing it, same distinction
-        // editProductReview's own `text !== undefined` check preserves.
-        const updated = await editProductReview(review.templateId, myReview.reviewId, {
-          rating, text: text === null ? undefined : text.trim(),
-        });
-        if (!shopReviews.includes(review)) return;
-        const index = review.reviews.findIndex((r) => r.reviewId === myReview.reviewId);
-        if (index !== -1) review.reviews[index] = updated;
-        rebuildReviewSprites(review);
-      } catch (err) {
-        alert(err.message || 'Could not update this review.');
-      } finally {
-        shopProductPreviewReviewBtn.disabled = false;
-      }
-    }
-    return;
-  }
-  const ratingInput = prompt('Rate this product 1-5 stars:', '5');
-  if (!ratingInput || !ratingInput.trim()) return;
-  const rating = Number(ratingInput.trim());
-  if (!Number.isInteger(rating) || rating < 1 || rating > 5) {
-    alert('Please enter a whole number from 1 to 5.');
-    return;
-  }
-  // A star rating alone is already a complete, useful review -- this text
-  // prompt is an optional extra, same as the calendar hint's own scheduling
-  // step.
-  const text = prompt('Add a comment (up to 280 characters), or leave blank:', '');
-  // #2005: same missing client-side check #1920 already added to the
-  // sign-post/calendar-event prompts -- prompt() gives no live character
-  // count, and an over-length submission loses the whole typed comment on
-  // the server's own 280-char rejection.
-  if (text && text.trim().length > 280) {
-    alert('Keep it to 280 characters or fewer.');
-    return;
-  }
-  shopProductPreviewReviewBtn.disabled = true;
-  try {
-    const posted = await createProductReview(review.templateId, { rating, text: text?.trim() || undefined });
-    // Same unloaded-landlet guard as the sign-post and calendar handlers
-    // (#426) -- registerShopReview's own fetch already checks this.
-    if (!shopReviews.includes(review)) return;
-    review.reviews.push(posted);
-    rebuildReviewSprites(review);
-  } catch (err) {
-    alert(err.message || 'Could not review this product.');
+      },
+    });
   } finally {
     shopProductPreviewReviewBtn.disabled = false;
   }
