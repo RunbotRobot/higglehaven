@@ -362,6 +362,23 @@ export function meshDimensions(mesh) {
   };
 }
 
+// #3254: the proxy's color. template.color is the upload flow's generic grey
+// placeholder for a real uploaded model, so a distant product used to read as
+// a plain grey box (the owner's "grey cube" report). Use the loaded model's
+// own look instead: the first mesh's texture average (averageTextureColor,
+// the same helper the crop backing uses) or, for an untextured material, its
+// base color; fall back to template.color when there is no model to read.
+function lodProxyColor(object) {
+  let found = null;
+  object.traverse((child) => {
+    if (found || !child.isMesh) return;
+    const material = Array.isArray(child.material) ? child.material[0] : child.material;
+    if (!material) return;
+    found = averageTextureColor(material.map) || (material.color ? material.color.clone() : null);
+  });
+  return found || new THREE.Color(object.userData.template.color);
+}
+
 // #2378 (docs/SPEC.md §1's near/middle-LOD/far-panoramic-backdrop chunk
 // loading, #2377): a cheap box stand-in for a model-loaded instance's full
 // geometry, shown at the middle LOD band instead of leaving full detail
@@ -379,7 +396,7 @@ export function buildInstanceLodProxy(object) {
   if (object.isMesh) return null;
   const { width, depth, height } = meshDimensions(object);
   const geometry = new THREE.BoxGeometry(width, depth, height);
-  const material = new THREE.MeshStandardMaterial({ color: object.userData.template.color });
+  const material = new THREE.MeshStandardMaterial({ color: lodProxyColor(object) });
   const proxy = new THREE.Mesh(geometry, material);
   proxy.visible = false;
   return proxy;

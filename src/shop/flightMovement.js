@@ -58,6 +58,13 @@ import { attentionDistanceAndDot, hasSustainedAttention, nextAttentionElapsedS, 
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from '../itemHandling.js';
 import { meshDimensions, isFlooringTemplate } from '../world/models.js';
 import { footprintsOverlap, footprintCorners } from '../build/scene.js';
+// #3293: the world the movement core moves through (obstacles, ground height,
+// boundary radius) sits behind one adapter; Shop's own world is registered as
+// the default just below the imports.
+import {
+  setMovementWorld, movementWorld, createShopMovementWorld,
+  positionBlockedIn, landingObstructionTopZIn, clampRadiusIn,
+} from './movementWorld.js';
 import { isNavigationKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
 import {
   shopAvatar, shopAvatarCollisionHalfM, shopAvatarHeightM, shopCameraAnchorHeightM,
@@ -99,6 +106,30 @@ import { updateShopVoiceChatIfNeeded } from './voiceChat.js';
 // #2627: the sign/calendar/review sprite fade loops and the scheduled-
 // calendar-event trigger check now live in src/shop/worldSprites.js.
 import { updateSignFade, updateCalendarFade, updateReviewFade, checkScheduledCalendarEvents } from './worldSprites.js';
+
+// #3293: Shop's world as the movement core's default world. Getters, not
+// snapshots: shopLandlets/shopWorldRadiusM are live bindings that other
+// modules reassign (see the TDZ note at initShopFlightInputBindings), so
+// every read must happen at call time.
+setMovementWorld(createShopMovementWorld({
+  landlets: () => shopLandlets,
+  terrainHeightAt: (x, y) => shopTerrainHeightAtM(x, y),
+  worldRadiusM: () => shopWorldRadiusM,
+}));
+// The movement core's boundary radius (null until a world exists).
+function activeWorldRadiusM() {
+  return movementWorld().worldRadiusM();
+}
+// The movement core's ground height at (x, y).
+function groundHeightAtM(x, y) {
+  return movementWorld().groundHeightAt(x, y);
+}
+const SHOP_MOVEMENT_GEOMETRY = {
+  meshDimensions,
+  footprintCorners,
+  footprintsOverlap,
+  isFlooring: isFlooringTemplate,
+};
 
 // docs/SPEC.md §2's confirmed ground speeds: 1.8 m/s walking, 4.4704 m/s
 // (10 mph, v17 — raised from 2.7 m/s/~6 mph, which the owner found still
@@ -689,7 +720,7 @@ window.__testTeleportShopAvatar = (x, y, z) => {
     // #2853: inverse of updateShopMovement's own per-frame sync formula
     // below, so the very next frame's recompute lands back on this exact z
     // instead of drifting by whatever real terrain sits at (x, y).
-    shopFlightAltitudeM = z - shopTerrainHeightAtM(x, y) + curvatureDropM(Math.hypot(x, y));
+    shopFlightAltitudeM = z - groundHeightAtM(x, y) + curvatureDropM(Math.hypot(x, y));
     shopFlightState = 'grounded';
   }
 };
@@ -760,7 +791,7 @@ let shopGoToLastLocationElapsedS = 0;
 // reusing it here directly would double-count the correction instead of
 // cancelling it.
 function clampShopCameraHeight() {
-  const maxHeight = SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M - curvatureDropM(shopWorldRadiusM);
+  const maxHeight = SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M - curvatureDropM(activeWorldRadiusM());
   camera.position.z = THREE.MathUtils.clamp(camera.position.z, SHOP_MIN_HEIGHT_M, maxHeight);
 }
 
@@ -775,9 +806,10 @@ function clampShopCameraHeight() {
 // formula just used in the opposite direction (picking a fresh random
 // radius there vs. clamping an existing position here).
 export function shopMaxRadiusM() {
-  if (shopWorldRadiusM === null) return 0;
-  const clearance = Math.max(SHOP_WALL_CLEARANCE_MIN_M, Math.min(SHOP_WALL_CLEARANCE_M, shopWorldRadiusM * 0.15));
-  return shopWorldRadiusM - clearance;
+  const worldRadiusM = activeWorldRadiusM();
+  if (worldRadiusM === null) return 0;
+  const clearance = Math.max(SHOP_WALL_CLEARANCE_MIN_M, Math.min(SHOP_WALL_CLEARANCE_M, worldRadiusM * 0.15));
+  return worldRadiusM - clearance;
 }
 
 // #1595: the avatar's own movement used to share shopMaxRadiusM (the
@@ -788,8 +820,9 @@ export function shopMaxRadiusM() {
 // own footprint half-width, just enough that it doesn't visually clip
 // through the wall mesh.
 function shopAvatarMaxRadiusM() {
-  if (shopWorldRadiusM === null) return 0;
-  return shopWorldRadiusM - shopAvatarCollisionHalfM();
+  const worldRadiusM = activeWorldRadiusM();
+  if (worldRadiusM === null) return 0;
+  return worldRadiusM - shopAvatarCollisionHalfM();
 }
 
 // #1840: shopAvatarMaxRadiusM above only ever bounded the avatar group's
@@ -823,13 +856,7 @@ function shopAvatarFlightLeanClearanceM() {
 }
 
 function clampShopRadius(position, maxRadius) {
-  if (shopWorldRadiusM === null) return;
-  const distance = Math.hypot(position.x, position.y);
-  if (distance > maxRadius) {
-    const scale = maxRadius / distance;
-    position.x *= scale;
-    position.y *= scale;
-  }
+  clampRadiusIn(movementWorld(), position, maxRadius);
 }
 
 // #1828: shopMaxRadiusM/shopAvatarMaxRadiusM above are each one flat
@@ -851,11 +878,12 @@ function clampShopRadius(position, maxRadius) {
 // flat formula right at the wall's own rim (heightAboveDomeBaseM <= 0),
 // where it returns baseMaxRadiusM unchanged.
 function shopMaxRadiusAtWorldZM(worldZ, baseMaxRadiusM) {
-  if (shopWorldRadiusM === null) return 0;
-  const heightAboveDomeBaseM = worldZ - (SHOP_WALL_HEIGHT_M - curvatureDropM(shopWorldRadiusM));
+  const worldRadiusM = activeWorldRadiusM();
+  if (worldRadiusM === null) return 0;
+  const heightAboveDomeBaseM = worldZ - (SHOP_WALL_HEIGHT_M - curvatureDropM(worldRadiusM));
   if (heightAboveDomeBaseM <= 0) return baseMaxRadiusM;
-  const clearanceM = shopWorldRadiusM - baseMaxRadiusM;
-  const domeRadiusAtHeightM = shopWorldRadiusM *
+  const clearanceM = worldRadiusM - baseMaxRadiusM;
+  const domeRadiusAtHeightM = worldRadiusM *
     Math.sqrt(Math.max(0, 1 - (heightAboveDomeBaseM / shopDomeRiseM) ** 2));
   return Math.max(0, domeRadiusAtHeightM - clearanceM);
 }
@@ -1089,7 +1117,7 @@ function updateGoToLastLocation(dt) {
     // #2853: see updateShopMovement's own per-frame sync formula for why
     // this adds the real terrain height at the teleport target.
     shopAvatarPosition.z = shopFlightAltitudeM
-      + shopTerrainHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
+      + groundHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
       - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
     // Face whichever direction the shopper was last facing, if known —
     // falls back to whatever shopYaw already was (invisible either way at
@@ -1172,7 +1200,7 @@ function updateShopFlight(dt) {
       // itself. (Pre-#2853, with no terrain term in that sync, this line
       // correctly needed only the curvature inversion -- that's no longer
       // the whole story now that altitude also carries a terrain component.)
-      : obstructionTopZ - shopTerrainHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
+      : obstructionTopZ - groundHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
         + curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
     const { altitudeM, landed } = clampedLandingAltitudeM(
       shopFlightTransitionElapsedS, SHOP_FLIGHT_LANDING_DURATION_S, shopFlightLandingStartAltitudeM, minAltitudeM,
@@ -1203,7 +1231,7 @@ function updateShopFlight(dt) {
           ? bareGroundAltitudeM()
           // #2853: same shopTerrainHeightAtM subtraction as the pre-nudge
           // computation above, and for the same reason.
-          : nudgedObstructionTopZ - shopTerrainHeightAtM(openSpot.x, openSpot.y)
+          : nudgedObstructionTopZ - groundHeightAtM(openSpot.x, openSpot.y)
             + curvatureDropM(Math.hypot(openSpot.x, openSpot.y));
       }
       shopAvatarPosition.x = openSpot.x;
@@ -1244,7 +1272,7 @@ function updateShopFlight(dt) {
 function shopMaxFlightAltitudeM() {
   const avatarDistanceFromOriginM = Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y);
   return SHOP_WALL_HEIGHT_M + shopDomeRiseM - SHOP_DOME_CLEARANCE_MARGIN_M
-    - curvatureDropM(shopWorldRadiusM) + curvatureDropM(avatarDistanceFromOriginM);
+    - curvatureDropM(activeWorldRadiusM()) + curvatureDropM(avatarDistanceFromOriginM);
 }
 
 // The classic over-the-shoulder third-person rig: orbits the camera around
@@ -1281,7 +1309,7 @@ export function positionShopCamera() {
     avatarRadiusM: Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y),
     cameraRadiusM: Math.hypot(camera.position.x, camera.position.y),
     domeBaseWorldZ: shopDomeMesh?.position.z ?? 0,
-    domeRadiusM: shopWorldRadiusM,
+    domeRadiusM: activeWorldRadiusM(),
     domeRiseM: shopDomeRiseM,
     // #1840: avatarX/avatarY let a test independently reconstruct the
     // leaning avatar mesh's own farthest world-space point (pivot + lean
@@ -1316,35 +1344,9 @@ function shopAvatarFootprintCorners(x, y) {
 }
 
 function shopPositionBlocked(x, y, z) {
-  const avatarCorners = shopAvatarFootprintCorners(x, y);
-  for (const entry of shopLandlets.values()) {
-    if (!entry.loaded) continue;
-    for (const mesh of entry.objects) {
-      // Flooring always renders flush with the ground (see isFlooringTemplate)
-      // — it's a walkable surface replacing the default grass, not an
-      // obstacle, so it never blocks the shopper the way a real object
-      // would (#530).
-      if (isFlooringTemplate(mesh.userData.template)) continue;
-      const worldX = entry.group.position.x + mesh.position.x;
-      const worldY = entry.group.position.y + mesh.position.y;
-      const { height } = meshDimensions(mesh);
-      // #2852: entry.group.position.z now carries this landlet's real
-      // terrain elevation (#2851) -- worldX/worldY above already add the
-      // group's own x/y, so z needs the same treatment, or every item on
-      // an elevated/sunken landlet collides at its old flat-baseline
-      // height instead of its real one.
-      const itemZMin = entry.group.position.z + mesh.position.z - height / 2;
-      const itemZMax = entry.group.position.z + mesh.position.z + height / 2;
-      // #1829: landing (the clamp at #1090, just below) rests the avatar at
-      // exactly z === itemZMax -- standing on an object's own top surface,
-      // not overlapping it, so this exclusion has to be >= here too, or
-      // every subsequent horizontal move at that same z reads as blocked by
-      // the very object the avatar is standing on.
-      if (z + shopAvatarHeightM() < itemZMin || z >= itemZMax) continue; // no vertical overlap — e.g. flying above it, or standing on top of it
-      if (footprintsOverlap(avatarCorners, footprintCorners(mesh, worldX, worldY))) return true;
-    }
-  }
-  return false;
+  // #3293: the obstacle walk lives in movementWorld.js, over whichever world
+  // the core is registered against (Shop's loaded landlets by default).
+  return positionBlockedIn(movementWorld(), SHOP_MOVEMENT_GEOMETRY, shopAvatarFootprintCorners(x, y), z, shopAvatarHeightM());
 }
 
 // #1090: shopPositionBlocked above only ever gets consulted for horizontal
@@ -1389,25 +1391,7 @@ function bareGroundAltitudeM() {
 }
 
 function shopLandingObstructionTopZ(x, y) {
-  const avatarCorners = shopAvatarFootprintCorners(x, y);
-  let topZ = null;
-  for (const entry of shopLandlets.values()) {
-    if (!entry.loaded) continue;
-    for (const mesh of entry.objects) {
-      if (isFlooringTemplate(mesh.userData.template)) continue;
-      const worldX = entry.group.position.x + mesh.position.x;
-      const worldY = entry.group.position.y + mesh.position.y;
-      if (!footprintsOverlap(avatarCorners, footprintCorners(mesh, worldX, worldY))) continue;
-      const { height } = meshDimensions(mesh);
-      // #2852: same entry.group.position.z addition shopPositionBlocked's
-      // own itemZMin/itemZMax just above now make -- without it, landing
-      // on an item on an elevated/sunken landlet rests at the item's old
-      // flat-baseline top instead of its real one.
-      const itemZMax = entry.group.position.z + mesh.position.z + height / 2;
-      if (topZ === null || itemZMax > topZ) topZ = itemZMax;
-    }
-  }
-  return topZ;
+  return landingObstructionTopZIn(movementWorld(), SHOP_MOVEMENT_GEOMETRY, shopAvatarFootprintCorners(x, y));
 }
 
 // #2477 (sub-issue of #2475): nearest valid sit/lean target (docs/API.md's
@@ -1752,7 +1736,7 @@ export function updateShopMovementCore(now) {
   // height above its own landlet's ground -- exactly what
   // shopLandingObstructionTopZ already returns, unchanged).
   shopAvatarPosition.z =
-    shopFlightAltitudeM + shopTerrainHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
+    shopFlightAltitudeM + groundHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
     - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
 
   // The walk-cycle and idle sway are both ground-only poses — flying holds
@@ -2023,7 +2007,7 @@ export function beginShopSpawn(spawnOrbitRadiusM, yaw) {
   // tick) doesn't position the camera against a stale z. #2853: same added
   // terrain term as that loop's own formula.
   shopAvatarPosition.z = shopFlightAltitudeM
-    + shopTerrainHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
+    + groundHeightAtM(shopAvatarPosition.x, shopAvatarPosition.y)
     - curvatureDropM(Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y));
   shopUpHeld = false;
   shopDownHeld = false;
