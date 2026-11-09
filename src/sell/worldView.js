@@ -26,7 +26,7 @@ import {
 } from '../shop/avatar.js';
 import { disposeObject3D } from '../shop/mode.js';
 import {
-  updateShopMovementCore, beginShopStanding, isShopStandingSpotBlocked,
+  updateShopMovementCore, beginShopStanding, isShopStandingSpotBlocked, releaseShopMovementInput,
 } from '../shop/flightMovement.js';
 import { mountShopAvatar } from '../shop/mountShopAvatar.js';
 import { setMovementWorld, createSellMovementWorld } from '../shop/movementWorld.js';
@@ -85,15 +85,26 @@ function showHud(visible) {
   }
 }
 
-// Called by the seller modal as it opens and closes. Movement input (joysticks,
-// keyboard, fly button) and the HUD are live only while the page itself is
-// what the seller is looking at.
-export function setSellWorldModalOpen(open) {
+// Movement input (joysticks, keyboard, fly button) and the HUD are live only
+// while the page itself is what the seller is looking at. Driven by the modal's
+// own visibility (below), not by each code path that opens it: the modal is
+// opened from several places (entry, the Products button, tapping a product on
+// the page), and a path that forgot to tell this module would leave the HUD and
+// movement keys live underneath it.
+function setSellWorldModalOpen(open) {
   modalOpen = open;
   if (!mounted) return;
+  // Anything held when the modal opens (a key, a stick) must not stay "down":
+  // its release may land on the modal instead of the world.
+  if (open) releaseShopMovementInput();
   setShopActive(!open);
   showHud(!open);
 }
+
+const sellerModalEl = document.getElementById('seller-modal');
+new MutationObserver(() => {
+  setSellWorldModalOpen(sellerModalEl.classList.contains('visible'));
+}).observe(sellerModalEl, { attributes: true, attributeFilter: ['class'] });
 
 // Enters the Sell world view. Called from enterSellMode once the seller
 // identity is confirmed. Re-entrant (a second call re-mounts the avatar).

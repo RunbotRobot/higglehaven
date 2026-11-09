@@ -360,6 +360,20 @@ let shopLookY = 0;
 const shopJoystickMove = { x: 0, y: 0 };
 const shopJoystickLook = { x: 0, y: 0 };
 const shopKeysDown = new Set();
+// #3296 (leaf 5/6 of #3291): drops every held movement input -- keys, both
+// joysticks' last values -- so nothing is left "stuck" when a modal opens over
+// the world while a key or stick is down (the keyup/pointerup may then land on
+// the modal, not the world). Sell's world view calls this as the product modal
+// opens.
+export function releaseShopMovementInput() {
+  shopKeysDown.clear();
+  shopJoystickMove.x = 0;
+  shopJoystickMove.y = 0;
+  shopJoystickLook.x = 0;
+  shopJoystickLook.y = 0;
+  applyShopStickInput();
+}
+
 function applyShopStickInput() {
   const keys = keyboardAxes(shopKeysDown);
   const move = mergeStickInput(shopJoystickMove, { x: keys.moveX, y: keys.moveY });

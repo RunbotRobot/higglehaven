@@ -1,11 +1,10 @@
 // #3249: Shop's Buy no longer depends on native dialogs. The purchase result
 // is an in-app notice (src/ui/noticeModal.js) that stays until closed, can be
 // selected, and puts the one-time delivery-confirm link in a selectable field (no Copy button, #3303 as amended) -- a
-// suppressed alert() would have lost that link for good. Buy's confirmation is
-// the shared confirm modal with a neutral (green) button, not the red
-// destructive one. The real Buy flow needs a Stripe-backed sale, so it is
-// exercised by purchase-checkout-real-stripe.test.mjs; this opens the same
-// modules directly and dismisses every native dialog the instant it opens
+// suppressed alert() would have lost that link for good. (Buy's own
+// confirmation is the shared confirm modal, #3278; the real Buy flow needs a
+// Stripe-backed sale, so it is exercised by
+// purchase-checkout-real-stripe.test.mjs.) This opens the notice modal directly and dismisses every native dialog the instant it opens
 // (what a suppressed dialog does).
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
 
@@ -57,30 +56,10 @@ const copyRowHiddenWhenPlain = !(await page.isVisible('#notice-modal-copy-row'))
 await page.click('#notice-modal-ok-btn');
 await page.waitForFunction(() => window.__noticeDone === true, null, { timeout: 5000 });
 
-// --- neutral confirm: green button, resolves true / false ---
-const bgOf = () => page.$eval('#confirm-modal-confirm-btn', (el) => getComputedStyle(el).backgroundColor);
-await page.evaluate(() => {
-  window.__confirmResult = undefined;
-  window.__confirmAction({ title: 'Buy "Widget"?', message: '$5.00.', confirmLabel: 'Buy' }).then((r) => { window.__confirmResult = r; });
-});
-await page.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
-const neutralClass = await page.$eval('#confirm-modal-confirm-btn', (el) => el.classList.contains('neutral'));
-const neutralBg = await bgOf();
-const confirmLabel = await page.textContent('#confirm-modal-confirm-btn');
-await page.click('#confirm-modal-confirm-btn');
-await page.waitForFunction(() => window.__confirmResult === true, null, { timeout: 5000 });
-await page.evaluate(() => {
-  window.__confirmResult = undefined;
-  window.__confirmAction({ title: 'Buy "Widget"?', message: '$5.00.', confirmLabel: 'Buy' }).then((r) => { window.__confirmResult = r; });
-});
-await page.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
-await page.click('#confirm-modal-cancel-btn');
-await page.waitForFunction(() => window.__confirmResult === false, null, { timeout: 5000 });
 
-console.log({ title, copyRowShown, fieldValue, selectable, noCopyButton, stillOpenAfterWait, closedByEscape, copyRowHiddenWhenPlain, neutralClass, neutralBg, confirmLabel, nativeDialogs });
+console.log({ title, copyRowShown, fieldValue, selectable, noCopyButton, stillOpenAfterWait, closedByEscape, copyRowHiddenWhenPlain, nativeDialogs });
 const pass = title === 'Purchase complete' && copyRowShown && fieldValue === LINK && selectable &&
   noCopyButton &&
   stillOpenAfterWait && closedByEscape && copyRowHiddenWhenPlain &&
-  neutralClass && neutralBg !== 'rgb(168, 58, 39)' && confirmLabel === 'Buy' &&
   nativeDialogs.length === 0 && errors.length === 0;
-await finish(browser, { pass, label: '#3249: purchase result notice and neutral Buy confirm are in-app modals', errors });
+await finish(browser, { pass, label: '#3249: the purchase result notice is an in-app modal with a selectable delivery link', errors });

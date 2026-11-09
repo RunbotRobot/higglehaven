@@ -259,6 +259,13 @@
       body.sell-world-view #seller-showcase-manage-btn {
         bottom: 140px;
       }
+      /* #3296: the pager's usual bottom-centre spot sits under the left joystick
+         on a phone-width screen (and next to the fly button); move it to the top
+         centre, below the mode switcher's strip. */
+      body.sell-world-view #seller-showcase-pager {
+        bottom: auto;
+        top: 60px;
+      }
       /* #635 (sub-issue of #631): the faux-layout preview's own small
          toolbar — top-center, since bottom-center is already
          #seller-showcase-pager's spot and this mode is never active at
@@ -2598,12 +2605,6 @@
         display: flex;
         justify-content: flex-end;
       }
-      /* #3249: confirmAction() -- the confirm modal asking about a choice that
-         is not destructive (Buy) gets the green button, not the red one. */
-      #confirm-modal-confirm-btn.neutral {
-        background: var(--brand-green);
-        color: #16240a;
-      }
       /* #3278: the shared destructive-confirm modal (src/ui/confirmModal.js),
          same shell as #bundle-name-modal. */
       #confirm-modal {
@@ -2667,6 +2668,10 @@
       #confirm-modal-confirm-btn {
         background: #a83a27;
         color: #fff;
+      }
+      #confirm-modal-confirm-btn[data-variant="primary"] {
+        background: var(--brand-green);
+        color: #16240a;
       }
       #confirm-modal-actions button:disabled {
         opacity: 0.5;

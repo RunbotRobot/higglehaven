@@ -885,13 +885,16 @@ function reconcileOtherAvatarAnimations(now) {
     const body = entry.body;
     const desired = desiredAvatarFor(wanted.get(builderId), allowed);
     const animationId = desired ? desired.templateId : null;
-    if (entry.clipsFor && entry.clipsFor.body === body && entry.clipsFor.animationId === animationId) continue;
-    entry.clipsFor = { body, animationId };
-    setUpOtherAvatarClips(entry, body, desired, animationId).catch(() => {});
+    // #3314: the seller's chosen clips arrive with every poll, so a change to
+    // them (not only a new body or animation) rebuilds this avatar's clips.
+    const rolesKey = JSON.stringify(entry.equippedAvatar?.clipRoles ?? null);
+    if (entry.clipsFor && entry.clipsFor.body === body && entry.clipsFor.animationId === animationId && entry.clipsFor.rolesKey === rolesKey) continue;
+    entry.clipsFor = { body, animationId, rolesKey };
+    setUpOtherAvatarClips(entry, body, desired, animationId, rolesKey).catch(() => {});
   }
 }
 
-async function setUpOtherAvatarClips(entry, body, appliedAnimation, animationId) {
+async function setUpOtherAvatarClips(entry, body, appliedAnimation, animationId, rolesKey) {
   let animations = [];
   let source = 'own';
   if (appliedAnimation) {
@@ -912,14 +915,16 @@ async function setUpOtherAvatarClips(entry, body, appliedAnimation, animationId)
   }
   // The body was swapped or the avatar despawned (both reset clipsFor), or a
   // newer request replaced this one, while the files loaded: nothing to install.
-  if (entry.body !== body || entry.clipsFor?.body !== body || entry.clipsFor.animationId !== animationId) return;
+  if (entry.body !== body || entry.clipsFor?.body !== body || entry.clipsFor.animationId !== animationId || entry.clipsFor.rolesKey !== rolesKey) return;
   let mixer = null;
   let actions = null;
   if (animations.length > 0 && body.userData.clipRoot) {
     mixer = new THREE.AnimationMixer(body.userData.clipRoot);
     actions = {};
     // #3287: same role matching as the shopper's own avatar and the upload wizard.
-    const picked = pickAvatarClips(animations, ['idle', 'walk']);
+    // #3314: the seller's chosen clips name clips of the avatar's OWN file, so
+    // they apply only when this body plays its own clips, not an applied animation's.
+    const picked = pickAvatarClips(animations, ['idle', 'walk'], source === 'own' ? JSON.parse(rolesKey) : null);
     for (const state of ['idle', 'walk']) {
       if (picked[state]) actions[state] = mixer.clipAction(picked[state]);
     }
@@ -954,6 +959,7 @@ function refreshOtherShopAvatarsDiagnostic() {
     bodyTemplateId: entry.bodyTemplateId, // added for #2045 -- e2e needs to see which model each other avatar actually drew
     animationSource: entry.animationSource, // added for #3230 -- e2e needs to see whether an avatar plays its own clips, an applied animation's, or none
     animState: entry.animState, // added for #3230 -- idle vs walk, to check clips follow observed movement
+    playingClip: (entry.actions && entry.animState && entry.actions[entry.animState]?.getClip().name) || null, // added for #3314 -- which named clip actually plays, to check the seller's chosen clip roles beat name matching
   }));
 }
 

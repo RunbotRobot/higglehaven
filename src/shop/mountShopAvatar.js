@@ -24,6 +24,7 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
   } = deps;
 
   let equippedAvatarModelUrl = null;
+  let equippedAvatarClipRoles = null; // #3314: the seller's chosen idle/walk/fly clips, if any
   setEquippedAvatarSkeletonSignature(null);
   // #1165: the applied animation (if any and still owned), fetched alongside
   // the equipped avatar: createCustomShopAvatar needs both together to decide
@@ -34,6 +35,7 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
     try {
       const avatar = await fetchMyEquippedAvatar();
       equippedAvatarModelUrl = avatar.modelUrl;
+      equippedAvatarClipRoles = avatar.clipRoles ?? null;
       setEquippedAvatarSkeletonSignature(avatar.skeletonSignature);
     } catch (err) {
       console.warn('Could not fetch equipped avatar, using the default avatar:', err);
@@ -56,7 +58,7 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
   setShopAvatar(null);
   if (equippedAvatarModelUrl) {
     try {
-      setShopAvatar(await createCustomShopAvatar(equippedAvatarModelUrl, equippedAnimation));
+      setShopAvatar(await createCustomShopAvatar(equippedAvatarModelUrl, equippedAnimation, equippedAvatarClipRoles));
     } catch (err) {
       console.warn(`Failed to load equipped avatar model (${equippedAvatarModelUrl}), falling back to the default avatar:`, err);
     }

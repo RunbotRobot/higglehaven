@@ -16,11 +16,19 @@ const eq = (id) => ({ templateId: id, modelUrl: `/uploads/${id}.glb` });
 
 describe('normalizeEquippedAvatar (#2045)', () => {
   it('passes a well-formed server value through', () => {
-    expect(normalizeEquippedAvatar({ templateId: 't1', modelUrl: '/m.glb', extra: 1 })).toEqual({ templateId: 't1', modelUrl: '/m.glb', skeletonSignature: null });
+    expect(normalizeEquippedAvatar({ templateId: 't1', modelUrl: '/m.glb', extra: 1 })).toEqual({ templateId: 't1', modelUrl: '/m.glb', skeletonSignature: null, clipRoles: null });
   });
   it('keeps the skeleton signature when the server sends one (#3230)', () => {
-    expect(normalizeEquippedAvatar({ templateId: 't1', modelUrl: '/m.glb', skeletonSignature: 'sig' })).toEqual({ templateId: 't1', modelUrl: '/m.glb', skeletonSignature: 'sig' });
+    expect(normalizeEquippedAvatar({ templateId: 't1', modelUrl: '/m.glb', skeletonSignature: 'sig' })).toEqual({ templateId: 't1', modelUrl: '/m.glb', skeletonSignature: 'sig', clipRoles: null });
     expect(normalizeEquippedAvatar({ templateId: 't1', modelUrl: '/m.glb', skeletonSignature: 7 }).skeletonSignature).toBeNull();
+  });
+  it('keeps the seller\'s chosen clip roles, and reads anything malformed as nobody having chosen (#3314)', () => {
+    const base = { templateId: 't1', modelUrl: '/m.glb' };
+    expect(normalizeEquippedAvatar({ ...base, clipRoles: { idle: null, walk: 'mixamo.com', fly: null } }).clipRoles)
+      .toEqual({ idle: null, walk: 'mixamo.com', fly: null });
+    for (const bad of [undefined, null, 'walk', 7, ['walk']]) {
+      expect(normalizeEquippedAvatar({ ...base, clipRoles: bad }).clipRoles).toBeNull();
+    }
   });
   it('treats a missing or malformed value as the default body', () => {
     for (const bad of [undefined, null, 5, 'x', {}, { templateId: 't1' }, { modelUrl: '/m.glb' }, { templateId: '', modelUrl: '/m.glb' }, { templateId: 1, modelUrl: '/m.glb' }]) {

@@ -937,7 +937,7 @@ function renderMyAvatarsField(onEquipped) {
           // already in Shop mode left it comparing against whichever
           // avatar was equipped when enterShopMode last ran.
           setShopEquippedAvatarSkeletonSignature(newEquipped.skeletonSignature);
-          await refreshEquippedShopAvatar(newEquipped.modelUrl);
+          await refreshEquippedShopAvatar(newEquipped.modelUrl, newEquipped.clipRoles);
           renderMyAvatarsList();
           onEquipped?.();
         } catch (err) {
@@ -1077,7 +1077,7 @@ function renderMyAnimationsField() {
           // the same way re-equipping an avatar already does — the avatar
           // itself (shopAvatar.modelUrl) doesn't change here, only which
           // animation createCustomShopAvatar binds against it.
-          await refreshEquippedShopAvatar(shopAvatar?.modelUrl);
+          await refreshEquippedShopAvatar(shopAvatar?.modelUrl, shopAvatar?.clipRoles);
           renderMyAnimationsList();
         } catch (err) {
           alert(err.message || 'Could not apply this animation.');

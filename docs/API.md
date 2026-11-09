@@ -4752,6 +4752,25 @@ self-service-settable" treatment catalog templates' own
 `isTestModel`/`flaggedHiddenAt` get. Normally `POST /api/instances/group`
 and `POST /api/instances/ungroup` are the only way to change it.
 
+`bundleId` (#3327, leaf 4/7 of #3323) is `null` for an ordinary, unsaved or
+pasted bundle instance, or the id of the saved bundle (template) the
+placement is **linked** to. Only members of a group are ever linked, and every
+member of one group shares one `bundleId` (stored in
+`placed_instances.bundle_id`, migration 0210; `ON DELETE SET NULL`, so
+deleting the template leaves the placements in the world as ordinary unlinked
+bundle instances). It is set by Save Bundle (the saved-from instance) and by
+placing a bundle from the picker, both through `POST /api/instances/group`'s
+optional `bundleId`; a plain Group, an Ungroup and a copy/paste never link.
+Like `groupId` it is ignored on every update of an existing instance, and on
+create it is honored only when the caller already owns a live member of the
+named `groupId` and that group is itself linked to exactly that bundle (so a
+Delete+Undo restores it, and a crafted create cannot claim a link). Version
+snapshots and archived versions carry it too (`GET` of a version's instances
+returns `bundleId`), and Restore-to-Editor re-verifies it against the live
+group the same way, so a restore never leaves a dangling or wrong link; a
+suspended seller's removed-and-restored placements (#2305) keep their link
+while the bundle still exists.
+
 The one exception (#2959): creating a brand-new instance — `POST
 /api/instances` or `POST`/`PUT /api/instances/batch` for an `instanceId`
 that doesn't already exist — *does* accept a client-supplied `groupId`, but
@@ -4971,8 +4990,17 @@ doesn't rely on that itself.
 Request body:
 
 ```json
-{ "instanceIds": ["2ddc1202-...", "91fa0cc3-..."] }
+{ "instanceIds": ["2ddc1202-...", "91fa0cc3-..."], "bundleId": "bundle-..." }
 ```
+
+`bundleId` is optional (#3327). Omitted, the new group is an unlinked bundle
+instance, and any link the members had before is cleared (grouping is "make a
+new bundle instance", so members of a linked group that are grouped again with
+other items are no longer linked). When present it must name the caller's own
+bundle or a shared one (`404 Bundle not found` otherwise, so another builder's
+private bundle ids cannot be probed), and the new group is linked to it. The
+link is evaluated at the write itself: a bundle deleted in between leaves the
+group unlinked rather than failing.
 
 `instanceIds` must have 2–5,000 unique entries, each an existing instance
 (`400` otherwise, with a message that states the limit: "You can group up to
@@ -4987,9 +5015,13 @@ Response (`201`):
 ```json
 {
   "groupId": "c9f6e9b2-...",
-  "instances": [ /* placed instance objects, each now carrying groupId */ ]
+  "bundleId": "bundle-...",
+  "instances": [ /* placed instance objects, each now carrying groupId and bundleId */ ]
 }
 ```
+
+`bundleId` is the link actually stored: `null` when none was requested or the
+bundle vanished before the write.
 
 **All-or-nothing, unlike the batch endpoints' own partial-success
 convention above.** A since-changed landlet ownership racing this request
@@ -4999,8 +5031,9 @@ and others' not — but since this call mints one brand-new shared id,
 "most members report it, a few don't" is an actively broken, half-formed
 group, not a partially-applied write the way the `batch` endpoints'
 own pre-existing-row updates are. If any referenced instance's write is
-rejected this way, the ones that did land are rolled back (`groupId` reset
-to `null`) and the whole request fails with `409` — safe to refetch and
+rejected this way, the ones that did land are rolled back (`groupId` and
+`bundleId` reset to what each member had before) and the whole request fails
+with `409` — safe to refetch and
 retry, same as a `batch` endpoint's own full-rejection case.
 
 ### `POST /api/instances/ungroup`
@@ -5010,7 +5043,9 @@ must belong to a landlet the calling session's builder owns (`403`
 otherwise). Fully dissolves a group back to independent items — there is
 no partial/nested ungroup (splitting a group into two smaller groups, or
 peeling off just one member while the rest stay grouped); every member's
-`groupId` is cleared to `null`.
+`groupId` is cleared to `null`, and so is its `bundleId` (#3327: a link
+without a group would leave loose items that a template edit could still
+rewrite).
 
 Request body:
 
@@ -6267,11 +6302,15 @@ appears to violate ... (matched \"...\")"); the phrase list lives in
 ### `PATCH /api/bundles/:bundleId`
 
 Requires a session logged in as the bundle's own builder (`403`
-otherwise). Updates `name` and/or `shared` — both optional and independent;
+otherwise). Updates `name`, `shared` and/or `items` — all optional and independent;
 omitting one leaves it at its current value rather than requiring the full
 object back — the frontend's Rename button only ever sends `{ name }`.
-There's no way to edit a saved bundle's `items` — the frontend has no
-UI for that; delete and re-save from a fresh selection instead. **#921:** a
+**#3327:** `items` (the bundle's members, same shape and validation as `POST`,
+including that every `templateId` must exist) is creator-only like the rest of
+this endpoint, so another builder is refused with `403` even for a shared
+bundle. It is the server half of editing a linked bundle; no client sends it
+yet (leaves 5/7–6/7 of #3323), and rewriting the placements that are linked to
+the bundle is also still to come. **#921:** a
 `name` in the body gets the same prohibited-content check as `POST` (a
 request that omits `name` is not re-checked).
 
@@ -12440,7 +12479,13 @@ for the same URL — one fetch/parse either way, not two) and looks up
 `Walking`/`Standing`/`Flying`, then any name containing the word; the part
 after the last `|` of an armature-prefixed name; a lone `mixamo.com` clip as
 `idle`; one clip per role), the same function other players' bodies and the
-upload wizard use. Any that exist become a `THREE.AnimationMixer` action,
+upload wizard use. When the equipped avatar carries a seller-chosen `clipRoles`
+(#3301; `GET /builders/me/avatar` and each nearby avatar's `equippedAvatar`
+return it), `pickAvatarClips` plays exactly those named clips and skips name
+matching (#3314): a role stored as `null`, or naming a clip the file does not
+have, plays nothing. It applies only when the avatar plays its own clips, never
+to an applied animation's, and another player's body rebuilds its clips when the
+roles it is polled with change. Any that exist become a `THREE.AnimationMixer` action,
 bound to `container.userData.model` — the actual loaded node the clip's
 tracks were authored against, not the wrapping container
 `createCustomShopAvatar` adds around it (see `loadModelInstance`'s own

@@ -44,6 +44,7 @@ import { requireBuilder } from './builder-profile.js';
 import { candidateRowFromLandlet } from './world-generation.js';
 import { handleSoldOutMarkers } from './purchases-admin.js';
 import { handleStartAuction } from './auctions.js';
+import { verifyOwnedGroupLinks, honoredGroupLink } from './bundle-links.js';
 import { landletMaxWorldRadius } from '../geometry.js';
 import { DEFAULT_EARTH_RADIUS_M, footprintScaleAtHeight } from '../earthCurvature.js';
 import {
@@ -284,8 +285,8 @@ export async function handleLandletVersions(request, db, route, url) {
       `).bind(versionId, landletId, name, JSON.stringify(metadata), landletId, landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO version_instances
-          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id)
-        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id
+          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id, bundle_id)
+        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id, bundle_id
         FROM placed_instances WHERE landlet_id = ?
           AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id IS ?)
       `).bind(versionId, landletId, landletId, landlet.owner_builder_id),
@@ -1614,20 +1615,14 @@ export async function handleLandletDraft(request, db, landletId) {
     // silently attaching a (re-created) instance to another builder's
     // group. Only honor a groupId the caller already owns at least one
     // other member of; anything else is treated as null, same as #2959.
-    const candidateGroupIds = [...new Set(instances.map((instance) => instance.groupId).filter(Boolean))];
-    let verifiedGroupIds = new Set();
-    if (candidateGroupIds.length > 0) {
-      const placeholders = candidateGroupIds.map(() => '?').join(', ');
-      const { results: ownedGroups } = await db.prepare(`
-        SELECT DISTINCT group_id FROM placed_instances
-        WHERE group_id IN (${placeholders})
-          AND EXISTS (SELECT 1 FROM landlets WHERE landlet_id = placed_instances.landlet_id AND owner_builder_id = ?)
-      `).bind(...candidateGroupIds, sessionBuilder.builder_id).all();
-      verifiedGroupIds = new Set(ownedGroups.map((row) => row.group_id));
-    }
+    // #3327: the bundle link follows the same rule -- a recreated instance
+    // keeps its bundle_id only when the live group it is rejoining is itself
+    // linked to that bundle (worker/lib/bundle-links.js). A bundle deleted since
+    // the version was saved, or a group since unbundled, restores as unlinked.
+    const verifiedLinks = await verifyOwnedGroupLinks(db, instances, sessionBuilder.builder_id);
     const instancesForInsert = instances.map((instance) => ({
       ...instance,
-      groupId: verifiedGroupIds.has(instance.groupId) ? instance.groupId : null,
+      ...honoredGroupLink(instance, verifiedLinks),
     }));
 
     // #1726: a deterministic versionId (from the client's own idempotency
@@ -1693,13 +1688,16 @@ export async function handleLandletDraft(request, db, landletId) {
       `).bind(landletId, JSON.stringify(instances), landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO placed_instances
-          (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id)
+          (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id, bundle_id)
         SELECT
           json_extract(value, '$.instanceId'), ?, json_extract(value, '$.templateId'),
           json_extract(value, '$.x'), json_extract(value, '$.y'), json_extract(value, '$.z'),
           json_extract(value, '$.rotationX'), json_extract(value, '$.rotationY'), json_extract(value, '$.rotationZ'),
           json_extract(value, '$.label'), json_extract(value, '$.crop'), json_extract(value, '$.scale'),
-          json_extract(value, '$.isCommunitySign'), json_extract(value, '$.isCommunityCalendar'), json_extract(value, '$.groupId')
+          json_extract(value, '$.isCommunitySign'), json_extract(value, '$.isCommunityCalendar'), json_extract(value, '$.groupId'),
+          -- Evaluated live at the write: a bundle deleted since the check above
+          -- leaves the instance unlinked instead of failing the foreign key.
+          (SELECT bundle_id FROM bundles WHERE bundle_id = json_extract(value, '$.bundleId'))
         FROM json_each(?)
         -- Doubles as the ownership guard and as the non-trivial WHERE
         -- SQLite's upsert grammar requires here (a bare "ON" after
@@ -1732,8 +1730,8 @@ export async function handleLandletDraft(request, db, landletId) {
       `).bind(versionId, landletId, versionName, JSON.stringify(versionMetadata), landletId, landletId, landlet.owner_builder_id),
       db.prepare(`
         INSERT INTO version_instances
-          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id)
-        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id
+          (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id, bundle_id)
+        SELECT ?, instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id, bundle_id
         FROM placed_instances WHERE landlet_id = ?
           AND ${ownerGuard}
         -- #1726: same no-op-on-retry reasoning as the INSERT above — this

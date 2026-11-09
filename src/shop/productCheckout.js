@@ -28,7 +28,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { openProductReviewModal } from '../ui/productReviewModal.js';
-import { confirmAction } from '../ui/confirmModal.js';
+import { confirmDestructive } from '../ui/confirmModal.js';
 import { showNotice } from '../ui/noticeModal.js';
 import { createMeshForInstance, disposeObject } from '../world/models.js';
 import {
@@ -447,15 +447,19 @@ export async function handleShopProductBuyClick() {
   if (isTestModel) return;
   // #659: a one-line mention right at the moment of buying, alongside the
   // full Return Policy button this same tapped product already surfaces
-  // (#shop-product-preview-return-policy-btn). #3249: an in-app confirmation,
-  // not window.confirm() -- a browser that suppresses native dialogs answered
-  // that with "no" at once, so Buy silently did nothing.
-  const confirmed = await confirmAction({
-    title: `Buy "${name}"?`,
-    message: `${formatPriceCents(priceCents)}. Refunds return 99% — see Return Policy.`,
+  // (#shop-product-preview-return-policy-btn) -- a plain sentence, the fact
+  // worth knowing before saying yes.
+  // #3278: its own in-app modal, not window.confirm(): a browser that
+  // suppresses native dialogs answers false at once, so Buy did nothing and
+  // said nothing (the same failure Sell > Manage Delete had, #3249).
+  const confirmed = await confirmDestructive({
+    title: 'Buy this item?',
+    message: `Buy "${name}" for ${formatPriceCents(priceCents)}? (Refunds return 99% — see Return Policy.)`,
     confirmLabel: 'Buy',
-    cancelLabel: 'Never mind',
+    variant: 'primary',
     returnFocusEl: shopProductPreviewBuyBtn,
+    restoreModalEl: shopProductPreviewModalEl,
+    restoreCloseFn: closeShopProductPreviewModal,
   });
   if (!confirmed) return;
   shopProductPreviewBuyBtn.disabled = true;

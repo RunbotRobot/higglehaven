@@ -48,7 +48,7 @@
 // REAL_STRIPE_TEST_FILES gate) when CI's own repo secrets are configured.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, emailForLabel } from './helpers.mjs';
+import { launchPage, emailForLabel, acceptConfirmModal } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -408,14 +408,25 @@ try {
   throw err;
 }
 
-// #3249: Buy asks in the in-app confirm modal (not a native confirm()), and
-// the result is the in-app notice modal (not an alert()), so this test clicks
-// the one and reads the other. dialogMessages stays wired as a tripwire: any
-// native dialog here means a purchase step regressed to window.confirm/alert.
+// #3278: handleShopProductBuyClick confirms in the shared in-app modal now
+// (it used to be a native confirm() auto-accepted by launchPage). This file
+// still adds a dialog listener (same convention as
+// e2e/purchase-shipping.test.mjs's own dialogMessages capture) as a tripwire:
+// the "Purchase complete" result is the in-app notice modal now (#3249), so
+// any native dialog here means a purchase step regressed to confirm()/alert().
 await page.click('#shop-product-preview-buy-btn');
-await page.waitForSelector('#confirm-modal.visible', { timeout: 15000 });
-const buyConfirmTitle = await page.textContent('#confirm-modal-title');
-await page.click('#confirm-modal-confirm-btn');
+// Never mind first: the modal names a price, focuses the safe choice, and
+// cancelling starts no checkout and leaves the preview modal open and armed.
+await page.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
+const buyConfirmNamesPrice = /\$\d/.test(await page.textContent('#confirm-modal-message'));
+const buyConfirmFocusOnSafeChoice = await page.evaluate(() => document.activeElement?.id === 'confirm-modal-cancel-btn');
+await page.click('#confirm-modal-cancel-btn');
+await page.waitForFunction(() => !document.getElementById('confirm-modal').classList.contains('visible'), null, { timeout: 5000 });
+const checkoutOpenedAfterCancel = (await page.locator('#checkout-modal.visible').count()) !== 0;
+const previewStillOpen = (await page.locator('#shop-product-preview-modal.visible').count()) === 1;
+console.log('buy confirm names a price / focuses Never mind / no checkout after cancel / preview still open:', buyConfirmNamesPrice, buyConfirmFocusOnSafeChoice, !checkoutOpenedAfterCancel, previewStillOpen);
+await page.click('#shop-product-preview-buy-btn');
+await acceptConfirmModal(page);
 
 await page.waitForSelector('#checkout-modal.visible', { timeout: 15000 });
 await page.waitForFunction(() => !document.getElementById('checkout-pay-btn').disabled, null, { timeout: 30000 });
@@ -432,12 +443,14 @@ await page.click('#checkout-pay-btn');
 // verify-card-real-stripe.test.mjs's own #verify-modal close wait gives.
 await page.waitForSelector('#checkout-modal:not(.visible)', { state: 'attached', timeout: 60000 });
 
+// #3249: the result is the in-app notice modal, not an alert(); native
+// dialogs stay wired as a tripwire for any purchase step regressing to one.
 await page.waitForSelector('#notice-modal.visible', { timeout: 30000 });
 const noticeTitle = await page.textContent('#notice-modal-title');
-console.log('buy confirm title:', buyConfirmTitle, '| result notice title:', noticeTitle, '| native dialogs (should be none):', dialogMessages);
-const purchaseCompleted = noticeTitle === 'Purchase complete' && buyConfirmTitle.startsWith('Buy ') && dialogMessages.length === 0;
+console.log('result notice title:', noticeTitle, '| native dialogs (should be none):', dialogMessages);
+const purchaseCompleted = noticeTitle === 'Purchase complete' && dialogMessages.length === 0;
 
-const pass = stripeAccountComplete && purchaseCompleted && errors.length === 0 && sellerErrors.length === 0;
+const pass = stripeAccountComplete && purchaseCompleted && buyConfirmNamesPrice && buyConfirmFocusOnSafeChoice && !checkoutOpenedAfterCancel && previewStillOpen && errors.length === 0 && sellerErrors.length === 0;
 await page.close();
 await browser.close();
 console.log('page errors:', errors.length || sellerErrors.length ? [...errors, ...sellerErrors] : 'none');

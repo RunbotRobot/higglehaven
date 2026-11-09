@@ -421,13 +421,19 @@ async function restoreSuspendedSellerPlacedInstances(db, sellerId) {
     // restore onto what's now a different owner's land.
     statements.push(db.prepare(`
       INSERT INTO placed_instances
-        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id)
-      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        (instance_id, landlet_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id, bundle_id)
+      -- #3327: the bundle link is restored with the group, but only while the
+      -- saved bundle still exists (evaluated live here; a template deleted
+      -- during the suspension leaves the restored items as an unlinked bundle
+      -- instance instead of failing the foreign key). snapshots taken before
+      -- migrations/0210 have no bundle_id and restore unlinked.
+      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, (SELECT bundle_id FROM bundles WHERE bundle_id = ?)
       WHERE EXISTS (SELECT 1 FROM landlets WHERE landlet_id = ? AND owner_builder_id = ?)
     `).bind(
       instanceId, snapshot.landlet_id, snapshot.template_id,
       saved.x_m, saved.y_m, saved.z_m, saved.rotation_x_rad, saved.rotation_y_rad, saved.rotation_z_rad,
       saved.label, saved.crop_json, saved.scale, saved.is_community_sign, saved.is_community_calendar, saved.group_id,
+      saved.group_id ? (saved.bundle_id ?? null) : null,
       snapshot.landlet_id, snapshot.builder_id,
     ));
     // Only marks this snapshot restored if the INSERT just above actually

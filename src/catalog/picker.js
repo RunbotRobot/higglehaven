@@ -408,7 +408,7 @@ export function renderBundlePicker() {
       // to grouped (placeClipboardItems' own new option, see its comment),
       // unlike an ordinary clipboard paste through pasteBtn elsewhere in
       // src/build/scene.js, which leaves this unset.
-      enterPlacementMode({ type: 'clipboard', items: bundle.items, group: true }, `Tap a spot to place "${bundle.name}"`);
+      enterPlacementMode({ type: 'clipboard', items: bundle.items, group: true, bundleId: bundle.bundleId }, `Tap a spot to place "${bundle.name}"`);
     });
     tile.appendChild(placeBtn);
 
