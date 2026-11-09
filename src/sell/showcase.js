@@ -34,7 +34,7 @@ let sellerShowcasePages = [];
 // below).
 export let sellerShowcasePageIndex = 0;
 // #3302 -- added so a feedback report sent from Sell says which showcase page
-// and how many products were on screen (Sell has no per-frame state of its own).
+// and how many products were on screen.
 export function sellerShowcaseFeedbackState() {
   return {
     pageIndex: sellerShowcasePageIndex,

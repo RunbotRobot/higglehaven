@@ -108,7 +108,11 @@ new MutationObserver(() => {
 
 // Enters the Sell world view. Called from enterSellMode once the seller
 // identity is confirmed. Re-entrant (a second call re-mounts the avatar).
-export async function enterSellWorldView() {
+// `onFrame(now)` is Sell's own per-frame side work (the Submit Feedback ring
+// buffer's sample, #3302), run after the movement core each frame: registering
+// the movement callback replaces whatever Sell had registered before it, so the
+// caller hands its own back here instead of losing it.
+export async function enterSellWorldView({ onFrame = null } = {}) {
   // Build's orbit camera is replaced by the movement core's follow camera.
   controls.enabled = false;
   document.body.classList.add('sell-world-view'); // lifts the Products button clear of the look joystick
@@ -132,6 +136,7 @@ export async function enterSellWorldView() {
   // landlet loading) are never started in Sell.
   registerModeFrameUpdate((now) => {
     updateShopMovementCore(now);
+    onFrame?.(now);
   });
   registerFacingOverride(() => shopAvatarFacing);
   shopStatusEl.classList.remove('visible');
