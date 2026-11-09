@@ -57,7 +57,7 @@ await page.click('#group-item');
 await page.waitForSelector('#selection-action-status:not([hidden])', { timeout: 5000 });
 await page.waitForTimeout(1000); // long enough for any same-tick overwrite to have happened
 const shown = await page.locator('#selection-action-status').innerText();
-check(/Couldn't group/.test(shown) && /removed or changed/.test(shown), `refusal text: ${shown}`);
+check(/Couldn't bundle/.test(shown) && /removed or changed/.test(shown), `refusal text: ${shown}`);
 check(await page.locator('#selection-action-status').isVisible(), 'status still visible after a second');
 check((await page.textContent('#product-info')).includes('2 items selected'), 'selection summary still shown separately');
 check(await page.locator('#group-item').isEnabled(), 'Group is usable again after a refusal');
@@ -77,7 +77,7 @@ check(statusStyle.userSelect !== 'none', `the refusal text is selectable (${stat
 await page.click('#selection-action-status-copy');
 await page.waitForTimeout(300);
 const copiedText = await page.evaluate(() => navigator.clipboard.readText());
-check(/Couldn't group/.test(copiedText) && /removed or changed/.test(copiedText), `Copy puts the refusal on the clipboard: ${copiedText}`);
+check(/Couldn't bundle/.test(copiedText) && /removed or changed/.test(copiedText), `Copy puts the refusal on the clipboard: ${copiedText}`);
 check((await page.textContent('#selection-action-status-copy')) === 'Copied!', 'Copy button confirms with "Copied!"');
 await page.click('#selection-action-status-dismiss');
 check(await page.locator('#selection-action-status').isHidden(), 'dismissing hides the refusal');

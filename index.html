@@ -176,8 +176,8 @@
       <button id="toggle-snap" type="button">Snap</button>
       <button id="copy-item" type="button">Copy</button>
       <button id="save-bundle-item" type="button">Save Bundle</button>
-      <button id="group-item" type="button">Group</button>
-      <button id="ungroup-item" type="button">Ungroup</button>
+      <button id="group-item" type="button">Bundle</button>
+      <button id="ungroup-item" type="button">Unbundle</button>
       <button id="toggle-community-sign" type="button">Community Sign</button>
       <button id="toggle-community-calendar" type="button">Community Calendar</button>
       <button id="toggle-backup-chain" type="button">Backup Chain</button>
@@ -259,10 +259,14 @@
           Name
           <input id="bundle-name-input" type="text" maxlength="100" />
         </label>
-        <label id="bundle-name-share-label" hidden>
-          <input id="bundle-name-share-checkbox" type="checkbox" />
-          Share this bundle to the Community tab so any builder can use it too
-        </label>
+        <!-- #3326 (owner decision "Bundle sharing defaults to public on save"):
+             the choice is a pair of radios with public selected, not an opt-in
+             checkbox. -->
+        <fieldset id="bundle-name-share-label" hidden>
+          <legend>Who can place this bundle?</legend>
+          <label><input id="bundle-name-share-public" name="bundle-name-share" type="radio" value="public" checked /> Anyone can place this bundle</label>
+          <label><input id="bundle-name-share-private" name="bundle-name-share" type="radio" value="private" /> Only you can place this bundle</label>
+        </fieldset>
         <div id="bundle-name-modal-actions">
           <button id="bundle-name-save-btn" type="button">Save</button>
         </div>

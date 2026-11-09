@@ -3556,7 +3556,7 @@ groupBtn.addEventListener('click', async () => {
     // grouping right after placing would name ids it has not stored yet (a
     // 404). Let the pending saves land first; say so if they take too long.
     if (!(await waitForSyncsToSettle(GROUP_SAVE_WAIT_MS))) {
-      showSelectionActionStatus('Still saving your items. Try Group again in a moment.');
+      showSelectionActionStatus('Still saving your items. Try Bundle again in a moment.');
       return;
     }
     // The selection may have changed while waiting.
@@ -3571,7 +3571,7 @@ groupBtn.addEventListener('click', async () => {
       setTimeout(() => groupBtn.classList.remove('pressed'), 150);
     } catch (err) {
       console.error('Could not group selection:', err);
-      showSelectionActionStatus(`Couldn't group these items. ${err.message || 'Please try again.'}`);
+      showSelectionActionStatus(`Couldn't bundle these items. ${err.message || 'Please try again.'}`);
     } finally {
       syncSettled();
     }
@@ -3599,7 +3599,7 @@ ungroupBtn.addEventListener('click', async () => {
     setTimeout(() => ungroupBtn.classList.remove('pressed'), 150);
   } catch (err) {
     console.error('Could not ungroup selection:', err);
-    showSelectionActionStatus(`Couldn't ungroup these items. ${err.message || 'Please try again.'}`);
+    showSelectionActionStatus(`Couldn't unbundle these items. ${err.message || 'Please try again.'}`);
   } finally {
     syncSettled();
     updateSelectionUI();

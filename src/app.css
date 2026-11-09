@@ -2376,11 +2376,23 @@
         color: var(--pill-text);
         font: 14px/1.4 sans-serif;
       }
-      /* Row-layout checkbox, same pattern #upload-digital-good-label uses. */
       #bundle-name-share-label {
-        flex-direction: row !important;
+        border: none;
+        margin: 0;
+        padding: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font: 14px/1.4 sans-serif;
+      }
+      #bundle-name-share-label[hidden] {
+        display: none;
+      }
+      #bundle-name-share-label label {
+        display: flex;
+        flex-direction: row;
         align-items: center;
-        gap: 8px !important;
+        gap: 8px;
       }
       #bundle-name-modal-actions {
         display: flex;
