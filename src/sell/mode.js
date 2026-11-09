@@ -42,6 +42,7 @@ import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
 import { promptBundleName } from '../ui/bundleNameModal.js';
 import { inlineConfirm } from '../ui/inlineConfirm.js';
+import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import {
   activeCatalog, setActiveCatalog, sellerId, setSellerId, currentMode,
 } from '../world/state.js';
@@ -1808,11 +1809,13 @@ function renderSellerList() {
             shipBtn.textContent = 'Mark shipped';
             shipBtn.addEventListener('click', async () => {
               shipBtn.disabled = true;
+              showInlineActionStatus(shipping, '');
               try {
                 await markPurchaseShipped(purchase.purchaseId);
                 await renderSales();
               } catch (err) {
-                alert(err.message || 'Could not mark this purchase shipped.');
+                // #3249: in the row, not alert() (a suppressed dialog is silent).
+                showInlineActionStatus(shipping, err.message || 'Could not mark this purchase shipped.');
                 shipBtn.disabled = false;
               }
             });
@@ -1842,11 +1845,13 @@ function renderSellerList() {
           refundBtn.textContent = 'Refund';
           refundBtn.addEventListener('click', async () => {
             refundBtn.disabled = true;
+            showInlineActionStatus(body, '');
             try {
               await refundPurchase(purchase.purchaseId);
               await renderSales();
             } catch (err) {
-              alert(err.message || 'Could not refund this purchase.');
+              // #3249: in the row, not alert() (a suppressed dialog is silent).
+              showInlineActionStatus(body, err.message || 'Could not refund this purchase.');
               refundBtn.disabled = false;
             }
           });
@@ -2621,12 +2626,14 @@ export async function renderSellSettingsSection() {
 
     cashOutBtn.addEventListener('click', async () => {
       cashOutBtn.disabled = true;
+      showInlineActionStatus(payoutsField, '');
       try {
         await requestSellerPayout();
         await refreshPayouts();
-        alert('Payout requested.');
+        // #3249: shown beside the balance, not alert() (a suppressed dialog is silent).
+        showInlineActionStatus(payoutsField, 'Payout requested.', { error: false });
       } catch (err) {
-        alert(err.message || 'Could not request a payout.');
+        showInlineActionStatus(payoutsField, err.message || 'Could not request a payout.');
       } finally {
         cashOutBtn.disabled = false;
       }
