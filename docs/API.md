@@ -1,3 +1,17 @@
+#3279 (supersedes #1291): removing a template that any builder owns as an
+avatar or animation (`owned_avatars`/`owned_animations`) **delists** it
+instead of deleting it. The row stays, with `delisted_at` set (exposed as
+`delistedAt` on the template); every owner keeps it exactly as it was -- still
+owned, still equipped, model still served -- and nobody is notified, because
+nothing changed for them. A delisted template leaves `GET /api/catalog`
+(browsing, search and the seller's own list), is `404` to its seller for
+further `PATCH`/`PUT`/`DELETE`, and cannot be purchased (`400`, "This product
+is no longer for sale"); `GET /api/catalog/:templateId` still returns it so
+owners' lookups keep working. A template nobody owns is hard-deleted as
+before. The placed-instance, saved-layout, version-history, backup-chain and
+archived-version `409`s above apply either way. `DELETE /api/catalog/batch`
+does the same per id.
+
 # higglehaven backend API
 
 This document describes the current dev-only Cloudflare Worker + D1 API contract.
@@ -1750,11 +1764,12 @@ leaving the old `seller_id` — and the unpaid purchases still pointing at
 it — with no session that can ever reach them again. Request a payout
 first, then delete.
 
-Response:
+Response (`delisted` is `true` when the template was delisted rather than deleted):
 
 ```json
 {
-  "deleted": true
+  "deleted": true,
+  "delisted": false
 }
 ```
 
@@ -2725,7 +2740,10 @@ must also set a non-null `priceCents`, or the whole batch is rejected with
 before deletion; a missing ID returns `404`, and a foreign-key conflict returns
 `409` with the entire D1 batch rolled back. Every template being deleted that
 has a non-null `sellerId` requires a session logged in as that seller (`403`
-otherwise). Success returns `deletedTemplateIds` in request order.
+otherwise). Success returns `deletedTemplateIds` in request order (every id
+that left the seller's list) and `delistedTemplateIds`, the subset that was
+delisted rather than deleted because shoppers own it (#3279, see the single-item
+`DELETE` below). An id that is already delisted reads as missing (`404`).
 
 ### `POST /api/catalog`
 

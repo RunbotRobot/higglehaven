@@ -815,55 +815,33 @@ async function notifyBundleOwnersOfTemplateDeletion(db, templates) {
   }));
 }
 
-// #1291 (decided under AGENTS.md's "No silent loss" and "Prefer an invisible
-// fix" defaults, not filed as owner-gated): deleting an avatar/animation
-// template used to leave every builder who owned or had it equipped with no
-// word at all -- owned_avatars/owned_animations and
-// builders.equipped_*_template_id are deliberately not real FKs, so the
-// delete always succeeded and the equipped lookups just quietly started
-// returning null. Same "tell them, don't block them" precedent as
-// notifyBundleOwnersOfTemplateDeletion above: the delete proceeds, any
-// builder who had it equipped is unequipped (clearing the now-dangling
-// pointer), and every builder who owned it is told. The owned_* rows are
-// left in place on purpose -- they're the builder's purchase record, and
-// keep enough (template id + purchase) to recover or replace the item.
-// Like the bundle sibling, notifications leave templateId null (the
-// template is already gone, so an FK to it would fail at insert time).
-async function notifyOwnersOfAvatarOrAnimationDeletion(db, templates) {
-  if (templates.length === 0) return;
-  const templateIds = templates.map(({ templateId }) => templateId);
+// #3279 (owner decision, 2026-11-08; supersedes #1291's "tell the owners and
+// unequip them"): a seller "deleting" a product that any shopper owns as an
+// avatar or animation delists it instead. Owners keep it exactly as it was --
+// owned list, equipped state and model file all untouched -- and are told
+// nothing, because nothing changed for them. Only a product nobody owns is
+// hard-deleted. Returns which ids were deleted and which were delisted;
+// callers have already run assertCatalogTemplatesDeletable, so the seller's
+// own placements still have to be cleared first either way.
+async function removeCatalogTemplates(db, templateIds) {
+  if (templateIds.length === 0) return { deletedIds: [], delistedIds: [] };
   const placeholders = templateIds.map(() => '?').join(', ');
-  const nameByTemplateId = new Map(templates.map(({ templateId, name }) => [templateId, name]));
   const { results } = await db.prepare(`
-    SELECT builder_id AS builderId, template_id AS templateId, 'avatar' AS kind, 0 AS equipped FROM owned_avatars WHERE template_id IN (${placeholders})
-    UNION ALL
-    SELECT builder_id, equipped_avatar_template_id, 'avatar', 1 FROM builders WHERE equipped_avatar_template_id IN (${placeholders})
-    UNION ALL
-    SELECT builder_id, template_id, 'animation', 0 FROM owned_animations WHERE template_id IN (${placeholders})
-    UNION ALL
-    SELECT builder_id, equipped_animation_template_id, 'animation', 1 FROM builders WHERE equipped_animation_template_id IN (${placeholders})
-  `).bind(...templateIds, ...templateIds, ...templateIds, ...templateIds).all();
-  if (results.length === 0) return;
-
+    SELECT template_id FROM owned_avatars WHERE template_id IN (${placeholders})
+    UNION
+    SELECT template_id FROM owned_animations WHERE template_id IN (${placeholders})
+  `).bind(...templateIds, ...templateIds).all();
+  const owned = new Set(results.map((row) => row.template_id));
+  const delistedIds = templateIds.filter((id) => owned.has(id));
+  const deletedIds = templateIds.filter((id) => !owned.has(id));
   await db.batch([
-    db.prepare(`UPDATE builders SET equipped_avatar_template_id = NULL WHERE equipped_avatar_template_id IN (${placeholders})`).bind(...templateIds),
-    db.prepare(`UPDATE builders SET equipped_animation_template_id = NULL WHERE equipped_animation_template_id IN (${placeholders})`).bind(...templateIds),
+    ...delistedIds.map((id) => db.prepare(`
+      UPDATE catalog_templates SET delisted_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE template_id = ? AND delisted_at IS NULL
+    `).bind(id)),
+    ...deletedIds.map((id) => db.prepare('DELETE FROM catalog_templates WHERE template_id = ?').bind(id)),
   ]);
-
-  const byBuilderAndTemplate = new Map();
-  for (const row of results) {
-    const key = `${row.builderId}\u0000${row.templateId}`;
-    const entry = byBuilderAndTemplate.get(key) ?? { builderId: row.builderId, templateId: row.templateId, kind: row.kind, equipped: false };
-    if (row.equipped) entry.equipped = true;
-    byBuilderAndTemplate.set(key, entry);
-  }
-  await fireNotifications(db, [...byBuilderAndTemplate.values()].map(({ builderId, templateId, kind, equipped }) => {
-    const name = nameByTemplateId.get(templateId);
-    const tail = equipped
-      ? ` It was your equipped ${kind}, so you're back to the default -- pick another any time.`
-      : ' Your purchase record is kept.';
-    return { builderId, message: `The ${kind} "${name}" you own was removed from the catalog by its seller.${tail}` };
-  }));
+  return { deletedIds, delistedIds };
 }
 
 async function assertUploadedModelExists(bucket, modelUrl) {
@@ -998,7 +976,8 @@ export async function handleCatalog(request, db, route, url, models, env) {
     if (new Set(templateIds).size !== templateIds.length) throw new HttpError('templateIds must be unique', 400);
     const placeholders = templateIds.map(() => '?').join(', ');
     const existing = await db.prepare(`
-      SELECT template_id, seller_id, name FROM catalog_templates WHERE template_id IN (${placeholders})
+      SELECT template_id, seller_id, name FROM catalog_templates
+      WHERE template_id IN (${placeholders}) AND delisted_at IS NULL
     `).bind(...templateIds).all();
     if (existing.results.length !== templateIds.length) {
       throw new HttpError('Every templateId must reference an existing catalog template', 404, { code: ERROR_CODES.STALE_REFERENCE });
@@ -1028,15 +1007,18 @@ export async function handleCatalog(request, db, route, url, models, env) {
       await checkRateLimit(db, `catalog-delete:${clientIp(request)}`, CATALOG_DELETE_RATE_LIMIT_MAX);
     }
     await assertCatalogTemplatesDeletable(db, templateIds);
-    await db.batch(templateIds.map((templateId) => db.prepare(
-      'DELETE FROM catalog_templates WHERE template_id = ?',
-    ).bind(templateId)));
+    const { deletedIds, delistedIds } = await removeCatalogTemplates(db, templateIds);
     // #792: fired after the batch commits, not inside it -- same
     // reasoning as the single-item DELETE handler's own identical call.
-    const deletedTemplates = existing.results.map((row) => ({ templateId: row.template_id, name: row.name }));
-    await notifyBundleOwnersOfTemplateDeletion(db, deletedTemplates);
-    await notifyOwnersOfAvatarOrAnimationDeletion(db, deletedTemplates);
-    return json({ deletedTemplateIds: templateIds });
+    // Only for products that are actually gone: a delisted one still exists.
+    const deletedSet = new Set(deletedIds);
+    await notifyBundleOwnersOfTemplateDeletion(
+      db,
+      existing.results.filter((row) => deletedSet.has(row.template_id)).map((row) => ({ templateId: row.template_id, name: row.name })),
+    );
+    // deletedTemplateIds keeps meaning "no longer in the seller's list"; the
+    // delisted ones are also named separately (#3279).
+    return json({ deletedTemplateIds: templateIds, delistedTemplateIds: delistedIds });
   }
 
   if ((request.method === 'POST' || request.method === 'PUT') && route.length === 2 && route[1] === 'batch') {
@@ -1103,6 +1085,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
         metadata_json = excluded.metadata_json,
         stock_quantity = excluded.stock_quantity,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE catalog_templates.delisted_at IS NULL
     ` : '';
     // #934: unlike the single-item PUT/PATCH sibling above (which forces
     // sellerId back to the existing row's own value on every update,
@@ -1359,6 +1342,10 @@ export async function handleCatalog(request, db, route, url, models, env) {
     // template with no real seller at all) is never excluded -- NULL = NULL
     // is never true in SQL, so the subquery simply finds no matching
     // sellers row for one and the exclusion never fires.
+    // #3279: a delisted product (removed by its seller after shoppers bought
+    // it) is not for sale, so it leaves browsing and the seller's own list;
+    // its owners still reach it through their owned list.
+    conditions.push('delisted_at IS NULL');
     conditions.push(`NOT EXISTS (
       SELECT 1 FROM sellers
       JOIN account_suspensions ON account_suspensions.user_id = sellers.user_id
@@ -1731,7 +1718,8 @@ export async function handleCatalog(request, db, route, url, models, env) {
 
   if ((request.method === 'PUT' || request.method === 'PATCH') && route.length === 2) {
     const existing = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
-    if (!existing) return json({ error: 'Catalog template not found' }, 404);
+    // #3279: a delisted product is gone as far as its seller is concerned.
+    if (!existing || existing.delisted_at) return json({ error: 'Catalog template not found' }, 404);
     if (existing.seller_id && await sellerExists(db, existing.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
       assertOwner(existing.seller_id, sessionSeller.seller_id, 'Not your catalog template');
@@ -1881,7 +1869,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
   }
 
   if (request.method === 'DELETE' && route.length === 2) {
-    const existing = await db.prepare('SELECT seller_id, name FROM catalog_templates WHERE template_id = ?').bind(route[1]).first();
+    const existing = await db.prepare('SELECT seller_id, name FROM catalog_templates WHERE template_id = ? AND delisted_at IS NULL').bind(route[1]).first();
     if (!existing) return json({ error: 'Catalog template not found' }, 404);
     if (existing.seller_id && await sellerExists(db, existing.seller_id)) {
       const sessionSeller = await requireSessionSeller(request, db);
@@ -1902,14 +1890,15 @@ export async function handleCatalog(request, db, route, url, models, env) {
       await checkRateLimit(db, `catalog-delete:${clientIp(request)}`, CATALOG_DELETE_RATE_LIMIT_MAX);
     }
     await assertCatalogTemplatesDeletable(db, [route[1]]);
-    await db.prepare('DELETE FROM catalog_templates WHERE template_id = ?').bind(route[1]).run();
+    const { deletedIds, delistedIds } = await removeCatalogTemplates(db, [route[1]]);
     // #792: fired after the delete commits, not inside it -- same "never
     // risk rolling back a real mutation over a best-effort notification"
     // placement as every other post-batch fireNotification(s) call in
-    // this codebase.
-    await notifyBundleOwnersOfTemplateDeletion(db, [{ templateId: route[1], name: existing.name }]);
-    await notifyOwnersOfAvatarOrAnimationDeletion(db, [{ templateId: route[1], name: existing.name }]);
-    return json({ deleted: true });
+    // this codebase. A delisted product still exists, so nothing is told.
+    if (deletedIds.length > 0) {
+      await notifyBundleOwnersOfTemplateDeletion(db, [{ templateId: route[1], name: existing.name }]);
+    }
+    return json({ deleted: true, delisted: delistedIds.length > 0 });
   }
 
   if (route.length >= 3 && route[2] === 'reviews') {
