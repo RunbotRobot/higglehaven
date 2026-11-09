@@ -43,6 +43,7 @@ import { loadModelInstance, computeSkeletonSignature, loadModelAnimations } from
 import { scene } from '../world/scene.js';
 import { currentMode } from '../world/state.js';
 import { fetchMyEquippedAnimation } from '../api.js';
+import { pickAvatarClips } from '../avatarClipNames.js';
 import { findShopIdleInteractionTarget } from './flightMovement.js';
 import {
   SHOP_AFK_BLEND_PER_S, SHOP_AFK_DELAY_S, SHOP_AVATAR_ANIM_CROSSFADE_S,
@@ -323,9 +324,10 @@ export async function createCustomShopAvatar(modelUrl, appliedAnimation = null) 
   if (animations.length > 0) {
     mixer = new THREE.AnimationMixer(container.userData.model);
     actions = {};
+    // #3287: same role matching as other players' bodies and the upload wizard.
+    const picked = pickAvatarClips(animations, ['idle', 'walk', 'fly']);
     for (const state of ['idle', 'walk', 'fly']) {
-      const clip = THREE.AnimationClip.findByName(animations, state);
-      if (clip) actions[state] = mixer.clipAction(clip);
+      if (picked[state]) actions[state] = mixer.clipAction(picked[state]);
     }
     if (Object.keys(actions).length === 0) { mixer = null; actions = null; }
   }
