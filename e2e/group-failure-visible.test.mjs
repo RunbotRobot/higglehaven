@@ -3,7 +3,8 @@
 //  1. A refused Group request set #product-info, but the handler's finally
 //     (updateSelectionUI) rewrote it with "2 items selected" in the same tick,
 //     so the message never showed. It now appears in #selection-action-status
-//     and stays.
+//     and stays. (#3303: it is also selectable, stays until dismissed, and has
+//     a Copy button.)
 //  2. Group right after placing named ids the server had not stored yet (404).
 //     Group now waits for the pending saves, then succeeds.
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
@@ -60,6 +61,26 @@ check(/Couldn't group/.test(shown) && /removed or changed/.test(shown), `refusal
 check(await page.locator('#selection-action-status').isVisible(), 'status still visible after a second');
 check((await page.textContent('#product-info')).includes('2 items selected'), 'selection summary still shown separately');
 check(await page.locator('#group-item').isEnabled(), 'Group is usable again after a refusal');
+
+// #3303 (owner decision: any text a user can read, they can copy). On a phone
+// the refusal used to be click-through (pointer-events: none) and vanished
+// after 8 seconds, so there was no time or way to copy it.
+await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+await page.waitForTimeout(8500); // past the old 8s auto-clear
+check(await page.locator('#selection-action-status').isVisible(), 'the refusal is still shown after 8.5 seconds');
+const statusStyle = await page.evaluate(() => {
+  const style = getComputedStyle(document.getElementById('selection-action-status'));
+  return { pointerEvents: style.pointerEvents, userSelect: style.userSelect };
+});
+check(statusStyle.pointerEvents !== 'none', `the refusal accepts pointer events (${statusStyle.pointerEvents})`);
+check(statusStyle.userSelect !== 'none', `the refusal text is selectable (${statusStyle.userSelect})`);
+await page.click('#selection-action-status-copy');
+await page.waitForTimeout(300);
+const copiedText = await page.evaluate(() => navigator.clipboard.readText());
+check(/Couldn't group/.test(copiedText) && /removed or changed/.test(copiedText), `Copy puts the refusal on the clipboard: ${copiedText}`);
+check((await page.textContent('#selection-action-status-copy')) === 'Copied!', 'Copy button confirms with "Copied!"');
+await page.click('#selection-action-status-dismiss');
+check(await page.locator('#selection-action-status').isHidden(), 'dismissing hides the refusal');
 
 // 2. Group while a placement save is still in flight waits for it.
 refuse = false;

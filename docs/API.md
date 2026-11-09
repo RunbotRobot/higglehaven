@@ -4935,7 +4935,7 @@ Response:
 
 #2764 (sub-issue of #2763, owner-requested). Requires a session; every
 referenced instance's `landletId` must belong to the calling session's
-builder (`403` otherwise). Groups 2–100 placed instances together under a
+builder (`403` otherwise). Groups 2–5,000 placed instances together under a
 freshly minted, shared `groupId` — persists across save/reload, unlike the
 transient multi-select group-move (`groupMovePivot`, `src/build/scene.js`)
 that only ever lives for the duration of one drag.
@@ -4955,8 +4955,13 @@ Request body:
 { "instanceIds": ["2ddc1202-...", "91fa0cc3-..."] }
 ```
 
-`instanceIds` must have 2–100 unique entries, each an existing instance.
-A missing id returns `404` and leaves nothing changed.
+`instanceIds` must have 2–5,000 unique entries, each an existing instance
+(`400` otherwise, with a message that states the limit: "You can group up to
+5,000 items at once."). A missing id returns `404` and leaves nothing changed.
+The lookup and the writes run in chunks under D1's 100-bound-parameter limit
+(#3304), the writes in one transaction, and a request counts as
+`ceil(n / 100)` writes against the shared per-builder instance-write rate
+limit.
 
 Response (`201`):
 
@@ -12403,8 +12408,12 @@ The last of #679's sub-issues. `createCustomShopAvatar` now also loads
 the equipped model's `AnimationClip`s (via a new `loadModelAnimations`,
 sharing the same cached parsed-GLTF promise `loadModelScene` already uses
 for the same URL — one fetch/parse either way, not two) and looks up
-`idle`, `walk`, and `fly` by exact name (`THREE.AnimationClip.
-findByName`). Any that exist become a `THREE.AnimationMixer` action,
+`idle`, `walk`, and `fly` with `pickAvatarClips` (`src/avatarClipNames.js`,
+#3287: case-insensitive, exact name first, then the usual aliases such as
+`Walking`/`Standing`/`Flying`, then any name containing the word; the part
+after the last `|` of an armature-prefixed name; a lone `mixamo.com` clip as
+`idle`; one clip per role), the same function other players' bodies and the
+upload wizard use. Any that exist become a `THREE.AnimationMixer` action,
 bound to `container.userData.model` — the actual loaded node the clip's
 tracks were authored against, not the wrapping container
 `createCustomShopAvatar` adds around it (see `loadModelInstance`'s own
@@ -12715,6 +12724,19 @@ a one-time `wrangler r2 bucket create higglehaven-feedback` (run once from
 before this binding resolves to anything live; the endpoint 500s with a
 clear message if `env.FEEDBACK` isn't configured, same as every other R2
 binding check in this codebase.
+
+**#3303**: `metadata` may also carry `recentUserVisibleMessages`, an array of
+`{ text, shownAt }` — the last few error/refusal strings the person was
+actually shown (`src/ui/visibleMessages.js`), so a report has the exact words
+even when they could not copy them. It is display-only like
+`renderStateBuffer`: not stored in `bug_reports` (no migration), only written
+into the report's Control Room card note under "Last messages shown to the
+person". The server keeps the last five well-formed entries and bounds each
+`text` to 500 characters; anything malformed is dropped. On the client, the
+Build-mode Group/Ungroup refusal (`#selection-action-status`) now stays until
+dismissed, is selectable, and has a Copy button (`src/ui/copyText.js`, shared
+with the admin camera readout); the Shop orb notices and `#shop-status` are
+selectable while shown.
 
 **`GET /api/feedback/bug-reports/:reportId/screenshot`** — admin-gated
 (`requireAdmin`), not public. #2715's own body flags, as a still-open

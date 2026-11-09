@@ -98,6 +98,8 @@ import {
   START_MODE_KEY, PREVIEW_SAVED_LAYOUT_ID_KEY,
 } from '../main.js';
 import { addItemBtn, closeCatalogPicker } from '../catalog/picker.js';
+import { copyTextWithFeedback } from '../ui/copyText.js';
+import { recordVisibleMessage } from '../ui/visibleMessages.js';
 import { consumeStripeReturnMarker, ownRequirementsDue, syncStripeStepPrompt } from '../stripeStep.js';
 import {
   settingsSectionEl, settingsRenderToken, renderSettingsSection, renderIdentityField,
@@ -1843,22 +1845,31 @@ productInfoEl.hidden = true;
 // toolbar, not #product-info: updateSelectionUI() (run in each handler's
 // finally) rewrites #product-info with the selection summary in the same
 // tick, which used to erase the error before anyone could read it. Cleared
-// by the next Group/Ungroup tap, when the selection empties, or after a while.
+// by the next Group/Ungroup tap, when the selection empties, or when the
+// person dismisses it.
+// #3303 (owner decision: any text a user can read, they can copy): a refusal
+// stays until dismissed (it used to vanish after 8 seconds, too soon to long-
+// press it on a phone), the text is selectable, and a Copy button puts it on
+// the clipboard.
 const selectionActionStatusEl = document.getElementById('selection-action-status');
-const SELECTION_ACTION_STATUS_MS = 8000;
+const selectionActionStatusTextEl = document.getElementById('selection-action-status-text');
+const selectionActionStatusCopyBtn = document.getElementById('selection-action-status-copy');
+const selectionActionStatusDismissBtn = document.getElementById('selection-action-status-dismiss');
 const GROUP_SAVE_WAIT_MS = 10000;
-let selectionActionStatusTimer = null;
 // #3302 -- added so a feedback report sent from Build carries the last
-// refusal/result text the person saw (the status line itself clears after
-// 8s, and the owner's Group refusal was gone before it could be reported).
+// refusal/result text the person saw (the owner's Group refusal was gone
+// before it could be reported); the ring-buffer sampler reads it.
 let lastSelectionActionStatusText = '';
 function showSelectionActionStatus(text) {
   if (text) lastSelectionActionStatusText = text;
-  clearTimeout(selectionActionStatusTimer);
-  selectionActionStatusEl.textContent = text;
+  selectionActionStatusTextEl.textContent = text;
   selectionActionStatusEl.hidden = !text;
-  if (text) selectionActionStatusTimer = setTimeout(() => showSelectionActionStatus(''), SELECTION_ACTION_STATUS_MS);
+  if (text) recordVisibleMessage(text); // #3303: so a bug report carries it
 }
+selectionActionStatusCopyBtn.addEventListener('click', () => {
+  copyTextWithFeedback(selectionActionStatusCopyBtn, selectionActionStatusTextEl.textContent);
+});
+selectionActionStatusDismissBtn.addEventListener('click', () => showSelectionActionStatus(''));
 
 
 const modeControlsEl = document.getElementById('gizmo-mode-controls');
@@ -4177,16 +4188,8 @@ function updateCameraDebug(now) {
     `dir  ${fmt(cameraDirection.x)}, ${fmt(cameraDirection.y)}, ${fmt(cameraDirection.z)}`;
 }
 
-cameraDebugCopyBtn.addEventListener('click', async () => {
-  try {
-    await navigator.clipboard.writeText(cameraDebugEl.textContent);
-    cameraDebugCopyBtn.textContent = 'Copied!';
-  } catch {
-    cameraDebugCopyBtn.textContent = "Couldn't copy";
-  }
-  setTimeout(() => {
-    cameraDebugCopyBtn.textContent = 'Copy';
-  }, 1200);
+cameraDebugCopyBtn.addEventListener('click', () => {
+  copyTextWithFeedback(cameraDebugCopyBtn, cameraDebugEl.textContent);
 });
 
 // Auto-pan the camera while dragging a product near a screen edge, so it

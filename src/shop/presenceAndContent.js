@@ -56,6 +56,7 @@ import * as THREE from 'three';
 import { camera, scene } from '../world/scene.js';
 import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, loadModelInstance, loadModelAnimations } from '../world/models.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
+import { pickAvatarClips } from '../avatarClipNames.js';
 import { isNetworkError } from '../build/scene.js';
 import { currentAuthUser } from '../account/auth.js';
 import {
@@ -915,9 +916,10 @@ async function setUpOtherAvatarClips(entry, body, appliedAnimation, animationId)
   if (animations.length > 0 && body.userData.clipRoot) {
     mixer = new THREE.AnimationMixer(body.userData.clipRoot);
     actions = {};
+    // #3287: same role matching as the shopper's own avatar and the upload wizard.
+    const picked = pickAvatarClips(animations, ['idle', 'walk']);
     for (const state of ['idle', 'walk']) {
-      const clip = THREE.AnimationClip.findByName(animations, state);
-      if (clip) actions[state] = mixer.clipAction(clip);
+      if (picked[state]) actions[state] = mixer.clipAction(picked[state]);
     }
     if (Object.keys(actions).length === 0) { mixer = null; actions = null; }
   }

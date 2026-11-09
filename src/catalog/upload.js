@@ -77,6 +77,17 @@ const uploadNoAnimationsNoteEl = document.getElementById('upload-no-animations-n
 // #2744: how many animation clips the model in the wizard carries (null until
 // known), so the "no animations" note below can react to the avatar checkbox.
 let uploadModelClipCount = null;
+// #3300: how many of an .fbx's textures could not be read during conversion;
+// shown on the dimensions step so a plain-looking model isn't a surprise.
+const uploadConversionNoticeEl = document.getElementById('upload-conversion-notice');
+let uploadConversionNoticeCount = 0;
+function refreshConversionNotice() {
+  const n = uploadConversionNoticeCount;
+  uploadConversionNoticeEl.textContent = n > 0
+    ? `${n === 1 ? '1 texture' : `${n} textures`} in this file could not be read, so the model will look plain where ${n === 1 ? 'it was' : 'they were'} used. The shape and animations are unaffected.`
+    : '';
+  uploadConversionNoticeEl.hidden = n === 0;
+}
 function refreshNoAnimationsNote() {
   const text = describeNoAnimationsForAvatar(uploadModelClipCount, uploadAvatarCategoryCheckbox.checked);
   uploadNoAnimationsNoteEl.textContent = text ?? '';
@@ -208,6 +219,8 @@ function disposeUploadDimensionPreview() {
   uploadAnimationsDetectedEl.hidden = true;
   uploadModelClipCount = null;
   refreshNoAnimationsNote();
+  uploadConversionNoticeCount = 0;
+  refreshConversionNotice();
   if (!uploadDimensionPreview) return;
   uploadDimensionPreview.resizeObserver?.disconnect();
   uploadDimensionPreview.controls.dispose();
@@ -598,6 +611,7 @@ async function handleUploadFileStep() {
     // to fall back to, so it aborts this upload attempt outright with a
     // clear error pointing back at the manual Blender path, rather than
     // silently uploading something broken (or the raw .fbx).
+    let skippedTextureCount = 0;
     if (/\.fbx$/i.test(file.name)) {
       setUploadStatus('Converting from FBX…');
       try {
@@ -608,14 +622,20 @@ async function handleUploadFileStep() {
         // write in this function already is.
         const glbBlob = await convertFbxToGlb(file, (status) => {
           if (myFlowToken === uploadFlowToken) setUploadStatus(status);
+        }, {
+          onTexturesSkipped: (count) => {
+            skippedTextureCount = count;
+          },
         });
         if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while converting
         uploadable = new File([glbBlob], file.name.replace(/\.fbx$/i, '.glb'), { type: 'model/gltf-binary' });
       } catch (err) {
         if (myFlowToken !== uploadFlowToken) return; // canceled/superseded — don't report a stale conversion failure
         console.warn('Client-side FBX conversion failed:', err);
+        // #3300: the technical reason stays in the console; the seller gets
+        // what to do next.
         setUploadStatus(
-          `Could not convert this .fbx file (${err.message || 'unknown error'}). ` +
+          'Could not convert this .fbx file. ' +
             'Try exporting it to .glb in Blender first and uploading that instead.',
           true,
         );
@@ -665,6 +685,9 @@ async function handleUploadFileStep() {
       uploadStepDimensionsEl.hidden = false;
       uploadSubmitBtn.textContent = 'Create Product';
       uploadRetryVideoBtn.hidden = uploadModelSource !== 'video';
+      // Set here, not earlier: showUploadDimensionPreview resets the notice first.
+      uploadConversionNoticeCount = skippedTextureCount;
+      refreshConversionNotice();
     });
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while loading the preview
     setUploadStatus('');

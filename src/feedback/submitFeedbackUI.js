@@ -24,6 +24,7 @@ import { getRenderStateBuffer, clearRenderStateBuffer } from './renderStateBuffe
 import { submitFeedbackBugReport } from '../api.js';
 import { currentAuthUser } from '../account/auth.js';
 import { currentMode } from '../world/state.js';
+import { getRecentVisibleMessages } from '../ui/visibleMessages.js';
 
 const feedbackModalEl = document.getElementById('feedback-modal');
 const feedbackCloseBtn = document.getElementById('feedback-close-btn');
@@ -158,6 +159,12 @@ async function handleFeedbackSubmit() {
     renderStateBuffer: getRenderStateBuffer(),
     submittedAt: new Date().toISOString(),
     userId: currentAuthUser?.userId ?? null,
+    // added for #3303 -- the owner hit a Group refusal on a phone, could not
+    // copy it, and had to describe it from memory; the exact error/refusal
+    // words the person was last shown make the next report diagnosable even
+    // when they could not copy them. Remove only once #3303 is closed and no
+    // report has needed it for a while.
+    recentUserVisibleMessages: getRecentVisibleMessages(),
   };
   const form = new FormData();
   if (feedbackScreenshotBlob) form.append('screenshot', feedbackScreenshotBlob, 'feedback.png');
