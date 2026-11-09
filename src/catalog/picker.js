@@ -54,6 +54,14 @@ import { enterPlacementMode, cancelPlacementMode, pendingPlacement } from '../bu
 // where the item actually goes. Tiles are (re)built in bootstrap() once
 // activeCatalog is settled, since the API's catalog isn't known until that
 // fetch resolves.
+// #3330: a saved bundle is a live template, so deleting it detaches every
+// placed copy. The copies keep their items; they just stop being linked.
+function bundleDeleteImpactNote(count) {
+  if (!count) return '';
+  const copies = count === 1 ? '1 placed copy' : `${count} placed copies`;
+  return `\n\n${copies} of it will stay where ${count === 1 ? 'it is' : 'they are'}, but will no longer be linked to this bundle.`;
+}
+
 export const addItemBtn = document.getElementById('add-item-btn');
 const catalogPickerEl = document.getElementById('catalog-picker');
 const catalogPickerGridEl = document.getElementById('catalog-picker-grid');
@@ -502,9 +510,19 @@ export function renderBundlePicker() {
         // onConfirm), not when the modal opens: a rename/share-toggle while
         // the person is still deciding must not make this delete look superseded.
         let myLoadToken = 0;
+        // #3330: the count of placed copies this delete would unlink changes
+        // whenever anyone places or unbundles one, so read it fresh rather
+        // than trusting the picker's cached list. Best effort: if the read
+        // fails the cached figure (possibly absent) is used and the delete
+        // is still offered.
+        let placementCount = bundle.placementCount;
+        try {
+          const fresh = (await fetchBundles()).find((b) => b.bundleId === bundle.bundleId);
+          if (fresh) placementCount = fresh.placementCount;
+        } catch { /* fall back to the cached figure */ }
         const deleted = await confirmDestructive({
           title: 'Delete this bundle?',
-          message: `Delete bundle "${bundle.name}"? This can't be undone.`,
+          message: `Delete bundle "${bundle.name}"? This can't be undone.${bundleDeleteImpactNote(placementCount)}`,
           confirmLabel: 'Delete',
           returnFocusEl: deleteTileBtn,
           restoreModalEl: catalogPickerEl,
