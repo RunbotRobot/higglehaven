@@ -2333,6 +2333,72 @@
         background: var(--brand-green);
         color: #16240a;
       }
+      /* #3278: the shared destructive-confirm modal (src/ui/confirmModal.js),
+         same shell as #bundle-name-modal. */
+      #confirm-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 26;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.35);
+        padding: 16px;
+      }
+      #confirm-modal.visible {
+        display: flex;
+      }
+      #confirm-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.99);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #confirm-modal-content h2 {
+        margin: 0 32px 0 0;
+        font-size: 17px;
+      }
+      #confirm-modal-message {
+        margin: 0;
+        overflow-wrap: anywhere;
+      }
+      #confirm-modal-status {
+        font-size: 13px;
+        color: #a83a27;
+      }
+      #confirm-modal-status:empty {
+        display: none;
+      }
+      #confirm-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      #confirm-modal-actions button {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+      }
+      #confirm-modal-cancel-btn {
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+      }
+      #confirm-modal-confirm-btn {
+        background: #a83a27;
+        color: #fff;
+      }
+      #confirm-modal-actions button:disabled {
+        opacity: 0.5;
+      }
       /* #2388: same shell as #bundle-name-modal above, for the moderation-
          delete category picker. */
       #moderation-category-modal {
@@ -3023,7 +3089,7 @@
         gap: 8px;
         margin-top: 12px;
       }
-      /* #3249: inline Delete confirm in Sell > Manage. */
+      /* #3249: inline confirm row in Sell > Manage (now only the rename warning; Delete uses the confirm modal, #3278). */
       .seller-row-confirm {
         display: inline-flex;
         flex-wrap: wrap;
