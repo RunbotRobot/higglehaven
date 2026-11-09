@@ -29,6 +29,7 @@ import { formatHiggles, START_MODE_KEY, BUILD_TARGET_LANDLET_ID_KEY } from '../m
 import { joinFriendVoiceChannel, leaveFriendVoiceChannel } from '../shop/voiceChat.js';
 import { confirmAndBlockPerson } from '../blocks.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
+import { promptBundleName } from '../ui/bundleNameModal.js';
 import {
   fetchMyBuilder,
   fetchTaxSummary,
@@ -1181,12 +1182,12 @@ async function renderMyLands() {
     renameBtn.type = 'button';
     renameBtn.textContent = 'Rename';
     renameBtn.addEventListener('click', async () => {
-      const next = prompt('Rename this land', landlet.name);
-      if (!next || !next.trim() || next.trim() === landlet.name) return;
-      if (next.trim().length > 100) {
-        alert('Keep it to 100 characters or fewer.');
-        return;
-      }
+      // #3359: the shared in-app name modal instead of window.prompt() (a
+      // browser that suppresses native dialogs made Rename do nothing). Its
+      // input is maxlength 100, so the old over-length alert() is gone.
+      const result = await promptBundleName({ title: 'Rename this land', initialName: landlet.name });
+      if (!result || result.name === landlet.name) return;
+      const next = result.name;
       myLandsStatusEl.textContent = '';
       myLandsStatusEl.classList.remove('error');
       renameBtn.disabled = true;
@@ -1194,7 +1195,7 @@ async function renderMyLands() {
         // #1150: server enforces uniqueness across every landlet, not just
         // this builder's own — a collision surfaces here as the server's
         // own friendly message via requestJson's rejection.
-        const updated = await renameLandlet(landlet.landletId, next.trim());
+        const updated = await renameLandlet(landlet.landletId, next);
         landlet.name = updated.name;
         openLink.textContent = landlet.name;
       } catch (err) {
