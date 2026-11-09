@@ -188,8 +188,23 @@ await pageA.evaluate(() => window.__bgSimResume());
 // presenceAndContent.js) -- A's row is fresh again almost immediately once
 // its loop resumes. Margin: A's first report + B's next poll + A's own
 // next poll (to see B again) + a little lerp/render settle time.
-await pageA.waitForTimeout(3000);
-await pageB.waitForTimeout(1500);
+// #3349: a fixed 3s + 1.5s margin failed under CI load (A's first poll after
+// resume landed late). Wait on the condition instead, with a long ceiling, so
+// a slow runner only makes this slower, never red.
+const seesBuilder = (page, id) => page.evaluate(
+  (builderId) => !!window.__shopOtherAvatars?.some((a) => a.builderId === builderId),
+  id,
+);
+const waitUntilSeen = async (page, id, ceilingMs = 45000) => {
+  const deadline = Date.now() + ceilingMs;
+  while (Date.now() < deadline) {
+    if (await seesBuilder(page, id)) return true;
+    await page.waitForTimeout(500);
+  }
+  return false;
+};
+await waitUntilSeen(pageB, builderA.builderId);
+await waitUntilSeen(pageA, builderB.builderId);
 
 const othersInB_afterRecovery = await pageB.evaluate(() => window.__shopOtherAvatars);
 const aSeenByB_after = othersInB_afterRecovery?.find((a) => a.builderId === builderA.builderId);
