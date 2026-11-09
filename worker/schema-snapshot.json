@@ -47,6 +47,7 @@
       "version_number": "INTEGER|1||0"
     },
     "archived_version_instances": {
+      "bundle_id": "TEXT|0||0",
       "crop_json": "TEXT|1|'{}'|0",
       "group_id": "TEXT|0||0",
       "is_community_calendar": "INTEGER|1|0|0",
@@ -483,6 +484,7 @@
       "template_id": "TEXT|1||0"
     },
     "placed_instances": {
+      "bundle_id": "TEXT|0||0",
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "crop_json": "TEXT|1|'{}'|0",
       "group_id": "TEXT|0||0",
@@ -775,6 +777,7 @@
       "username": "TEXT|0||0"
     },
     "version_instances": {
+      "bundle_id": "TEXT|0||0",
       "crop_json": "TEXT|1|'{}'|0",
       "group_id": "TEXT|0||0",
       "is_community_calendar": "INTEGER|1|0|0",
@@ -1176,6 +1179,10 @@
     "index:idx_placed_instance_backups_template_id": {
       "tbl": "placed_instance_backups",
       "sql": "CREATE INDEX idx_placed_instance_backups_template_id ON placed_instance_backups(template_id)"
+    },
+    "index:idx_placed_instances_bundle_id": {
+      "tbl": "placed_instances",
+      "sql": "CREATE INDEX idx_placed_instances_bundle_id ON placed_instances(bundle_id)"
     },
     "index:idx_placed_instances_group_id": {
       "tbl": "placed_instances",

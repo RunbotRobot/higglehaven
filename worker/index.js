@@ -2386,10 +2386,10 @@ async function resolveAuction(db, auction) {
         `).bind(auction.seller_builder_id, auction.landlet_id),
         db.prepare(`
           INSERT INTO archived_version_instances
-            (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id)
+            (version_id, source_instance_id, template_id, x_m, y_m, z_m, rotation_x_rad, rotation_y_rad, rotation_z_rad, label, crop_json, scale, is_community_sign, is_community_calendar, group_id, bundle_id)
           SELECT vi.version_id, vi.source_instance_id, vi.template_id, vi.x_m, vi.y_m, vi.z_m,
                  vi.rotation_x_rad, vi.rotation_y_rad, vi.rotation_z_rad, vi.label, vi.crop_json, vi.scale,
-                 vi.is_community_sign, vi.is_community_calendar, vi.group_id
+                 vi.is_community_sign, vi.is_community_calendar, vi.group_id, vi.bundle_id
           FROM version_instances vi
           JOIN landlet_versions v ON v.version_id = vi.version_id
           WHERE v.landlet_id = ?
@@ -4357,6 +4357,10 @@ export function validateInstance(input, fallbackId) {
     // value (only when it names a group the caller already owns a member
     // of), not this function.
     groupId: input.groupId ? stringValue(input.groupId, 'groupId') : null,
+    // #3327: round-tripped the same way as groupId and gated by the same
+    // check (worker/lib/bundle-links.js): honored only when the live group
+    // the instance rejoins is itself linked to this bundle.
+    bundleId: input.bundleId ? stringValue(input.bundleId, 'bundleId') : null,
   };
 }
 
@@ -4502,6 +4506,11 @@ export function instanceFromRow(row) {
     // POST /api/instances/group and POST /api/instances/ungroup
     // (worker/lib/world-objects.js) ever change it.
     groupId: row.group_id ?? null,
+    // #3327: the saved bundle this placement is linked to (migrations/0210),
+    // or null for an ordinary / unsaved / pasted bundle instance. Like groupId
+    // it is only ever changed by the group/ungroup routes, never by the
+    // generic POST/PATCH field merge.
+    bundleId: row.bundle_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -4640,6 +4649,9 @@ export function versionInstanceFromRow(row) {
     // group_id alongside this function's other already-mirrored columns —
     // see that migration's own comment for why.
     groupId: row.group_id ?? null,
+    // #3327: version_instances/archived_version_instances carry the link too
+    // (migrations/0210); restoring re-verifies it against the live group.
+    bundleId: row.bundle_id ?? null,
   };
 }
 

@@ -1319,6 +1319,9 @@ function instanceFromMesh(mesh) {
     // mesh's own instanceFromMesh call (inside syncBatchCreate) ask the
     // server to restore it, instead of coming back permanently ungrouped.
     groupId: mesh.userData.groupId ?? null,
+    // #3327: same Delete+Undo reasoning as groupId; the server honors it only
+    // when the live group is still linked to this bundle.
+    bundleId: mesh.userData.bundleId ?? null,
   };
 }
 
@@ -1708,6 +1711,7 @@ async function applyStaleInstances(staleInstances, { gateHeld = false } = {}) {
       const instance = staleById.get(mesh.userData.instanceId);
       if (!instance) continue;
       mesh.userData.groupId = instance.groupId ?? null;
+      mesh.userData.bundleId = instance.bundleId ?? null;
       adoptVersion(instance);
     }
     updateSelectionUI();
@@ -2393,7 +2397,8 @@ function meshDiffersFromInstance(mesh, inst) {
   return !near(mesh.position.x, inst.x) || !near(mesh.position.y, inst.y) || !near(mesh.position.z, inst.z)
     || !near(mesh.rotation.x, inst.rotationX ?? 0) || !near(mesh.rotation.y, inst.rotationY ?? 0) || !near(mesh.rotation.z, inst.rotationZ ?? 0)
     || !near(mesh.userData.scale ?? 1, inst.scale ?? 1)
-    || (mesh.userData.groupId ?? null) !== (inst.groupId ?? null);
+    || (mesh.userData.groupId ?? null) !== (inst.groupId ?? null)
+    || (mesh.userData.bundleId ?? null) !== (inst.bundleId ?? null);
 }
 
 // Makes the live scene match the server's instance list (the same reshaping
@@ -2423,7 +2428,10 @@ async function applyServerInstances(serverInstances) {
     // not group membership, which only the server's group/ungroup endpoints change.
     for (const mesh of productMeshes) {
       const inst = serverById.get(mesh.userData.instanceId);
-      if (inst) mesh.userData.groupId = inst.groupId ?? null;
+      if (inst) {
+        mesh.userData.groupId = inst.groupId ?? null;
+        mesh.userData.bundleId = inst.bundleId ?? null; // #3327
+      }
     }
     serverInstances.forEach(adoptVersion); // #1062: only now that the server's state is what the scene shows
     updateSelectionUI();
@@ -3565,8 +3573,11 @@ groupBtn.addEventListener('click', async () => {
     const instanceIds = meshes.map((mesh) => mesh.userData.instanceId);
     syncsInFlight += 1; // #3101: a refocus reconcile must not land mid-request
     try {
-      const { groupId } = await groupInstancesRemote(instanceIds);
-      for (const mesh of meshes) mesh.userData.groupId = groupId;
+      const { groupId, bundleId } = await groupInstancesRemote(instanceIds);
+      for (const mesh of meshes) {
+        mesh.userData.groupId = groupId;
+        mesh.userData.bundleId = bundleId; // #3327: a fresh Group is an unlinked bundle instance
+      }
       groupBtn.classList.add('pressed');
       setTimeout(() => groupBtn.classList.remove('pressed'), 150);
     } catch (err) {
@@ -3593,6 +3604,7 @@ ungroupBtn.addEventListener('click', async () => {
     for (const mesh of productMeshes) {
       if (mesh.userData.groupId === groupId && ungroupedSet.has(mesh.userData.instanceId)) {
         mesh.userData.groupId = null;
+        mesh.userData.bundleId = null; // #3327: dissolving the group dissolves its link
       }
     }
     ungroupBtn.classList.add('pressed');
@@ -3777,7 +3789,7 @@ renderer.domElement.addEventListener('pointerdown', (event) => {
 // through handlePlacementClick below), never from pasteBtn's ordinary
 // clipboard paste, which should keep placing an ad-hoc copied selection as
 // independent items like it always has.
-async function placeClipboardItems(items, x, y, supportZ, { group = false } = {}) {
+async function placeClipboardItems(items, x, y, supportZ, { group = false, bundleId = null } = {}) {
   const placed = [];
   // #469: a saved bundle can outlive the catalog templates its items point
   // at (deleting a template only checks for currently-*placed* instances,
@@ -3857,8 +3869,12 @@ async function placeClipboardItems(items, x, y, supportZ, { group = false } = {}
   // itself or pile a second alert on top of syncBatchCreate's own.
   if (group && placed.length >= 2) {
     try {
-      const { groupId } = await groupInstancesRemote(placed.map((mesh) => mesh.userData.instanceId));
-      for (const mesh of placed) mesh.userData.groupId = groupId;
+      // #3327: a bundle placed from the picker is linked to its saved template.
+      const { groupId, bundleId: linkedBundleId } = await groupInstancesRemote(placed.map((mesh) => mesh.userData.instanceId), { bundleId });
+      for (const mesh of placed) {
+        mesh.userData.groupId = groupId;
+        mesh.userData.bundleId = linkedBundleId;
+      }
       // The toolbar's Ungroup-enabled state was already computed by the
       // updateSelectionUI() call above, before groupId existed on any of
       // these meshes -- recompute now that it does, same as groupBtn's own
@@ -3915,7 +3931,7 @@ export async function handlePlacementClick() {
       const mesh = await spawnInstanceAt(pending.template, point.x, point.y, supportZ + pending.template.dimensions.height / 2);
       selectOnly(mesh);
     } else {
-      await placeClipboardItems(pending.items, point.x, point.y, supportZ, { group: pending.group });
+      await placeClipboardItems(pending.items, point.x, point.y, supportZ, { group: pending.group, bundleId: pending.bundleId ?? null });
     }
   } finally {
     endSceneMutation();
