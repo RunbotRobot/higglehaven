@@ -504,17 +504,18 @@ async function renderBackupChain() {
             await deleteInstanceBackup(instanceId, backup.backupId);
           } catch (err) {
             failed = true;
+            // #2969: refresh the list right away so a dead row self-heals
+            // behind the modal while it shows why the remove failed.
+            renderBackupChain();
             throw new Error(err.message || 'Could not remove this backup.');
           }
         },
       });
-      // #2969: re-render after a failure too (not just a success) -- a
-      // concurrent delete of this same backup (a second open copy of this
-      // panel) is exactly the kind of failure this fires for, and leaving the
-      // stale row in place just repeats the same dead-end delete on every
-      // retry. Same fix #2963/metadataModals.js's sign-posts/calendar-events
-      // handlers already got.
-      if (removed || failed) await renderBackupChain();
+      // #2969: a concurrent delete of this same backup (a second open copy
+      // of this panel) is the kind of failure that leaves a dead row, and
+      // leaving it just repeats the same dead-end delete on every retry. A
+      // failure already refreshed the list above; this covers success.
+      if (removed) await renderBackupChain();
     });
     row.appendChild(removeBtn);
     backupChainListEl.appendChild(row);

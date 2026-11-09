@@ -179,6 +179,10 @@ await fetchJson(`/api/instances/${chairInstance.instanceId}/backups/${staleBacku
 await page.locator('.backup-chain-row').filter({ hasText: 'Tree' }).locator('.backup-chain-row-remove').click();
 await acceptConfirmModal(page); // #3278: in-app confirm modal
 await page.waitForFunction(() => document.querySelectorAll('.backup-chain-row').length === 1, null, { timeout: 60000 });
+// #3278: the failure is shown inside the confirm modal, which stays open until dismissed.
+await page.waitForFunction(() => document.getElementById('confirm-modal-status').textContent.length > 0, null, { timeout: 10000 });
+await page.click('#confirm-modal-cancel-btn');
+await page.waitForFunction(() => !document.getElementById('confirm-modal').classList.contains('visible'), null, { timeout: 5000 });
 const rowCountAfterStaleRemove = await page.locator('.backup-chain-row').count();
 const remainingRowTextAfterStaleRemove = await page.locator('.backup-chain-row').first().textContent();
 console.log('rows shown before attempting to remove an already-gone backup (should be 2):', rowCountBeforeStaleRemove);
