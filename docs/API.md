@@ -4935,7 +4935,7 @@ Response:
 
 #2764 (sub-issue of #2763, owner-requested). Requires a session; every
 referenced instance's `landletId` must belong to the calling session's
-builder (`403` otherwise). Groups 2–100 placed instances together under a
+builder (`403` otherwise). Groups 2–5,000 placed instances together under a
 freshly minted, shared `groupId` — persists across save/reload, unlike the
 transient multi-select group-move (`groupMovePivot`, `src/build/scene.js`)
 that only ever lives for the duration of one drag.
@@ -4955,8 +4955,13 @@ Request body:
 { "instanceIds": ["2ddc1202-...", "91fa0cc3-..."] }
 ```
 
-`instanceIds` must have 2–100 unique entries, each an existing instance.
-A missing id returns `404` and leaves nothing changed.
+`instanceIds` must have 2–5,000 unique entries, each an existing instance
+(`400` otherwise, with a message that states the limit: "You can group up to
+5,000 items at once."). A missing id returns `404` and leaves nothing changed.
+The lookup and the writes run in chunks under D1's 100-bound-parameter limit
+(#3304), the writes in one transaction, and a request counts as
+`ceil(n / 100)` writes against the shared per-builder instance-write rate
+limit.
 
 Response (`201`):
 
