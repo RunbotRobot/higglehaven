@@ -2922,6 +2922,23 @@ stored signature is cleared to `null` rather than left describing the old
 model. Re-sending the current `modelUrl`, or any edit that does not touch
 it, leaves all three alone.
 
+`clipRoles` (#3312, part of #3301) is the seller's own choice of which clip
+of an avatar model plays as idle, walk and fly, for a model whose clip names
+cannot say (a Mixamo export names every clip `mixamo.com`). On create,
+`PUT`/`PATCH` it is `{ "idle": <clip name|null>, "walk": ..., "fly": ... }`
+(any subset of those three keys; each value a clip name of 1 to 200
+characters or `null`; one clip cannot be given to two roles; anything else is
+a `400`) and is returned normalised, with all three keys, as `clipRoles`; it
+is `null` when nobody chose, in which case clients keep matching clips by
+name. A stored value is authoritative: a role set to `null` plays nothing. It
+is only accepted for a product in the `avatar` category (`400` otherwise).
+Because it names clips of one file, it is cleared to `null` when `modelUrl`
+changes without a new `clipRoles` in the same request, and when `category`
+changes away from `avatar`. `PATCH` leaves it alone when the field is
+omitted, and `"clipRoles": null` clears it. It is stored on the shared
+product too, so a second seller attaching their own listing
+(`POST /api/catalog/listings`) inherits it.
+
 If the request actually changes `dimensions`, every builder with a placed
 instance of this template gets a notification once the update succeeds —
 see "Notifications" below.

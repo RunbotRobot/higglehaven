@@ -162,6 +162,7 @@
     },
     "catalog_templates": {
       "category": "TEXT|1|'placeholder'|0",
+      "clip_roles": "TEXT|0||0",
       "color": "TEXT|1||0",
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "delisted_at": "TEXT|0||0",
@@ -524,6 +525,7 @@
     },
     "products": {
       "category": "TEXT|1|'placeholder'|0",
+      "clip_roles": "TEXT|0||0",
       "color": "TEXT|1||0",
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "depth_m": "REAL|1||0",
