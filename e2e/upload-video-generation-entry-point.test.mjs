@@ -41,6 +41,7 @@ console.log('manual file row visible before toggling (should be true):', fileRow
 console.log('video section hidden before toggling (should be true):', videoSectionHiddenInitially);
 
 await page.fill('#upload-name', PRODUCT_NAME);
+await page.fill('#upload-price', '5'); // #3252: price is checked on this step
 await page.click('#upload-mode-video-btn');
 
 const videoSectionVisibleAfterToggle = await page.evaluate(() => !document.getElementById('upload-video-section').hidden);

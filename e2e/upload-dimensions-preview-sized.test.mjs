@@ -27,6 +27,7 @@ await page.waitForTimeout(300);
 await page.click('#upload-model-btn');
 await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await page.fill('#upload-name', 'Preview Size Crate');
+await page.fill('#upload-price', '5'); // #3252: price is checked on this step
 await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
 await page.click('#upload-submit-btn');
 await page.waitForSelector('#upload-step-dimensions:not([hidden])', { timeout: 30000 });

@@ -37,6 +37,7 @@ console.log('upload-hint-btn aria-expanded after click (should be "true"):', exp
 // whose own tooltip (#upload-dimensions-hint) should start hidden too and
 // opening it should close the file step's still-open one (one at a time).
 await page.fill('#upload-name', 'Info Tooltip Suite Crate');
+await page.fill('#upload-price', '5'); // #3252: price is checked on this step
 await page.setInputFiles('#upload-file-input', path.join(REPO_ROOT, 'public', 'models', 'crate.glb'));
 await page.click('#upload-submit-btn');
 // #2639 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
