@@ -699,12 +699,21 @@
       /* #1589: the bird artwork fills the whole pill on a white background
          now, rather than sitting as a small icon on a green one — padding
          removed so the image can reach the button's own edge. */
+      /* #3334: the fly button and the up/down stack above it share one
+         bottom anchor, so the stack's position is derived from the button's
+         own bottom + size + gap instead of a second hand-tuned number that
+         could drift into it (it overlapped by 2px at 390x844). */
+      :root {
+        --shop-fly-bottom: 78px;
+        --shop-fly-size: 56px;
+        --shop-fly-stack-gap: 12px;
+      }
       #shop-fly-btn {
-        bottom: 78px;
+        bottom: var(--shop-fly-bottom);
         left: 50%;
         transform: translateX(-50%);
-        width: 56px;
-        height: 56px;
+        width: var(--shop-fly-size);
+        height: var(--shop-fly-size);
         padding: 0;
         border-radius: 50%;
         border: none;
@@ -737,7 +746,7 @@
          row. */
       #shop-vertical-controls {
         display: none;
-        bottom: 132px;
+        bottom: calc(var(--shop-fly-bottom) + var(--shop-fly-size) + var(--shop-fly-stack-gap));
         left: 50%;
         transform: translateX(-50%);
         flex-direction: column;
