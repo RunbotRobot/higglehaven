@@ -2231,6 +2231,30 @@
         font-size: 12px;
         color: rgb(var(--ink-rgb) / 0.65);
       }
+      /* #3315: the clip-role picker on the upload wizard's dimensions step. */
+      #upload-clip-roles {
+        font-size: 12px;
+      }
+      #upload-clip-roles-title {
+        font-weight: 600;
+        margin-bottom: 4px;
+      }
+      .upload-clip-role-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        margin-top: 4px;
+      }
+      .upload-clip-role-name {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      #upload-clip-roles[hidden] {
+        display: none;
+      }
       /* #2442: the free-generations-remaining line above the video picker
          -- same small/muted treatment as #upload-animations-detected. */
       #upload-video-credits {
