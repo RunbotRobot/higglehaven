@@ -84,7 +84,6 @@ import {
 import { disposeObject3D, unloadShopLandletInstances, buildShopGroundMesh } from './mode.js';
 import { registerShopSign, registerShopCalendar, registerShopReview } from './worldSprites.js';
 import { rateLimitNoticeText } from '../rateLimitNotice.js';
-import { copyTextWithFeedback } from '../ui/copyText.js';
 import { recordVisibleMessage } from '../ui/visibleMessages.js';
 
 const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
@@ -1343,10 +1342,4 @@ function showCreditOrbRateLimitNotice(rateLimit) {
 function hideCreditOrbRateLimitNotice() {
   shopCreditOrbRateLimitNoticeEl.classList.remove('visible');
 }
-shopCreditOrbRateLimitNoticeEl.querySelector('.shop-notice-copy-btn').addEventListener('click', (event) => {
-  copyTextWithFeedback(event.currentTarget, shopCreditOrbRateLimitNoticeTextEl.textContent);
-});
 shopCreditOrbRateLimitNoticeEl.querySelector('.shop-notice-dismiss-btn').addEventListener('click', hideCreditOrbRateLimitNotice);
-shopCreditOrbOfflineNoticeEl.querySelector('.shop-notice-copy-btn').addEventListener('click', (event) => {
-  copyTextWithFeedback(event.currentTarget, shopCreditOrbOfflineNoticeTextEl.textContent);
-});

@@ -1,8 +1,8 @@
-// #3303: the one decision behind the Copy button on error lines, kept
-// dependency-free (no DOM) so it is unit-testable. Does this status line
-// currently hold an error worth a Copy button? An empty line, or a plain
-// progress/success note, does not.
-export function shouldOfferCopy({ text, hasErrorClass, role }) {
+// #3303/#3348: the one decision behind recording a modal status line as a
+// message the person was shown, kept dependency-free (no DOM) so it is
+// unit-testable. Does this line currently hold an error? An empty line, or a
+// plain progress/success note, does not.
+export function isErrorLine({ text, hasErrorClass, role }) {
   if (!String(text ?? '').trim()) return false;
   return Boolean(hasErrorClass) || role === 'alert';
 }
