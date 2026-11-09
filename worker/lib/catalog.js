@@ -232,8 +232,13 @@ function validateTemplate(input, fallbackId) {
     // modelSizeBytes, same "measured once at upload time, persisted so
     // nothing needs to re-fetch the model later" reasoning.
     skeletonSignature: optionalSkeletonSignature(input.skeletonSignature),
+    // #3312: the seller's own idle/walk/fly clip choice for an avatar model.
+    clipRoles: optionalClipRoles(input.clipRoles),
     metadata: input.metadata || {},
   };
+  if (template.clipRoles !== null && template.category !== 'avatar') {
+    throw new HttpError('clipRoles only applies to a product in the avatar category', 400);
+  }
   // Found via backlog audit (#375): modelUrl went straight through with no
   // format check at all — assertUploadedModelExists (below, at the actual
   // R2-reference check) only validates a `/uploads/`-prefixed value and
@@ -322,8 +327,47 @@ function optionalSkeletonSignature(value) {
   return value;
 }
 
+// #3312: which clip of an avatar model plays as idle / walk / fly, as the
+// seller chose it in the upload wizard (the file cannot say: a Mixamo export
+// names every clip "mixamo.com"). An object with only those three keys, each a
+// clip name or null; omitted/null as a whole means nobody chose, and clients
+// keep matching clips by name. A stored value is authoritative, so it is
+// normalised to all three keys in a fixed order (an unmentioned role is null,
+// "plays nothing"), which also makes stored values comparable as text. Only the
+// shape is checked: like skeletonSignature, the server never opens the model.
+const CLIP_ROLE_KEYS = ['idle', 'walk', 'fly'];
+const MAX_CLIP_NAME_CHARS = 200;
+function optionalClipRoles(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new HttpError('clipRoles must be an object with idle, walk and/or fly, or omitted', 400);
+  }
+  const unknownKey = Object.keys(value).find((key) => !CLIP_ROLE_KEYS.includes(key));
+  if (unknownKey) throw new HttpError(`clipRoles can only set idle, walk and fly, not "${unknownKey}"`, 400);
+  const roles = {};
+  for (const key of CLIP_ROLE_KEYS) {
+    const name = value[key];
+    if (name === undefined || name === null) {
+      roles[key] = null;
+    } else if (typeof name !== 'string' || name.trim() === '' || name.length > MAX_CLIP_NAME_CHARS) {
+      throw new HttpError(`clipRoles.${key} must be a clip name of 1 to ${MAX_CLIP_NAME_CHARS} characters, or null`, 400);
+    } else {
+      roles[key] = name;
+    }
+  }
+  const named = CLIP_ROLE_KEYS.map((key) => roles[key]).filter((name) => name !== null);
+  if (new Set(named).size !== named.length) {
+    throw new HttpError('clipRoles cannot give the same clip to two roles', 400);
+  }
+  return roles;
+}
+
+function clipRolesToText(clipRoles) {
+  return clipRoles ? JSON.stringify(clipRoles) : null;
+}
+
 function templateParams(template) {
-  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata), template.stockQuantity];
+  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata), template.stockQuantity, clipRolesToText(template.clipRoles)];
 }
 
 // #1758: compares an existing row (raw DB shape) against a freshly
@@ -344,7 +388,8 @@ function templateContentMatches(existingRow, template) {
     && existingRow.height_m === template.dimensions.height
     && existingRow.price_cents === template.priceCents
     && existingRow.metadata_json === JSON.stringify(template.metadata)
-    && existingRow.stock_quantity === template.stockQuantity;
+    && existingRow.stock_quantity === template.stockQuantity
+    && (existingRow.clip_roles ?? null) === clipRolesToText(template.clipRoles);
 }
 
 // #327: decodes and size-caps the flat PNG thumbnail POST /api/catalog/
@@ -1082,6 +1127,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
         seller_id = excluded.seller_id, model_url = excluded.model_url,
         model_size_bytes = excluded.model_size_bytes,
         skeleton_signature = excluded.skeleton_signature,
+        clip_roles = excluded.clip_roles,
         metadata_json = excluded.metadata_json,
         stock_quantity = excluded.stock_quantity,
         updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -1111,8 +1157,8 @@ export async function handleCatalog(request, db, route, url, models, env) {
     }
     await db.batch(templates.map((template) => db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity, clip_roles)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...templateParams(existingSellerIdById.has(template.templateId)
       ? { ...template, sellerId: existingSellerIdById.get(template.templateId) }
@@ -1605,25 +1651,26 @@ export async function handleCatalog(request, db, route, url, models, env) {
       db.prepare(`
         INSERT INTO products
           (product_id, name, category, subcategory, color, width_m, depth_m, height_m,
-           model_url, metadata_json, model_size_bytes, skeleton_signature, original_seller_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           model_url, metadata_json, model_size_bytes, skeleton_signature, original_seller_id, clip_roles)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(product_id) DO UPDATE SET
           name = excluded.name, category = excluded.category, subcategory = excluded.subcategory,
           color = excluded.color, width_m = excluded.width_m, depth_m = excluded.depth_m,
           height_m = excluded.height_m, model_url = excluded.model_url,
           metadata_json = excluded.metadata_json, model_size_bytes = excluded.model_size_bytes,
-          skeleton_signature = excluded.skeleton_signature, original_seller_id = excluded.original_seller_id
+          skeleton_signature = excluded.skeleton_signature, original_seller_id = excluded.original_seller_id,
+          clip_roles = excluded.clip_roles
         WHERE NOT EXISTS (SELECT 1 FROM catalog_templates WHERE product_id = excluded.product_id)
       `).bind(
         template.templateId, template.name, template.category, template.subcategory, template.color,
         template.dimensions.width, template.dimensions.depth, template.dimensions.height,
         template.modelUrl, JSON.stringify(template.metadata), template.modelSizeBytes, template.skeletonSignature,
-        template.sellerId,
+        template.sellerId, clipRolesToText(template.clipRoles),
       ),
       db.prepare(`
         INSERT INTO catalog_templates
-          (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity, product_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity, clip_roles, product_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(...templateParams(template), template.templateId),
     ]);
     // #976: re-select and map through templateFromRow rather than handing
@@ -1704,13 +1751,13 @@ export async function handleCatalog(request, db, route, url, models, env) {
       INSERT INTO catalog_templates
         (template_id, name, category, subcategory, color, width_m, depth_m, height_m,
          price_cents, seller_id, model_url, model_size_bytes, skeleton_signature,
-         image_url, image_embedding, is_test_model, metadata_json, stock_quantity, product_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         image_url, image_embedding, is_test_model, metadata_json, stock_quantity, product_id, clip_roles)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       templateId, product.name, product.category, product.subcategory, product.color,
       product.width_m, product.depth_m, product.height_m,
       priceCents, sessionSeller.seller_id, product.model_url, product.model_size_bytes, product.skeleton_signature,
-      imageUrl, imageEmbedding, product.is_test_model, product.metadata_json, stockQuantity, productId,
+      imageUrl, imageEmbedding, product.is_test_model, product.metadata_json, stockQuantity, productId, product.clip_roles ?? null,
     ).run();
     const stored = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     return json({ template: templateFromRow(stored) }, 201);
@@ -1769,10 +1816,16 @@ export async function handleCatalog(request, db, route, url, models, env) {
       throw new HttpError('modelSizeBytes is required when modelUrl changes', 400);
     }
     const clearSkeletonSignature = modelUrlChanged && input.skeletonSignature === undefined;
+    // #3312: a seller's clip choice names clips of the OLD file, so a new
+    // model file drops it unless the same request brings a fresh one.
+    // Likewise when the product stops being an avatar (clipRoles is avatar-only).
+    const clearClipRoles = input.clipRoles === undefined
+      && (modelUrlChanged || (input.category !== undefined && input.category !== 'avatar'));
     const template = validateTemplate({
       ...templateFromRow(existing),
       ...input,
       ...(clearSkeletonSignature ? { skeletonSignature: null } : {}),
+      ...(clearClipRoles ? { clipRoles: null } : {}),
       templateId: route[1],
       sellerId: existing.seller_id,
     }, route[1]);
@@ -1821,6 +1874,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
           model_url = CASE WHEN ? = 1 THEN ? ELSE model_url END,
           model_size_bytes = CASE WHEN ? = 1 THEN ? ELSE model_size_bytes END,
           skeleton_signature = CASE WHEN ? = 1 THEN ? ELSE skeleton_signature END,
+          clip_roles = CASE WHEN ? = 1 THEN ? ELSE clip_roles END,
           metadata_json = CASE WHEN ? = 1 THEN ? ELSE metadata_json END,
           stock_quantity = CASE WHEN ? = 1 THEN ? ELSE stock_quantity END,
           updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
@@ -1838,6 +1892,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
       input.modelUrl === undefined ? 0 : 1, template.modelUrl,
       input.modelSizeBytes === undefined ? 0 : 1, template.modelSizeBytes,
       input.skeletonSignature === undefined && !clearSkeletonSignature ? 0 : 1, template.skeletonSignature,
+      input.clipRoles === undefined && !clearClipRoles ? 0 : 1, clipRolesToText(template.clipRoles),
       input.metadata === undefined ? 0 : 1, JSON.stringify(template.metadata),
       input.stockQuantity === undefined ? 0 : 1, template.stockQuantity,
       route[1],

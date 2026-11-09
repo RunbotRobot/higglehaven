@@ -37,9 +37,8 @@ await sellerPage.waitForSelector('#upload-modal.visible', { timeout: 10000 });
 await sellerPage.fill('#upload-name', PRODUCT_NAME);
 await sellerPage.fill('#upload-price', OVER_CAP_DOLLARS);
 await sellerPage.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
-await sellerPage.click('#upload-submit-btn');
-await sellerPage.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
-await sellerPage.waitForTimeout(300);
+// #3252: the over-cap price is refused on this first step (the one that has
+// the price field), so the wizard never advances to Confirm Dimensions.
 await sellerPage.click('#upload-submit-btn');
 await sellerPage.waitForFunction(
   () => document.getElementById('upload-status')?.textContent.includes('$1,000,000'),
@@ -52,15 +51,11 @@ const uploadModalStillOpen = await sellerPage.locator('#upload-modal.visible').c
 console.log('upload modal still open after the rejected price, confirming no fetch was sent (should be 1):', uploadModalStillOpen);
 
 // A valid price still works normally -- not a regression to "nothing can
-// ever be uploaded". #upload-price lives on the file step, already hidden
-// now that the wizard has moved to the dimensions step (where this re-check
-// runs) -- force bypasses the hidden-ancestor actionability check, same as
-// just editing the retained value directly would.
-await sellerPage.evaluate(() => {
-  const input = document.getElementById('upload-price');
-  input.value = '10.00';
-  input.dispatchEvent(new Event('input', { bubbles: true }));
-});
+// ever be uploaded".
+await sellerPage.fill('#upload-price', '10.00');
+await sellerPage.click('#upload-submit-btn');
+await sellerPage.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 30000 });
+await sellerPage.waitForTimeout(300);
 await sellerPage.click('#upload-submit-btn');
 await sellerPage.waitForFunction(() => !document.getElementById('upload-modal').classList.contains('visible'), null, { timeout: 30000 });
 await sellerPage.waitForTimeout(500);

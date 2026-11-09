@@ -4438,6 +4438,8 @@ export function templateFromRow(row) {
     modelUrl: row.model_url,
     modelSizeBytes: row.model_size_bytes,
     skeletonSignature: row.skeleton_signature,
+    // #3312: the seller's own idle/walk/fly clip choice, or null when nobody chose.
+    clipRoles: row.clip_roles ? JSON.parse(row.clip_roles) : null,
     // #327: set via POST /api/catalog/:templateId/thumbnail, never via the
     // ordinary create/update paths above (validateTemplate/templateParams
     // deliberately don't touch these two columns) — see that endpoint's
