@@ -28,6 +28,7 @@ import { formatHiggles, START_MODE_KEY, BUILD_TARGET_LANDLET_ID_KEY } from '../m
 // rendering only) does.
 import { joinFriendVoiceChannel, leaveFriendVoiceChannel } from '../shop/voiceChat.js';
 import { confirmAndBlockPerson } from '../blocks.js';
+import { confirmDestructive } from '../ui/confirmModal.js';
 import {
   fetchMyBuilder,
   fetchTaxSummary,
@@ -839,16 +840,24 @@ async function renderFriends() {
     removeBtn.className = 'danger';
     removeBtn.textContent = 'Remove';
     removeBtn.addEventListener('click', async () => {
-      if (!confirm(`Remove ${friendship.otherLabel} as a friend?`)) return;
-      removeBtn.disabled = true;
-      try {
-        await removeFriendship(friendship.friendshipId);
-        await renderFriends();
-      } catch (err) {
-        friendsStatusEl.textContent = err.message || 'Could not remove this friend.';
-        friendsStatusEl.classList.add('error');
-        removeBtn.disabled = false;
-      }
+      // #3278: confirmed in its own in-app modal (not window.confirm), opened
+      // over the friends list; a refusal is shown inside it.
+      const removed = await confirmDestructive({
+        title: 'Remove this friend?',
+        message: `Remove ${friendship.otherLabel} as a friend?`,
+        confirmLabel: 'Remove',
+        returnFocusEl: removeBtn,
+        restoreModalEl: friendsModalEl,
+        restoreCloseFn: closeFriendsModal,
+        onConfirm: async () => {
+          try {
+            await removeFriendship(friendship.friendshipId);
+          } catch (err) {
+            throw new Error(err.message || 'Could not remove this friend.');
+          }
+        },
+      });
+      if (removed) await renderFriends();
     });
     actions.appendChild(removeBtn);
     // #3140: Block sits next to Remove. It also ends the friendship (silently).
@@ -857,9 +866,11 @@ async function renderFriends() {
     blockBtn.className = 'danger';
     blockBtn.textContent = 'Block';
     blockBtn.addEventListener('click', async () => {
-      blockBtn.disabled = true;
-      if (await confirmAndBlockPerson(friendship.otherBuilderId)) await renderFriends();
-      else blockBtn.disabled = false;
+      if (await confirmAndBlockPerson(friendship.otherBuilderId, {
+        restoreModalEl: friendsModalEl,
+        restoreCloseFn: closeFriendsModal,
+        returnFocusEl: blockBtn,
+      })) await renderFriends();
     });
     actions.appendChild(blockBtn);
     row.appendChild(actions);
