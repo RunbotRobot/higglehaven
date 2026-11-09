@@ -43,7 +43,7 @@ import { loadModelInstance, computeSkeletonSignature, loadModelAnimations } from
 import { scene } from '../world/scene.js';
 import { currentMode } from '../world/state.js';
 import { fetchMyEquippedAnimation } from '../api.js';
-import { pickAvatarClips } from '../avatarClipNames.js';
+import { pickAvatarClips, normalizeClipRoles } from '../avatarClipNames.js';
 import { findShopIdleInteractionTarget } from './flightMovement.js';
 import {
   SHOP_AFK_BLEND_PER_S, SHOP_AFK_DELAY_S, SHOP_AVATAR_ANIM_CROSSFADE_S,
@@ -232,7 +232,11 @@ export function createShopAvatar() {
 // bodies in presenceAndContent.js so both turn a model the same way.
 export const CUSTOM_AVATAR_FRONT_YAW_RAD = Math.PI;
 
-export async function createCustomShopAvatar(modelUrl, appliedAnimation = null) {
+// #3314: clipRoles is the seller's own choice of which of THIS model's clips
+// plays as idle/walk/fly (src/avatarClipNames.js), or null to match by name.
+// It names clips of the avatar's own file, so it only applies when the avatar
+// plays its own clips, never an applied animation's.
+export async function createCustomShopAvatar(modelUrl, appliedAnimation = null, clipRoles = null) {
   // #982: lets an e2e test simulate a slow model load (a real network fetch
   // + GLTF parse can take a while) deterministically, without depending on
   // how long an actual fetch takes or on Playwright's own route-
@@ -325,7 +329,7 @@ export async function createCustomShopAvatar(modelUrl, appliedAnimation = null) 
     mixer = new THREE.AnimationMixer(container.userData.model);
     actions = {};
     // #3287: same role matching as other players' bodies and the upload wizard.
-    const picked = pickAvatarClips(animations, ['idle', 'walk', 'fly']);
+    const picked = pickAvatarClips(animations, ['idle', 'walk', 'fly'], animationIsCompatible ? null : clipRoles);
     for (const state of ['idle', 'walk', 'fly']) {
       if (picked[state]) actions[state] = mixer.clipAction(picked[state]);
     }
@@ -334,6 +338,8 @@ export async function createCustomShopAvatar(modelUrl, appliedAnimation = null) 
 
   return {
     group, legPivotL, legPivotR, armPivotL, armPivotR, headPivot, afkSprite, mixer, actions, animState: null, modelUrl,
+    // #3314: kept so a re-equip of only the applied animation rebuilds with the same choice.
+    clipRoles: normalizeClipRoles(clipRoles),
     measuredHeightM: height, measuredCollisionHalfM: horizontalHalfM,
     // #1165: which file `actions` above was actually bound from, for the
     // same "nothing in the DOM reflects this" e2e-diagnostic reasoning
@@ -402,7 +408,7 @@ let shopAvatarEquipToken = 0;
 // new "My Animations" picker applies/clears an animation (modelUrl stays
 // the same, re-fetched fresh here either way) — either trigger needs the
 // exact same rebuild, since compatibility depends on both together.
-export async function refreshEquippedShopAvatar(modelUrl) {
+export async function refreshEquippedShopAvatar(modelUrl, clipRoles = null) {
   if (currentMode !== 'shop' || !shopAvatar) return;
   const myToken = ++shopAvatarEquipToken;
   let appliedAnimation = null;
@@ -416,7 +422,7 @@ export async function refreshEquippedShopAvatar(modelUrl) {
   let nextAvatar;
   if (modelUrl) {
     try {
-      nextAvatar = await createCustomShopAvatar(modelUrl, appliedAnimation);
+      nextAvatar = await createCustomShopAvatar(modelUrl, appliedAnimation, clipRoles);
     } catch (err) {
       console.warn(`Failed to load newly-equipped avatar model (${modelUrl}), falling back to the default avatar:`, err);
       nextAvatar = createShopAvatar();

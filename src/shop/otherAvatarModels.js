@@ -16,6 +16,8 @@
 // uploaded to the GPU, so a crowded landlet must not load one per avatar --
 // beyond the cap an avatar simply keeps the default body (the issue's own
 // suggested ~6).
+import { normalizeClipRoles } from '../avatarClipNames.js';
+
 export const MAX_DISTINCT_CUSTOM_AVATAR_MODELS = 6;
 
 // Fail open: how long a model that failed to load is left alone before the
@@ -35,7 +37,9 @@ export function normalizeEquippedAvatar(raw) {
   // #3230: skeletonSignature rides along (null from an older server, or a
   // model with no skeleton) so animationForAvatar can run the compatibility
   // check without another request.
-  return { templateId, modelUrl, skeletonSignature: normalizeSignature(raw.skeletonSignature) };
+  // #3314: the seller's chosen idle/walk/fly clips (null when nobody chose, or
+  // from an older server), so this body plays the same clips its owner's does.
+  return { templateId, modelUrl, skeletonSignature: normalizeSignature(raw.skeletonSignature), clipRoles: normalizeClipRoles(raw.clipRoles) };
 }
 
 function normalizeSignature(raw) {

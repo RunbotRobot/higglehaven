@@ -51,7 +51,7 @@ describe('mountShopAvatar (#3294)', () => {
     const t = setup({ avatar: { modelUrl: '/uploads/a.glb', skeletonSignature: 'sig-1' }, animation, customAvatar: custom });
     const result = await mountShopAvatar({ scene: t.scene, isLoggedIn: true }, t.deps);
     expect(result).toBe(custom);
-    expect(t.deps.createCustomShopAvatar).toHaveBeenCalledWith('/uploads/a.glb', animation);
+    expect(t.deps.createCustomShopAvatar).toHaveBeenCalledWith('/uploads/a.glb', animation, null);
     expect(t.calls.filter(([k]) => k === 'signature').map(([, v]) => v)).toEqual([null, 'sig-1']);
     expect(t.win.__shopAvatarModelUrl).toBe('/uploads/a.glb');
     expect(t.win.__shopAvatarAnimationSource).toBe('applied');
@@ -59,15 +59,22 @@ describe('mountShopAvatar (#3294)', () => {
     expect(t.deps.resetShopAvatarIdleState).toHaveBeenCalledTimes(1);
   });
 
+  it('hands the seller\'s chosen clip roles to the custom avatar (#3314)', async () => {
+    const roles = { idle: null, walk: 'mixamo.com', fly: null };
+    const t = setup({ avatar: { modelUrl: '/u.glb', clipRoles: roles }, customAvatar: { group: 'c', modelUrl: '/u.glb' } });
+    await mountShopAvatar({ scene: t.scene, isLoggedIn: true }, t.deps);
+    expect(t.deps.createCustomShopAvatar).toHaveBeenCalledWith('/u.glb', null, roles);
+  });
+
   it('ignores an animation response with no equipped template, and survives the animation fetch failing', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const custom = { group: 'c', modelUrl: '/u.glb' };
     const none = setup({ avatar: { modelUrl: '/u.glb' }, animation: { equippedTemplateId: null }, customAvatar: custom });
     await mountShopAvatar({ scene: none.scene, isLoggedIn: true }, none.deps);
-    expect(none.deps.createCustomShopAvatar).toHaveBeenCalledWith('/u.glb', null);
+    expect(none.deps.createCustomShopAvatar).toHaveBeenCalledWith('/u.glb', null, null);
     const failed = setup({ avatar: { modelUrl: '/u.glb' }, animation: new Error('nope'), customAvatar: custom });
     await mountShopAvatar({ scene: failed.scene, isLoggedIn: true }, failed.deps);
-    expect(failed.deps.createCustomShopAvatar).toHaveBeenCalledWith('/u.glb', null);
+    expect(failed.deps.createCustomShopAvatar).toHaveBeenCalledWith('/u.glb', null, null);
     warn.mockRestore();
   });
 
