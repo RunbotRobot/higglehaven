@@ -73,9 +73,11 @@ import {
   fetchSavedLayouts, deleteSavedLayout, fetchInstances,
 } from '../api.js';
 import { refresh as refreshPendingRestorations } from './pendingRestoration.js';
+import { planSelectionBoxes } from './selectionBoxes.js';
 import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
 import { toDisplayLength, fromDisplayLength, formatLength, formatArea } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
+import { rotateMembersRigidly, bundlePivot } from './bundleRotation.js';
 import { footprintScaleAtHeight } from '../../worker/earthCurvature.js';
 import {
   curveGroundGeometry, flatGroundHitPoint, createGroundTexture, normalizeGroundShapeUVs,
@@ -99,10 +101,11 @@ import {
 } from '../main.js';
 import { addItemBtn, closeCatalogPicker } from '../catalog/picker.js';
 import { copyTextWithFeedback } from '../ui/copyText.js';
+import { confirmDestructive } from '../ui/confirmModal.js';
 import { recordVisibleMessage } from '../ui/visibleMessages.js';
 import { consumeStripeReturnMarker, ownRequirementsDue, syncStripeStepPrompt } from '../stripeStep.js';
 import {
-  settingsSectionEl, settingsRenderToken, renderSettingsSection, renderIdentityField,
+  settingsSectionEl, settingsRenderToken, renderSettingsSection, renderIdentityField, closeSettingsModal,
 } from '../settings/modal.js';
 
 // Vertical construction (issue #167/#168/#169): the current lándlet's own
@@ -467,11 +470,12 @@ function wireDraggingBehavior(transformControls) {
     // batched request (see syncBatchUpdate) rather than one fire-and-forget
     // request per mesh — a wall-sized selection dragged at once is exactly
     // the load pattern that used to risk a few silently never saving.
-    if (transformControls.object === groupMovePivot) {
+    if (transformControls.object === groupMovePivot || transformControls.object === groupRotatePivot) {
       const meshes = groupMoveMeshes ?? [];
       groupMoveMeshes = null;
       groupMoveSet = null;
       groupMoveStartPositions = null;
+      groupRotatePivot.quaternion.identity();
       syncBatchUpdate(meshes);
     } else if (transformControls.object) {
       syncUpdate(transformControls.object);
@@ -520,6 +524,13 @@ const groupMovePivot = new THREE.Object3D();
 // position matching the real meshes it's attached to, rather than
 // rendering elevationM off from them.
 landletElevationGroup.add(groupMovePivot);
+// #3325: the Rotate gizmo's anchor for a bundle, same idea as groupMovePivot
+// above. It starts each drag at identity orientation, so its quaternion at any
+// moment IS the world-space rotation delta to apply rigidly to every member.
+const groupRotatePivot = new THREE.Object3D();
+landletElevationGroup.add(groupRotatePivot);
+let groupRotateStarts = null; // [{ position, quaternion }] per mesh, aligned with groupMoveMeshes, captured at drag start
+let groupRotateLastValidDelta = new THREE.Quaternion();
 let groupMoveMeshes = null; // meshes being moved together, captured at drag start
 let groupMoveSet = null; // same meshes as a Set, for O(1) "is this mine?" checks during collision sweeps
 let groupMoveStartPositions = null; // mesh -> its position when the drag began (fixed for the whole drag)
@@ -794,6 +805,55 @@ window.__testDragGroupMoveZ = (offsetZ) => {
   return true;
 };
 
+// #3325: rotate a bundle as a rigid body about its pivot.
+rotateControls.addEventListener('dragging-changed', (event) => {
+  if (!event.value || rotateControls.object !== groupRotatePivot) return;
+  groupMoveMeshes = [...selectedMeshes];
+  groupRotateStarts = groupMoveMeshes.map((mesh) => ({ position: mesh.position.clone(), quaternion: mesh.quaternion.clone() }));
+  groupRotatePivot.quaternion.identity();
+  groupRotateLastValidDelta = new THREE.Quaternion();
+});
+// A member's centre must stay inside the landlet and the level being edited;
+// a rotation that would push any out is simply not applied that frame (the
+// gizmo snaps back to the last valid turn) instead of saving a rejected batch.
+function bundleTransformsInBounds(transforms) {
+  const half = LANDLET_SIDE_M / 2;
+  const floor = levelFloorZ(currentLevelIndex);
+  return transforms.every(({ position }) => Math.abs(position.x) <= half && Math.abs(position.y) <= half
+    && position.z >= floor && position.z <= floor + LANDLET_HEIGHT_M);
+}
+function applyBundleRotation(delta) {
+  const transforms = rotateMembersRigidly(groupRotateStarts, groupRotatePivot.position, delta);
+  if (!bundleTransformsInBounds(transforms)) return false;
+  (groupMoveMeshes ?? []).forEach((mesh, i) => {
+    mesh.position.copy(transforms[i].position);
+    mesh.quaternion.copy(transforms[i].quaternion);
+  });
+  return true;
+}
+rotateControls.addEventListener('objectChange', () => {
+  if (rotateControls.object !== groupRotatePivot || !groupRotateStarts) return;
+  const delta = groupRotatePivot.quaternion.clone();
+  if (applyBundleRotation(delta)) {
+    groupRotateLastValidDelta.copy(delta);
+  } else {
+    groupRotatePivot.quaternion.copy(groupRotateLastValidDelta);
+  }
+});
+
+// #3325: test hook, same reasoning as __testDragGroupMoveZ above -- turns the
+// attached bundle by `radians` about 'x'|'y'|'z' through the real drag path
+// without mouse-dragging the 3D gizmo.
+window.__testRotateBundle = (axis, radians) => {
+  if (rotateControls.object !== groupRotatePivot) return false;
+  rotateControls.dispatchEvent({ type: 'dragging-changed', value: true });
+  const vector = new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0);
+  groupRotatePivot.quaternion.setFromAxisAngle(vector, radians);
+  rotateControls.dispatchEvent({ type: 'objectChange' });
+  rotateControls.dispatchEvent({ type: 'dragging-changed', value: false });
+  return true;
+};
+
 // Trim: shortens an extensible product (see extensibleAxes) along its
 // seller-declared axis — cutting a door or a length of lumber down to fit,
 // rather than the builder being stuck with whatever size the seller
@@ -947,10 +1007,7 @@ async function updateTrimPreview(object) {
   // live (still-stretching) scale, out of step with the correctly-cropped
   // preview sitting right where the object used to be.
   const outline = selectionOutlines.get(object);
-  if (outline) {
-    outline.helper.visible = false;
-    outline.fill.visible = false;
-  }
+  if (outline) outline.hidden = true;
   trimInputEl(trimAxis).value = toDisplayLength(clampedLength).toFixed(2);
 }
 
@@ -968,10 +1025,7 @@ function clearTrimPreview(object) {
   if (object) {
     object.visible = true;
     const outline = selectionOutlines.get(object);
-    if (outline) {
-      outline.helper.visible = true;
-      outline.fill.visible = true;
-    }
+    if (outline) outline.hidden = false;
   }
 }
 
@@ -1030,10 +1084,7 @@ trimControls.addEventListener('dragging-changed', (event) => {
     // worst, briefly nothing at all — is ever visible instead.
     object.visible = false;
     const outline = selectionOutlines.get(object);
-    if (outline) {
-      outline.helper.visible = false;
-      outline.fill.visible = false;
-    }
+    if (outline) outline.hidden = true;
     updateTrimPreview(object);
     return;
   }
@@ -2512,8 +2563,14 @@ function setGizmoMode(mode) {
     (mode === 'translate' ? translateControls : rotateControls).attach(mesh);
     return;
   }
+  if (selectedMeshes.size > 1 && mode === 'rotate' && isSingleBundleSelection()) {
+    groupRotatePivot.position.copy(bundlePivot([...selectedMeshes].map((mesh) => mesh.position)));
+    groupRotatePivot.quaternion.identity();
+    rotateControls.attach(groupRotatePivot);
+    return;
+  }
   if (selectedMeshes.size > 1 && mode === 'translate') {
-    groupMovePivot.position.copy(getSelectionPivot());
+    groupMovePivot.position.copy(getSelectionBoundsCentre());
     translateControls.space = 'world';
     translateControls.attach(groupMovePivot);
   }
@@ -2944,7 +3001,12 @@ renderer.domElement.addEventListener('pointerleave', () => {
 // higglehaven brand (--brand-green in index.html) rather than an arbitrary
 // accent color.
 const SELECTION_OUTLINE_COLOR = 0x6ca42e;
-const selectionOutlines = new Map(); // mesh -> { helper: THREE.BoxHelper, fill: THREE.Mesh }
+// #3324: the SET of selected meshes that should draw a highlight (mesh ->
+// { hidden }); the boxes actually drawn live in selectionBoxes below, one per
+// bundle (every member sharing a groupId) or loose item, not one per mesh.
+const selectionOutlines = new Map();
+// key (a groupId, or the mesh for a loose item) -> { helper: THREE.Box3Helper, fill: THREE.Mesh }
+const selectionBoxes = new Map();
 
 // A row of touching, identically-shaped items (a brick course, say) makes a
 // wireframe-only outline ambiguous — the shared edge between a selected
@@ -2965,9 +3027,20 @@ const scratchBoxCenter = new THREE.Vector3();
 
 export function addSelectionOutline(mesh) {
   if (selectionOutlines.has(mesh)) return;
-  const helper = new THREE.BoxHelper(mesh, SELECTION_OUTLINE_COLOR);
-  scene.add(helper);
+  selectionOutlines.set(mesh, { hidden: false });
+}
 
+export function removeSelectionOutline(mesh) {
+  selectionOutlines.delete(mesh);
+}
+
+function createSelectionBox() {
+  // Box3Helper reads its own mutable `box`, so one helper follows a whole
+  // bundle's union bounds with no per-member geometry (BoxHelper, one per
+  // mesh, is what an 863-brick wall used to cost).
+  const helper = new THREE.Box3Helper(new THREE.Box3(), SELECTION_OUTLINE_COLOR);
+  helper.frustumCulled = false;
+  scene.add(helper);
   const fillMaterial = new THREE.MeshBasicMaterial({
     color: SELECTION_OUTLINE_COLOR,
     transparent: true,
@@ -2975,21 +3048,67 @@ export function addSelectionOutline(mesh) {
     depthWrite: false,
   });
   const fill = new THREE.Mesh(selectionFillGeometry, fillMaterial);
+  fill.frustumCulled = false;
   scene.add(fill);
-
-  selectionOutlines.set(mesh, { helper, fill });
+  return { helper, fill };
 }
 
-export function removeSelectionOutline(mesh) {
-  const entry = selectionOutlines.get(mesh);
-  if (!entry) return;
+function disposeSelectionBox(entry) {
   scene.remove(entry.helper);
   entry.helper.geometry.dispose();
   entry.helper.material.dispose();
   scene.remove(entry.fill);
   entry.fill.material.dispose();
-  selectionOutlines.delete(mesh);
 }
+
+// #3324: reconciles the drawn boxes with the current selection and tracks
+// the members' live bounds (a gizmo drag moves them every frame). One box
+// per bundle plus one per loose item; a mesh being previewed elsewhere
+// (the trim preview hides the real one) is left out of the union.
+function updateSelectionBoxes() {
+  if (selectionOutlines.size === 0 && selectionBoxes.size === 0) return;
+  const visibleMeshes = [];
+  for (const [mesh, outline] of selectionOutlines) {
+    if (!outline.hidden) visibleMeshes.push(mesh);
+  }
+  const plan = planSelectionBoxes(visibleMeshes);
+  const live = new Set();
+  for (const { key, members } of plan) {
+    live.add(key);
+    let entry = selectionBoxes.get(key);
+    if (!entry) {
+      entry = createSelectionBox();
+      selectionBoxes.set(key, entry);
+    }
+    const unionBox = entry.helper.box;
+    unionBox.makeEmpty();
+    for (const member of members) {
+      scratchBox.setFromObject(member);
+      unionBox.union(scratchBox);
+    }
+    unionBox.getSize(scratchBoxSize);
+    unionBox.getCenter(scratchBoxCenter);
+    entry.fill.scale.copy(scratchBoxSize).multiplyScalar(SELECTION_FILL_PADDING);
+    entry.fill.position.copy(scratchBoxCenter);
+  }
+  for (const [key, entry] of selectionBoxes) {
+    if (live.has(key)) continue;
+    disposeSelectionBox(entry);
+    selectionBoxes.delete(key);
+  }
+}
+
+// #3324: test-only hook (the window.__test* convention used throughout this
+// file) -- how many selection boxes are drawn right now, with the bounds of
+// each, so an e2e can assert "one box around a bundle", not just that the
+// members are selected.
+window.__testSelectionBoxes = () => {
+  updateSelectionBoxes();
+  return [...selectionBoxes.values()].map(({ helper }) => ({
+    min: [helper.box.min.x, helper.box.min.y, helper.box.min.z],
+    max: [helper.box.max.x, helper.box.max.y, helper.box.max.z],
+  }));
+};
 
 // #1950 (sub-issue of #1947): a second, independent highlight for placed
 // items matching the active low-stock filter in Settings > Build --
@@ -3190,16 +3309,15 @@ export function updateSelectionUI() {
   }
   setProductInfo(count === 1 ? singleSelectionInfo : `${count} items selected`);
   modeControlsEl.classList.add('visible');
-  // Rotate has no group form (rotating several items around a shared pivot
-  // while also spinning each one's own orientation is a much harder problem
-  // than was asked for) — only Move is offered for a multi-item selection.
+  // Rotate has a bundle form only (#3325: one rigid turn about the bundle's
+  // pivot); an arbitrary multi-item selection still offers only Move.
   // Disabling Rotate (rather than hiding it) keeps every other button —
   // Move, Snap, Copy, Delete — in the same position regardless of selection
   // count; removing it from the layout entirely let the rest reflow into
   // different left/right groupings depending on whether Rotate happened to
   // be there. Trim follows the same reasoning, disabled (not hidden) for
   // both a multi-item selection and a single non-extensible one.
-  modeRotateBtn.disabled = count !== 1;
+  modeRotateBtn.disabled = count !== 1 && !isSingleBundleSelection();
   const singleMesh = count === 1 ? [...selectedMeshes][0] : null;
   modeTrimBtn.disabled = !singleMesh || !extensibleAxes(singleMesh.userData.template);
   // Community Sign (docs/API.md's "Community signs") only makes sense for
@@ -3257,10 +3375,23 @@ export function updateSelectionUI() {
   }
   if (count === 1) {
     setGizmoMode(currentGizmoMode);
+  } else if (currentGizmoMode === 'rotate' && isSingleBundleSelection()) {
+    setGizmoMode('rotate');
   } else {
     currentGizmoMode = 'translate';
     setGizmoMode('translate');
   }
+}
+
+// #3325: true when the selection is exactly one bundle (2+ items that all
+// share one groupId) -- the only multi-item selection Rotate applies to.
+function isSingleBundleSelection() {
+  if (selectedMeshes.size < 2) return false;
+  const [first] = selectedMeshes;
+  const id = first.userData.groupId;
+  if (!id) return false;
+  for (const mesh of selectedMeshes) if (mesh.userData.groupId !== id) return false;
+  return true;
 }
 
 export function clearSelection() {
@@ -3328,6 +3459,22 @@ function getSelectionPivot() {
   const centroid = new THREE.Vector3();
   for (const mesh of selectedMeshes) centroid.add(mesh.position);
   return centroid.divideScalar(selectedMeshes.size);
+}
+
+// #3324: where the move gizmo sits for a multi-item selection -- the centre
+// of the selection's own bounding box, which for a single bundle is the
+// centre of the one box drawn around it. (getSelectionPivot's centroid of
+// member positions is kept for the camera tween and paste anchor, which want
+// that point, and is skewed by wherever the densest cluster of members is.)
+const scratchPivotBox = new THREE.Box3();
+const scratchMemberBox = new THREE.Box3();
+function getSelectionBoundsCentre() {
+  scratchPivotBox.makeEmpty();
+  for (const mesh of selectedMeshes) {
+    scratchMemberBox.setFromObject(mesh);
+    scratchPivotBox.union(scratchMemberBox);
+  }
+  return scratchPivotBox.isEmpty() ? getSelectionPivot() : scratchPivotBox.getCenter(new THREE.Vector3());
 }
 
 multiSelectBtn.addEventListener('click', () => {
@@ -3409,7 +3556,7 @@ groupBtn.addEventListener('click', async () => {
     // grouping right after placing would name ids it has not stored yet (a
     // 404). Let the pending saves land first; say so if they take too long.
     if (!(await waitForSyncsToSettle(GROUP_SAVE_WAIT_MS))) {
-      showSelectionActionStatus('Still saving your items. Try Group again in a moment.');
+      showSelectionActionStatus('Still saving your items. Try Bundle again in a moment.');
       return;
     }
     // The selection may have changed while waiting.
@@ -3424,7 +3571,7 @@ groupBtn.addEventListener('click', async () => {
       setTimeout(() => groupBtn.classList.remove('pressed'), 150);
     } catch (err) {
       console.error('Could not group selection:', err);
-      showSelectionActionStatus(`Couldn't group these items. ${err.message || 'Please try again.'}`);
+      showSelectionActionStatus(`Couldn't bundle these items. ${err.message || 'Please try again.'}`);
     } finally {
       syncSettled();
     }
@@ -3452,7 +3599,7 @@ ungroupBtn.addEventListener('click', async () => {
     setTimeout(() => ungroupBtn.classList.remove('pressed'), 150);
   } catch (err) {
     console.error('Could not ungroup selection:', err);
-    showSelectionActionStatus(`Couldn't ungroup these items. ${err.message || 'Please try again.'}`);
+    showSelectionActionStatus(`Couldn't unbundle these items. ${err.message || 'Please try again.'}`);
   } finally {
     syncSettled();
     updateSelectionUI();
@@ -4343,23 +4490,11 @@ export function buildModeFrameUpdate(now) {
   applyEdgePanWhileDraggingProduct();
   controls.update();
   updateCameraDebug(now);
-  // A selected item's outline must track it live while the translate/rotate
-  // gizmo drags it — BoxHelper doesn't auto-update, so it's recomputed here
-  // every frame rather than only on selection change. The fill mesh reuses
-  // the helper's own freshly-computed box rather than recomputing its own,
-  // so the two never drift out of sync with each other.
-  for (const [mesh, { helper, fill }] of selectionOutlines) {
-    helper.update();
-    // BoxHelper computes its world-aligned box internally without exposing
-    // it (no public `.box` on this three.js version), so the fill mesh
-    // recomputes the same box independently rather than reading it back off
-    // the helper.
-    scratchBox.setFromObject(mesh);
-    scratchBox.getSize(scratchBoxSize);
-    scratchBox.getCenter(scratchBoxCenter);
-    fill.scale.copy(scratchBoxSize).multiplyScalar(SELECTION_FILL_PADDING);
-    fill.position.copy(scratchBoxCenter);
-  }
+  // A selected item's box must track it live while the translate/rotate
+  // gizmo drags it, so the boxes are recomputed here every frame rather than
+  // only on selection change (#3324: one union box per bundle, the fill
+  // reading the very same box so the two never drift apart).
+  updateSelectionBoxes();
   // #1950: same "recomputed every frame, not just on change" reasoning as
   // selectionOutlines just above -- a highlighted item being dragged by the
   // gizmo (it can be selected and low-stock-matching at once) needs its
@@ -4843,15 +4978,23 @@ export function renderBuildSettingsSection() {
     deleteBtn.className = 'version-action-btn';
     deleteBtn.textContent = 'Delete';
     deleteBtn.addEventListener('click', async () => {
-      if (!confirm(`Permanently delete "${savedLayout.name}"? This can't be undone.`)) return;
-      deleteBtn.disabled = true;
-      try {
-        await deleteSavedLayout(savedLayout.savedLayoutId);
-        renderSavedLayoutsList();
-      } catch (err) {
-        alert(err.message || 'Could not delete this saved layout.');
-        deleteBtn.disabled = false;
-      }
+      // #3278: its own in-app modal (not window.confirm), opened over Settings.
+      const deleted = await confirmDestructive({
+        title: 'Delete this saved layout?',
+        message: `Permanently delete "${savedLayout.name}"? This can't be undone.`,
+        confirmLabel: 'Delete',
+        returnFocusEl: deleteBtn,
+        restoreModalEl: document.getElementById('settings-modal'),
+        restoreCloseFn: closeSettingsModal,
+        onConfirm: async () => {
+          try {
+            await deleteSavedLayout(savedLayout.savedLayoutId);
+          } catch (err) {
+            throw new Error(err.message || 'Could not delete this saved layout.');
+          }
+        },
+      });
+      if (deleted) renderSavedLayoutsList();
     });
     actions.appendChild(deleteBtn);
 
@@ -4971,46 +5114,56 @@ export function renderBuildSettingsSection() {
     restoreBtn.className = 'version-action-btn';
     restoreBtn.textContent = 'Restore to Editor';
     restoreBtn.addEventListener('click', async () => {
-      if (!confirm(`Replace everything currently placed with "${version.name}"? This saves its own version first, so it's reversible, but everything since your last save will be gone from the live editor.`)) return;
-      restoreBtn.disabled = true;
-      publishStatus.textContent = 'Restoring…';
+      publishStatus.textContent = '';
       publishStatus.classList.remove('error');
-      try {
-        const full = await fetchLandletVersion(landletId, version.versionId);
-        // #2250: each restore wraps the prior name in this same prefix/
-        // suffix, so a chain of restores grows versionName past the
-        // server's own MAX_LABEL_LENGTH (100, worker/index.js) and the
-        // restore starts failing a 400 that has nothing to do with the
-        // instances actually being restored -- this is an auto-generated
-        // label the user never typed, so truncate it rather than let the
-        // server reject it.
-        const wrappedVersionName = `Restored from "${version.name}"`;
-        const versionName = wrappedVersionName.length > 100
-          ? `${wrappedVersionName.slice(0, 99)}…`
-          : wrappedVersionName;
-        const restoredDraft = await replaceLandletDraft(landletId, {
-          instances: full.instances,
-          versionName,
-        });
-        clearDraftIdempotencyKey(landletId);
-        // #3034: the server leaves out any product whose seller is
-        // currently suspended -- say so before the reload below, instead
-        // of the builder wondering where those items went.
-        const skippedCount = restoredDraft?.skippedInstances?.length ?? 0;
-        if (skippedCount > 0) {
-          alert(`${skippedCount} ${skippedCount === 1 ? 'item was' : 'items were'} not restored because ${skippedCount === 1 ? 'its seller is' : 'their sellers are'} currently suspended.`);
-        }
-        // Simplest correct way to get the live scene back in sync with
-        // whatever the server now holds — the same "something changed
-        // server-side, reload" pattern claimBackBtn already uses
-        // elsewhere in this file.
-        sessionStorage.setItem(START_MODE_KEY, 'build');
-        location.reload();
-      } catch (err) {
-        publishStatus.textContent = err.message || 'Could not restore.';
-        publishStatus.classList.add('error');
-        restoreBtn.disabled = false;
+      let restoredDraft = null;
+      // #3278: its own in-app modal (not window.confirm), opened over Settings.
+      // The restore runs inside it, so a failure is shown where they tapped.
+      const restored = await confirmDestructive({
+        title: 'Restore this version to the editor?',
+        message: `Replace everything currently placed with "${version.name}"? This saves its own version first, so it's reversible, but everything since your last save will be gone from the live editor.`,
+        confirmLabel: 'Restore',
+        returnFocusEl: restoreBtn,
+        restoreModalEl: document.getElementById('settings-modal'),
+        restoreCloseFn: closeSettingsModal,
+        onConfirm: async () => {
+          try {
+            const full = await fetchLandletVersion(landletId, version.versionId);
+            // #2250: each restore wraps the prior name in this same prefix/
+            // suffix, so a chain of restores grows versionName past the
+            // server's own MAX_LABEL_LENGTH (100, worker/index.js) and the
+            // restore starts failing a 400 that has nothing to do with the
+            // instances actually being restored -- this is an auto-generated
+            // label the user never typed, so truncate it rather than let the
+            // server reject it.
+            const wrappedVersionName = `Restored from "${version.name}"`;
+            const versionName = wrappedVersionName.length > 100
+              ? `${wrappedVersionName.slice(0, 99)}…`
+              : wrappedVersionName;
+            restoredDraft = await replaceLandletDraft(landletId, {
+              instances: full.instances,
+              versionName,
+            });
+            clearDraftIdempotencyKey(landletId);
+          } catch (err) {
+            throw new Error(err.message || 'Could not restore.');
+          }
+        },
+      });
+      if (!restored) return;
+      // #3034: the server leaves out any product whose seller is
+      // currently suspended -- say so before the reload below, instead
+      // of the builder wondering where those items went.
+      const skippedCount = restoredDraft?.skippedInstances?.length ?? 0;
+      if (skippedCount > 0) {
+        alert(`${skippedCount} ${skippedCount === 1 ? 'item was' : 'items were'} not restored because ${skippedCount === 1 ? 'its seller is' : 'their sellers are'} currently suspended.`);
       }
+      // Simplest correct way to get the live scene back in sync with
+      // whatever the server now holds — the same "something changed
+      // server-side, reload" pattern claimBackBtn already uses
+      // elsewhere in this file.
+      sessionStorage.setItem(START_MODE_KEY, 'build');
+      location.reload();
     });
     actions.appendChild(restoreBtn);
 

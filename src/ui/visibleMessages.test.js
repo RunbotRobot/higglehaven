@@ -5,10 +5,10 @@ beforeEach(() => clearRecentVisibleMessages());
 
 describe('visible message log (#3303)', () => {
   it('records what the person was shown, oldest first, with a timestamp', () => {
-    recordVisibleMessage("Couldn't group these items.");
+    recordVisibleMessage("Couldn't bundle these items.");
     recordVisibleMessage('Still saving your items.');
     const messages = getRecentVisibleMessages();
-    expect(messages.map((m) => m.text)).toEqual(["Couldn't group these items.", 'Still saving your items.']);
+    expect(messages.map((m) => m.text)).toEqual(["Couldn't bundle these items.", 'Still saving your items.']);
     expect(Number.isNaN(Date.parse(messages[0].shownAt))).toBe(false);
   });
 

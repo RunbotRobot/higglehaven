@@ -511,8 +511,13 @@ most likely to come up again.
   the status line blocked pointer events and vanished after eight
   seconds. No text surface disables selection or pointer events; an
   error or refusal stays until the person dismisses it (a success note
-  may still fade); and a message a person might need to send on (an
-  error, a refusal, an id) gets a Copy control.
+  may still fade). **Amended the same day, on seeing the first Copy
+  buttons live:** copying means the person selects the text themselves
+  with the platform's own selection; there is no Copy control. The
+  owner: "Maybe they only want to copy one small part of the message.
+  That also reduces clutter." So the fix for uncopyable text is always
+  to make it selectable and persistent, never to add a button beside
+  it.
 
 - **Groups and bundles are one feature, called bundles, and a placed
   bundle is one item.** (2026-11-09, #3323.) After grouping an 863-piece

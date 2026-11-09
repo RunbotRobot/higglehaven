@@ -32,13 +32,20 @@ await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
-async function uploadProduct(name) {
+let uploadInlineWarning = null;
+async function uploadProduct(name, { expectInlineWarning = false } = {}) {
   await page.click('#upload-model-btn');
   await page.waitForSelector('#upload-modal.visible', { timeout: 10000 });
   await page.fill('#upload-name', name);
   await page.fill('#upload-price', '5');
   await page.setInputFiles('#upload-file-input', CRATE_MODEL_PATH);
   await page.click('#upload-submit-btn');
+  if (expectInlineWarning) {
+    // #3249: an in-app confirm beside the button, not a native dialog.
+    await page.waitForSelector('#upload-modal-actions .inline-confirm', { timeout: 5000 });
+    uploadInlineWarning = await page.textContent('#upload-modal-actions .inline-confirm');
+    await page.click('#upload-modal-actions .inline-confirm-yes-btn');
+  }
   await page.waitForFunction(() => !document.getElementById('upload-step-dimensions').hidden, null, { timeout: 45000 });
   await page.waitForTimeout(300);
   await page.click('#upload-submit-btn');
@@ -60,8 +67,9 @@ console.log('dialogs after second unique-name upload (should still be 0):', dial
 // Third upload, same name as the very first product -- should warn, then
 // (since launchPage's own handler accepts every dialog) still go through,
 // since this is a soft warning, not a hard block.
-await uploadProduct(FIRST_NAME);
-const dupUploadWarning = dialogMessages[dialogMessages.length - 1] ?? null;
+await uploadProduct(FIRST_NAME, { expectInlineWarning: true });
+const dupUploadWarning = uploadInlineWarning;
+const nativeDialogsDuringDup = dialogMessages.length;
 console.log('duplicate-name warning on create (should mention the name):', dupUploadWarning);
 
 const sellerListText = await page.textContent('#seller-list');
@@ -97,6 +105,7 @@ const pass = dialogsAfterFirstUpload === 0 &&
   dialogsAfterUniqueSecondUpload === 0 &&
   dupUploadWarning !== null && dupUploadWarning.includes(FIRST_NAME) &&
   bothWidgetsListed &&
+  nativeDialogsDuringDup === 0 &&
   renamed &&
   dupRenameWarning !== null && dupRenameWarning.includes(FIRST_NAME) &&
   dupRenameWarning !== dupUploadWarning &&

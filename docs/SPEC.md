@@ -132,7 +132,7 @@
 - **Alignment assist:** snap-with-escape model — transient guide near an alignment opportunity, continued movement releases it, pausing commits it. Conservative starting threshold, tune via playtesting.
 - **Overlap handling:** permissive by default. AI flags only visually *broken*-looking overlaps, not intentional/concealed ones. Builder can dismiss or disable.
 - **Item placement physics:** fully permissive (float, embed, rest — builder's discretion). Shopper collision still prevents walking through items.
-- **Bundles** (confirmed term): group items to move together. Private by default; explicit opt-in sharing to a community bundle tab.
+- **Bundles** (confirmed term; one feature, no separate "groups"): bundle items to move and rotate together as one item. Saving a bundle shares it to the community bundle tab by default (owner ruling 2026-11-09, #3323); the builder can make it private in the save dialog.
 - **Draft/publish + version history:** preview from shopper's perspective before publishing. Every save = a version snapshot; active version = a pointer. Toggle between saved versions **from within the live shopping interface**, with explicit confirmation before activating a different version.
 - **Version-change transition (shoppers present):** old items fade/shrink into ground, new version's items fade/grow up — ~2–4 second animated transition.
 

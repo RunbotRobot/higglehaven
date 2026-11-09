@@ -698,7 +698,7 @@ export async function fillBundleNameModal(page, name) {
 export async function saveBundleAs(page, name, { shared = false } = {}) {
   await page.click('#save-bundle-item');
   await page.waitForSelector('#bundle-name-modal.visible', { timeout: 10000 });
-  if (shared) await page.check('#bundle-name-share-checkbox');
+  await page.check(shared ? '#bundle-name-share-public' : '#bundle-name-share-private');
   await page.fill('#bundle-name-input', name);
   await page.click('#bundle-name-save-btn');
 }
@@ -718,4 +718,14 @@ export async function finish(browser, { pass, label, errors = [] }) {
   console.log(pass ? `PASS: ${label}` : `FAIL: ${label}`);
   await browser.close();
   process.exit(pass ? 0 : 1);
+}
+
+// #3278: destructive actions confirm in the shared in-app modal
+// (src/ui/confirmModal.js), not a native confirm(). Waits for it, optionally
+// returns its message text, and presses its confirm button.
+export async function acceptConfirmModal(page, { timeout = 10000 } = {}) {
+  await page.waitForSelector('#confirm-modal.visible', { timeout });
+  const message = await page.textContent('#confirm-modal-message');
+  await page.click('#confirm-modal-confirm-btn');
+  return message;
 }
