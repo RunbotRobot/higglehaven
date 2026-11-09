@@ -77,6 +77,7 @@ import { planSelectionBoxes } from './selectionBoxes.js';
 import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
 import { toDisplayLength, fromDisplayLength, formatLength, formatArea } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
+import { rotateMembersRigidly, bundlePivot } from './bundleRotation.js';
 import { footprintScaleAtHeight } from '../../worker/earthCurvature.js';
 import {
   curveGroundGeometry, flatGroundHitPoint, createGroundTexture, normalizeGroundShapeUVs,
@@ -469,11 +470,12 @@ function wireDraggingBehavior(transformControls) {
     // batched request (see syncBatchUpdate) rather than one fire-and-forget
     // request per mesh — a wall-sized selection dragged at once is exactly
     // the load pattern that used to risk a few silently never saving.
-    if (transformControls.object === groupMovePivot) {
+    if (transformControls.object === groupMovePivot || transformControls.object === groupRotatePivot) {
       const meshes = groupMoveMeshes ?? [];
       groupMoveMeshes = null;
       groupMoveSet = null;
       groupMoveStartPositions = null;
+      groupRotatePivot.quaternion.identity();
       syncBatchUpdate(meshes);
     } else if (transformControls.object) {
       syncUpdate(transformControls.object);
@@ -522,6 +524,13 @@ const groupMovePivot = new THREE.Object3D();
 // position matching the real meshes it's attached to, rather than
 // rendering elevationM off from them.
 landletElevationGroup.add(groupMovePivot);
+// #3325: the Rotate gizmo's anchor for a bundle, same idea as groupMovePivot
+// above. It starts each drag at identity orientation, so its quaternion at any
+// moment IS the world-space rotation delta to apply rigidly to every member.
+const groupRotatePivot = new THREE.Object3D();
+landletElevationGroup.add(groupRotatePivot);
+let groupRotateStarts = null; // [{ position, quaternion }] per mesh, aligned with groupMoveMeshes, captured at drag start
+let groupRotateLastValidDelta = new THREE.Quaternion();
 let groupMoveMeshes = null; // meshes being moved together, captured at drag start
 let groupMoveSet = null; // same meshes as a Set, for O(1) "is this mine?" checks during collision sweeps
 let groupMoveStartPositions = null; // mesh -> its position when the drag began (fixed for the whole drag)
@@ -793,6 +802,55 @@ window.__testDragGroupMoveZ = (offsetZ) => {
   groupMovePivot.position.z += offsetZ;
   translateControls.dispatchEvent({ type: 'objectChange' });
   translateControls.dispatchEvent({ type: 'dragging-changed', value: false });
+  return true;
+};
+
+// #3325: rotate a bundle as a rigid body about its pivot.
+rotateControls.addEventListener('dragging-changed', (event) => {
+  if (!event.value || rotateControls.object !== groupRotatePivot) return;
+  groupMoveMeshes = [...selectedMeshes];
+  groupRotateStarts = groupMoveMeshes.map((mesh) => ({ position: mesh.position.clone(), quaternion: mesh.quaternion.clone() }));
+  groupRotatePivot.quaternion.identity();
+  groupRotateLastValidDelta = new THREE.Quaternion();
+});
+// A member's centre must stay inside the landlet and the level being edited;
+// a rotation that would push any out is simply not applied that frame (the
+// gizmo snaps back to the last valid turn) instead of saving a rejected batch.
+function bundleTransformsInBounds(transforms) {
+  const half = LANDLET_SIDE_M / 2;
+  const floor = levelFloorZ(currentLevelIndex);
+  return transforms.every(({ position }) => Math.abs(position.x) <= half && Math.abs(position.y) <= half
+    && position.z >= floor && position.z <= floor + LANDLET_HEIGHT_M);
+}
+function applyBundleRotation(delta) {
+  const transforms = rotateMembersRigidly(groupRotateStarts, groupRotatePivot.position, delta);
+  if (!bundleTransformsInBounds(transforms)) return false;
+  (groupMoveMeshes ?? []).forEach((mesh, i) => {
+    mesh.position.copy(transforms[i].position);
+    mesh.quaternion.copy(transforms[i].quaternion);
+  });
+  return true;
+}
+rotateControls.addEventListener('objectChange', () => {
+  if (rotateControls.object !== groupRotatePivot || !groupRotateStarts) return;
+  const delta = groupRotatePivot.quaternion.clone();
+  if (applyBundleRotation(delta)) {
+    groupRotateLastValidDelta.copy(delta);
+  } else {
+    groupRotatePivot.quaternion.copy(groupRotateLastValidDelta);
+  }
+});
+
+// #3325: test hook, same reasoning as __testDragGroupMoveZ above -- turns the
+// attached bundle by `radians` about 'x'|'y'|'z' through the real drag path
+// without mouse-dragging the 3D gizmo.
+window.__testRotateBundle = (axis, radians) => {
+  if (rotateControls.object !== groupRotatePivot) return false;
+  rotateControls.dispatchEvent({ type: 'dragging-changed', value: true });
+  const vector = new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0);
+  groupRotatePivot.quaternion.setFromAxisAngle(vector, radians);
+  rotateControls.dispatchEvent({ type: 'objectChange' });
+  rotateControls.dispatchEvent({ type: 'dragging-changed', value: false });
   return true;
 };
 
@@ -2505,6 +2563,12 @@ function setGizmoMode(mode) {
     (mode === 'translate' ? translateControls : rotateControls).attach(mesh);
     return;
   }
+  if (selectedMeshes.size > 1 && mode === 'rotate' && isSingleBundleSelection()) {
+    groupRotatePivot.position.copy(bundlePivot([...selectedMeshes].map((mesh) => mesh.position)));
+    groupRotatePivot.quaternion.identity();
+    rotateControls.attach(groupRotatePivot);
+    return;
+  }
   if (selectedMeshes.size > 1 && mode === 'translate') {
     groupMovePivot.position.copy(getSelectionBoundsCentre());
     translateControls.space = 'world';
@@ -3245,16 +3309,15 @@ export function updateSelectionUI() {
   }
   setProductInfo(count === 1 ? singleSelectionInfo : `${count} items selected`);
   modeControlsEl.classList.add('visible');
-  // Rotate has no group form (rotating several items around a shared pivot
-  // while also spinning each one's own orientation is a much harder problem
-  // than was asked for) — only Move is offered for a multi-item selection.
+  // Rotate has a bundle form only (#3325: one rigid turn about the bundle's
+  // pivot); an arbitrary multi-item selection still offers only Move.
   // Disabling Rotate (rather than hiding it) keeps every other button —
   // Move, Snap, Copy, Delete — in the same position regardless of selection
   // count; removing it from the layout entirely let the rest reflow into
   // different left/right groupings depending on whether Rotate happened to
   // be there. Trim follows the same reasoning, disabled (not hidden) for
   // both a multi-item selection and a single non-extensible one.
-  modeRotateBtn.disabled = count !== 1;
+  modeRotateBtn.disabled = count !== 1 && !isSingleBundleSelection();
   const singleMesh = count === 1 ? [...selectedMeshes][0] : null;
   modeTrimBtn.disabled = !singleMesh || !extensibleAxes(singleMesh.userData.template);
   // Community Sign (docs/API.md's "Community signs") only makes sense for
@@ -3312,10 +3375,23 @@ export function updateSelectionUI() {
   }
   if (count === 1) {
     setGizmoMode(currentGizmoMode);
+  } else if (currentGizmoMode === 'rotate' && isSingleBundleSelection()) {
+    setGizmoMode('rotate');
   } else {
     currentGizmoMode = 'translate';
     setGizmoMode('translate');
   }
+}
+
+// #3325: true when the selection is exactly one bundle (2+ items that all
+// share one groupId) -- the only multi-item selection Rotate applies to.
+function isSingleBundleSelection() {
+  if (selectedMeshes.size < 2) return false;
+  const [first] = selectedMeshes;
+  const id = first.userData.groupId;
+  if (!id) return false;
+  for (const mesh of selectedMeshes) if (mesh.userData.groupId !== id) return false;
+  return true;
 }
 
 export function clearSelection() {
