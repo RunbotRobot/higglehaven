@@ -57,9 +57,24 @@ await page.click('#notice-modal-ok-btn');
 await page.waitForFunction(() => window.__noticeDone === true, null, { timeout: 5000 });
 
 
-console.log({ title, copyRowShown, fieldValue, selectable, noCopyButton, stillOpenAfterWait, closedByEscape, copyRowHiddenWhenPlain, nativeDialogs });
+// --- two notices raised together queue: each is read in turn, none is lost ---
+await page.evaluate(() => {
+  window.__queueDone = 0;
+  window.__showNotice({ title: 'First', message: 'First message' }).then(() => { window.__queueDone += 1; });
+  window.__showNotice({ title: 'Second', message: 'Second message' }).then(() => { window.__queueDone += 1; });
+});
+await page.waitForSelector('#notice-modal.visible', { timeout: 5000 });
+const queueFirst = await page.textContent('#notice-modal-message');
+await page.click('#notice-modal-ok-btn');
+await page.waitForFunction(() => document.getElementById('notice-modal-message').textContent === 'Second message' && document.getElementById('notice-modal').classList.contains('visible'), null, { timeout: 5000 });
+const queueSecond = await page.textContent('#notice-modal-message');
+await page.click('#notice-modal-ok-btn');
+await page.waitForFunction(() => window.__queueDone === 2, null, { timeout: 5000 });
+const queueOk = queueFirst === 'First message' && queueSecond === 'Second message';
+
+console.log({ title, copyRowShown, fieldValue, selectable, noCopyButton, stillOpenAfterWait, closedByEscape, copyRowHiddenWhenPlain, queueOk, nativeDialogs });
 const pass = title === 'Purchase complete' && copyRowShown && fieldValue === LINK && selectable &&
   noCopyButton &&
-  stillOpenAfterWait && closedByEscape && copyRowHiddenWhenPlain &&
+  stillOpenAfterWait && closedByEscape && copyRowHiddenWhenPlain && queueOk &&
   nativeDialogs.length === 0 && errors.length === 0;
 await finish(browser, { pass, label: '#3249: the purchase result notice is an in-app modal with a selectable delivery link', errors });

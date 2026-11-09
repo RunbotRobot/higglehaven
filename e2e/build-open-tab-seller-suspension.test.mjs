@@ -7,7 +7,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, captureNotices, finish } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -91,8 +91,8 @@ await chooseIdentity(page, { mode: 'build', label: LABEL_BUILDER, isNew: true })
 await page.waitForSelector('#undo-redo-panel', { state: 'attached', timeout: 15000 });
 await page.waitForTimeout(1500);
 
-// Capture alert() text (launchPage's own handler just accepts them).
-await page.evaluate(() => { window.__alerts = []; window.alert = (msg) => { window.__alerts.push(String(msg)); }; });
+// Record each in-app notice's text and close it (#3359: it was alert()).
+await captureNotices(page);
 
 // An ordinary tree: placing it, then deleting it, leaves Undo enabled with a
 // snapshot that also contains the (soon to be phantom) product.

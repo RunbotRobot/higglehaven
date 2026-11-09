@@ -729,3 +729,20 @@ export async function acceptConfirmModal(page, { timeout = 10000 } = {}) {
   await page.click('#confirm-modal-confirm-btn');
   return message;
 }
+
+// #3359: the Build sync-failure and suspended-seller messages are an in-app
+// notice modal (src/ui/noticeModal.js), not window.alert(). This records each
+// notice's text into window.__alerts and closes it as it appears (as the
+// earlier window.alert stub did, so later clicks are not blocked by the
+// overlay), so a test reads what the builder was told the same way as before.
+export async function captureNotices(page) {
+  await page.evaluate(() => {
+    window.__alerts = [];
+    const modal = document.getElementById('notice-modal');
+    new MutationObserver(() => {
+      if (!modal.classList.contains('visible')) return;
+      window.__alerts.push(String(document.getElementById('notice-modal-message').textContent));
+      document.getElementById('notice-modal-ok-btn').click();
+    }).observe(modal, { attributes: true, attributeFilter: ['class'] });
+  });
+}
