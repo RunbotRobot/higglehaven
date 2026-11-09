@@ -181,6 +181,14 @@ console.log('B sees A while A is "backgrounded" (should be gone):', othersInB_du
 // Resume A's loop for real -- no page reload anywhere in this test, same
 // as the owner's own "recovered on its own... no code change or reload"
 // report.
+// #3349: A's presence GETs take longer than the 1 s poll interval from here
+// on (a loaded Worker). The stale-response guard used to discard every
+// response while a newer poll had merely been issued, so A never applied
+// any poll result and never saw B again, however long it waited.
+await pageA.route('**/api/presence', async (route) => {
+  if (route.request().method() === 'GET') await new Promise((r) => setTimeout(r, 1300));
+  await route.continue();
+});
 await pageA.evaluate(() => window.__bgSimResume());
 
 // reportOwnPresenceIfNeeded "always reports on its very first eligible
