@@ -200,7 +200,15 @@ await teleportShopAvatar(30);
 const bandAfterReapproach = await lodBand();
 console.log('LOD band after re-approaching past the exit threshold (should be "near" again):', bandAfterReapproach);
 
+// #3254: the proxy takes the model's own color, not the template's generic
+// placeholder (#8899aa here). crate.glb's material is orange (red-dominant).
+const proxyColorHex = await page.evaluate((id) => window.__testShopInstanceLodProxyColor(id), instanceId);
+console.log('LOD proxy color comes from the model, not template.color (should be an orange, not 8899aa):', proxyColorHex);
+const proxyIsModelColor = typeof proxyColorHex === 'string' && proxyColorHex !== '8899aa' &&
+  parseInt(proxyColorHex.slice(0, 2), 16) > parseInt(proxyColorHex.slice(4, 6), 16) + 60;
+
 const pass = !!landlet
+  && proxyIsModelColor
   && nearAfterLoad === 'near'
   && bandAtMiddle === 'middle'
   && bandInHysteresisGap === 'middle'

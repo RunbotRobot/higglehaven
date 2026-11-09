@@ -1304,6 +1304,16 @@ window.__testShopInstanceLodBand = (instanceId) => {
   }
   return null;
 };
+// #3254: read-only test hook reporting the LOD proxy's color as a hex string
+// (no leading #), or null if the instance isn't loaded or has no proxy.
+window.__testShopInstanceLodProxyColor = (instanceId) => {
+  for (const entry of shopLandlets.values()) {
+    const object = entry.objects.find((o) => o.userData.instanceId === instanceId);
+    if (!object) continue;
+    return object.userData.lodProxy?.material.color.getHexString() ?? null;
+  }
+  return null;
+};
 // #2399: read-only test hook exercising the *real* raycast pipeline (the
 // same THREE.Raycaster/shopReviews.map(r => r.mesh) pair the tap-to-inspect
 // click handler below uses) against a ray aimed straight down through the
