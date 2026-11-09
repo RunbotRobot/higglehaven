@@ -22,6 +22,7 @@ import {
   getTurnstileSitekey,
 } from '../api.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
+import { showNotice } from '../ui/noticeModal.js';
 import { currentMode, setBuilderId, setSellerId } from '../world/state.js';
 import { loadStripeJs, loadTurnstileJs, START_MODE_KEY } from '../main.js';
 import { setAccountSessionEnding } from '../shop/presenceAndContent.js';
@@ -466,14 +467,13 @@ function closeAuthModal() {
 // handleMe comment), but refreshAccountAuthUI's banner only renders once
 // the Account modal is actually opened. Without this, a suspended visitor
 // who never happens to open it still has no way to learn why every other
-// authenticated action they try is silently failing. alert() rather than
-// auto-opening the modal -- this file's own openAuthModal/closeAuthModal
-// pair drives a login-result-resolution flow (notifyAuthResult/
-// pendingAuthResolvers) that a stray auto-open-then-close here could
-// interfere with; a blocking native alert needs none of that, and this
-// codebase already uses native dialogs for exactly this kind of
-// unmissable-but-simple notice elsewhere (confirm()/prompt() throughout
-// voiceChat.js, productCheckout.js, sell/mode.js, etc.).
+// authenticated action they try is silently failing. Shown as a persistent
+// in-app notice (#3359; it was a native alert(), which a browser that
+// suppresses dialogs drops without a trace, leaving a suspended person with no
+// explanation). Not an auto-opened Account modal: this file's
+// openAuthModal/closeAuthModal pair drives a login-result-resolution flow
+// (notifyAuthResult/pendingAuthResolvers) that a stray auto-open-then-close
+// here could interfere with.
 let suspensionAlertShown = false;
 
 async function refreshCurrentUser() {
@@ -494,7 +494,10 @@ async function refreshCurrentUser() {
     if (!suspensionAlertShown) {
       suspensionAlertShown = true;
       const untilFormatted = new Date(currentAuthUser.suspension.gracePeriodEndsAt).toLocaleDateString();
-      alert(`Your account has been suspended. Reason: ${currentAuthUser.suspension.reason}. This suspension is in effect until ${untilFormatted} unless lifted sooner. To dispute this, contact our customer service team — they handle all suspension disputes and appeals. (You can see this notice again anytime from the Account menu.)`);
+      showNotice({
+        title: 'Your account is suspended',
+        message: `Reason: ${currentAuthUser.suspension.reason}. This suspension is in effect until ${untilFormatted} unless lifted sooner. To dispute this, contact our customer service team — they handle all suspension disputes and appeals. (You can see this notice again anytime from the Account menu.)`,
+      });
     }
   } else {
     suspensionAlertShown = false;
