@@ -118,14 +118,16 @@ await bidderPage.click('.settings-tab-btn[data-section="build"]');
 const auctionsListItems = bidderPage.locator('.auction-list .auction-row');
 await auctionsListItems.first().waitFor({ timeout: 10000 });
 
-let lastAlertMessage = null;
-bidderPage.on('dialog', (dialog) => { lastAlertMessage = dialog.message(); });
+// #3359: the message is an inline status in the row now, not a native alert().
+let nativeDialogCount = 0;
+bidderPage.on('dialog', () => { nativeDialogCount += 1; });
 const bidInput = auctionsListItems.first().locator('.auction-row-bid-input');
 await bidInput.fill(OVER_CAP_DOLLARS);
 await auctionsListItems.first().locator('.auction-bid-btn').click();
 await bidderPage.waitForTimeout(300);
-console.log('alert shown for an over-the-cap bid (should mention $1,000,000):', lastAlertMessage);
-const placeBidOverCapAlertOk = lastAlertMessage === 'Enter a bid of $1,000,000.00 or less.';
+const overCapStatus = await auctionsListItems.first().locator('.inline-action-status').textContent();
+console.log('inline status for an over-the-cap bid (should mention $1,000,000), native dialogs fired (should be 0):', overCapStatus, nativeDialogCount);
+const placeBidOverCapAlertOk = overCapStatus === 'Enter a bid of $1,000,000.00 or less.' && nativeDialogCount === 0;
 
 await bidderSession.browser.close();
 
