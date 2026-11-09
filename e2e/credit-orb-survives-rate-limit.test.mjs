@@ -137,6 +137,34 @@ console.log('no further collect requests fired while cooling down (should be 0):
 const listedOnServer = await fetchJson(`/api/credit-orbs?landletId=${encodeURIComponent(LANDLET_ID)}`);
 console.log('orb still active server-side (should be true, the 429 never actually collected it):', listedOnServer.body.orbs.some((o) => o.orbId === orbId));
 
+// #3303 (owner decision: an error or refusal stays until the person dismisses
+// it, and any text a user can read, they can copy): the notice no longer fades
+// after the 30s cooldown. Walk out of range first so no retry can re-show it,
+// then wait past the old auto-hide, then Copy and dismiss.
+await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+await page.evaluate(([x, y]) => {
+  window.__testTeleportShopAvatar(x, y);
+  window.__testForceShopProximityCheck();
+}, [orbWorldX + 400, orbWorldY + 400]);
+await page.waitForTimeout(31000);
+const noticeStillVisible = await page.isVisible('#shop-credit-orb-rate-limit-notice.visible');
+console.log('rate-limit notice still shown after the old 30s auto-hide (should be true):', noticeStillVisible);
+const noticeStyle = await page.evaluate(() => {
+  const style = getComputedStyle(document.getElementById('shop-credit-orb-rate-limit-notice'));
+  return { pointerEvents: style.pointerEvents, userSelect: style.userSelect };
+});
+const noticeSelectable = noticeStyle.pointerEvents !== 'none' && noticeStyle.userSelect !== 'none';
+console.log('rate-limit notice is selectable while shown (should be true):', noticeSelectable, noticeStyle);
+await page.click('#shop-credit-orb-rate-limit-notice .shop-notice-copy-btn');
+await page.waitForTimeout(300);
+const copiedNotice = await page.evaluate(() => navigator.clipboard.readText());
+const copiedOk = /orbs every/.test(copiedNotice) && /Try again/.test(copiedNotice);
+console.log('Copy puts the notice text on the clipboard (should be true):', copiedOk, copiedNotice);
+await page.click('#shop-credit-orb-rate-limit-notice .shop-notice-dismiss-btn');
+await page.waitForTimeout(300);
+const noticeDismissed = !(await page.isVisible('#shop-credit-orb-rate-limit-notice.visible'));
+console.log('dismissing hides the notice (should be true):', noticeDismissed);
+
 // The deliberate 404s/429s above are real, expected HTTP error responses --
 // Chromium logs each one to the console as "Failed to load resource"
 // independent of anything this app's own code does, the same expected
@@ -148,6 +176,7 @@ const pass = !!myLandlet &&
   activeBeforeWalkingOver.includes(orbId) &&
   !toastVisible &&
   rateLimitNoticeVisible &&
+  noticeStillVisible && noticeSelectable && copiedOk && noticeDismissed &&
   activeAfterFailedCollect.includes(orbId) &&
   collectRequestsDuringCooldown === 0 &&
   listedOnServer.body.orbs.some((o) => o.orbId === orbId) &&

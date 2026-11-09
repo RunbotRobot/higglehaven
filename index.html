@@ -18,8 +18,15 @@
     <button id="shop-sign-hint" class="shop-ui" type="button">Leave a Note</button>
     <button id="shop-calendar-hint" class="shop-ui" type="button">Add an Event</button>
     <div id="shop-credit-orb-toast" role="status" aria-live="polite">You collected a free model-generation credit!</div>
-    <div id="shop-credit-orb-offline-notice" role="status" aria-live="polite">Can't collect orbs right now — you appear to be offline.</div>
-    <div id="shop-credit-orb-rate-limit-notice" role="status" aria-live="polite">You've reached the orb limit for now — try again in a bit.</div>
+    <div id="shop-credit-orb-offline-notice" role="status" aria-live="polite">
+      <span class="shop-notice-text">Can't collect orbs right now — you appear to be offline.</span>
+      <button class="shop-notice-btn shop-notice-copy-btn" type="button">Copy</button>
+    </div>
+    <div id="shop-credit-orb-rate-limit-notice" role="status" aria-live="polite">
+      <span class="shop-notice-text">You've reached the orb limit for now — try again in a bit.</span>
+      <button class="shop-notice-btn shop-notice-copy-btn" type="button">Copy</button>
+      <button class="shop-notice-btn shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
+    </div>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <!-- #506/N45 history (see this button's own CSS comment below for the
@@ -37,11 +44,6 @@
       <button id="shop-up-btn" type="button" aria-label="Fly up">&#9650;</button>
       <button id="shop-down-btn" type="button" aria-label="Fly down">&#9660;</button>
     </div>
-    <!-- #2718 (sub-issue of #2715): opens src/feedback/submitFeedbackUI.js's
-         own modal. Shop-only for now -- see that module's own comment on
-         why. Revealed (.visible added) by src/shop/mode.js's enterShopMode,
-         same moment as #shop-fly-btn/#shop-vertical-controls above. -->
-    <button id="shop-feedback-btn" class="shop-ui" type="button">Feedback</button>
     <!-- #2779 (sub-issue of #2777, docs/SPEC.md §2's "Text chat available
          as an alternative [to voice]"): visibility is driven entirely by
          src/shop/nearbyChat.js's own per-tick trustTier check (same
@@ -741,6 +743,11 @@
           <button class="settings-tab-btn" type="button" data-section="sell">Sell</button>
         </div>
         <div id="settings-section"></div>
+        <!-- #3302: utilities that aren't about one mode live here, in every
+             mode, instead of as HUD pills over the world. -->
+        <div id="settings-utilities">
+          <button id="settings-feedback-btn" type="button">Send feedback</button>
+        </div>
       </div>
     </div>
     <div id="auth-modal" role="dialog" aria-modal="true" tabindex="-1">

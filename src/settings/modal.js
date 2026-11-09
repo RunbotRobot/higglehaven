@@ -26,6 +26,7 @@
 // back here for refreshUnitDisplays' own repaint.
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
+import { openFeedbackModal } from '../feedback/submitFeedbackUI.js';
 import { getUnits, setUnits, unitSuffix } from '../settings.js';
 import { currentMode } from '../world/state.js';
 import { currentAuthUser, setCurrentAuthUser } from '../account/auth.js';
@@ -639,6 +640,11 @@ export function closeSettingsModal() {
   closeModalA11y(settingsModalEl);
 }
 settingsBtn.addEventListener('click', openSettingsModal);
+// #3302: Send feedback, in every mode. Opens the Submit Feedback modal over
+// Settings; closing it returns to Settings (see openFeedbackModal's returnTo).
+document.getElementById('settings-feedback-btn').addEventListener('click', () => {
+  openFeedbackModal({ el: settingsModalEl, close: closeSettingsModal });
+});
 settingsCloseBtn.addEventListener('click', closeSettingsModal);
 
 for (const btn of settingsTabsEl.querySelectorAll('.settings-tab-btn')) {

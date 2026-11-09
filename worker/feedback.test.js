@@ -169,6 +169,20 @@ describe('POST /api/feedback/bug-report surfaces a Control Room card (#2720)', (
     expect(task.note_number).toBeGreaterThan(0);
   });
 
+  // #3302: reports now come from Shop, Build and Sell; the card says which.
+  it('names the mode the report came from on the card, and rejects a non-string mode', async () => {
+    const response = await postBugReport({ metadata: metadataFor({ mode: 'build' }) });
+    const task = await controlRoomTaskFor((await response.json()).reportId);
+    expect(task.note).toContain('Mode: build');
+
+    const none = await postBugReport({ metadata: metadataFor() });
+    const noneTask = await controlRoomTaskFor((await none.json()).reportId);
+    expect(noneTask.note).not.toContain('Mode:');
+
+    const bad = await postBugReport({ metadata: metadataFor({ mode: { evil: true } }) });
+    expect(bad.status).toBe(400);
+  });
+
   it('puts the last messages the person was shown into the card (#3303)', async () => {
     const response = await postBugReport({
       metadata: metadataFor({

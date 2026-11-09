@@ -89,6 +89,7 @@ import {
   LANDLET_AREA_M2, LANDLET_SIDE_M, LANDLET_HEIGHT_M,
 } from '../world/state.js';
 import { scene, camera, renderer, canvas, registerModeFrameUpdate } from '../world/scene.js';
+import { recordRenderStateSample } from '../feedback/renderStateBuffer.js';
 import { runClaimFlow } from '../claim/flow.js';
 import { currentAuthUser } from '../account/auth.js';
 import { ensureBuilderIdentity } from '../account/identity.js';
@@ -1856,7 +1857,12 @@ const selectionActionStatusTextEl = document.getElementById('selection-action-st
 const selectionActionStatusCopyBtn = document.getElementById('selection-action-status-copy');
 const selectionActionStatusDismissBtn = document.getElementById('selection-action-status-dismiss');
 const GROUP_SAVE_WAIT_MS = 10000;
+// #3302 -- added so a feedback report sent from Build carries the last
+// refusal/result text the person saw (the owner's Group refusal was gone
+// before it could be reported); the ring-buffer sampler reads it.
+let lastSelectionActionStatusText = '';
 function showSelectionActionStatus(text) {
+  if (text) lastSelectionActionStatusText = text;
   selectionActionStatusTextEl.textContent = text;
   selectionActionStatusEl.hidden = !text;
   if (text) recordVisibleMessage(text); // #3303: so a bug report carries it
@@ -3881,6 +3887,19 @@ window.__testSyncUpdate = (instanceId) => {
   return mesh ? syncUpdate(mesh) : undefined;
 };
 
+// #3304: selects every placed product at once (outlines and selection UI
+// included), so an e2e can run Group over more than 100 items without clicking
+// each one. Same "inert unless a test calls it" convention as the hooks above.
+window.__testSelectAllProducts = () => {
+  for (const mesh of productMeshes) {
+    if (selectedMeshes.has(mesh)) continue;
+    selectedMeshes.add(mesh);
+    addSelectionOutline(mesh);
+  }
+  updateSelectionUI();
+  return selectedMeshes.size;
+};
+
 window.__testProductScreenPositions = () => productMeshes.map((mesh) => ({
   instanceId: mesh.userData.instanceId,
   ...projectMeshToScreen(mesh),
@@ -4309,6 +4328,18 @@ function applyEdgePanWhileDraggingProduct() {
 // per-frame work of its own (paginated, static between page turns) and
 // registers null (see enterSellMode).
 export function buildModeFrameUpdate(now) {
+  // #3302: feed the Submit Feedback ring buffer from Build too (it is
+  // throttled to ~1Hz inside recordRenderStateSample, so calling every frame
+  // is cheap). Each field below was added for #3302 so a report sent from
+  // Build says where the camera was and what was selected/refused.
+  recordRenderStateSample(now, {
+    mode: currentMode, // #3302: which mode the report came from
+    cameraPosition: { x: camera.position.x, y: camera.position.y, z: camera.position.z }, // #3302: orbit camera pose
+    cameraTarget: { x: controls.target.x, y: controls.target.y, z: controls.target.z }, // #3302: what the orbit camera looks at
+    selectedInstanceIds: [...selectedMeshes].map((m) => m.userData.instanceId).filter(Boolean).slice(0, 50), // #3302: capped so a wall of 800 items doesn't bloat the report
+    selectedCount: selectedMeshes.size, // #3302: true size when the id list above is capped
+    lastSelectionActionStatus: lastSelectionActionStatusText || null, // #3302: last Group/refusal text shown
+  });
   updateTargetTween(now);
   applyEdgePanWhileDraggingProduct();
   controls.update();
