@@ -83,6 +83,7 @@ import {
   beginShopSpawn, updateShopMovement,
   getShopCameraLockToFacing, setShopCameraLockToFacing,
 } from './flightMovement.js';
+import { mountShopAvatar } from './mountShopAvatar.js';
 import { settingsSectionEl } from '../settings/modal.js';
 import {
   shopDomeRiseM, resetShopDomeRiseM, paintVerticalGradient,
@@ -497,29 +498,9 @@ export async function enterShopMode() {
   // regardless of the try/catch (found via e2e/auth.test.mjs's own
   // logout -> reset-password reload tripping its errors.length === 0
   // check).
-  let equippedAvatarModelUrl = null;
-  setShopEquippedAvatarSkeletonSignature(null);
-  // #1165: the applied animation (if any and still owned), fetched
-  // alongside the equipped avatar — createCustomShopAvatar needs both
-  // together to decide whether this animation's own clips actually apply
-  // here (#1162's compatibility check) or this avatar falls back to its
-  // own.
-  let equippedAnimation = null;
-  if (currentAuthUser) {
-    try {
-      const avatar = await fetchMyEquippedAvatar();
-      equippedAvatarModelUrl = avatar.modelUrl;
-      setShopEquippedAvatarSkeletonSignature(avatar.skeletonSignature);
-    } catch (err) {
-      console.warn('Could not fetch equipped avatar, using the default avatar:', err);
-    }
-    try {
-      const animation = await fetchMyEquippedAnimation();
-      if (animation.equippedTemplateId) equippedAnimation = animation;
-    } catch (err) {
-      console.warn('Could not fetch applied animation, falling back to the equipped avatar\'s own clips:', err);
-    }
-  }
+  // #3294: the equipped avatar and applied animation are fetched, and the
+  // avatar built and mounted, together by mountShopAvatar below (the same
+  // function the Sell world view uses); it only fetches when logged in.
 
   // #1176: the shopper's own last-reported position, if any — powers the
   // "Go to Last Location" button shown during the spawn orbit below. Never
@@ -721,33 +702,18 @@ export async function enterShopMode() {
     });
   }
 
-  // Shop mode can be (re-)entered without a reload (see this function's own
-  // opening comment) — remove any avatar left over from a previous round
-  // trip before building a fresh one, rather than ending up with two
-  // overlapping bodies.
-  // #1358: also dispose it, not just detach it from the scene graph — left
-  // over from a previous round trip means its geometry/material (and any
-  // custom GLTF avatar's textures) would otherwise leak every time Shop
-  // mode is re-entered without a page reload.
-  if (shopAvatar) {
-    scene.remove(shopAvatar.group);
-    disposeObject3D(shopAvatar.group);
-  }
-  setShopAvatar(null);
-  if (equippedAvatarModelUrl) {
-    try {
-      setShopAvatar(await createCustomShopAvatar(equippedAvatarModelUrl, equippedAnimation));
-    } catch (err) {
-      console.warn(`Failed to load equipped avatar model (${equippedAvatarModelUrl}), falling back to the default avatar:`, err);
-    }
-  }
-  if (!shopAvatar) setShopAvatar(createShopAvatar());
-  scene.add(shopAvatar.group);
-  window.__shopAvatarModelUrl = shopAvatar.modelUrl; // see refreshEquippedShopAvatar's own comment on this (#982)
-  window.__shopAvatarMetrics = { heightM: shopAvatarHeightM(), collisionHalfM: shopAvatarCollisionHalfM(), cameraAnchorHeightM: shopCameraAnchorHeightM() }; // see refreshEquippedShopAvatar's own comment on this (#1091)
-  window.__shopAvatarAnimationSource = shopAvatar.animationSource ?? null; // see createCustomShopAvatar's own comment on this (#1165)
+  // #3294: one shared function builds and mounts the avatar (see
+  // src/shop/mountShopAvatar.js for the behaviour it keeps, including the
+  // #1358 dispose of a previous round trip's avatar and the fallbacks).
+  await mountShopAvatar({ scene, isLoggedIn: Boolean(currentAuthUser) }, {
+    fetchMyEquippedAvatar, fetchMyEquippedAnimation,
+    setEquippedAvatarSkeletonSignature: setShopEquippedAvatarSkeletonSignature,
+    getShopAvatar: () => shopAvatar, setShopAvatar, disposeObject3D,
+    createCustomShopAvatar, createShopAvatar,
+    shopAvatarHeightM, shopAvatarCollisionHalfM, shopCameraAnchorHeightM,
+    resetShopAvatarIdleState,
+  });
   await reportRendererMemoryDiagnostic(); // see disposeObject3D's neighboring comment on this (#1358)
-  resetShopAvatarIdleState(); // src/shop/avatar.js (#2623) — zeroes every idle/sway/sit/lean field it owns
   // #1175 (docs/SPEC.md §1/§2): every spawn — not just a first-ever visit —
   // starts already flying, above a random world location, facing the
   // world center, and slowly orbiting it clockwise until the shopper gives
