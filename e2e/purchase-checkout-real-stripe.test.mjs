@@ -48,7 +48,7 @@
 // REAL_STRIPE_TEST_FILES gate) when CI's own repo secrets are configured.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, emailForLabel } from './helpers.mjs';
+import { launchPage, emailForLabel, acceptConfirmModal } from './helpers.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
@@ -408,12 +408,24 @@ try {
   throw err;
 }
 
-// handleShopProductBuyClick's own confirm() dialog is auto-accepted by
-// launchPage's own default dialog handler -- this file only adds a second
-// listener (same convention as e2e/purchase-shipping.test.mjs's own
-// dialogMessages capture) to read back the "Purchase complete" alert as
-// this test's actual pass signal, not to change any dialog's outcome.
+// #3278: handleShopProductBuyClick confirms in the shared in-app modal now
+// (it used to be a native confirm() auto-accepted by launchPage). This file
+// still adds a dialog listener (same convention as
+// e2e/purchase-shipping.test.mjs's own dialogMessages capture) to read back
+// the "Purchase complete" alert as this test's actual pass signal.
 await page.click('#shop-product-preview-buy-btn');
+// Never mind first: the modal names a price, focuses the safe choice, and
+// cancelling starts no checkout and leaves the preview modal open and armed.
+await page.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
+const buyConfirmNamesPrice = /\$\d/.test(await page.textContent('#confirm-modal-message'));
+const buyConfirmFocusOnSafeChoice = await page.evaluate(() => document.activeElement?.id === 'confirm-modal-cancel-btn');
+await page.click('#confirm-modal-cancel-btn');
+await page.waitForFunction(() => !document.getElementById('confirm-modal').classList.contains('visible'), null, { timeout: 5000 });
+const checkoutOpenedAfterCancel = (await page.locator('#checkout-modal.visible').count()) !== 0;
+const previewStillOpen = (await page.locator('#shop-product-preview-modal.visible').count()) === 1;
+console.log('buy confirm names a price / focuses Never mind / no checkout after cancel / preview still open:', buyConfirmNamesPrice, buyConfirmFocusOnSafeChoice, !checkoutOpenedAfterCancel, previewStillOpen);
+await page.click('#shop-product-preview-buy-btn');
+await acceptConfirmModal(page);
 
 await page.waitForSelector('#checkout-modal.visible', { timeout: 15000 });
 await page.waitForFunction(() => !document.getElementById('checkout-pay-btn').disabled, null, { timeout: 30000 });
@@ -433,7 +445,7 @@ await page.waitForSelector('#checkout-modal:not(.visible)', { state: 'attached',
 console.log('dialog messages seen (should include a "Purchase complete" alert):', dialogMessages);
 const purchaseCompleted = dialogMessages.some((message) => message.includes('Purchase complete'));
 
-const pass = stripeAccountComplete && purchaseCompleted && errors.length === 0 && sellerErrors.length === 0;
+const pass = stripeAccountComplete && purchaseCompleted && buyConfirmNamesPrice && buyConfirmFocusOnSafeChoice && !checkoutOpenedAfterCancel && previewStillOpen && errors.length === 0 && sellerErrors.length === 0;
 await page.close();
 await browser.close();
 console.log('page errors:', errors.length || sellerErrors.length ? [...errors, ...sellerErrors] : 'none');
