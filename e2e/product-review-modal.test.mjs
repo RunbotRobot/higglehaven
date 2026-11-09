@@ -4,7 +4,7 @@
 // Product did nothing and said nothing. This opens the modal directly (the
 // in-world button needs real camera movement) with stubbed callbacks, dismisses
 // every native dialog the instant it opens (what a suppressed dialog does),
-// and checks: create mode, a server failure shown inside the modal and kept
+// and checks: create mode, a server failure shown inside the modal as selectable text and kept
 // for a retry, the 280-character guard, and edit mode's prefill and Delete
 // through the shared destructive-confirm modal.
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
@@ -49,7 +49,9 @@ await page.click('#product-review-save-btn');
 await page.waitForSelector('#product-review-status:not([hidden])', { timeout: 5000 });
 const errorText = await page.textContent('#product-review-status-text');
 const stillOpenAfterError = await visible('#product-review-modal');
-const copyBtnShown = await page.isVisible('#product-review-status-copy-btn');
+// #3303 as amended: selectable text, no Copy control.
+const errorSelectable = await page.$eval('#product-review-status-text', (el) => getComputedStyle(el).userSelect !== 'none' && getComputedStyle(el).pointerEvents !== 'none');
+const noCopyButton = (await page.locator('#product-review-modal button', { hasText: /^copy$/i }).count()) === 0;
 const saveEnabledAfterError = await page.$eval('#product-review-save-btn', (el) => !el.disabled);
 // Retry succeeds and closes the modal.
 await page.click('#product-review-save-btn');
@@ -106,10 +108,10 @@ await page.waitForFunction(() => window.__reviewResult === true, null, { timeout
 const deletedAfterConfirm = await page.evaluate(() => window.__deleted);
 const bothClosed = !(await visible('#product-review-modal')) && !(await visible('#confirm-modal'));
 
-console.log({ createTitle, defaultRating, deleteHiddenOnCreate, errorText, stillOpenAfterError, copyBtnShown, saveEnabledAfterError, closedAfterRetry, calls, overClass, overMsg, overCalls, editTitle, editRating, editText, deleteShownOnEdit, confirmTitle, reviewStillOpen, deletedAfterCancel, deletedAfterConfirm, bothClosed, nativeDialogs });
+console.log({ createTitle, defaultRating, deleteHiddenOnCreate, errorText, stillOpenAfterError, errorSelectable, noCopyButton, saveEnabledAfterError, closedAfterRetry, calls, overClass, overMsg, overCalls, editTitle, editRating, editText, deleteShownOnEdit, confirmTitle, reviewStillOpen, deletedAfterCancel, deletedAfterConfirm, bothClosed, nativeDialogs });
 
 const pass = createTitle === 'Review this product' && defaultRating === '5' && deleteHiddenOnCreate &&
-  errorText.includes('buy this product') && stillOpenAfterError && copyBtnShown && saveEnabledAfterError &&
+  errorText.includes('buy this product') && stillOpenAfterError && errorSelectable && noCopyButton && saveEnabledAfterError &&
   closedAfterRetry && calls.length === 2 && calls[1].rating === 4 && calls[1].text === 'Sturdy.' &&
   overClass && overMsg.includes('280') && overCalls === 0 &&
   editTitle === 'Your review' && editRating === '2' && editText === 'Meh.' && deleteShownOnEdit &&

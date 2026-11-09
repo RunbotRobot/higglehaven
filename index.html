@@ -289,12 +289,27 @@
         </label>
         <div id="product-review-status" role="alert" hidden>
           <span id="product-review-status-text"></span>
-          <button id="product-review-status-copy-btn" type="button">Copy</button>
         </div>
         <div id="product-review-actions">
           <button id="product-review-delete-btn" type="button" hidden>Delete review</button>
           <button id="product-review-cancel-btn" type="button">Cancel</button>
           <button id="product-review-save-btn" type="button">Post review</button>
+        </div>
+      </div>
+    </div>
+    <!-- #3249: an in-app notice for an outcome the person must be able to read
+         and copy (a purchase result with its one-time delivery link, a refusal),
+         replacing window.alert(). See src/ui/noticeModal.js. -->
+    <div id="notice-modal" role="dialog" aria-modal="true" aria-labelledby="notice-modal-title" tabindex="-1">
+      <div id="notice-modal-content">
+        <button id="notice-modal-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2 id="notice-modal-title"></h2>
+        <p id="notice-modal-message"></p>
+        <div id="notice-modal-copy-row" hidden>
+          <input id="notice-modal-copy-field" type="text" readonly aria-label="Text to copy" />
+        </div>
+        <div id="notice-modal-actions">
+          <button id="notice-modal-ok-btn" type="button">OK</button>
         </div>
       </div>
     </div>

@@ -6,11 +6,10 @@
 // nothing and said nothing. Here the rating is a radio group, the comment has
 // a live count against the 280 limit (#2005 -- prompt() could not show one),
 // and an error from the server is shown inside the modal, where the person
-// just tapped, and stays until the next attempt (#3303; it has a Copy button).
+// just tapped, and stays until the next attempt, as selectable text (#3303).
 // Deleting goes through the shared destructive-confirm modal (#3278).
 import { openModalA11y, closeModalA11y } from './modal.js';
 import { confirmDestructive } from './confirmModal.js';
-import { copyTextWithFeedback } from './copyText.js';
 
 export const REVIEW_COMMENT_MAX = 280;
 
@@ -22,7 +21,6 @@ const textEl = document.getElementById('product-review-text');
 const countEl = document.getElementById('product-review-count');
 const statusEl = document.getElementById('product-review-status');
 const statusTextEl = document.getElementById('product-review-status-text');
-const statusCopyBtn = document.getElementById('product-review-status-copy-btn');
 const deleteBtn = document.getElementById('product-review-delete-btn');
 const cancelBtn = document.getElementById('product-review-cancel-btn');
 const saveBtn = document.getElementById('product-review-save-btn');
@@ -121,9 +119,6 @@ cancelBtn.addEventListener('click', cancel);
 saveBtn.addEventListener('click', save);
 deleteBtn.addEventListener('click', remove);
 textEl.addEventListener('input', updateCount);
-statusCopyBtn.addEventListener('click', () => {
-  copyTextWithFeedback(statusCopyBtn, statusTextEl.textContent);
-});
 
 // `existing` ({ rating, text }) switches the modal to edit mode and shows the
 // Delete button. `onSubmit({ rating, text })` and `onDelete()` run while the

@@ -411,8 +411,9 @@ try {
 // #3278: handleShopProductBuyClick confirms in the shared in-app modal now
 // (it used to be a native confirm() auto-accepted by launchPage). This file
 // still adds a dialog listener (same convention as
-// e2e/purchase-shipping.test.mjs's own dialogMessages capture) to read back
-// the "Purchase complete" alert as this test's actual pass signal.
+// e2e/purchase-shipping.test.mjs's own dialogMessages capture) as a tripwire:
+// the "Purchase complete" result is the in-app notice modal now (#3249), so
+// any native dialog here means a purchase step regressed to confirm()/alert().
 await page.click('#shop-product-preview-buy-btn');
 // Never mind first: the modal names a price, focuses the safe choice, and
 // cancelling starts no checkout and leaves the preview modal open and armed.
@@ -442,8 +443,12 @@ await page.click('#checkout-pay-btn');
 // verify-card-real-stripe.test.mjs's own #verify-modal close wait gives.
 await page.waitForSelector('#checkout-modal:not(.visible)', { state: 'attached', timeout: 60000 });
 
-console.log('dialog messages seen (should include a "Purchase complete" alert):', dialogMessages);
-const purchaseCompleted = dialogMessages.some((message) => message.includes('Purchase complete'));
+// #3249: the result is the in-app notice modal, not an alert(); native
+// dialogs stay wired as a tripwire for any purchase step regressing to one.
+await page.waitForSelector('#notice-modal.visible', { timeout: 30000 });
+const noticeTitle = await page.textContent('#notice-modal-title');
+console.log('result notice title:', noticeTitle, '| native dialogs (should be none):', dialogMessages);
+const purchaseCompleted = noticeTitle === 'Purchase complete' && dialogMessages.length === 0;
 
 const pass = stripeAccountComplete && purchaseCompleted && buyConfirmNamesPrice && buyConfirmFocusOnSafeChoice && !checkoutOpenedAfterCancel && previewStillOpen && errors.length === 0 && sellerErrors.length === 0;
 await page.close();
