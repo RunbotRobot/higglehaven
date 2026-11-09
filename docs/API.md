@@ -12763,7 +12763,15 @@ dismissed, is selectable, and has a Copy button (`src/ui/copyText.js`, shared
 with the admin camera readout); the Shop orb notices and `#shop-status` are
 selectable while shown. The orb rate-limit notice no longer fades on a timer: it
 stays until dismissed or a collect succeeds, with Copy and dismiss buttons, and
-the offline notice has a Copy button.
+the offline notice has a Copy button. Every modal status line that shows an error (`auth-status`, `claim-status`,
+`upload-status`, `checkout-status`, `verify-status`, `seller-status`,
+`feedback-status`, `friends-status`, `dm-status`, `my-lands-status`,
+`confirm-modal-status`, `sell-this-too-form-error`) gets one shared Copy button
+while it holds error text (`src/ui/copyableErrors.js`, so no per-surface wiring)
+and records the text for bug reports. `#product-info` is selectable. The
+overlays left click-through on purpose carry no information-bearing text: the
+wordmark art, compass letters, joystick knobs, the multi-select marquee and
+brush circle.
 
 **`GET /api/feedback/bug-reports/:reportId/screenshot`** — admin-gated
 (`requireAdmin`), not public. #2715's own body flags, as a still-open
