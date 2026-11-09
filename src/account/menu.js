@@ -39,6 +39,7 @@ import {
   markNotificationRead,
   deleteNotification,
   markAllNotificationsRead,
+  clearReadNotifications,
   fetchFriendships,
   sendFriendRequest,
   acceptFriendRequest,
@@ -70,6 +71,7 @@ const notificationsCloseBtn = document.getElementById('notifications-close-btn')
 const notificationsListEl = document.getElementById('notifications-list');
 const notificationsEmptyEl = document.getElementById('notifications-empty');
 const notificationsMarkAllBtn = document.getElementById('notifications-mark-all-btn');
+const notificationsClearReadBtn = document.getElementById('notifications-clear-read-btn');
 const notificationsLoadMoreBtn = document.getElementById('notifications-load-more-btn');
 
 export async function refreshNotificationsBadge() {
@@ -255,6 +257,29 @@ notificationsMarkAllBtn.addEventListener('click', async () => {
   } finally {
     notificationsMarkAllBtn.disabled = false;
   }
+});
+
+// #3280: remove every notice that has already been read, after confirming in
+// the in-app modal (#3278). Unread notices are never removed; the modal says so.
+notificationsClearReadBtn.addEventListener('click', async () => {
+  if (!builderId) return;
+  await confirmDestructive({
+    title: 'Clear read notices?',
+    message: 'This removes every notice you have already read. Unread notices stay.',
+    confirmLabel: 'Clear read',
+    returnFocusEl: notificationsClearReadBtn,
+    restoreModalEl: notificationsModalEl,
+    restoreCloseFn: closeNotificationsModal,
+    onConfirm: async () => {
+      try {
+        await clearReadNotifications();
+      } catch (err) {
+        throw new Error(err.message || 'Could not clear read notices.');
+      }
+      await renderNotifications();
+      await refreshNotificationsBadge();
+    },
+  });
 });
 
 // Owner (Control Room feedback): "Builders should see their lánd cap in

@@ -1027,6 +1027,13 @@ export async function deleteNotification(notificationId) {
   await requestJson(`/notifications/${encodeURIComponent(notificationId)}`, { method: 'DELETE' });
 }
 
+// #3280: removes every notice the caller has already read; resolves to the
+// number removed.
+export async function clearReadNotifications() {
+  const { deleted } = await requestJson('/notifications/clear-read', { method: 'POST' });
+  return deleted;
+}
+
 export async function markAllNotificationsRead() {
   await requestJson('/notifications/mark-all-read', { method: 'POST' });
 }
