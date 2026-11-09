@@ -44,8 +44,10 @@ const CONTROL_ROOM_BUG_REPORT_POSTED_BY = 'bug-report';
 // blow up this row the same way MAX_METADATA_JSON_BYTES above already
 // guards the request itself).
 const CONTROL_ROOM_NOTE_MAX_LENGTH = 20000;
-function bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platform, submittedAt, renderStateBuffer, recentUserVisibleMessages = [] }) {
+function bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platform, submittedAt, mode, renderStateBuffer, recentUserVisibleMessages = [] }) {
   const lines = [];
+  // #3302: the report now comes from Shop, Build or Sell; say which on the card.
+  if (mode) lines.push(`Mode: ${mode}`);
   if (webglRenderer || webglVendor) {
     lines.push(`WebGL renderer: ${webglRenderer || '(unknown)'}${webglVendor ? ` (${webglVendor})` : ''}`);
   }
@@ -159,6 +161,7 @@ export async function handleFeedbackBugReportCreate(request, env, db) {
   const userAgent = optionalText(metadata.userAgent, 'userAgent', MAX_TEXT_FIELD_LENGTH);
   const platform = optionalText(metadata.platform, 'platform', MAX_TEXT_FIELD_LENGTH);
   const submittedAt = optionalText(metadata.submittedAt, 'submittedAt', 64);
+  const mode = optionalText(metadata.mode, 'mode', 16); // #3302: 'shop' | 'build' | 'sell', display-only
   // #2717's own buffer shape is display-only (#2720) and never queried on
   // here -- same "not deeply schema-validated" treatment this codebase
   // already gives admin_action_log.detail_json and control_room_tasks'
@@ -207,7 +210,7 @@ export async function handleFeedbackBugReportCreate(request, env, db) {
   const controlRoomTaskId = `bug-report-${reportId.slice('report-'.length)}`;
   const now = new Date().toISOString();
   const controlRoomTitle = description || 'Bug report (no description)';
-  const controlRoomNote = bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platform, submittedAt, renderStateBuffer, recentUserVisibleMessages });
+  const controlRoomNote = bugReportControlRoomNote({ webglRenderer, webglVendor, userAgent, platform, submittedAt, mode, renderStateBuffer, recentUserVisibleMessages });
 
   await db.batch([
     db.prepare(`

@@ -687,7 +687,7 @@ export const MAX_MONEY_CENTS = 100_000_000;
 import {
   sellerModalEl, closeSellerModal, renderActiveSellerView, hasDuplicateProductName,
   AXIS_ARROW_COLORS, openSellerModal, myProducts, updateSellerViewToggleUI,
-  focusSellerManageRow, renderSellerFeedbackSummary, resetSellerView,
+  focusSellerManageRow, renderSellerFeedbackSummary, resetSellerView, recordSellFeedbackSample,
 } from './sell/mode.js';
 
 // #2565 (leaf of #2504/#2500's src/main.js module split): the Settings
@@ -1849,8 +1849,9 @@ async function enterSellMode() {
   // #2552: Sell has no per-frame work of its own (paginated, static
   // between page turns) — see world/scene.js's own comment on why this is
   // an explicit null rather than just leaving whatever the previous page
-  // load registered.
-  registerModeFrameUpdate(null);
+  // load registered. #3302: it now registers a tiny callback that only feeds
+  // the Submit Feedback ring buffer (no movement or scene work).
+  registerModeFrameUpdate(recordSellFeedbackSample);
   for (const id of SELL_HIDDEN_BUILDER_UI_IDS) {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';

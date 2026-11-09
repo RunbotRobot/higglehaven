@@ -514,6 +514,37 @@ most likely to come up again.
   may still fade); and a message a person might need to send on (an
   error, a refusal, an id) gets a Copy control.
 
+- **Groups and bundles are one feature, called bundles, and a placed
+  bundle is one item.** (2026-11-09, #3323.) After grouping an 863-piece
+  wall, the owner asked for the builder to "truly be able to abstract
+  away all the subproducts": one selection box around the bundle from
+  the moment it is created, moved and rotated as a rigid body (a wall
+  turned 90 degrees is still a wall, not bricks each turned 90 degrees),
+  and no second concept called a group. An unsaved bundle is "a
+  one-instance, unnamed, private bundle"; pasting it makes independent
+  copies. This is "One model, not a hybrid" applied to Build mode
+  content.
+
+- **A saved bundle is a live template: editing a placed copy changes
+  every copy, the editor is warned first, only the creator can edit,
+  and anyone can unbundle to make it their own.** (2026-11-09, #3323.)
+  Saving names an existing bundle and links it to a template; placing
+  the saved bundle makes linked copies. A member edit on a linked copy
+  rewrites the template and every placement, including on other
+  builders' landlets, so Edit on a linked bundle opens an in-app
+  confirmation saying exactly that. Only the builder who saved the
+  bundle edits its members; another builder sees why Edit is disabled
+  and can Unbundle (detach into an unsaved bundle of their own) and
+  re-save it. The owner weighed a one-step "save as my own copy" and
+  chose the two-step path as clearer. Builders whose landlet changes
+  under them are told, by "The builder has full information and full
+  autonomy over anything that happens on their landlet".
+
+- **Bundle sharing defaults to public on save.** (2026-11-09, #3323.)
+  The save modal offers the choice with public selected; the builder
+  can make it private. This replaces docs/SPEC.md's "Private by
+  default; explicit opt-in sharing" for bundles.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and

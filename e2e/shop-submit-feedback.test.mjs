@@ -8,7 +8,7 @@
 // end to end. The backend's own behavior (bug_reports row shape, R2
 // storage, auth) is covered directly by worker/feedback.test.js; this
 // test's own scope is the UI flow only.
-import { launchPage, chooseIdentity, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
 
 const LABEL = 'Feedback Suite Tester';
 
@@ -16,10 +16,19 @@ const { browser, page, errors } = await launchPage();
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
-await page.waitForSelector('#shop-feedback-btn.visible', { timeout: 10000 });
 
-await page.click('#shop-feedback-btn');
-await page.waitForSelector('#feedback-modal.visible', { timeout: 5000 });
+// #3302: the entry point moved from a Shop HUD pill to Send feedback in
+// Settings (every mode). The all-modes flow is covered by
+// feedback-in-settings-all-modes.test.mjs; this file keeps the Shop-mode
+// capture / success / failed-capture behaviour.
+async function openFeedbackFromSettings() {
+  await openAccountMenu(page);
+  await page.click('#settings-btn');
+  await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
+  await page.click('#settings-feedback-btn');
+  await page.waitForSelector('#feedback-modal.visible', { timeout: 5000 });
+}
+await openFeedbackFromSettings();
 
 // The screenshot capture is async (canvas.toBlob) -- wait for the preview
 // <img>'s src to actually be populated rather than asserting at the
@@ -71,8 +80,8 @@ console.log('modal auto-closed after a successful submit (should be 0):', modalS
 // A capture that produces nothing must not leave a broken-image icon behind,
 // and must say so (the report can still be sent without a picture).
 await page.evaluate(() => { HTMLCanvasElement.prototype.toBlob = function toBlobNothing(callback) { callback(null); }; });
-await page.click('#shop-feedback-btn');
-await page.waitForSelector('#feedback-modal.visible', { timeout: 5000 });
+await page.click('#settings-close-btn');
+await openFeedbackFromSettings();
 await page.waitForFunction(
   () => document.getElementById('feedback-status').textContent.includes("couldn't capture"),
   null,

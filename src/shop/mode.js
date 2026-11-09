@@ -104,7 +104,6 @@ import {
 } from './worldSprites.js';
 import { closeShopProductPreviewModal, confettiBursts, disposeConfettiBurst } from './productCheckout.js';
 import { recordRenderStateSample } from '../feedback/renderStateBuffer.js';
-import { shopFeedbackBtn } from '../feedback/submitFeedbackUI.js';
 
 // small ground/wall seam overlap only — see wildGround below (enterShopMode)
 const SHOP_WALL_MARGIN_M = 1.5;
@@ -728,10 +727,6 @@ export async function enterShopMode() {
   // wait until here, unlike the other Shop HUD elements above).
   shopFlyBtn.classList.add('visible');
   shopVerticalControlsEl.classList.add('visible');
-  // #2718: reveal the "Submit Feedback" trigger the same moment as the fly
-  // button/vertical controls above -- see submitFeedbackUI.js's own
-  // comment on why this is Shop-only and owns its own listeners.
-  shopFeedbackBtn.classList.add('visible');
   // Not just clearing the text — an empty .visible pill still shows its
   // own padding/background as a small blank rectangle, which sat directly
   // on top of the wordmark (both anchored at the same top:10/left:12 spot)
@@ -756,6 +751,7 @@ export async function enterShopMode() {
     // comment on why (GET /api/world is a singleton; there's no id to
     // capture yet).
     recordRenderStateSample(now, {
+      mode: 'shop', // #3302: which mode the report came from (Build and Sell now feed this buffer too)
       cameraPosition: { x: camera.position.x, y: camera.position.y, z: camera.position.z },
       avatarPosition: { x: shopAvatarPosition.x, y: shopAvatarPosition.y, z: shopAvatarPosition.z },
       avatarFacingRad: shopAvatarFacing,

@@ -33,6 +33,15 @@ let sellerShowcasePages = [];
 // the showcase stale (see refreshSellerShowcase/sellerShowcaseMeshesStale
 // below).
 export let sellerShowcasePageIndex = 0;
+// #3302 -- added so a feedback report sent from Sell says which showcase page
+// and how many products were on screen (Sell has no per-frame state of its own).
+export function sellerShowcaseFeedbackState() {
+  return {
+    pageIndex: sellerShowcasePageIndex,
+    pageCount: sellerShowcasePages.length,
+    productCount: sellerShowcaseMeshes.length,
+  };
+}
 
 const sellerShowcasePagerEl = document.getElementById('seller-showcase-pager');
 const sellerShowcasePageLabelEl = document.getElementById('seller-showcase-page-label');
