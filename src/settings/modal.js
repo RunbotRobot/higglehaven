@@ -25,6 +25,7 @@
 // Settings-unrelated initial paint there at load) -- exported, imported
 // back here for refreshUnitDisplays' own repaint.
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
+import { confirmDestructive } from '../ui/confirmModal.js';
 import { getUnits, setUnits, unitSuffix } from '../settings.js';
 import { currentMode } from '../world/state.js';
 import { currentAuthUser, setCurrentAuthUser } from '../account/auth.js';
@@ -567,12 +568,28 @@ export async function renderIdentityField(kind, { fetchProfile, idKey, renamePro
       // click since `profile` can have changed since renderIdentityField
       // was first called.
       const warningText = typeof deleteWarning === 'function' ? deleteWarning(profile) : deleteWarning;
-      if (!confirm(warningText)) return;
       status.textContent = '';
       status.classList.remove('error');
+      // #3278: its own in-app modal (not window.confirm), opened over
+      // Settings; a refusal is shown inside it, where the person just tapped.
+      const confirmed = await confirmDestructive({
+        title: 'Reset this profile?',
+        message: warningText,
+        confirmLabel: 'Reset Profile',
+        returnFocusEl: deleteBtn,
+        restoreModalEl: settingsModalEl,
+        restoreCloseFn: closeSettingsModal,
+        onConfirm: async () => {
+          try {
+            await deleteProfile(profile[idKey]);
+          } catch (err) {
+            throw new Error(err.message || 'Could not delete.');
+          }
+        },
+      });
+      if (!confirmed) return;
       deleteBtn.disabled = true;
       try {
-        await deleteProfile(profile[idKey]);
         // #738: the caller's cached module-level id (builderId/sellerId)
         // must be cleared here, before fetchProfile() re-provisions a
         // fresh identity server-side -- ensureBuilderIdentity()'s own

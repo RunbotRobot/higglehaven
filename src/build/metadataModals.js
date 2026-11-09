@@ -12,6 +12,7 @@
 // must disappear the moment the picker closes, pick or cancel alike).
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
+import { confirmDestructive } from '../ui/confirmModal.js';
 import {
   fetchSignPosts, deleteSignPost,
   fetchCalendarEvents, deleteCalendarEvent, editCalendarEvent,
@@ -488,21 +489,32 @@ async function renderBackupChain() {
     removeBtn.textContent = '×';
     removeBtn.setAttribute('aria-label', 'Remove backup');
     removeBtn.addEventListener('click', async () => {
-      if (!confirm('Remove this backup? This can\'t be undone.')) return;
-      removeBtn.disabled = true;
-      try {
-        await deleteInstanceBackup(instanceId, backup.backupId);
-        await renderBackupChain();
-      } catch (err) {
-        alert(err.message || 'Could not remove this backup.');
-        // #2969: re-render instead of just re-enabling the button -- a
-        // concurrent delete of this same backup (a second open copy of
-        // this panel) is exactly the kind of failure this alert fires
-        // for, and leaving the stale row in place just repeats the same
-        // dead-end delete on every retry. Same fix #2963/metadataModals.js's
-        // sign-posts/calendar-events handlers already got.
-        await renderBackupChain();
-      }
+      // #3278: its own in-app modal (not window.confirm), opened over the
+      // backup-chain modal; a refusal is shown inside it.
+      let failed = false;
+      const removed = await confirmDestructive({
+        title: 'Remove this backup?',
+        message: 'Remove this backup? This can\'t be undone.',
+        confirmLabel: 'Remove',
+        returnFocusEl: removeBtn,
+        restoreModalEl: backupChainModalEl,
+        restoreCloseFn: closeBackupChainModal,
+        onConfirm: async () => {
+          try {
+            await deleteInstanceBackup(instanceId, backup.backupId);
+          } catch (err) {
+            failed = true;
+            throw new Error(err.message || 'Could not remove this backup.');
+          }
+        },
+      });
+      // #2969: re-render after a failure too (not just a success) -- a
+      // concurrent delete of this same backup (a second open copy of this
+      // panel) is exactly the kind of failure this fires for, and leaving the
+      // stale row in place just repeats the same dead-end delete on every
+      // retry. Same fix #2963/metadataModals.js's sign-posts/calendar-events
+      // handlers already got.
+      if (removed || failed) await renderBackupChain();
     });
     row.appendChild(removeBtn);
     backupChainListEl.appendChild(row);

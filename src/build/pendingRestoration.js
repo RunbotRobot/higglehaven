@@ -8,6 +8,7 @@
 // a different product. Shoppers never see any of this: the endpoint behind
 // it only ever returns the signed-in builder's own records.
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
+import { confirmDestructive } from '../ui/confirmModal.js';
 import { fetchPendingRestorations, clearPendingRestoration } from '../api.js';
 
 const buttonEl = document.getElementById('pending-restoration-btn');
@@ -72,13 +73,23 @@ function renderSlots(slots) {
     clearBtn.textContent = 'Clear';
     clearBtn.setAttribute('aria-label', `Clear ${name} for good`);
     clearBtn.addEventListener('click', async () => {
-      if (!confirm('Clear this for good? It will not come back, and the spot is free for something else.')) return;
-      clearBtn.disabled = true;
-      try {
-        await clearPendingRestoration(slot.snapshotId);
-      } catch (err) {
-        alert(err.message || 'Could not clear this item.');
-      }
+      // #3278: its own in-app modal (not window.confirm), opened over this
+      // one; a refusal is shown inside it.
+      await confirmDestructive({
+        title: `Clear ${name} for good?`,
+        message: 'Clear this for good? It will not come back, and the spot is free for something else.',
+        confirmLabel: 'Clear',
+        returnFocusEl: clearBtn,
+        restoreModalEl: modalEl,
+        restoreCloseFn: closeModal,
+        onConfirm: async () => {
+          try {
+            await clearPendingRestoration(slot.snapshotId);
+          } catch (err) {
+            throw new Error(err.message || 'Could not clear this item.');
+          }
+        },
+      });
       // Re-fetch rather than splice locally: a failed clear (or a second
       // open copy of this panel clearing the same slot) leaves the list
       // exactly as the server now has it.

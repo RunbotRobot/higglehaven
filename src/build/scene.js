@@ -98,10 +98,11 @@ import {
 } from '../main.js';
 import { addItemBtn, closeCatalogPicker } from '../catalog/picker.js';
 import { copyTextWithFeedback } from '../ui/copyText.js';
+import { confirmDestructive } from '../ui/confirmModal.js';
 import { recordVisibleMessage } from '../ui/visibleMessages.js';
 import { consumeStripeReturnMarker, ownRequirementsDue, syncStripeStepPrompt } from '../stripeStep.js';
 import {
-  settingsSectionEl, settingsRenderToken, renderSettingsSection, renderIdentityField,
+  settingsSectionEl, settingsRenderToken, renderSettingsSection, renderIdentityField, closeSettingsModal,
 } from '../settings/modal.js';
 
 // Vertical construction (issue #167/#168/#169): the current lándlet's own
@@ -4812,15 +4813,23 @@ export function renderBuildSettingsSection() {
     deleteBtn.className = 'version-action-btn';
     deleteBtn.textContent = 'Delete';
     deleteBtn.addEventListener('click', async () => {
-      if (!confirm(`Permanently delete "${savedLayout.name}"? This can't be undone.`)) return;
-      deleteBtn.disabled = true;
-      try {
-        await deleteSavedLayout(savedLayout.savedLayoutId);
-        renderSavedLayoutsList();
-      } catch (err) {
-        alert(err.message || 'Could not delete this saved layout.');
-        deleteBtn.disabled = false;
-      }
+      // #3278: its own in-app modal (not window.confirm), opened over Settings.
+      const deleted = await confirmDestructive({
+        title: 'Delete this saved layout?',
+        message: `Permanently delete "${savedLayout.name}"? This can't be undone.`,
+        confirmLabel: 'Delete',
+        returnFocusEl: deleteBtn,
+        restoreModalEl: document.getElementById('settings-modal'),
+        restoreCloseFn: closeSettingsModal,
+        onConfirm: async () => {
+          try {
+            await deleteSavedLayout(savedLayout.savedLayoutId);
+          } catch (err) {
+            throw new Error(err.message || 'Could not delete this saved layout.');
+          }
+        },
+      });
+      if (deleted) renderSavedLayoutsList();
     });
     actions.appendChild(deleteBtn);
 
@@ -4940,46 +4949,56 @@ export function renderBuildSettingsSection() {
     restoreBtn.className = 'version-action-btn';
     restoreBtn.textContent = 'Restore to Editor';
     restoreBtn.addEventListener('click', async () => {
-      if (!confirm(`Replace everything currently placed with "${version.name}"? This saves its own version first, so it's reversible, but everything since your last save will be gone from the live editor.`)) return;
-      restoreBtn.disabled = true;
-      publishStatus.textContent = 'Restoring…';
+      publishStatus.textContent = '';
       publishStatus.classList.remove('error');
-      try {
-        const full = await fetchLandletVersion(landletId, version.versionId);
-        // #2250: each restore wraps the prior name in this same prefix/
-        // suffix, so a chain of restores grows versionName past the
-        // server's own MAX_LABEL_LENGTH (100, worker/index.js) and the
-        // restore starts failing a 400 that has nothing to do with the
-        // instances actually being restored -- this is an auto-generated
-        // label the user never typed, so truncate it rather than let the
-        // server reject it.
-        const wrappedVersionName = `Restored from "${version.name}"`;
-        const versionName = wrappedVersionName.length > 100
-          ? `${wrappedVersionName.slice(0, 99)}…`
-          : wrappedVersionName;
-        const restoredDraft = await replaceLandletDraft(landletId, {
-          instances: full.instances,
-          versionName,
-        });
-        clearDraftIdempotencyKey(landletId);
-        // #3034: the server leaves out any product whose seller is
-        // currently suspended -- say so before the reload below, instead
-        // of the builder wondering where those items went.
-        const skippedCount = restoredDraft?.skippedInstances?.length ?? 0;
-        if (skippedCount > 0) {
-          alert(`${skippedCount} ${skippedCount === 1 ? 'item was' : 'items were'} not restored because ${skippedCount === 1 ? 'its seller is' : 'their sellers are'} currently suspended.`);
-        }
-        // Simplest correct way to get the live scene back in sync with
-        // whatever the server now holds — the same "something changed
-        // server-side, reload" pattern claimBackBtn already uses
-        // elsewhere in this file.
-        sessionStorage.setItem(START_MODE_KEY, 'build');
-        location.reload();
-      } catch (err) {
-        publishStatus.textContent = err.message || 'Could not restore.';
-        publishStatus.classList.add('error');
-        restoreBtn.disabled = false;
+      let restoredDraft = null;
+      // #3278: its own in-app modal (not window.confirm), opened over Settings.
+      // The restore runs inside it, so a failure is shown where they tapped.
+      const restored = await confirmDestructive({
+        title: 'Restore this version to the editor?',
+        message: `Replace everything currently placed with "${version.name}"? This saves its own version first, so it's reversible, but everything since your last save will be gone from the live editor.`,
+        confirmLabel: 'Restore',
+        returnFocusEl: restoreBtn,
+        restoreModalEl: document.getElementById('settings-modal'),
+        restoreCloseFn: closeSettingsModal,
+        onConfirm: async () => {
+          try {
+            const full = await fetchLandletVersion(landletId, version.versionId);
+            // #2250: each restore wraps the prior name in this same prefix/
+            // suffix, so a chain of restores grows versionName past the
+            // server's own MAX_LABEL_LENGTH (100, worker/index.js) and the
+            // restore starts failing a 400 that has nothing to do with the
+            // instances actually being restored -- this is an auto-generated
+            // label the user never typed, so truncate it rather than let the
+            // server reject it.
+            const wrappedVersionName = `Restored from "${version.name}"`;
+            const versionName = wrappedVersionName.length > 100
+              ? `${wrappedVersionName.slice(0, 99)}…`
+              : wrappedVersionName;
+            restoredDraft = await replaceLandletDraft(landletId, {
+              instances: full.instances,
+              versionName,
+            });
+            clearDraftIdempotencyKey(landletId);
+          } catch (err) {
+            throw new Error(err.message || 'Could not restore.');
+          }
+        },
+      });
+      if (!restored) return;
+      // #3034: the server leaves out any product whose seller is
+      // currently suspended -- say so before the reload below, instead
+      // of the builder wondering where those items went.
+      const skippedCount = restoredDraft?.skippedInstances?.length ?? 0;
+      if (skippedCount > 0) {
+        alert(`${skippedCount} ${skippedCount === 1 ? 'item was' : 'items were'} not restored because ${skippedCount === 1 ? 'its seller is' : 'their sellers are'} currently suspended.`);
       }
+      // Simplest correct way to get the live scene back in sync with
+      // whatever the server now holds — the same "something changed
+      // server-side, reload" pattern claimBackBtn already uses
+      // elsewhere in this file.
+      sessionStorage.setItem(START_MODE_KEY, 'build');
+      location.reload();
     });
     actions.appendChild(restoreBtn);
 

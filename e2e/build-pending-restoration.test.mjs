@@ -13,7 +13,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, emailForLabel, finish, acceptConfirmModal } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -126,8 +126,9 @@ const rowCount = await page.locator('.pending-restoration-row').count();
 console.log('exactly one row listed (should be 1):', rowCount);
 console.log('row names the removed product (should include the product name):', rowText);
 
-// Clear it for good (launchPage's own dialog handler accepts the confirm()).
+// Clear it for good (#3278: confirmed in the in-app modal).
 await page.locator('.pending-restoration-row-clear').first().click();
+await acceptConfirmModal(page);
 await page.waitForFunction(() => document.querySelectorAll('.pending-restoration-row').length === 0, null, { timeout: 5000 });
 const emptyShown = await page.locator('#pending-restoration-empty').isVisible();
 const buttonHiddenAfterClear = await page.locator('#pending-restoration-btn').isHidden();

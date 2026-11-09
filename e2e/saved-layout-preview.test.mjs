@@ -9,8 +9,7 @@
 // downstream of that: the Settings panel, Preview, marquee select, and
 // Back/Delete.
 import {
-  launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, grantLandCapHeadroomAsAdmin,
-} from './helpers.mjs';
+  launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, grantLandCapHeadroomAsAdmin, acceptConfirmModal } from './helpers.mjs';
 
 const LABEL = 'Saved Layout Preview Suite Tester';
 const LEVEL_HEIGHT_M = 10;
@@ -179,6 +178,7 @@ await page.click('.settings-tab-btn[data-section="build"]');
 await page.waitForFunction(() => document.querySelectorAll('.version-row').length >= 1, null, { timeout: 240000 });
 await page.locator('.settings-field', { hasText: 'Saved Layouts' }).locator('.version-row')
   .locator('button', { hasText: 'Delete' }).click();
+await acceptConfirmModal(page); // #3278: in-app confirm modal
 await page.waitForFunction(
   () => document.querySelector('.settings-field')?.textContent.includes('Nothing saved yet') ||
     !Array.from(document.querySelectorAll('.settings-field')).some((f) => f.textContent.includes('Saved Layouts') && f.querySelector('.version-row')),

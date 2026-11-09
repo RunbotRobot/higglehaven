@@ -14,7 +14,7 @@
 // row buttons, removing a row, and a plain cancel (closing the picker
 // without picking) correctly reopening the backup-chain panel rather than
 // leaving both modals' state stuck.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, acceptConfirmModal } from './helpers.mjs';
 
 const LABEL = 'Backup Chain Suite Tester';
 
@@ -136,6 +136,7 @@ console.log('backend chain order after reordering (should be [placeholder-table,
 
 // Remove the tree (now second) via its row's own × button.
 await page.locator('.backup-chain-row').filter({ hasText: 'Tree' }).locator('.backup-chain-row-remove').click();
+await acceptConfirmModal(page); // #3278: in-app confirm modal
 // #2639 (sub-issue of #2635): same waitForFunction arg/options bug as above
 // -- null arg, timeout widened to 60000ms.
 await page.waitForFunction(() => document.querySelectorAll('.backup-chain-row').length === 1, null, { timeout: 60000 });
@@ -176,6 +177,7 @@ await fetchJson(`/api/instances/${chairInstance.instanceId}/backups/${staleBacku
 // fix means the panel refreshes itself afterward instead of leaving
 // the dead row in place.
 await page.locator('.backup-chain-row').filter({ hasText: 'Tree' }).locator('.backup-chain-row-remove').click();
+await acceptConfirmModal(page); // #3278: in-app confirm modal
 await page.waitForFunction(() => document.querySelectorAll('.backup-chain-row').length === 1, null, { timeout: 60000 });
 const rowCountAfterStaleRemove = await page.locator('.backup-chain-row').count();
 const remainingRowTextAfterStaleRemove = await page.locator('.backup-chain-row').first().textContent();

@@ -2368,6 +2368,7 @@
       #confirm-modal-message {
         margin: 0;
         overflow-wrap: anywhere;
+        white-space: pre-line;
       }
       #confirm-modal-status {
         font-size: 13px;

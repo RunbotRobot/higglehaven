@@ -9,7 +9,7 @@
 // (itself capped at 100 server-side, so this is a realistic value a real
 // chain of restores would actually produce) and does a single real
 // "Restore to Editor" click on it.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, acceptConfirmModal } from './helpers.mjs';
 
 const LABEL = 'Restore Version Name Cap Tester';
 
@@ -46,6 +46,7 @@ await page.waitForFunction(() => document.querySelectorAll('.version-row').lengt
 
 const seededRow = page.locator('.version-row').filter({ hasText: nearCapName.slice(0, 40) });
 await seededRow.locator('button', { hasText: 'Restore to Editor' }).click();
+await acceptConfirmModal(page); // #3278: in-app confirm modal
 await page.waitForLoadState('networkidle', { timeout: 15000 });
 await page.waitForTimeout(1500);
 
