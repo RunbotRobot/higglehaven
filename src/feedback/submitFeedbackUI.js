@@ -1,39 +1,29 @@
 // #2718 (sub-issue of #2715, "[Tracking] In-app 'Submit Feedback' bug
-// reports with automatic rendering-state capture"): the "Submit Feedback"
-// button + modal. Shop mode only for now -- #2715's own body says "Shop
-// mode at minimum; consider global placement," and the ring buffer #2717
-// feeds (./renderStateBuffer.js) is itself only ever populated from Shop
-// mode's own per-frame loop (src/shop/mode.js) today -- a report submitted
-// anywhere else would have an empty buffer and nothing useful for the
-// "what rendered in the preceding ~60s" half of this feature. Extending
-// capture (and this button) to Build/Sell mode is a separate, later scope
-// decision, not folded in here.
+// reports with automatic rendering-state capture"): the Submit Feedback
+// modal.
 //
-// A fully self-contained leaf, unlike most of Shop mode's other DOM
-// buttons (shopFlyBtn and friends, still owned/exported by src/main.js,
-// pending #2500/#2504's larger split) -- this is brand-new markup with no
-// main.js legacy to respect, so it looks its own elements up directly and
-// wires its own listeners here (same shape src/ui/modal.js's own top-level
-// document keydown listener already uses), rather than routing through
-// main.js the way the older shop/*.js leaves do. shopFeedbackBtn is
-// exported only so src/shop/mode.js's enterShopMode can reveal it
-// (classList.add('visible')) the same moment it reveals shopFlyBtn/
-// shopVerticalControlsEl, once the avatar is actually ready.
+// #3302: the entry point is now "Send feedback" in the Settings modal (every
+// mode), not a Shop-only HUD pill -- owner decision 2026-11-09: utilities
+// live in Settings so the world stays uncluttered. settings/modal.js imports
+// openFeedbackModal and passes the Settings modal as `returnTo`, so closing
+// this modal puts the person back in Settings (the stacked-modal pattern
+// #2515 fixed for the upload/seller pair). The ring buffer #2717 feeds
+// (./renderStateBuffer.js) is now populated from Shop's, Build's and Sell's
+// per-frame callbacks, and the payload carries `mode`.
+//
+// Self-contained: looks its own modal elements up directly and wires its
+// own listeners here.
 //
 // On submit, posts a multipart body (screenshot blob + a JSON metadata
 // field) to POST /api/feedback/bug-report via api.js's
-// submitFeedbackBugReport -- the Worker endpoint #2719 adds. Built ahead
-// of that landing, per #2715's own "can be built against a stubbed/
-// mocked... endpoint in the meantime if landing out of order" -- until
-// #2719 merges, submitting here 404s; handleFeedbackSubmit below surfaces
-// that as an ordinary inline error, not a crash.
+// submitFeedbackBugReport. handleFeedbackSubmit below surfaces a failed
+// request as an ordinary inline error, not a crash.
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { scene, camera, renderer, canvas } from '../world/scene.js';
 import { getRenderStateBuffer, clearRenderStateBuffer } from './renderStateBuffer.js';
 import { submitFeedbackBugReport } from '../api.js';
 import { currentAuthUser } from '../account/auth.js';
-
-export const shopFeedbackBtn = document.getElementById('shop-feedback-btn');
+import { currentMode } from '../world/state.js';
 
 const feedbackModalEl = document.getElementById('feedback-modal');
 const feedbackCloseBtn = document.getElementById('feedback-close-btn');
@@ -61,6 +51,11 @@ let feedbackScreenshotUrl = null;
 // both openFeedbackModal and closeFeedbackModal so either one supersedes an
 // in-flight capture from the other.
 let feedbackModalToken = 0;
+
+// #3302: the modal this one was opened over (Settings), re-armed on close so
+// Settings is not left on screen but untrapped -- same bug class #2515 fixed
+// for the upload/seller pair. Null when opened from anywhere else.
+let feedbackReturnTo = null;
 
 // #2718's own body: "the actual GPU/driver string via
 // WEBGL_debug_renderer_info ... gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)
@@ -96,7 +91,8 @@ function setFeedbackStatus(message, isError) {
   feedbackStatusEl.classList.toggle('error', !!isError);
 }
 
-async function openFeedbackModal() {
+export async function openFeedbackModal(returnTo = null) {
+  feedbackReturnTo = returnTo;
   const myToken = ++feedbackModalToken;
   setFeedbackStatus('', false);
   feedbackDescriptionEl.value = '';
@@ -140,6 +136,9 @@ function closeFeedbackModal() {
     feedbackScreenshotUrl = null;
   }
   feedbackScreenshotBlob = null;
+  const returnTo = feedbackReturnTo;
+  feedbackReturnTo = null;
+  if (returnTo?.el?.classList.contains('visible')) openModalA11y(returnTo.el, returnTo.close);
 }
 
 async function handleFeedbackSubmit() {
@@ -154,6 +153,8 @@ async function handleFeedbackSubmit() {
     webglVendor,
     userAgent: navigator.userAgent,
     platform: navigator.platform,
+    // #3302: which mode the person was in when they sent the report.
+    mode: currentMode,
     renderStateBuffer: getRenderStateBuffer(),
     submittedAt: new Date().toISOString(),
     userId: currentAuthUser?.userId ?? null,
@@ -179,7 +180,6 @@ async function handleFeedbackSubmit() {
   }
 }
 
-shopFeedbackBtn.addEventListener('click', openFeedbackModal);
 feedbackCloseBtn.addEventListener('click', closeFeedbackModal);
 feedbackCancelBtn.addEventListener('click', closeFeedbackModal);
 feedbackSubmitBtn.addEventListener('click', handleFeedbackSubmit);

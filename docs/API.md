@@ -12681,7 +12681,9 @@ at the moment something looked wrong is long gone, and a from-scratch
 repro harness can only approximate it. This feature closes that gap with
 an in-app "Submit Feedback" tool: a client-side rolling render-state ring
 buffer (#2717, `src/feedback/renderStateBuffer.js`) feeds a "Submit
-Feedback" button/modal in Shop mode (#2718, `src/feedback/submitFeedbackUI.js`)
+Feedback" modal (#2718, `src/feedback/submitFeedbackUI.js`), opened from
+"Send feedback" in the Settings modal in every mode (#3302; Shop, Build and
+Sell all feed the buffer)
 that captures a canvas screenshot, `WEBGL_debug_renderer_info`, browser/OS
 info, and the ring buffer, then POSTs all of it here.
 
@@ -12689,7 +12691,9 @@ info, and the ring buffer, then POSTs all of it here.
 `form-data`, not JSON: an optional `screenshot` file field (PNG, capped at
 10MB) and a required `metadata` field (a JSON string, capped at 256KB)
 shaped `{ description?, webglRenderer?, webglVendor?, userAgent?,
-platform?, renderStateBuffer?, submittedAt? }` (`description`/
+platform?, mode?, renderStateBuffer?, submittedAt? }` (`mode` is
+`shop`, `build` or `sell` (#3302) and is shown on the Control Room card;
+`description`/
 `webglRenderer`/`webglVendor`/`userAgent`/`platform` each capped at 280
 characters, same as every other free-text comment field in this API;
 `renderStateBuffer` is stored as-is if it's an array, else as `[]`).

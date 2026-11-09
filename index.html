@@ -37,11 +37,6 @@
       <button id="shop-up-btn" type="button" aria-label="Fly up">&#9650;</button>
       <button id="shop-down-btn" type="button" aria-label="Fly down">&#9660;</button>
     </div>
-    <!-- #2718 (sub-issue of #2715): opens src/feedback/submitFeedbackUI.js's
-         own modal. Shop-only for now -- see that module's own comment on
-         why. Revealed (.visible added) by src/shop/mode.js's enterShopMode,
-         same moment as #shop-fly-btn/#shop-vertical-controls above. -->
-    <button id="shop-feedback-btn" class="shop-ui" type="button">Feedback</button>
     <!-- #2779 (sub-issue of #2777, docs/SPEC.md §2's "Text chat available
          as an alternative [to voice]"): visibility is driven entirely by
          src/shop/nearbyChat.js's own per-tick trustTier check (same
@@ -718,6 +713,11 @@
           <button class="settings-tab-btn" type="button" data-section="sell">Sell</button>
         </div>
         <div id="settings-section"></div>
+        <!-- #3302: utilities that aren't about one mode live here, in every
+             mode, instead of as HUD pills over the world. -->
+        <div id="settings-utilities">
+          <button id="settings-feedback-btn" type="button">Send feedback</button>
+        </div>
       </div>
     </div>
     <div id="auth-modal" role="dialog" aria-modal="true" tabindex="-1">
