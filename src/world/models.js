@@ -602,6 +602,23 @@ async function loadCroppedModelInstance(template, instance) {
 // which axis a scene treats as "up" — it has no idea about camera.up. Since
 // Z is our vertical axis, `height` (the product's real-world tallness) has
 // to go in the third argument, not the second.
+// #3254: one failed model fetch (a dropped request on a phone, an R2 read
+// racing the upload) used to turn a placed product into its grey placeholder
+// box for the rest of the tab's session, because nothing ever asked again and
+// the only trace was a console warning. A second attempt after a short pause
+// recovers the transient cases; a persistent failure still falls through to the
+// box exactly as before. Exported delay so tests can shorten it.
+export const MODEL_LOAD_RETRY_DELAY_MS = 1000;
+async function withOneModelLoadRetry(load, templateId) {
+  try {
+    return await load();
+  } catch (err) {
+    console.warn(`Model load for "${templateId}" failed, retrying once:`, err);
+    await new Promise((resolve) => setTimeout(resolve, MODEL_LOAD_RETRY_DELAY_MS));
+    return load();
+  }
+}
+
 export async function createMeshForInstance(instance) {
   const template = findTemplate(instance.templateId);
   if (!template) {
@@ -648,9 +665,9 @@ export async function createMeshForInstance(instance) {
   let object;
   if (template.modelUrl) {
     try {
-      object = extensibleAxes(template)
-        ? await loadCroppedModelInstance(template, instance)
-        : await loadModelInstance(template.modelUrl);
+      object = await withOneModelLoadRetry(() => (extensibleAxes(template)
+        ? loadCroppedModelInstance(template, instance)
+        : loadModelInstance(template.modelUrl)), template.templateId);
     } catch (err) {
       console.warn(`Failed to load model for "${template.templateId}" (${template.modelUrl}), falling back to a colored box:`, err);
     }
