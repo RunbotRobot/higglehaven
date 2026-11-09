@@ -29,6 +29,7 @@
 // from anywhere a placement can start -- a tile pick here, Upload Model,
 // Paste) write its button label directly.
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
+import { confirmDestructive } from '../ui/confirmModal.js';
 import { promptBundleName } from '../ui/bundleNameModal.js';
 import { generateConceptImage, searchCatalogBySimilarity, fetchBundles, fetchSharedBundles, updateBundle, deleteBundle } from '../api.js';
 import {
@@ -490,22 +491,38 @@ export function renderBundlePicker() {
       deleteTileBtn.textContent = '×';
       deleteTileBtn.addEventListener('click', async (event) => {
         event.stopPropagation();
-        if (!confirm(`Delete bundle "${bundle.name}"? This can't be undone.`)) return;
         // #1787: same bundlePickerLoadToken guard as the rename/share-toggle
         // handlers above — without it, a slower concurrent rename/share-
         // toggle on a different tile can resolve after this delete and
         // overwrite myBundles/communityBundles with a refetched snapshot
         // that still contains the bundle this handler just deleted.
-        const myLoadToken = ++bundlePickerLoadToken;
-        try {
-          await deleteBundle(bundle.bundleId);
-          if (myLoadToken !== bundlePickerLoadToken) return; // superseded while loading — a newer rename/share-toggle owns the picker now
-          setMyBundles(myBundles.filter((b) => b.bundleId !== bundle.bundleId));
-          setCommunityBundles(communityBundles.filter((b) => b.bundleId !== bundle.bundleId));
-          renderBundlePicker();
-        } catch (err) {
-          alert(err.message || 'Could not delete this bundle.');
-        }
+        // #3278: confirmed in its own in-app modal (not window.confirm),
+        // opened over the picker; a refusal is shown inside it.
+        // The token is taken when the delete actually starts (inside
+        // onConfirm), not when the modal opens: a rename/share-toggle while
+        // the person is still deciding must not make this delete look superseded.
+        let myLoadToken = 0;
+        const deleted = await confirmDestructive({
+          title: 'Delete this bundle?',
+          message: `Delete bundle "${bundle.name}"? This can't be undone.`,
+          confirmLabel: 'Delete',
+          returnFocusEl: deleteTileBtn,
+          restoreModalEl: catalogPickerEl,
+          restoreCloseFn: closeCatalogPicker,
+          onConfirm: async () => {
+            try {
+              myLoadToken = ++bundlePickerLoadToken;
+              await deleteBundle(bundle.bundleId);
+            } catch (err) {
+              throw new Error(err.message || 'Could not delete this bundle.');
+            }
+          },
+        });
+        if (!deleted) return;
+        if (myLoadToken !== bundlePickerLoadToken) return; // superseded while loading — a newer rename/share-toggle owns the picker now
+        setMyBundles(myBundles.filter((b) => b.bundleId !== bundle.bundleId));
+        setCommunityBundles(communityBundles.filter((b) => b.bundleId !== bundle.bundleId));
+        renderBundlePicker();
       });
       tile.appendChild(deleteTileBtn);
     }

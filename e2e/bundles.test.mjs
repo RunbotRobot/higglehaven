@@ -3,7 +3,7 @@
 // again elsewhere (all items land together, preserving their relative
 // layout — see relativeItemsForMeshes/placeClipboardItems), and can delete
 // it.
-import { launchPage, chooseIdentity, claimLandlet, finish, saveBundleAs, fillBundleNameModal } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, saveBundleAs, fillBundleNameModal, acceptConfirmModal } from './helpers.mjs';
 
 const LABEL = 'Bundle Suite Tester';
 
@@ -124,11 +124,12 @@ const bundleGroupFetch = await page.evaluate(async (ids) => {
 }, placedBundleIds);
 console.log('placed bundle instances\' persisted groupId (should be equal, non-null):', bundleGroupFetch);
 
-// Delete it — confirm() is auto-accepted by launchPage's dialog handler —
-// and the section goes back to hidden once nothing's left.
+// Delete it (#3278: confirmed in the in-app modal) and the section goes
+// back to hidden once nothing's left.
 await page.click('#add-item-btn');
 await page.waitForSelector('#catalog-picker.visible', { timeout: 10000 });
 await page.click('.bundle-tile-delete');
+await acceptConfirmModal(page);
 await page.waitForTimeout(500);
 const bundleSectionHiddenAfterDelete = await page.locator('#bundle-picker-section').isHidden();
 console.log('bundle section hidden after deleting the only bundle (should be true):', bundleSectionHiddenAfterDelete);
