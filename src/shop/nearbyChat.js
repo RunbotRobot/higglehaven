@@ -16,6 +16,8 @@ import { currentAuthUser } from '../account/auth.js';
 import { fetchNearbyChatMessages, sendNearbyChatMessage, sendNearbyChatReport } from '../api.js';
 import { confirmAndBlockPerson } from '../blocks.js';
 import { createPersistentMuteSet } from './mutePersistence.js';
+import { promptReportReason } from '../ui/reportReasonModal.js';
+import { showNotice } from '../ui/noticeModal.js';
 
 const NEARBY_CHAT_POLL_INTERVAL_MS = 2000;
 
@@ -97,19 +99,18 @@ function removeMessagesFromBuilder(builderId) {
     .forEach((el) => el.remove());
 }
 
-// Same prompt()-based lightweight text-input convention voiceChat.js's own
-// reportVoicePeer already uses for this exact action -- see that module's
-// comment for why a bespoke modal isn't used here either.
+// Same report flow voiceChat.js's reportVoicePeer uses for this action.
 async function reportNearbyChatSender(builderId) {
-  const reason = window.prompt(
-    'Report this nearby chat sender for inappropriate conduct? Optionally describe why (up to 280 characters), or leave blank:', '',
-  );
-  if (reason === null) return; // cancelled
+  // #3359: in-app modal and notices, not window.prompt()/alert() -- a browser
+  // that suppresses native dialogs made reporting impossible and dropped the
+  // outcome. A cancelled modal (null) submits nothing.
+  const answer = await promptReportReason({ title: 'Report this nearby chat sender for inappropriate conduct?' });
+  if (answer === null) return;
   try {
-    await sendNearbyChatReport({ reportedBuilderId: builderId, reason: reason.trim() || undefined });
-    window.alert('Report submitted. Thank you.');
+    await sendNearbyChatReport({ reportedBuilderId: builderId, reason: answer.reason || undefined });
+    await showNotice({ title: 'Report submitted', message: 'Thank you.' });
   } catch {
-    window.alert('Could not submit the report -- please try again.');
+    await showNotice({ title: 'Could not submit the report', message: 'Please try again.' });
   }
 }
 
