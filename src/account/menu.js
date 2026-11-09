@@ -1317,8 +1317,12 @@ friendsBtn.addEventListener('click', () => {
 });
 friendsCloseBtn.addEventListener('click', closeFriendsModal);
 friendsAddBtn.addEventListener('click', async () => {
-  const label = prompt("Friend's name (must match their identity exactly):", '');
-  if (!label || !label.trim()) return;
+  // #3359: the shared in-app name modal instead of window.prompt() (a browser
+  // that suppresses native dialogs made Add Friend do nothing). The title keeps
+  // the old prompt's one piece of guidance: the name has to match exactly.
+  const named = await promptBundleName({ title: "Friend's name (must match their identity exactly)" });
+  if (!named) return;
+  const label = named.name;
   friendsStatusEl.textContent = '';
   friendsStatusEl.classList.remove('error');
   friendsAddBtn.disabled = true;

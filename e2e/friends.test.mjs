@@ -11,7 +11,7 @@
 // outgoing request. Duplicate-request rejection, the self-request 400, and
 // the "declined" (recipient-side DELETE) path are covered instead by
 // worker/profiles.test.js's own "Friendships" describe block.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName } from './helpers.mjs';
 
 const ALICE = 'Friends Suite Alice';
 const BOB = 'Friends Suite Bob';
@@ -45,16 +45,12 @@ async function fetchJson(page, path, options) {
   }, [path, options]);
 }
 
-// Alice sends Bob a request through the real "+ Add Friend" prompt.
-// launchPage's own dialog handler answers every prompt with one fixed
-// string for the session (ALICE here), so this swaps in a one-off handler
-// for the "Friend's name" prompt specifically, answering with BOB instead.
+// Alice sends Bob a request through the real "+ Add Friend" name modal
+// (#3359: it used to be a native prompt()).
 await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
 await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
-alicePage.removeAllListeners('dialog');
-alicePage.on('dialog', (dialog) => dialog.accept(BOB));
-await alicePage.click('#friends-add-btn');
+await addFriendByName(alicePage, BOB);
 // Sending kicks off an async POST + outgoing-list refresh — poll for both
 // rather than guessing a fixed delay, which flaked under CI load (a fixed
 // 500ms here read stale/empty state on a loaded runner even though the
@@ -124,9 +120,7 @@ await fetch(`${baseUrl}/api/builders`, {
 await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
 await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
-alicePage.removeAllListeners('dialog');
-alicePage.on('dialog', (dialog) => dialog.accept(CAROL));
-await alicePage.click('#friends-add-btn');
+await addFriendByName(alicePage, CAROL);
 await alicePage.waitForFunction(
   (name) => [...document.querySelectorAll('#friends-outgoing-list .friend-row')].some((row) => row.textContent.includes(name)),
   CAROL,

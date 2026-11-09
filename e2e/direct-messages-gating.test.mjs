@@ -15,7 +15,7 @@
 // either way. A real POST against the live dev server (not the vitest
 // in-process pool) confirms the backend gate holds even if a button
 // existed.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName } from './helpers.mjs';
 
 const ALICE = 'DM Gating Suite Alice';
 const BOB = 'DM Gating Suite Bob';
@@ -35,9 +35,7 @@ await claimLandlet(bobPage);
 await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
 await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
-alicePage.removeAllListeners('dialog');
-alicePage.on('dialog', (dialog) => dialog.accept(BOB));
-await alicePage.click('#friends-add-btn');
+await addFriendByName(alicePage, BOB);
 await waitForText(alicePage, '#friends-status', BOB);
 await alicePage.click('#friends-close-btn');
 
