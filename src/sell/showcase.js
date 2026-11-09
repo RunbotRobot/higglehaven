@@ -68,6 +68,15 @@ function updateSellerShowcasePagerUI() {
 // page's own largest item so nothing overlaps regardless of how big any
 // one product's declared dimensions are.
 let sellerShowcaseLoadToken = 0;
+// #3295 (leaf 4/6 of #3291): called once a page's ground and meshes are in the
+// scene (and for an empty page, whose ground is the placeholder square), so
+// Sell's world view can put the avatar back at the page's start and refresh
+// the walkable bounds. A setter rather than an import so this file does not
+// depend on the world view (which depends on the movement core).
+let sellerShowcasePageLoadedListener = null;
+export function setSellerShowcasePageLoadedListener(fn) {
+  sellerShowcasePageLoadedListener = fn;
+}
 // Exported for src/main.js's own enterSellMode, which calls this directly
 // after setSellerShowcasePages (below).
 export async function loadSellerShowcasePage(pageIndex) {
@@ -80,6 +89,7 @@ export async function loadSellerShowcasePage(pageIndex) {
   if (templates.length === 0) {
     // Nothing to show — leave the ground as whatever plain placeholder
     // square it already was rather than building a zero-size shape.
+    sellerShowcasePageLoadedListener?.();
     return;
   }
   const { groundWidth, groundDepth, placements } = layoutSellerShowcasePage(templates);
@@ -136,6 +146,7 @@ export async function loadSellerShowcasePage(pageIndex) {
     scene.add(mesh);
     sellerShowcaseMeshes.push(mesh);
   }
+  sellerShowcasePageLoadedListener?.();
 }
 
 sellerShowcasePrevBtn.addEventListener('click', () => {

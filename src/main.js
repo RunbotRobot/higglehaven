@@ -185,6 +185,7 @@ import {
   sellerShowcaseMeshes, sellerShowcasePageIndex, sellerShowcaseManageBtn,
   findRootSellerShowcaseMesh,
 } from './sell/showcase.js';
+import { enterSellWorldView } from './sell/worldView.js';
 // #2564: the mandatory first-claim flow (runClaimFlow, its own flyover-map
 // scene, and the plot pick/confirm handlers) now lives in src/claim/flow.js
 // — see that module's own comment for its dependency notes, including why
@@ -1909,6 +1910,10 @@ async function enterSellMode() {
     setActiveCatalog(FALLBACK_CATALOG);
   }
   setSellerShowcasePages(computeSellerShowcasePages(myProducts()));
+  // #3295 (leaf 4/6 of #3291): the seller walks the page with Shop's own
+  // movement and their equipped avatar. Entered before the first page loads
+  // so that load puts the avatar at the page's start.
+  await enterSellWorldView();
 
   // Preserves today's default: Sell has always opened straight into the
   // product-management modal — the showcase array behind it (semi-

@@ -22,6 +22,14 @@
 //                           claim status (Shop: shopTerrainHeightAtM).
 //   worldRadiusM()          the boundary radius, or null when there is no
 //                           boundary yet (every boundary clamp is then a no-op).
+//   boundsCamera            OPTIONAL. false = the follow camera is not clamped to
+//                           the boundary (only the avatar is). Default true.
+//   clampToBoundary(position, clearanceM)   OPTIONAL. A world whose edge is not
+//                           a circle (#3295: Sell's rectangular showcase ground)
+//                           supplies this to pull (x, y) back inside its own
+//                           edge, `clearanceM` in from it, in place. Without
+//                           it the boundary is the circle worldRadiusM() names
+//                           (Shop's).
 
 let activeWorld = null;
 
@@ -94,12 +102,64 @@ export function landingObstructionTopZIn(world, geometry, avatarCorners) {
 
 // Pulls `position` (x, y) radially back inside maxRadius, in place; a no-op
 // while the world has no boundary yet.
-export function clampRadiusIn(world, position, maxRadius) {
-  if (world.worldRadiusM() === null) return;
+export function clampRadiusIn(world, position, maxRadius, isCamera = false) {
+  const worldRadiusM = world.worldRadiusM();
+  if (worldRadiusM === null) return;
+  // #3295: a world can leave the follow camera unbounded (`boundsCamera:
+  // false`): the camera trails the avatar by several metres and may sit
+  // outside the walkable ground, which only the avatar must stay inside.
+  if (isCamera && world.boundsCamera === false) return;
+  // #3295: callers pass the radius they want, already net of their own
+  // clearance from the edge (worldRadius - clearance), so the clearance a
+  // non-circular world needs is the difference.
+  if (world.clampToBoundary) {
+    world.clampToBoundary(position, Math.max(0, worldRadiusM - maxRadius));
+    return;
+  }
   const distance = Math.hypot(position.x, position.y);
   if (distance > maxRadius) {
     const scale = maxRadius / distance;
     position.x *= scale;
     position.y *= scale;
   }
+}
+
+// #3295 (leaf 4/6 of #3291, part of #3253): Sell mode's world for the same
+// movement core. The walkable area is the showcase page's own rectangular
+// ground, the obstacles are the page's product meshes (at the scene origin,
+// not inside a landlet group), and the ground is flat. `showcaseMeshes()` and
+// `groundBounds()` are getters so every read sees the current page:
+// groundBounds() is { minX, maxX, minY, maxY } or null before a page exists.
+export function createSellMovementWorld({ showcaseMeshes, groundBounds }) {
+  return {
+    forEachObstacle(visit) {
+      for (const mesh of showcaseMeshes()) {
+        if (visit(mesh, 0, 0, 0) === true) return true;
+      }
+      return false;
+    },
+    groundHeightAt: () => 0,
+    boundsCamera: false,
+    // The circle through the ground's corners: only used where the core needs
+    // *a* radius (it is never the actual edge, clampToBoundary is).
+    worldRadiusM() {
+      const b = groundBounds();
+      if (!b) return null;
+      return Math.hypot(b.maxX - b.minX, b.maxY - b.minY) / 2;
+    },
+    clampToBoundary(position, clearanceM) {
+      const b = groundBounds();
+      if (!b) return;
+      // A ground narrower than twice the clearance still keeps the avatar on
+      // it: the clamp range collapses to the ground's centre line.
+      const clampAxis = (value, min, max) => {
+        const lo = min + clearanceM;
+        const hi = max - clearanceM;
+        if (lo > hi) return (min + max) / 2;
+        return Math.min(hi, Math.max(lo, value));
+      };
+      position.x = clampAxis(position.x, b.minX, b.maxX);
+      position.y = clampAxis(position.y, b.minY, b.maxY);
+    },
+  };
 }
