@@ -95,6 +95,7 @@ import {
 } from '../world/state.js';
 import { scene, camera, renderer, canvas, registerModeFrameUpdate } from '../world/scene.js';
 import { recordRenderStateSample } from '../feedback/renderStateBuffer.js';
+import { frameMonitorSample } from '../world/frameMonitor.js';
 import { runClaimFlow } from '../claim/flow.js';
 import { currentAuthUser } from '../account/auth.js';
 import { ensureBuilderIdentity } from '../account/identity.js';
@@ -4833,6 +4834,7 @@ export function buildModeFrameUpdate(now) {
     selectedInstanceIds: [...selectedMeshes].map((m) => m.userData.instanceId).filter(Boolean).slice(0, 50), // #3302: capped so a wall of 800 items doesn't bloat the report
     selectedCount: selectedMeshes.size, // #3302: true size when the id list above is capped
     lastSelectionActionStatus: lastSelectionActionStatusText || null, // #3302: last Group/refusal text shown
+    ...frameMonitorSample(now), // added for #3396 -- load freeze; need the longest gap between frames in the last second and the long-task count to tell a main-thread stall from a slow network
   });
   updateTargetTween(now);
   applyEdgePanWhileDraggingProduct();

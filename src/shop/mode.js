@@ -104,6 +104,7 @@ import {
 } from './worldSprites.js';
 import { closeShopProductPreviewModal, confettiBursts, disposeConfettiBurst } from './productCheckout.js';
 import { recordRenderStateSample } from '../feedback/renderStateBuffer.js';
+import { frameMonitorSample } from '../world/frameMonitor.js';
 import { showNotice } from '../ui/noticeModal.js';
 
 // small ground/wall seam overlap only — see wildGround below (enterShopMode)
@@ -754,6 +755,9 @@ export async function enterShopMode() {
       avatarFacingRad: shopAvatarFacing,
       uTime: currentShopSkyTimeS(),
       worldRadiusM: shopWorldRadiusM,
+      // added for #3396 -- load freeze; need the longest gap between frames in the
+      // last second and the long-task count to tell a main-thread stall from a slow network
+      ...frameMonitorSample(now),
     });
   });
   registerFacingOverride(() => shopAvatarFacing);

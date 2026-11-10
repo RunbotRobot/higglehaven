@@ -82,6 +82,7 @@ import {
 
 import { camera as worldCamera } from '../world/scene.js';
 import { recordRenderStateSample } from '../feedback/renderStateBuffer.js';
+import { frameMonitorSample } from '../world/frameMonitor.js';
 
 export const sellerModalEl = document.getElementById('seller-modal');
 const sellerFeedbackSummaryEl = document.getElementById('seller-feedback-summary');
@@ -1895,6 +1896,7 @@ export function recordSellFeedbackSample(now) {
     sellerView: sellerActiveView, // #3302: 'manage' or 'list' view of the seller modal
     sellerModalOpen: sellerModalEl.classList.contains('visible'), // #3302: whether a modal was covering the showcase
     showcase: sellerShowcaseFeedbackState(), // #3302: which showcase page / how many products were showing
+    ...frameMonitorSample(now), // added for #3396 -- load freeze; need the longest gap between frames in the last second and the long-task count to tell a main-thread stall from a slow network
   });
 }
 
