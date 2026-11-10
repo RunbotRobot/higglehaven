@@ -2017,6 +2017,8 @@ async function spawnInstanceAt(template, x, y, z, overrides = {}, { sync = true,
 // (see applySnapshotLocally); releasing what left the scene is the least urgent
 // world work, so it runs after anything still being built, a few ms per frame.
 const BUILD_QUEUE_PRIORITY = 0;
+// Test hook: how the queue paced the work (ticks, units run, longest tick).
+window.__worldWorkQueueStats = () => worldWorkQueue.stats();
 const DISPOSE_QUEUE_PRIORITY = 1e9;
 
 // persist: false for a caller deleting many meshes in a loop, which then calls
