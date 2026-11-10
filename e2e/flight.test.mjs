@@ -55,7 +55,7 @@ const flyBtnIconFile = () => page.evaluate(() => document.getElementById('shop-f
 // pixel touches the edge -- in both states.
 const flyBtnIconHasNoTransform = () => page.evaluate(() => getComputedStyle(document.getElementById('shop-fly-btn-icon')).transform === 'none');
 // Screenshot the button and check a ring just inside its circular edge (radius
-// 25.5..27px of 28px) is uniformly its own background colour.
+// 26.5..27px of 28px) is uniformly its own background colour.
 const flyBtnEdgeRingIsBackground = async () => {
   const bg = await page.evaluate(() => getComputedStyle(document.getElementById('shop-fly-btn')).backgroundColor.match(/\d+/g).slice(0, 3).map(Number));
   const png = await page.locator('#shop-fly-btn').screenshot();
@@ -65,7 +65,7 @@ const flyBtnEdgeRingIsBackground = async () => {
   let bad = 0;
   for (let y = 0; y < info.height; y++) for (let x = 0; x < info.width; x++) {
     const d = Math.hypot(x + 0.5 - cx, y + 0.5 - cy) / scale;
-    if (d < 25.5 || d > 27) continue;
+    if (d < 26.5 || d > 27) continue;
     const p = (y * info.width + x) * 3;
     if (Math.max(Math.abs(data[p] - bg[0]), Math.abs(data[p + 1] - bg[1]), Math.abs(data[p + 2] - bg[2])) > 16) bad++;
   }

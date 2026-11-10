@@ -11,7 +11,7 @@ const disc = (size, radiusShare) => image(size, (x, y) => Math.hypot(x - size / 
 
 describe('measureIcon / problemsWith (#3369)', () => {
   it('accepts a bird that fills most of the circle with a margin', () => {
-    expect(problemsWith('ok', measureIcon(disc(100, 0.9)))).toEqual([]);
+    expect(problemsWith('ok', measureIcon(disc(100, 0.85)))).toEqual([]);
   });
 
   it('measures the farthest visible pixel in button pixels', () => {
