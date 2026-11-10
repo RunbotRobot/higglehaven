@@ -99,6 +99,14 @@ not after it's been sitting for a while. This is conversational
 surfacing, not a new notification channel — the owner explicitly asked
 for this instead of an emailed digest, so don't build one.
 
+**Update (owner, 2026-11-10): the channel is now email.** The owner
+stopped reading the session log ("too repetitive") and asked for email
+with whatever they need to know. Everything above still applies to
+*what* is surfaced and *when* (proactively, one topic at a time, no age
+gate, never a routine digest); it now reaches the owner as a short
+`[hh]` email from higglehaven1, not as chat text. See "The owner reads
+email, not the session log" under "Standing owner decisions".
+
 Multiple Claude Code sessions work on this repo at once, each with a
 fixed session name assigned by the project owner — `higglehaven1`
 through `higglehaven12` as of writing, with more (`higglehaven13`, ...)
@@ -328,7 +336,9 @@ most likely to come up again.
 
 - **Owner items are surfaced in conversation, one at a time — never as
   an email digest.** (2026-10-25; "Surfacing items waiting on the owner"
-  above.) Proactive email is for genuine emergencies only.
+  above.) Proactive email is for genuine emergencies only. **Channel
+  superseded 2026-11-10:** the owner now reads email, not the session
+  log; see "The owner reads email, not the session log" below.
 
 - **Review effort scales with blast radius.** (2026-11-02.) A
   second-review pass over another session's already-merged PR is not a
@@ -649,6 +659,24 @@ most likely to come up again.
   backdrop (#2377 and its sub-issues, closed as superseded). The owner
   offered several models per product as an example and left the
   implementation open; the design is in #3412.
+
+- **The owner reads email, not the session log; tell them only what
+  they need to know.** (2026-11-10.) "I'd like to stop reading your
+  entire session log. It's too repetitive. Instead, you could send me
+  emails with whatever you want me to know." higglehaven1 answers the
+  owner's prompts by email and emails unprompted only when something
+  needs them: a decision, something they asked for that is ready to try,
+  a problem. No check-in reports and no "nothing changed". One subject
+  per email, subject prefixed `[hh]`, plain language, as short as is
+  complete. The owner writes in chat or replies to the email;
+  higglehaven1 reads `[hh]` replies at each check-in. An emailed reply
+  is owner direction for product decisions and feedback; anything that
+  moves money, changes access or credentials, or deletes data is
+  confirmed in chat first, because email can be forged. This replaces
+  the channel in "Owner items are surfaced in conversation" above; its
+  reasons still hold (no digest of routine status, one topic at a time).
+  The principle: the owner's attention is the scarcest thing in the
+  project, so every message to them has to earn its place.
 
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
