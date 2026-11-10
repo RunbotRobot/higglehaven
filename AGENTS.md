@@ -550,6 +550,21 @@ most likely to come up again.
   can make it private. This replaces docs/SPEC.md's "Private by
   default; explicit opt-in sharing" for bundles.
 
+- **A gesture is constrained while it happens: the thing stops at the
+  limit and says why.** (2026-11-10, #3372, #3371.) The owner moved an
+  829-item bundle upward, the app let it go, and the save was then
+  refused with a developer message about z ranges and an API route:
+  "we should clamp the movement, not allow the move then give an
+  error." The same day, rotating that bundle about a horizontal axis
+  jumped between a few angles because every out-of-bounds frame was
+  silently dropped. Both are the same failure. The app never accepts a
+  move the server will refuse, and never silently discards part of a
+  gesture: a drag, rotate or resize follows the finger up to the limit,
+  rests there (re-seating the thing if that keeps it legal), and says
+  the limit once in the user's terms. The client and server read the
+  limit from one definition. A refusal that still happens puts the
+  thing back where it was and says so.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
