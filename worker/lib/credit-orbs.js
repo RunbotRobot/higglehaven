@@ -174,12 +174,22 @@ export async function handleCreditOrbs(request, db, route, url) {
     // center_x_m/center_y_m to get a world position, same convention every
     // other per-landlet placed thing in this file uses) -- joined here
     // since avatar_presence (below) only ever stores a world x/y.
-    const orb = await db.prepare(`
-      SELECT credit_orbs.landlet_id, landlets.center_x_m + credit_orbs.x_m AS world_x,
-        landlets.center_y_m + credit_orbs.y_m AS world_y
-      FROM credit_orbs JOIN landlets ON landlets.landlet_id = credit_orbs.landlet_id
-      WHERE credit_orbs.orb_id = ? AND credit_orbs.collected_at IS NULL
-    `).bind(orbId).first();
+    // #3392: the orb row and the collector's presence row do not depend on
+    // each other, so they are read in one D1 round trip (db.batch) instead of
+    // two sequential ones -- the collect path is a chain of round trips and
+    // the orb pops on the client before the server answers, so every trip
+    // saved is time the confirmation (and any reversal) arrives sooner.
+    // #3147: avatar_presence is keyed on the account.
+    const [orbRead, presenceRead] = await db.batch([
+      db.prepare(`
+        SELECT credit_orbs.landlet_id, landlets.center_x_m + credit_orbs.x_m AS world_x,
+          landlets.center_y_m + credit_orbs.y_m AS world_y
+        FROM credit_orbs JOIN landlets ON landlets.landlet_id = credit_orbs.landlet_id
+        WHERE credit_orbs.orb_id = ? AND credit_orbs.collected_at IS NULL
+      `).bind(orbId),
+      db.prepare('SELECT x, y, updated_at FROM avatar_presence WHERE user_id = ?').bind(sessionBuilder.user_id),
+    ]);
+    const orb = orbRead.results[0];
     if (!orb) {
       throw new HttpError('This credit orb is no longer available -- someone else may have already collected it.', 404);
     }
@@ -192,9 +202,7 @@ export async function handleCreditOrbs(request, db, route, url) {
     // report landlet_id: null here. World-position proximity (below) is
     // the actual "walked up to it" signal, independent of land ownership.
     const staleBefore = new Date(Date.now() - PRESENCE_STALE_AFTER_MS).toISOString();
-    // #3147: avatar_presence is keyed on the account.
-    const presence = await db.prepare('SELECT x, y, updated_at FROM avatar_presence WHERE user_id = ?')
-      .bind(sessionBuilder.user_id).first();
+    const presence = presenceRead.results[0];
     const nearby = presence
       && presence.updated_at >= staleBefore
       && Math.hypot(presence.x - orb.world_x, presence.y - orb.world_y) <= CREDIT_ORB_COLLECT_PROXIMITY_RADIUS_M;
