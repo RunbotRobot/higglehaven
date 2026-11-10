@@ -1306,10 +1306,10 @@ window.__testSetShopSkyElapsedSeconds = (seconds) => {
   setShopSkyElapsedSecondsForTest(performance.now(), seconds);
 };
 // #2378: read-only test hook reporting an instance's actual rendered LOD
-// state, rather than just entry.lod's own intended-state tracking -- reads
-// object.userData.lodProxy.visible directly (the real signal
+// state, rather than just the tier the decision (#3373, shop/lodTier.js)
+// intended -- reads object.userData.lodProxy.visible directly (the real signal
 // setInstanceLodState toggles), so a bug in that toggle itself still shows
-// up here even if entry.lod flipped correctly. Returns 'near' (full detail
+// up here even if the decision flipped correctly. Returns 'near' (full detail
 // visible), 'middle' (simplified proxy visible), 'none' (no proxy at all --
 // a box/flooring fallback instance, nothing to simplify), or null if the
 // instance isn't currently loaded. Same minimal-exposure-for-verification

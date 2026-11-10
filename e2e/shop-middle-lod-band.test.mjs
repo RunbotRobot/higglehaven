@@ -1,10 +1,11 @@
 // #2378 (sub-issue of #2377, docs/SPEC.md §1's near/middle-LOD/far-
 // panoramic-backdrop chunk loading): a model-loaded placed instance should
-// swap to a cheap simplified-proxy box once the shopper is far enough away
-// (past SHOP_MIDDLE_LOD_ENTER_RADIUS_M, between the existing near-load and
-// far-unload radii) rather than staying at full detail all the way out to
-// SHOP_UNLOAD_RADIUS_M, and swap back to full detail on re-approach (past
-// SHOP_MIDDLE_LOD_EXIT_RADIUS_M). This drives the real teleport+forced-
+// swap to a cheap simplified-proxy box once it looks small on screen, rather
+// than staying at full detail all the way out to the unload radius, and swap
+// back to full detail on re-approach. #3373: the swap is by apparent size
+// (src/shop/lodTier.js), not a fixed distance, so a large item keeps its real
+// model at a range where a small one is already a box, with a hysteresis band
+// in between. This drives the real teleport+forced-
 // proximity-check pattern e2e/shop-landlet-instance-leak.test.mjs (#1445)
 // already established for deterministically crossing these radii, minus
 // that file's own GLTF-fetch-delay race machinery (not needed here — this
@@ -21,6 +22,7 @@ const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
 
 const LABEL = 'Middle LOD Band Suite Tester';
 const PRODUCT_NAME = 'Suite Middle LOD Band Product';
+const LARGE_PRODUCT_NAME = 'Suite Middle LOD Band Large Product';
 
 async function adminFetch(pathAndQuery, cookie, options = {}) {
   const response = await fetch(`${BASE_URL}/api${pathAndQuery}`, {
@@ -114,6 +116,23 @@ if (templateRes.status !== 200 && templateRes.status !== 201) {
 }
 const template = templateBody.template;
 
+// #3373: the same model declared 8 m on a side: at the same range it looks
+// several times bigger on screen than the 1 m one.
+const largeTemplateRes = await fetch(`${BASE_URL}/api/catalog`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', cookie: cookieHeader },
+  body: JSON.stringify({
+    name: LARGE_PRODUCT_NAME, category: 'placeholder', color: '#8899aa',
+    dimensions: { width: 8, depth: 8, height: 8 },
+    sellerId, modelUrl: modelUpload.modelUrl, modelSizeBytes: modelUpload.sizeBytes, priceCents: 500,
+  }),
+});
+const largeTemplateBody = await largeTemplateRes.json();
+if (largeTemplateRes.status !== 200 && largeTemplateRes.status !== 201) {
+  throw new Error(`large catalog template create failed (${largeTemplateRes.status}): ${JSON.stringify(largeTemplateBody)}`);
+}
+const largeTemplate = largeTemplateBody.template;
+
 const { body: buildersBody } = await pageFetchJson('/api/builders');
 const me = buildersBody.builders.find((b) => b.label === LABEL);
 const { body: landletsBody } = await pageFetchJson(`/api/landlets?status=claimed&ownerBuilderId=${me.builderId}&limit=100`);
@@ -125,6 +144,13 @@ await pageFetchJson('/api/instances', {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ instanceId, landletId: landlet.landletId, templateId: template.templateId, x: 0, y: 0 }),
+});
+
+const largeInstanceId = `middle-lod-large-instance-${crypto.randomUUID()}`;
+await pageFetchJson('/api/instances', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ instanceId: largeInstanceId, landletId: landlet.landletId, templateId: largeTemplate.templateId, x: 10, y: 10 }),
 });
 
 const landletCenterX = landlet.center.x;
@@ -141,13 +167,15 @@ async function teleportShopAvatar(distanceFromLandletM) {
   const x = landletCenterX + awayDirX * distanceFromLandletM;
   const y = landletCenterY + awayDirY * distanceFromLandletM;
   await page.evaluate(([tx, ty]) => {
-    window.__testTeleportShopAvatar(tx, ty);
+    // #3373: z = 0 lands the avatar on the ground. The swap is by apparent size from the
+    // camera, and the spawn flight is ~80 m up, which would make every item look small.
+    window.__testTeleportShopAvatar(tx, ty, 0);
     window.__testForceShopProximityCheck();
   }, [x, y]);
 }
 
-async function lodBand() {
-  return page.evaluate((id) => window.__testShopInstanceLodBand(id), instanceId);
+async function lodBand(id = instanceId) {
+  return page.evaluate((i) => window.__testShopInstanceLodBand(i), id);
 }
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
@@ -169,36 +197,44 @@ await page.mouse.up();
 await page.waitForTimeout(100);
 
 // Into SHOP_LOAD_RADIUS_M (60m) -- triggers the real load.
-await teleportShopAvatar(30);
+await teleportShopAvatar(25);
 // Poll (not a fixed sleep) for the instance to actually finish loading —
 // the model fetch itself is real async I/O.
 let band = null;
 const loadDeadlineAt = Date.now() + 10000;
-while (band === null && Date.now() < loadDeadlineAt) {
+while ((band === null || (await lodBand(largeInstanceId)) === null) && Date.now() < loadDeadlineAt) {
   band = await lodBand();
-  if (band === null) await page.waitForTimeout(100);
+  await page.waitForTimeout(100);
 }
+band = await lodBand();
 console.log('LOD band once loaded near the landlet (should be "near"):', band);
 const nearAfterLoad = band;
 
-// Past SHOP_MIDDLE_LOD_ENTER_RADIUS_M (75m) but under SHOP_UNLOAD_RADIUS_M
-// (90m) -- should swap to the simplified proxy, not unload outright.
+// 80 m: a 1 m item is only ~16 px across, under the swap-down size -- the simplified
+// proxy, not an unload. The 8 m item at the same range is still a prominent ~130 px
+// object and keeps its real model (#3373: the owner's "huge item turns into a cube").
 await teleportShopAvatar(80);
 const bandAtMiddle = await lodBand();
-console.log('LOD band past the middle-band enter threshold (should be "middle", not null/unloaded):', bandAtMiddle);
+const largeBandAtMiddle = await lodBand(largeInstanceId);
+console.log('small item at 80 m (should be "middle", not null/unloaded):', bandAtMiddle);
+console.log('large item at the same range (should still be "near"):', largeBandAtMiddle);
 
-// Inside the enter/exit hysteresis gap (65-75m) -- should hold whatever
-// state it was already in (middle), not flip back just from being closer
-// than the enter threshold alone.
-await teleportShopAvatar(70);
+// ~45 m: the 1 m item is ~29 px, inside the swap hysteresis band (24-36 px). Coming
+// from "middle" it must hold the box, not flip back up just from being a bit closer.
+await teleportShopAvatar(45);
 const bandInHysteresisGap = await lodBand();
-console.log('LOD band inside the hysteresis gap, approaching from middle (should still be "middle"):', bandInHysteresisGap);
+console.log('small item inside the size hysteresis band, approaching from middle (should still be "middle"):', bandInHysteresisGap);
 
-// Back under SHOP_MIDDLE_LOD_EXIT_RADIUS_M (65m) -- should swap back to
-// full detail.
-await teleportShopAvatar(30);
+// Close: well past the swap-back size -- full detail again.
+await teleportShopAvatar(25);
 const bandAfterReapproach = await lodBand();
-console.log('LOD band after re-approaching past the exit threshold (should be "near" again):', bandAfterReapproach);
+console.log('small item after re-approaching (should be "near" again):', bandAfterReapproach);
+
+// The same band, now approaching from "near": it must hold the full model.
+await teleportShopAvatar(45);
+const bandInGapFromNear = await lodBand();
+console.log('small item inside the size hysteresis band, approaching from near (should still be "near"):', bandInGapFromNear);
+await teleportShopAvatar(25);
 
 // #3254: the proxy takes the model's own color, not the template's generic
 // placeholder (#8899aa here). crate.glb's material is orange (red-dominant).
@@ -211,8 +247,10 @@ const pass = !!landlet
   && proxyIsModelColor
   && nearAfterLoad === 'near'
   && bandAtMiddle === 'middle'
+  && largeBandAtMiddle === 'near'
   && bandInHysteresisGap === 'middle'
   && bandAfterReapproach === 'near'
+  && bandInGapFromNear === 'near'
   && errors.length === 0;
 await finish(browser, {
   pass,

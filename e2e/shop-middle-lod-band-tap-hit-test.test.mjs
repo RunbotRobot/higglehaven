@@ -138,7 +138,9 @@ async function teleportShopAvatar(distanceFromLandletM) {
   const x = landletCenterX + awayDirX * distanceFromLandletM;
   const y = landletCenterY + awayDirY * distanceFromLandletM;
   await page.evaluate(([tx, ty]) => {
-    window.__testTeleportShopAvatar(tx, ty);
+    // #3373: z = 0 lands the avatar on the ground. The swap is by apparent size from the
+    // camera, and the spawn flight is ~80 m up, which would make every item look small.
+    window.__testTeleportShopAvatar(tx, ty, 0);
     window.__testForceShopProximityCheck();
   }, [x, y]);
 }
@@ -180,7 +182,7 @@ console.log('LOD band once loaded near the landlet (should be "near"):', band);
 const hitSourceNear = await lodHitSource();
 console.log('Hit source while band is "near" (should be "real" -- full detail is the visible representation):', hitSourceNear);
 
-// Past SHOP_MIDDLE_LOD_ENTER_RADIUS_M (75m) -- swaps to the simplified proxy.
+// #3373: a 1 m item at 80 m is well under the swap-down apparent size -- swaps to the simplified proxy.
 await teleportShopAvatar(80);
 const bandAtMiddle = await lodBand();
 console.log('LOD band past the middle-band enter threshold (should be "middle"):', bandAtMiddle);

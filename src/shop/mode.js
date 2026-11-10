@@ -284,7 +284,6 @@ export function disposeObject3D(object) {
 
 export function unloadShopLandletInstances(entry) {
   entry.loaded = false;
-  entry.lod = 'near'; // #2378: reset so a later reload always starts at full detail, same reasoning as entry.loaded's own reset here
   entry.loadToken++; // invalidate any in-flight loadShopLandletInstances call, reload or not
   for (const object of entry.objects) {
     entry.group.remove(object);
@@ -693,9 +692,6 @@ export async function enterShopMode() {
     scene.add(group);
     shopLandlets.set(record.landletId, {
       record, group, groundMesh, loaded: false, loadToken: 0, objects: [],
-      // #2378: 'near' (full detail) or 'middle' (simplified proxy) — only
-      // meaningful while loaded is true; see updateShopProximity.
-      lod: 'near',
       // #1995: orbs' own load state, independent of loaded/loadToken/
       // objects above -- see updateShopProximity's own comment on why.
       orbsLoaded: false, orbLoadToken: 0,

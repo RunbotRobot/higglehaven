@@ -79,9 +79,10 @@ await page.mouse.down();
 await page.mouse.move(cx + 25, cy, { steps: 5 });
 await page.waitForTimeout(100);
 await page.mouse.up();
-await page.evaluate(([x, y]) => { window.__testTeleportShopAvatar(x, y); window.__testForceShopProximityCheck(); }, [landlet.center.x + 4, landlet.center.y]);
+await page.evaluate(([x, y]) => { window.__testTeleportShopAvatar(x, y, 0); window.__testForceShopProximityCheck(); }, [landlet.center.x + 4, landlet.center.y]);
 
-// 'none' = the grey box fallback, 'near' = the real model with its LOD proxy.
+// z = 0 lands the avatar on the ground beside the item (#3373: the tier is by apparent size from the camera, and the
+// spawn flight is ~80 m up, where a 1 m item is a box). 'none' = the grey box fallback, 'near' = the real model with its LOD proxy.
 let band = null;
 const deadline = Date.now() + 15000;
 while (band !== 'near' && Date.now() < deadline) {
