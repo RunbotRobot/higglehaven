@@ -64,7 +64,8 @@ import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
   fetchCreditOrbs, collectCreditOrb, reportPresence, fetchNearbyPresence,
 } from '../api.js';
-import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD } from './avatar.js';
+import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
+import { creditOrbContact, creditOrbRefusalKind, creditOrbMayRetry, CREDIT_ORB_RETRY_INTERVAL_MS } from './creditOrbCollect.js';
 import {
   normalizeEquippedAvatar, normalizeEquippedAnimation, chooseAllowedTemplateIds, desiredAvatarFor,
   animationForAvatar, locomotionStateFor,
@@ -90,6 +91,7 @@ import { recordVisibleMessage } from '../ui/visibleMessages.js';
 const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
 const shopCreditOrbOfflineNoticeEl = document.getElementById('shop-credit-orb-offline-notice');
 const shopCreditOrbRateLimitNoticeEl = document.getElementById('shop-credit-orb-rate-limit-notice');
+const shopCreditOrbProblemNoticeEl = document.getElementById('shop-credit-orb-problem-notice');
 export const accountMenuLandletInfoEl = document.getElementById('account-menu-landlet-info');
 
 // #1630: how many times pickShopSpawnLocation will reroll a candidate that
@@ -162,6 +164,9 @@ const SHOP_PRESENCE_HEARTBEAT_INTERVAL_MS = 3000;
 // Floats at a fixed height above the spawned ground position (#1994's own
 // z_m is always 0) purely for visual legibility — walking "through" it at
 // avatar height is the intended collection gesture, not a bug.
+// #3392: horizontal tolerance for the altitude rule below only; contact itself is
+// the avatar's body meeting the orb's surface (creditOrbContact, reach =
+// avatar footprint half-width + CREDIT_ORB_RADIUS_M), no longer a 1.5 m ring.
 const CREDIT_ORB_COLLECT_RADIUS_M = 1.5;
 const CREDIT_ORB_FLOAT_HEIGHT_M = 1.2;
 // #2443: how far above local ground (shopFlightAltitudeM, not world z --
@@ -1178,7 +1183,13 @@ function createCreditOrbMesh() {
 // orb.mesh itself, which removeCreditOrb disposes immediately after) so
 // this purely cosmetic effect never has to finish before collection logic/
 // collision moves on.
-const CREDIT_ORB_POP_LIFESPAN_S = 0.4;
+// #3392: halved from 0.4 s so the pop reads as a snap on contact.
+const CREDIT_ORB_POP_LIFESPAN_S = 0.2;
+// #3392: the reversal shown when the server says someone else got the orb first:
+// a grey puff that collapses where the orb was, distinct from the bright pop.
+const CREDIT_ORB_REVERSAL_LIFESPAN_S = 0.35;
+// #3392: how long a returned orb takes to scale back in.
+const CREDIT_ORB_RETURN_SCALE_IN_S = 0.25;
 const CREDIT_ORB_POP_END_SCALE = 2.5;
 const creditOrbPopEffects = [];
 
@@ -1187,16 +1198,34 @@ function spawnCreditOrbPopEffect(orb) {
   mesh.material.transparent = true;
   mesh.position.copy(orb.mesh.position);
   orb.group.add(mesh);
-  creditOrbPopEffects.push({ mesh, group: orb.group, elapsed: 0 });
+  creditOrbPopEffects.push({ mesh, group: orb.group, elapsed: 0, kind: 'pop' });
+}
+
+// #3392: the orb's position kept after it has popped, so a refusal can put an
+// orb back (429) or play the reversal where it was (404).
+function spawnCreditOrbReversalEffect(snapshot) {
+  const mesh = new THREE.Mesh(
+    new THREE.SphereGeometry(CREDIT_ORB_RADIUS_M, 16, 16),
+    new THREE.MeshBasicMaterial({ color: 0x8a8f98, transparent: true, opacity: 0.7 }),
+  );
+  mesh.position.copy(snapshot.position);
+  snapshot.group.add(mesh);
+  creditOrbPopEffects.push({ mesh, group: snapshot.group, elapsed: 0, kind: 'reversal' });
 }
 
 export function updateCreditOrbPopEffects(dt) {
   for (const effect of [...creditOrbPopEffects]) {
     effect.elapsed += dt;
-    const t = THREE.MathUtils.clamp(effect.elapsed / CREDIT_ORB_POP_LIFESPAN_S, 0, 1);
-    effect.mesh.scale.setScalar(1 + (CREDIT_ORB_POP_END_SCALE - 1) * t);
-    effect.mesh.material.opacity = 1 - t;
-    if (effect.elapsed >= CREDIT_ORB_POP_LIFESPAN_S) {
+    const lifespanS = effect.kind === 'reversal' ? CREDIT_ORB_REVERSAL_LIFESPAN_S : CREDIT_ORB_POP_LIFESPAN_S;
+    const t = THREE.MathUtils.clamp(effect.elapsed / lifespanS, 0, 1);
+    if (effect.kind === 'reversal') {
+      effect.mesh.scale.setScalar(1.8 - 1.5 * t); // collapses, the opposite of the pop
+      effect.mesh.material.opacity = 0.7 * (1 - t);
+    } else {
+      effect.mesh.scale.setScalar(1 + (CREDIT_ORB_POP_END_SCALE - 1) * t);
+      effect.mesh.material.opacity = 1 - t;
+    }
+    if (effect.elapsed >= lifespanS) {
       effect.group.remove(effect.mesh);
       effect.mesh.geometry.dispose();
       effect.mesh.material.dispose();
@@ -1221,28 +1250,36 @@ export function updateCreditOrbs(dt) {
   const shimmer = CREDIT_ORB_SHIMMER_MIN + (CREDIT_ORB_SHIMMER_MAX - CREDIT_ORB_SHIMMER_MIN)
     * (0.5 + 0.5 * Math.sin(creditOrbShimmerElapsedS * CREDIT_ORB_SHIMMER_SPEED_RAD_S));
   const rateLimited = creditOrbRateLimitedUntilMs !== null && performance.now() < creditOrbRateLimitedUntilMs;
-  for (const orb of shopCreditOrbs) {
+  // Deliberately the avatar's own position, not camera.position (unlike
+  // updateSignFade/updateCalendarFade's fade distance) -- positionShopCamera
+  // holds the third-person camera SHOP_CAMERA_FOLLOW_DISTANCE_M (4.2m) behind
+  // the avatar, so camera.position would never read as "touching" an orb.
+  // #3392: and the segment since last frame, so a fast flyer cannot pass
+  // through an orb between two frames.
+  const to = { x: shopAvatarPosition.x, y: shopAvatarPosition.y };
+  const from = creditOrbPreviousAvatarXY;
+  creditOrbPreviousAvatarXY = to;
+  const reachM = shopAvatarCollisionHalfM() + CREDIT_ORB_RADIUS_M;
+  for (const orb of [...shopCreditOrbs]) {
     orb.mesh.rotation.y += CREDIT_ORB_ROTATION_SPEED_RAD_S * dt;
     orb.mesh.material.emissiveIntensity = shimmer;
-    // Already mid-collect-request — avoid firing a second one every frame
-    // while the first is still in flight (walking stays within the radius
-    // for several frames, not just one).
+    // #3392: a returned orb (429 / unconfirmed) scales back in rather than appearing.
+    if (orb.appearT !== undefined && orb.appearT < 1) {
+      orb.appearT = Math.min(1, orb.appearT + dt / CREDIT_ORB_RETURN_SCALE_IN_S);
+      orb.mesh.scale.setScalar(Math.max(0.01, orb.appearT));
+    }
+    // Mid-collect orbs are removed from shopCreditOrbs the frame they pop
+    // (#3392), so this only guards against a stray double trigger.
     if (orb.collecting) continue;
-    // Cooling down after a 429 — see creditOrbRateLimitedUntilMs's own
-    // comment. The shimmer/rotation above still runs so the scene doesn't
-    // look frozen; only the collect attempt itself is skipped.
-    if (rateLimited) continue;
-    // Deliberately the avatar's own position, not camera.position (unlike
-    // updateSignFade/updateCalendarFade's fade distance) -- positionShopCamera
-    // holds the third-person camera SHOP_CAMERA_FOLLOW_DISTANCE_M (4.2m)
-    // behind the avatar, well outside CREDIT_ORB_COLLECT_RADIUS_M on its
-    // own, so camera.position would never read as "standing on it" at this
-    // tight a radius the way it still works for signs/calendars' much wider
-    // SIGN_INTERACT_RADIUS_M (8m).
     const world = orb.mesh.getWorldPosition(scratchCreditOrbWorldPos);
-    const dx = world.x - shopAvatarPosition.x;
-    const dy = world.y - shopAvatarPosition.y;
-    if (Math.hypot(dx, dy) > CREDIT_ORB_COLLECT_RADIUS_M) continue;
+    if (!creditOrbContact({ orbX: world.x, orbY: world.y, from, to, reachM })) {
+      orb.noticeShownForContact = false;
+      orb.rearmOnLeave = false;
+      continue;
+    }
+    // #3392: an orb that came back (429 / never confirmed) does not pop again
+    // under an avatar still standing on it; the person steps off and back.
+    if (orb.rearmOnLeave) continue;
     // #2443: horizontal proximity alone also fired for flying directly over
     // an orb at any altitude, since height above ground was never checked.
     // shopFlightAltitudeM (not world z -- see CREDIT_ORB_COLLECT_ALTITUDE_
@@ -1251,69 +1288,93 @@ export function updateCreditOrbs(dt) {
     // excludes real flight altitude without touching an ordinary ground
     // walk-in.
     if (Math.abs(shopFlightAltitudeM) > CREDIT_ORB_COLLECT_ALTITUDE_TOLERANCE_M) continue;
-    orb.collecting = true;
-    collectCreditOrb(orb.orbId).then(() => {
-      // #2441: spawned before removeCreditOrb disposes the real orb.mesh
-      // below -- this clones it first, so the pop has its own geometry/
-      // material to animate independently of the disposal.
-      markCreditOrbCollectReachedServer();
-      spawnCreditOrbPopEffect(orb);
-      removeCreditOrb(orb);
-      hideCreditOrbRateLimitNotice(); // #3303: a successful collect means the limit lifted
-      showCreditOrbToast();
-    }).catch((error) => {
-      // #2222: a 403 means the server's own avatar_presence record hasn't
-      // caught up with this walk-in yet (SHOP_PRESENCE_REPORT_INTERVAL_MS/
-      // SHOP_PRESENCE_HEARTBEAT_INTERVAL_MS throttle how often that gets
-      // posted) -- not a real rejection, so this leaves the orb in place
-      // and clears the in-flight guard to let the very next frame retry,
-      // the same way it would if collecting had never fired at all.
-      if (error.status === 403) {
-        markCreditOrbCollectReachedServer();
-        orb.collecting = false;
-        return;
+    // Cooling down after a 429 (see creditOrbRateLimitedUntilMs): the person
+    // is at the limit already, so the orb does not pop; touching it says why,
+    // once per contact, instead of silently doing nothing (#3392, and
+    // "A message that limits or refuses an action states the limit").
+    if (rateLimited) {
+      if (!orb.noticeShownForContact) {
+        orb.noticeShownForContact = true;
+        showCreditOrbRateLimitNotice(creditOrbLastRateLimit);
       }
-      // The server's own atomic claim is authoritative (docs/API.md's
-      // "Credit orbs" section) — a 404 here just means another shopper
-      // collected it first, not a real error, so this quietly drops the
-      // now-stale orb from the scene instead of surfacing anything to the
-      // shopper or retrying.
-      if (error.status === 404) {
-        markCreditOrbCollectReachedServer();
-        removeCreditOrb(orb);
-        return;
-      }
-      // A 429 from CREDIT_ORB_COLLECT_RATE_LIMIT_MAX -- see
-      // creditOrbRateLimitedUntilMs's own comment on why this needs its
-      // own branch rather than falling into the generic one just below:
-      // without a cooldown, the very next frame retries (and 429s again)
-      // for as long as the shopper stands in range, up to 60 times a
-      // second, with nothing ever telling them why.
-      if (error.status === 429) {
-        markCreditOrbCollectReachedServer();
-        creditOrbRateLimitedUntilMs = performance.now() + CREDIT_ORB_RATE_LIMIT_RETRY_COOLDOWN_MS;
-        showCreditOrbRateLimitNotice(error.rateLimit);
-        orb.collecting = false;
-        return;
-      }
-      // #2264: everything else (a 500, a plain network blip) used to fall
-      // through to the 404 branch above and remove the orb as if it had
-      // genuinely been collected by someone else -- loadCreditOrbsForLandlet
-      // only ever fetches a landlet's orbs once, so a wrongly-removed orb
-      // was gone from this session's view for good. Transient, same as
-      // 403: leave the orb in place and let the next frame retry.
-      // #2447: a 429/500 is still a real HTTP response (error.status is
-      // set), proving the server was reachable -- only a genuine network
-      // failure (isNetworkError, fetch() itself rejecting with no response
-      // at all) counts as evidence of actually being offline.
-      if (isNetworkError(error)) {
-        markCreditOrbCollectFailedToReachServer();
-      } else {
-        markCreditOrbCollectReachedServer();
-      }
-      orb.collecting = false;
-    });
+      continue;
+    }
+    popAndCollectCreditOrb(orb);
   }
+}
+
+// #3392: the frame the avatar touches the orb it pops, the toast shows and the
+// request goes out; the server stays the authority and a refusal is reversed
+// visibly with the reason (404: someone else got it, 429: the limit, anything
+// else: retried quietly for a few seconds, then the orb comes back).
+let creditOrbPreviousAvatarXY = null;
+let creditOrbLastRateLimit = null;
+
+function popAndCollectCreditOrb(orb) {
+  orb.collecting = true;
+  // Kept so a refusal can put the orb back or play the reversal where it was.
+  const snapshot = { orbId: orb.orbId, group: orb.group, position: orb.mesh.position.clone() };
+  // #2441: spawned before removeCreditOrb disposes the real orb.mesh -- the pop
+  // clones it first, so it has its own geometry/material to animate.
+  spawnCreditOrbPopEffect(orb);
+  removeCreditOrb(orb);
+  showCreditOrbToast();
+  const startedAt = performance.now();
+  const attempt = () => {
+    collectCreditOrb(snapshot.orbId).then(() => {
+      markCreditOrbCollectReachedServer();
+      hideCreditOrbRateLimitNotice(); // #3303: a successful collect means the limit lifted
+    }).catch((error) => {
+      const refusal = creditOrbRefusalKind(error);
+      if (refusal === 'retry') {
+        // #2447: a 403/5xx is still a real HTTP response proving the server is
+        // reachable; only fetch() itself rejecting counts toward "offline".
+        if (isNetworkError(error)) markCreditOrbCollectFailedToReachServer();
+        else markCreditOrbCollectReachedServer();
+        if (creditOrbMayRetry(performance.now() - startedAt)) {
+          setTimeout(attempt, CREDIT_ORB_RETRY_INTERVAL_MS);
+          return;
+        }
+        // Gave up: the orb was never confirmed, so it comes back and the
+        // person is told, instead of the pop standing for something that did
+        // not happen (#2264: it must not vanish for the session either).
+        hideCreditOrbToast();
+        restoreCreditOrb(snapshot);
+        showCreditOrbProblemNotice(isNetworkError(error)
+          ? "Couldn't collect that orb. You appear to be offline."
+          : "Couldn't collect that orb. Try touching it again in a moment.");
+        return;
+      }
+      markCreditOrbCollectReachedServer();
+      hideCreditOrbToast();
+      if (refusal === 'gone') {
+        // The server's own atomic claim is authoritative: another shopper
+        // collected it first. It stays gone; the reversal shows where it was.
+        spawnCreditOrbReversalEffect(snapshot);
+        showCreditOrbProblemNotice('Someone else collected that orb just before you.');
+        return;
+      }
+      // 429, CREDIT_ORB_COLLECT_RATE_LIMIT_MAX: the orb comes back, the limit
+      // and when it lifts are shown, and collecting pauses for a cooldown so
+      // standing in range is not a retry storm.
+      creditOrbRateLimitedUntilMs = performance.now() + CREDIT_ORB_RATE_LIMIT_RETRY_COOLDOWN_MS;
+      creditOrbLastRateLimit = error.rateLimit;
+      restoreCreditOrb(snapshot);
+      showCreditOrbRateLimitNotice(error.rateLimit);
+    });
+  };
+  attempt();
+}
+
+// A popped orb the server did not confirm: a fresh mesh at the same spot,
+// scaling back in. Skipped if its landlet unloaded meanwhile.
+function restoreCreditOrb(snapshot) {
+  if (!snapshot.group.parent) return;
+  const mesh = createCreditOrbMesh();
+  mesh.position.copy(snapshot.position);
+  mesh.scale.setScalar(0.01);
+  snapshot.group.add(mesh);
+  shopCreditOrbs.push({ mesh, group: snapshot.group, orbId: snapshot.orbId, collecting: false, appearT: 0, rearmOnLeave: true });
 }
 
 // #2447: null while no genuine network failure is currently in progress;
@@ -1359,7 +1420,9 @@ window.__testActiveCreditOrbIds = () => shopCreditOrbs.map((orb) => orb.orbId);
 // above -- lets a test confirm a pop effect actually spawned on collection
 // (and, after waiting out CREDIT_ORB_POP_LIFESPAN_S, that it cleaned itself
 // up again) without depending on fragile pixel-level visual assertions.
-window.__testActiveCreditOrbPopEffectCount = () => creditOrbPopEffects.length;
+window.__testActiveCreditOrbPopEffectCount = () => creditOrbPopEffects.filter((e) => e.kind === 'pop').length;
+// #3392: same convention, for the reversal puff shown when someone else got the orb.
+window.__testActiveCreditOrbReversalEffectCount = () => creditOrbPopEffects.filter((e) => e.kind === 'reversal').length;
 
 function showCreditOrbToast() {
   shopCreditOrbToastEl.classList.add('visible');
@@ -1369,6 +1432,10 @@ function showCreditOrbToast() {
   }, CREDIT_ORB_TOAST_VISIBLE_MS);
 }
 let creditOrbToastHideTimer = null;
+function hideCreditOrbToast() {
+  clearTimeout(creditOrbToastHideTimer);
+  shopCreditOrbToastEl.classList.remove('visible');
+}
 
 // #3303 (owner decision: an error or refusal stays until the person dismisses
 // it): unlike the toast above, this no longer fades on a timer. It stays until
@@ -1387,3 +1454,14 @@ function hideCreditOrbRateLimitNotice() {
   shopCreditOrbRateLimitNoticeEl.classList.remove('visible');
 }
 shopCreditOrbRateLimitNoticeEl.querySelector('.shop-notice-dismiss-btn').addEventListener('click', hideCreditOrbRateLimitNotice);
+// #3392: a collect the server refused after the orb had popped. Like the other
+// orb notices it stays until dismissed and its text is selectable (#3303).
+const shopCreditOrbProblemNoticeTextEl = shopCreditOrbProblemNoticeEl.querySelector('.shop-notice-text');
+function showCreditOrbProblemNotice(text) {
+  shopCreditOrbProblemNoticeTextEl.textContent = text;
+  shopCreditOrbProblemNoticeEl.classList.add('visible');
+  recordVisibleMessage(text);
+}
+shopCreditOrbProblemNoticeEl.querySelector('.shop-notice-dismiss-btn').addEventListener('click', () => {
+  shopCreditOrbProblemNoticeEl.classList.remove('visible');
+});

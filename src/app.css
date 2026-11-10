@@ -598,6 +598,36 @@
         user-select: text;
         -webkit-user-select: text;
       }
+      /* #3392: a collect the server refused after the orb had already popped
+         (someone else got it first, or it could not be confirmed); stays until
+         dismissed, like the other orb notices. One slot above the rate-limit notice. */
+      #shop-credit-orb-problem-notice {
+        position: fixed;
+        /* #3377: size to the text up to 90vw. Without this a fixed box at left: 50%
+           shrink-wraps into the right half of the screen only. */
+        width: max-content;
+        z-index: 16;
+        bottom: 430px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: rgb(var(--pill-rgb) / 0.9);
+        padding: 8px 16px;
+        border-radius: 8px;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        max-width: 90vw;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.4s;
+      }
+      #shop-credit-orb-problem-notice.visible {
+        opacity: 1;
+        /* #3303: readable text is selectable while it is shown; the hidden
+           (opacity 0) state stays click-through so it never blocks a tap. */
+        pointer-events: auto;
+        user-select: text;
+        -webkit-user-select: text;
+      }
       /* #3335 / #3377: one layout for every notice (orb notices, the Build
          selection-action status). A notice that can be dismissed carries its x
          in the upper-right corner, on the first line of the text, as a dismiss
