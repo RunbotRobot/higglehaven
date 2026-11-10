@@ -28,12 +28,19 @@ const PRODUCT_NAME = 'Suite Shippable Product';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
 
-// launchPage already registers its own page.on('dialog', ...) that accepts
-// every dialog — this second listener alongside it just also records the
-// alert() message each confirm-delivery visit shows, same technique as
-// e2e/land-auctions.test.mjs's own lastAlertMessage capture.
+// #3359: the confirm-delivery result is an in-app notice (src/ui/noticeModal.js),
+// not alert(). Native dialogs stay recorded as a tripwire for a regression.
 const dialogMessages = [];
 page.on('dialog', (dialog) => { dialogMessages.push(dialog.message()); });
+const noticeMessages = [];
+async function readNotice() {
+  await page.waitForSelector('#notice-modal.visible', { timeout: 15000 });
+  const text = `${await page.textContent('#notice-modal-title')} -- ${await page.textContent('#notice-modal-message')}`;
+  noticeMessages.push(text);
+  await page.click('#notice-modal-ok-btn');
+  await page.waitForFunction(() => !document.getElementById('notice-modal').classList.contains('visible'), null, { timeout: 5000 });
+  return text;
+}
 
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
@@ -119,15 +126,13 @@ console.log('Mark shipped button remaining (should be 0 — nothing left to ship
 // opened (e2e/auth.test.mjs's own verifyEmail/resetPassword link visits use
 // the identical page.goto(url) idiom for this reason).
 await page.goto(deliveryConfirmUrl);
-await page.waitForTimeout(500);
-console.log('alert after a valid, first confirm-delivery visit (should mention "Delivery confirmed"):', dialogMessages[dialogMessages.length - 1]);
+console.log('notice after a valid, first confirm-delivery visit (should mention "Delivery confirmed"):', await readNotice());
 
 // Re-visiting the exact same link again is idempotent, not an error
 // (docs/API.md's "Purchase delivery confirmation", #1361) — still a
 // success alert, so this doesn't trip errors.length === 0 either.
 await page.goto(deliveryConfirmUrl);
-await page.waitForTimeout(500);
-console.log('alert after re-visiting the same link a second time (should still mention "Delivery confirmed", not an error):', dialogMessages[dialogMessages.length - 1]);
+console.log('notice after re-visiting the same link a second time (should still mention "Delivery confirmed", not an error):', await readNotice());
 
 // Each page.goto(deliveryConfirmUrl) above was a real navigation (same
 // origin, stripped query string) — the seller modal is long closed by now,
@@ -147,7 +152,8 @@ const pass = !!template && purchased.status === 201 &&
   !!purchased.body.purchase?.paymentIntentId && !!deliveryConfirmUrl &&
   shipBtnCountBefore === 1 &&
   shippingTextAfterShip.includes('Shipped') && shipBtnCountAfter === 0 &&
-  dialogMessages.filter((m) => m.includes('Delivery confirmed')).length === 2 &&
+  noticeMessages.filter((m) => m.includes('Delivery confirmed')).length === 2 &&
+  dialogMessages.length === 0 &&
   shippingTextAfterConfirm.includes('Delivery confirmed') &&
   errors.length === 0;
 await finish(browser, { pass, label: 'Post-purchase shipping flow: Mark Shipped + ?confirmDelivery= (#1231)', errors });

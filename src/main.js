@@ -637,6 +637,7 @@ export async function persistCatalogThumbnail(template) {
 // same check, not just this modal's own handleUploadDimensionsStep.
 import { dimensionsChanged } from './catalog/upload.js';
 import { promptBundleName } from './ui/bundleNameModal.js';
+import { showNotice } from './ui/noticeModal.js';
 import './ui/copyableErrors.js'; // #3303: record modal error lines for bug reports
 
 // #2558: the catalog/bundle picker modal (Build's add-item flow, "prompt
@@ -978,9 +979,18 @@ document.addEventListener('click', (event) => {
   history.replaceState(null, '', location.pathname);
   try {
     await confirmPurchaseDelivery(confirmToken);
-    alert('Delivery confirmed — thank you! The seller can now cash out for this order.');
+    // #3359: an in-app notice, not alert() -- a browser that suppresses native
+    // dialogs drops alert() without a trace, and this visitor has no account
+    // to look the result up in afterwards.
+    await showNotice({
+      title: 'Delivery confirmed',
+      message: 'Thank you! The seller can now cash out for this order.',
+    });
   } catch (err) {
-    alert(err.message || 'This delivery-confirmation link is invalid or has expired.');
+    await showNotice({
+      title: "Couldn't confirm delivery",
+      message: err.message || 'This delivery-confirmation link is invalid or has expired.',
+    });
   }
 })();
 
