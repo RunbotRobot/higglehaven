@@ -62,3 +62,20 @@ export function flightSpeedMultiplier(
   const raw = refMultiplier * Math.pow(Math.max(altitudeM, 0.01) / refAltitudeM, exponent);
   return Math.min(maxMultiplier, Math.max(minMultiplier, raw));
 }
+
+// #3374: how far a flying avatar's body reaches beyond its pivot (its feet,
+// the group origin), so the world-edge clamp can bound the whole body instead
+// of the pivot alone. In flight the group is tipped forward by `pitchRad`
+// about the pivot, so the top of a `heightM`-tall body moves forward by
+// height*sin(pitch) (`forwardM`) and stays height*cos(pitch) above it, plus
+// half the body's half-width for the head's own size (`riseM`). The body's
+// sideways half-width is the caller's, since it already reserves that from
+// the edge. Pure so it can be unit-tested; the dome geometry stays in the
+// caller.
+export function flightBodyReach(heightM, pitchRad, halfWidthM) {
+  const pitch = Math.abs(pitchRad);
+  return {
+    forwardM: heightM * Math.sin(pitch),
+    riseM: heightM * Math.cos(pitch) + halfWidthM * 0.5,
+  };
+}

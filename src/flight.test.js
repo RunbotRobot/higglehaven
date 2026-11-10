@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { smoothstep, takeoffAltitudeM, landingAltitudeM, clampedLandingAltitudeM, flightSpeedMultiplier } from './flight.js';
+import { smoothstep, takeoffAltitudeM, landingAltitudeM, clampedLandingAltitudeM, flightSpeedMultiplier, flightBodyReach } from './flight.js';
 
 describe('smoothstep', () => {
   it('returns 0 at x=0 and 1 at x=1', () => {
@@ -119,5 +119,30 @@ describe('flightSpeedMultiplier', () => {
 
   it('defaults to the same production constants when no options are passed', () => {
     expect(flightSpeedMultiplier(10)).toBeCloseTo(10, 5);
+  });
+});
+
+describe('flightBodyReach (#3374)', () => {
+  it('is the full body height tipped forward, not just the torso and head', () => {
+    // The default avatar: 1.64 m tall, tipped 45 degrees, 0.3 m half-width.
+    const reach = flightBodyReach(1.64, -Math.PI / 4, 0.3);
+    expect(reach.forwardM).toBeCloseTo(1.64 * Math.SQRT1_2, 5);
+    expect(reach.riseM).toBeCloseTo(1.64 * Math.SQRT1_2 + 0.15, 5);
+    // The old clearance only counted torso + head (0.78 m): 0.55 m forward.
+    expect(reach.forwardM).toBeGreaterThan(0.78 * Math.SQRT1_2 + 0.5);
+  });
+
+  it('grows with a taller custom avatar and is symmetric in the sign of the lean', () => {
+    const tall = flightBodyReach(2.4, 0.5, 0.4);
+    const short = flightBodyReach(1.2, 0.5, 0.4);
+    expect(tall.forwardM).toBeGreaterThan(short.forwardM);
+    expect(tall.riseM).toBeGreaterThan(short.riseM);
+    expect(flightBodyReach(1.7, -0.7, 0.3)).toEqual(flightBodyReach(1.7, 0.7, 0.3));
+  });
+
+  it('has no forward swing when upright', () => {
+    const upright = flightBodyReach(1.7, 0, 0.3);
+    expect(upright.forwardM).toBeCloseTo(0, 5);
+    expect(upright.riseM).toBeCloseTo(1.7 + 0.15, 5);
   });
 });
