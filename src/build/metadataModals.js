@@ -13,6 +13,7 @@
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
+import { showNotice } from '../ui/noticeModal.js';
 import {
   fetchSignPosts, deleteSignPost,
   fetchCalendarEvents, deleteCalendarEvent, editCalendarEvent,
@@ -541,7 +542,13 @@ async function reorderBackupChainRow(backups, fromIndex, toIndex) {
     await reorderInstanceBackups(instanceId, reordered.map((backup) => backup.backupId));
     await renderBackupChain();
   } catch (err) {
-    alert(err.message || 'Could not reorder the backup chain.');
+    // #3359: in-app notice over the backup-chain modal it came from.
+    showNotice({
+      title: "Couldn't reorder the backups",
+      message: err.message || 'Could not reorder the backup chain.',
+      restoreModalEl: backupChainModalEl,
+      restoreCloseFn: closeBackupChainModal,
+    });
     // #2969: re-render instead of just re-enabling the buttons -- see
     // removeBtn's own handler above. A concurrent delete of one of these
     // backups (a second open copy of this panel) would 409 this full-
@@ -582,7 +589,8 @@ backupChainAddBtn.addEventListener('click', async () => {
         await addInstanceBackup(instanceId, { templateId: template.templateId });
         await renderBackupChain();
       } catch (err) {
-        alert(err.message || 'Could not add this backup.');
+        // #3359: in-app notice; the catalog picker this ran from is closing.
+        showNotice({ title: "Couldn't add this backup", message: err.message || 'Could not add this backup.' });
       }
     },
     () => openBackupChainModal(mesh),
