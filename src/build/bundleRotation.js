@@ -22,3 +22,34 @@ export function bundlePivot(positions) {
   for (const p of positions) box.expandByPoint(p);
   return box.getCenter(new THREE.Vector3());
 }
+
+// #3371: a rotation must never drop a frame. Tilting a tall or wide bundle
+// about a horizontal axis sends some members below the floor or past the edge
+// at most intermediate angles, so instead of rejecting the frame the whole
+// bundle is shifted by the smallest offset that brings every member's CENTRE
+// back inside `bounds` ({ minX, maxX, minY, maxY, minZ, maxZ }). The same
+// offset applies to every member, so it stays one rigid transform. Member
+// extents are not considered (centres only, as the bounds check always was).
+// Returns { transforms, fits }: fits is false only when the rotated bundle is
+// wider than the bounds on some axis, so no shift can seat it.
+export function reseatInBounds(transforms, bounds) {
+  if (!transforms.length) return { transforms, fits: true };
+  const lo = new THREE.Vector3(Infinity, Infinity, Infinity);
+  const hi = new THREE.Vector3(-Infinity, -Infinity, -Infinity);
+  for (const { position } of transforms) {
+    lo.min(position);
+    hi.max(position);
+  }
+  const limits = [['x', bounds.minX, bounds.maxX], ['y', bounds.minY, bounds.maxY], ['z', bounds.minZ, bounds.maxZ]];
+  const offset = new THREE.Vector3();
+  for (const [axis, min, max] of limits) {
+    if (hi[axis] - lo[axis] > max - min + 1e-9) return { transforms, fits: false };
+    if (lo[axis] < min) offset[axis] = min - lo[axis];
+    else if (hi[axis] > max) offset[axis] = max - hi[axis];
+  }
+  if (offset.lengthSq() === 0) return { transforms, fits: true };
+  return {
+    transforms: transforms.map(({ position, quaternion }) => ({ position: position.clone().add(offset), quaternion })),
+    fits: true,
+  };
+}

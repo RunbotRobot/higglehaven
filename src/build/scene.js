@@ -78,7 +78,7 @@ import { planSelectionBoxes } from './selectionBoxes.js';
 import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
 import { toDisplayLength, fromDisplayLength, formatLength, formatArea } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
-import { rotateMembersRigidly, bundlePivot } from './bundleRotation.js';
+import { rotateMembersRigidly, bundlePivot, reseatInBounds } from './bundleRotation.js';
 import { footprintScaleAtHeight } from '../../worker/earthCurvature.js';
 import {
   curveGroundGeometry, flatGroundHitPoint, createGroundTexture, normalizeGroundShapeUVs,
@@ -815,19 +815,24 @@ rotateControls.addEventListener('dragging-changed', (event) => {
   groupRotateStarts = groupMoveMeshes.map((mesh) => ({ position: mesh.position.clone(), quaternion: mesh.quaternion.clone() }));
   groupRotatePivot.quaternion.identity();
   groupRotateLastValidDelta = new THREE.Quaternion();
+  bundleRotateLimitShown = false;
 });
-// A member's centre must stay inside the landlet and the level being edited;
-// a rotation that would push any out is simply not applied that frame (the
-// gizmo snaps back to the last valid turn) instead of saving a rejected batch.
-function bundleTransformsInBounds(transforms) {
+// A member's centre must stay inside the landlet and the level being edited.
+// #3371: a frame that would push members out is not dropped (that made a tilt
+// about a horizontal axis land only on the few angles where everything fit).
+// The whole bundle is re-seated instead -- lifted onto the floor, slid in from
+// an edge -- so the turn follows the finger. Only a bundle too big to fit at
+// that angle stops at the last angle that did, with one status line saying so.
+function bundleBounds() {
   const half = LANDLET_SIDE_M / 2;
   const floor = levelFloorZ(currentLevelIndex);
-  return transforms.every(({ position }) => Math.abs(position.x) <= half && Math.abs(position.y) <= half
-    && position.z >= floor && position.z <= floor + LANDLET_HEIGHT_M);
+  return { minX: -half, maxX: half, minY: -half, maxY: half, minZ: floor, maxZ: floor + LANDLET_HEIGHT_M };
 }
+let bundleRotateLimitShown = false;
 function applyBundleRotation(delta) {
-  const transforms = rotateMembersRigidly(groupRotateStarts, groupRotatePivot.position, delta);
-  if (!bundleTransformsInBounds(transforms)) return false;
+  const raw = rotateMembersRigidly(groupRotateStarts, groupRotatePivot.position, delta);
+  const { transforms, fits } = reseatInBounds(raw, bundleBounds());
+  if (!fits) return false;
   (groupMoveMeshes ?? []).forEach((mesh, i) => {
     mesh.position.copy(transforms[i].position);
     mesh.quaternion.copy(transforms[i].quaternion);
@@ -839,8 +844,13 @@ rotateControls.addEventListener('objectChange', () => {
   const delta = groupRotatePivot.quaternion.clone();
   if (applyBundleRotation(delta)) {
     groupRotateLastValidDelta.copy(delta);
+    bundleRotateLimitShown = false;
   } else {
     groupRotatePivot.quaternion.copy(groupRotateLastValidDelta);
+    if (!bundleRotateLimitShown) {
+      bundleRotateLimitShown = true;
+      showSelectionActionStatus('This bundle is too big to turn any further here.');
+    }
   }
 });
 
@@ -856,6 +866,15 @@ window.__testRotateBundle = (axis, radians) => {
   rotateControls.dispatchEvent({ type: 'dragging-changed', value: false });
   return true;
 };
+
+// #3371: after __testRotateBundle, what turn was actually applied (radians) and
+// where the lowest selected member's centre sits, so a test can tell a tilt that
+// followed the request from one that was dropped back to 0.
+window.__testBundleRotateResult = () => ({
+  appliedRadians: groupRotateLastValidDelta.angleTo(new THREE.Quaternion()),
+  lowestZ: Math.min(...[...selectedMeshes].map((m) => m.position.z)),
+  floorZ: levelFloorZ(currentLevelIndex),
+});
 
 // Trim: shortens an extensible product (see extensibleAxes) along its
 // seller-declared axis — cutting a door or a length of lumber down to fit,
