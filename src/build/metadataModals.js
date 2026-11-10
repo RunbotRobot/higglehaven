@@ -14,6 +14,7 @@ import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { promptModerationCategory } from '../ui/moderationCategoryModal.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { showNotice } from '../ui/noticeModal.js';
+import { openTextNoteModal } from '../ui/textNoteModal.js';
 import {
   fetchSignPosts, deleteSignPost,
   fetchCalendarEvents, deleteCalendarEvent, editCalendarEvent,
@@ -142,7 +143,14 @@ async function renderSignPosts() {
         await deleteSignPost(instanceId, post.postId, { category });
         await renderSignPosts();
       } catch (err) {
-        alert(err.message || 'Could not delete this post.');
+        // #3359: an in-app notice, not alert() (a suppressed native dialog
+        // dropped it silently); focus returns to this panel when it closes.
+        showNotice({
+          title: "Couldn't delete this post",
+          message: err.message || 'Could not delete this post.',
+          restoreModalEl: signPostsModalEl,
+          restoreCloseFn: closeSignPostsModal,
+        });
         // #2963: re-render instead of just re-enabling the button -- a
         // concurrent delete of this same post (the author's own composer,
         // or a second open copy of this panel) is exactly the kind of
@@ -282,25 +290,40 @@ async function renderCalendarEvents() {
       editRowBtn.textContent = '✎';
       editRowBtn.setAttribute('aria-label', 'Edit event');
       editRowBtn.addEventListener('click', async () => {
-        const newText = prompt('Edit this event (up to 280 characters):', event.text);
-        if (newText === null) return;
-        if (!newText.trim()) {
-          alert('Event text cannot be empty.');
-          return;
-        }
-        if (newText.trim().length > 280) {
-          alert('Keep it to 280 characters or fewer.');
-          return;
-        }
+        // #3359: the shared in-app note modal (src/ui/textNoteModal.js), not
+        // prompt()/alert(): a live 280 count, an empty or over-long edit
+        // refused inside it with the typed text kept, a server error shown
+        // inside it. A concurrent delete of this event (#2963) refreshes
+        // the list and tells the person, as the old alert path did.
         editRowBtn.disabled = true;
         try {
-          await editCalendarEvent(instanceId, event.eventId, { text: newText.trim() });
-          await renderCalendarEvents();
-        } catch (err) {
-          alert(err.message || 'Could not update this event.');
-          // #2963: re-render instead of just re-enabling the button -- see
-          // the sign-posts delete handler's own comment above.
-          await renderCalendarEvents();
+          await openTextNoteModal({
+            title: 'Edit this event',
+            label: 'Event details',
+            existing: { text: event.text },
+            submitLabel: 'Save changes',
+            emptyMessage: 'Describe the event first.',
+            returnFocusEl: editRowBtn,
+            onSubmit: async ({ text }) => {
+              try {
+                await editCalendarEvent(instanceId, event.eventId, { text });
+              } catch (err) {
+                // #2963: re-render instead of leaving the stale row behind.
+                await renderCalendarEvents();
+                if (err?.status !== 404) throw err;
+                showNotice({
+                  title: 'Event already removed',
+                  message: 'This event was already removed, so your edit was not saved.',
+                  restoreModalEl: calendarEventsModalEl,
+                  restoreCloseFn: closeCalendarEventsModal,
+                });
+                return;
+              }
+              await renderCalendarEvents();
+            },
+          });
+        } finally {
+          editRowBtn.disabled = false;
         }
       });
       actions.appendChild(editRowBtn);
@@ -321,7 +344,12 @@ async function renderCalendarEvents() {
         await deleteCalendarEvent(instanceId, event.eventId, { category });
         await renderCalendarEvents();
       } catch (err) {
-        alert(err.message || 'Could not delete this event.');
+        showNotice({
+          title: "Couldn't delete this event",
+          message: err.message || 'Could not delete this event.',
+          restoreModalEl: calendarEventsModalEl,
+          restoreCloseFn: closeCalendarEventsModal,
+        });
         // #2963: re-render instead of just re-enabling the button -- see
         // the sign-posts delete handler's own comment above.
         await renderCalendarEvents();
