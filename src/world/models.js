@@ -5,6 +5,8 @@ import { cropGeometryFromEnd } from '../meshCrop.js';
 import { skeletonSignatureFromBones } from '../skeletonSignature.js';
 import { curvedPosition, flatPosition } from '../../worker/earthCurvature.js';
 import { activeCatalog, LANDLET_SIDE_M } from './state.js';
+import { placementUserData } from '../shop/instanceBatching.js';
+export { createPlacementHandle } from './placementHandle.js';
 import { markSharedModelResources, markSharedModelTextures, disposeOwnedMeshResources } from '../sharedModelResources.js';
 
 // #2553 (part of #2504/#2500's src/main.js module split, see #2503's design
@@ -698,40 +700,25 @@ export async function createMeshForInstance(instance) {
   }
   object.position.set(instance.x ?? 0, instance.y ?? 0, instance.z ?? height / 2);
   object.rotation.set(instance.rotationX ?? 0, instance.rotationY ?? 0, instance.rotationZ ?? 0);
-  object.userData.instanceId = instance.instanceId ?? instance.id;
-  object.userData.template = template;
-  object.userData.crop = { ...(instance.crop || {}) };
-  // A uniform scale factor, separate from Trim's per-axis crop above.
-  // Builders can no longer set this (Resize was removed from Build mode —
-  // the world should be populated at each product's real, seller-declared
-  // size), but existing instances saved before that change still carry a
-  // non-1 value here and must keep rendering at it. Applied to the whole
-  // returned object (box fallback or real model container alike) so it
-  // scales everything uniformly, position included via Object3D's own
-  // transform.
-  object.userData.scale = instance.scale ?? 1;
+  // The instance's userData (id, template, crop, scale, sign/calendar flags,
+  // groupId, bundleId, label) comes from placementUserData so a geometry-free
+  // handle (createPlacementHandle, src/world/placementHandle.js) carries exactly the same fields.
+  // Notes on individual fields, kept from where they were set one by one:
+  // - crop is Trim's per-axis override; scale is a uniform factor builders can
+  //   no longer set (Resize was removed from Build mode) but existing
+  //   instances still carry a non-1 value and must keep rendering at it.
+  // - isCommunitySign / isCommunityCalendar are per-instance flags (docs/API.md's
+  //   "Community signs" / "Community calendar"), unlike flooring's per-template
+  //   one; flooring has its own branch above and can't also be one.
+  // - groupId (#2764) and bundleId (#3327) are carried through so a grouping or
+  //   saved-bundle link already on the row survives being rebuilt into a mesh.
+  // - label is not editable in Build mode yet (#1294), carried through so a
+  //   value already on the row round-trips.
+  Object.assign(object.userData, placementUserData(instance, template));
+  // Applied to the whole returned object (box fallback or real model container
+  // alike) so it scales everything uniformly, position included via Object3D's
+  // own transform.
   object.scale.setScalar(object.userData.scale);
-  // Community signs (docs/API.md's "Community signs") — a per-instance
-  // flag, unlike flooring's per-template one, so it lives on the instance
-  // itself rather than being derived from the template. Flooring can't
-  // also be a sign (its own branch above never sets this), which is fine —
-  // nothing in the spec calls for a flat ground patch to double as one.
-  object.userData.isCommunitySign = instance.isCommunitySign ?? false;
-  // Community calendar (docs/API.md's "Community calendar") — same
-  // per-instance-flag reasoning as isCommunitySign just above, and
-  // independent of it.
-  object.userData.isCommunityCalendar = instance.isCommunityCalendar ?? false;
-  // #2764: same reasoning as the flooring branch's own groupId comment
-  // above.
-  object.userData.groupId = instance.groupId ?? null;
-  // #3327: the saved bundle this placement is linked to, if any.
-  object.userData.bundleId = instance.bundleId ?? null;
-  // Not editable anywhere in Build mode yet (#1294) — carried through
-  // purely so a value already on the row (set directly via the API)
-  // survives being rebuilt into a mesh and round-tripped back out again,
-  // the same reasoning as crop/scale/isCommunitySign/isCommunityCalendar
-  // just above.
-  object.userData.label = instance.label ?? null;
   // #1254: exposes the real rendered bounding-box size of whichever
   // instance's mesh this function last built — e2e-only, same "expose a
   // minimal hook purely for test verification" precedent as

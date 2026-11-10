@@ -1,6 +1,6 @@
 // #3400: the pure batching rules.
 import { describe, expect, it } from 'vitest';
-import { MIN_BATCH_SIZE, batchKey, groupPlacements } from './instanceBatching.js';
+import { MIN_BATCH_SIZE, batchKey, groupPlacements, placementUserData } from './instanceBatching.js';
 
 const brick = { templateId: 'brick', modelUrl: '/m/brick.glb', metadata: {} };
 const chair = { templateId: 'chair', modelUrl: '/m/chair.glb', metadata: {} };
@@ -68,5 +68,29 @@ describe('groupPlacements', () => {
   it('tolerates empty and missing input', () => {
     expect(groupPlacements([], templateFor)).toEqual({ batches: new Map(), singles: [] });
     expect(groupPlacements(undefined, templateFor)).toEqual({ batches: new Map(), singles: [] });
+  });
+});
+
+describe('placementUserData (#3401)', () => {
+  it('carries every field a placed object exposes, with the same defaults', () => {
+    expect(placementUserData(place('a', 'brick'), brick)).toEqual({
+      instanceId: 'a', template: brick, crop: {}, scale: 1,
+      isCommunitySign: false, isCommunityCalendar: false, groupId: null, bundleId: null, label: null,
+    });
+  });
+
+  it('copies what the instance sets, reading either instanceId or id', () => {
+    const data = placementUserData(
+      { id: 'row-9', templateId: 'brick', crop: { x: 0.5 }, scale: 2, isCommunitySign: true, groupId: 'g', bundleId: 'b', label: 'L' },
+      brick,
+    );
+    expect(data).toMatchObject({ instanceId: 'row-9', crop: { x: 0.5 }, scale: 2, isCommunitySign: true, groupId: 'g', bundleId: 'b', label: 'L' });
+  });
+
+  it('gives each placement its own crop object', () => {
+    const instance = place('a', 'brick', { crop: { x: 1 } });
+    const data = placementUserData(instance, brick);
+    data.crop.x = 9;
+    expect(instance.crop.x).toBe(1);
   });
 });

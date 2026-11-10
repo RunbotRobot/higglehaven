@@ -63,3 +63,24 @@ export function groupPlacements(instances, templateFor, minBatchSize = MIN_BATCH
   const singles = list.filter((_, index) => keyed[index] === null || !batches.has(keyed[index]));
   return { batches, singles };
 }
+
+// #3401: the userData every placed (non-flooring) instance carries, in one
+// place so a built mesh (createMeshForInstance) and a geometry-free handle
+// (createPlacementHandle) cannot drift apart. Collision, sit/lean search,
+// level of detail, signs, calendars and reviews all read these fields off the
+// object in entry.objects, so a handle that has them is interchangeable for
+// all of those; meshDimensions reads only template, crop and scale from here,
+// never geometry, so a handle needs no cached dimensions of its own.
+export function placementUserData(instance, template) {
+  return {
+    instanceId: instance.instanceId ?? instance.id,
+    template,
+    crop: { ...(instance.crop || {}) },
+    scale: instance.scale ?? 1,
+    isCommunitySign: instance.isCommunitySign ?? false,
+    isCommunityCalendar: instance.isCommunityCalendar ?? false,
+    groupId: instance.groupId ?? null,
+    bundleId: instance.bundleId ?? null,
+    label: instance.label ?? null,
+  };
+}
