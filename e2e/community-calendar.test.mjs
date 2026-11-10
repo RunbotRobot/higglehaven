@@ -107,24 +107,26 @@ console.log('events persisted server-side after the panel delete (should be 1, t
 
 // #1975: the Manage Events panel now also offers an edit button (✎) on any
 // row this browser's own logged-in account authored — every row here,
-// since this builder both owns the landlet and authored both events. The
-// page's single dialog handler (launchPage's own promptAnswer) answers
-// every prompt() with the same fixed LABEL string, so the edited text ends
-// up equal to LABEL rather than some distinct new string — that's fine,
-// this is exercising the real click -> prompt -> PATCH -> re-render wiring
-// (and that the button renders for an own-authored row at all), not
-// testing a specific submitted string.
+// since this builder both owns the landlet and authored both events.
+// #3359: the edit is the shared in-app note modal (src/ui/textNoteModal.js),
+// not a native prompt(), so this fills and saves that modal.
+const EDITED_TEXT = 'Bonfire night, moved indoors';
 await page.locator('.calendar-event-row').filter({ hasText: 'Bonfire night' }).locator('.calendar-event-row-edit').click();
+await page.waitForSelector('#note-modal.visible', { timeout: 5000 });
+const editModalPrefill = await page.inputValue('#note-modal-text');
+console.log('edit modal prefilled with the event text (should be "Bonfire night"):', editModalPrefill);
+await page.fill('#note-modal-text', EDITED_TEXT);
+await page.click('#note-modal-save-btn');
 // #2635: same arg/options mix-up as above.
 await page.waitForFunction(() => {
   const row = document.querySelector('.calendar-event-row');
-  return row && !row.textContent.includes('Bonfire night');
+  return row && row.textContent.includes('moved indoors');
 }, null, { timeout: 30000 });
 const editedRowText = await page.locator('.calendar-event-row').first().textContent();
-console.log('row text after editing via the panel\'s own edit button (should no longer mention "Bonfire night"):', editedRowText);
+console.log('row text after editing via the panel\'s own edit button (should mention "moved indoors"):', editedRowText);
 
 const { events: eventsAfterEdit } = (await fetchJson(`/api/instances/${calendarInstance.instanceId}/events`)).body;
-console.log('events persisted server-side after the panel edit (text should now equal LABEL):', eventsAfterEdit.map((e) => `${e.authorLabel}: ${e.text}`));
+console.log('events persisted server-side after the panel edit (text should now be the edited string):', eventsAfterEdit.map((e) => `${e.authorLabel}: ${e.text}`));
 
 // Scheduled events + the one-shot creative-tool trigger (docs/SPEC.md
 // §6's own "scheduled confetti-cannon" example) — posted directly via the
@@ -182,8 +184,9 @@ const pass = labelBefore.trim() === 'Community Calendar' &&
   rowCountAfterDelete === 1 &&
   eventsAfterDelete.length === 1 && eventsAfterDelete[0].authorLabel === LABEL &&
   eventsAfterDelete[0].text === 'Bonfire night, Friday 8pm!' &&
-  editedRowText.includes(LABEL) && !editedRowText.includes('Bonfire night') &&
-  eventsAfterEdit.length === 1 && eventsAfterEdit[0].text === LABEL &&
+  editModalPrefill === 'Bonfire night' &&
+  editedRowText.includes(LABEL) && editedRowText.includes('moved indoors') &&
+  eventsAfterEdit.length === 1 && eventsAfterEdit[0].text === EDITED_TEXT &&
   scheduledRowText.includes('Scheduled for') &&
   notDueTrigger.body.triggered === false &&
   modalHiddenAfterUnflag &&
