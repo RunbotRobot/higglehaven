@@ -42,6 +42,45 @@
   and never edit an already-merged migration -- the same check rejects it (#805).
 - Commit each completed change.
 
+## Looking at the live site as a person (#3428, #3430)
+
+Every fleet session has its own account on the live site (`higglehaven3`,
+`higglehaven10`, ...) and `scripts/live-site.mjs` drives it in the
+pre-installed Chromium at the owner's phone size (390x844, touch; `--desktop`
+for 1280x800). It signs in through the fleet login, runs the steps you chain on
+the command line, and prints one JSON report: screenshot paths, console
+errors, failed requests, request timings for the routes you name, and frame
+figures (longest frame, long tasks). The proxy adds the fleet key; the script
+never prints or stores a cookie or a header. If the live site answers `401`
+the key is not configured for this environment: say so on your PR or issue and
+stop, and never go looking for a passphrase.
+
+```
+node scripts/live-site.mjs --name higglehaven10 --out "$SCRATCHPAD" \
+  idle shot:shop walk:forward:3000 fly shot:flying stats
+node scripts/live-site.mjs --name higglehaven10 --timing /api/credit-orbs idle
+```
+
+Steps: `walk:<forward|back|left|right>[:ms]`, `look:<dx>:<dy>`,
+`tap:<x>:<y>` or `tap:<selector>`, `mode:<shop|build|sell>`, `fly`,
+`settings`, `idle`, `wait:<ms>`, `shot[:name]`, `stats`. Read screenshots back
+with the Read tool. Against a local `wrangler dev`, add
+`--url http://127.0.0.1:8787 --login local`.
+
+**After a change of yours deploys, look at it on the live site at phone size
+before calling it done, and say in the PR or issue what you saw.**
+
+Rules of conduct on the live site:
+
+- Look at anything. Change only your own fleet account's data and the
+  landlets set aside for the fleet.
+- Never touch another person's content, and never friend, message, flag,
+  report or block a real user.
+- No load testing on the live site; stay inside the normal rate limits.
+- Clean up what you place outside your sandbox landlet.
+- After a change of yours deploys, look at it on the live site at phone size
+  before calling it done, and say what you saw.
+
 ## Bug-report feedback capture: extend deliberately, prune deliberately
 
 The in-app "Submit Feedback" bug-report tool (#2715) captures a
