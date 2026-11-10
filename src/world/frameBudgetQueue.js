@@ -14,10 +14,19 @@
 //  - awaits a unit that returns a promise before starting the next one (a model
 //    still downloading holds its place without blocking anything else);
 //  - lets a whole group of pending units be dropped at once (a load that was
-//    superseded by an unload), and keeps going if a unit throws.
+//    superseded by an unload), and keeps going if a unit throws;
+//  - run() queues a unit and returns a promise for its result, for a caller
+//    that has to know when its own work finished (#3427: undo rebuilding items).
 //
 // Dependency-free, with the clock and the frame scheduler passed in, so it runs
 // in the plain vitest pool.
+
+export class DroppedWorkError extends Error {
+  constructor() {
+    super('Queued world work was dropped before it ran.');
+    this.name = 'DroppedWorkError';
+  }
+}
 
 const DEFAULT_BUDGET_MS = 4; // the part of a frame world content may use
 
@@ -130,6 +139,23 @@ export function createFrameBudgetQueue({
     return entry;
   }
 
+  // Like enqueue, but returns a promise for the unit's result. A unit that
+  // throws rejects the promise (it is the caller's to handle, so onError is not
+  // called); a unit whose group is dropped before it ran rejects with
+  // DroppedWorkError so nobody waits forever.
+  function run(unit, options = {}) {
+    return new Promise((resolve, reject) => {
+      const entry = enqueue(async () => {
+        try {
+          resolve(await unit());
+        } catch (error) {
+          reject(error);
+        }
+      }, options);
+      entry.onDrop = () => reject(new DroppedWorkError());
+    });
+  }
+
   // Cancel every pending unit of a group. A unit already running finishes.
   function dropGroup(group) {
     const set = byGroup.get(group);
@@ -140,6 +166,7 @@ export function createFrameBudgetQueue({
       entry.dropped = true;
       live -= 1;
       dropped += 1;
+      entry.onDrop?.();
     }
     byGroup.delete(group);
     return dropped;
@@ -157,6 +184,7 @@ export function createFrameBudgetQueue({
 
   return {
     enqueue,
+    run,
     dropGroup,
     drain,
     pending: () => live,
