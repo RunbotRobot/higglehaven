@@ -114,7 +114,7 @@ const EDITED_TEXT = 'Bonfire night, moved indoors';
 await page.locator('.calendar-event-row').filter({ hasText: 'Bonfire night' }).locator('.calendar-event-row-edit').click();
 await page.waitForSelector('#note-modal.visible', { timeout: 5000 });
 const editModalPrefill = await page.inputValue('#note-modal-text');
-console.log('edit modal prefilled with the event text (should be "Bonfire night"):', editModalPrefill);
+console.log('edit modal prefilled with the event text (should be "Bonfire night, Friday 8pm!"):', editModalPrefill);
 await page.fill('#note-modal-text', EDITED_TEXT);
 await page.click('#note-modal-save-btn');
 // #2635: same arg/options mix-up as above.
@@ -184,7 +184,7 @@ const pass = labelBefore.trim() === 'Community Calendar' &&
   rowCountAfterDelete === 1 &&
   eventsAfterDelete.length === 1 && eventsAfterDelete[0].authorLabel === LABEL &&
   eventsAfterDelete[0].text === 'Bonfire night, Friday 8pm!' &&
-  editModalPrefill === 'Bonfire night' &&
+  editModalPrefill === 'Bonfire night, Friday 8pm!' &&
   editedRowText.includes(LABEL) && editedRowText.includes('moved indoors') &&
   eventsAfterEdit.length === 1 && eventsAfterEdit[0].text === EDITED_TEXT &&
   scheduledRowText.includes('Scheduled for') &&
