@@ -591,6 +591,22 @@ most likely to come up again.
   Where a platform convention exists, follow it; a control a person has
   to hunt for is a missing feature as far as they can tell.
 
+- **An action in the world is felt the instant it happens; the server
+  confirms afterward, and a refusal is reversed visibly with the
+  reason.** (2026-11-10, #3392.) Collecting an orb waited for the
+  server's reply before anything showed, so the orb sat on the avatar
+  for most of a second. The owner: "It should really be exactly when the
+  avatar hits it to create that tactile feeling", and if another avatar
+  claimed it milliseconds earlier, "the user who didn't get the orb
+  could receive a reversal message and animation." So for something a
+  person does by touching the world, the client shows the result on
+  contact and the server stays the authority: a refusal undoes what was
+  shown, with its own effect and one plain sentence saying why, never
+  silently. A rare, explained reversal is a better price than a delay on
+  every success. (higglehaven1's reading of the limit, not the owner's
+  words: this covers small, reversible things such as an orb or a
+  placement. Money is never shown as moved before the server says so.)
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
