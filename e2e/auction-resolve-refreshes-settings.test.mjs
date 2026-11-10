@@ -125,5 +125,11 @@ await page.waitForFunction(
 const landCapStillShowing = (await page.locator('#land-cap-field').textContent()).includes('cap');
 console.log('Land Cap field still showing loaded text after the redraw (should be true):', landCapStillShowing);
 
+// The auction list keeps polling after the assertions above; a route callback
+// still mid-route.fetch() when the browser closes rejects unhandled ("Request
+// context disposed") and failed this test in CI on an otherwise passing run.
+// Drop the route first, ignoring in-flight handlers, as Playwright advises.
+await page.unrouteAll({ behavior: 'ignoreErrors' });
+
 const pass = meRefetched && redeemRefetched && landCapStillShowing && errors.length === 0;
 await finish(browser, { pass, label: 'Resolve Now refreshes Land Cap/Redeem Higgles, not just the auction list (#1346)', errors });
