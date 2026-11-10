@@ -37,6 +37,7 @@
 import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
 import { landletLevelZRange } from '../../shared/level-range.js';
 import { checkRateLimit } from './rate-limit.js';
+import { invalidateFarPlacementsAt } from './far-placements.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { readJson, stringValue, queryLimit, decodeCursor, encodeCursor } from './validation.js';
 import { fireNotifications } from './notifications.js';
@@ -318,6 +319,8 @@ export async function handleLandletVersions(request, db, route, url) {
     if (result.meta.changes === 0) {
       throw new HttpError('Landlet changed concurrently — refetch and retry', 409, { code: ERROR_CODES.CHANGED_CONCURRENTLY });
     }
+    // #3417: what far view draws for this landlet just changed.
+    await invalidateFarPlacementsAt(landlet.center_x_m, landlet.center_y_m);
     const updatedLandlet = await requireLandlet(db, landletId);
     return json({ landlet: landletFromRow(updatedLandlet), version });
   }

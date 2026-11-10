@@ -4167,6 +4167,21 @@ the same `status` and `ownerBuilderId` filters while following a cursor.
 
 Fetches one landlet.
 
+### `GET /api/far-placements?tile=x,y`
+
+Public, read-only (#3417). Every placement on every landlet whose centre lies in
+one 512 m world tile (`tile` = whole-number indices; landlet centre / 512,
+floored), in a compact form for drawing distant landlets from the shared far
+product models. Responds `{ tile: {x, y, sizeM}, templates: [productId, ...],
+landlets: [{ id, cx, cy, items: [[templateIndex, x, y, z, rotX, rotY, rotZ,
+scale, crop?], ...] }] }`; positions are landlet-local (add `cx`, `cy`), and
+`crop` appears only when set. Published versions are used, falling back to the
+draft; suspended builders' landlets and delisted or suspended-seller products
+are left out. `400` for a malformed or out-of-world tile. Cached at the edge
+for 60 s (`x-far-placements-cache: hit|miss`); activating a landlet version
+drops its tile's entry in the same data centre, other changes show within the
+TTL.
+
 ### `POST /api/landlets`
 
 Creates a landlet. `landletId` is optional; if omitted, the Worker generates

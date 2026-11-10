@@ -162,6 +162,7 @@ import { handleBlocks } from './lib/blocks.js';
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
 import { handleLandlets } from './lib/land.js';
+import { handleFarPlacements } from './lib/far-placements.js';
 import { landletLevelZRange } from '../shared/level-range.js';
 import { CSP_POLICY, isHtmlResponse, handleCspReport } from './lib/csp.js';
 // #2538: bundle and land-acquisition-auction route handlers, extracted into
@@ -752,6 +753,11 @@ async function handleApi(request, env, url, ctx) {
 
   if (route[0] === 'landlets') {
     return handleLandlets(request, env.DB, route, url);
+  }
+
+  // #3417: compact far-view placements by world tile (public read, edge-cached).
+  if (route[0] === 'far-placements') {
+    return handleFarPlacements(request, env.DB, url);
   }
 
   if (route[0] === 'land-candidates') {
