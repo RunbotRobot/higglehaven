@@ -48,8 +48,8 @@ const VOICE_RANGE_M = 30.48;
 const VOICE_FULL_VOLUME_RADIUS_M = 3;
 // Hysteresis gap between opening a connection (at VOICE_RANGE_M) and
 // tearing it down (past this) — same enter-at-one-distance/exit-at-a-
-// farther-one shape SHOP_MIDDLE_LOD_ENTER_RADIUS_M/EXIT_RADIUS_M
-// (presenceAndContent.js) already use, so a peer hovering right at the
+// farther-one shape the level-of-detail swap's enter/exit sizes
+// (lodTier.js) use, so a peer hovering right at the
 // range boundary doesn't thrash connections open/closed every frame.
 const VOICE_DISCONNECT_RADIUS_M = 36;
 // Comparable cadence to the other Shop-mode poll loops (SHOP_PRESENCE_

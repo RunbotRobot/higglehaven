@@ -54,7 +54,8 @@
 // reuses it for an unrelated Build-mode neighbor-outline radius.
 import * as THREE from 'three';
 import { camera, scene } from '../world/scene.js';
-import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, loadModelInstance, loadModelAnimations } from '../world/models.js';
+import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, loadModelInstance, loadModelAnimations, meshDimensions } from '../world/models.js';
+import { apparentSizePx, nextIsMiddle, fullDetailFloorPx } from './lodTier.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
 import { isNetworkError } from '../build/scene.js';
@@ -122,18 +123,10 @@ const SHOP_SPAWN_LOCATION_MAX_ATTEMPTS = 20;
 // and the credit-orb load, and SHOP_LOAD_RADIUS_M is still what main.js reuses.
 export const SHOP_LOAD_RADIUS_M = SHOP_BASE_LOAD_RADIUS_M;
 const SHOP_UNLOAD_RADIUS_M = SHOP_BASE_UNLOAD_RADIUS_M;
-// #2378: a middle LOD band between the near (full detail, above) and far
-// (unload, above) radii, giving the simplified-proxy swap its own
-// enter/exit hysteresis gap — the same enter-at-one-distance/exit-at-a-
-// closer-one shape SHOP_LOAD_RADIUS_M/SHOP_UNLOAD_RADIUS_M already use for
-// the near/far transition, so an avatar hovering right at one boundary
-// doesn't thrash the LOD swap every frame. Both sit strictly inside
-// [SHOP_LOAD_RADIUS_M, SHOP_UNLOAD_RADIUS_M] so the full progression reads
-// as near (0-65m, full detail) → middle (65-90m experienced range, but the
-// swap only actually triggers past 75m until the avatar comes back under
-// 65m) → far (unload past 90m).
-const SHOP_MIDDLE_LOD_ENTER_RADIUS_M = 75; // switch to the simplified proxy once past this
-const SHOP_MIDDLE_LOD_EXIT_RADIUS_M = 65; // switch back to full detail once back under this
+// #2378/#3373: an item's level of detail (full model near, a coloured box once it
+// is small on screen) is decided per item by its apparent size, not by a fixed
+// distance from the landlet; see src/shop/lodTier.js for the rule, its
+// hysteresis and the cap on full-detail items, and updateInstanceLodTiers below.
 
 // #1100 (sub-issue of #1095, multiplayer presence): report/poll cadence
 // for seeing other avatars live in Shop mode. Report stays comfortably
@@ -291,10 +284,11 @@ const shopCreditOrbs = [];
 // claimed landlet's content loads inside an altitude-scaled radius
 // (loadRadius.js: 60 m on the ground, wider from up high, hard-capped, and at
 // most SHOP_MAX_LOADED_LANDLETS at once, nearest first) and unloads past that
-// radius plus a hysteresis band. Content that loads from far away starts in
-// the simplified middle LOD (its distance is already past the enter
-// threshold), so flying high doesn't mean full-detail meshes for everything
-// in view. Credit orbs keep the ground-level 60/90 m radii.
+// radius plus a hysteresis band. Each loaded item's level of detail is then set
+// from how big it looks on screen (#3373, updateInstanceLodTiers), so flying
+// high doesn't mean full-detail meshes for everything in view, and a large item
+// keeps its real model for as long as it is a prominent object. Credit orbs
+// keep the ground-level 60/90 m radii.
 export function updateShopProximity() {
   const avatarX = shopAvatarPosition.x;
   const avatarY = shopAvatarPosition.y;
@@ -308,16 +302,6 @@ export function updateShopProximity() {
         unloadShopLandletInstances(entry);
       } else if (entry.loaded) {
         loadedCount += 1;
-        // #2378: the middle LOD band's own enter/exit hysteresis, same
-        // "only flip once past the gap, not right at a shared boundary"
-        // shape the near/far load-unload check above already uses.
-        if (entry.lod !== 'middle' && distance > SHOP_MIDDLE_LOD_ENTER_RADIUS_M) {
-          entry.lod = 'middle';
-          for (const object of entry.objects) setInstanceLodState(object, true);
-        } else if (entry.lod !== 'near' && distance < SHOP_MIDDLE_LOD_EXIT_RADIUS_M) {
-          entry.lod = 'near';
-          for (const object of entry.objects) setInstanceLodState(object, false);
-        }
       } else {
         loadCandidates.push({ entry, distance });
       }
@@ -341,13 +325,61 @@ export function updateShopProximity() {
   // Unloads above already ran, so loadedCount is what remains loaded.
   for (const { entry, distance } of pickLandletsToLoad(loadCandidates, loadedCount, shopFlightAltitudeM)) {
     entry.loaded = true; // set before awaiting so a second tick can't double-load
-    // A fresh load starts at the LOD its distance calls for, so a landlet loaded
-    // from altitude never builds full detail only to swap down a tick later.
-    entry.lod = distance > SHOP_MIDDLE_LOD_ENTER_RADIUS_M ? 'middle' : 'near';
     // Each load gets its own token (see loadShopLandletInstances) so a
     // fast unload-then-reload cycle can't let an earlier, still in-flight
     // fetch resurrect itself once entry.loaded flips back to true.
     loadShopLandletInstances(entry, ++entry.loadToken);
+  }
+  updateInstanceLodTiers();
+}
+
+// #3373: how big a placed item looks on screen right now (its bounding sphere's
+// diameter in CSS pixels), from the real camera. The item's radius is half the
+// diagonal of its declared size, cached on the object.
+function lodApparentPx(entry, object) {
+  let radiusM = object.userData.lodRadiusM;
+  if (radiusM === undefined) {
+    const { width, depth, height } = meshDimensions(object);
+    radiusM = 0.5 * Math.hypot(width, depth, height);
+    object.userData.lodRadiusM = radiusM;
+  }
+  const dx = entry.group.position.x + object.position.x - camera.position.x;
+  const dy = entry.group.position.y + object.position.y - camera.position.y;
+  const dz = entry.group.position.z + object.position.z - camera.position.z;
+  return apparentSizePx(radiusM, Math.hypot(dx, dy, dz), camera.fov, window.innerHeight);
+}
+
+// #3373: sets every loaded item's level of detail from its apparent size (with
+// hysteresis), then, if more items want full detail than the budget allows,
+// drops the smallest on screen to the box first. Runs on the proximity tick
+// (SHOP_PROXIMITY_INTERVAL_MS), so an item flips within a fraction of a second
+// of crossing a threshold. An item with no proxy (a box or flooring, already as
+// cheap as it gets) has nothing to switch.
+const lodNearPxScratch = [];
+function updateInstanceLodTiers() {
+  lodNearPxScratch.length = 0;
+  for (const entry of shopLandlets.values()) {
+    if (!entry.loaded) continue;
+    for (const object of entry.objects) {
+      if (!object.userData.lodProxy) continue;
+      const px = lodApparentPx(entry, object);
+      object.userData.lodPx = px;
+      const wantMiddle = nextIsMiddle(object.userData.lodMiddle, px);
+      object.userData.lodWantMiddle = wantMiddle;
+      if (!wantMiddle) lodNearPxScratch.push(px);
+    }
+  }
+  const floorPx = fullDetailFloorPx(lodNearPxScratch);
+  for (const entry of shopLandlets.values()) {
+    if (!entry.loaded) continue;
+    for (const object of entry.objects) {
+      if (!object.userData.lodProxy) continue;
+      const isMiddle = object.userData.lodWantMiddle || object.userData.lodPx < floorPx;
+      if (isMiddle !== object.userData.lodMiddle) {
+        object.userData.lodMiddle = isMiddle;
+        setInstanceLodState(object, isMiddle);
+      }
+    }
   }
 }
 
@@ -1059,7 +1091,12 @@ async function loadShopLandletInstances(entry, myToken) {
       object.userData.lodProxy = lodProxy;
       object.add(lodProxy);
     }
-    setInstanceLodState(object, entry.lod === 'middle');
+    // #3373: a fresh item starts at the tier its apparent size calls for, so
+    // one loaded from altitude never builds full detail only to swap down a
+    // tick later.
+    const startsMiddle = nextIsMiddle(null, lodApparentPx(entry, object));
+    object.userData.lodMiddle = startsMiddle;
+    setInstanceLodState(object, startsMiddle);
     if (object.userData.isCommunitySign) registerShopSign(object, entry);
     if (object.userData.isCommunityCalendar) registerShopCalendar(object, entry);
     // Unlike signs/calendar above, reviews have no builder opt-in flag at
