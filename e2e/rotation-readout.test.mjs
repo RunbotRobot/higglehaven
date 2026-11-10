@@ -45,7 +45,7 @@ async function placeTreeAt(x, y) {
 }
 
 // ---- 1. A single item ----
-await placeTreeAt(160, 420);
+await placeTreeAt(160, 380);
 check(await readoutText() === null, 'no readout while nothing is being rotated');
 await page.click('#mode-rotate');
 await waitReadout(/Turn 0\.0° \(blue ring\) · Tilt 0\.0° \(red ring\) · Tilt 0\.0° \(green ring\)/, 'single item at rest reads 0, 0, 0 in plain words');
@@ -83,8 +83,8 @@ check(await readoutText() === null, 'the readout goes away when Rotate is off');
 await page.click('#toggle-snap'); // Snap back on
 
 // ---- 2. A bundle ----
-await placeTreeAt(260, 420);
-await page.mouse.click(60, 650);
+await placeTreeAt(260, 380);
+await page.mouse.click(60, 550);
 await page.waitForTimeout(300);
 const [posA, posB] = await page.evaluate(() => window.__testProductScreenPositions());
 await page.click('#toggle-multiselect');
@@ -109,7 +109,7 @@ const afterTilt = await page.evaluate(() => window.__testBundleRotateResult());
 check(afterTilt.lowestZ >= Math.max(afterTilt.floorZ, afterTilt.levelRange.minZ) - 1e-6, 'the tilted bundle is still above the floor');
 
 // Derived from the members, not remembered by the session: select it again.
-await page.mouse.click(60, 650);
+await page.mouse.click(60, 550);
 await page.waitForTimeout(300);
 check(await readoutText() === null, 'nothing selected: no readout');
 const positions = await page.evaluate(() => window.__testProductScreenPositions());
