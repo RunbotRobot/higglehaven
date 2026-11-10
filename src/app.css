@@ -538,6 +538,9 @@
          doesn't collide with this notice fading out. */
       #shop-credit-orb-offline-notice {
         position: fixed;
+        /* #3377: size to the text up to 90vw. Without this a fixed box at left: 50%
+           shrink-wraps into the right half of the screen only. */
+        width: max-content;
         z-index: 16;
         bottom: 330px;
         left: 50%;
@@ -570,6 +573,9 @@
          offline notice per its own stacking idiom. */
       #shop-credit-orb-rate-limit-notice {
         position: fixed;
+        /* #3377: size to the text up to 90vw. Without this a fixed box at left: 50%
+           shrink-wraps into the right half of the screen only. */
+        width: max-content;
         z-index: 16;
         bottom: 380px;
         left: 50%;
@@ -592,10 +598,12 @@
         user-select: text;
         -webkit-user-select: text;
       }
-      /* #3335: one layout for every dismissible notice (orb notices, the Build
-         selection-action status): the text takes the full width and the
-         actions sit in a small right-aligned row beneath it, so a phone-width
-         notice is not squeezed into a few short lines by its own buttons. */
+      /* #3335 / #3377: one layout for every notice (orb notices, the Build
+         selection-action status). A notice that can be dismissed carries its x
+         in the upper-right corner, on the first line of the text, as a dismiss
+         control normally sits; the text keeps the width except the room the x
+         needs (.shop-notice-dismissible .shop-notice-text), so a phone-width notice does not lose
+         a line to it and a one-line notice is no taller than its text. */
       .shop-notice {
         display: flex;
         flex-direction: column;
@@ -609,19 +617,24 @@
         min-width: 0;
         overflow-wrap: anywhere;
       }
-      .shop-notice-actions {
-        display: flex;
-        justify-content: flex-end;
-        gap: 8px;
+      /* On the text, not the notice's padding: the notices' own #id padding
+         rules outrank a class. 24px + the notice's 12-16px side padding clears
+         the 36px-wide x. */
+      .shop-notice-dismissible .shop-notice-text {
+        margin-right: 24px;
       }
-      .shop-notice-btn {
-        flex: 0 0 auto;
-        padding: 3px 10px;
-        border-radius: 6px;
+      .shop-notice-dismiss-btn {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 36px;
+        height: 32px;
+        padding: 0;
         border: none;
-        background: rgb(var(--pill-rgb) / 0.6);
+        background: transparent;
         color: var(--pill-text-soft);
-        font: 12px/1.4 sans-serif;
+        font: 18px/1 sans-serif;
+        cursor: pointer;
       }
       /* Same treatment as #shop-sign-hint just above (see its own comment),
          stacked one slot higher so both can show at once near an
@@ -1422,7 +1435,9 @@
         -webkit-user-select: text;
         box-sizing: border-box;
         text-align: center;
-        padding: 6px 12px;
+        /* 7px so a one-line status is tall enough for the 32px dismiss target
+           in its corner (#3377). */
+        padding: 7px 12px;
         border-radius: 12px;
         background: rgb(var(--pill-rgb) / 0.85);
         color: var(--pill-text);

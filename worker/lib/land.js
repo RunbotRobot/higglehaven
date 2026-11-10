@@ -35,6 +35,7 @@
 // function/class binding, so none of them can be exported from there as a
 // plain const (confirmed the hard way for D1_MAX_BOUND_PARAMETERS in #2535).
 import { json, HttpError, clientIp, ERROR_CODES } from './http.js';
+import { landletLevelZRange } from '../../shared/level-range.js';
 import { checkRateLimit } from './rate-limit.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { readJson, stringValue, queryLimit, decodeCursor, encodeCursor } from './validation.js';
@@ -67,23 +68,13 @@ const LEVEL_HEIGHT_M = 10;
 // of its own DB area_m2/landlet_class.
 const LANDLET_AREA_M2 = 1000;
 
-// Half a level's height, allowed as slack on each end of a landlet's
-// purchased-levels range — an instance's own thickness can carry it
-// slightly past a level's exact z boundary without actually needing the
-// next level purchased just to fit.
-const HALF_LEVEL_HEIGHT_M = LEVEL_HEIGHT_M / 2;
 
 // #3045: the z-range a landlet's purchased levels cover, the same formula
 // the level-removal sweep (handleLandletLevels' DELETE branch, #928/#2470)
 // uses to decide what is out of range. Exported so the suspended-seller
 // restore path (account-moderation.js) can refuse to put an instance back
 // at a z where no level exists any more.
-export function landletLevelZRange(levelIndices) {
-  return {
-    minZ: Math.min(0, ...levelIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M,
-    maxZ: Math.max(0, ...levelIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M,
-  };
-}
+export { landletLevelZRange };
 
 const LANDLET_RELEASED_VIA_AUCTION_SQL = `EXISTS (
   SELECT 1 FROM auctions
@@ -537,8 +528,7 @@ export async function handleLandletLevels(request, db, route) {
     // the POST branch already has for its own atomic INSERT.
     const current = await db.prepare('SELECT level_index FROM landlet_levels WHERE landlet_id = ?').bind(landletId).all();
     const remainingIndices = current.results.map((row) => row.level_index).filter((index) => index !== levelIndex);
-    const minZ = Math.min(0, ...remainingIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M;
-    const maxZ = Math.max(0, ...remainingIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M;
+    const { minZ, maxZ } = landletLevelZRange(remainingIndices);
     const outOfRange = await db.prepare('SELECT * FROM placed_instances WHERE landlet_id = ? AND (z_m < ? OR z_m > ?)')
       .bind(landletId, minZ, maxZ).all();
     // #2925 (accepted, not a bug to fix): this pre-delete snapshot picks the
@@ -607,8 +597,7 @@ export async function handleLandletLevels(request, db, route) {
     const remainingAfterDelete = await db.prepare('SELECT level_index FROM landlet_levels WHERE landlet_id = ?')
       .bind(landletId).all();
     const freshRemainingIndices = remainingAfterDelete.results.map((row) => row.level_index);
-    const freshMinZ = Math.min(0, ...freshRemainingIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M;
-    const freshMaxZ = Math.max(0, ...freshRemainingIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M;
+    const { minZ: freshMinZ, maxZ: freshMaxZ } = landletLevelZRange(freshRemainingIndices);
     // #522 (owner-confirmed, 2026-09-09): any instance left sitting in the
     // z-range this level was providing is removed from active shoppable
     // space rather than silently drifting out of bounds — nothing else

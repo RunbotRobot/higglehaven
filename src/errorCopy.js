@@ -20,6 +20,9 @@ export const PLAYER_ERROR_COPY = Object.freeze({
   upstream_failed: "That didn't go through on our side. Please try again in a moment.",
   stale_reference: 'Something you were working with was removed or changed. Reload and try again.',
   seller_suspended: "That product isn't available right now.",
+  // #3372: the Build client stops a move at the top and bottom level, so this
+  // only shows for stale level data or a second tab; the items are put back.
+  out_of_level_range: "That's beyond the top or bottom level of this lándlet.",
 });
 
 // The player-facing text for a server error: the mapped copy for a known code,
