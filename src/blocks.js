@@ -9,6 +9,7 @@
 // friends list); the nearby-chat and voice panels are HUD panels, not modals.
 import { blockPerson } from './api.js';
 import { confirmDestructive } from './ui/confirmModal.js';
+import { showNotice } from './ui/noticeModal.js';
 
 export async function confirmAndBlockPerson(builderId, { restoreModalEl = null, restoreCloseFn = null, returnFocusEl = null } = {}) {
   const blocked = await confirmDestructive({
@@ -26,6 +27,17 @@ export async function confirmAndBlockPerson(builderId, { restoreModalEl = null, 
       }
     },
   });
-  if (blocked) window.alert('Blocked. You can unblock them from Blocked people in your friends list.');
+  // #3359: an in-app notice (a browser can drop alert() unseen). Not awaited:
+  // callers refresh their lists as soon as the block lands, and the notice
+  // opens over the friends list it came from (restoreModalEl re-arms it).
+  if (blocked) {
+    showNotice({
+      title: 'Blocked',
+      message: 'You can unblock them from Blocked people in your friends list.',
+      restoreModalEl,
+      restoreCloseFn,
+      returnFocusEl,
+    });
+  }
   return blocked;
 }
