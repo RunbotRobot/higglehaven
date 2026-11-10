@@ -8234,6 +8234,15 @@ placing an instance directly could build arbitrarily high or deep without
 ever calling `POST /api/landlets/:landletId/levels` — the only place land
 cap is actually charged for going vertical.
 
+The refusal is `400` with `code: "out_of_level_range"` and the range as
+fields (`minZ`, `maxZ`), and a one-sentence `error` with no coordinate, id or
+route in it (#3372). The range is defined once, in `shared/level-range.js`
+(`landletLevelZRange`), and read by the Worker and by the Build client: a
+move, bundle move, rotation or paste stops at the top or bottom level while
+it happens, the status line says "That's as high as this lándlet goes…", and
+the save that follows is accepted. A refusal that still happens (stale level
+data, another tab) puts the items back where they were saved and says so.
+
 ## Purchases
 
 Land cap's own commentary above flags the actual gap directly: this

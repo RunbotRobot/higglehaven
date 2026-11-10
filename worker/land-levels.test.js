@@ -1594,7 +1594,11 @@ describe('Landlet levels', () => {
         }),
       }));
       expect(tooHigh.response.status).toBe(400);
-      expect(tooHigh.body.error).toMatch(/purchased levels/);
+      expect(tooHigh.body.code).toBe('out_of_level_range');
+      expect(tooHigh.body.minZ).toBe(-LEVEL_HEIGHT_M / 2);
+      expect(tooHigh.body.maxZ).toBe(LEVEL_HEIGHT_M / 2);
+      // No route, id or raw coordinate in a message a builder reads.
+      expect(tooHigh.body.error).not.toMatch(/landlet|instance|POST|\d/);
 
       const tooDeep = await api('/instances', owner.session({
         method: 'POST',
