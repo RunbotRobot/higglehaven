@@ -9,6 +9,7 @@ import schemaSnapshot from './schema-snapshot.json';
 // the call-site counts that justified pulling it out of this file.
 import { json, HttpError, JSON_HEADERS, clientIp, htmlResponse, ERROR_CODES } from './lib/http.js';
 import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './lib/rate-limit.js';
+import { fleetKeyStatus, withoutFleetKey, handleFleetLogin, FLEET_LOGIN_PATH } from './lib/fleet.js';
 import { adminActionLogStatement } from './lib/admin-log.js';
 import { timingSafeEqual, bytesToHex, hexToBytes } from './lib/crypto.js';
 import {
@@ -355,9 +356,30 @@ async function routeRequest(request, env, ctx) {
     return Response.redirect(url.toString(), 301);
   }
 
-  if (env.ACCESS_PASSPHRASE) {
+  // #3429: the fleet key (see worker/lib/fleet.js) passes the preview gate
+  // for a Claude Code session. Checked first so a wrong key is counted, then
+  // stripped from the request so nothing downstream can log or echo it.
+  let fleetKey;
+  try {
+    fleetKey = await fleetKeyStatus(request, env);
+  } catch (error) {
+    if (error instanceof HttpError) return json({ error: error.message, ...(error.extra ?? {}) }, error.status);
+    throw error;
+  }
+  request = withoutFleetKey(request);
+
+  if (env.ACCESS_PASSPHRASE && fleetKey !== 'ok') {
     const gateResponse = await checkAccessGate(request, url, env);
     if (gateResponse) return gateResponse;
+  }
+
+  if (url.pathname === FLEET_LOGIN_PATH && request.method === 'POST') {
+    try {
+      return await handleFleetLogin(request, env, env.DB, url, fleetKey === 'ok');
+    } catch (error) {
+      if (error instanceof HttpError) return json({ error: error.message, ...(error.extra ?? {}) }, error.status);
+      throw error;
+    }
   }
 
   if (request.method === 'OPTIONS') {

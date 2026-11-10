@@ -10105,6 +10105,43 @@ coarser, all-or-nothing layer that sits in front of that real system, not a
 substitute for it: once past the gate, every route still enforces its own
 per-user auth exactly as documented elsewhere in this file.
 
+### Fleet access (Claude Code sessions)
+
+A session of the project's Claude Code fleet can use the live site as its own
+account, past the gate, without being given the passphrase (#3428, #3429). It
+is off until the Worker secret `FLEET_ACCESS_KEY` is set (any long random
+phrase); unsetting the secret turns it off again. The owner stores the same
+value once as a network secret for host `higglehaven.com`, header
+`x-fleet-key`, on the fleet's Claude Code environment, so the network proxy
+adds the header and no session reads the value.
+
+- **The gate.** A request whose `x-fleet-key` header equals the secret
+  (constant-time compare) passes the preview gate as if it held the `hh_access`
+  cookie. The header is removed from the request before any other code sees
+  it. A wrong value is counted per client IP (10 per 15 minutes, the same
+  window as `/__access/login`) and the limit is checked before the comparison,
+  so a spent budget stops guessing outright; a correct key is never counted.
+  With the secret unset the header does nothing.
+- **`POST /api/auth/fleet-login`** `{ "name": "higglehaven3" }`. Needs the key;
+  `404` otherwise, so the route does not exist without it. `name` must match
+  `higglehaven` plus one to three digits (`400` otherwise). The first call
+  creates the account (username = the name, `users.is_fleet = 1`, a
+  non-deliverable `@fleet.invalid` email, no usable password, marked
+  email-verified and age-attested because those checks only prove a mailbox
+  and a person); later calls sign in the same one. Returns the ordinary session
+  cookie. A name already held by a regular account is a `409`; the route never
+  signs in as a real person.
+- **What a fleet account cannot do.** It is never an admin (`admin-bootstrap`
+  and `grant-admin` refuse it, and a trigger in migration 0211 rejects any
+  write that would make it one). Its product flags are recorded with weight 0.
+  It cannot file conduct or voice reports, or leave product reviews or seller
+  feedback (`403`). It cannot buy while Stripe is in live mode (a `rk_live_` or
+  `sk_live_` `STRIPE_SECRET_KEY`); test-mode purchases are allowed. Suspension
+  and moderation apply to it like any account.
+- **Visibility.** Fleet avatars are visible to everyone like any other avatar
+  until a launch decision says otherwise; there is no search by name in the
+  app, so there is nothing to exclude from one.
+
 This depends on `wrangler.jsonc`'s `assets.run_worker_first: true`. Without
 it, Cloudflare serves static files (`/`, `/assets/*`) directly from the
 `ASSETS` binding and never invokes the Worker's `fetch` handler at all, so

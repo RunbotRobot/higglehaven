@@ -199,5 +199,6 @@
   "0202_social_drop_builder_id_columns.sql": "83646f239cae2ae45178711735779c26ece9f2dac28de8a15d96f0afd1742186",
   "0203_catalog_template_delisted_at.sql": "fece36ad7f239c589815883bcde8128a353b783a847f1cd4e07fbf4a69bd81c4",
   "0204_catalog_clip_roles.sql": "221c58517e8c3a871db3adfccf1204b8ee40c2feb3f0ad24357bcabb436043d8",
-  "0210_bundle_instance_links.sql": "ed65a9eacb9313dae0146f4c2af73a3ab2537afefebdec36189c7f8079e1689d"
+  "0210_bundle_instance_links.sql": "ed65a9eacb9313dae0146f4c2af73a3ab2537afefebdec36189c7f8079e1689d",
+  "0211_users_is_fleet.sql": "594e5a243ceb45c0b884fd32d96304960e96911ded05e923f2dd4fbb239c8932"
 }

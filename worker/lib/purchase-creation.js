@@ -32,6 +32,7 @@ import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue, labelValue, positiveInteger } from './validation.js';
 import { requireVerifiedSession, sha256Hex, builderHasActiveSuspension, suspendedSellerTemplateIds } from './auth.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
+import { stripeIsLive } from './fleet.js';
 import { fireNotification } from './notifications.js';
 import { isUserSuspended } from './account-moderation.js';
 import {
@@ -240,6 +241,11 @@ export async function handleInstancePurchase(request, env, instanceId) {
     throw new HttpError('This product is no longer available.', 400);
   }
   if (seller?.stripe_account_id && seller.stripe_onboarding_status === 'complete' && stripeConfigured(env)) {
+    // #3429: a fleet account (a Claude Code session on the live site) never
+    // moves real money. Test mode is allowed so purchase flows can be tried.
+    if (user.is_fleet === 1 && stripeIsLive(env)) {
+      throw new HttpError('Purchases are not available for this account while payments are live.', 403);
+    }
     return createPurchaseCheckout(env, instance, template, landlet, seller, input, buyerBuilder.builder_id, buyerBuilder.label);
   }
   // #653 (owner, 2026-09-11): "real-world shoppers should not be able to

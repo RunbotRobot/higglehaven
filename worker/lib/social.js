@@ -28,6 +28,7 @@ import {
 } from './auth.js';
 import { fireNotification } from './notifications.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
+import { assertNotFleetAccount } from './fleet.js';
 
 // #3145: blocks key on user_id and friendships now do too, so the friendship
 // paths check blocks directly on user ids.
@@ -569,6 +570,9 @@ const CONDUCT_REPORT_NOTE_MAX_LENGTH = 4000;
 async function fileConductReport(db, {
   table, kind, reportId, reporterUserId, reportedUserId, reason, title, noteLines, now,
 }) {
+  // #3429: a fleet account (a Claude Code session looking at the live site)
+  // never files a report; one would only pollute the board real people use.
+  assertNotFleetAccount(await db.prepare('SELECT is_fleet FROM users WHERE user_id = ?').bind(reporterUserId).first(), 'file a report');
   const repeatLine = `[${now}] Repeat report from the same reporter against the same account${reason ? `. Reason: ${reason}` : ''}`;
   await db.batch([
     db.prepare(`

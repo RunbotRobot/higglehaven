@@ -28,6 +28,7 @@ import {
 } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { sessionIsPurchaseBuyer, purchaseBuyerUserIdSql } from './purchase-buyer.js';
+import { assertNotFleetAccount } from './fleet.js';
 import { removeSuspendedSellerPlacedInstances, SUSPENSION_SPARES_LAST_ADMIN_SQL } from './account-moderation.js';
 import { moderationRemovalCategory, recordModerationRemovalSnapshot } from './content-moderation.js';
 import {
@@ -124,6 +125,7 @@ export async function handleProductReviews(request, db, route) {
     // a verified session (N44), so this is a strict tightening, not a new
     // restriction on anyone who could legitimately review something.
     const sessionBuilder = await requireSessionBuilder(request, db);
+    assertNotFleetAccount(await db.prepare('SELECT is_fleet FROM users WHERE user_id = ?').bind(sessionBuilder.user_id).first(), 'leave a review');
     await checkRateLimit(db, `product-review-create:${sessionBuilder.user_id}`, PRODUCT_REVIEW_CREATE_RATE_LIMIT_MAX);
     const input = await readJson(request);
     const authorLabel = sessionBuilder.label;
@@ -440,8 +442,10 @@ export async function handleProductFlags(request, db, route) {
     const flaggerIp = clientIp(request);
     // #2941: see TURNSTILE_FAILED_FLAG_WEIGHT_MULTIPLIER's own comment on
     // why this one read is safe outside the atomic INSERT below.
-    const flagger = await db.prepare('SELECT turnstile_failed_at FROM users WHERE user_id = ?').bind(sessionBuilder.user_id).first();
-    const turnstileMultiplier = flagger?.turnstile_failed_at ? TURNSTILE_FAILED_FLAG_WEIGHT_MULTIPLIER : 1;
+    const flagger = await db.prepare('SELECT turnstile_failed_at, is_fleet FROM users WHERE user_id = ?').bind(sessionBuilder.user_id).first();
+    // #3429: a fleet account's flag carries zero weight, composed on the same
+    // weight column as the Turnstile and IP factors (never a second mechanism).
+    const turnstileMultiplier = flagger?.is_fleet === 1 ? 0 : flagger?.turnstile_failed_at ? TURNSTILE_FAILED_FLAG_WEIGHT_MULTIPLIER : 1;
     // #2215 (owner decision, 2026-10-31, option 2): the first pending flag
     // against a listing from a given real IP counts fully toward the
     // auto-hide threshold; any further pending flag sharing that same IP
@@ -914,6 +918,7 @@ export async function handleSellerFeedbackCreate(request, env, purchaseId) {
   // instead of a caller-supplied, non-unique, mutable label matched against
   // purchases.buyer_label.
   const sessionBuilder = await requireSessionBuilder(request, db);
+  assertNotFleetAccount(await db.prepare('SELECT is_fleet FROM users WHERE user_id = ?').bind(sessionBuilder.user_id).first(), 'leave seller feedback');
   await checkRateLimit(db, `seller-feedback-create:${sessionBuilder.user_id}`, SELLER_FEEDBACK_CREATE_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const authorLabel = sessionBuilder.label;
