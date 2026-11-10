@@ -2417,6 +2417,67 @@
         background: var(--brand-green);
         color: #16240a;
       }
+      /* #3359: the report-reason modal (src/ui/reportReasonModal.js), same shell
+         as #bundle-name-modal. */
+      #report-reason-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #report-reason-modal.visible {
+        display: flex;
+      }
+      #report-reason-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 360px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #report-reason-modal-content h2 {
+        margin: 0 32px 0 0;
+        font-size: 17px;
+      }
+      #report-reason-modal-content label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      #report-reason-input {
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        resize: vertical;
+        user-select: text;
+      }
+      #report-reason-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+      }
+      #report-reason-submit-btn {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+        background: var(--brand-green);
+        color: #16240a;
+      }
       /* #3249: the product review modal (src/ui/productReviewModal.js), same
          shell as #bundle-name-modal; sits under #confirm-modal (z-index 26) so
          Delete's confirmation stacks over it. */

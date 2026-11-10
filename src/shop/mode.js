@@ -104,6 +104,7 @@ import {
 } from './worldSprites.js';
 import { closeShopProductPreviewModal, confettiBursts, disposeConfettiBurst } from './productCheckout.js';
 import { recordRenderStateSample } from '../feedback/renderStateBuffer.js';
+import { showNotice } from '../ui/noticeModal.js';
 
 // small ground/wall seam overlap only — see wildGround below (enterShopMode)
 const SHOP_WALL_MARGIN_M = 1.5;
@@ -941,7 +942,7 @@ function renderMyAvatarsField(onEquipped) {
           renderMyAvatarsList();
           onEquipped?.();
         } catch (err) {
-          alert(err.message || 'Could not equip this avatar.');
+          showNotice({ title: 'Could not equip this avatar', message: err.message || 'Please try again.' });
           equipBtn.disabled = false;
         }
       });
@@ -963,7 +964,7 @@ function renderMyAvatarsField(onEquipped) {
           nextCursor = page.nextCursor;
           drawRows();
         } catch (err) {
-          alert(err.message || 'Could not load more avatars.');
+          showNotice({ title: 'Could not load more avatars', message: err.message || 'Please try again.' });
           moreBtn.disabled = false;
         }
       });
@@ -1080,7 +1081,7 @@ function renderMyAnimationsField() {
           await refreshEquippedShopAvatar(shopAvatar?.modelUrl, shopAvatar?.clipRoles);
           renderMyAnimationsList();
         } catch (err) {
-          alert(err.message || 'Could not apply this animation.');
+          showNotice({ title: 'Could not apply this animation', message: err.message || 'Please try again.' });
           equipBtn.disabled = false;
         }
       });
@@ -1102,7 +1103,7 @@ function renderMyAnimationsField() {
           nextCursor = page.nextCursor;
           drawRows();
         } catch (err) {
-          alert(err.message || 'Could not load more animations.');
+          showNotice({ title: 'Could not load more animations', message: err.message || 'Please try again.' });
           moreBtn.disabled = false;
         }
       });

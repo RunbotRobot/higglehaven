@@ -30,6 +30,7 @@
 // Paste) write its button label directly.
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
+import { showNotice } from '../ui/noticeModal.js';
 import { promptBundleName } from '../ui/bundleNameModal.js';
 import { generateConceptImage, searchCatalogBySimilarity, fetchBundles, fetchSharedBundles, updateBundle, deleteBundle } from '../api.js';
 import {
@@ -451,8 +452,16 @@ export function renderBundlePicker() {
           setCommunityBundles(freshShared);
           renderBundlePicker();
         } catch (err) {
-          alert(err.message || 'Could not rename this bundle.');
           renameBtn.disabled = false;
+          // #3359: an in-app notice (a browser can suppress alert() and drop
+          // the refusal without a trace); stays until dismissed, text selectable.
+          await showNotice({
+            title: 'Could not rename this bundle',
+            message: err.message || 'Could not rename this bundle.',
+            returnFocusEl: renameBtn,
+            restoreModalEl: catalogPickerEl,
+            restoreCloseFn: closeCatalogPicker,
+          });
         }
       });
       tile.appendChild(renameBtn);
@@ -486,8 +495,14 @@ export function renderBundlePicker() {
           setCommunityBundles(freshShared);
           renderBundlePicker();
         } catch (err) {
-          alert(err.message || 'Could not update this bundle\'s sharing.');
           shareToggleBtn.disabled = false;
+          await showNotice({
+            title: 'Could not update sharing',
+            message: err.message || 'Could not update this bundle\'s sharing.',
+            returnFocusEl: shareToggleBtn,
+            restoreModalEl: catalogPickerEl,
+            restoreCloseFn: closeCatalogPicker,
+          });
         }
       });
       tile.appendChild(shareToggleBtn);

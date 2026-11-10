@@ -14,7 +14,7 @@
 // DIDIT_API_KEY, so there's no real way to drive an account to
 // trust_tier === 'id_verified' — mocking /api/auth/me's own trustTier is
 // the same approach that test already uses to reach the "Message" button.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName } from './helpers.mjs';
 
 const ALICE = 'Escape Restore Suite Alice';
 const BOB = 'Escape Restore Suite Bob';
@@ -43,9 +43,7 @@ await claimLandlet(bobPage);
 await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
 await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
-alicePage.removeAllListeners('dialog');
-alicePage.on('dialog', (dialog) => dialog.accept(BOB));
-await alicePage.click('#friends-add-btn');
+await addFriendByName(alicePage, BOB);
 await waitForText(alicePage, '#friends-status', BOB);
 await alicePage.click('#friends-close-btn');
 

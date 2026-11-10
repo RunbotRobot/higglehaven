@@ -22,10 +22,15 @@ let session = null;
 
 function finish() {
   if (!session) return;
-  const { resolve, returnFocusEl } = session;
+  const { resolve, returnFocusEl, restoreModalEl, restoreCloseFn } = session;
   session = null;
   modalEl.classList.remove('visible');
   closeModalA11y(modalEl);
+  // Opened over another modal (the bundle picker): hand focus trapping and
+  // Escape back to it, the way confirmModal.js does.
+  if (restoreModalEl?.classList.contains('visible')) {
+    openModalA11y(restoreModalEl, restoreCloseFn);
+  }
   if (returnFocusEl?.isConnected && returnFocusEl.offsetParent !== null) {
     returnFocusEl.focus({ preventScroll: true });
   }
@@ -35,9 +40,11 @@ function finish() {
 closeBtn.addEventListener('click', finish);
 okBtn.addEventListener('click', finish);
 
-function present({ title, message, copyText = null, okLabel = 'OK', returnFocusEl = null }) {
+function present({
+  title, message, copyText = null, okLabel = 'OK', returnFocusEl = null, restoreModalEl = null, restoreCloseFn = null,
+}) {
   return new Promise((resolve) => {
-    session = { resolve, returnFocusEl };
+    session = { resolve, returnFocusEl, restoreModalEl, restoreCloseFn };
     titleEl.textContent = title;
     messageEl.textContent = message;
     copyRowEl.hidden = !copyText;

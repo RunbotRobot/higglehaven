@@ -35,6 +35,8 @@ import {
 import { shopOtherAvatars } from './presenceAndContent.js';
 import { createPersistentMuteSet } from './mutePersistence.js';
 import { shopAvatarPosition } from '../main.js';
+import { promptReportReason } from '../ui/reportReasonModal.js';
+import { showNotice } from '../ui/noticeModal.js';
 
 // docs/SPEC.md §2: "100 feet (~30m) of complete silence as the outer
 // range, with volume ramping up gradually as avatars get closer — not a
@@ -547,23 +549,21 @@ if (voicePeersListEl) {
   });
 }
 
-// Same prompt()-based lightweight text-input convention this codebase
-// already uses for every other short, optional free-text capture (product/
-// seller reviews, land/friend renames -- src/shop/productCheckout.js,
-// src/account/menu.js) rather than a bespoke modal. A cancelled prompt
-// (null) submits nothing -- #1212's own product-flag reporting is
-// "zero-cost/consequence-free for the flagger by design," and an accidental
-// click shouldn't be able to fire a report with no way to back out.
+// A cancelled report modal (null) submits nothing -- #1212's own
+// product-flag reporting is "zero-cost/consequence-free for the flagger by
+// design," and an accidental click shouldn't be able to fire a report with
+// no way to back out.
 async function reportVoicePeer(builderId) {
-  const reason = window.prompt(
-    'Report this nearby voice for inappropriate conduct? Optionally describe why (up to 280 characters), or leave blank:', '',
-  );
-  if (reason === null) return; // cancelled
+  // #3359: in-app modal and notices, not window.prompt()/alert() -- a browser
+  // that suppresses native dialogs made reporting impossible and dropped the
+  // outcome. A cancelled modal (null) submits nothing.
+  const answer = await promptReportReason({ title: 'Report this nearby voice for inappropriate conduct?' });
+  if (answer === null) return;
   try {
-    await sendVoiceReport({ reportedBuilderId: builderId, reason: reason.trim() || undefined });
-    window.alert('Report submitted. Thank you.');
+    await sendVoiceReport({ reportedBuilderId: builderId, reason: answer.reason || undefined });
+    await showNotice({ title: 'Report submitted', message: 'Thank you.' });
   } catch {
-    window.alert('Could not submit the report -- please try again.');
+    await showNotice({ title: 'Could not submit the report', message: 'Please try again.' });
   }
 }
 

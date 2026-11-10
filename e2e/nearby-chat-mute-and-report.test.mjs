@@ -15,15 +15,9 @@ import { launchPage, chooseIdentity, finish } from './helpers.mjs';
 
 const REPORT_REASON = 'inappropriate conduct';
 const LABEL = 'Nearby Chat Mute Report Tester';
-// chooseIdentity's own signup flow (below) fills real form fields, not a
-// window.prompt() -- so this test's one and only prompt() is
-// reportNearbyChatSender's own "optional reason" prompt
-// (src/shop/nearbyChat.js). launchPage's own dialog handler answers every
-// prompt() for the page's whole lifetime with `promptAnswer` -- reusing it
-// here for the report's reason text, rather than also registering a
-// second competing 'prompt' handler (two listeners on the same dialog
-// both calling dialog.accept() throws "already handled").
-const { browser, page, errors } = await launchPage({ promptAnswer: REPORT_REASON });
+// #3359: the report reason is collected in the in-app report modal and the
+// outcome shown in the in-app notice -- no native dialogs are involved.
+const { browser, page, errors } = await launchPage();
 
 async function patchTrustTierToIdVerified(route) {
   const response = await route.fetch();
@@ -61,14 +55,11 @@ await page.route('**/api/nearby-chat/report', async (route) => {
   await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ reportId: 'nearby-chat-report-test-1' }) });
 });
 
-// Observes only -- launchPage's own built-in handler already accepts every
-// dialog type (prompt with `promptAnswer`, everything else including the
-// confirming alert below with no text), so this must not also call
-// dialog.accept()/dismiss() itself (two listeners both resolving the same
-// dialog throws "already handled").
+// Any native dialog is a regression (#3359): record it so the test fails.
 const dialogMessages = [];
-page.on('dialog', (dialog) => {
+page.on('dialog', async (dialog) => {
   dialogMessages.push({ type: dialog.type(), message: dialog.message() });
+  await dialog.dismiss();
 });
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: true });
@@ -104,14 +95,13 @@ const laterMessageFromMutedSuppressed = (await page.locator(`.shop-nearby-chat-m
 console.log('a later message from the muted sender is never rendered (should be true):', laterMessageFromMutedSuppressed);
 
 await page.click(`.shop-nearby-chat-message[data-builder-id="${REPORTED_BUILDER_ID}"] button[data-action="report"]`);
-// Poll for both dialogs (prompt, then the confirming alert) to have landed
-// -- same "poll, don't fixed-wait" idiom nearby-chat-send-failure.test.mjs's
-// own comment already documents, rather than a single fixed sleep.
-for (let i = 0; i < 20 && dialogMessages.length < 2; i += 1) {
-  await page.waitForTimeout(250);
-}
-
-console.log('dialogs seen (should be one prompt then one alert):', dialogMessages.map((d) => d.type));
+await page.waitForSelector('#report-reason-modal.visible', { timeout: 5000 });
+await page.fill('#report-reason-input', REPORT_REASON);
+await page.click('#report-reason-submit-btn');
+await page.waitForSelector('#notice-modal.visible', { timeout: 5000 });
+const noticeTitle = await page.textContent('#notice-modal-title');
+console.log('confirming notice shown in-app (should be "Report submitted"):', noticeTitle);
+console.log('no native dialog was raised (should be 0):', dialogMessages.length);
 console.log('report request sent with the reported builder id and typed reason (should be true):',
   reportRequestBody?.reportedBuilderId === REPORTED_BUILDER_ID && reportRequestBody?.reason === REPORT_REASON);
 
@@ -122,9 +112,8 @@ const pass =
   mutedMessageRemoved &&
   reportedMessageStillVisible &&
   laterMessageFromMutedSuppressed &&
-  dialogMessages.length === 2 &&
-  dialogMessages[0].type === 'prompt' &&
-  dialogMessages[1].type === 'alert' &&
+  dialogMessages.length === 0 &&
+  noticeTitle === 'Report submitted' &&
   reportRequestBody?.reportedBuilderId === REPORTED_BUILDER_ID &&
   reportRequestBody?.reason === REPORT_REASON &&
   unexpectedErrors.length === 0;

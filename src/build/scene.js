@@ -102,6 +102,7 @@ import {
 } from '../main.js';
 import { addItemBtn, closeCatalogPicker } from '../catalog/picker.js';
 import { copyTextWithFeedback } from '../ui/copyText.js';
+import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { showNotice } from '../ui/noticeModal.js';
 import { recordVisibleMessage } from '../ui/visibleMessages.js';
@@ -5704,7 +5705,7 @@ async function renderAuctionSection() {
         const updated = await fetchAuction(auction.auctionId);
         row.replaceWith(buildAuctionRow(updated));
       } catch (err) {
-        alert(err.message || 'Could not refresh this auction.');
+        showInlineActionStatus(row, err.message || 'Could not refresh this auction.');
         refreshBtn.disabled = false;
       }
     });
@@ -5807,7 +5808,7 @@ async function renderAuctionSection() {
           renderSettingsSection();
           return;
         } catch (err) {
-          alert(err.message || 'Could not resolve this auction.');
+          showInlineActionStatus(row, err.message || 'Could not resolve this auction.');
           resolveBtn.disabled = false;
         }
       });
@@ -5833,25 +5834,26 @@ async function renderAuctionSection() {
       bidBtn.addEventListener('click', async () => {
         const dollars = Number(bidInput.value);
         if (!Number.isFinite(dollars) || dollars < 0) {
-          alert('Enter a bid amount of zero or more.');
+          showInlineActionStatus(row, 'Enter a bid amount of zero or more.');
           return;
         }
         const amountCents = Math.round(dollars * 100);
         if (amountCents > MAX_MONEY_CENTS) {
-          alert(`Enter a bid of ${formatHiggles(MAX_MONEY_CENTS)} or less.`);
+          showInlineActionStatus(row, `Enter a bid of ${formatHiggles(MAX_MONEY_CENTS)} or less.`);
           return;
         }
         if (amountCents < minCents) {
-          alert(`Enter a bid of at least ${formatHiggles(minCents)}.`);
+          showInlineActionStatus(row, `Enter a bid of at least ${formatHiggles(minCents)}.`);
           return;
         }
+        showInlineActionStatus(row, ''); // clear an earlier validation message
         bidBtn.disabled = true;
         try {
           await placeBid(auction.auctionId, { amountCents });
           await renderAuctionList();
           await renderStartSection();
         } catch (err) {
-          alert(err.message || 'Could not place bid.');
+          showInlineActionStatus(row, err.message || 'Could not place bid.');
           bidBtn.disabled = false;
         }
       });
@@ -6077,7 +6079,7 @@ async function renderSoldOutMarkersSection() {
         row.remove();
         empty.hidden = list.children.length > 0;
       } catch (err) {
-        alert(err.message || 'Could not dismiss this marker.');
+        showInlineActionStatus(row, err.message || 'Could not dismiss this marker.');
         dismissBtn.disabled = false;
       }
     });

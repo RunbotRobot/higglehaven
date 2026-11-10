@@ -132,18 +132,18 @@ const bidInput = auctionsListItems.first().locator('.auction-row-bid-input');
 // '-5' is a value <input type="number"> actually accepts (unlike
 // non-numeric text, which the browser itself blanks out before it ever
 // reaches this handler) that genuinely fails the client-side
-// Number.isFinite/< 0 check. It now surfaces its own alert, same
-// handling pattern as the sibling Start Auction form. The shared dialog
-// listener from launchPage still auto-accepts it; this one just also
-// records the message it saw.
-let lastAlertMessage = null;
-bidderPage.on('dialog', (dialog) => { lastAlertMessage = dialog.message(); });
+// Number.isFinite/< 0 check. #3359: it reports in the row itself (an inline
+// status), not a native alert() a suppressing browser would drop. The dialog
+// listener only proves no native dialog fires any more.
+let nativeDialogCount = 0;
+bidderPage.on('dialog', () => { nativeDialogCount += 1; });
+const rowStatus = () => auctionsListItems.first().locator('.inline-action-status').textContent();
 await bidInput.fill('-5');
 await auctionsListItems.first().locator('.auction-bid-btn').click();
 await bidderPage.waitForTimeout(300);
-console.log('alert shown for a negative bid input (should mention "zero or more"):', lastAlertMessage);
-const invalidBidAlertOk = lastAlertMessage === 'Enter a bid amount of zero or more.';
-lastAlertMessage = null;
+const negativeBidStatus = await rowStatus();
+console.log('inline status for a negative bid input (should mention "zero or more"):', negativeBidStatus);
+const invalidBidAlertOk = negativeBidStatus === 'Enter a bid amount of zero or more.';
 
 await bidInput.fill('15');
 await auctionsListItems.first().locator('.auction-bid-btn').click();
@@ -163,9 +163,11 @@ console.log('auction after bidding (should mention high bid $15.00, 1 bid):', af
 await bidInput.fill('12');
 await auctionsListItems.first().locator('.auction-bid-btn').click();
 await bidderPage.waitForTimeout(500);
-console.log('alert shown for a too-low bid (should mention "at least $15.01"):', lastAlertMessage);
-const lowBidAlertOk = lastAlertMessage === 'Enter a bid of at least $15.01.';
-lastAlertMessage = null;
+const lowBidStatus = await rowStatus();
+console.log('inline status for a too-low bid (should mention "at least $15.01"):', lowBidStatus);
+const lowBidAlertOk = lowBidStatus === 'Enter a bid of at least $15.01.';
+const noNativeDialogForBids = nativeDialogCount === 0;
+console.log('native dialogs fired for the bid validation messages (should be 0):', nativeDialogCount);
 const afterRejectedBidText = await auctionsListItems.first().textContent();
 console.log('auction after a too-low bid attempt (should still say $15.00, not $12.00):', afterRejectedBidText);
 
@@ -305,6 +307,7 @@ const pass = sellerOwnAuctionText.includes('Your auction is live') && sellerOwnA
   invalidBidAlertOk &&
   afterBidText.includes('$15.00') && afterBidText.includes('1 bid') &&
   lowBidAlertOk &&
+  noNativeDialogForBids &&
   afterRejectedBidText.includes('$15.00') && !afterRejectedBidText.includes('$12.00') &&
   bidHistoryLabelBeforeExpand.includes('View Bids (1)') &&
   bidHistoryRowText.includes('$15.00') && bidHistoryRowText.includes(BIDDER) &&

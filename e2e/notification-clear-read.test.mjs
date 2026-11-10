@@ -5,7 +5,7 @@
 // Steps: the notice starts unread, so Clear read + confirm leaves it (and
 // removes nothing); after it is marked read, Never mind keeps it; confirming
 // removes it, the empty message returns, and it is gone server-side.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName } from './helpers.mjs';
 
 const ALICE = 'Notification Clear Suite Alice';
 const BOB = 'Notification Clear Suite Bob';
@@ -23,9 +23,7 @@ await claimLandlet(bobPage);
 await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
 await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
-alicePage.removeAllListeners('dialog');
-alicePage.on('dialog', (dialog) => dialog.accept(BOB));
-await alicePage.click('#friends-add-btn');
+await addFriendByName(alicePage, BOB);
 await waitForText(alicePage, '#friends-status', BOB);
 await alicePage.click('#friends-close-btn');
 
