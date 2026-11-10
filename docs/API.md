@@ -4203,6 +4203,21 @@ the same `status` and `ownerBuilderId` filters while following a cursor.
 
 Fetches one landlet.
 
+### `GET /api/far-placements?tile=x,y`
+
+Public, read-only (#3417). Every placement on every landlet whose centre lies in
+one 512 m world tile (`tile` = whole-number indices; landlet centre / 512,
+floored), in a compact form for drawing distant landlets from the shared far
+product models. Responds `{ tile: {x, y, sizeM}, templates: [productId, ...],
+landlets: [{ id, cx, cy, items: [[templateIndex, x, y, z, rotX, rotY, rotZ,
+scale, crop?], ...] }] }`; positions are landlet-local (add `cx`, `cy`), and
+`crop` appears only when set. Published versions are used, falling back to the
+draft; suspended builders' landlets and delisted or suspended-seller products
+are left out. `400` for a malformed or out-of-world tile. Cached at the edge
+for 60 s (`x-far-placements-cache: hit|miss`); activating a landlet version
+drops its tile's entry in the same data centre, other changes show within the
+TTL.
+
 ### `POST /api/landlets`
 
 Creates a landlet. `landletId` is optional; if omitted, the Worker generates
@@ -10140,6 +10155,43 @@ one passphrase and one session shape, and it has no concept of the
 coarser, all-or-nothing layer that sits in front of that real system, not a
 substitute for it: once past the gate, every route still enforces its own
 per-user auth exactly as documented elsewhere in this file.
+
+### Fleet access (Claude Code sessions)
+
+A session of the project's Claude Code fleet can use the live site as its own
+account, past the gate, without being given the passphrase (#3428, #3429). It
+is off until the Worker secret `FLEET_ACCESS_KEY` is set (any long random
+phrase); unsetting the secret turns it off again. The owner stores the same
+value once as a network secret for host `higglehaven.com`, header
+`x-fleet-key`, on the fleet's Claude Code environment, so the network proxy
+adds the header and no session reads the value.
+
+- **The gate.** A request whose `x-fleet-key` header equals the secret
+  (constant-time compare) passes the preview gate as if it held the `hh_access`
+  cookie. The header is removed from the request before any other code sees
+  it. A wrong value is counted per client IP (10 per 15 minutes, the same
+  window as `/__access/login`) and the limit is checked before the comparison,
+  so a spent budget stops guessing outright; a correct key is never counted.
+  With the secret unset the header does nothing.
+- **`POST /api/auth/fleet-login`** `{ "name": "higglehaven3" }`. Needs the key;
+  `404` otherwise, so the route does not exist without it. `name` must match
+  `higglehaven` plus one to three digits (`400` otherwise). The first call
+  creates the account (username = the name, `users.is_fleet = 1`, a
+  non-deliverable `@fleet.invalid` email, no usable password, marked
+  email-verified and age-attested because those checks only prove a mailbox
+  and a person); later calls sign in the same one. Returns the ordinary session
+  cookie. A name already held by a regular account is a `409`; the route never
+  signs in as a real person.
+- **What a fleet account cannot do.** It is never an admin (`admin-bootstrap`
+  and `grant-admin` refuse it, and a trigger in migration 0211 rejects any
+  write that would make it one). Its product flags are recorded with weight 0.
+  It cannot file conduct or voice reports, or leave product reviews or seller
+  feedback (`403`). It cannot buy while Stripe is in live mode (a `rk_live_` or
+  `sk_live_` `STRIPE_SECRET_KEY`); test-mode purchases are allowed. Suspension
+  and moderation apply to it like any account.
+- **Visibility.** Fleet avatars are visible to everyone like any other avatar
+  until a launch decision says otherwise; there is no search by name in the
+  app, so there is nothing to exclude from one.
 
 This depends on `wrangler.jsonc`'s `assets.run_worker_first: true`. Without
 it, Cloudflare serves static files (`/`, `/assets/*`) directly from the

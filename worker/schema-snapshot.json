@@ -769,6 +769,7 @@
       "email_verified_at": "TEXT|0||0",
       "failed_login_attempts": "INTEGER|1|0|0",
       "is_admin": "INTEGER|1|0|0",
+      "is_fleet": "INTEGER|1|0|0",
       "locked_until": "TEXT|0||0",
       "password_hash": "TEXT|1||0",
       "tax_form_completed_at": "TEXT|0||0",
@@ -1391,6 +1392,14 @@
     "trigger:reject_overlapping_landlet_candidate_ring": {
       "tbl": "landlet_candidate_rings",
       "sql": "CREATE TRIGGER reject_overlapping_landlet_candidate_ring BEFORE INSERT ON landlet_candidate_rings WHEN EXISTS ( SELECT 1 FROM landlet_candidate_rings WHERE inner_radius_m < NEW.outer_radius_m - 0.0000001 AND outer_radius_m > NEW.inner_radius_m + 0.0000001 ) BEGIN SELECT RAISE(ABORT, 'generated ring radial overlap'); END"
+    },
+    "trigger:users_fleet_never_admin_insert": {
+      "tbl": "users",
+      "sql": "CREATE TRIGGER users_fleet_never_admin_insert BEFORE INSERT ON users WHEN NEW.is_fleet = 1 AND NEW.is_admin = 1 BEGIN SELECT RAISE(ABORT, 'A fleet account can never be an admin'); END"
+    },
+    "trigger:users_fleet_never_admin_update": {
+      "tbl": "users",
+      "sql": "CREATE TRIGGER users_fleet_never_admin_update BEFORE UPDATE ON users WHEN NEW.is_fleet = 1 AND NEW.is_admin = 1 BEGIN SELECT RAISE(ABORT, 'A fleet account can never be an admin'); END"
     },
     "trigger:validate_landlet_candidate_ring_adjacency_parent": {
       "tbl": "landlet_candidate_rings",
