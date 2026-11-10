@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { LANDLET_SIDE_M } from './state.js';
 import { watchMainRendererContext } from './contextLoss.js';
+import { recordFrame, startFrameMonitor } from './frameMonitor.js';
 
 // #2552 (part of #2504/#2500's src/main.js module split, see #2503's design
 // comment for the full dependency map): the Three.js engine primitives
@@ -102,8 +103,10 @@ export function registerModeFrameUpdate(fn) {
 
 export function animate(now) {
   requestAnimationFrame(animate);
+  recordFrame(now); // #3396: the gap since the last frame, so a stall is measured
   activeModeFrameUpdate?.(now);
   updateCompassNeedle();
   renderer.render(scene, camera);
 }
+startFrameMonitor();
 animate(0);

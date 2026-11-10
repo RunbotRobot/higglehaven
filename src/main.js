@@ -1306,6 +1306,14 @@ window.__testForceShopLandletRecordRefresh = () => refreshShopLandletRecordsNow(
 window.__testSetShopSkyElapsedSeconds = (seconds) => {
   setShopSkyElapsedSecondsForTest(performance.now(), seconds);
 };
+// #3396: how many placed items are built and in the scene across every loaded
+// landlet, so an e2e test can tell when a big landlet has finished loading.
+// Always inert unless a test calls it, same convention as the hooks below.
+window.__testShopLoadedInstanceCount = () => {
+  let count = 0;
+  for (const entry of shopLandlets.values()) count += entry.objects.length;
+  return count;
+};
 // #2378: read-only test hook reporting an instance's actual rendered LOD
 // state, rather than just the tier the decision (#3373, shop/lodTier.js)
 // intended -- reads object.userData.lodProxy.visible directly (the real signal
