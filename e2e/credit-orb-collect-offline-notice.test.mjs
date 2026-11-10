@@ -81,17 +81,32 @@ console.log('route actually intercepted at least one real collect attempt (shoul
 const noticeHiddenDuringBriefOutage = !(await page.isVisible('#shop-credit-orb-offline-notice.visible'));
 console.log('offline notice still hidden well under the threshold (should be true):', noticeHiddenDuringBriefOutage);
 
+// #3392: the orb pops on contact (the feel of touching it), so during the quiet
+// retry window it is not in the scene; it must not be lost for good though
+// (#2264), which the "comes back" check below covers.
 const activeDuringOutage = await page.evaluate(() => window.__testActiveCreditOrbIds());
-console.log('orb survives the outage instead of vanishing (should be true):', activeDuringOutage.includes(orbId));
+console.log('orb popped on contact and is quietly retrying, not in the scene (should be true):', !activeDuringOutage.includes(orbId));
 
-// Past the threshold now -- the sustained streak should surface the notice.
-await page.waitForTimeout(2500);
+// Past the notice threshold (3 s) and the retry window (4 s): the sustained
+// streak surfaces the offline notice, and the never-confirmed orb comes back.
+await page.waitForTimeout(3500);
 const noticeVisibleAfterSustainedOutage = await page.isVisible('#shop-credit-orb-offline-notice.visible');
 console.log('offline notice visible after a sustained network failure (should be true):', noticeVisibleAfterSustainedOutage);
+const activeAfterGiveUp = await page.evaluate(() => window.__testActiveCreditOrbIds());
+console.log('orb came back once the retry window ended, not lost for good (should be true):', activeAfterGiveUp.includes(orbId));
+const problemText = await page.textContent('#shop-credit-orb-problem-notice .shop-notice-text');
+const problemShown = await page.isVisible('#shop-credit-orb-problem-notice.visible');
+console.log('plain message shown for the unconfirmed orb (should be true):', problemShown, problemText);
+const requestsAtGiveUp = abortedCollectAttempts;
+await page.waitForTimeout(1200);
+console.log('no further attempts while still standing on the returned orb (should be true):', abortedCollectAttempts === requestsAtGiveUp);
 
-// Connectivity returns -- the very next successful collect should clear it,
-// with no special recovery action needed from the shopper.
+// Connectivity returns -- stepping off the orb and back on collects it, and the
+// successful collect clears the offline notice, with no special recovery action.
 await page.unroute('**/api/credit-orbs/*/collect');
+await page.evaluate(([x, y]) => window.__testTeleportShopAvatar(x + 20, y + 20), [orbWorldX, orbWorldY]);
+await page.waitForTimeout(300);
+await page.evaluate(([x, y]) => window.__testTeleportShopAvatar(x, y), [orbWorldX, orbWorldY]);
 await page.waitForTimeout(1500);
 
 const toastVisibleAfterRecovery = await page.isVisible('#shop-credit-orb-toast.visible');
@@ -113,7 +128,10 @@ const pass = !!myLandlet &&
   noticeHiddenBeforeAnyFailure &&
   abortedCollectAttempts > 0 &&
   noticeHiddenDuringBriefOutage &&
-  activeDuringOutage.includes(orbId) &&
+  !activeDuringOutage.includes(orbId) &&
+  activeAfterGiveUp.includes(orbId) &&
+  problemShown && /Couldn't collect that orb/.test(problemText) &&
+  abortedCollectAttempts === requestsAtGiveUp &&
   noticeVisibleAfterSustainedOutage &&
   toastVisibleAfterRecovery &&
   noticeHiddenAfterRecovery &&
