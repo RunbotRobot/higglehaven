@@ -82,6 +82,7 @@
 - **Flight:** single tap on the bird button, or double-press spacebar (desktop) — the button needs no double-tap guard since, unlike spacebar, it isn't an overloaded gesture a stray press could trigger by accident. Takeoff ~1s lift + ~1s fade to invisible. Landing: ~2s reverse fade; occupied landing spots offset to nearest open space.
 - Altitude/speed: **logarithmic** — each doubling of altitude ≈ 50% more max ground speed, diminishing at extremes. ~10x walking speed near building-height, up to ~100x at max altitude (~500m).
 - Flying avatars are invisible to other users.
+- **One way to move through the world (owner decision, 2026-11-08, #3253):** Sell mode's in-world view of a seller's own products uses this same movement, camera, HUD and compass, with the seller's equipped avatar, instead of a separate set of controls. The seller walks (or flies) among the page of products; there is no presence, chat or voice there.
 - **210-degree rotational offset** applied once during real-world-to-higglehaven coordinate mapping — permanent, zero-cost, thematically resonant detail.
 
 **Collision (crowding) — confirmed numbers:** a **2-foot-diameter hard barrier** (avatars cannot overlap closer than this) surrounded by a **1-foot-diameter zone of increasing push-back resistance** as an avatar moves further into it — soft at the outer edge, firmer approaching the hard barrier. (~0.6m hard barrier + ~0.3m soft zone in the platform's internal meter-based units.)

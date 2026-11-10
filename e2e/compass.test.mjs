@@ -1,6 +1,7 @@
 // #1169 (owner request via Control Room): a small on-screen compass in
-// Shop and Build modes, hidden in Sell (no free-look camera/avatar facing
-// there to orient by — see SELL_HIDDEN_BUILDER_UI_IDS's own comment).
+// every mode. Sell's world view (#3295) walks the page as the seller's avatar,
+// so the compass is shown there too; it used to be hidden in Sell (no
+// free-look camera/avatar facing to orient by).
 //
 // Shop mode's needle is driven by shopAvatarFacing; Build mode has no
 // avatar, so it's driven directly off the free OrbitControls camera's own
@@ -120,8 +121,10 @@ console.log('Shop-mode needle rotation facing right (should differ meaningfully 
 
 await page.click('button[data-mode="sell"]');
 await page.waitForTimeout(500);
-const compassHiddenInSell = await page.locator('#compass-panel').isHidden();
-console.log('compass hidden in Sell mode (should be true):', compassHiddenInSell);
+// #3295: Sell's world view walks the page with Shop's movement and the seller's
+// avatar, so the compass is shown there too (it reads that avatar's facing).
+const compassVisibleInSell = await page.locator('#compass-panel').isVisible();
+console.log('compass visible in Sell mode (should be true):', compassVisibleInSell);
 
 const near = (actual, expected, tolerance) => typeof actual === 'number' && Math.abs(actual - expected) < tolerance;
 // Shortest signed angular distance in degrees — handles the wraparound a
@@ -140,6 +143,6 @@ const pass =
   typeof shopRotationForward === 'number' &&
   typeof shopRotationRight === 'number' &&
   angleDeltaDeg(shopRotationRight, shopRotationForward) > 30 &&
-  compassHiddenInSell &&
+  compassVisibleInSell &&
   errors.length === 0;
-await finish(browser, { pass, label: 'On-screen compass: Shop/Build visibility, Sell hidden, needle tracks facing (#1169)', errors });
+await finish(browser, { pass, label: 'On-screen compass: visible in Shop, Build and Sell, needle tracks facing (#1169)', errors });

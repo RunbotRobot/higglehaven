@@ -49,11 +49,10 @@ export function onResize() {
 }
 window.addEventListener('resize', onResize);
 
-// #1169: on-screen compass (Shop and Build modes; hidden in Sell via
-// SELL_HIDDEN_BUILDER_UI_IDS, src/main.js). Shop mode tracks a dedicated
-// avatar-facing angle (eases toward movement direction rather than
-// tracking the camera instantly) and registers it below via
-// registerFacingOverride, on entry; Build mode (and layout-preview) has no
+// #1169: on-screen compass (every mode). Shop mode, and since #3295 Sell's
+// world view, track a dedicated avatar-facing angle (eases toward movement
+// direction rather than tracking the camera instantly) and register it below
+// via registerFacingOverride, on entry; Build mode (and layout-preview) has no
 // avatar at all, just the free OrbitControls camera, so the default here
 // reads its "facing" directly off the camera's own current look direction
 // instead. Same single-mutable-slot reasoning as activeModeFrameUpdate
@@ -94,8 +93,9 @@ let activeModeFrameUpdate = null;
 // last set, with nothing to unregister on the way out. Shop registers its
 // own movement+sky callback; Build (and layout-preview) registers its own
 // tween+edge-pan+controls+debug+selection/highlight-tracking callback;
-// Sell has no per-frame work of its own (paginated, static between page
-// turns) and registers null.
+// Sell's world view (#3295) registers the movement core (the same callback
+// Shop's movement uses, without Shop's world services) plus the Submit
+// Feedback sampler (#3302).
 export function registerModeFrameUpdate(fn) {
   activeModeFrameUpdate = fn;
 }

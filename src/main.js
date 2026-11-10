@@ -1832,13 +1832,11 @@ export function showShopAccessGate() {
 // showcase click handling in the main renderer click listener). Unlike
 // Shop's own list, notifications/friends stay reachable — Sell (unlike
 // Shop) always runs under a real logged-in account, which those features
-// are genuinely useful for.
+// are genuinely useful for. The compass (#1169) is deliberately not hidden
+// here any more: Sell's world view walks the page with Shop's movement and the
+// seller's avatar (#3295), so it has the same facing for the compass to show.
 export const SELL_HIDDEN_BUILDER_UI_IDS = [
   'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel', 'level-controls',
-  // #1169: the compass orients by Shop/Build's own free-look camera or
-  // avatar facing — Sell has neither (its own faux-landlet showcase is a
-  // fixed, non-orbiting preview), so there's no facing for it to show.
-  'compass-panel',
 ];
 
 // #2561: the faux-layout preview mode (layoutPreviewMeshes/Instances,
@@ -1856,11 +1854,12 @@ export const SELL_HIDDEN_BUILDER_UI_IDS = [
 // hide the builder chrome that doesn't apply, clear out whatever the
 // placeholder/real landlet scene had, load this seller's own content.
 async function enterSellMode() {
-  // #2552: Sell has no per-frame work of its own (paginated, static
-  // between page turns) — see world/scene.js's own comment on why this is
-  // an explicit null rather than just leaving whatever the previous page
-  // load registered. #3302: it now registers a tiny callback that only feeds
-  // the Submit Feedback ring buffer (no movement or scene work).
+  // #2552: an explicit registration rather than leaving whatever an earlier
+  // load registered (see world/scene.js's own comment). Until the Sell world
+  // view mounts below (#3295), and if it never does (a declined login), the
+  // only per-frame work is the tiny callback that feeds the Submit Feedback
+  // ring buffer (#3302); the world view then takes over the slot and runs that
+  // same callback after the movement core each frame.
   registerModeFrameUpdate(recordSellFeedbackSample);
   for (const id of SELL_HIDDEN_BUILDER_UI_IDS) {
     const el = document.getElementById(id);
@@ -1924,7 +1923,7 @@ async function enterSellMode() {
   // #3295 (leaf 4/6 of #3291): the seller walks the page with Shop's own
   // movement and their equipped avatar. Entered before the first page loads
   // so that load puts the avatar at the page's start.
-  await enterSellWorldView();
+  await enterSellWorldView({ onFrame: recordSellFeedbackSample });
 
   // Preserves today's default: Sell has always opened straight into the
   // product-management modal — the showcase array behind it (semi-
