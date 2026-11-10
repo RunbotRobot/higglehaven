@@ -9,7 +9,8 @@
 // Setup (teleport next to a real community sign, force the real per-frame
 // proximity logic) follows community-sign-edit-char-limit-guard.test.mjs.
 // Both branches are driven through the real UI: stale edit, then (after the
-// recovery lets a fresh note be created) stale delete.
+// recovery lets a fresh note be created) stale delete. (#3359: the note flow is
+// an in-app modal now, so this drives that modal and reads the notice.)
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
 
 const LABEL = 'Sign Stale Post Tester';
@@ -79,24 +80,14 @@ await page.evaluate(([x, y, z]) => {
 await page.waitForSelector('#shop-sign-hint.visible', { timeout: 5000 });
 await page.evaluate(() => document.body.classList.remove('shop-flying'));
 
-// Answers by dialog index (see each step's comment below).
-const dialogMessages = [];
-const answers = [
-  'edit',                   // 1: edit/delete choice, against the stale original note
-  'Edited text that is lost', // 2: edit text prompt
-  null,                     // 3: alert -- note already removed
-  FRESH_TEXT,               // 4: create prompt (only reachable if the stale post was dropped)
-  'delete',                 // 5: edit/delete choice, against the stale fresh note
-  null,                     // 6: alert -- note already removed
-  undefined,                // 7: create prompt again -- cancel it
-];
+// #3359: the sign note flow is an in-app modal (src/ui/textNoteModal.js) and the
+// "already removed" message an in-app notice, not native prompt()/alert().
+// Native dialogs are dismissed and recorded as a tripwire for a regression.
+const nativeDialogs = [];
 page.removeAllListeners('dialog');
 page.on('dialog', async (dialog) => {
-  dialogMessages.push(dialog.message());
-  const answer = answers[dialogMessages.length - 1];
-  if (answer === undefined) await dialog.dismiss();
-  else if (answer === null) await dialog.accept();
-  else await dialog.accept(answer);
+  nativeDialogs.push(dialog.message());
+  await dialog.dismiss();
 });
 
 async function deleteMyPostsServerSide() {
@@ -107,51 +98,73 @@ async function deleteMyPostsServerSide() {
   return (await fetchJson(postsUrl)).body.posts.length;
 }
 
+async function tapSign() {
+  await page.click('#shop-sign-hint');
+  await page.waitForSelector('#note-modal.visible', { timeout: 5000 });
+  return page.textContent('#note-modal-title');
+}
+async function closeNotice() {
+  await page.waitForSelector('#notice-modal.visible', { timeout: 5000 });
+  const text = `${await page.textContent('#notice-modal-title')} -- ${await page.textContent('#notice-modal-message')}`;
+  await page.click('#notice-modal-ok-btn');
+  await page.waitForFunction(() => !document.getElementById('notice-modal').classList.contains('visible'), null, { timeout: 5000 });
+  return text;
+}
+const noteModalClosed = () => page.waitForFunction(() => !document.getElementById('note-modal').classList.contains('visible'), null, { timeout: 5000 });
+const isEditTitle = (t) => /^Your note on this sign/.test(t || '');
+
 // Step A: a moderator removes the original note; the shopper's client still
 // holds the stale snapshot and tries to edit it.
 const remainingAfterFirstDelete = await deleteMyPostsServerSide();
-await page.click('#shop-sign-hint');
-await page.waitForTimeout(800);
+const titleA = await tapSign();
+await page.fill('#note-modal-text', 'Edited text that is lost');
+await page.click('#note-modal-save-btn');
+const noticeA = await closeNotice();
+await noteModalClosed();
 
 // Step A2: with the stale post dropped, the next click offers "leave a note"
-// (the create prompt), not the edit/delete choice.
-await page.click('#shop-sign-hint');
-await page.waitForTimeout(800);
+// (the create modal), not the edit/delete one.
+const titleA2 = await tapSign();
+await page.fill('#note-modal-text', FRESH_TEXT);
+await page.click('#note-modal-save-btn');
+await noteModalClosed();
+await page.waitForTimeout(500);
 const { body: afterCreate } = await fetchJson(postsUrl);
 
 // Step B: the fresh note is removed the same way; the shopper tries to delete it.
 const remainingAfterSecondDelete = await deleteMyPostsServerSide();
-await page.click('#shop-sign-hint');
-await page.waitForTimeout(800);
+const titleB = await tapSign();
+await page.click('#note-modal-delete-btn');
+await page.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
+await page.click('#confirm-modal-confirm-btn');
+const noticeB = await closeNotice();
+await noteModalClosed();
 
-// Step B2: again the next click must be the create prompt.
-await page.click('#shop-sign-hint');
-await page.waitForTimeout(800);
+// Step B2: again the next click must be the create modal -- cancel it.
+const titleB2 = await tapSign();
+await page.click('#note-modal-cancel-btn');
+await noteModalClosed();
 
 // The deliberate 404s above also log Chromium "Failed to load resource"
 // console errors independent of the app's own handling.
 errors.splice(0, errors.length, ...errors.filter((e) => !e.includes('Failed to load resource')));
 
-const isChoicePrompt = (m) => /^Your note on this sign:/.test(m || '');
-console.log('dialogs shown (should be exactly 7):', dialogMessages.length);
-console.log('dialog 1 is the edit/delete choice:', isChoicePrompt(dialogMessages[0]));
-console.log('dialog 3 (edit on removed note):', dialogMessages[2]);
-console.log('dialog 4 is the create prompt, not the stale choice:', !isChoicePrompt(dialogMessages[3]));
+console.log('modal titles (edit, create, edit, create):', titleA, '|', titleA2, '|', titleB, '|', titleB2);
+console.log('notice after the edit on a removed note:', noticeA);
+console.log('notice after the delete on a removed note:', noticeB);
 console.log('fresh note created server-side after recovery:', afterCreate.posts.length === 1 && afterCreate.posts[0].text === FRESH_TEXT);
-console.log('dialog 5 is the edit/delete choice for the fresh note:', isChoicePrompt(dialogMessages[4]));
-console.log('dialog 6 (delete on removed note):', dialogMessages[5]);
-console.log('dialog 7 is the create prompt, not the stale choice:', !isChoicePrompt(dialogMessages[6]));
+console.log('native dialogs (should be none):', nativeDialogs);
 
 const pass = remainingAfterFirstDelete === 0 &&
   remainingAfterSecondDelete === 0 &&
-  dialogMessages.length === 7 &&
-  isChoicePrompt(dialogMessages[0]) &&
-  /already removed/.test(dialogMessages[2] || '') &&
-  !isChoicePrompt(dialogMessages[3]) &&
+  isEditTitle(titleA) &&
+  /already removed/.test(noticeA) &&
+  !isEditTitle(titleA2) &&
   afterCreate.posts.length === 1 &&
   afterCreate.posts[0].text === FRESH_TEXT &&
-  isChoicePrompt(dialogMessages[4]) &&
-  /already removed/.test(dialogMessages[5] || '') &&
-  !isChoicePrompt(dialogMessages[6]) &&
+  isEditTitle(titleB) &&
+  /already removed/.test(noticeB) &&
+  !isEditTitle(titleB2) &&
+  nativeDialogs.length === 0 &&
   errors.length === 0;
 await finish(browser, { pass, label: '#2962: a sign note deleted out from under the shopper is dropped locally on the 404, so the next click offers a fresh note instead of the same dead end', errors });
