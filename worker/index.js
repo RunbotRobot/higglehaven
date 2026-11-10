@@ -162,6 +162,7 @@ import { handleBlocks } from './lib/blocks.js';
 // vertical levels -- extracted into worker/lib/land.js, see that module's
 // own header comment for what deliberately stayed here instead (and why).
 import { handleLandlets } from './lib/land.js';
+import { landletLevelZRange } from '../shared/level-range.js';
 import { CSP_POLICY, isHtmlResponse, handleCspReport } from './lib/csp.js';
 // #2538: bundle and land-acquisition-auction route handlers, extracted into
 // worker/lib/auctions.js -- see that module's own header comment for what
@@ -1769,14 +1770,6 @@ const LEVEL_HEIGHT_M = 10;
 const LANDLET_AREA_M2 = 1000;
 const LANDLET_SIDE_M = Math.sqrt(LANDLET_AREA_M2);
 
-// Half a level's height, allowed as slack on each end of a landlet's
-// purchased-levels range — an instance's own thickness can carry it
-// slightly past a level's exact z boundary (see levelCapConsumedM2's own
-// comment on where that boundary sits) without actually needing the next
-// level purchased just to fit. Shared by assertInstanceZWithinLevels
-// (validating a placement) and handleLandletLevels' own DELETE branch
-// (deciding what still fits once a level is removed).
-const HALF_LEVEL_HEIGHT_M = LEVEL_HEIGHT_M / 2;
 
 // Land cap (docs/SPEC.md §3: "Grows via a formula converting trailing-30-day
 // higgles earnings per 1,000 m² owned into cap increases. Ratcheting: once
@@ -4172,13 +4165,19 @@ export async function assertInstanceZWithinLevels(db, instances) {
   for (const row of rows) levelIndicesByLandlet.get(row.landlet_id).push(row.level_index);
   for (const instance of instances) {
     const levelIndices = levelIndicesByLandlet.get(instance.landletId) || [];
-    const minZ = Math.min(0, ...levelIndices) * LEVEL_HEIGHT_M - HALF_LEVEL_HEIGHT_M;
-    const maxZ = Math.max(0, ...levelIndices) * LEVEL_HEIGHT_M + HALF_LEVEL_HEIGHT_M;
+    const { minZ, maxZ } = landletLevelZRange(levelIndices);
     if (instance.z < minZ || instance.z > maxZ) {
+      // #3372: a sentence a builder could read (no coordinate, id or route);
+      // the code and range travel as fields so the client words it and tests
+      // can assert on them. The Build client stops a move at this range
+      // before it is ever sent (shared/level-range.js), so seeing this means
+      // stale level data or another tab.
       throw new HttpError(
-        `z (${instance.z}) is outside landlet "${instance.landletId}"'s purchased levels `
-        + `(allowed range: ${minZ} to ${maxZ}) — add more levels via POST /landlets/:id/levels first`,
+        instance.z > maxZ
+          ? "That's higher than this lándlet's levels go."
+          : "That's lower than this lándlet's levels go.",
         400,
+        { code: ERROR_CODES.OUT_OF_LEVEL_RANGE, minZ, maxZ },
       );
     }
   }

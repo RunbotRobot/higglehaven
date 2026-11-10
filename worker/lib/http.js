@@ -39,6 +39,7 @@ export const ERROR_CODES = Object.freeze({
   UPSTREAM_FAILED: 'upstream_failed',
   STALE_REFERENCE: 'stale_reference',
   SELLER_SUSPENDED: 'seller_suspended',
+  OUT_OF_LEVEL_RANGE: 'out_of_level_range', // #3372
 });
 
 export class HttpError extends Error {
