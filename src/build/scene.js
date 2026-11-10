@@ -916,7 +916,9 @@ window.__testRotateBundle = (axis, radians) => {
 window.__testBundleRotateResult = () => ({
   appliedRadians: groupRotateLastValidDelta.angleTo(new THREE.Quaternion()),
   lowestZ: Math.min(...[...selectedMeshes].map((m) => m.position.z)),
+  highestZ: Math.max(...[...selectedMeshes].map((m) => m.position.z)),
   floorZ: levelFloorZ(currentLevelIndex),
+  levelRange: itemCentreZRange(),
 });
 
 // Trim: shortens an extensible product (see extensibleAxes) along its
