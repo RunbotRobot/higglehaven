@@ -61,7 +61,7 @@ import {
   userFromRow,
 } from '../index.js';
 
-const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+export const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
 const EMAIL_VERIFICATION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000; // 1 hour — shorter than email verification since a leaked reset link is higher-stakes
 const FAILED_LOGIN_LOCK_THRESHOLD = 5;
@@ -127,7 +127,7 @@ function usernameValue(value) {
   return username;
 }
 
-async function createSession(db, userId) {
+export async function createSession(db, userId) {
   const token = generateToken();
   const tokenHash = await sha256Hex(token);
   const expiresAt = new Date(Date.now() + SESSION_TTL_MS).toISOString();
@@ -142,7 +142,7 @@ async function createSession(db, userId) {
 // POST and Lax cookies are already withheld from cross-site POST/fetch/
 // form-submit by every modern browser; Secure omitted only for plain-http
 // local dev).
-function sessionCookieHeader(url, token, maxAgeSeconds) {
+export function sessionCookieHeader(url, token, maxAgeSeconds) {
   const attrs = [`${SESSION_COOKIE_NAME}=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${maxAgeSeconds}`];
   if (url.protocol === 'https:') attrs.push('Secure');
   return attrs.join('; ');
