@@ -4,7 +4,7 @@
 // /api/instances/batch) used to recreate it server-side. The tab now saves
 // with updateOnly: the server skips ids it no longer has, and the tab drops
 // them and says so, without losing the save of its other items.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, captureNotices, finish } from './helpers.mjs';
 
 const LABEL = 'Stale Tab Save Suite Builder';
 
@@ -65,7 +65,8 @@ const del = await pageFetchJson(tabB, `/api/instances/${encodeURIComponent(itemX
 console.log('tab B deleted item X (should be 200):', del.status);
 
 // Tab A never refocused: it still shows X, and saves both items.
-await tabA.evaluate(() => { window.__alerts = []; window.alert = (msg) => { window.__alerts.push(String(msg)); }; });
+// Record each in-app notice's text and close it (#3359: it was alert()).
+await captureNotices(tabA);
 const sceneBefore = await sceneIds(tabA);
 console.log('tab A still shows both items before saving (should be 2):', sceneBefore.length);
 await tabA.evaluate((ids) => window.__testSyncBatchUpdate(ids), [itemX, itemY]);

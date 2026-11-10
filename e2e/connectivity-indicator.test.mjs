@@ -51,14 +51,16 @@ const treeStillPlacedLocally = await page.evaluate(() => {
 });
 console.log('item still saved locally despite the failed sync (should be true):', treeStillPlacedLocally);
 
-// launchPage already registers its own page.on('dialog', ...) that accepts
-// every dialog (needed for the prompt()/alert() calls used throughout this
-// app) — this just reads the message, leaving accept() to that handler
-// rather than racing it for the same dialog.
-let dialogMessage = '';
-page.once('dialog', (dialog) => { dialogMessage = dialog.message(); });
+// #3359: the explanation is an in-app notice (src/ui/noticeModal.js), not a
+// native alert(); read its text, then close it so it does not cover the page.
+// Any native dialog here would mean it regressed to alert().
+let nativeDialogSeen = false;
+page.once('dialog', () => { nativeDialogSeen = true; });
 await page.click('#connectivity-indicator');
-await page.waitForTimeout(200);
+await page.waitForSelector('#notice-modal.visible', { timeout: 5000 });
+const dialogMessage = await page.textContent('#notice-modal-message');
+await page.click('#notice-modal-ok-btn');
+await page.waitForFunction(() => !document.getElementById('notice-modal').classList.contains('visible'), null, { timeout: 5000 });
 console.log('tapping the icon explains what it means (should mention "server" and "device"):', dialogMessage);
 
 // Server reachable again — the very next successful sync should hide it,
@@ -76,7 +78,7 @@ console.log('indicator hidden again after the next sync succeeds (should be true
 const unexpectedErrors = errors.filter((e) => !e.includes('net::ERR_FAILED'));
 
 const pass = indicatorHiddenBeforeAnyFailure && indicatorVisibleAfterFailure && treeStillPlacedLocally &&
-  dialogMessage.toLowerCase().includes('server') && dialogMessage.toLowerCase().includes('device') &&
+  dialogMessage.toLowerCase().includes('server') && dialogMessage.toLowerCase().includes('device') && !nativeDialogSeen &&
   indicatorHiddenAfterRecovery &&
   unexpectedErrors.length === 0;
 await finish(browser, { pass, label: 'Build-mode connectivity indicator (#545)', errors: unexpectedErrors });

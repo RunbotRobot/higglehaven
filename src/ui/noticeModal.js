@@ -40,12 +40,9 @@ function finish() {
 closeBtn.addEventListener('click', finish);
 okBtn.addEventListener('click', finish);
 
-// Resolves once the person closes it. `copyText` (optional) is shown in a
-// read-only, selectable field.
-export function showNotice({
+function present({
   title, message, copyText = null, okLabel = 'OK', returnFocusEl = null, restoreModalEl = null, restoreCloseFn = null,
-} = {}) {
-  if (session) finish();
+}) {
   return new Promise((resolve) => {
     session = { resolve, returnFocusEl, restoreModalEl, restoreCloseFn };
     titleEl.textContent = title;
@@ -57,6 +54,19 @@ export function showNotice({
     openModalA11y(modalEl, finish);
     okBtn.focus({ preventScroll: true });
   });
+}
+
+// Notices queue, one at a time, like the alert() calls they replace: a second
+// one raised while the first is open waits its turn instead of replacing it
+// (several Build sync failures can land together, and each must be read).
+let queue = Promise.resolve();
+
+// Resolves once the person closes it. `copyText` (optional) is shown in a
+// read-only, selectable field.
+export function showNotice(options = {}) {
+  const shown = queue.then(() => present(options));
+  queue = shown.catch(() => {});
+  return shown;
 }
 
 // E2E hook, same idea as window.__openProductReviewModal.

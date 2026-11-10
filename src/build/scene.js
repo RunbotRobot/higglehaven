@@ -104,6 +104,7 @@ import { addItemBtn, closeCatalogPicker } from '../catalog/picker.js';
 import { copyTextWithFeedback } from '../ui/copyText.js';
 import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
+import { showNotice } from '../ui/noticeModal.js';
 import { recordVisibleMessage } from '../ui/visibleMessages.js';
 import { consumeStripeReturnMarker, ownRequirementsDue, syncStripeStepPrompt } from '../stripeStep.js';
 import {
@@ -1347,7 +1348,7 @@ function instanceForSave(mesh) {
 }
 
 // #545: the batch siblings below already surface a sync failure loudly via
-// alert() — the single-item ones (this trio) deliberately don't, since
+// a notice — the single-item ones (this trio) deliberately don't, since
 // alerting on every routine move/rotate/place would be far too noisy (see
 // their own comment). Owner-clarified UX for the gap that leaves: a single
 // small icon reflecting whether the backend was reachable as of the most
@@ -1431,8 +1432,17 @@ function reportSyncResult(attemptId, reachable) {
   setServerReachable(reachable);
 }
 
+// #3359 (part of #3249's native-dialog sweep): save-failure and
+// suspended-seller notices are an in-app modal that stays until closed, not
+// window.alert(). A browser that suppresses native dialogs drops alert()
+// without a trace, and these are the messages that tell a builder their work
+// may not have been saved or was taken off their land.
+function tellBuilder(title, message) {
+  return showNotice({ title, message });
+}
+
 connectivityIndicatorEl.addEventListener('click', () => {
-  alert("Can't reach the higglehaven server right now. Your changes are still being saved to this device and will sync automatically once the connection comes back.");
+  tellBuilder("No connection", "Can't reach the higglehaven server right now. Your changes are still being saved to this device and will sync automatically once the connection comes back.");
 });
 
 // A fetch() call rejects with a TypeError specifically when it never
@@ -1502,14 +1512,14 @@ async function handleRejectedSingleSync(err, action) {
   const reverted = isServerRejection(err) && await revertSceneToServer();
   if (!reverted) noteSyncFailure(err);
   if (isSuspendedSellerSyncError(err)) {
-    alert("That item was taken off your land because its seller is suspended. It's saved under Removed Items and will return if the suspension is lifted.");
+    tellBuilder("Taken off your land", "That item was taken off your land because its seller is suspended. It's saved under Removed Items and will return if the suspension is lifted.");
     return;
   }
   const what = action === 'delete' ? "Couldn't delete that item" : action === 'create' ? "Couldn't save that new item" : "Couldn't save that change";
   const outcome = reverted
     ? 'It has been put back the way it is saved.'
     : 'It may not survive a reload.';
-  alert(`${what} to the server. ${outcome} ${err.message || ''}`.trim());
+  tellBuilder("Couldn't save your change", `${what} to the server. ${outcome} ${err.message || ''}`.trim());
 }
 
 async function syncCreate(mesh) {
@@ -1586,7 +1596,7 @@ async function syncDelete(instanceId) {
 // undo/redo restoring a snapshot). Two differences from the single-item
 // versions: instances go through the server's own /instances/batch
 // endpoint (chunked to its 100-per-request cap) instead of one request
-// per item, and a failure here surfaces loudly via alert() instead of a
+// per item, and a failure here surfaces loudly via a notice instead of a
 // console.warn only nobody sees. Both matter for the same reason: hundreds
 // of simultaneous unbatched fire-and-forget requests is exactly the load
 // pattern that let some quietly never reach the server while everything
@@ -1661,7 +1671,7 @@ async function reconcileOpenTabOnFocus() {
   clearSelection();
   updateSelectionUI();
   for (const mesh of gone) deleteInstance(mesh, { sync: false });
-  alert(suspendedSellerRemovalNotice(gone.length));
+  tellBuilder("Taken off your land", suspendedSellerRemovalNotice(gone.length));
 }
 document.addEventListener('visibilitychange', reconcileOpenTabOnFocus);
 
@@ -1677,7 +1687,7 @@ async function syncBatchCreate(meshes) {
     if (isSuspendedSellerSyncError(err)) {
       const { removed, remaining } = await reconcileAfterSellerSuspension(meshes);
       if (removed > 0) {
-        alert(suspendedSellerRemovalNotice(removed));
+        tellBuilder("Taken off your land", suspendedSellerRemovalNotice(removed));
         if (remaining.length > 0) await syncBatchCreate(remaining);
         return;
       }
@@ -1688,7 +1698,7 @@ async function syncBatchCreate(meshes) {
     // says how many, so this doesn't claim the whole placement failed when
     // most of it actually made it to the server.
     const failedCount = meshes.length - (err.succeededCount ?? 0);
-    alert(`Couldn't save ${failedCount} placed item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
+    tellBuilder("Couldn't save your items", `Couldn't save ${failedCount} placed item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
   } finally {
     syncSettled();
   }
@@ -1747,7 +1757,7 @@ async function runBatchUpdate(meshes, { gateHeld = false } = {}) {
     if (result.staleInstances?.length) {
       const applied = await applyStaleInstances(result.staleInstances, { gateHeld });
       const count = result.staleInstances.length;
-      alert(applied
+      tellBuilder("Changed in another tab", applied
         ? `${count} item(s) you changed here had already been changed in another tab or window, so your change was not saved. They now show the latest version.`
         : `${count} item(s) you changed here had already been changed in another tab or window, so your change was not saved. Switch away from this tab and back to see the latest version.`);
     }
@@ -1769,7 +1779,7 @@ async function runBatchUpdate(meshes, { gateHeld = false } = {}) {
       }
       const elsewhere = missing.size - suspended.size;
       if (elsewhere > 0) sentences.push(`${elsewhere} item(s) you changed here had already been removed from your land in another tab or window, so they were not put back.`);
-      alert(sentences.join(' '));
+      tellBuilder("Changed elsewhere", sentences.join(' '));
     }
   } catch (err) {
     console.warn('Failed to sync instance updates to backend:', err);
@@ -1777,7 +1787,7 @@ async function runBatchUpdate(meshes, { gateHeld = false } = {}) {
     if (isSuspendedSellerSyncError(err)) {
       const { removed, remaining } = await reconcileAfterSellerSuspension(meshes);
       if (removed > 0) {
-        alert(suspendedSellerRemovalNotice(removed));
+        tellBuilder("Taken off your land", suspendedSellerRemovalNotice(removed));
         // The rejected batch also held items that are fine; save those now.
         if (remaining.length > 0) {
           // Already inside the update chain, so run directly (queueing behind
@@ -1794,7 +1804,7 @@ async function runBatchUpdate(meshes, { gateHeld = false } = {}) {
     // large group-move/undo-redo batch already landed before the chunk
     // that failed, so this doesn't overstate how much was actually lost.
     const failedCount = meshes.length - (err.succeededCount ?? 0);
-    alert(`Couldn't save ${failedCount} moved item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
+    tellBuilder("Couldn't save your items", `Couldn't save ${failedCount} moved item(s) to the server — they may not survive a reload. ${err.message || ''}`.trim());
   } finally {
     syncSettled();
   }
@@ -1815,7 +1825,7 @@ async function syncBatchDelete(instanceIds) {
     // large multi-delete/undo-redo batch already landed before the chunk
     // that failed, so this doesn't overstate how much was actually lost.
     const failedCount = instanceIds.length - (err.succeededCount ?? 0);
-    alert(`Couldn't save the deletion of ${failedCount} item(s) to the server — they may reappear on reload. ${err.message || ''}`.trim());
+    tellBuilder("Couldn't save the deletion", `Couldn't save the deletion of ${failedCount} item(s) to the server — they may reappear on reload. ${err.message || ''}`.trim());
   } finally {
     syncSettled();
   }
@@ -2486,7 +2496,7 @@ async function reconcileOnRefocus() {
     if (deletedIds.length > 0) {
       const restorable = new Set((slots || []).map((slot) => slot.removedInstanceId).filter(Boolean));
       const suspendedCount = deletedIds.filter((id) => restorable.has(id)).length;
-      if (suspendedCount > 0) alert(suspendedSellerRemovalNotice(suspendedCount));
+      if (suspendedCount > 0) tellBuilder("Taken off your land", suspendedSellerRemovalNotice(suspendedCount));
     }
   } catch (err) {
     console.warn('Reconciling with the server on refocus failed:', err);
@@ -4018,7 +4028,7 @@ async function placeClipboardItems(items, x, y, supportZ, { group = false, bundl
     }
   }
   if (skippedCount > 0) {
-    alert(`${skippedCount} item${skippedCount === 1 ? '' : 's'} couldn't be placed — the product ${skippedCount === 1 ? 'it references' : 'they reference'} no longer exists in the catalog.`);
+    tellBuilder("Some items couldn't be placed", `${skippedCount} item${skippedCount === 1 ? '' : 's'} couldn't be placed — the product ${skippedCount === 1 ? 'it references' : 'they reference'} no longer exists in the catalog.`);
   }
 }
 
@@ -5305,7 +5315,7 @@ export function renderBuildSettingsSection() {
       // of the builder wondering where those items went.
       const skippedCount = restoredDraft?.skippedInstances?.length ?? 0;
       if (skippedCount > 0) {
-        alert(`${skippedCount} ${skippedCount === 1 ? 'item was' : 'items were'} not restored because ${skippedCount === 1 ? 'its seller is' : 'their sellers are'} currently suspended.`);
+        tellBuilder("Some items weren't restored", `${skippedCount} ${skippedCount === 1 ? 'item was' : 'items were'} not restored because ${skippedCount === 1 ? 'its seller is' : 'their sellers are'} currently suspended.`);
       }
       // Simplest correct way to get the live scene back in sync with
       // whatever the server now holds — the same "something changed

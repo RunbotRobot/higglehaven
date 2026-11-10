@@ -4,7 +4,7 @@
 // a later reload. Now the builder is told in plain words and the scene is
 // put back to what the server has -- the rejected new item leaves the scene,
 // and a following (accepted) placement still works.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, captureNotices, finish } from './helpers.mjs';
 
 const LABEL = 'Rejected Save Suite Builder';
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
@@ -13,8 +13,8 @@ await claimLandlet(page);
 await page.waitForSelector('#undo-redo-panel', { state: 'attached', timeout: 15000 });
 await page.waitForTimeout(1000);
 
-// Capture alert() text (launchPage's own handler just accepts them).
-await page.evaluate(() => { window.__alerts = []; window.alert = (msg) => { window.__alerts.push(String(msg)); }; });
+// Record each in-app notice's text and close it (#3359: it was alert()).
+await captureNotices(page);
 
 async function placeTree(x, y) {
   await page.click('#add-item-btn');
