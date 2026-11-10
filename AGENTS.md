@@ -22,8 +22,9 @@
   `src/shop/nearbyChat.js`, and friend group voice channels all exist.
   This line has now gone stale twice, so re-verify against the code
   (grep, don't trust this paragraph) before relying on it. Gaps against
-  docs/SPEC.md as of that audit: the far panoramic backdrop (§1, #2377
-  tracking; #2379/#2380/#2381 open); the crowdsourced model pipeline
+  docs/SPEC.md as of that audit: the far view (§1; the panoramic backdrop
+  in #2377 was superseded on 2026-11-10 by real simplified models at
+  every distance, #3412 tracking); the crowdsourced model pipeline
   (§4, #2846) and behavioral minor-detection (§6, #2845) and tax
   education content authoring (§7, #2841) — each blocked on an
   `[owner judgment needed]` sub-issue; friend "follow"/"stay with"
@@ -631,6 +632,23 @@ most likely to come up again.
   (higglehaven1's extension by analogy, not yet the owner's words: the
   same treatment for other sudden swaps, such as a level-of-detail
   change or content leaving on unload.)
+
+- **Everything built is always shown as itself: simplified with
+  distance, never replaced by a stand-in and never left out.**
+  (2026-11-10, #3412.) Small or distant items were drawn as coloured
+  boxes, and nothing beyond the load radius was drawn at all. The owner:
+  "I don't ever want to see placeholder cubes. But I also don't want to
+  look off into the far distance and have items not show at all... It's
+  just really important for people to be able to see the vast landscape
+  of the world from afar, seeing the structural design decisions of each
+  builder." Every product carries automatically generated simpler
+  versions of its own model, and every landlet in view is drawn from
+  them out to the horizon. The cost of distance and density is paid by
+  simplifying the real thing, never by substituting a shape that is not
+  it or by omitting it. This replaces docs/SPEC.md's flat painted far
+  backdrop (#2377 and its sub-issues, closed as superseded). The owner
+  offered several models per product as an example and left the
+  implementation open; the design is in #3412.
 
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
