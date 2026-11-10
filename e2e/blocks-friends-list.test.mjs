@@ -51,6 +51,12 @@ const bobNoteCountBefore = (await fetchJson(bobPage, '/api/notifications')).body
 await alicePage.locator('#friends-accepted-list .friend-row').filter({ hasText: BOB }).locator('button', { hasText: 'Block' }).click();
 await acceptConfirmModal(alicePage); // #3278: in-app confirm modal
 await alicePage.waitForFunction(() => document.querySelectorAll('#friends-blocked-list .friend-row').length === 1, null, { timeout: 30000 });
+// #3359: the "Blocked." result is an in-app notice (a browser can drop alert()).
+await alicePage.waitForSelector('#notice-modal.visible', { timeout: 10000 });
+const blockNotice = await alicePage.textContent('#notice-modal-message');
+console.log('block notice (should mention Blocked people):', blockNotice);
+await alicePage.click('#notice-modal-ok-btn');
+await alicePage.waitForSelector('#notice-modal.visible', { state: 'hidden', timeout: 5000 });
 const friendRowsAfterBlock = await alicePage.locator('#friends-accepted-list .friend-row').count();
 const blockedRowText = await alicePage.locator('#friends-blocked-list .friend-row').first().textContent();
 console.log('Friends list is empty after blocking (should be 0):', friendRowsAfterBlock);
@@ -69,7 +75,7 @@ const blockedEmptyAfter = await alicePage.locator('#friends-blocked-empty').isVi
 console.log('"You haven\'t blocked anyone" shown again after unblocking (should be true):', blockedEmptyAfter);
 
 const errors = [...aliceSession.errors, ...bobSession.errors];
-const pass = blockedEmptyBefore &&
+const pass = /Blocked people/.test(blockNotice) && blockedEmptyBefore &&
   friendRowsAfterBlock === 0 &&
   blockedRowText.includes(BOB) &&
   bobFriendships.length === 0 &&

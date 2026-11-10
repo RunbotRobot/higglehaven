@@ -18,16 +18,13 @@
 // test doesn't need) -- the first chunk's 100 items still hit the real
 // server and really commit, so what's under test (whether the frontend
 // correctly accounts for that real partial success) is exercised for real.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, grantLandCapHeadroomAsAdmin } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, finish, grantLandCapHeadroomAsAdmin, captureNotices } from './helpers.mjs';
 
 const LABEL = 'Saved Layout Chunk Retry Tester';
 const LEVEL_HEIGHT_M = 10;
 const INSTANCE_COUNT = 101;
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
-
-let lastAlertMessage = null;
-page.on('dialog', (dialog) => { if (dialog.type() === 'alert') lastAlertMessage = dialog.message(); });
 
 await chooseIdentity(page, { mode: 'build', label: LABEL, isNew: true });
 await claimLandlet(page);
@@ -154,11 +151,13 @@ await page.route('**/api/instances/batch', async (route) => {
   await route.continue();
 });
 
+await captureNotices(page); // #3359: the paste result is an in-app notice now (installed on the preview page itself)
 await page.click('#layout-preview-paste-btn');
 // #2146 (sub-issue of #2138): same waitForFunction arg/options bug as above
 // -- null arg, 60000ms real timeout.
 await page.waitForFunction(() => document.getElementById('layout-preview-paste-btn') && !document.getElementById('layout-preview-paste-btn').disabled, null, { timeout: 60000 });
-console.log('alert shown after the partial failure:', lastAlertMessage);
+const lastAlertMessage = (await page.evaluate(() => window.__alerts ?? [])).at(-1) ?? null;
+console.log('notice shown after the partial failure:', lastAlertMessage);
 const alertMentionsPartialSuccess = Boolean(lastAlertMessage) && lastAlertMessage.includes('100') && lastAlertMessage.includes('1 failed');
 
 const instancesAfterFirstAttempt = await fetchAllInstances(landletId);

@@ -570,6 +570,7 @@ async function reorderBackupChainRow(backups, fromIndex, toIndex) {
     await reorderInstanceBackups(instanceId, reordered.map((backup) => backup.backupId));
     await renderBackupChain();
   } catch (err) {
+    // #3359: in-app notice over the backup-chain modal it came from.
     showNotice({
       title: "Couldn't reorder the backups",
       message: err.message || 'Could not reorder the backup chain.',
@@ -616,6 +617,7 @@ backupChainAddBtn.addEventListener('click', async () => {
         await addInstanceBackup(instanceId, { templateId: template.templateId });
         await renderBackupChain();
       } catch (err) {
+        // #3359: in-app notice; the catalog picker this ran from is closing.
         showNotice({ title: "Couldn't add this backup", message: err.message || 'Could not add this backup.' });
       }
     },
