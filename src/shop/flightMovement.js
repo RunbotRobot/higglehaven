@@ -65,6 +65,7 @@ import {
   setMovementWorld, movementWorld, createShopMovementWorld,
   positionBlockedIn, landingObstructionTopZIn, clampRadiusIn,
 } from './movementWorld.js';
+import { keepPairInside } from './rigidCameraPair.js';
 import { isNavigationKeyEvent, keyboardAxes, mergeStickInput } from './keyboardInput.js';
 import {
   shopAvatar, shopAvatarCollisionHalfM, shopAvatarHeightM, shopCameraAnchorHeightM,
@@ -1270,6 +1271,63 @@ function shopMaxFlightAltitudeM() {
     - curvatureDropM(activeWorldRadiusM()) + curvatureDropM(avatarDistanceFromOriginM);
 }
 
+// #3374/#3385: how far from the world's centre the avatar's pivot may be at
+// its current height, so its whole body (tipped forward when airborne) stays
+// inside the wall and the dome. One definition for the movement clamp and for
+// the rigid avatar/camera pair in positionShopCamera.
+// #3374: judged where the body's highest, farthest point is, not at the
+// pivot's height: the dome narrows with height, so the tipped head meets
+// the dome before the feet do. shopAvatarMaxRadiusM already reserves the
+// body's half-width, so only the forward lean is taken off on top of it.
+function shopAvatarLimitRadiusM(airborne) {
+  const bodyReach = airborne ? shopAvatarFlightBodyReach() : null;
+  return shopMaxRadiusAtWorldZM(
+    shopAvatarPosition.z + (bodyReach ? bodyReach.riseM : 0),
+    shopAvatarMaxRadiusM() - (bodyReach ? bodyReach.forwardM : 0),
+  );
+}
+
+// #3385: moves the avatar and the camera inward together when either end
+// would cross the dome. Returns false when there is no circular boundary to
+// pair against, or no legal pair exists, and the caller bounds the camera alone.
+function keepShopPairInside() {
+  const world = movementWorld();
+  const worldRadiusM = world.worldRadiusM();
+  if (worldRadiusM === null || world.boundsCamera === false || world.clampToBoundary) return false;
+  // The movement clamp owns the avatar's own limit and only runs on input. An
+  // avatar already outside it (teleported, landing nudge, spawn orbit) is not
+  // this function's to move: pulling it onto the disc here would also change
+  // the ground it stands on (e2e shop-terrain-elevation-altitude). The camera
+  // alone is bounded for that frame, as before #3385.
+  const avatarLimitM = shopAvatarLimitRadiusM(shopFlightState !== 'grounded');
+  if (Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y) > avatarLimitM + 1e-3) return false;
+  const shifted = keepPairInside({
+    x: shopAvatarPosition.x,
+    y: shopAvatarPosition.y,
+    offsetX: camera.position.x - shopAvatarPosition.x,
+    offsetY: camera.position.y - shopAvatarPosition.y,
+    avatarLimitM,
+    cameraLimitM: shopMaxRadiusAtWorldZM(camera.position.z, worldRadiusM - SHOP_CAMERA_DOME_MARGIN_M),
+  });
+  if (!shifted) return false;
+  const dx = shifted.x - shopAvatarPosition.x;
+  const dy = shifted.y - shopAvatarPosition.y;
+  if (dx === 0 && dy === 0) return true;
+  shopAvatarPosition.x += dx;
+  shopAvatarPosition.y += dy;
+  shopCameraAnchor.x += dx;
+  shopCameraAnchor.y += dy;
+  camera.position.x += dx;
+  camera.position.y += dy;
+  // The movement core copied the avatar to its mesh before this ran; move the
+  // mesh by the same amount so the avatar never draws a frame outside the dome.
+  if (shopAvatar?.group) {
+    shopAvatar.group.position.x += dx;
+    shopAvatar.group.position.y += dy;
+  }
+  return true;
+}
+
 // The classic over-the-shoulder third-person rig: orbits the camera around
 // a fixed-radius sphere (SHOP_CAMERA_FOLLOW_DISTANCE_M) centered on the
 // avatar's own head-height anchor, using the exact look direction
@@ -1286,18 +1344,25 @@ export function positionShopCamera() {
   shopCameraAnchor.z += shopCameraAnchorHeightM();
   camera.position.copy(shopCameraAnchor).addScaledVector(shopViewDirection, -SHOP_CAMERA_FOLLOW_DISTANCE_M);
   clampShopCameraHeight();
-  // #3374: the avatar is what is bounded; the camera only follows it. The
-  // camera's own wall clearance (shopMaxRadiusM, up to several metres) is
-  // stricter than the avatar's, so near the edge it used to pin the camera
-  // while the avatar flew on. The radius it may use is never below the
-  // avatar's own, which keeps a radial pull-in from moving the camera away
-  // from the avatar (projecting onto a disc that contains the anchor never
-  // increases the distance to it), and never past the dome itself at the
-  // camera's own height.
-  const cameraAnchorRadiusM = Math.hypot(shopCameraAnchor.x, shopCameraAnchor.y);
-  const cameraWallRadiusM = shopMaxRadiusAtWorldZM(camera.position.z, shopMaxRadiusM());
-  const cameraDomeRadiusM = shopMaxRadiusAtWorldZM(camera.position.z, (activeWorldRadiusM() ?? 0) - SHOP_CAMERA_DOME_MARGIN_M);
-  clampShopRadius(camera.position, Math.min(Math.max(cameraWallRadiusM, cameraAnchorRadiusM), cameraDomeRadiusM), true);
+  // #3385 (owner rule from #3374): at the world's edge the avatar and the
+  // camera are one rigid pair. The camera stays exactly the follow distance
+  // from the anchor, neither end crosses the dome, and when either would the
+  // pair moves in together (keepPairInside): flying out with the camera behind
+  // the avatar, the avatar reaches the dome first; backing out with the camera
+  // on the outer side, the camera does and the avatar stops one follow
+  // distance short. Turning the camera is never blocked; the avatar slides
+  // inward just far enough. The grazing-angle wall clearance
+  // (shopMaxRadiusM) no longer pulls the camera in alone: that is what
+  // shortened the distance before; the camera keeps SHOP_CAMERA_DOME_MARGIN_M
+  // from the dome surface at its own height. A world with no circular edge to
+  // pair against (Sell's rectangle, an unbounded camera, a world too small for
+  // any legal pair) falls back to bounding the camera alone.
+  if (!keepShopPairInside()) {
+    const cameraAnchorRadiusM = Math.hypot(shopCameraAnchor.x, shopCameraAnchor.y);
+    const cameraWallRadiusM = shopMaxRadiusAtWorldZM(camera.position.z, shopMaxRadiusM());
+    const cameraDomeRadiusM = shopMaxRadiusAtWorldZM(camera.position.z, (activeWorldRadiusM() ?? 0) - SHOP_CAMERA_DOME_MARGIN_M);
+    clampShopRadius(camera.position, Math.min(Math.max(cameraWallRadiusM, cameraAnchorRadiusM), cameraDomeRadiusM), true);
+  }
   // #1631: e2e-only hook (same "expose computed state purely for
   // verification" convention as window.__shopInstanceDisposedCount) --
   // lets a test confirm the avatar/camera's real world z stays under the
@@ -1741,14 +1806,7 @@ export function updateShopMovementCore(now) {
     // pivot's height: the dome narrows with height, so the tipped head meets
     // the dome before the feet do. shopAvatarMaxRadiusM already reserves the
     // body's half-width, so only the forward lean is taken off on top of it.
-    const bodyReach = airborne ? shopAvatarFlightBodyReach() : null;
-    clampShopRadius(
-      shopAvatarPosition,
-      shopMaxRadiusAtWorldZM(
-        shopAvatarPosition.z + (bodyReach ? bodyReach.riseM : 0),
-        shopAvatarMaxRadiusM() - (bodyReach ? bodyReach.forwardM : 0),
-      ),
-    );
+    clampShopRadius(shopAvatarPosition, shopAvatarLimitRadiusM(airborne));
   }
 
   // #1588: with the setting on, and only while the shopper isn't actively
