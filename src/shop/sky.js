@@ -588,8 +588,15 @@ export function currentShopSkyTimeS() {
 // updateShopProximity), not a global precomputed guarantee.
 export function growShopDomeIfNeeded(object) {
   if (!shopDomeMesh) return;
-  const box = new THREE.Box3().setFromObject(object);
-  const neededRise = box.max.z - SHOP_WALL_HEIGHT_M + SHOP_DOME_CLEARANCE_MARGIN_M;
+  growShopDomeToHeight(new THREE.Box3().setFromObject(object).max.z);
+}
+
+// #3402: the same growth from a known top height (world z), for placements
+// drawn by a shared instanced mesh, which have no geometry of their own to
+// measure.
+export function growShopDomeToHeight(topZ) {
+  if (!shopDomeMesh) return;
+  const neededRise = topZ - SHOP_WALL_HEIGHT_M + SHOP_DOME_CLEARANCE_MARGIN_M;
   if (neededRise <= shopDomeRiseM) return;
   shopDomeRiseM = neededRise;
   shopDomeMesh.scale.y = shopDomeRiseM;

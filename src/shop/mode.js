@@ -304,6 +304,18 @@ export function unloadShopLandletInstances(entry) {
     worldWorkQueue.enqueue(() => disposeObject3D(object), { priority: DISPOSE_QUEUE_PRIORITY });
   }
   entry.objects = [];
+  // #3402: batches of identical placements drawn by shared instanced meshes
+  // (their handles are in entry.objects above and were removed with them). The
+  // instance buffers and the model clone that owns the materials are released
+  // like everything else, a few at a time inside the frame budget.
+  for (const batch of entry.batches) {
+    for (const mesh of batch.meshes) entry.group.remove(mesh);
+    worldWorkQueue.enqueue(() => {
+      for (const mesh of batch.meshes) mesh.dispose();
+      disposeObject3D(batch.container);
+    }, { priority: DISPOSE_QUEUE_PRIORITY });
+  }
+  entry.batches = [];
   for (const sign of [...shopSigns]) {
     if (sign.group !== entry.group) continue;
     disposeSignSprites(sign);
@@ -705,7 +717,7 @@ export async function enterShopMode() {
     group.add(groundMesh);
     scene.add(group);
     shopLandlets.set(record.landletId, {
-      record, group, groundMesh, loaded: false, loadToken: 0, objects: [],
+      record, group, groundMesh, loaded: false, loadToken: 0, objects: [], batches: [],
       // #1995: orbs' own load state, independent of loaded/loadToken/
       // objects above -- see updateShopProximity's own comment on why.
       orbsLoaded: false, orbLoadToken: 0,

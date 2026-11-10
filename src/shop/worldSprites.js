@@ -55,6 +55,7 @@
 import * as THREE from 'three';
 import { camera } from '../world/scene.js';
 import { meshDimensions } from '../world/models.js';
+import { handleForInstanceHit } from './instanceBatching.js';
 import { addSelectionOutline, removeSelectionOutline } from '../build/scene.js';
 import {
   fetchSignPosts, fetchCalendarEvents, triggerCalendarEvent, fetchProductReviews,
@@ -530,6 +531,14 @@ export function productInfoText(template) {
 // loadModelInstance) to whichever shopReviews entry's root mesh is its
 // ancestor, the same findRootProduct pattern Build mode's own click
 // handler uses against productMeshes.
+// #3402: a hit on a batch's instanced mesh names the placement by instance
+// index; everything else resolves by walking up as before.
+export function findTappedShopProductFromHit(hit) {
+  const handle = handleForInstanceHit(hit.object?.userData?.instanceHandles, hit.instanceId);
+  if (handle) return shopReviews.find((r) => r.mesh === handle) ?? null;
+  return findTappedShopProduct(hit.object);
+}
+
 export function findTappedShopProduct(object) {
   let current = object;
   while (current) {

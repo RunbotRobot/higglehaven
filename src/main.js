@@ -291,7 +291,7 @@ import {
   nearestActiveSign, nearestActiveCalendar,
   setShopTappedProduct,
   rebuildSignSprites, rebuildCalendarSprites,
-  findTappedShopProduct,
+  findTappedShopProductFromHit,
 } from './shop/worldSprites.js';
 // #2628 (leaf of #2563/#2504/#2500, depends on #2627 above): Shop mode's
 // product-preview modal, checkout/Stripe flow, confetti, and buy/review-
@@ -1309,6 +1309,31 @@ window.__testSetShopSkyElapsedSeconds = (seconds) => {
 // #3396: how many placed items are built and in the scene across every loaded
 // landlet, so an e2e test can tell when a big landlet has finished loading.
 // Always inert unless a test calls it, same convention as the hooks below.
+// #3402: e2e-only. What drawing the Shop scene costs right now: renders one
+// frame and reads the draw calls and triangles that frame needed, plus how many
+// batches of identical placements (drawn by shared instanced meshes) are live
+// and the renderer's live geometry and texture counts, so a test can tell a
+// landlet drawn as a few instanced meshes from one cloned mesh per item, and
+// can tell an unload released what the batches held.
+window.__testShopDrawStats = () => {
+  renderer.render(scene, camera);
+  let batches = 0;
+  let instancedMeshes = 0;
+  let batchedPlacements = 0;
+  for (const entry of shopLandlets.values()) {
+    batches += entry.batches.length;
+    for (const batch of entry.batches) {
+      instancedMeshes += batch.meshes.length;
+      batchedPlacements += batch.handles.length;
+    }
+  }
+  const { render, memory } = renderer.info;
+  return {
+    drawCalls: render.calls, triangles: render.triangles,
+    batches, instancedMeshes, batchedPlacements,
+    geometries: memory.geometries, textures: memory.textures,
+  };
+};
 window.__testShopLoadedInstanceCount = () => {
   let count = 0;
   for (const entry of shopLandlets.values()) count += entry.objects.length;
@@ -1503,8 +1528,14 @@ renderer.domElement.addEventListener('click', (event) => {
     if (Math.hypot(dx, dy) > CLICK_DRAG_THRESHOLD_PX) return;
   }
   raycaster.setFromCamera(ndcFromEvent(event), camera);
-  const hits = raycaster.intersectObjects(shopReviews.map((r) => r.mesh), true);
-  const review = hits.length > 0 ? findTappedShopProduct(hits[0].object) : null;
+  // #3402: items drawn by a shared instanced mesh have a geometry-free handle
+  // as their review mesh; the batch's instanced meshes are what a tap can hit.
+  const tapTargets = shopReviews.map((r) => r.mesh);
+  for (const entry of shopLandlets.values()) {
+    for (const batch of entry.batches) tapTargets.push(...batch.meshes);
+  }
+  const hits = raycaster.intersectObjects(tapTargets, true);
+  const review = hits.length > 0 ? findTappedShopProductFromHit(hits[0]) : null;
   setShopTappedProduct(review);
   if (review) openShopProductPreviewModal(review);
   else closeShopProductPreviewModal();
