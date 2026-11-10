@@ -80,6 +80,7 @@ import { setShopBuilderLabel } from '../shop/presenceAndContent.js';
 import { toDisplayLength, fromDisplayLength, formatLength, formatArea } from '../settings.js';
 import { saveInstances } from '../layoutStorage.js';
 import { rotateMembersRigidly, bundlePivot, reseatInBounds } from './bundleRotation.js';
+import { anglesFromQuaternion, formatRotationReadout, referenceOrientation, snapAxisComponent, snapDeltaToAbsolute } from './rotationReadout.js';
 import { footprintScaleAtHeight } from '../../worker/earthCurvature.js';
 import {
   curveGroundGeometry, flatGroundHitPoint, createGroundTexture, normalizeGroundShapeUVs,
@@ -560,6 +561,7 @@ const groupRotatePivot = new THREE.Object3D();
 landletElevationGroup.add(groupRotatePivot);
 let groupRotateStarts = null; // [{ position, quaternion }] per mesh, aligned with groupMoveMeshes, captured at drag start
 let groupRotateLastValidDelta = new THREE.Quaternion();
+let groupRotateReference = new THREE.Quaternion(); // #3376
 let groupMoveMeshes = null; // meshes being moved together, captured at drag start
 let groupMoveSet = null; // same meshes as a Set, for O(1) "is this mine?" checks during collision sweeps
 let groupMoveStartPositions = null; // mesh -> its position when the drag began (fixed for the whole drag)
@@ -854,6 +856,9 @@ rotateControls.addEventListener('dragging-changed', (event) => {
   groupRotateStarts = groupMoveMeshes.map((mesh) => ({ position: mesh.position.clone(), quaternion: mesh.quaternion.clone() }));
   groupRotatePivot.quaternion.identity();
   groupRotateLastValidDelta = new THREE.Quaternion();
+  // #3376: the bundle's absolute orientation when the drag began, so Snap can
+  // land its angle (not just this drag's turn) on an exact value.
+  groupRotateReference = referenceOrientation(groupRotateStarts.map((start) => start.quaternion));
   bundleRotateLimitShown = false;
 });
 // A member's centre must stay inside the landlet and the level being edited.
@@ -884,7 +889,10 @@ function applyBundleRotation(delta) {
 }
 rotateControls.addEventListener('objectChange', () => {
   if (rotateControls.object !== groupRotatePivot || !groupRotateStarts) return;
-  const delta = groupRotatePivot.quaternion.clone();
+  // #3376: Snap on lands the bundle's absolute angle on a step; Snap off
+  // settles it onto a right angle within a degree. Only the ring being turned.
+  const delta = snapDeltaToAbsolute(groupRotateReference, groupRotatePivot.quaternion, rotateControls.axis, { snap: snapToSurfaces });
+  groupRotatePivot.quaternion.copy(delta);
   if (applyBundleRotation(delta)) {
     groupRotateLastValidDelta.copy(delta);
     bundleRotateLimitShown = false;
@@ -897,15 +905,66 @@ rotateControls.addEventListener('objectChange', () => {
   }
 });
 
+// #3376: a single item turned with the gizmo gets the same Snap / settle on the
+// ring being turned, measured from upright (its stored rotation), not from where
+// the drag began.
+rotateControls.addEventListener('objectChange', () => {
+  const item = rotateControls.object;
+  if (item && item !== groupRotatePivot) {
+    item.quaternion.copy(snapAxisComponent(item.quaternion, rotateControls.axis, { snap: snapToSurfaces }));
+  }
+  refreshRotationReadout();
+});
+
+// #3376: the angle the selected item (or bundle) is at, while it is selected in
+// Rotate mode: "Turn 90.0° (blue ring) · Tilt 0.0° (red ring) · ...". Absolute,
+// measured from upright. A bundle has no stored orientation of its own; it
+// reads as the orientation most of its members share (see referenceOrientation).
+// The text is selectable (#3303) and stays up between drags.
+const rotationReadoutEl = document.getElementById('rotation-readout');
+function refreshRotationReadout() {
+  const object = rotateControls.object;
+  let orientation = null;
+  if (object === groupRotatePivot) orientation = referenceOrientation([...selectedMeshes].map((mesh) => mesh.quaternion));
+  else if (object) orientation = object.quaternion;
+  if (!orientation || currentGizmoMode !== 'rotate') {
+    if (!rotationReadoutEl.hidden) rotationReadoutEl.hidden = true;
+    return;
+  }
+  const text = formatRotationReadout(anglesFromQuaternion(orientation));
+  if (rotationReadoutEl.textContent !== text) rotationReadoutEl.textContent = text;
+  if (rotationReadoutEl.hidden) rotationReadoutEl.hidden = false;
+}
+rotateControls.addEventListener('dragging-changed', refreshRotationReadout);
+
 // #3325: test hook, same reasoning as __testDragGroupMoveZ above -- turns the
 // attached bundle by `radians` about 'x'|'y'|'z' through the real drag path
 // without mouse-dragging the 3D gizmo.
-window.__testRotateBundle = (axis, radians) => {
+// #3376: `dragAxis: true` also tells the gizmo which ring is being turned, the
+// way a real drag does, so Snap / settle apply; without it the raw angle is used.
+window.__testRotateBundle = (axis, radians, { dragAxis = false } = {}) => {
   if (rotateControls.object !== groupRotatePivot) return false;
   rotateControls.dispatchEvent({ type: 'dragging-changed', value: true });
   const vector = new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0);
   groupRotatePivot.quaternion.setFromAxisAngle(vector, radians);
+  if (dragAxis) rotateControls.axis = axis.toUpperCase();
   rotateControls.dispatchEvent({ type: 'objectChange' });
+  rotateControls.axis = null;
+  rotateControls.dispatchEvent({ type: 'dragging-changed', value: false });
+  return true;
+};
+
+// #3376: the same for the single selected item: turns it by `radians` about
+// 'x'|'y'|'z' (world) from its current orientation, as a gizmo drag would.
+window.__testRotateSelected = (axis, radians, { dragAxis = false } = {}) => {
+  const item = rotateControls.object;
+  if (!item || item === groupRotatePivot) return false;
+  rotateControls.dispatchEvent({ type: 'dragging-changed', value: true });
+  const vector = new THREE.Vector3(axis === 'x' ? 1 : 0, axis === 'y' ? 1 : 0, axis === 'z' ? 1 : 0);
+  item.quaternion.premultiply(new THREE.Quaternion().setFromAxisAngle(vector, radians));
+  if (dragAxis) rotateControls.axis = axis.toUpperCase();
+  rotateControls.dispatchEvent({ type: 'objectChange' });
+  rotateControls.axis = null;
   rotateControls.dispatchEvent({ type: 'dragging-changed', value: false });
   return true;
 };
@@ -2624,6 +2683,10 @@ export function updateTrimLengthInput() {
 }
 
 let currentGizmoMode = 'translate';
+// #3376: attaching, detaching and undo change what is selected without a drag; a
+// light poll keeps the rotation readout true to the selection (it does nothing
+// unless Rotate is on). Started here, after currentGizmoMode exists.
+setInterval(refreshRotationReadout, 250);
 function setGizmoMode(mode) {
   currentGizmoMode = mode;
   // #1503: aria-pressed mirrors .active so the current tool is announced to

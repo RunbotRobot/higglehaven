@@ -1307,6 +1307,32 @@
         -webkit-user-select: text;
         z-index: 10;
       }
+      /* #3376: the angle the selected item or bundle is at while Rotate is on.
+         Sits just under #product-info at the top so it never covers the gizmo,
+         stays up between drags, and its text is selectable (#3303). */
+      #rotation-readout {
+        position: fixed;
+        top: 56px;
+        left: 50%;
+        transform: translateX(-50%);
+        max-width: 94vw;
+        color: var(--pill-text);
+        background: rgb(var(--pill-rgb) / 0.65);
+        padding: 4px 12px;
+        border-radius: 8px;
+        font: 13px/1.4 sans-serif;
+        text-align: center;
+        pointer-events: auto;
+        user-select: text;
+        -webkit-user-select: text;
+        z-index: 10;
+      }
+      #rotation-readout[hidden] {
+        display: none;
+      }
+      body:has(#catalog-picker.visible) #rotation-readout {
+        display: none;
+      }
       /* Whatever this hint currently says (a selected item's name, a
          Measure readout, ...) is stale and redundant once the catalog
          picker is open — the builder is choosing a product to place, not
