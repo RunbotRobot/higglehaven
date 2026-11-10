@@ -26,6 +26,12 @@ import {
   positiveInteger,
 } from './validation.js';
 import { fireNotifications } from './notifications.js';
+import { verifyOwnedGroupLinks } from './bundle-links.js';
+import { findPlacementTransform, unyawItems } from './bundle-relayout.js';
+import {
+  relayoutLinkedPlacements, countLinkedPlacements, assertNewTemplatesFromActiveSellers, sameItems,
+  RELAYOUT_MAX_LANDLETS, RELAYOUT_MAX_ROWS, RELAYOUT_TOO_MANY_MESSAGE,
+} from './bundle-relayout-db.js';
 import { requireSessionBuilder, assertOwner, currentUser, adminInGoodStanding } from './auth.js';
 import { adminActionLogStatement } from './admin-log.js';
 import { moderationRemovalCategory, recordModerationRemovalSnapshot } from './content-moderation.js';
@@ -222,10 +228,41 @@ export async function handleBundles(request, db, route, url) {
     // refused before this point. Resolved via COALESCE like the other fields,
     // so a concurrent rename/share-toggle is not clobbered by a stale read.
     let itemsJson = null;
+    let relayout = null;
     if (input.items !== undefined) {
-      const items = validateBundleItems(input.items);
+      let items = validateBundleItems(input.items);
+      const oldItems = JSON.parse(existing.items_json);
+      // #3329: `placement` says "these items are what the placement with this
+      // groupId looks like now" (Edit mode on one copy). That copy may have
+      // been turned as a unit, so its yaw is undone to get the template's own
+      // frame, and the copy itself is not re-laid (it already shows the edit).
+      let excludeGroupId = null;
+      if (input.placement !== undefined && input.placement !== null) {
+        const groupId = stringValue(input.placement.groupId, 'placement.groupId');
+        const links = await verifyOwnedGroupLinks(db, [{ groupId }], sessionBuilder.builder_id);
+        if (links.get(groupId) !== route[1]) throw new HttpError('That copy is not linked to this bundle', 409);
+        const baseline = validateBundleItems(input.placement.baselineItems);
+        const baselineRows = baseline.map((item, index) => ({
+          id: String(index), templateId: item.templateId, x: item.dx, y: item.dy, z: item.dz,
+          rotationX: item.rotationX, rotationY: item.rotationY, rotationZ: item.rotationZ, scale: item.scale,
+        }));
+        const found = findPlacementTransform(oldItems, baselineRows);
+        if (!found) {
+          throw new HttpError("This copy was turned, tilted or rearranged since it was placed, so it can't be matched to the saved bundle. Unbundle it to keep your changes as your own copy.", 409);
+        }
+        items = unyawItems(items, found.theta);
+        excludeGroupId = groupId;
+      }
       await assertReferencesExist(db, 'catalog_templates', 'template_id', items.map((item) => item.templateId), 'items[].templateId');
       itemsJson = JSON.stringify(items);
+      if (!sameItems(items, oldItems)) {
+        await assertNewTemplatesFromActiveSellers(db, oldItems, items);
+        const counts = await countLinkedPlacements(db, route[1], excludeGroupId);
+        if (counts.landlets > RELAYOUT_MAX_LANDLETS || counts.rows > RELAYOUT_MAX_ROWS) {
+          throw new HttpError(RELAYOUT_TOO_MANY_MESSAGE, 409);
+        }
+        relayout = { oldItems, items, excludeGroupId, existingJson: existing.items_json };
+      }
     }
     // Found via backlog audit: without checking this UPDATE's own
     // meta.changes, a concurrent DELETE of this bundle landing between the
@@ -233,10 +270,31 @@ export async function handleBundles(request, db, route, url) {
     // the follow-up SELECT below then returns undefined, and
     // bundleFromRow(undefined) throws an uncaught TypeError (a 500) instead
     // of the clean 404 this should be. Same shape as #288's friendship fix.
+    // #3329: when the members change, the write is a compare-and-swap on the
+    // members this request read, so two edits racing each other are
+    // serialized: the loser gets a 409 instead of laying out over the winner.
     const result = await db.prepare(`
       UPDATE bundles SET name = COALESCE(?, name), shared = COALESCE(?, shared), items_json = COALESCE(?, items_json), updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE bundle_id = ?
-    `).bind(name, shared, itemsJson, route[1]).run();
-    if (result.meta.changes === 0) return json({ error: 'Bundle not found' }, 404);
+      ${relayout ? 'AND items_json = ?' : ''}
+    `).bind(name, shared, itemsJson, route[1], ...(relayout ? [relayout.existingJson] : [])).run();
+    if (result.meta.changes === 0) {
+      const stillThere = relayout && await db.prepare('SELECT 1 FROM bundles WHERE bundle_id = ?').bind(route[1]).first();
+      if (stillThere) throw new HttpError('This bundle was changed somewhere else a moment ago. Reopen it and try again.', 409);
+      return json({ error: 'Bundle not found' }, 404);
+    }
+    let relayoutSummary = null;
+    if (relayout) {
+      relayoutSummary = await relayoutLinkedPlacements(db, {
+        bundleId: route[1],
+        bundleName: name ?? existing.name,
+        oldItems: relayout.oldItems,
+        newItems: relayout.items,
+        newItemsJson: itemsJson,
+        editorBuilderId: sessionBuilder.builder_id,
+        editorLabel: sessionBuilder.label,
+        excludeGroupId: relayout.excludeGroupId,
+      });
+    }
     // #2426: result.meta.changes === 0 only proves the UPDATE matched a row
     // at the moment it ran -- a concurrent DELETE landing in the single
     // await gap between that UPDATE committing and this re-SELECT removes
@@ -244,7 +302,7 @@ export async function handleBundles(request, db, route, url) {
     // raw 500 instead of a clean 404. Same idiom as #2334/#2354/#2364.
     const updated = await db.prepare('SELECT * FROM bundles WHERE bundle_id = ?').bind(route[1]).first();
     if (!updated) return json({ error: 'Bundle not found' }, 404);
-    return json({ bundle: bundleFromRow(updated) });
+    return json({ bundle: bundleFromRow(updated), ...(relayoutSummary ? { relayout: relayoutSummary } : {}) });
   }
 
   if (request.method === 'DELETE' && route.length === 2) {
