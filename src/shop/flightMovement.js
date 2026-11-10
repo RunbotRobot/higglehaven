@@ -936,38 +936,15 @@ function shopFlightSpeedMultiplier(altitudeM) {
 // tilt needed to compensate (see #shop-fly-btn-icon/.active in index.html).
 const SHOP_FLY_BTN_ICON_FLYING = '/bird-flying.png';
 const SHOP_FLY_BTN_ICON_STANDING = '/bird-standing.png';
-// #1815: both owner-supplied PNGs bake in their own circular card/ring
-// backdrop (a separate, smaller circle than #shop-fly-btn's own 56x56
-// clip), which read as a "ring within a ring" / "hole in the ozone layer"
-// artifact. Zooming each icon in via a CSS transform (clipped back down to
-// the button's own circle by its new `overflow: hidden`, see index.html)
-// crops that inner ring out of view entirely, without touching the source
-// artwork. transform-origin doubles as the owner's requested per-icon
-// nudge: scaling pushes content *away* from the fixed origin point, so an
-// origin offset toward one corner shifts the bird toward the opposite
-// corner. Tuned directly against screenshots of the real rendered button,
-// not derived analytically — a quick visual check after any future artwork
-// swap is cheap insurance that these still land right.
-//
-// #2750: one shared zoom for both icons assumed they had similar margin
-// around the bird within their own 512x559 canvas -- they don't.
-// bird-standing.png has generous empty margin around a small bird, so a
-// 1.6x zoom comfortably crops its own baked-in ring out while leaving the
-// bird itself fully framed. bird-flying.png's wings already spread nearly
-// to the canvas edges with almost no margin at all, so that same 1.6x zoom
-// (tuned against the standing bird, never separately verified against this
-// one) pushed its wingtips well past the button's own circular clip --
-// exactly the "images are too large to fit in their circle" the owner
-// reported. Screenshotting the real rendered button at a range of zoom
-// values (not derived analytically, same methodology as the original
-// tuning) showed bird-flying.png needs no extra zoom at all: plain
-// object-fit: cover already frames it fully and cleanly, with no visible
-// ring artifact left over (its own margin is thin enough that the square
-// crop alone removes it).
-const SHOP_FLY_BTN_ICON_STANDING_ZOOM = 1.6;
-const SHOP_FLY_BTN_ICON_FLYING_ZOOM = 1.0;
-const SHOP_FLY_BTN_ICON_STANDING_ORIGIN = '38% 62%'; // standing bird: shift right + up
-const SHOP_FLY_BTN_ICON_FLYING_ORIGIN = '50% 50%'; // in-flight bird: no zoom applied, so no offset needed
+// #3369: the PNGs are the bird alone on a transparent background, sized so
+// the farthest pixel of the bird sits inside the button's inscribed circle
+// (scripts/cut-bird-icons.mjs; art/ keeps the owner's originals). They used
+// to bake in a cream card and ring that were hidden by zooming the icon in
+// (#1815, retuned in #2750), and because the standing bird overlaps its own
+// ring no zoom could hide the ring without clipping the bird -- the clipped
+// bird kept coming back. There is no zoom, origin or clip any more: the icon
+// is object-fit: contain, and src/shop/flyButtonIcons.test.js pins the
+// artwork inside the circle.
 export function setShopFlyBtnFlying(flying) {
   document.body.classList.toggle('shop-flying', flying);
   shopFlyBtn.classList.toggle('active', flying);
@@ -976,8 +953,6 @@ export function setShopFlyBtnFlying(flying) {
   // state — a standing bird (press to take off) while grounded, a flying
   // bird (press to land) while flying, i.e. the inverse of `flying`.
   shopFlyBtnIcon.src = flying ? SHOP_FLY_BTN_ICON_STANDING : SHOP_FLY_BTN_ICON_FLYING;
-  shopFlyBtnIcon.style.transformOrigin = flying ? SHOP_FLY_BTN_ICON_STANDING_ORIGIN : SHOP_FLY_BTN_ICON_FLYING_ORIGIN;
-  shopFlyBtnIcon.style.transform = `scale(${flying ? SHOP_FLY_BTN_ICON_STANDING_ZOOM : SHOP_FLY_BTN_ICON_FLYING_ZOOM})`;
 }
 
 // Toggling mid-takeoff is ignored — let it finish, then the next press

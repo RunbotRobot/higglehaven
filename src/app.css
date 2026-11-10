@@ -725,20 +725,15 @@
         color: var(--pill-text);
         font-size: 18px;
         touch-action: none;
-        /* #1815: the icon itself is now zoomed in (see its own JS-set
-           transform/transform-origin, set per-icon in setShopFlyBtnFlying)
-           to crop out the owner-supplied artwork's own baked-in circular
-           backdrop -- without this, that zoom would spill the icon's
-           rendered box past this button's own edges instead of staying
-           clipped to it. */
-        overflow: hidden;
       }
+      /* #3369: the icon is the bird alone, already sized to sit inside this
+         circle (scripts/cut-bird-icons.mjs), so it is just contained -- no
+         zoom, no clip. */
       #shop-fly-btn-icon {
         display: block;
         width: 100%;
         height: 100%;
-        border-radius: 50%;
-        object-fit: cover;
+        object-fit: contain;
       }
       #shop-fly-btn.active {
         background: var(--brand-green);
