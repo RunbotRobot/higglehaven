@@ -3,7 +3,7 @@
 // on top of the existing per-friend inline location text. Two independent
 // browser pages stand in for two different builders, the same pattern
 // e2e/friends.test.mjs already uses for a friend request.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName } from './helpers.mjs';
 
 const ALICE = 'Friends Map Alice';
 const BOB = 'Friends Map Bob';
@@ -34,9 +34,7 @@ const bobBuilder = (await fetchJson(bobPage, '/api/builders/me')).body.builder;
 await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
 await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
-alicePage.removeAllListeners('dialog');
-alicePage.on('dialog', (dialog) => dialog.accept(BOB));
-await alicePage.click('#friends-add-btn');
+await addFriendByName(alicePage, BOB);
 await waitForText(alicePage, '#friends-status', BOB);
 // #2637 (sub-issue of #2635): waitForFunction's signature is (pageFunction,
 // arg, options) -- a bare (fn, { timeout }) call puts the options object in

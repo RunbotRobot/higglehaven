@@ -9,7 +9,7 @@
 // Two independent browser pages stand in for two different builders (same
 // pattern e2e/notification-row-mark-read-listener.test.mjs already uses),
 // since a real notification needs a real second party to trigger it.
-import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName } from './helpers.mjs';
 
 const ALICE = 'Notification Keyboard Suite Alice';
 const BOB = 'Notification Keyboard Suite Bob';
@@ -30,9 +30,7 @@ await claimLandlet(bobPage);
 await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
 await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
-alicePage.removeAllListeners('dialog');
-alicePage.on('dialog', (dialog) => dialog.accept(BOB));
-await alicePage.click('#friends-add-btn');
+await addFriendByName(alicePage, BOB);
 await waitForText(alicePage, '#friends-status', BOB);
 await alicePage.click('#friends-close-btn');
 

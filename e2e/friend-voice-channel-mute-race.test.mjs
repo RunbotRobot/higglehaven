@@ -20,7 +20,7 @@
 // apart and confirm the connection survives" section, since this bug has
 // nothing to do with distance.
 import { chromium } from 'playwright';
-import { chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish } from './helpers.mjs';
+import { chooseIdentity, claimLandlet, openAccountMenu, waitForText, finish, addFriendByName } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const CHROMIUM_PATH = process.env.PLAYWRIGHT_CHROMIUM_PATH || null;
@@ -181,9 +181,7 @@ await pageB.route('**/api/direct-messages/unread-count', unreadCountMock);
 await openAccountMenu(pageA);
 await pageA.click('#friends-btn');
 await pageA.waitForSelector('#friends-modal.visible', { timeout: 5000 });
-pageA.removeAllListeners('dialog');
-pageA.on('dialog', (dialog) => dialog.accept(LABEL_B));
-await pageA.click('#friends-add-btn');
+await addFriendByName(pageA, LABEL_B);
 await waitForText(pageA, '#friends-status', LABEL_B);
 await pageA.click('#friends-close-btn');
 
