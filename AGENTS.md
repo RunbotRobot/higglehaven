@@ -607,6 +607,31 @@ most likely to come up again.
   words: this covers small, reversible things such as an orb or a
   placement. Money is never shown as moved before the server says so.)
 
+- **Moving, looking and drawing never wait on loading.** (2026-11-10,
+  #3396.) An 829-item wall loading below a flying avatar froze the
+  screen for up to half a second at a time and left the controls stuck
+  where they were. The owner: "navigation and controls and screen moving
+  and rendering should never be blocked on things loading." Content is
+  built, swapped and disposed in small pieces inside a per-frame time
+  budget, nearest and largest first; a frame is never skipped to finish
+  a batch sooner. Applies to every mode and to anything processed in
+  bulk (loading, level-of-detail changes, unloading), and it is
+  measured, not assumed: a change that loads content reports its longest
+  frame.
+
+- **Things arrive in the world through fog; nothing pops in.**
+  (2026-11-10, #3397.) On the same recording: "Maybe have a fog
+  materialize where the known product is about to be and slowly
+  materialize into the product. The sudden pop-in is jarring. A simple
+  fade-in is certainly an option, but a stylish foggy transition is more
+  on-brand." Where the app already knows something is about to appear,
+  it shows soft fog in that place first and the thing resolves out of
+  it. Given a plain option and a characterful one of similar cost, the
+  owner picks the one with the brand's character, so offer that first.
+  (higglehaven1's extension by analogy, not yet the owner's words: the
+  same treatment for other sudden swaps, such as a level-of-detail
+  change or content leaving on unload.)
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
