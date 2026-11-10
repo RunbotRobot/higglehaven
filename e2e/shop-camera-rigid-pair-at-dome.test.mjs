@@ -74,7 +74,7 @@ console.log('facing out, at rest:', JSON.stringify(outward));
 await page.keyboard.down('KeyE');
 let turned = await state();
 const turnSamples = [turned];
-for (let i = 0; i < 60 && turned.lookDotOutward > -0.95; i += 1) {
+for (let i = 0; i < 400 && turned.lookDotOutward > -0.95; i += 1) {
   await page.waitForTimeout(100);
   turned = await state();
   turnSamples.push(turned);

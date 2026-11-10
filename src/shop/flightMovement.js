@@ -1319,12 +1319,19 @@ function keepShopPairInside() {
   const world = movementWorld();
   const worldRadiusM = world.worldRadiusM();
   if (worldRadiusM === null || world.boundsCamera === false || world.clampToBoundary) return false;
+  // The movement clamp owns the avatar's own limit and only runs on input. An
+  // avatar already outside it (teleported, landing nudge, spawn orbit) is not
+  // this function's to move: pulling it onto the disc here would also change
+  // the ground it stands on (e2e shop-terrain-elevation-altitude). The camera
+  // alone is bounded for that frame, as before #3385.
+  const avatarLimitM = shopAvatarLimitRadiusM(shopFlightState !== 'grounded');
+  if (Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y) > avatarLimitM + 1e-3) return false;
   const shifted = keepPairInside({
     x: shopAvatarPosition.x,
     y: shopAvatarPosition.y,
     offsetX: camera.position.x - shopAvatarPosition.x,
     offsetY: camera.position.y - shopAvatarPosition.y,
-    avatarLimitM: shopAvatarLimitRadiusM(shopFlightState !== 'grounded'),
+    avatarLimitM,
     cameraLimitM: shopMaxRadiusAtWorldZM(camera.position.z, worldRadiusM - SHOP_CAMERA_DOME_MARGIN_M),
   });
   if (!shifted) return false;
