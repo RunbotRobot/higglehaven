@@ -21,11 +21,9 @@
     <div id="shop-credit-orb-offline-notice" class="shop-notice" role="status" aria-live="polite">
       <span class="shop-notice-text">Can't collect orbs right now — you appear to be offline.</span>
     </div>
-    <div id="shop-credit-orb-rate-limit-notice" class="shop-notice" role="status" aria-live="polite">
+    <div id="shop-credit-orb-rate-limit-notice" class="shop-notice shop-notice-dismissible" role="status" aria-live="polite">
       <span class="shop-notice-text">You've reached the orb limit for now — try again in a bit.</span>
-      <span class="shop-notice-actions">
-        <button class="shop-notice-btn shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
-      </span>
+      <button class="shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
     </div>
     <div id="shop-move-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
     <div id="shop-look-joystick" class="shop-ui shop-joystick"><div class="shop-joystick-knob"></div></div>
@@ -180,11 +178,9 @@
       <button id="toggle-community-calendar" type="button">Community Calendar</button>
       <button id="toggle-backup-chain" type="button">Backup Chain</button>
       <button id="delete-item" type="button">Delete</button>
-      <div id="selection-action-status" class="shop-notice" role="status" aria-live="polite" hidden>
+      <div id="selection-action-status" class="shop-notice shop-notice-dismissible" role="status" aria-live="polite" hidden>
         <span id="selection-action-status-text" class="shop-notice-text"></span>
-        <span class="shop-notice-actions">
-          <button id="selection-action-status-dismiss" class="shop-notice-btn" type="button" aria-label="Dismiss">&times;</button>
-        </span>
+        <button id="selection-action-status-dismiss" class="shop-notice-dismiss-btn" type="button" aria-label="Dismiss">&times;</button>
       </div>
     </div>
     <div id="level-controls">
