@@ -58,6 +58,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { createCoalescingSaveQueue } from '../coalescingSaveQueue.js';
+import { landletLevelZRange } from '../../shared/level-range.js';
 import {
   createInstanceRemote, updateInstanceRemote, deleteInstanceRemote,
   createInstancesRemote, upsertInstancesRemote, deleteInstancesRemote,
@@ -167,6 +168,26 @@ function levelCapConsumedM2(landletAreaM2, levelIndex) {
 function levelExtent() {
   const indices = currentLandletLevels.map((level) => level.levelIndex);
   return { top: Math.max(0, ...indices), bottom: Math.min(0, ...indices) };
+}
+
+// #3372: how high and low an item's centre may sit on this lándlet -- the
+// same range the server enforces (shared/level-range.js), so a move is
+// stopped here instead of being accepted and then refused on save.
+function itemCentreZRange() {
+  return landletLevelZRange(currentLandletLevels.map((level) => level.levelIndex));
+}
+
+// Which end of the lándlet's levels a gesture last ran into (null when it
+// was free). The gesture handlers read and clear it so the limit is said
+// once per hit, not once per frame.
+let levelLimitHit = null;
+function announceLevelLimit() {
+  const hit = levelLimitHit;
+  levelLimitHit = null;
+  if (!hit) return;
+  showSelectionActionStatus(hit === 'top'
+    ? "That's as high as this lándlet goes. Use Build Level Above to build higher."
+    : "That's as deep as this lándlet goes. Use Dig Level Below to go deeper.");
 }
 
 function levelLabel(levelIndex) {
@@ -419,7 +440,12 @@ function clampToLandlet(mesh, x, y, z) {
   const { width, depth, height } = meshDimensions(mesh);
   const floorZ = levelFloorZ(currentLevelIndex);
   const ceilingZ = floorZ + LANDLET_HEIGHT_M;
-  const clampedZ = THREE.MathUtils.clamp(z, floorZ + height / 2, ceilingZ - height / 2);
+  const { minZ, maxZ } = itemCentreZRange();
+  const lowestZ = Math.max(floorZ + height / 2, minZ);
+  const highestZ = Math.min(ceilingZ - height / 2, maxZ);
+  const clampedZ = THREE.MathUtils.clamp(z, lowestZ, highestZ);
+  if (z > highestZ && highestZ === maxZ) levelLimitHit = 'top';
+  else if (z < lowestZ && lowestZ === minZ) levelLimitHit = 'bottom';
   const footprintScale = footprintScaleAtHeight(clampedZ);
   const halfSpanX = (LANDLET_SIDE_M / 2) * footprintScale - width / 2;
   const halfSpanY = (LANDLET_SIDE_M / 2) * footprintScale - depth / 2;
@@ -727,6 +753,17 @@ translateControls.addEventListener('objectChange', () => {
       // edited, same as clampToLandlet's own single-item case.
       minOffsetZ = Math.max(minOffsetZ, levelFloorZ(currentLevelIndex) + height / 2 - start.z);
       maxOffsetZ = Math.min(maxOffsetZ, levelFloorZ(currentLevelIndex) + LANDLET_HEIGHT_M - height / 2 - start.z);
+      // #3372: and by the lándlet's levels, as the server reads them.
+      const { minZ, maxZ } = itemCentreZRange();
+      minOffsetZ = Math.max(minOffsetZ, minZ - start.z);
+      maxOffsetZ = Math.min(maxOffsetZ, maxZ - start.z);
+    }
+    if (meshes.length > 0) {
+      const { minZ, maxZ } = itemCentreZRange();
+      const levelsMaxOffsetZ = Math.min(...meshes.map((m) => maxZ - groupMoveStartPositions.get(m).z));
+      const levelsMinOffsetZ = Math.max(...meshes.map((m) => minZ - groupMoveStartPositions.get(m).z));
+      if (totalOffset.z > maxOffsetZ && maxOffsetZ === levelsMaxOffsetZ) levelLimitHit = 'top';
+      else if (totalOffset.z < minOffsetZ && minOffsetZ === levelsMinOffsetZ) levelLimitHit = 'bottom';
     }
     const offset = new THREE.Vector3(
       THREE.MathUtils.clamp(totalOffset.x, minOffsetX, maxOffsetX),
@@ -768,6 +805,7 @@ translateControls.addEventListener('objectChange', () => {
       groupMovePivotStartPosition.y + offset.y,
       groupMovePivotStartPosition.z + offset.z,
     );
+    announceLevelLimit();
     return;
   }
   const requested = clampToLandlet(object, object.position.x, object.position.y, object.position.z);
@@ -790,6 +828,7 @@ translateControls.addEventListener('objectChange', () => {
   updateAlignmentGuides(object);
   object.userData.safePosition = new THREE.Vector3(resolved.x, resolved.y, resolved.z);
   object.position.set(resolved.x, resolved.y, resolved.z);
+  announceLevelLimit();
 });
 
 // #1770: same reasoning as window.__testTeleportShopAvatar and the other
@@ -826,7 +865,11 @@ rotateControls.addEventListener('dragging-changed', (event) => {
 function bundleBounds() {
   const half = LANDLET_SIDE_M / 2;
   const floor = levelFloorZ(currentLevelIndex);
-  return { minX: -half, maxX: half, minY: -half, maxY: half, minZ: floor, maxZ: floor + LANDLET_HEIGHT_M };
+  const { minZ, maxZ } = itemCentreZRange(); // #3372: the server's range too
+  return {
+    minX: -half, maxX: half, minY: -half, maxY: half,
+    minZ: Math.max(floor, minZ), maxZ: Math.min(floor + LANDLET_HEIGHT_M, maxZ),
+  };
 }
 let bundleRotateLimitShown = false;
 function applyBundleRotation(delta) {
@@ -1818,6 +1861,17 @@ async function runBatchUpdate(meshes, { gateHeld = false } = {}) {
       }
     }
     noteSyncFailure(err);
+    // #3372: the client stops moves at the lándlet's top and bottom level, so
+    // this means stale level data or another tab. Put the items back where
+    // they are saved and say so, rather than leaving them somewhere that
+    // "may not survive a reload".
+    if (err.code === 'out_of_level_range') {
+      const putBack = await revertSceneToServer();
+      tellBuilder("Couldn't move those items", putBack
+        ? `${err.message} They have been put back where they were.`
+        : `${err.message} They may not stay where they are after a reload.`);
+      return;
+    }
     // #1380: same reasoning as syncBatchCreate's own #903 fix above —
     // err.succeededCount (set by upsertInstancesRemote) says how many of a
     // large group-move/undo-redo batch already landed before the chunk
@@ -4041,6 +4095,10 @@ async function placeClipboardItems(items, x, y, supportZ, { group = false, bundl
       maxOffsetY = Math.min(maxOffsetY, halfSpanY - mesh.position.y);
       minOffsetZ = Math.max(minOffsetZ, floorZ + height / 2 - mesh.position.z);
       maxOffsetZ = Math.min(maxOffsetZ, ceilingZ - height / 2 - mesh.position.z);
+      // #3372: and by the lándlet's levels, as the server reads them.
+      const { minZ, maxZ } = itemCentreZRange();
+      minOffsetZ = Math.max(minOffsetZ, minZ - mesh.position.z);
+      maxOffsetZ = Math.min(maxOffsetZ, maxZ - mesh.position.z);
     }
     const offsetX = THREE.MathUtils.clamp(0, minOffsetX, maxOffsetX);
     const offsetY = THREE.MathUtils.clamp(0, minOffsetY, maxOffsetY);

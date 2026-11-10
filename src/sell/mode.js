@@ -498,6 +498,23 @@ function renderSellerList() {
     details.className = 'seller-row-details';
     row.appendChild(details);
 
+    // #3378 (owner, 2026-11-10): the buttons that act on the whole product sit
+    // directly under its name, above every settings toggle, with the status
+    // line and the preview they produce right beside them. They are created
+    // here so their place in the block is fixed; the buttons are filled in
+    // further down.
+    const rowStatus = document.createElement('div');
+    rowStatus.className = 'seller-row-status';
+
+    const actions = document.createElement('div');
+    actions.className = 'seller-row-actions';
+    details.appendChild(actions);
+    details.appendChild(rowStatus);
+
+    const previewContainer = document.createElement('div');
+    previewContainer.className = 'seller-row-preview';
+    details.appendChild(previewContainer);
+
     toggle.addEventListener('click', () => {
       const wasExpanded = row.classList.contains('expanded');
       for (const otherRow of sellerListEl.querySelectorAll('.seller-row')) otherRow.classList.remove('expanded');
@@ -1022,17 +1039,6 @@ function renderSellerList() {
       priceToggle.textContent = `Edit Price ${pricePanel.hidden ? '▾' : '▴'}`;
       if (!pricePanel.hidden) fillPriceInput();
     });
-
-    const rowStatus = document.createElement('div');
-    rowStatus.className = 'seller-row-status';
-
-    const actions = document.createElement('div');
-    actions.className = 'seller-row-actions';
-    details.appendChild(actions);
-
-    const previewContainer = document.createElement('div');
-    previewContainer.className = 'seller-row-preview';
-    details.appendChild(previewContainer);
 
     // General-purpose look-it-over view by default (no axis arrows) — see
     // showAxisPreview's own doc comment. Toggling reuses the single
@@ -1848,7 +1854,6 @@ function renderSellerList() {
       if (!salesPanel.hidden) renderSales();
     });
 
-    details.appendChild(rowStatus);
     // #457: a save begun before the modal was closed can still be in
     // flight against this templateId when it's reopened and this row is
     // rebuilt from scratch — disable this row's own freshly-created

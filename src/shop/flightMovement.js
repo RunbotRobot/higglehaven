@@ -53,7 +53,7 @@
 import * as THREE from 'three';
 import { camera, renderer } from '../world/scene.js';
 import { curvatureDropM } from '../../worker/earthCurvature.js';
-import { takeoffAltitudeM, clampedLandingAltitudeM, flightSpeedMultiplier } from '../flight.js';
+import { takeoffAltitudeM, clampedLandingAltitudeM, flightSpeedMultiplier, flightBodyReach } from '../flight.js';
 import { attentionDistanceAndDot, hasSustainedAttention, nextAttentionElapsedS, pickNearestInRange, yawRotatedForward } from '../attention.js';
 import { classifyHandlingKind, nextHandlingBlend, nextPhase, shouldEndItemHandling } from '../itemHandling.js';
 import { meshDimensions, isFlooringTemplate } from '../world/models.js';
@@ -77,7 +77,7 @@ import {
   shopActive, shopLastLocation,
   shopWorldRadiusM, shopDomeMesh, SHOP_MAX_PITCH,
   SHOP_WALL_HEIGHT_M, SHOP_DOME_CLEARANCE_MARGIN_M,
-  SHOP_AVATAR_COLLISION_HALF_M, SHOP_AVATAR_HEAD_RADIUS_M, SHOP_AVATAR_TORSO_LENGTH_M,
+  SHOP_AVATAR_COLLISION_HALF_M,
   shopFlyBtn, shopFlyBtnIcon, shopLastLocationBtn, shopVerticalControlsEl,
   shopUpBtn, shopDownBtn, shopMoveJoystickEl, shopMoveKnobEl, shopLookJoystickEl, shopLookKnobEl,
 } from '../main.js';
@@ -318,6 +318,8 @@ const SHOP_PROXIMITY_INTERVAL_MS = 400;
 // avoid the grazing-angle case on any world.
 const SHOP_WALL_CLEARANCE_M = 6;
 const SHOP_WALL_CLEARANCE_MIN_M = 2;
+// #3374: the least the follow camera keeps from the dome surface itself.
+const SHOP_CAMERA_DOME_MARGIN_M = 0.3;
 
 // A wide range on purpose — Shop's "zoom" is a pure lens effect (the
 // free-flying camera never actually moves closer/farther, see setShopFov's
@@ -859,17 +861,18 @@ function shopAvatarMaxRadiusM() {
 // in-between value here, since even a partial lean reaches less than this
 // worst case, not more) keeps the whole leaning body inside the boundary,
 // not just its pivot.
-// #2624: a function rather than a cached module-level constant -- computed
-// from SHOP_AVATAR_TORSO_LENGTH_M/SHOP_AVATAR_HEAD_RADIUS_M, reverse-
-// imported from main.js, which (same TDZ-class hazard as the DOM-element
-// bindings this module's own initShopFlightInputBindings comment
-// documents) still read as undefined at this module's own top-level
-// evaluation time -- main.js hasn't reached their declarations yet when
-// the circular import resolves. The call site is the one place this is
-// ever needed, every frame, so there's no real cost to just computing it
-// fresh there instead of caching a value that would otherwise be NaN.
-function shopAvatarFlightLeanClearanceM() {
-  return (SHOP_AVATAR_TORSO_LENGTH_M + SHOP_AVATAR_HEAD_RADIUS_M * 2) * Math.sin(Math.abs(SHOP_AVATAR_FLIGHT_PITCH_RAD));
+// #3374: the lean reach was first counted as torso + head only (0.78 m of a
+// 1.64 m body), but the group origin is the avatar's feet, so the whole body
+// swings forward; it is now the avatar's real height (a custom model's
+// measured height included) via flightBodyReach in src/flight.js. A function
+// rather than a cached constant since the equipped avatar can change (#713).
+function shopAvatarFlightBodyReach() {
+  // #3374: the group origin is the avatar's feet (procedural body and custom
+  // models alike, see createCustomShopAvatar), so the head swings forward by
+  // the FULL body height times sin(lean), not just the torso and head the
+  // #1840 formula counted (0.78 m of a 1.64 m body). A custom avatar's
+  // measured height flows through shopAvatarHeightM.
+  return flightBodyReach(shopAvatarHeightM(), SHOP_AVATAR_FLIGHT_PITCH_RAD, shopAvatarCollisionHalfM());
 }
 
 function clampShopRadius(position, maxRadius, isCamera = false) {
@@ -1308,7 +1311,18 @@ export function positionShopCamera() {
   shopCameraAnchor.z += shopCameraAnchorHeightM();
   camera.position.copy(shopCameraAnchor).addScaledVector(shopViewDirection, -SHOP_CAMERA_FOLLOW_DISTANCE_M);
   clampShopCameraHeight();
-  clampShopRadius(camera.position, shopMaxRadiusAtWorldZM(camera.position.z, shopMaxRadiusM()), true);
+  // #3374: the avatar is what is bounded; the camera only follows it. The
+  // camera's own wall clearance (shopMaxRadiusM, up to several metres) is
+  // stricter than the avatar's, so near the edge it used to pin the camera
+  // while the avatar flew on. The radius it may use is never below the
+  // avatar's own, which keeps a radial pull-in from moving the camera away
+  // from the avatar (projecting onto a disc that contains the anchor never
+  // increases the distance to it), and never past the dome itself at the
+  // camera's own height.
+  const cameraAnchorRadiusM = Math.hypot(shopCameraAnchor.x, shopCameraAnchor.y);
+  const cameraWallRadiusM = shopMaxRadiusAtWorldZM(camera.position.z, shopMaxRadiusM());
+  const cameraDomeRadiusM = shopMaxRadiusAtWorldZM(camera.position.z, (activeWorldRadiusM() ?? 0) - SHOP_CAMERA_DOME_MARGIN_M);
+  clampShopRadius(camera.position, Math.min(Math.max(cameraWallRadiusM, cameraAnchorRadiusM), cameraDomeRadiusM), true);
   // #1631: e2e-only hook (same "expose computed state purely for
   // verification" convention as window.__shopInstanceDisposedCount) --
   // lets a test confirm the avatar/camera's real world z stays under the
@@ -1557,6 +1571,42 @@ window.__testNearestOpenLandingSpot = (x, y) => nearestOpenLandingSpot(x, y);
 // above -- lets a test compute the real world-boundary radius a landing
 // should be clamped to, instead of hardcoding/guessing it.
 window.__testShopAvatarMaxRadiusM = () => shopAvatarMaxRadiusM();
+// #3374: e2e-only, computed on demand (a world-space Box3 over a skinned
+// avatar is too costly to refresh every frame like __shopFlightCeilingDebug).
+// The avatar's vertex with the least room inside the dome (judged at its own
+// height), so a test can check the whole body, not just the clamped pivot,
+// without restating the clamp's own formula.
+window.__shopAvatarBoundsDebug = () => {
+  if (!shopAvatar) return null;
+  shopAvatar.group.updateWorldMatrix(true, true);
+  // Real (skinned) vertices in world space, not an axis-aligned box: a box
+  // around a tipped body has corners the body never reaches.
+  const vertex = new THREE.Vector3();
+  let farthest = null;
+  shopAvatar.group.traverse((object) => {
+    if (!object.isMesh || !object.geometry?.attributes?.position || object.isSprite) return;
+    const count = object.geometry.attributes.position.count;
+    const stride = Math.max(1, Math.floor(count / 4000));
+    for (let i = 0; i < count; i += stride) {
+      object.getVertexPosition(i, vertex);
+      vertex.applyMatrix4(object.matrixWorld);
+      const radiusM = Math.hypot(vertex.x, vertex.y);
+      // Judge each vertex against the dome at its own height.
+      const margin = shopMaxRadiusAtWorldZM(vertex.z, activeWorldRadiusM() ?? 0) - radiusM;
+      if (!farthest || margin < farthest.marginM) farthest = { radiusM, z: vertex.z, marginM: margin };
+    }
+  });
+  return {
+    farthest,
+    pivotRadiusM: Math.hypot(shopAvatarPosition.x, shopAvatarPosition.y),
+    pivotZ: shopAvatarPosition.z,
+    cameraRadiusM: Math.hypot(camera.position.x, camera.position.y),
+    cameraXM: camera.position.x,
+    cameraYM: camera.position.y,
+    cameraZM: camera.position.z,
+    heightM: shopAvatarHeightM(),
+  };
+};
 // #2116: the clearance a landing nudge must leave from another avatar.
 window.__testLandingClearanceM = () => shopAvatarCollisionHalfM() + SHOP_AVATAR_COLLISION_HALF_M;
 // #2852: same e2e-only convention -- lets a test read the real floor a
@@ -1712,9 +1762,17 @@ export function updateShopMovementCore(now) {
     // consistently at every height -- both down at the flat wall (this
     // issue's own low-altitude case) and up where the dome's real curved
     // cross-section already narrows the radius on its own (#1839's case).
+    // #3374: judged where the body's highest, farthest point is, not at the
+    // pivot's height: the dome narrows with height, so the tipped head meets
+    // the dome before the feet do. shopAvatarMaxRadiusM already reserves the
+    // body's half-width, so only the forward lean is taken off on top of it.
+    const bodyReach = airborne ? shopAvatarFlightBodyReach() : null;
     clampShopRadius(
       shopAvatarPosition,
-      shopMaxRadiusAtWorldZM(shopAvatarPosition.z, shopAvatarMaxRadiusM() - (airborne ? shopAvatarFlightLeanClearanceM() : 0)),
+      shopMaxRadiusAtWorldZM(
+        shopAvatarPosition.z + (bodyReach ? bodyReach.riseM : 0),
+        shopAvatarMaxRadiusM() - (bodyReach ? bodyReach.forwardM : 0),
+      ),
     );
   }
 
