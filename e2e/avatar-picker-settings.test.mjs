@@ -148,6 +148,24 @@ console.log('Default avatar row shows no purchase date (should be true):', !defa
 // avatar's own count, is what actually verifies "revert disposed the
 // custom avatar and landed back on the same default-avatar footprint,"
 // the comparison this test is actually meant to make.
+// #3373: placed items switch between their full model and a simplified box by
+// apparent size, with hysteresis, and swapping to the (differently tall) custom
+// avatar moves the camera a little. An item sitting between the two thresholds
+// can therefore stay in the other tier after the revert, which changes the
+// geometry count by one without any avatar leak. One equip-and-revert round
+// trip first puts the scene in the state every later revert returns to, so the
+// baseline below is comparable with the revert's count.
+async function equipRow(rowLocator, equippedText) {
+  await rowLocator.locator('button', { hasText: 'Equip' }).click();
+  await page.waitForFunction(
+    (name) => [...document.querySelectorAll('.version-row')].some((r) => r.textContent.includes(name) && r.textContent.includes('equipped')),
+    equippedText,
+    { timeout: 30000 },
+  );
+}
+await equipRow(myAvatarsField.locator('.version-row', { hasText: PRODUCT_NAME }), PRODUCT_NAME);
+await equipRow(myAvatarsField.locator('.version-row', { hasText: 'Default avatar' }), 'Default avatar');
+await page.waitForTimeout(1500);
 const memBaseline = await page.evaluate(() => window.__currentRendererMemory());
 console.log('renderer live-geometry count for the default avatar, right before equipping anything:', memBaseline);
 
