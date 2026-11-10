@@ -299,6 +299,12 @@ export function unloadShopLandletInstances(entry) {
     worldWorkQueue.dropGroup(entry.loadGroup);
     entry.loadGroup = null;
   }
+  // #3407: release every arrival fog and put the plain materials back before the
+  // items leave, so nothing is left dissolved, fogged or leaked.
+  if (entry.arrivalRun) {
+    entry.arrivalRun.dispose();
+    entry.arrivalRun = null;
+  }
   for (const object of entry.objects) {
     entry.group.remove(object);
     worldWorkQueue.enqueue(() => disposeObject3D(object), { priority: DISPOSE_QUEUE_PRIORITY });

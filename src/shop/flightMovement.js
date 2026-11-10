@@ -94,7 +94,7 @@ import { shopDomeRiseM } from './sky.js';
 // see that module's own comment for its dependency notes.
 import {
   shopLandlets, shopOtherAvatars,
-  reportOwnPresenceIfNeeded, pollNearbyPresenceIfNeeded, updateOtherShopAvatars,
+  reportOwnPresenceIfNeeded, pollNearbyPresenceIfNeeded, updateOtherShopAvatars, updateShopArrivals,
   updateCreditOrbs, updateCreditOrbPopEffects,
   updateShopProximity, updateShopLandletInfo, shopTerrainHeightAtM,
   refreshShopLandletRecordsIfNeeded,
@@ -1969,6 +1969,8 @@ export function updateShopWorldServices(now, dt) {
   refreshShopLandletRecordsIfNeeded(now);
   pollNearbyChatIfNeeded(now);
   updateOtherShopAvatars(now);
+  // #3407: arrival fogs and dissolves of landlets still loading in.
+  updateShopArrivals();
   // #2818: after updateOtherShopAvatars above, so this frame's distance
   // checks read this tick's own smoothed/interpolated positions, not last
   // frame's stale ones.
