@@ -565,6 +565,32 @@ most likely to come up again.
   limit from one definition. A refusal that still happens puts the
   thing back where it was and says so.
 
+- **At the world's edge the avatar and the camera both stay inside, and
+  the distance between them never changes.** (2026-11-10, #3374.) The
+  first fix proposed for the avatar flying through the dome had the
+  camera pull in toward the avatar. The owner chose otherwise: "blocking
+  both the camera and the avatar from crossing the dome boundary, while
+  still keeping a constant distance between avatar and camera." The pair
+  stops when either end reaches the boundary, so the avatar gets closer
+  to the dome when the camera faces it than when the camera faces the
+  centre; the owner named that asymmetry and accepted it. The view never
+  extends outside the world, and the framing a person steers by is not
+  changed under them to make a limit easier to meet. A predictable
+  limit with a visible asymmetry beats a rig that changes shape.
+
+- **Controls sit where a person looks for them first.** (2026-11-10,
+  #3377, #3378.) Two reports in one message. The close button on the
+  orb limit notice sat alone on a line under the text: "Let's move it to
+  the upper-right, like normal." And the owner asked for a product
+  rename feature that already existed, because Rename sat half way down
+  the product's block between two groups of settings: "Let's move the
+  menu buttons to the top of the modal, maybe just below the product
+  name." So the control that dismisses a notice, panel or modal is in
+  its upper-right corner, and the actions on a thing sit directly under
+  its name, above its settings, with their results shown beside them.
+  Where a platform convention exists, follow it; a control a person has
+  to hunt for is a missing feature as far as they can tell.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
