@@ -730,9 +730,10 @@
          (see bindShopFlyToggle in src/main.js; double-press space does the
          same on desktop). Centered above the hint text, its own row so it
          never collides with the move/look joysticks on either side. */
-      /* #1589: the bird artwork fills the whole pill on a white background
-         now, rather than sitting as a small icon on a green one — padding
-         removed so the image can reach the button's own edge. */
+      /* #1589: the bird artwork fills the whole pill rather than sitting as a
+         small icon -- padding removed so the image can reach the button's own
+         edge. #3393: the pill is brand green in both states (the owner liked
+         the green one); the icon alone says which state it is in. */
       /* #3334: the fly button and the up/down stack above it share one
          bottom anchor, so the stack's position is derived from the button's
          own bottom + size + gap instead of a second hand-tuned number that
@@ -751,10 +752,19 @@
         padding: 0;
         border-radius: 50%;
         border: none;
-        background: #fff;
+        background: var(--brand-green);
         color: var(--pill-text);
         font-size: 18px;
         touch-action: none;
+      }
+      /* #3393: colour no longer tells the two states apart, so a press and
+         keyboard focus each get their own visible cue. */
+      #shop-fly-btn:active {
+        filter: brightness(0.88);
+      }
+      #shop-fly-btn:focus-visible {
+        outline: 3px solid rgb(var(--ink-rgb) / 0.75);
+        outline-offset: 3px;
       }
       /* #3369: the icon is the bird alone, already sized to sit inside this
          circle (scripts/cut-bird-icons.mjs), so it is just contained -- no
@@ -764,9 +774,6 @@
         width: 100%;
         height: 100%;
         object-fit: contain;
-      }
-      #shop-fly-btn.active {
-        background: var(--brand-green);
       }
       /* Ascend/descend while actually flying (updateShopFlight in
          src/main.js sets shop-flying on <body> for the duration) — hidden
