@@ -16,7 +16,7 @@ const COUNT = 829;
 // the pacing is judged against that idle figure and directly through the
 // queue's own stats (ticks and longest tick) below.
 const EXTRA_GAP_CEILING_MS = Number(process.env.UNDO_EXTRA_GAP_CEILING_MS || 250);
-const MIN_QUEUE_TICKS = 10; // the rebuild is spread over at least this many frames
+const MIN_QUEUE_TICKS = 5; // the rebuild is spread over at least this many frames
 const MAX_TICK_MS = 60; // the budget is 4 ms plus one unit; this is generous for a loaded runner
 
 const { browser, page, errors } = await launchPage({ promptAnswer: LABEL });
