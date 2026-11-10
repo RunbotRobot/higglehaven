@@ -123,6 +123,14 @@ check(count === COUNT, `every item arrives (${count}/${COUNT})`);
 check(stats.longestGapMs < MAX_FRAME_GAP_MS, `no frame gap of ${MAX_FRAME_GAP_MS} ms or more while loading (longest ${Math.round(stats.longestGapMs)} ms)`);
 check(moved > 1, `the avatar kept moving while the landlet loaded (${moved.toFixed(1)} m)`);
 
+// For the PR: what the same software renderer manages with the landlet fully
+// loaded and nothing loading (829 separate meshes), so a remaining gap can be
+// told apart from loading work.
+await page.evaluate(() => window.__frameMonitor.reset());
+await page.waitForTimeout(2500);
+const steady = await page.evaluate(() => window.__frameMonitor.longestFrameGapMs());
+console.log(`steady state with the landlet loaded and nothing loading: longest frame gap ${Math.round(steady)} ms`);
+
 // ---- 2. A load abandoned part way leaves nothing behind ----
 await moveTo(farPoint);
 await page.waitForFunction(() => window.__testShopLoadedInstanceCount() === 0, null, { timeout: 30000 });
