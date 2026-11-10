@@ -106,6 +106,7 @@ import {
 import { addItemBtn, closeCatalogPicker } from '../catalog/picker.js';
 import { copyTextWithFeedback } from '../ui/copyText.js';
 import { showInlineActionStatus } from '../ui/inlineActionStatus.js';
+import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { confirmDestructive } from '../ui/confirmModal.js';
 import { showNotice } from '../ui/noticeModal.js';
 import { recordVisibleMessage } from '../ui/visibleMessages.js';
@@ -2010,7 +2011,18 @@ async function spawnInstanceAt(template, x, y, z, overrides = {}, { sync = true,
 // sync: false is the multi-item counterpart to spawnInstanceAt's own —
 // used wherever several instances are deleted in one action (multi-delete,
 // undo/redo) so the caller can batch the network side into one request.
-function deleteInstance(mesh, { sync = true } = {}) {
+// #3427: "Moving, looking and drawing never wait on loading." Rebuilding or
+// removing hundreds of items (undoing the delete of an 829-brick wall) used to
+// run as one task that held the screen. Building goes through worldWorkQueue
+// (see applySnapshotLocally); releasing what left the scene is the least urgent
+// world work, so it runs after anything still being built, a few ms per frame.
+const BUILD_QUEUE_PRIORITY = 0;
+const DISPOSE_QUEUE_PRIORITY = 1e9;
+
+// persist: false for a caller deleting many meshes in a loop, which then calls
+// persistLayout() once itself -- writing the whole layout once per deleted item
+// is quadratic in the number of items.
+function deleteInstance(mesh, { sync = true, persist = true } = {}) {
   const index = productMeshes.indexOf(mesh);
   if (index === -1) return;
   const instanceId = mesh.userData.instanceId;
@@ -2024,8 +2036,8 @@ function deleteInstance(mesh, { sync = true } = {}) {
   // itself is gone.
   removeLowStockHighlight(mesh);
   landletElevationGroup.remove(mesh);
-  disposeObject(mesh);
-  persistLayout();
+  worldWorkQueue.enqueue(() => disposeObject(mesh), { priority: DISPOSE_QUEUE_PRIORITY });
+  if (persist) persistLayout();
   if (sync) syncDelete(instanceId);
 }
 
@@ -2293,8 +2305,9 @@ levelRemoveBtn.addEventListener('click', async () => {
         selectedMeshes.delete(mesh);
         selectionChanged = true;
       }
-      deleteInstance(mesh, { sync: false });
+      deleteInstance(mesh, { sync: false, persist: false });
     }
+    persistLayout();
     if (selectionChanged) updateSelectionUI();
     currentLandletLevels = currentLandletLevels.filter((level) => level.levelIndex !== currentLevelIndex);
     currentLevelIndex += currentLevelIndex > 0 ? -1 : 1;
@@ -2430,12 +2443,14 @@ async function applySnapshotLocally(snapshot) {
         selectedMeshes.delete(mesh);
       }
       deletedIds.push(mesh.userData.instanceId);
-      deleteInstance(mesh, { sync: false });
+      deleteInstance(mesh, { sync: false, persist: false });
     }
   }
+  if (deletedIds.length > 0) persistLayout();
   const currentById = new Map(productMeshes.map((mesh) => [mesh.userData.instanceId, mesh]));
   const updatedMeshes = [];
   const createdMeshes = [];
+  const pendingCreates = [];
   for (const inst of snapshot) {
     let mesh = currentById.get(inst.instanceId);
     if (mesh) {
@@ -2467,9 +2482,16 @@ async function applySnapshotLocally(snapshot) {
       mesh.userData.safePosition = mesh.position.clone();
       updatedMeshes.push(mesh);
     } else {
-      const newMesh = await addInstanceToScene(inst);
-      if (newMesh) createdMeshes.push(newMesh);
+      // #3427: built through the queue, a few ms per frame, so undoing the
+      // delete of hundreds of items no longer holds the screen in one task.
+      // All units are queued before any is awaited, so they run back to back
+      // in snapshot order (productMeshes keeps that order) and the budget, not
+      // a frame per await, is the only pacing.
+      pendingCreates.push(worldWorkQueue.run(() => addInstanceToScene(inst), { priority: BUILD_QUEUE_PRIORITY }));
     }
+  }
+  for (const newMesh of await Promise.all(pendingCreates)) {
+    if (newMesh) createdMeshes.push(newMesh);
   }
   return { deletedIds, updatedMeshes, createdMeshes };
 }
@@ -3701,7 +3723,8 @@ deleteBtn.addEventListener('click', () => {
   const instanceIds = meshes.map((mesh) => mesh.userData.instanceId);
   clearSelection();
   updateSelectionUI();
-  for (const mesh of meshes) deleteInstance(mesh, { sync: false });
+  for (const mesh of meshes) deleteInstance(mesh, { sync: false, persist: false });
+  persistLayout();
   syncBatchDelete(instanceIds);
 });
 
