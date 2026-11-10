@@ -54,7 +54,8 @@
 // reuses it for an unrelated Build-mode neighbor-outline radius.
 import * as THREE from 'three';
 import { camera, scene } from '../world/scene.js';
-import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, loadModelInstance, loadModelAnimations, meshDimensions } from '../world/models.js';
+import { worldWorkQueue } from '../world/frameBudgetQueue.js';
+import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
 import { apparentSizePx, nextIsMiddle, fullDetailFloorPx } from './lodTier.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
@@ -370,6 +371,10 @@ function updateInstanceLodTiers() {
     }
   }
   const floorPx = fullDetailFloorPx(lodNearPxScratch);
+  // #3396: flipping hundreds of items in one tick is a batch like any other, so
+  // it stops when its slice of the frame is spent; the items not reached keep
+  // their state and flip on the next tick.
+  const flipStartMs = performance.now();
   for (const entry of shopLandlets.values()) {
     if (!entry.loaded) continue;
     for (const object of entry.objects) {
@@ -378,10 +383,12 @@ function updateInstanceLodTiers() {
       if (isMiddle !== object.userData.lodMiddle) {
         object.userData.lodMiddle = isMiddle;
         setInstanceLodState(object, isMiddle);
+        if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;
       }
     }
   }
 }
+const SHOP_LOD_FLIP_BUDGET_MS = 4; // #3396: the part of a frame one tick's tier flips may use
 
 // True if the given world point falls inside this landlet's own footprint
 // — the same shape shapeForLandlet draws for its Shop-mode ground mesh
@@ -1058,53 +1065,86 @@ async function loadShopLandletInstances(entry, myToken) {
     if (myToken === entry.loadToken) entry.loaded = false; // allow a later pass to retry
     return;
   }
+  // #3396: moving, looking and drawing never wait on loading. Each item is its
+  // own small unit of work, run inside the per-frame time budget (see
+  // src/world/frameBudgetQueue.js), nearest and largest on screen first, so a
+  // landlet of hundreds of items arrives over several frames instead of
+  // freezing one. Dropping the group on unload (or on a newer load) cancels
+  // whatever has not run yet.
+  if (entry.loadGroup) worldWorkQueue.dropGroup(entry.loadGroup);
+  const group = {};
+  entry.loadGroup = group;
   for (const instance of instances) {
-    if (myToken !== entry.loadToken) return; // superseded while this was in flight
-    const object = await createMeshForInstance(instance);
-    if (!object) continue;
-    // #1445: object was already fully built above (a real GLTF load) before
-    // this guard runs — same hazard #1426/#1427 already fixed for their own
-    // async-supersede loaders. Without disposing it here, the superseded-
-    // but-already-built instance's geometry/materials/textures leak for the
-    // rest of the tab's lifetime, since nothing else ever references it.
-    if (myToken !== entry.loadToken) {
-      disposeObject3D(object);
-      // Nothing else observes this branch (object is never added to
-      // entry.group, so it's never drawn and therefore never counted by
-      // reportRendererMemoryDiagnostic's renderer.info.memory snapshot
-      // either) -- exposed purely so an e2e test can confirm the dispose
-      // above actually ran, same reasoning as window.__sellerShowcaseDisposedMeshCount
-      // (#1427/#1432) and window.__supersededAvatarDisposals (#1426).
-      window.__shopInstanceDisposedCount = (window.__shopInstanceDisposedCount ?? 0) + 1;
-      return;
-    }
-    entry.group.add(object);
-    entry.objects.push(object);
-    growShopDomeIfNeeded(object);
-    // #2378: built/attached after growShopDomeIfNeeded above, not before —
-    // the proxy's box dimensions approximate the model's declared template
-    // size, which can differ slightly from the real mesh's own rendered
-    // bounds, so keeping it out of that one Box3.setFromObject(object) call
-    // avoids any chance of it skewing the dome-growth calculation.
-    const lodProxy = buildInstanceLodProxy(object);
-    if (lodProxy) {
-      object.userData.lodProxy = lodProxy;
-      object.add(lodProxy);
-    }
-    // #3373: a fresh item starts at the tier its apparent size calls for, so
-    // one loaded from altitude never builds full detail only to swap down a
-    // tick later.
-    const startsMiddle = nextIsMiddle(null, lodApparentPx(entry, object));
-    object.userData.lodMiddle = startsMiddle;
-    setInstanceLodState(object, startsMiddle);
-    if (object.userData.isCommunitySign) registerShopSign(object, entry);
-    if (object.userData.isCommunityCalendar) registerShopCalendar(object, entry);
-    // Unlike signs/calendar above, reviews have no builder opt-in flag at
-    // all — every placed instance's underlying catalog template is
-    // reviewable by definition (see docs/API.md's "Product reviews"), so
-    // this registers unconditionally.
-    registerShopReview(object, entry);
+    worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, myToken), {
+      group,
+      priority: instanceLoadPriority(entry, instance),
+    });
   }
+}
+
+// How soon an item should be built: the bigger it will look on screen, the
+// sooner (a lower number runs first). Uses the template's declared size, since
+// the mesh does not exist yet.
+function instanceLoadPriority(entry, instance) {
+  const template = findTemplate(instance.templateId);
+  const dims = template?.dimensions;
+  const scale = instance.scale ?? 1;
+  const radiusM = dims ? 0.5 * Math.hypot(dims.width, dims.depth, dims.height) * scale : 0.5;
+  const dx = entry.group.position.x + (instance.x ?? 0) - camera.position.x;
+  const dy = entry.group.position.y + (instance.y ?? 0) - camera.position.y;
+  const dz = entry.group.position.z + (instance.z ?? 0) - camera.position.z;
+  return -apparentSizePx(radiusM, Math.hypot(dx, dy, dz), camera.fov, window.innerHeight);
+}
+
+// One item of a landlet load (#3396): build it, attach it, register it. The
+// loop this came from checked its token before and after the build; those
+// checks are unchanged.
+async function buildAndAttachInstance(entry, instance, myToken) {
+  if (myToken !== entry.loadToken) return; // superseded while queued
+  const object = await createMeshForInstance(instance);
+  if (!object) return;
+  // #1445: object was already fully built above (a real GLTF load) before
+  // this guard runs — same hazard #1426/#1427 already fixed for their own
+  // async-supersede loaders. Without disposing it here, the superseded-
+  // but-already-built instance's geometry/materials/textures leak for the
+  // rest of the tab's lifetime, since nothing else ever references it.
+  if (myToken !== entry.loadToken) {
+    disposeObject3D(object);
+    // Nothing else observes this branch (object is never added to
+    // entry.group, so it's never drawn and therefore never counted by
+    // reportRendererMemoryDiagnostic's renderer.info.memory snapshot
+    // either) -- exposed purely so an e2e test can confirm the dispose
+    // above actually ran, same reasoning as window.__sellerShowcaseDisposedMeshCount
+    // (#1427/#1432) and window.__supersededAvatarDisposals (#1426).
+    window.__shopInstanceDisposedCount = (window.__shopInstanceDisposedCount ?? 0) + 1;
+    return;
+  }
+  entry.group.add(object);
+  entry.objects.push(object);
+  growShopDomeIfNeeded(object);
+  // #2378: built/attached after growShopDomeIfNeeded above, not before —
+  // the proxy's box dimensions approximate the model's declared template
+  // size, which can differ slightly from the real mesh's own rendered
+  // bounds, so keeping it out of that one Box3.setFromObject(object) call
+  // avoids any chance of it skewing the dome-growth calculation.
+  const lodProxy = buildInstanceLodProxy(object);
+  if (lodProxy) {
+    object.userData.lodProxy = lodProxy;
+    object.add(lodProxy);
+  }
+  // #3373: a fresh item starts at the tier its apparent size calls for, so
+  // one loaded from altitude never builds full detail only to swap down a
+  // tick later.
+  const startsMiddle = nextIsMiddle(null, lodApparentPx(entry, object));
+  object.userData.lodMiddle = startsMiddle;
+  setInstanceLodState(object, startsMiddle);
+  if (object.userData.isCommunitySign) registerShopSign(object, entry);
+  if (object.userData.isCommunityCalendar) registerShopCalendar(object, entry);
+  // Unlike signs/calendar above, reviews have no builder opt-in flag at
+  // all — every placed instance's underlying catalog template is
+  // reviewable by definition (see docs/API.md's "Product reviews"), so
+  // this registers unconditionally.
+  registerShopReview(object, entry);
 }
 
 // Unlike signs/calendars/reviews above, a credit orb isn't a placed

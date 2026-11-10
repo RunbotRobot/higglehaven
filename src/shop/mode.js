@@ -104,6 +104,7 @@ import {
 } from './worldSprites.js';
 import { closeShopProductPreviewModal, confettiBursts, disposeConfettiBurst } from './productCheckout.js';
 import { recordRenderStateSample } from '../feedback/renderStateBuffer.js';
+import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { frameMonitorSample } from '../world/frameMonitor.js';
 import { showNotice } from '../ui/noticeModal.js';
 
@@ -283,12 +284,24 @@ export function disposeObject3D(object) {
   });
 }
 
+// #3396: releasing what left the scene is the least urgent world work: it runs
+// after anything still being built (whose priority is minus its apparent size).
+const DISPOSE_QUEUE_PRIORITY = 1e9;
+
 export function unloadShopLandletInstances(entry) {
   entry.loaded = false;
   entry.loadToken++; // invalidate any in-flight loadShopLandletInstances call, reload or not
+  // #3396: items still waiting to be built are cancelled; items already in the
+  // scene leave it now, but their GPU resources are released a few at a time
+  // inside the per-frame budget instead of hundreds in one frame. Disposal is
+  // queued last, behind any load that is under way.
+  if (entry.loadGroup) {
+    worldWorkQueue.dropGroup(entry.loadGroup);
+    entry.loadGroup = null;
+  }
   for (const object of entry.objects) {
     entry.group.remove(object);
-    disposeObject3D(object);
+    worldWorkQueue.enqueue(() => disposeObject3D(object), { priority: DISPOSE_QUEUE_PRIORITY });
   }
   entry.objects = [];
   for (const sign of [...shopSigns]) {
