@@ -2611,6 +2611,110 @@
       #product-review-actions button:disabled {
         opacity: 0.5;
       }
+      /* #3359: the short-text note modal (src/ui/textNoteModal.js), same shell
+         as #product-review-modal; z-index 25 so the destructive-confirm modal
+         (26) and the notice modal (27) stack over it. */
+      #note-modal {
+        position: fixed;
+        inset: 0;
+        z-index: 25;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgb(0 0 0 / 0.22);
+        padding: 16px;
+      }
+      #note-modal.visible {
+        display: flex;
+      }
+      #note-modal-content {
+        position: relative;
+        width: 100%;
+        max-width: 380px;
+        background: rgb(var(--panel-rgb) / 0.97);
+        border-radius: 14px;
+        padding: 18px;
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      #note-modal-content h2 {
+        margin: 0 32px 0 0;
+        font-size: 17px;
+      }
+      #note-modal-text-label,
+      #note-modal-schedule-label {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        font-size: 13px;
+        color: rgb(var(--ink-rgb) / 0.85);
+      }
+      #note-modal-schedule-label[hidden] {
+        display: none;
+      }
+      #note-modal-text,
+      #note-modal-schedule {
+        padding: 8px 10px;
+        border-radius: 8px;
+        border: 1px solid rgb(var(--ink-rgb) / 0.25);
+        background: rgb(var(--ink-rgb) / 0.1);
+        color: var(--pill-text);
+        font: 14px/1.4 sans-serif;
+      }
+      #note-modal-text {
+        resize: vertical;
+      }
+      #note-modal-count {
+        align-self: flex-end;
+        font-size: 12px;
+      }
+      #note-modal-count.over {
+        color: #a83a27;
+      }
+      #note-modal-status {
+        font-size: 13px;
+        color: #a83a27;
+        overflow-wrap: anywhere;
+        user-select: text;
+      }
+      #note-modal-status[hidden] {
+        display: none;
+      }
+      #note-modal-actions {
+        display: flex;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      #note-modal-actions button {
+        padding: 8px 16px;
+        border-radius: 999px;
+        border: none;
+        font: 14px/1.4 sans-serif;
+      }
+      #note-modal-actions button[hidden] {
+        display: none;
+      }
+      #note-modal-delete-btn {
+        margin-right: auto;
+        background: transparent;
+        color: #a83a27;
+        border: 1px solid #a83a27 !important;
+      }
+      #note-modal-cancel-btn {
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+      }
+      #note-modal-save-btn {
+        background: var(--brand-green);
+        color: #16240a;
+      }
+      #note-modal-actions button:disabled {
+        opacity: 0.5;
+      }
       /* #3249: the shared notice modal (src/ui/noticeModal.js). z-index 27 so a
          notice raised from inside another modal's flow sits above it. */
       #notice-modal {

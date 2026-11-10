@@ -114,19 +114,14 @@ await page.waitForSelector('#shop-sign-hint.visible', { timeout: 5000 });
 // checks depends on the flight UI itself.
 await page.evaluate(() => document.body.classList.remove('shop-flying'));
 
-// Replace launchPage's own single-answer dialog handler: this flow shows
-// three dialogs in strict sequence (the edit/delete choice prompt, the
-// text prompt prefilled with the existing note, then the client-side
-// guard's own alert), each needing a different answer.
-const dialogMessages = [];
-let dialogCount = 0;
+// #3359: the sign note flow is an in-app modal (src/ui/textNoteModal.js) with a
+// live 280-character count, not three native dialogs. Native dialogs are
+// dismissed and recorded as a tripwire for a regression.
+const nativeDialogs = [];
 page.removeAllListeners('dialog');
-page.on('dialog', (dialog) => {
-  dialogMessages.push(dialog.message());
-  dialogCount += 1;
-  if (dialogCount === 1) return dialog.accept('edit');
-  if (dialogCount === 2) return dialog.accept(OVERLONG_TEXT);
-  return dialog.accept();
+page.on('dialog', async (dialog) => {
+  nativeDialogs.push(dialog.message());
+  await dialog.dismiss();
 });
 
 let patchRequestCount = 0;
@@ -136,19 +131,33 @@ await page.route('**/api/instances/*/posts/*', async (route) => {
 });
 
 await page.click('#shop-sign-hint');
-await page.waitForTimeout(500);
+await page.waitForSelector('#note-modal.visible', { timeout: 5000 });
+const prefilled = await page.inputValue('#note-modal-text');
+await page.fill('#note-modal-text', OVERLONG_TEXT);
+const countOver = await page.$eval('#note-modal-count', (el) => el.classList.contains('over'));
+await page.click('#note-modal-save-btn');
+await page.waitForSelector('#note-modal-status:not([hidden])', { timeout: 5000 });
+const guardMessage = await page.textContent('#note-modal-status');
+const stillOpen = await page.evaluate(() => document.getElementById('note-modal').classList.contains('visible'));
+const keptText = (await page.inputValue('#note-modal-text')) === OVERLONG_TEXT;
 
 const { posts: postsAfterOverlongEdit } = (await fetchJson(`/api/instances/${signInstance.instanceId}/posts`)).body;
 
-console.log('dialogs shown (should be exactly 3 -- choice, text, guard alert):', dialogMessages.length);
-console.log('third dialog message (should mention the 280-char guard):', dialogMessages[2]);
+console.log('edit modal prefilled with the existing note (should be true):', prefilled === ORIGINAL_TEXT);
+console.log('count flagged over the limit (should be true):', countOver);
+console.log('guard message shown in the modal (should mention 280):', guardMessage);
+console.log('modal stays open with the typed text kept (should be true):', stillOpen, keptText);
 console.log('PATCH requests sent for the over-280-char edit (should be 0 -- caught client-side):', patchRequestCount);
 console.log('post text server-side after the attempted over-long edit (should be unchanged):', postsAfterOverlongEdit[0]?.text === ORIGINAL_TEXT);
+console.log('native dialogs (should be none):', nativeDialogs);
 
-const pass = dialogMessages.length === 3 &&
-  /280/.test(dialogMessages[2] || '') &&
+const pass = prefilled === ORIGINAL_TEXT &&
+  countOver &&
+  /280/.test(guardMessage || '') &&
+  stillOpen && keptText &&
   patchRequestCount === 0 &&
   postsAfterOverlongEdit.length === 1 &&
   postsAfterOverlongEdit[0].text === ORIGINAL_TEXT &&
+  nativeDialogs.length === 0 &&
   errors.length === 0;
-await finish(browser, { pass, label: '#2015: sign-post edit prompt enforces the 280-char guard client-side, same as the create path', errors });
+await finish(browser, { pass, label: '#2015: sign-post edit enforces the 280-char guard client-side, keeps the typed text, same as the create path', errors });

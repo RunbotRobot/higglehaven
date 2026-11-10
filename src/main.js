@@ -638,6 +638,7 @@ export async function persistCatalogThumbnail(template) {
 import { dimensionsChanged } from './catalog/upload.js';
 import { promptBundleName } from './ui/bundleNameModal.js';
 import { showNotice } from './ui/noticeModal.js';
+import { openTextNoteModal } from './ui/textNoteModal.js';
 import './ui/copyableErrors.js'; // #3303: record modal error lines for bug reports
 
 // #2558: the catalog/bundle picker modal (Build's add-item flow, "prompt
@@ -1554,78 +1555,63 @@ shopSignHintEl.addEventListener('click', async () => {
   // nothing invited them either), while actually using the real ownership
   // #1830 adds (sign.posts' own userId, populated from signPostFromRow).
   const myPost = currentAuthUser && sign.posts.find((post) => post.userId === currentAuthUser.userId);
-  if (myPost) {
-    const choice = (prompt(
-      `Your note on this sign: "${myPost.text}"\n\nType "edit" to change it, or "delete" to remove it. Leave blank to cancel.`,
-      '',
-    ) || '').trim().toLowerCase();
-    if (choice === 'delete') {
-      shopSignHintEl.disabled = true;
-      try {
-        await deleteSignPost(sign.instanceId, myPost.postId);
-        if (!shopSigns.includes(sign)) return;
-        sign.posts = sign.posts.filter((post) => post.postId !== myPost.postId);
-        rebuildSignSprites(sign);
-      } catch (err) {
-        alert(dropStaleSignPost(sign, myPost.postId, err)
-          ? 'This note was already removed.'
-          : (err.message || 'Could not delete this note.'));
-      } finally {
-        shopSignHintEl.disabled = false;
-      }
-    } else if (choice === 'edit') {
-      const text = prompt('Your note (up to 280 characters):', myPost.text);
-      if (!text || !text.trim()) return;
-      // #2015: same #1920 guard as the sibling create path below -- prompt()
-      // shows no live character count, and without this an over-length edit
-      // reaches the server's own 280-char check, throws, and the retyped note
-      // is lost since the prompt isn't reopened with the text prefilled.
-      if (text.trim().length > 280) {
-        alert('Keep it to 280 characters or fewer.');
-        return;
-      }
-      shopSignHintEl.disabled = true;
-      try {
-        const updated = await editSignPost(sign.instanceId, myPost.postId, { text: text.trim() });
-        if (!shopSigns.includes(sign)) return;
-        const index = sign.posts.findIndex((post) => post.postId === myPost.postId);
-        if (index !== -1) sign.posts[index] = updated;
-        rebuildSignSprites(sign);
-      } catch (err) {
-        alert(dropStaleSignPost(sign, myPost.postId, err)
-          ? 'This note was already removed, so your edit was not saved. Tap the sign again to leave a new one.'
-          : (err.message || 'Could not update this note.'));
-      } finally {
-        shopSignHintEl.disabled = false;
-      }
-    }
-    return;
-  }
-  const text = prompt('Your note (up to 280 characters):', '');
-  if (!text || !text.trim()) return;
-  // #1920: prompt() shows no live character count, and unlike the DM
-  // compose field (a real <input maxlength="280">), nothing here stops an
-  // over-length submission from reaching the server's own 280-char check
-  // (worker/index.js) -- which then throws, and prompt() isn't reopened
-  // with the text prefilled, so the whole note has to be retyped from
-  // scratch. Catch it client-side instead.
-  if (text.trim().length > 280) {
-    alert('Keep it to 280 characters or fewer.');
-    return;
-  }
+  // #3359: one in-app modal for write / edit / delete, not a chain of native
+  // prompt()/alert() calls (a suppressed native dialog answered each with
+  // "cancel", so tapping a sign did nothing). It shows a live 280-character
+  // count and refuses an over-length note without losing the typed text
+  // (#1920, #2015); a server error is shown inside it and the text is kept.
+  // A note a moderator already removed (#2962) is dropped locally and the
+  // person is told, then the next tap offers a fresh note.
+  const noteGoneNotice = (message) => {
+    showNotice({ title: 'Note already removed', message });
+  };
   shopSignHintEl.disabled = true;
   try {
-    const post = await createSignPost(sign.instanceId, { text: text.trim() });
-    // The landlet this sign belongs to can unload while the request above
-    // was in flight (registerShopSign's own fetch has the same guard, for
-    // the same reason — see its own comment) — without this, a post that
-    // resolves after the sign is gone still gets added to its still-live
-    // THREE.Group, an orphaned sprite nothing will ever dispose (#426).
-    if (!shopSigns.includes(sign)) return;
-    sign.posts.push(post);
-    rebuildSignSprites(sign);
-  } catch (err) {
-    alert(err.message || 'Could not post to this sign.');
+    await openTextNoteModal({
+      title: myPost ? 'Your note on this sign' : 'Leave a note on this sign',
+      label: 'Note',
+      existing: myPost ? { text: myPost.text } : null,
+      submitLabel: myPost ? 'Save changes' : 'Post note',
+      emptyMessage: 'Write a note first.',
+      deleteTitle: 'Delete your note?',
+      deleteMessage: 'Your note will be removed from this sign.',
+      returnFocusEl: shopSignHintEl,
+      onSubmit: async ({ text }) => {
+        if (!myPost) {
+          const post = await createSignPost(sign.instanceId, { text });
+          // The landlet this sign belongs to can unload while the request
+          // was in flight (registerShopSign's own fetch has the same guard,
+          // for the same reason) — without this, a post that resolves after
+          // the sign is gone still gets added to its still-live THREE.Group,
+          // an orphaned sprite nothing will ever dispose (#426).
+          if (!shopSigns.includes(sign)) return;
+          sign.posts.push(post);
+          rebuildSignSprites(sign);
+          return;
+        }
+        try {
+          const updated = await editSignPost(sign.instanceId, myPost.postId, { text });
+          if (!shopSigns.includes(sign)) return;
+          const index = sign.posts.findIndex((post) => post.postId === myPost.postId);
+          if (index !== -1) sign.posts[index] = updated;
+          rebuildSignSprites(sign);
+        } catch (err) {
+          if (!dropStaleSignPost(sign, myPost.postId, err)) throw err;
+          noteGoneNotice('This note was already removed, so your edit was not saved. Tap the sign again to leave a new one.');
+        }
+      },
+      onDelete: async () => {
+        try {
+          await deleteSignPost(sign.instanceId, myPost.postId);
+          if (!shopSigns.includes(sign)) return;
+          sign.posts = sign.posts.filter((post) => post.postId !== myPost.postId);
+          rebuildSignSprites(sign);
+        } catch (err) {
+          if (!dropStaleSignPost(sign, myPost.postId, err)) throw err;
+          noteGoneNotice('This note was already removed.');
+        }
+      },
+    });
   } finally {
     shopSignHintEl.disabled = false;
   }
@@ -1641,47 +1627,33 @@ shopCalendarHintEl.addEventListener('click', async () => {
   // specifically, not just any logged-in shopper.
   const builder = await ensureBuilderIdentity();
   if (!builder) return;
-  const text = prompt('Event details (up to 280 characters):', '');
-  if (!text || !text.trim()) return;
-  // #1920: same missing client-side check as the sign-post prompt above --
-  // see its own comment for why this matters (prompt() gives no live
-  // count, and loses the whole typed text on a server-side rejection).
-  if (text.trim().length > 280) {
-    alert('Keep it to 280 characters or fewer.');
-    return;
-  }
-  // Optional third step — most events are just a plain announcement (the
-  // two prompts above already cover that), a real scheduled moment (the
-  // spec's own "creative-tool support like a scheduled confetti-cannon
-  // trigger") is an explicit extra ask. Left blank, this posts exactly
-  // like it always has.
-  const scheduleInput = prompt(
-    'Schedule a special moment? Enter a date/time (e.g. 2026-08-26T20:00), or leave blank for just a note:', '',
-  );
-  let scheduledAt;
-  if (scheduleInput && scheduleInput.trim()) {
-    const parsed = new Date(scheduleInput.trim());
-    if (Number.isNaN(parsed.getTime())) {
-      alert('Could not understand that date/time — try a format like 2026-08-26T20:00. Posting without a scheduled moment.');
-    } else {
-      scheduledAt = parsed.toISOString();
-    }
-  }
+  // #3359: an in-app modal, not three native prompt()s. Most events are just
+  // a plain announcement; a real scheduled moment (the spec's own "creative-
+  // tool support like a scheduled confetti-cannon trigger") is an optional
+  // date/time field, left empty it posts exactly like it always has.
   shopCalendarHintEl.disabled = true;
   try {
-    const event = await createCalendarEvent(calendar.instanceId, { text: text.trim(), scheduledAt });
-    // The window between the two prompts and the ensureBuilderIdentity()
-    // auth-modal wait above is genuinely unbounded — the landlet this
-    // calendar belongs to can unload well before this request resolves.
-    // registerShopCalendar's own fetch already guards against exactly
-    // this; without the same check here, a post that resolves after the
-    // calendar is gone still gets added to its still-live THREE.Group, an
-    // orphaned sprite nothing will ever dispose (#426).
-    if (!shopCalendars.includes(calendar)) return;
-    calendar.events.push(event);
-    rebuildCalendarSprites(calendar);
-  } catch (err) {
-    alert(err.message || 'Could not post to this calendar.');
+    await openTextNoteModal({
+      title: 'Add an event to this calendar',
+      label: 'Event details',
+      schedule: true,
+      submitLabel: 'Post event',
+      emptyMessage: 'Describe the event first.',
+      returnFocusEl: shopCalendarHintEl,
+      onSubmit: async ({ text, scheduledAt }) => {
+        const event = await createCalendarEvent(calendar.instanceId, { text, scheduledAt });
+        // The window while the modal is open (and the ensureBuilderIdentity()
+        // auth-modal wait above) is genuinely unbounded — the landlet this
+        // calendar belongs to can unload well before this request resolves.
+        // registerShopCalendar's own fetch already guards against exactly
+        // this; without the same check here, a post that resolves after the
+        // calendar is gone still gets added to its still-live THREE.Group, an
+        // orphaned sprite nothing will ever dispose (#426).
+        if (!shopCalendars.includes(calendar)) return;
+        calendar.events.push(event);
+        rebuildCalendarSprites(calendar);
+      },
+    });
   } finally {
     shopCalendarHintEl.disabled = false;
   }
