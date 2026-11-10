@@ -248,6 +248,21 @@
          prompt + its own follow-up share confirm, and the bundle-tile
          rename prompt in src/catalog/picker.js) — see
          src/ui/bundleNameModal.js, shared by both call sites. -->
+    <!-- #3359: the optional-reason prompt the nearby-chat and voice report
+         flows open (src/ui/reportReasonModal.js), replacing window.prompt(). -->
+    <div id="report-reason-modal" role="dialog" aria-modal="true" aria-labelledby="report-reason-modal-title" tabindex="-1">
+      <div id="report-reason-modal-content">
+        <button id="report-reason-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
+        <h2 id="report-reason-modal-title">Report</h2>
+        <label>
+          Why? (optional, up to 280 characters)
+          <textarea id="report-reason-input" maxlength="280" rows="3"></textarea>
+        </label>
+        <div id="report-reason-modal-actions">
+          <button id="report-reason-submit-btn" type="button">Report</button>
+        </div>
+      </div>
+    </div>
     <div id="bundle-name-modal" role="dialog" aria-modal="true" tabindex="-1">
       <div id="bundle-name-modal-content">
         <button id="bundle-name-cancel-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>

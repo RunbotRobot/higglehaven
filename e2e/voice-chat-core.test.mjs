@@ -264,10 +264,6 @@ await pageA.route('**/api/voice/report', async (route) => {
   reportRequestBody = JSON.parse(route.request().postData() || '{}');
   await route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ reportId: 'voice-report-test-1' }) });
 });
-await pageA.evaluate(() => {
-  window.prompt = () => 'Was shouting over voice chat';
-  window.alert = () => {};
-});
 
 await pageA.waitForSelector('#shop-voice-peers-panel.open', { timeout: 10000 });
 const peerRowCountBeforeMute = await pageA.evaluate(
@@ -300,6 +296,10 @@ const mutePersistenceCleared = await pageA.evaluate(() => !Object.keys(localStor
 console.log('un-muting removes the persisted mute (should be true):', mutePersistenceCleared);
 
 await pageA.click('#shop-voice-peers-list button[data-action="report"]');
+// #3359: the reason is collected in the in-app report modal, not window.prompt().
+await pageA.waitForSelector('#report-reason-modal.visible', { timeout: 5000 });
+await pageA.fill('#report-reason-input', 'Was shouting over voice chat');
+await pageA.click('#report-reason-submit-btn');
 // The click handler's own fetch is async and unawaited from this test's
 // perspective -- poll briefly for the mocked route to have actually fired
 // rather than asserting immediately after the click.
