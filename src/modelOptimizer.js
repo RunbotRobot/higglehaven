@@ -27,14 +27,9 @@ import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
 import { TGALoader } from 'three/addons/loaders/TGALoader.js';
 import { LoadingManager } from 'three';
-// A locally patched copy, not the stock addon — see its own doc comment.
-// The stock SimplifyModifier silently drops any geometry attribute outside
-// position/uv/normal/tangent/color, including a secondary UV set some
-// export pipelines put a texture on; this one carries uv1/uv2/uv3 through
-// decimation too; see git history for the version of this file that
-// instead detected and skipped simplifying those meshes entirely.
-import { SimplifyModifier } from './vendor/SimplifyModifierExtraUV.js';
-import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+// The simplifier itself (a locally patched SimplifyModifier that carries
+// uv1/uv2/uv3 through decimation) and its guards moved to geometrySimplify.js.
+import { countTriangles, simplifyGeometryOnePass } from './geometrySimplify.js';
 
 // Real-time web/mobile products should be tiny (see catalog.js's own
 // comments) — a few thousand triangles is already generous detail for
@@ -52,33 +47,8 @@ const MAX_TEXTURE_SIZE = 1024;
 // trying, so this is surfaced as a warning rather than a refusal.
 const LARGE_MESH_VERTEX_WARNING_THRESHOLD = 150000;
 
-// #2744: SimplifyModifier's edge-collapse algorithm (both the stock one and
-// this file's own vendored copy) has no topology-preserving guarantee -- it
-// can and does tear real holes (new boundary edges in a previously closed
-// mesh) into the result once a single pass removes too large a fraction of
-// a mesh's vertices at once. Confirmed empirically (not theoretically) with
-// a standalone probe against several unrelated closed shapes (TorusKnot,
-// Sphere, Cylinder): all stayed hole-free up through a 60% single-pass
-// removal, and all but Sphere (the least topologically complex of the
-// three) had started tearing by 65-70%. A single mesh that's drastically
-// larger than TARGET_TRIANGLES_PER_MESH -- e.g. a dense, non-skinned
-// character/prop mesh -- would otherwise need exactly this kind of
-// extreme single-pass ratio to hit the target in one modify() call. Same
-// "optimization is a nice-to-have, not a requirement" tradeoff this file
-// already makes for a skinned mesh (#1552) and a thrown simplifier error
-// (see this function's own caller in main.js): capping how much a single
-// pass may remove means an extremely dense mesh comes out larger than
-// TARGET_TRIANGLES_PER_MESH rather than risking visible holes to hit it.
-const MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION = 0.6;
-
 const gltfLoader = new GLTFLoader();
 const gltfExporter = new GLTFExporter();
-const simplifier = new SimplifyModifier();
-
-function countTriangles(geometry) {
-  const count = geometry.index ? geometry.index.count : geometry.attributes.position.count;
-  return Math.round(count / 3);
-}
 
 // #1166: lets a seller pick a plain .fbx (e.g. a Mixamo character) in the
 // upload wizard with no Blender step required. Runs entirely in the
@@ -215,42 +185,14 @@ export async function optimizeModelFile(file, onProgress) {
       return;
     }
 
-    // #1552: SimplifyModifier's attribute whitelist doesn't carry skin
-    // binding through edge-collapse, so decimating a SkinnedMesh silently
-    // destroys its skinIndex/skinWeight -- breaking equip/animation
-    // playback with no error surfaced anywhere. Same "optimization is a
-    // nice-to-have, not a requirement" fallback as a thrown simplifier
-    // error (see this function's own caller in main.js): leave a skinned
-    // mesh undecimated rather than risk its rig.
-    if (geometry.attributes.skinIndex || geometry.attributes.skinWeight) {
+    // #1552 / #1682 / #2744: the skinned-mesh skip, the merged-vertex count
+    // and the single-pass removal cap all live in simplifyGeometryOnePass
+    // (src/geometrySimplify.js, shared with the model-tier builder, #3413).
+    const simplified = simplifyGeometryOnePass(geometry, TARGET_TRIANGLES_PER_MESH);
+    if (!simplified) {
       trianglesAfter += triangleCount;
       return;
     }
-
-    // #1682: removeCount must land in the same units simplifier.modify()
-    // actually operates on. It always merges duplicate vertices internally
-    // before collapsing (SimplifyModifierExtraUV.js's own mergeVertices
-    // call) -- a no-op for an already-indexed mesh, but a non-indexed one
-    // (one vertex per triangle corner, no sharing) has a raw
-    // position.count far larger than its real unique-vertex working set.
-    // Without this, removeCount is computed against that inflated raw
-    // count and can vastly overshoot the actual mergeable vertices,
-    // decimating the mesh down to nothing instead of ~TARGET_TRIANGLES_PER_MESH.
-    const mergedForCount = mergeVertices(geometry);
-    const vertexCount = mergedForCount.attributes.position.count;
-    mergedForCount.dispose();
-    const targetVertexCount = Math.max(3, Math.round(vertexCount * (TARGET_TRIANGLES_PER_MESH / triangleCount)));
-    const uncappedRemoveCount = vertexCount - targetVertexCount;
-    if (uncappedRemoveCount <= 0) {
-      trianglesAfter += triangleCount;
-      return;
-    }
-    // #2744: see MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION's own comment --
-    // don't let one mesh's removeCount exceed the empirically-safe
-    // single-pass ratio just to hit TARGET_TRIANGLES_PER_MESH exactly.
-    const removeCount = Math.min(uncappedRemoveCount, Math.floor(vertexCount * MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION));
-
-    const simplified = simplifier.modify(geometry, removeCount);
     geometry.dispose();
     child.geometry = simplified;
     trianglesAfter += countTriangles(simplified);
