@@ -4182,6 +4182,32 @@ for 60 s (`x-far-placements-cache: hit|miss`); activating a landlet version
 drops its tile's entry in the same data centre, other changes show within the
 TTL.
 
+Decisions recorded for this read (#3417):
+
+- **Freshness.** Draft edits, delisting a product, suspending or closing a
+  seller and suspending a builder are not wired to invalidate the cache. They
+  reach far view within the 60 s TTL. The cache (`caches.default`) is per data
+  centre, so an explicit drop could only ever help the one data centre that
+  handled the write and every other one would wait out the TTL anyway; more than
+  twenty write paths (every placement edit, plus the suspension and delist
+  cascades) would carry that call for no change in the worst case. Anyone near
+  the content reads the uncached per-landlet lists, which change immediately, so
+  the lag only affects a distant silhouette.
+- **No rate limit.** The sibling public landlet reads have none, and the limiter
+  itself is a D1 write per call, which costs more than the one indexed read it
+  would protect. A repeat read is a cache hit and costs no query, and a tile
+  index beyond 1,000 either way is refused with `400` before any query.
+- **Size.** An 829-item landlet of one product is about 22.8 KB of JSON (27.5
+  bytes per item) and about 3.3 KB gzipped.
+- **Cost on the free tier.** Edge cache: no KV or R2 reads or writes. A miss is
+  one D1 query reading the tile's placements (plus index lookups for the product
+  visibility check); a hit reads nothing. With one miss per tile per data centre
+  per TTL at most, a continuously requested, dense tile costs roughly its row
+  count times 1,440 reads per day per data centre. Clients should therefore read
+  a tile when it comes into range, not poll it. Raise
+  `FAR_PLACEMENT_CACHE_TTL_S` if real traffic ever approaches the daily D1 read
+  allowance.
+
 ### `POST /api/landlets`
 
 Creates a landlet. `landletId` is optional; if omitted, the Worker generates

@@ -212,10 +212,13 @@ describe('GET /api/far-placements (#3417)', () => {
     for (let i = 0; i < statements.length; i += 100) await env.DB.batch(statements.slice(i, i + 100));
 
     const { response, body } = await readTile(tile);
-    const bytes = new TextEncoder().encode(JSON.stringify(body)).length;
-    console.log(`far-placements response for an 829-item landlet: ${bytes} bytes (${(bytes / 829).toFixed(1)} per item)`);
+    const raw = new TextEncoder().encode(JSON.stringify(body));
+    // What actually crosses the network: the edge gzips JSON responses.
+    const gzipped = new Uint8Array(await new Response(new Blob([raw]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer());
+    console.log(`far-placements response for an 829-item landlet: ${raw.length} bytes raw (${(raw.length / 829).toFixed(1)} per item), ${gzipped.length} bytes gzipped`);
     expect(response.status).toBe(200);
     expect(body.landlets[0].items).toHaveLength(829);
-    expect(bytes).toBeLessThan(40_000);
+    expect(raw.length).toBeLessThan(40_000);
+    expect(gzipped.length).toBeLessThan(8_000);
   });
 });
