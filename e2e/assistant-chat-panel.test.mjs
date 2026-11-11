@@ -161,6 +161,9 @@ await pageA.waitForSelector('#assistant-chat-panel[hidden]', { state: 'attached'
 const afterBlock = await postJson(pageA, '/api/assistant-chat/start', { assistantUserId, text: 'Hello again' });
 console.log('start after blocking (should be 403):', afterBlock.status, afterBlock.body.error);
 
+// The refused question above is a deliberate 403, which the browser logs as a
+// failed resource load; it is the only page error this test expects.
+const unexpectedErrors = sessionA.errors.filter((error) => !/status of 403/.test(String(error)));
 const pass = tapped === true
   && opened.name === ASSISTANT_NAME && opened.badge === 'assistant'
   && opened.log.includes('AI assistant')
@@ -172,10 +175,10 @@ const pass = tapped === true
   && ended === `${ASSISTANT_NAME} ended the conversation.`
   && told.body.ended?.endedBy === 'shopper'
   && blockShown && afterBlock.status === 403 && afterBlock.body.error === "You can't message this person."
-  && sessionA.errors.length === 0;
+  && unexpectedErrors.length === 0;
 await finish(sessionA.browser, {
   pass,
   label: '#3447: tap an assistant, ask, read the reply, see it end, and closing the panel ends the conversation, and Block blocks the assistant',
-  errors: sessionA.errors,
+  errors: unexpectedErrors,
 });
 await sessionB.browser.close();
