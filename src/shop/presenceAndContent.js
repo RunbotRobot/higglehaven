@@ -59,7 +59,7 @@ import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
 import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
-import { apparentSizePx, nextIsMiddle, fullDetailFloorPx, isNearFullDetail, MAX_FULL_DETAIL_ITEMS } from './lodTier.js';
+import { apparentSizePx, nextIsMiddle, fullDetailFloorPx, isNearFullDetail, setBoundingSphere, MAX_FULL_DETAIL_ITEMS } from './lodTier.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
 import { isNetworkError } from '../build/scene.js';
@@ -347,13 +347,18 @@ export function updateShopProximity() {
 // #3373: how big a placed item looks on screen right now (its bounding sphere's
 // diameter in CSS pixels), from the real camera. The item's radius is half the
 // diagonal of its declared size, cached on the object.
-function lodApparentPx(entry, object) {
+function lodRadiusM(object) {
   let radiusM = object.userData.lodRadiusM;
   if (radiusM === undefined) {
     const { width, depth, height } = meshDimensions(object);
     radiusM = 0.5 * Math.hypot(width, depth, height);
     object.userData.lodRadiusM = radiusM;
   }
+  return radiusM;
+}
+
+function lodApparentPx(entry, object) {
+  const radiusM = lodRadiusM(object);
   const dx = entry.group.position.x + object.position.x - camera.position.x;
   const dy = entry.group.position.y + object.position.y - camera.position.y;
   const dz = entry.group.position.z + object.position.z - camera.position.z;
@@ -367,22 +372,72 @@ function lodApparentPx(entry, object) {
 // of crossing a threshold. An item with no proxy (a box or flooring, already as
 // cheap as it gets) has nothing to switch.
 const lodNearPxScratch = [];
+
+// #3443: the placed bundles of a loaded landlet that have more than one
+// proxied member, each with its bounding sphere, found once per change in the
+// landlet's object count (Shop items do not move). Members that are drawn by an
+// instanced batch have no proxy and are not decided one by one at all.
+function lodSetsFor(entry) {
+  if (entry.lodSets && entry.lodSetsObjectCount === entry.objects.length && entry.lodSetsToken === entry.loadToken) return entry.lodSets;
+  const byGroup = new Map();
+  for (const object of entry.objects) {
+    const groupId = object.userData.groupId;
+    if (!groupId || !object.userData.lodProxy) continue;
+    let members = byGroup.get(groupId);
+    if (!members) byGroup.set(groupId, members = []);
+    members.push(object);
+  }
+  const sets = new Map();
+  for (const [groupId, members] of byGroup) {
+    if (members.length < 2) continue; // a lone member is decided as a single item
+    const sphere = setBoundingSphere(members.map((object) => ({
+      x: object.position.x, y: object.position.y, z: object.position.z, radiusM: lodRadiusM(object),
+    })));
+    sets.set(groupId, { members, sphere, px: 0, near: false });
+  }
+  entry.lodSets = sets;
+  entry.lodSetsObjectCount = entry.objects.length;
+  entry.lodSetsToken = entry.loadToken; // an unload and reload with the same count must not reuse stale members
+  return sets;
+}
+
 function updateInstanceLodTiers() {
   lodNearPxScratch.length = 0;
   let protectedCount = 0;
   for (const entry of shopLandlets.values()) {
     if (!entry.loaded) continue;
+    // #3443: a bundle changes detail as one set, from the set's size on screen,
+    // and is protected as a whole when any member is beside the avatar.
+    const sets = lodSetsFor(entry);
+    for (const set of sets.values()) {
+      const { sphere } = set;
+      const dx = entry.group.position.x + sphere.x - camera.position.x;
+      const dy = entry.group.position.y + sphere.y - camera.position.y;
+      const dz = entry.group.position.z + sphere.z - camera.position.z;
+      set.px = apparentSizePx(sphere.radiusM, Math.hypot(dx, dy, dz), camera.fov, window.innerHeight);
+      set.near = false;
+      for (const member of set.members) {
+        if (isNearFullDetail(horizontalDistanceM(
+          entry.group.position.x + member.position.x, entry.group.position.y + member.position.y,
+          shopAvatarPosition.x, shopAvatarPosition.y,
+        ))) { set.near = true; break; }
+      }
+    }
     for (const object of entry.objects) {
       if (!object.userData.lodProxy) continue;
-      const px = lodApparentPx(entry, object);
+      const set = object.userData.groupId ? sets.get(object.userData.groupId) : undefined;
+      const px = set ? set.px : lodApparentPx(entry, object);
       object.userData.lodPx = px;
       // #3443: beside the avatar is always the real model, outside the cap too.
-      const nearAvatar = isNearFullDetail(horizontalDistanceM(
+      const nearAvatar = set ? set.near : isNearFullDetail(horizontalDistanceM(
         entry.group.position.x + object.position.x, entry.group.position.y + object.position.y,
         shopAvatarPosition.x, shopAvatarPosition.y,
       ));
       object.userData.lodProtected = nearAvatar;
-      const wantMiddle = !nearAvatar && nextIsMiddle(object.userData.lodMiddle, px);
+      // A set's current tier is its first member's, so the hysteresis band
+      // applies to the set as a whole rather than to each member's own state.
+      const currentIsMiddle = set ? set.members[0].userData.lodMiddle : object.userData.lodMiddle;
+      const wantMiddle = !nearAvatar && nextIsMiddle(currentIsMiddle, px);
       object.userData.lodWantMiddle = wantMiddle;
       if (nearAvatar) protectedCount += 1;
       else if (!wantMiddle) lodNearPxScratch.push(px);
@@ -401,6 +456,7 @@ function updateInstanceLodTiers() {
       if (isMiddle !== object.userData.lodMiddle) {
         object.userData.lodMiddle = isMiddle;
         setInstanceLodState(object, isMiddle);
+        window.__shopLodFlipCount = (window.__shopLodFlipCount ?? 0) + 1; // #3443: e2e counts tier changes
         if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;
       }
     }
@@ -1238,7 +1294,13 @@ async function buildAndAttachInstance(entry, instance, myToken, run) {
   // #3373: a fresh item starts at the tier its apparent size calls for, so
   // one loaded from altitude never builds full detail only to swap down a
   // tick later.
-  const startsMiddle = nextIsMiddle(null, lodApparentPx(entry, object));
+  // #3443: and one built beside the avatar starts at full detail, as the tick
+  // would keep it.
+  const startsNearAvatar = isNearFullDetail(horizontalDistanceM(
+    entry.group.position.x + object.position.x, entry.group.position.y + object.position.y,
+    shopAvatarPosition.x, shopAvatarPosition.y,
+  ));
+  const startsMiddle = !startsNearAvatar && nextIsMiddle(null, lodApparentPx(entry, object));
   object.userData.lodMiddle = startsMiddle;
   setInstanceLodState(object, startsMiddle);
   if (object.userData.isCommunitySign) registerShopSign(object, entry);

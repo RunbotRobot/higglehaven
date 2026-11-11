@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   apparentSizePx, nextIsMiddle, fullDetailFloorPx, isNearFullDetail, NEAR_FULL_DETAIL_M, LOD_ENTER_PX, LOD_EXIT_PX, MAX_FULL_DETAIL_ITEMS,
+  setBoundingSphere,
 } from './lodTier.js';
 
 const FOV = 60;
@@ -114,5 +115,38 @@ describe('the protected radius around the avatar (#3443)', () => {
   it('and with protected items fewer than the cap, the rest keep the remaining budget', () => {
     const floor = fullDetailFloorPx([10, 20, 30, 40], 2);
     expect([10, 20, 30, 40].filter((p) => p >= floor)).toEqual([30, 40]);
+  });
+});
+
+describe('setBoundingSphere (#3443)', () => {
+  it('is a zero sphere for no members', () => {
+    expect(setBoundingSphere([])).toEqual({ x: 0, y: 0, z: 0, radiusM: 0 });
+  });
+
+  it('is the member\'s own half-diagonal for a single member', () => {
+    const sphere = setBoundingSphere([{ x: 4, y: 5, z: 6, radiusM: 2 }]);
+    expect(sphere.x).toBe(4);
+    expect(sphere.y).toBe(5);
+    expect(sphere.z).toBe(6);
+    expect(sphere.radiusM).toBeCloseTo(0.5 * Math.hypot(4, 4, 4), 9);
+  });
+
+  it('covers a wall of members far wider than any one of them', () => {
+    // 100 bricks 0.2 m wide in a row 20 m long.
+    const members = Array.from({ length: 100 }, (_, i) => ({ x: i * 0.2, y: 0, z: 0.1, radiusM: 0.1 }));
+    const sphere = setBoundingSphere(members);
+    expect(sphere.x).toBeCloseTo(9.9, 6);
+    expect(sphere.radiusM).toBeGreaterThan(9.9); // at least the half-length
+    // A single brick would look tiny; the wall as a whole does not.
+    expect(apparentSizePx(sphere.radiusM, 40, 60, 800)).toBeGreaterThan(apparentSizePx(0.1, 40, 60, 800) * 50);
+  });
+
+  it('is never smaller than any member\'s own extent', () => {
+    const members = [{ x: 0, y: 0, z: 0, radiusM: 1 }, { x: 3, y: 0, z: 0, radiusM: 0.5 }];
+    const sphere = setBoundingSphere(members);
+    for (const member of members) {
+      expect(Math.hypot(member.x - sphere.x, member.y - sphere.y, member.z - sphere.z) + member.radiusM)
+        .toBeLessThanOrEqual(sphere.radiusM * Math.sqrt(3) + 1e-9);
+    }
   });
 });
