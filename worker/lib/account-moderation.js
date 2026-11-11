@@ -636,8 +636,8 @@ export async function handleSuspendAccount(request, db) {
   }).run();
 
   // #2031: an automated in-app notice, not the full admin-only evidenceNote
-  // -- and routes disputes through the third-party CS agency (docs/SPEC.md
-  // §6 P122), never the operator directly. No builder row (never happened
+  // -- and routes disputes to customer service (AI assistants, per
+  // docs/SPEC.md §6 P122 as updated 2026-11-11), never the operator directly. No builder row (never happened
   // for a real, non-dev-mode account, but some pre-#1092 free-text builders
   // predate the user_id link entirely) just means nothing to notify.
   const suspendedBuilder = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(row.user_id).first();
