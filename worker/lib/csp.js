@@ -13,6 +13,10 @@
 //     page's script blocks live in files, and scripts/check-no-inline-blocks.mjs
 //     (a pretest step) fails the build if one comes back, because a browser
 //     would just ignore it and the page would silently stop working.
+//   - Cloudflare Web Analytics (#3465): the dashboard injects its beacon at the
+//     edge (static.cloudflareinsights.com script, posts to cloudflareinsights.com).
+//     Allowed by those two exact hosts so the injected script stops logging a
+//     console error on every load; nothing else in script-src was widened.
 //   - style-src: 'self' only, so <style> elements are gone too (index.html's
 //     CSS is src/app.css, the admin pages' are public/admin-*.css). CSSOM
 //     writes (el.style.x = ...) are not governed by it.
@@ -39,13 +43,13 @@
 // directive, so they need no entry.
 export const CSP_POLICY = [
   "default-src 'self'",
-  "script-src 'self' https://js.stripe.com https://challenges.cloudflare.com",
+  "script-src 'self' https://js.stripe.com https://challenges.cloudflare.com https://static.cloudflareinsights.com",
   "style-src 'self'",
   "style-src-attr 'unsafe-inline'",
   "img-src 'self' data: blob:",
   "font-src 'self' data:",
   "media-src 'self' blob:",
-  "connect-src 'self' blob: data: https://api.stripe.com https://challenges.cloudflare.com",
+  "connect-src 'self' blob: data: https://api.stripe.com https://challenges.cloudflare.com https://cloudflareinsights.com",
   'frame-src https://js.stripe.com https://hooks.stripe.com https://m.stripe.network https://challenges.cloudflare.com',
   "worker-src 'self' blob:",
   "object-src 'none'",
