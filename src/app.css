@@ -117,6 +117,10 @@
       }
       #loading-screen.loading-screen-hidden {
         opacity: 0;
+        /* #3442: the splash now sits above the Shop HUD, so while it fades
+           out it must not swallow a tap or drag meant for the controls
+           beneath it. */
+        pointer-events: none;
       }
       #loading-screen img {
         width: min(240px, 60vw);

@@ -43,8 +43,11 @@ await page.addInitScript(() => {
     for (const el of [move, look]) {
       if (!shown(el)) continue;
       if (!shown(fly)) window.__hud.joystickWithoutFly = true;
+      // "Up" means not yet told to leave: once it has the hidden class it is
+      // fading out and no longer takes input, so the controls underneath may
+      // already be there for the end of the fade.
       const splashUp = splash && getComputedStyle(splash).display !== 'none'
-        && parseFloat(getComputedStyle(splash).opacity) > 0.5;
+        && !splash.classList.contains('loading-screen-hidden');
       if (splashUp) {
         const rect = el.getBoundingClientRect();
         const top = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
