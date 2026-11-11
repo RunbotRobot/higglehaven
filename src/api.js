@@ -580,6 +580,13 @@ export async function fetchAllLandlets(params = {}) {
   }
 }
 
+// #3477: every placement of every landlet in one 512 m tile, compact (docs/API.md
+// "GET /api/far-placements"). Public. Read a tile when it comes into range, not
+// on a timer: the server caches it for 60 s.
+export async function fetchFarPlacements(tileX, tileY) {
+  return requestJson(`/far-placements?tile=${Math.trunc(tileX)},${Math.trunc(tileY)}`);
+}
+
 // docs/API.md's "Vertical construction — levels" (issue #168/#169). Public,
 // no session required — matches fetchLandlet's own unauthenticated read.
 export async function fetchLandletLevels(landletId) {

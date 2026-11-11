@@ -410,6 +410,16 @@ const NEARBY_CHAT_SEND_RATE_LIMIT_MAX = 60;
 const NEARBY_CHAT_POLL_RATE_LIMIT_MAX = PRESENCE_REPORT_RATE_LIMIT_MAX;
 const NEARBY_CHAT_POLL_LIMIT = 50;
 
+// #3445: the one place that decides whether a row's author is shown as an
+// assistant. Needs users.is_fleet AS is_fleet and users.username AS
+// fleet_username on the row; derived on the server, never from anything a
+// client sends. An empty object (no key at all) for everyone else.
+function assistantFlagFromRow(row) {
+  return row.is_fleet === 1 && isAssistantUsername(row.fleet_username)
+    ? { assistant: { name: row.fleet_username } }
+    : {};
+}
+
 function nearbyChatMessageFromRow(row) {
   return {
     messageId: row.message_id,
@@ -419,6 +429,10 @@ function nearbyChatMessageFromRow(row) {
     builderId: row.builder_id,
     text: row.text,
     createdAt: row.created_at,
+    // #3445: an assistant's lines carry the same flag its avatar does, so the
+    // log can say who is speaking; absent for every ordinary shopper, whose
+    // lines stay unlabeled.
+    ...assistantFlagFromRow(row),
   };
 }
 
@@ -461,9 +475,11 @@ export async function handleNearbyChat(request, db, route, url) {
     // wire; an author with none right now has no one to attribute the line to
     // (a profile reset used to delete their messages through the cascade).
     const { results } = await db.prepare(`
-      SELECT nearby_chat_messages.*, builders.builder_id AS builder_id
+      SELECT nearby_chat_messages.*, builders.builder_id AS builder_id,
+        users.is_fleet AS is_fleet, users.username AS fleet_username
       FROM nearby_chat_messages
       JOIN builders ON builders.user_id = nearby_chat_messages.user_id
+      JOIN users ON users.user_id = nearby_chat_messages.user_id
       WHERE ${conditions.join(' AND ')}
       ORDER BY nearby_chat_messages.created_at ASC, nearby_chat_messages.message_id ASC LIMIT ?
     `).bind(...bindings, limit).all();
@@ -499,7 +515,12 @@ export async function handleNearbyChat(request, db, route, url) {
       INSERT INTO nearby_chat_messages (message_id, user_id, landlet_id, text)
       VALUES (?, ?, ?, ?)
     `).bind(messageId, sessionBuilder.user_id, landletId, text).run();
-    const row = await db.prepare('SELECT * FROM nearby_chat_messages WHERE message_id = ?').bind(messageId).first();
+    const row = await db.prepare(`
+      SELECT nearby_chat_messages.*, users.is_fleet AS is_fleet, users.username AS fleet_username
+      FROM nearby_chat_messages
+      JOIN users ON users.user_id = nearby_chat_messages.user_id
+      WHERE nearby_chat_messages.message_id = ?
+    `).bind(messageId).first();
     return json({ message: nearbyChatMessageFromRow({ ...row, builder_id: sessionBuilder.builder_id }) }, 201);
   }
 
@@ -1244,7 +1265,7 @@ function avatarPresenceFromRow(row) {
     // from users.is_fleet plus the username being one of the assistants' agent
     // names, never from anything a client sends; the key is absent for everyone
     // else, coding sessions' accounts included (owner decision 2026-11-11).
-    ...(row.is_fleet === 1 && isAssistantUsername(row.fleet_username) ? { assistant: { name: row.fleet_username } } : {}),
+    ...assistantFlagFromRow(row),
   };
 }
 

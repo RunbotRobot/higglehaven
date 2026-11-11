@@ -1043,6 +1043,11 @@
         align-items: baseline;
         gap: 6px;
       }
+      /* #3445: "Juniper · assistant" ahead of an assistant's line. */
+      .shop-nearby-chat-message-speaker {
+        flex: 0 0 auto;
+        font-weight: 600;
+      }
       .shop-nearby-chat-message-text {
         flex: 1 1 auto;
       }

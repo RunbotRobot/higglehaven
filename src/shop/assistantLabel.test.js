@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { assistantNameFrom, assistantTagLines, ASSISTANT_NAME_MAX_CHARS } from './assistantLabel.js';
+import { assistantNameFrom, assistantSpeakerLabel, assistantTagLines, ASSISTANT_NAME_MAX_CHARS } from './assistantLabel.js';
 
 describe('assistantNameFrom', () => {
   it('is the trimmed name for a fleet avatar', () => {
@@ -20,5 +20,15 @@ describe('assistantTagLines', () => {
     const [name] = assistantTagLines('x'.repeat(100));
     expect(name).toHaveLength(ASSISTANT_NAME_MAX_CHARS);
     expect(name.endsWith('…')).toBe(true);
+  });
+});
+
+describe('assistantSpeakerLabel', () => {
+  it('is one line, the name then the plain word assistant', () => {
+    expect(assistantSpeakerLabel('Juniper')).toBe('Juniper \u00b7 assistant');
+  });
+  it('shortens a very long name exactly as the avatar tag does', () => {
+    const label = assistantSpeakerLabel('x'.repeat(100));
+    expect(label).toBe(`${assistantTagLines('x'.repeat(100))[0]} \u00b7 assistant`);
   });
 });
