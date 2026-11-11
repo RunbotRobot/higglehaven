@@ -17,6 +17,9 @@ function apiError(response, body, fallback) {
   error.serverMessage = body.error;
   error.code = body.code;
   error.status = response.status;
+  // #3447: the whole body, for the few callers that act on a flag the server
+  // sends beside the message (assistantBusy, conversationEnded, ...).
+  error.body = body;
   // #3258: a rate-limit 429 carries { limit, windowSeconds, retryAfterSeconds }
   // so a notice can say how much and until when (see worker/lib/rate-limit.js).
   if (response.status === 429 && typeof body.limit === 'number') {
@@ -2006,6 +2009,26 @@ export async function fetchNearbyChatMessages({ cursor = null } = {}) {
   const query = new URLSearchParams();
   if (cursor) query.set('cursor', cursor);
   return requestJson(`/nearby-chat?${query.toString()}`);
+}
+
+// #3447 (part of #3444): asking an assistant a question. The server's side is
+// worker/lib/assistant-chat.js; src/shop/assistantChat.js is the only caller.
+const jsonPost = (path, body) => requestJson(path, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify(body ?? {}),
+});
+export function startAssistantChat({ assistantUserId, text }) {
+  return jsonPost('/assistant-chat/start', { assistantUserId, text });
+}
+export function fetchAssistantChat({ afterSeq = 0 } = {}) {
+  return requestJson(`/assistant-chat/current?afterSeq=${encodeURIComponent(afterSeq)}`);
+}
+export function sendAssistantChat(text) {
+  return jsonPost('/assistant-chat/send', { text });
+}
+export function endAssistantChat() {
+  return jsonPost('/assistant-chat/end');
 }
 
 // #2956: parity with sendVoiceReport below -- mute itself is purely local/
