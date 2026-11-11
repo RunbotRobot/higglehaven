@@ -9,7 +9,7 @@
 // duplicated from worker/index.js, not imported -- see that duplication's
 // own comment for why.
 import { json, HttpError, ERROR_CODES } from './http.js';
-import { checkRateLimit } from './rate-limit.js';
+import { checkRateLimit, rateLimitStanding } from './rate-limit.js';
 import { requireAdmin, requireSessionBuilder } from './auth.js';
 import { readJson, stringValue, finiteNumber } from './validation.js';
 import { adminActionLogStatement } from './admin-log.js';
@@ -134,6 +134,14 @@ export async function handleCreditOrbs(request, db, route, url) {
     `).bind(...bindings).all();
     return json({ orbs: results.map(creditOrbFromRow) });
   }
+  // GET /api/credit-orbs/standing (#3441) -- where the signed-in builder
+  // stands against the collect limit (remaining, and when the next slot
+  // frees), so the Shop can leave an orb alone and say why instead of popping
+  // it and reversing the pop on a 429. Read-only: it never spends a slot.
+  if (request.method === 'GET' && route.length === 2 && route[1] === 'standing') {
+    const sessionBuilder = await requireSessionBuilder(request, db);
+    return json({ standing: await rateLimitStanding(db, `credit-orb-collect:${sessionBuilder.builder_id}`, CREDIT_ORB_COLLECT_RATE_LIMIT_MAX) });
+  }
   // POST /api/credit-orbs -- admin-gated test/ops fixture, same escape-hatch
   // reasoning as POST /api/landlets/.../land-cap-grants/higgles-grants: the
   // real spawn cadence (spawnCreditOrbIfDue, ~70min apart by default) is far
@@ -224,7 +232,12 @@ export async function handleCreditOrbs(request, db, route, url) {
     if (claim.meta.changes === 0) {
       throw new HttpError('This credit orb is no longer available -- someone else may have already collected it.', 404);
     }
-    return json({ collected: true });
+    // #3441: the reply carries where the builder now stands, so the client
+    // knows the limit has been reached before the next orb, not after it.
+    return json({
+      collected: true,
+      standing: await rateLimitStanding(db, `credit-orb-collect:${sessionBuilder.builder_id}`, CREDIT_ORB_COLLECT_RATE_LIMIT_MAX),
+    });
   }
   return json({ error: 'Not found' }, 404);
 }

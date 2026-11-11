@@ -11237,6 +11237,20 @@ Optional `?landletId=` scopes the result to one landlet, for the frontend to
 poll only the landlet currently in view rather than every active orb
 world-wide.
 
+### `GET /api/credit-orbs/standing`
+
+#3441. Session-gated, read-only: where the signed-in builder stands against
+the collect limit, `{ "standing": { "limit", "windowSeconds", "remaining",
+"retryAfterSeconds" } }`. `remaining` is how many collect attempts are left in
+the current window (every attempt, including a 404 or 403, counts, exactly as
+`POST .../collect` enforces it); `retryAfterSeconds` is when the oldest
+in-window attempt ages out (when the next slot frees), `0` when none is used.
+It never spends a slot. The Shop reads it when a landlet's orbs load, and a
+successful collect returns the same object, so an orb touched at `remaining: 0`
+is left in place with the limit notice instead of being popped and reversed by
+a `429`; a `429` that still happens (two tabs, another device) is handled as
+before, and its notice says the orb came back.
+
 ### `POST /api/credit-orbs` (admin-only test/ops fixture)
 
 **Admin-only** (`requireAdmin`), same "escape hatch" reasoning as
@@ -11261,7 +11275,8 @@ orb_id = ? AND collected_by_builder_id = ?)` only matches once the first
 statement in the same batch has actually committed that builder as the
 collector, so the two statements either both land or neither does, and two
 shoppers racing the same orb can never both be credited for it. Returns
-`{ "collected": true }` on success. `404` if the orb doesn't exist, or
+`{ "collected": true, "standing": { ... } }` on success (`standing` as in
+`GET /api/credit-orbs/standing`, #3441). `404` if the orb doesn't exist, or
 already has a `collected_at` (someone else got there first — the frontend
 reads this as "it's already gone," not an error to surface loudly).
 Rate-limited (`CREDIT_ORB_COLLECT_RATE_LIMIT_MAX`, 20 per builder) like

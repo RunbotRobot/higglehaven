@@ -66,7 +66,7 @@ import { isNetworkError } from '../build/scene.js';
 import { currentAuthUser } from '../account/auth.js';
 import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
-  fetchCreditOrbs, collectCreditOrb, reportPresence, fetchNearbyPresence,
+  fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence,
 } from '../api.js';
 import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
 import { creditOrbContact, creditOrbRefusalKind, creditOrbMayRetry, CREDIT_ORB_RETRY_INTERVAL_MS } from './creditOrbCollect.js';
@@ -90,6 +90,7 @@ import {
 import { disposeObject3D, unloadShopLandletInstances, buildShopGroundMesh } from './mode.js';
 import { registerShopSign, registerShopCalendar, registerShopReview } from './worldSprites.js';
 import { rateLimitNoticeText } from '../rateLimitNotice.js';
+import { creditOrbStandingState, creditOrbLimitNow } from './creditOrbStanding.js';
 import { recordVisibleMessage } from '../ui/visibleMessages.js';
 
 const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
@@ -1285,6 +1286,9 @@ async function loadCreditOrbsForLandlet(entry, myToken) {
     return;
   }
   if (myToken !== entry.orbLoadToken) return; // superseded while this was in flight
+  // #3441: so a reload at the limit does not buy one more pop that the next
+  // 429 takes back. Best effort; the server still enforces the limit.
+  if (orbs.length > 0) fetchCreditOrbStanding().then(applyCreditOrbStanding);
   for (const orb of orbs) {
     const mesh = createCreditOrbMesh();
     mesh.position.set(orb.x, orb.y, orb.z + CREDIT_ORB_FLOAT_HEIGHT_M);
@@ -1392,6 +1396,15 @@ const scratchCreditOrbWorldPos = new THREE.Vector3();
 // CREDIT_ORB_COLLECT_RATE_LIMIT_MAX is keyed by builder id, so hitting it
 // near one orb means every other orb in range would 429 too if retried.
 let creditOrbRateLimitedUntilMs = null;
+// #3441: where the server says the person stands against that limit (see
+// creditOrbStanding.js), from the orb list load and from every collect reply.
+// An orb touched while this says "at the limit" is left in place and the
+// notice shows, instead of popping and being reversed by the next 429.
+let creditOrbStanding = null;
+function applyCreditOrbStanding(reply) {
+  const state = creditOrbStandingState(reply, performance.now());
+  if (state) creditOrbStanding = state;
+}
 
 // Called every Shop-mode frame, unthrottled like updateSignFade/
 // updateCalendarFade — the shimmer needs to read as continuous, and
@@ -1400,7 +1413,9 @@ export function updateCreditOrbs(dt) {
   creditOrbShimmerElapsedS += dt;
   const shimmer = CREDIT_ORB_SHIMMER_MIN + (CREDIT_ORB_SHIMMER_MAX - CREDIT_ORB_SHIMMER_MIN)
     * (0.5 + 0.5 * Math.sin(creditOrbShimmerElapsedS * CREDIT_ORB_SHIMMER_SPEED_RAD_S));
-  const rateLimited = creditOrbRateLimitedUntilMs !== null && performance.now() < creditOrbRateLimitedUntilMs;
+  const standingLimit = creditOrbLimitNow(creditOrbStanding, performance.now());
+  const rateLimited = standingLimit !== null
+    || (creditOrbRateLimitedUntilMs !== null && performance.now() < creditOrbRateLimitedUntilMs);
   // Deliberately the avatar's own position, not camera.position (unlike
   // updateSignFade/updateCalendarFade's fade distance) -- positionShopCamera
   // holds the third-person camera SHOP_CAMERA_FOLLOW_DISTANCE_M (4.2m) behind
@@ -1446,7 +1461,7 @@ export function updateCreditOrbs(dt) {
     if (rateLimited) {
       if (!orb.noticeShownForContact) {
         orb.noticeShownForContact = true;
-        showCreditOrbRateLimitNotice(creditOrbLastRateLimit);
+        showCreditOrbRateLimitNotice(standingLimit ?? creditOrbLastRateLimit);
       }
       continue;
     }
@@ -1472,7 +1487,8 @@ function popAndCollectCreditOrb(orb) {
   showCreditOrbToast();
   const startedAt = performance.now();
   const attempt = () => {
-    collectCreditOrb(snapshot.orbId).then(() => {
+    collectCreditOrb(snapshot.orbId).then((reply) => {
+      applyCreditOrbStanding(reply?.standing);
       markCreditOrbCollectReachedServer();
       hideCreditOrbRateLimitNotice(); // #3303: a successful collect means the limit lifted
     }).catch((error) => {
@@ -1510,8 +1526,11 @@ function popAndCollectCreditOrb(orb) {
       // standing in range is not a retry storm.
       creditOrbRateLimitedUntilMs = performance.now() + CREDIT_ORB_RATE_LIMIT_RETRY_COOLDOWN_MS;
       creditOrbLastRateLimit = error.rateLimit;
+      if (error.rateLimit) applyCreditOrbStanding({ ...error.rateLimit, remaining: 0 });
       restoreCreditOrb(snapshot);
-      showCreditOrbRateLimitNotice(error.rateLimit);
+      // #3441: said in the same sentence as the limit, so a person who saw the
+      // pop knows the orb was given back.
+      showCreditOrbRateLimitNotice(error.rateLimit, { orbCameBack: true });
     });
   };
   attempt();
@@ -1549,7 +1568,10 @@ function markCreditOrbCollectFailedToReachServer() {
     return;
   }
   if (now - creditOrbOfflineStreakStartedAt >= CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS) {
-    if (!shopCreditOrbOfflineNoticeEl.classList.contains('visible')) recordVisibleMessage(shopCreditOrbOfflineNoticeTextEl.textContent); // #3303
+    if (!shopCreditOrbOfflineNoticeEl.classList.contains('visible')) {
+      recordVisibleMessage(shopCreditOrbOfflineNoticeTextEl.textContent); // #3303
+      bringShopNoticeToFront(shopCreditOrbOfflineNoticeEl);
+    }
     shopCreditOrbOfflineNoticeEl.classList.add('visible');
   }
 }
@@ -1595,9 +1617,20 @@ function hideCreditOrbToast() {
 // the page, so it cannot linger into Build/Sell.
 const shopCreditOrbRateLimitNoticeTextEl = shopCreditOrbRateLimitNoticeEl.querySelector('.shop-notice-text');
 const shopCreditOrbOfflineNoticeTextEl = shopCreditOrbOfflineNoticeEl.querySelector('.shop-notice-text');
-function showCreditOrbRateLimitNotice(rateLimit) {
+// #3441: the orb notices share one stack (#shop-notice-stack) so two showing at
+// once are both readable, and the one raised last sits nearest the controls
+// (highest `order`; the stack is bottom-anchored). Nothing here ever hides
+// another notice.
+let shopNoticeOrderCounter = 0;
+function bringShopNoticeToFront(noticeEl) {
+  shopNoticeOrderCounter += 1;
+  noticeEl.style.order = String(shopNoticeOrderCounter);
+}
+function showCreditOrbRateLimitNotice(rateLimit, { orbCameBack = false } = {}) {
   const text = rateLimitNoticeText('orbs', rateLimit);
-  if (text) shopCreditOrbRateLimitNoticeTextEl.textContent = text;
+  if (text) shopCreditOrbRateLimitNoticeTextEl.textContent = orbCameBack ? `That orb is back where it was. ${text}` : text;
+  else if (orbCameBack) shopCreditOrbRateLimitNoticeTextEl.textContent = "That orb is back where it was. You've reached the orb limit for now. Try again in a bit.";
+  bringShopNoticeToFront(shopCreditOrbRateLimitNoticeEl);
   shopCreditOrbRateLimitNoticeEl.classList.add('visible');
   recordVisibleMessage(shopCreditOrbRateLimitNoticeTextEl.textContent);
 }
@@ -1610,6 +1643,7 @@ shopCreditOrbRateLimitNoticeEl.querySelector('.shop-notice-dismiss-btn').addEven
 const shopCreditOrbProblemNoticeTextEl = shopCreditOrbProblemNoticeEl.querySelector('.shop-notice-text');
 function showCreditOrbProblemNotice(text) {
   shopCreditOrbProblemNoticeTextEl.textContent = text;
+  bringShopNoticeToFront(shopCreditOrbProblemNoticeEl);
   shopCreditOrbProblemNoticeEl.classList.add('visible');
   recordVisibleMessage(text);
 }

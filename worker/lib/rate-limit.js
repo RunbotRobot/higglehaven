@@ -29,6 +29,26 @@ import { HttpError } from './http.js';
 // comes off, not just a bigger version of this.
 export const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 
+// #3441: where a bucket stands right now, without spending one of its slots.
+// The same numbers a 429 carries ({ limit, windowSeconds, retryAfterSeconds })
+// plus how many are left, so a client can tell a person they are at a limit
+// before they touch the thing, from the server's own figures rather than a
+// second copy of the limit. retryAfterSeconds is when the next slot frees (the
+// oldest in-window event ageing out); 0 when nothing is used yet.
+export async function rateLimitStanding(db, bucketKey, maxAttempts) {
+  const now = Date.now();
+  const row = await db.prepare(
+    'SELECT COUNT(*) AS used, MIN(created_at) AS oldest FROM rate_limit_events WHERE bucket_key = ? AND created_at >= ?',
+  ).bind(bucketKey, now - RATE_LIMIT_WINDOW_MS).first();
+  const used = row?.used ?? 0;
+  return {
+    limit: maxAttempts,
+    windowSeconds: RATE_LIMIT_WINDOW_MS / 1000,
+    remaining: Math.max(0, maxAttempts - used),
+    retryAfterSeconds: used > 0 ? Math.max(1, Math.ceil(((row.oldest ?? now) + RATE_LIMIT_WINDOW_MS - now) / 1000)) : 0,
+  };
+}
+
 export async function checkRateLimit(db, bucketKey, maxAttempts) {
   const now = Date.now();
   // A separate SELECT-then-INSERT here would be a check-then-act race:
