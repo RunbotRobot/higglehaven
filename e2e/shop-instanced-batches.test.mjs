@@ -141,6 +141,7 @@ await where('baseline');
 const baseline = await page.evaluate(() => window.__testShopDrawStats());
 
 await moveTo(nearPoint);
+await page.evaluate(() => window.__frameMonitor.reset());
 await where('after near');
 try {
   await page.waitForFunction((n) => window.__testShopLoadedInstanceCount() === n, COUNT, { timeout: 120000 });
@@ -154,7 +155,11 @@ try {
 }
 await page.waitForTimeout(1000);
 const loaded = await page.evaluate(() => window.__testShopDrawStats());
-console.log('loaded:', JSON.stringify(loaded), 'baseline:', JSON.stringify(baseline));
+const loadStats = await page.evaluate(() => ({ longestGapMs: window.__frameMonitor.longestFrameGapMs() }));
+console.log('loaded:', JSON.stringify(loaded), 'baseline:', JSON.stringify(baseline), `longest frame gap while loading ${Math.round(loadStats.longestGapMs)} ms`);
+// "Moving, looking and drawing never wait on loading" (#3396): the batch is built
+// in the frame-budgeted queue like everything else. Same ceiling as that test.
+check(loadStats.longestGapMs < Number(process.env.E2E_MAX_FRAME_GAP_MS || 250), `loading the batch never holds a frame back (longest gap ${Math.round(loadStats.longestGapMs)} ms)`);
 check(loaded.batches >= 1 && loaded.batchedPlacements === COUNT, `all ${COUNT} placements are in a batch (${loaded.batchedPlacements} in ${loaded.batches})`);
 check(loaded.drawCalls < MAX_DRAW_CALLS, `the scene needs fewer than ${MAX_DRAW_CALLS} draw calls (${loaded.drawCalls})`);
 check(loaded.geometries - baseline.geometries < 20, `batches share geometry instead of cloning it per item (${loaded.geometries - baseline.geometries} new geometries)`);

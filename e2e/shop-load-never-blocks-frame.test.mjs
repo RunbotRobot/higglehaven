@@ -62,6 +62,12 @@ const instances = Array.from({ length: COUNT }, (_, i) => ({
   templateId: 'placeholder-chair',
   x: -7 + (i % 29) * 0.5,
   y: -7 + Math.floor(i / 29) * 0.5,
+  // Each item a slightly different size, so none can share an instanced batch
+  // (#3402 draws identical placements as one batch, which arrives in a single
+  // cheap step). This test is about the per-item, frame-budgeted path that
+  // every other kind of content takes; e2e/shop-instanced-batches.test.mjs
+  // covers the batched one.
+  scale: 1 + i * 1e-4,
 }));
 const statuses = [];
 for (let i = 0; i < COUNT; i += 100) {
