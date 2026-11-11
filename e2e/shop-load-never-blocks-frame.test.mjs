@@ -7,6 +7,10 @@
 // reports, whether the avatar kept moving, that every item arrives, and that a
 // load abandoned part way leaves nothing behind. Phone width.
 //
+// #3463: loading those 829 items must also cost one reviews request for the
+// product (they all share it), not 829 (the browser used to run out of
+// connections and drop most of them).
+//
 // The loader builds items in small pieces inside a per-frame time budget, so a
 // partly loaded landlet is observable (an all-at-once loader never shows one).
 import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish } from './helpers.mjs';
@@ -97,6 +101,11 @@ await moveTo(farPoint);
 await page.waitForFunction(() => window.__testShopLoadedInstanceCount() === 0, null, { timeout: 30000 });
 await page.waitForTimeout(1500);
 
+let reviewRequests = 0;
+page.on('request', (req) => {
+  if (req.method() === 'GET' && /\/api\/catalog\/[^/?]+\/reviews(\?|$)/.test(req.url())) reviewRequests += 1;
+});
+
 let pass = true;
 const check = (ok, msg) => { if (!ok) { pass = false; console.log(`FAIL check: ${msg}`); } };
 
@@ -104,6 +113,7 @@ const check = (ok, msg) => { if (!ok) { pass = false; console.log(`FAIL check: $
 const joystick = await page.locator('#shop-move-joystick').boundingBox();
 const originX = joystick.x + joystick.width / 2;
 const originY = joystick.y + joystick.height / 2;
+reviewRequests = 0;
 await moveTo(nearPoint);
 await page.evaluate(() => window.__frameMonitor.reset());
 await page.mouse.move(originX, originY);
@@ -128,6 +138,8 @@ console.log(`loaded ${count}/${COUNT} in ${loadMs} ms; longest frame gap ${Math.
 check(count === COUNT, `every item arrives (${count}/${COUNT})`);
 check(stats.longestGapMs < MAX_FRAME_GAP_MS, `no frame gap of ${MAX_FRAME_GAP_MS} ms or more while loading (longest ${Math.round(stats.longestGapMs)} ms)`);
 check(moved > 1, `the avatar kept moving while the landlet loaded (${moved.toFixed(1)} m)`);
+console.log(`reviews requests while the ${COUNT} items of one product loaded: ${reviewRequests}`);
+check(reviewRequests <= 1, `one reviews request for the product, not one per item (${reviewRequests} for ${COUNT} items)`);
 
 // For the PR: what the same software renderer manages with the landlet fully
 // loaded and nothing loading (829 separate meshes), so a remaining gap can be

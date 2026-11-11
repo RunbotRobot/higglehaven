@@ -39,7 +39,7 @@ import { ensureBuilderIdentity } from '../account/identity.js';
 import { currentAuthUser } from '../account/auth.js';
 import { loadStripeJs, formatPriceCents } from '../main.js';
 import { createCheckoutPayState, runPayAttempt, describePayFailure } from './checkoutPayAttempt.js';
-import { shopTappedProduct, shopReviews, rebuildReviewSprites, productInfoText } from './worldSprites.js';
+import { shopTappedProduct, shopReviews, rebuildReviewSprites, productInfoText, invalidateProductReviews } from './worldSprites.js';
 
 const shopProductPreviewModalEl = document.getElementById('shop-product-preview-modal');
 const shopProductPreviewCanvas = document.getElementById('shop-product-preview-canvas');
@@ -260,12 +260,14 @@ export async function handleShopProductReviewClick() {
           // An empty string clears the comment, same as before: the server's
           // `text !== undefined` check keeps the old value only when omitted.
           const updated = await editProductReview(review.templateId, myReview.reviewId, { rating, text });
+          invalidateProductReviews(review.templateId);
           if (!shopReviews.includes(review)) return;
           const index = review.reviews.findIndex((r) => r.reviewId === myReview.reviewId);
           if (index !== -1) review.reviews[index] = updated;
         } else {
           // A star rating alone is already a complete, useful review.
           const posted = await createProductReview(review.templateId, { rating, text: text || undefined });
+          invalidateProductReviews(review.templateId);
           // Same unloaded-landlet guard as the sign-post and calendar
           // handlers (#426) -- registerShopReview's own fetch checks this.
           if (!shopReviews.includes(review)) return;
@@ -275,6 +277,7 @@ export async function handleShopProductReviewClick() {
       },
       onDelete: async () => {
         await deleteProductReview(review.templateId, myReview.reviewId);
+        invalidateProductReviews(review.templateId);
         if (!shopReviews.includes(review)) return;
         review.reviews = review.reviews.filter((r) => r.reviewId !== myReview.reviewId);
         rebuildReviewSprites(review);
