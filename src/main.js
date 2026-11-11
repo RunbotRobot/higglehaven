@@ -1408,7 +1408,14 @@ window.__testShopInstanceLodStats = (instanceId) => {
       }
       for (const child of node.children) walk(child);
     };
-    for (const child of object.children) walk(child);
+    // #3494: while a swap cross-fades the version being left is still drawn; the
+    // stats describe the version now shown.
+    const lodTiers = object.userData.lodTiers;
+    const shownTier = object.userData.lodShown ?? 'full';
+    for (const child of object.children) {
+      const childTier = !lodTiers ? shownTier : child === lodTiers.mid ? 'mid' : child === lodTiers.far ? 'far' : 'full';
+      if (childTier === shownTier) walk(child);
+    }
     return {
       tier: object.userData.model ? (object.userData.lodShown ?? 'full') : 'none',
       tiersState: object.userData.lodTiersState ?? null,

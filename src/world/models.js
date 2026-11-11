@@ -479,18 +479,32 @@ export function attachInstanceTiers(object, scenes) {
 // actually see. Returns the tier now shown: a version the item does not have
 // falls back to the nearest one it does (mid <-> far), then to the full model.
 // A no-op returning 'full' for an item with no reduced versions.
-export function setInstanceLodState(object, tier) {
+//
+// #3494: with `crossfades` (src/shop/tierCrossfade.js) the version being left
+// stays drawn, no longer hit-testable, while the new one dissolves in; the
+// crossfade hides it at the end. Without it, or when it declines, the swap is
+// instant.
+export function setInstanceLodState(object, tier, crossfades) {
   const tiers = object.userData.lodTiers;
   if (!tiers) return TIER_FULL;
   let shown = tier;
   if (shown === TIER_FAR && !tiers.far) shown = tiers.mid ? TIER_MID : TIER_FULL;
   if (shown === TIER_MID && !tiers.mid) shown = tiers.far ? TIER_FAR : TIER_FULL;
+  const tierOf = (child) => (child === tiers.mid ? TIER_MID : child === tiers.far ? TIER_FAR : TIER_FULL);
+  // A swap during a fade settles the fade first, so one item never shows three versions.
+  crossfades?.finish(object);
+  const previous = object.userData.lodShown;
+  const incoming = [];
+  const outgoing = [];
   for (const child of object.children) {
-    let visible;
-    if (child === tiers.mid) visible = shown === TIER_MID;
-    else if (child === tiers.far) visible = shown === TIER_FAR;
-    else visible = shown === TIER_FULL;
-    child.visible = visible;
+    if (tierOf(child) === shown) incoming.push(child);
+    else if (child.visible) outgoing.push(child);
+  }
+  const fading = previous !== undefined && previous !== shown
+    && !!crossfades?.start(object, outgoing, incoming);
+  for (const child of object.children) {
+    const visible = tierOf(child) === shown;
+    if (!fading) child.visible = visible;
     setLodChildHitTestable(child, visible);
   }
   object.userData.lodShown = shown;
