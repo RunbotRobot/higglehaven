@@ -17,6 +17,11 @@ let longestGapMs = 0; // since the last reset
 let recentGaps = []; // [{ atMs, gapMs }], notable gaps in the last RECENT_WINDOW_MS
 let longTaskCount = 0; // cumulative since page load
 let longestLongTaskMs = 0;
+// added for #3483 -- a 2.7 s long task that appears once, on the first visit
+// after a deploy; the report only had its size, so nobody could tell a slow
+// title screen from a freeze in flight. When the longest one started
+// (ms since navigation), so a live-site report can say which step it fell in.
+let longestLongTaskAtMs = null;
 
 // Called once per rendered frame with the frame's timestamp (ms).
 export function recordFrame(nowMs) {
@@ -38,9 +43,12 @@ export function noteFramesPaused() {
   lastFrameAtMs = null;
 }
 
-export function recordLongTask(durationMs) {
+export function recordLongTask(durationMs, startMs = null) {
   longTaskCount += 1;
-  if (durationMs > longestLongTaskMs) longestLongTaskMs = durationMs;
+  if (durationMs > longestLongTaskMs) {
+    longestLongTaskMs = durationMs;
+    longestLongTaskAtMs = startMs;
+  }
 }
 
 // Longest gap between two frames since the last reset (ms), for e2e.
@@ -49,7 +57,7 @@ export function longestFrameGapMs() {
 }
 
 export function longTasks() {
-  return { count: longTaskCount, longestMs: longestLongTaskMs };
+  return { count: longTaskCount, longestMs: longestLongTaskMs, longestAtMs: longestLongTaskAtMs === null ? null : Math.round(longestLongTaskAtMs) };
 }
 
 export function resetFrameMonitor() {
@@ -57,6 +65,7 @@ export function resetFrameMonitor() {
   recentGaps = [];
   longTaskCount = 0;
   longestLongTaskMs = 0;
+  longestLongTaskAtMs = null;
 }
 
 // The two figures a bug report carries: the longest gap between frames in the
@@ -75,7 +84,7 @@ export function frameMonitorSample(nowMs) {
 export function startFrameMonitor(target = globalThis) {
   try {
     const observer = new target.PerformanceObserver((list) => {
-      for (const entry of list.getEntries()) recordLongTask(entry.duration);
+      for (const entry of list.getEntries()) recordLongTask(entry.duration, entry.startTime);
     });
     observer.observe({ type: 'longtask' });
   } catch {

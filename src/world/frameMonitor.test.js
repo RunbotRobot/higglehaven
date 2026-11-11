@@ -40,10 +40,11 @@ describe('frameMonitor (#3396)', () => {
   });
 
   it('counts long tasks and remembers the longest', () => {
-    recordLongTask(80);
-    recordLongTask(210);
-    recordLongTask(60);
-    expect(longTasks()).toEqual({ count: 3, longestMs: 210 });
+    recordLongTask(80, 1000.4);
+    recordLongTask(210, 5200.6);
+    recordLongTask(60, 9000);
+    // #3483: the longest one's start time (ms since navigation) comes with it.
+    expect(longTasks()).toEqual({ count: 3, longestMs: 210, longestAtMs: 5201 });
   });
 
   it('reports only the last second of notable gaps in the feedback sample', () => {
