@@ -65,6 +65,15 @@ function realStripeWranglerVars(testFile) {
     '--var', `STRIPE_PUBLISHABLE_KEY:${E2E_STRIPE_PUBLISHABLE_KEY}`,
   ];
 }
+// #3430: the one file that drives scripts/live-site.mjs through the real fleet
+// login (#3429) needs the fleet key set on its own wrangler dev; every other
+// file runs with fleet access off, as production does until the owner sets the
+// secret. A throwaway test value, never a real key.
+const FLEET_KEY_TEST_FILES = new Set(['live-site-script.test.mjs']);
+const E2E_FLEET_ACCESS_KEY = 'e2e-fleet-key-not-a-secret';
+function fleetWranglerVars(testFile) {
+  return FLEET_KEY_TEST_FILES.has(testFile) ? ['--var', `FLEET_ACCESS_KEY:${E2E_FLEET_ACCESS_KEY}`] : [];
+}
 // A literal IP, not the "localhost" hostname — Node/Chromium's dual-stack
 // DNS resolution can intermittently try ::1 first (Happy Eyeballs), and a
 // request that lands there gets refused outright if wrangler dev is only
@@ -254,7 +263,7 @@ async function runOneTest(testFile) {
   }
 
   const wranglerLogFilesBefore = listWranglerLogFiles();
-  const wrangler = spawn('npx', ['wrangler', 'dev', '--local', '--ip', '127.0.0.1', '--port', PORT, ...realStripeWranglerVars(testFile)], {
+  const wrangler = spawn('npx', ['wrangler', 'dev', '--local', '--ip', '127.0.0.1', '--port', PORT, ...realStripeWranglerVars(testFile), ...fleetWranglerVars(testFile)], {
     cwd: repoRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: true,
