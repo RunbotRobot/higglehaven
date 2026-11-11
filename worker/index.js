@@ -96,6 +96,7 @@ import {
   expireStaleVideoGenerationJobs,
 } from './lib/video-generation.js';
 import { handleCreditOrbs, spawnCreditOrbIfDue } from './lib/credit-orbs.js';
+import { handleAssistant } from './lib/assistant-shift.js';
 // #2614: the instance-purchase creation/checkout domain (simulated and
 // real-money paths), extracted into worker/lib/purchase-creation.js -- see
 // that module's own header comment for what deliberately stayed here
@@ -722,6 +723,10 @@ async function handleApi(request, env, url, ctx) {
 
   if (route[0] === 'presence') {
     return handlePresence(request, env.DB, route, url);
+  }
+
+  if (route[0] === 'assistant') {
+    return handleAssistant(request, env.DB, route);
   }
 
   if (route[0] === 'friendships') {

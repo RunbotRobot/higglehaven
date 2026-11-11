@@ -11,7 +11,7 @@ import {
   SHOP_AVATAR_LEG_LENGTH_M, SHOP_AVATAR_TORSO_LENGTH_M, SHOP_AVATAR_TORSO_RADIUS_M,
   SHOP_AVATAR_HEAD_RADIUS_M,
 } from '../main.js';
-import { assistantNameFrom, assistantTagLines } from './assistantLabel.js';
+import { assistantBusyFrom, assistantNameFrom, assistantTagLines } from './assistantLabel.js';
 
 const SHIRT_COLOR = 0xf4f1ea;
 const PATCH_COLOR = 0x3f8f5a;
@@ -47,8 +47,8 @@ function createAssistantShirt() {
   return group;
 }
 
-function createAssistantTag(name) {
-  const [nameLine, wordLine] = assistantTagLines(name);
+function createAssistantTag(name, busy) {
+  const [nameLine, wordLine] = assistantTagLines(name, busy);
   const canvas = document.createElement('canvas');
   const ctx = canvas.getContext('2d');
   const nameFont = '600 44px sans-serif';
@@ -101,11 +101,13 @@ function removeLook(entry) {
 // dresses it as an assistant (or re-names it), or takes the look off.
 export function applyAssistantLook(entry, rawAssistant) {
   const name = assistantNameFrom(rawAssistant);
-  if (name === (entry.assistantName ?? null)) return;
+  const busy = assistantBusyFrom(rawAssistant);
+  if (name === (entry.assistantName ?? null) && (!name || busy === Boolean(entry.assistantBusy))) return;
   removeLook(entry);
   if (!name) return;
   entry.assistantName = name;
+  entry.assistantBusy = busy;
   entry.assistantShirt = createAssistantShirt();
-  entry.assistantTag = createAssistantTag(name);
+  entry.assistantTag = createAssistantTag(name, busy);
   entry.group.add(entry.assistantShirt, entry.assistantTag);
 }

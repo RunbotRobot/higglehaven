@@ -22,3 +22,10 @@ describe('assistantTagLines', () => {
     expect(name.endsWith('…')).toBe(true);
   });
 });
+
+describe('assistantTagLines busy state (#3449)', () => {
+  it('says busy only when the assistant is helping someone', () => {
+    expect(assistantTagLines('Fig')[1]).toBe('assistant');
+    expect(assistantTagLines('Fig', true)[1]).toBe('assistant · busy');
+  });
+});

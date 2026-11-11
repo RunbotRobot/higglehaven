@@ -64,6 +64,11 @@
       "y_m": "REAL|1||0",
       "z_m": "REAL|1||0"
     },
+    "assistant_shifts": {
+      "busy": "INTEGER|1|0|0",
+      "last_seen_at": "TEXT|1||0",
+      "user_id": "TEXT|0||1"
+    },
     "auction_bids": {
       "amount_cents": "INTEGER|1||0",
       "auction_id": "TEXT|1||0",
