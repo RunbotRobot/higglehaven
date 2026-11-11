@@ -29,7 +29,7 @@
 // window.__testShopInstanceLodBand(instanceId) (src/main.js, #2378) is
 // reused as the "is this instance's mesh actually present right now"
 // probe: it already returns null when no entry.objects anywhere holds a
-// matching instanceId, and a band string ('near'/'middle'/'none' for a
+// matching instanceId, and a band string ('full'/'mid'/'far'/'none' for a
 // proxy-less model) once createMeshForInstance's result is in the scene
 // -- exactly the loaded/unloaded signal this fix needs, no new test hook
 // required.

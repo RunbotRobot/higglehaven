@@ -82,13 +82,13 @@ await page.mouse.up();
 await page.evaluate(([x, y]) => { window.__testTeleportShopAvatar(x, y, 0); window.__testForceShopProximityCheck(); }, [landlet.center.x + 4, landlet.center.y]);
 
 // z = 0 lands the avatar on the ground beside the item (#3373: the tier is by apparent size from the camera, and the
-// spawn flight is ~80 m up, where a 1 m item is a box). 'none' = the grey box fallback, 'near' = the real model with its LOD proxy.
+// spawn flight is ~80 m up, where a 1 m item is a box). 'none' = the grey box fallback, 'full' = the real model.
 let band = null;
 const deadline = Date.now() + 15000;
-while (band !== 'near' && Date.now() < deadline) {
+while (band !== 'full' && Date.now() < deadline) {
   band = await page.evaluate((id) => window.__testShopInstanceLodBand(id), instanceId);
-  if (band !== 'near') await page.waitForTimeout(200);
+  if (band !== 'full') await page.waitForTimeout(200);
 }
 console.log('model requests made (first was aborted, so should be >= 2):', modelRequests);
-console.log('final band after the dropped first request (should be "near", not "none"):', band);
-await finish(browser, { pass: band === 'near' && modelRequests >= 2, label: 'placed product recovers its model after one dropped fetch', errors: errors.filter((e) => !/Failed to load resource|net::ERR_FAILED/.test(String(e))) });
+console.log('final band after the dropped first request (should be "full", not "none"):', band);
+await finish(browser, { pass: band === 'full' && modelRequests >= 2, label: 'placed product recovers its model after one dropped fetch', errors: errors.filter((e) => !/Failed to load resource|net::ERR_FAILED/.test(String(e))) });

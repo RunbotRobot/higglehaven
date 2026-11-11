@@ -1,24 +1,37 @@
-// #2378 (sub-issue of #2377, docs/SPEC.md §1's near/middle-LOD/far-
-// panoramic-backdrop chunk loading): a model-loaded placed instance should
-// swap to a cheap simplified-proxy box once it looks small on screen, rather
-// than staying at full detail all the way out to the unload radius, and swap
-// back to full detail on re-approach. #3373: the swap is by apparent size
-// (src/shop/lodTier.js), not a fixed distance, so a large item keeps its real
-// model at a range where a small one is already a box, with a hysteresis band
-// in between. This drives the real teleport+forced-
-// proximity-check pattern e2e/shop-landlet-instance-leak.test.mjs (#1445)
-// already established for deterministically crossing these radii, minus
-// that file's own GLTF-fetch-delay race machinery (not needed here — this
-// only cares about the LOD state once the instance has actually loaded,
-// not about an in-flight load being superseded).
-import fs from 'node:fs/promises';
+// #2378 / #3373 / #3416 (Model tiers 4/7): a placed model steps through three
+// versions of ITSELF by how big it looks on screen -- full, mid (about a tenth
+// of the triangles) and far (a few dozen to ~200) -- and back on re-approach,
+// never a stand-in box. The step is by apparent size (src/shop/lodTier.js), not
+// a fixed distance, so a large item keeps its real model at a range where a
+// small one is already far, with a hysteresis band at each boundary. Items
+// within 10 m of the avatar stay full (#3443). This drives the real
+// teleport+forced-proximity-check pattern e2e/shop-landlet-instance-leak.test.mjs
+// (#1445) established for deterministically crossing these ranges.
+//
+// The model is a dense sphere built here (public/models/crate.glb is already
+// cheap, so it has no reduced versions to show). Phone-size viewport, as the
+// owner uses the site.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as THREE from 'three';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
+
+// Node has no FileReader -- GLTFExporter's binary path uses it.
+globalThis.FileReader = class {
+  readAsArrayBuffer(blob) {
+    blob.arrayBuffer().then((buf) => {
+      this.result = buf;
+      this.onloadend?.();
+    });
+  }
+};
+const denseScene = new THREE.Scene();
+denseScene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 120, 120), new THREE.MeshStandardMaterial({ color: '#c0392b' })));
+const denseBuffer = Buffer.from(await new GLTFExporter().parseAsync(denseScene, { binary: true }));
 
 const LABEL = 'Middle LOD Band Suite Tester';
 const PRODUCT_NAME = 'Suite Middle LOD Band Product';
@@ -89,10 +102,10 @@ const sellerId = sellerMeBody.seller.sellerId;
 
 // Uploaded straight through the API (not the page's own upload wizard) so
 // Shop mode's load below is a model-loaded instance, not the box-fallback
-// path (which has no LOD proxy at all — see buildInstanceLodProxy).
-const modelBytes = await fs.readFile(CRATE_MODEL_PATH);
+// path (which has no reduced versions at all).
+const modelBytes = denseBuffer;
 const modelForm = new FormData();
-modelForm.append('file', new Blob([modelBytes], { type: 'model/gltf-binary' }), 'middle-lod-crate.glb');
+modelForm.append('file', new Blob([modelBytes], { type: 'model/gltf-binary' }), 'middle-lod-sphere.glb');
 const modelUploadRes = await fetch(`${BASE_URL}/api/models`, { method: 'POST', body: modelForm });
 const modelUpload = await modelUploadRes.json();
 if (modelUploadRes.status !== 200 && modelUploadRes.status !== 201) {
@@ -205,6 +218,20 @@ async function teleportShopAvatar(distanceFromLandletM) {
 async function lodBand(id = instanceId) {
   return page.evaluate((i) => window.__testShopInstanceLodBand(i), id);
 }
+async function lodStats(id = instanceId) {
+  return page.evaluate((i) => window.__testShopInstanceLodStats(i), id);
+}
+// Reduced versions are made on first need, so a step down is polled for rather
+// than read at once.
+async function waitBand(expected, id = instanceId, timeoutMs = 15000) {
+  const deadlineAt = Date.now() + timeoutMs;
+  let band = await lodBand(id);
+  while (band !== expected && Date.now() < deadlineAt) {
+    await page.waitForTimeout(100);
+    band = await lodBand(id);
+  }
+  return band;
+}
 
 await chooseIdentity(page, { mode: 'shop', label: LABEL, isNew: false });
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 10000 });
@@ -224,44 +251,57 @@ await page.waitForTimeout(100);
 await page.mouse.up();
 await page.waitForTimeout(100);
 
-// Into SHOP_LOAD_RADIUS_M (60m) -- triggers the real load.
-await teleportShopAvatar(25);
-// Poll (not a fixed sleep) for the instance to actually finish loading —
-// the model fetch itself is real async I/O.
-let band = null;
-const loadDeadlineAt = Date.now() + 10000;
-while ((band === null || (await lodBand(largeInstanceId)) === null) && Date.now() < loadDeadlineAt) {
-  band = await lodBand();
-  await page.waitForTimeout(100);
-}
-band = await lodBand();
-console.log('LOD band once loaded near the landlet (should be "near"):', band);
-const nearAfterLoad = band;
+// Distances below are from the 1 m item (about 1100 / distance in CSS px on this
+// viewport, camera behind the avatar): full above 80 px (inside ~16 m), mid down to 24 px (~54 m), far
+// below; coming back up it holds each version until 110 px / 36 px.
 
-// 80 m: a 1 m item is only ~16 px across, under the swap-down size -- the simplified
-// proxy, not an unload. The 8 m item at the same range is still a prominent ~130 px
-// object and keeps its real model (#3373: the owner's "huge item turns into a cube").
+// 9 m: inside the protected radius -- the full model.
+await teleportShopAvatar(9);
+const loadDeadlineAt = Date.now() + 15000;
+while ((await lodBand()) === null && Date.now() < loadDeadlineAt) await page.waitForTimeout(100);
+const nearAfterLoad = await waitBand('full');
+console.log('tier once loaded close (should be "full"):', nearAfterLoad, await lodStats());
+const fullStats = await lodStats();
+
+// 80 m: ~16 px -- the far version of the same model, not an unload and not a
+// box. The 8 m item at the same range is still a prominent object and keeps its
+// full model (#3373: the owner's "huge item turns into a cube").
 await teleportShopAvatar(80);
-const bandAtMiddle = await lodBand();
-const largeBandAtMiddle = await lodBand(largeInstanceId);
-console.log('small item at 80 m (should be "middle", not null/unloaded):', bandAtMiddle);
-console.log('large item at the same range (should still be "near"):', largeBandAtMiddle);
+const bandAtFar = await waitBand('far');
+const largeBandAtFar = await lodBand(largeInstanceId);
+const farStats = await lodStats();
+console.log('small item at 80 m (should be "far"):', bandAtFar, farStats);
+console.log('large item at the same range (should still be "full"):', largeBandAtFar);
 
-// ~45 m: the 1 m item is ~29 px, inside the swap hysteresis band (24-36 px). Coming
-// from "middle" it must hold the box, not flip back up just from being a bit closer.
+// ~45 m: ~29 px, inside the far hysteresis band (24-36 px). Coming from far it
+// must hold far, not flip up just from being a bit closer.
 await teleportShopAvatar(45);
-const bandInHysteresisGap = await lodBand();
-console.log('small item inside the size hysteresis band, approaching from middle (should still be "middle"):', bandInHysteresisGap);
+await page.waitForTimeout(400);
+const bandInFarGap = await lodBand();
+console.log('inside the far/mid band, approaching from far (should still be "far"):', bandInFarGap);
 
-// Close: well past the swap-back size -- full detail again.
+// 25 m: ~52 px, past the far exit size -- mid.
 await teleportShopAvatar(25);
-const bandAfterReapproach = await lodBand();
-console.log('small item after re-approaching (should be "near" again):', bandAfterReapproach);
+const bandAtMid = await waitBand('mid');
+const midStats = await lodStats();
+console.log('small item at 25 m (should be "mid"):', bandAtMid, midStats);
 
-// The same band, now approaching from "near": it must hold the full model.
-await teleportShopAvatar(45);
-const bandInGapFromNear = await lodBand();
-console.log('small item inside the size hysteresis band, approaching from near (should still be "near"):', bandInGapFromNear);
+// 13 m: ~86 px, inside the mid/full band (80-110 px). Coming from mid it holds mid.
+await teleportShopAvatar(13);
+await page.waitForTimeout(400);
+const bandInMidGap = await lodBand();
+console.log('inside the mid/full band, approaching from mid (should still be "mid"):', bandInMidGap);
+
+// 8 m: beside the avatar (#3443) and past the full exit size -- full again.
+await teleportShopAvatar(8);
+const bandAfterReapproach = await waitBand('full');
+console.log('after re-approaching (should be "full"):', bandAfterReapproach);
+
+// The same band, now approaching from full: holds the full model.
+await teleportShopAvatar(13);
+await page.waitForTimeout(400);
+const bandInGapFromFull = await lodBand();
+console.log('inside the mid/full band, approaching from full (should still be "full"):', bandInGapFromFull);
 await teleportShopAvatar(25);
 
 // #3443: the speck, beside the avatar (8 m away on the ground) and then well past the
@@ -277,33 +317,37 @@ async function teleportToTinyOffset(offsetM) {
 await teleportToTinyOffset(8);
 await page.waitForTimeout(300);
 const tinyBandBeside = await lodBand(tinyInstanceId);
-console.log('speck 8 m from the avatar (should be "near": protected):', tinyBandBeside);
+console.log('speck 8 m from the avatar (should be "full": protected):', tinyBandBeside);
 await teleportToTinyOffset(30);
-await page.waitForTimeout(300);
-const tinyBandAway = await lodBand(tinyInstanceId);
-console.log('speck 30 m away (should be "middle": size rule applies):', tinyBandAway);
+const tinyBandAway = await waitBand('far', tinyInstanceId);
+console.log('speck 30 m away (should be "far": size rule applies):', tinyBandAway);
 await teleportShopAvatar(25);
 
-// #3254: the proxy takes the model's own color, not the template's generic
-// placeholder (#8899aa here). crate.glb's material is orange (red-dominant).
-const proxyColorHex = await page.evaluate((id) => window.__testShopInstanceLodProxyColor(id), instanceId);
-console.log('LOD proxy color comes from the model, not template.color (should be an orange, not 8899aa):', proxyColorHex);
-const proxyIsModelColor = typeof proxyColorHex === 'string' && proxyColorHex !== '8899aa' &&
-  parseInt(proxyColorHex.slice(0, 2), 16) > parseInt(proxyColorHex.slice(4, 6), 16) + 60;
+// #3416: each tier is a lighter version of the same model, and none is a box.
+const trianglesStepDown = fullStats && midStats && farStats
+  && fullStats.visibleTriangles > midStats.visibleTriangles
+  && midStats.visibleTriangles > farStats.visibleTriangles
+  && farStats.visibleTriangles <= 200
+  && midStats.visibleTriangles <= fullStats.visibleTriangles * 0.2;
+const noBoxes = [fullStats, midStats, farStats].every((st) => st && st.boxStandIns === 0);
+console.log('triangles full/mid/far:', fullStats?.visibleTriangles, midStats?.visibleTriangles, farStats?.visibleTriangles);
 
 const pass = !!landlet
-  && proxyIsModelColor
-  && nearAfterLoad === 'near'
-  && bandAtMiddle === 'middle'
-  && largeBandAtMiddle === 'near'
-  && bandInHysteresisGap === 'middle'
-  && bandAfterReapproach === 'near'
-  && bandInGapFromNear === 'near'
-  && tinyBandBeside === 'near'
-  && tinyBandAway === 'middle'
+  && trianglesStepDown
+  && noBoxes
+  && nearAfterLoad === 'full'
+  && bandAtFar === 'far'
+  && largeBandAtFar === 'full'
+  && bandInFarGap === 'far'
+  && bandAtMid === 'mid'
+  && bandInMidGap === 'mid'
+  && bandAfterReapproach === 'full'
+  && bandInGapFromFull === 'full'
+  && tinyBandBeside === 'full'
+  && tinyBandAway === 'far'
   && errors.length === 0;
 await finish(browser, {
   pass,
-  label: '#2378: a model-loaded placed instance swaps to a simplified LOD proxy in the middle distance band and back to full detail on re-approach, with real enter/exit hysteresis',
+  label: '#3416: a placed model steps full -> mid -> far (lighter versions of itself, never a box) by apparent size and back on re-approach, with hysteresis at each boundary',
   errors,
 });

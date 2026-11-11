@@ -81,7 +81,7 @@ const sellerId = sellerMeBody.seller.sellerId;
 
 // Uploaded straight through the API (not the page's own upload wizard) so
 // Shop mode's load below is a model-loaded instance, not the box-fallback
-// path (which has no LOD proxy at all — see buildInstanceLodProxy).
+// path (which has no reduced versions at all).
 const modelBytes = await fs.readFile(CRATE_MODEL_PATH);
 const modelForm = new FormData();
 modelForm.append('file', new Blob([modelBytes], { type: 'model/gltf-binary' }), 'altitude-load-crate.glb');
@@ -190,7 +190,7 @@ while (bandAltitude === null && Date.now() < loadDeadlineAt) {
   bandAltitude = await lodBand();
   if (bandAltitude === null) await page.waitForTimeout(150);
 }
-console.log('60 m up, 150 m away (should be "middle", i.e. loaded):', bandAltitude);
+console.log('60 m up, 150 m away (should be loaded: a model tier, not null):', bandAltitude);
 
 // Back on the ground at the same spot: out of range again, so it unloads.
 await teleportAt(FAR_M, 0);
@@ -200,7 +200,7 @@ console.log('back on the ground, 150 m away (should be null / unloaded):', bandB
 
 const pass = !!landlet
   && bandGroundFar === null
-  && bandAltitude === 'middle'
+  && bandAltitude !== null && bandAltitude !== 'none'
   && bandBackOnGround === null
   && errors.length === 0;
 await finish(browser, {
