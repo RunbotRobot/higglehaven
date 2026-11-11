@@ -9,7 +9,7 @@
 // duplicated from worker/index.js, not imported -- see that duplication's
 // own comment for why.
 import { json, HttpError, ERROR_CODES } from './http.js';
-import { checkRateLimit, rateLimitStanding, rateLimitStandingStatement, rateLimitStandingFromRow } from './rate-limit.js';
+import { rateLimitInsertStatement, rateLimitRefusal, rateLimitStanding, rateLimitStandingStatement, rateLimitStandingFromRow } from './rate-limit.js';
 import { requireAdmin, requireSessionBuilder } from './auth.js';
 import { readJson, stringValue, finiteNumber } from './validation.js';
 import { adminActionLogStatement } from './admin-log.js';
@@ -176,7 +176,7 @@ export async function handleCreditOrbs(request, db, route, url) {
   // themselves a credit for it.
   if (request.method === 'POST' && route.length === 3 && route[2] === 'collect') {
     const sessionBuilder = await requireSessionBuilder(request, db);
-    await checkRateLimit(db, `credit-orb-collect:${sessionBuilder.builder_id}`, CREDIT_ORB_COLLECT_RATE_LIMIT_MAX);
+    const collectBucket = `credit-orb-collect:${sessionBuilder.builder_id}`;
     const orbId = stringValue(route[1], 'orbId');
     // x_m/y_m are landlet-local offsets (added to the owning landlet's own
     // center_x_m/center_y_m to get a world position, same convention every
@@ -188,7 +188,10 @@ export async function handleCreditOrbs(request, db, route, url) {
     // the orb pops on the client before the server answers, so every trip
     // saved is time the confirmation (and any reversal) arrives sooner.
     // #3147: avatar_presence is keyed on the account.
-    const [orbRead, presenceRead] = await db.batch([
+    // #3464: the rate-limit insert rides in the same trip (it depends on
+    // neither read); it is refused after, so a 429 still wins over a 404/403
+    // and every attempt is counted exactly as before.
+    const [orbRead, presenceRead, limitInsert] = await db.batch([
       db.prepare(`
         SELECT credit_orbs.landlet_id, landlets.center_x_m + credit_orbs.x_m AS world_x,
           landlets.center_y_m + credit_orbs.y_m AS world_y
@@ -196,7 +199,9 @@ export async function handleCreditOrbs(request, db, route, url) {
         WHERE credit_orbs.orb_id = ? AND credit_orbs.collected_at IS NULL
       `).bind(orbId),
       db.prepare('SELECT x, y, updated_at FROM avatar_presence WHERE user_id = ?').bind(sessionBuilder.user_id),
+      rateLimitInsertStatement(db, collectBucket, CREDIT_ORB_COLLECT_RATE_LIMIT_MAX),
     ]);
+    await rateLimitRefusal(db, limitInsert, collectBucket, CREDIT_ORB_COLLECT_RATE_LIMIT_MAX);
     const orb = orbRead.results[0];
     if (!orb) {
       throw new HttpError('This credit orb is no longer available -- someone else may have already collected it.', 404);
@@ -230,7 +235,7 @@ export async function handleCreditOrbs(request, db, route, url) {
       `).bind(sessionBuilder.builder_id, orbId, sessionBuilder.builder_id),
       // #3464: the standing rides in the claim's round trip (its rate-limit
       // insert already ran above, so it does not depend on the claim).
-      rateLimitStandingStatement(db, `credit-orb-collect:${sessionBuilder.builder_id}`),
+      rateLimitStandingStatement(db, collectBucket),
     ]);
     if (claim.meta.changes === 0) {
       throw new HttpError('This credit orb is no longer available -- someone else may have already collected it.', 404);
