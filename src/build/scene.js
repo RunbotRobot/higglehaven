@@ -85,7 +85,7 @@ import { footprintScaleAtHeight } from '../../worker/earthCurvature.js';
 import {
   curveGroundGeometry, flatGroundHitPoint, createGroundTexture, normalizeGroundShapeUVs,
   landlet, findTemplate, loadModelAnimations, computeSkeletonSignature, loadModelInstance,
-  extensibleAxes, effectiveLength, meshDimensions, buildInstanceLodProxy, setInstanceLodState,
+  extensibleAxes, effectiveLength, meshDimensions,
   AXIS_DIMENSION_KEY, AXIS_LIST, FLOORING_THICKNESS_M, isFlooringTemplate,
   createMeshForInstance, disposeMaterialTextures, disposeObject,
 } from '../world/models.js';
@@ -1286,7 +1286,7 @@ export function applyLandletShape(landletRecord) {
 
 // loadModelGltf/loadModelScene/loadModelAnimations/computeSkeletonSignature/
 // loadModelInstance/extensibleAxes/effectiveLength/meshDimensions/
-// buildInstanceLodProxy/setLodChildHitTestable/setInstanceLodState/
+// attachInstanceTiers/setInstanceLodState/
 // AXIS_DIMENSION_KEY/AXIS_LIST/FLOORING_THICKNESS_M/isFlooringTemplate all
 // now live in src/world/models.js (#2553).
 

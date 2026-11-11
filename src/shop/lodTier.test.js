@@ -1,8 +1,10 @@
-// #3373: the pure level-of-detail rule: apparent size, hysteresis, and the cap.
+// #3373 / #3416: the pure level-of-detail rule: apparent size, three tiers with
+// hysteresis, and the budget.
 import { describe, expect, it } from 'vitest';
 import {
-  apparentSizePx, nextIsMiddle, fullDetailFloorPx, isNearFullDetail, NEAR_FULL_DETAIL_M, LOD_ENTER_PX, LOD_EXIT_PX, MAX_FULL_DETAIL_ITEMS,
-  setBoundingSphere,
+  apparentSizePx, nextTier, budgetedTiers, fullDetailFloorPx, isNearFullDetail, NEAR_FULL_DETAIL_M,
+  LOD_MID_ENTER_PX, LOD_MID_EXIT_PX, LOD_FAR_ENTER_PX, LOD_FAR_EXIT_PX, MAX_FULL_DETAIL_ITEMS, MAX_MID_DETAIL_ITEMS,
+  TIER_FULL, TIER_MID, TIER_FAR, setBoundingSphere,
 } from './lodTier.js';
 
 const FOV = 60;
@@ -30,45 +32,79 @@ describe('apparentSizePx', () => {
 });
 
 describe('the cases the owner reported', () => {
-  const swapsAt = (radiusM, distanceM) => nextIsMiddle(false, apparentSizePx(radiusM, distanceM, FOV, VIEWPORT_H));
+  const tierAt = (radiusM, distanceM) => nextTier(null, apparentSizePx(radiusM, distanceM, FOV, VIEWPORT_H));
 
-  it('an enormous item (the toilet, ~6 m across) is still the real model at 75 m and 100 m', () => {
-    expect(swapsAt(3, 75)).toBe(false);
-    expect(swapsAt(3, 100)).toBe(false);
+  it('an enormous item (the toilet, ~6 m across) is never reduced to the far version at 75 m or 100 m', () => {
+    expect(tierAt(3, 75)).not.toBe(TIER_FAR);
+    expect(tierAt(3, 100)).not.toBe(TIER_FAR);
   });
 
-  it('a small item (a teacup, ~0.3 m across) is already the box at 75 m', () => {
-    expect(swapsAt(0.15, 75)).toBe(true);
+  it('a small item (a teacup, ~0.3 m across) is already a reduced version at 75 m', () => {
+    expect(tierAt(0.15, 75)).not.toBe(TIER_FULL);
   });
 
-  it('every item swaps eventually, farther the bigger it is', () => {
-    const swapDistance = (radiusM) => {
+  it('every item steps down eventually, farther the bigger it is, and never to a box', () => {
+    const farDistance = (radiusM) => {
       let d = 1;
-      while (!swapsAt(radiusM, d) && d < 10000) d += 1;
+      while (tierAt(radiusM, d) !== TIER_FAR && d < 100000) d += 1;
       return d;
     };
-    expect(swapDistance(0.15)).toBeLessThan(swapDistance(1));
-    expect(swapDistance(1)).toBeLessThan(swapDistance(3));
+    expect(farDistance(0.15)).toBeLessThan(farDistance(1));
+    expect(farDistance(1)).toBeLessThan(farDistance(3));
+    expect([TIER_FULL, TIER_MID, TIER_FAR]).toContain(tierAt(0.01, 5000));
   });
 });
 
-describe('nextIsMiddle hysteresis', () => {
-  it('swaps down below the enter size and not before', () => {
-    expect(nextIsMiddle(false, LOD_ENTER_PX + 0.1)).toBe(false);
-    expect(nextIsMiddle(false, LOD_ENTER_PX - 0.1)).toBe(true);
+describe('nextTier', () => {
+  it('goes full -> mid -> far as the item shrinks on screen', () => {
+    expect(nextTier(null, LOD_MID_ENTER_PX + 1)).toBe(TIER_FULL);
+    expect(nextTier(null, LOD_MID_ENTER_PX - 1)).toBe(TIER_MID);
+    expect(nextTier(null, LOD_FAR_ENTER_PX - 1)).toBe(TIER_FAR);
   });
 
-  it('only swaps back up once past the exit size, a band above the enter size', () => {
-    expect(LOD_EXIT_PX).toBeGreaterThan(LOD_ENTER_PX);
-    const between = (LOD_ENTER_PX + LOD_EXIT_PX) / 2;
-    expect(nextIsMiddle(true, between)).toBe(true); // stays box inside the band
-    expect(nextIsMiddle(false, between)).toBe(false); // stays model inside the band
-    expect(nextIsMiddle(true, LOD_EXIT_PX + 0.1)).toBe(false);
+  it('has a hysteresis band at each boundary', () => {
+    expect(LOD_MID_EXIT_PX).toBeGreaterThan(LOD_MID_ENTER_PX);
+    expect(LOD_FAR_EXIT_PX).toBeGreaterThan(LOD_FAR_ENTER_PX);
+    const midBand = (LOD_MID_ENTER_PX + LOD_MID_EXIT_PX) / 2;
+    expect(nextTier(TIER_MID, midBand)).toBe(TIER_MID);
+    expect(nextTier(TIER_FULL, midBand)).toBe(TIER_FULL);
+    expect(nextTier(TIER_MID, LOD_MID_EXIT_PX + 1)).toBe(TIER_FULL);
+    const farBand = (LOD_FAR_ENTER_PX + LOD_FAR_EXIT_PX) / 2;
+    expect(nextTier(TIER_FAR, farBand)).toBe(TIER_FAR);
+    expect(nextTier(TIER_MID, farBand)).toBe(TIER_MID);
+    expect(nextTier(TIER_FAR, LOD_FAR_EXIT_PX + 1)).toBe(TIER_MID);
   });
 
-  it('an item with no tier yet starts on the plain threshold', () => {
-    expect(nextIsMiddle(null, LOD_ENTER_PX - 1)).toBe(true);
-    expect(nextIsMiddle(undefined, LOD_ENTER_PX + 1)).toBe(false);
+  it('a far item that suddenly looks huge jumps straight to full', () => {
+    expect(nextTier(TIER_FAR, LOD_MID_EXIT_PX + 50)).toBe(TIER_FULL);
+  });
+});
+
+describe('budgetedTiers', () => {
+  const item = (px, wanted, isProtected = false) => ({ px, wanted, protected: isProtected });
+
+  it('changes nothing when everything fits', () => {
+    const items = [item(200, TIER_FULL), item(50, TIER_MID), item(10, TIER_FAR)];
+    expect(budgetedTiers(items)).toEqual([TIER_FULL, TIER_MID, TIER_FAR]);
+  });
+
+  it('full overflow drops the smallest on screen to mid', () => {
+    const items = [item(300, TIER_FULL), item(200, TIER_FULL), item(150, TIER_FULL), item(100, TIER_FULL)];
+    expect(budgetedTiers(items, 2, 10)).toEqual([TIER_FULL, TIER_FULL, TIER_MID, TIER_MID]);
+  });
+
+  it('mid overflow (including those just dropped) drops the smallest to far, never skipping mid', () => {
+    const items = [item(300, TIER_FULL), item(200, TIER_FULL), item(60, TIER_MID), item(40, TIER_MID)];
+    expect(budgetedTiers(items, 1, 2)).toEqual([TIER_FULL, TIER_MID, TIER_MID, TIER_FAR]);
+  });
+
+  it('protected items stay full and use no budget', () => {
+    const items = [item(5, TIER_FULL, true), item(5, TIER_FULL, true), item(300, TIER_FULL), item(200, TIER_FULL)];
+    expect(budgetedTiers(items, 3, 10)).toEqual([TIER_FULL, TIER_FULL, TIER_FULL, TIER_MID]);
+  });
+
+  it('has sensible default budgets', () => {
+    expect(MAX_MID_DETAIL_ITEMS).toBeGreaterThan(MAX_FULL_DETAIL_ITEMS);
   });
 });
 
@@ -104,7 +140,7 @@ describe('the protected radius around the avatar (#3443)', () => {
 
   it('a brick 10 m away would otherwise be inside the swap band, which is why it is protected', () => {
     const px = apparentSizePx(0.2, NEAR_FULL_DETAIL_M, FOV, VIEWPORT_H);
-    expect(px).toBeLessThan(LOD_EXIT_PX);
+    expect(px).toBeLessThan(LOD_MID_EXIT_PX);
   });
 
   it('protected items use up the cap: with none left, every unprotected item simplifies', () => {

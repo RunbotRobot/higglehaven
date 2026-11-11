@@ -56,10 +56,10 @@ import * as THREE from 'three';
 import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
-import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
+import { setInstanceLodState, attachInstanceTiers, loadTierScenes, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
-import { apparentSizePx, nextIsMiddle, fullDetailFloorPx, isNearFullDetail, setBoundingSphere, MAX_FULL_DETAIL_ITEMS } from './lodTier.js';
+import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL } from './lodTier.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
 import { isNetworkError } from '../build/scene.js';
@@ -365,24 +365,51 @@ function lodApparentPx(entry, object) {
   return apparentSizePx(radiusM, Math.hypot(dx, dy, dz), camera.fov, window.innerHeight);
 }
 
-// #3373: sets every loaded item's level of detail from its apparent size (with
-// hysteresis), then, if more items want full detail than the budget allows,
-// drops the smallest on screen to the box first. Runs on the proximity tick
-// (SHOP_PROXIMITY_INTERVAL_MS), so an item flips within a fraction of a second
-// of crossing a threshold. An item with no proxy (a box or flooring, already as
-// cheap as it gets) has nothing to switch.
-const lodNearPxScratch = [];
+// #3373 / #3416: whether an item has reduced versions to switch between: a
+// placed model (not a box fallback, flooring, or the geometry-free handle of a
+// batched placement, none of which has a loaded model container) that is not
+// cropped to a per-placement shape (the versions are of the whole product).
+function hasLodTiers(object) {
+  return Boolean(object.userData.model) && !extensibleAxes(object.userData.template);
+}
+
+// #3416: an item's mid and far versions are fetched or built only once the
+// item first needs one, so a landlet the shopper only ever stands beside never
+// pays for them. Until they are ready the item stays on its full model.
+function requestInstanceTiers(entry, object) {
+  object.userData.lodTiersState = 'loading';
+  loadTierScenes(object.userData.template).then((scenes) => {
+    if (!object.parent) { object.userData.lodTiersState = 'none'; return; } // unloaded meanwhile
+    // Attaching clones the versions into this item: a small unit of work run
+    // inside the per-frame budget, largest on screen first (#3396).
+    worldWorkQueue.enqueue(() => {
+      if (!object.parent) { object.userData.lodTiersState = 'none'; return; }
+      object.userData.lodTiersState = attachInstanceTiers(object, scenes) ? 'ready' : 'none';
+    }, { group: entry.loadGroup, priority: -(object.userData.lodPx ?? 0) });
+  });
+}
+
+// #3373 / #3416: sets every loaded item's level of detail from its apparent
+// size (with hysteresis): its full model, a mid version, or a far version of the
+// same model, never a box. If more items want full detail than the budget
+// allows, the smallest on screen drop to mid, and past the mid budget to far.
+// Runs on the proximity tick (SHOP_PROXIMITY_INTERVAL_MS), so an item flips
+// within a fraction of a second of crossing a threshold. An item without
+// versions (a box fallback, flooring, a batched placement, a cropped item)
+// has nothing to switch.
+const lodItemsScratch = [];
+const lodObjectsScratch = [];
 
 // #3443: the placed bundles of a loaded landlet that have more than one
-// proxied member, each with its bounding sphere, found once per change in the
+// member with versions to switch between, each with its bounding sphere, found once per change in the
 // landlet's object count (Shop items do not move). Members that are drawn by an
-// instanced batch have no proxy and are not decided one by one at all.
+// instanced batch have no versions and are not decided one by one at all.
 function lodSetsFor(entry) {
   if (entry.lodSets && entry.lodSetsObjectCount === entry.objects.length && entry.lodSetsToken === entry.loadToken) return entry.lodSets;
   const byGroup = new Map();
   for (const object of entry.objects) {
     const groupId = object.userData.groupId;
-    if (!groupId || !object.userData.lodProxy) continue;
+    if (!groupId || !hasLodTiers(object)) continue;
     let members = byGroup.get(groupId);
     if (!members) byGroup.set(groupId, members = []);
     members.push(object);
@@ -402,8 +429,8 @@ function lodSetsFor(entry) {
 }
 
 function updateInstanceLodTiers() {
-  lodNearPxScratch.length = 0;
-  let protectedCount = 0;
+  lodItemsScratch.length = 0;
+  lodObjectsScratch.length = 0;
   for (const entry of shopLandlets.values()) {
     if (!entry.loaded) continue;
     // #3443: a bundle changes detail as one set, from the set's size on screen,
@@ -424,42 +451,43 @@ function updateInstanceLodTiers() {
       }
     }
     for (const object of entry.objects) {
-      if (!object.userData.lodProxy) continue;
+      if (!hasLodTiers(object)) continue;
       const set = object.userData.groupId ? sets.get(object.userData.groupId) : undefined;
       const px = set ? set.px : lodApparentPx(entry, object);
       object.userData.lodPx = px;
-      // #3443: beside the avatar is always the real model, outside the cap too.
+      // #3443: beside the avatar is always the real model, outside the budget too.
       const nearAvatar = set ? set.near : isNearFullDetail(horizontalDistanceM(
         entry.group.position.x + object.position.x, entry.group.position.y + object.position.y,
         shopAvatarPosition.x, shopAvatarPosition.y,
       ));
-      object.userData.lodProtected = nearAvatar;
       // A set's current tier is its first member's, so the hysteresis band
-      // applies to the set as a whole rather than to each member's own state.
-      const currentIsMiddle = set ? set.members[0].userData.lodMiddle : object.userData.lodMiddle;
-      const wantMiddle = !nearAvatar && nextIsMiddle(currentIsMiddle, px);
-      object.userData.lodWantMiddle = wantMiddle;
-      if (nearAvatar) protectedCount += 1;
-      else if (!wantMiddle) lodNearPxScratch.push(px);
+      // applies to the set as a whole rather than to each member's own state;
+      // every member of a set carries the set's size, so the budget drops or
+      // keeps the set together.
+      const currentTier = set ? set.members[0].userData.lodTier : object.userData.lodTier;
+      lodItemsScratch.push({
+        px,
+        protected: nearAvatar,
+        wanted: nearAvatar ? TIER_FULL : nextTier(currentTier, px),
+      });
+      lodObjectsScratch.push({ entry, object });
     }
   }
-  const floorPx = fullDetailFloorPx(lodNearPxScratch, Math.max(MAX_FULL_DETAIL_ITEMS - protectedCount, 0));
+  const tiers = budgetedTiers(lodItemsScratch);
   // #3396: flipping hundreds of items in one tick is a batch like any other, so
   // it stops when its slice of the frame is spent; the items not reached keep
   // their state and flip on the next tick.
   const flipStartMs = performance.now();
-  for (const entry of shopLandlets.values()) {
-    if (!entry.loaded) continue;
-    for (const object of entry.objects) {
-      if (!object.userData.lodProxy) continue;
-      const isMiddle = !object.userData.lodProtected && (object.userData.lodWantMiddle || object.userData.lodPx < floorPx);
-      if (isMiddle !== object.userData.lodMiddle) {
-        object.userData.lodMiddle = isMiddle;
-        setInstanceLodState(object, isMiddle);
-        window.__shopLodFlipCount = (window.__shopLodFlipCount ?? 0) + 1; // #3443: e2e counts tier changes
-        if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;
-      }
-    }
+  for (let i = 0; i < lodObjectsScratch.length; i++) {
+    const { entry, object } = lodObjectsScratch[i];
+    const tier = tiers[i];
+    object.userData.lodTier = tier;
+    if (tier !== TIER_FULL && object.userData.lodTiersState === undefined) requestInstanceTiers(entry, object);
+    if (object.userData.lodTiersState !== 'ready' || tier === object.userData.lodApplied) continue;
+    object.userData.lodApplied = tier;
+    setInstanceLodState(object, tier);
+    window.__shopLodFlipCount = (window.__shopLodFlipCount ?? 0) + 1; // #3443: e2e counts tier changes
+    if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;
   }
 }
 const SHOP_LOD_FLIP_BUDGET_MS = 4; // #3396: the part of a frame one tick's tier flips may use
@@ -1281,28 +1309,12 @@ async function buildAndAttachInstance(entry, instance, myToken, run) {
   entry.group.add(object);
   entry.objects.push(object);
   growShopDomeIfNeeded(object);
-  // #2378: built/attached after growShopDomeIfNeeded above, not before —
-  // the proxy's box dimensions approximate the model's declared template
-  // size, which can differ slightly from the real mesh's own rendered
-  // bounds, so keeping it out of that one Box3.setFromObject(object) call
-  // avoids any chance of it skewing the dome-growth calculation.
-  const lodProxy = buildInstanceLodProxy(object);
-  if (lodProxy) {
-    object.userData.lodProxy = lodProxy;
-    object.add(lodProxy);
-  }
-  // #3373: a fresh item starts at the tier its apparent size calls for, so
-  // one loaded from altitude never builds full detail only to swap down a
-  // tick later.
-  // #3443: and one built beside the avatar starts at full detail, as the tick
-  // would keep it.
-  const startsNearAvatar = isNearFullDetail(horizontalDistanceM(
-    entry.group.position.x + object.position.x, entry.group.position.y + object.position.y,
-    shopAvatarPosition.x, shopAvatarPosition.y,
-  ));
-  const startsMiddle = !startsNearAvatar && nextIsMiddle(null, lodApparentPx(entry, object));
-  object.userData.lodMiddle = startsMiddle;
-  setInstanceLodState(object, startsMiddle);
+  // #3416: the item starts on its full model. Its mid and far versions are
+  // added the first time updateInstanceLodTiers asks for one (see
+  // requestInstanceTiers), after growShopDomeIfNeeded above has measured the
+  // full model alone.
+  object.userData.lodTier = TIER_FULL;
+  object.userData.lodApplied = TIER_FULL;
   if (object.userData.isCommunitySign) registerShopSign(object, entry);
   if (object.userData.isCommunityCalendar) registerShopCalendar(object, entry);
   // Unlike signs/calendar above, reviews have no builder opt-in flag at
@@ -1310,8 +1322,7 @@ async function buildAndAttachInstance(entry, instance, myToken, run) {
   // reviewable by definition (see docs/API.md's "Product reviews"), so
   // this registers unconditionally.
   registerShopReview(object, entry);
-  // #3407: last, so the dissolve covers everything attached above (the LOD
-  // proxy included). The item stays fully dissolved until its whole cluster has
+  // #3407: last, so the dissolve covers everything attached above. The item stays fully dissolved until its whole cluster has
   // arrived, then resolves out of the fog.
   run?.itemReady(instance.instanceId, object);
 }

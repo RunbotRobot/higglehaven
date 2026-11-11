@@ -1,27 +1,37 @@
-// #2399: setInstanceLodState (#2378's middle-LOD-band swap) only ever
-// toggled `.visible` on the proxy box and the real model's own children --
-// but THREE.Raycaster's tree walk never checks `.visible` (only `.layers`,
-// then each object's own raycast() return value), so visibility alone
-// never decided which representation actually caught a tap. The *visible*
-// one (proxy in the middle band, real model up close) needs to be the one
-// that's actually hit-testable; the hidden one needs to be excluded, or a
-// tap meant for what the shopper can see gets silently absorbed by
-// whatever's invisible instead.
+// #2399 / #3416: setInstanceLodState (the level-of-detail switch) only ever
+// toggled `.visible` on the placed model's versions -- but THREE.Raycaster's
+// tree walk never checks `.visible` (only `.layers`, then each object's own
+// raycast() return value), so visibility alone never decided which version
+// actually caught a tap. The *visible* one (full up close, mid, or far) needs
+// to be the one that's hit-testable; the hidden ones need to be excluded, or a
+// tap meant for what the shopper can see gets silently absorbed by whatever's
+// invisible instead.
 //
-// Reuses e2e/shop-middle-lod-band.test.mjs's own real-model setup (crate.glb
-// uploaded through the API, same teleport+forceProximityCheck pattern for
-// deterministically crossing the enter/exit radii) rather than duplicating
-// it, then drives the new window.__testShopInstanceLodHitSource hook (added
-// alongside this fix) at both bands to confirm the hit always lands on the
-// currently-visible representation, never the hidden one.
-import fs from 'node:fs/promises';
+// Same dense-sphere setup and teleport pattern as
+// e2e/shop-middle-lod-band.test.mjs, driving window.__testShopInstanceLodHitSource
+// at each of the three versions to confirm the hit always lands on the one
+// currently shown.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import * as THREE from 'three';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
+
+// Node has no FileReader -- GLTFExporter's binary path uses it.
+globalThis.FileReader = class {
+  readAsArrayBuffer(blob) {
+    blob.arrayBuffer().then((buf) => {
+      this.result = buf;
+      this.onloadend?.();
+    });
+  }
+};
+const denseScene = new THREE.Scene();
+denseScene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 120, 120), new THREE.MeshStandardMaterial({ color: '#c0392b' })));
+const denseBuffer = Buffer.from(await new GLTFExporter().parseAsync(denseScene, { binary: true }));
 
 const LABEL = 'Middle LOD Band Tap Hit Tester';
 const PRODUCT_NAME = 'Tap Hit Test Middle LOD Product';
@@ -86,11 +96,11 @@ const { body: sellerMeBody } = await pageFetchJson('/api/sellers/me');
 const sellerId = sellerMeBody.seller.sellerId;
 
 // Uploaded straight through the API so Shop mode's load below is a
-// model-loaded instance, not the box-fallback path (which has no LOD proxy
-// at all -- see buildInstanceLodProxy).
-const modelBytes = await fs.readFile(CRATE_MODEL_PATH);
+// model-loaded instance, not the box-fallback path (which has no reduced
+// versions at all).
+const modelBytes = denseBuffer;
 const modelForm = new FormData();
-modelForm.append('file', new Blob([modelBytes], { type: 'model/gltf-binary' }), 'tap-hit-test-crate.glb');
+modelForm.append('file', new Blob([modelBytes], { type: 'model/gltf-binary' }), 'tap-hit-test-sphere.glb');
 const modelUploadRes = await fetch(`${BASE_URL}/api/models`, { method: 'POST', body: modelForm });
 const modelUpload = await modelUploadRes.json();
 if (modelUploadRes.status !== 200 && modelUploadRes.status !== 201) {
@@ -170,33 +180,45 @@ await page.waitForTimeout(100);
 await page.mouse.up();
 await page.waitForTimeout(100);
 
-// Into SHOP_LOAD_RADIUS_M (60m) -- triggers the real load.
-await teleportShopAvatar(30);
-let band = null;
-const loadDeadlineAt = Date.now() + 10000;
-while (band === null && Date.now() < loadDeadlineAt) {
-  band = await lodBand();
-  if (band === null) await page.waitForTimeout(100);
+async function waitBand(expected, timeoutMs = 15000) {
+  const deadlineAt = Date.now() + timeoutMs;
+  let band = await lodBand();
+  while (band !== expected && Date.now() < deadlineAt) {
+    await page.waitForTimeout(100);
+    band = await lodBand();
+  }
+  return band;
 }
-console.log('LOD band once loaded near the landlet (should be "near"):', band);
-const hitSourceNear = await lodHitSource();
-console.log('Hit source while band is "near" (should be "real" -- full detail is the visible representation):', hitSourceNear);
 
-// #3373: a 1 m item at 80 m is well under the swap-down apparent size -- swaps to the simplified proxy.
+// 9 m: inside the protected radius, the full model.
+await teleportShopAvatar(9);
+const band = await waitBand('full');
+console.log('tier once loaded close (should be "full"):', band);
+const hitSourceFull = await lodHitSource();
+console.log('hit source while full (should be "full"):', hitSourceFull);
+
+// 25 m (~52 px): the mid version.
+await teleportShopAvatar(25);
+const bandAtMid = await waitBand('mid');
+const hitSourceMid = await lodHitSource();
+console.log('tier at 25 m (should be "mid"):', bandAtMid, 'hit source (should be "mid"):', hitSourceMid);
+
+// 80 m (~16 px): the far version.
 await teleportShopAvatar(80);
-const bandAtMiddle = await lodBand();
-console.log('LOD band past the middle-band enter threshold (should be "middle"):', bandAtMiddle);
-const hitSourceMiddle = await lodHitSource();
-console.log('Hit source while band is "middle" (should be "proxy" -- the simplified box is the visible representation, not the hidden real model):', hitSourceMiddle);
+const bandAtFar = await waitBand('far');
+const hitSourceFar = await lodHitSource();
+console.log('tier at 80 m (should be "far"):', bandAtFar, 'hit source (should be "far"):', hitSourceFar);
 
 const pass = !!landlet
-  && band === 'near'
-  && hitSourceNear === 'real'
-  && bandAtMiddle === 'middle'
-  && hitSourceMiddle === 'proxy'
+  && band === 'full'
+  && hitSourceFull === 'full'
+  && bandAtMid === 'mid'
+  && hitSourceMid === 'mid'
+  && bandAtFar === 'far'
+  && hitSourceFar === 'far'
   && errors.length === 0;
 await finish(browser, {
   pass,
-  label: '#2399: a tap always lands on whichever LOD representation is actually visible, never the hidden one',
+  label: '#2399 / #3416: a tap always lands on whichever version (full, mid or far) is actually visible, never a hidden one',
   errors,
 });

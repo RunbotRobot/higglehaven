@@ -6,13 +6,15 @@ import { skeletonSignatureFromBones } from '../skeletonSignature.js';
 import { curvedPosition, flatPosition } from '../../worker/earthCurvature.js';
 import { activeCatalog, LANDLET_SIDE_M } from './state.js';
 import { placementUserData } from '../shop/instanceBatching.js';
+import { TIER_FULL, TIER_MID, TIER_FAR } from '../shop/lodTier.js';
+import { buildModelTiers } from '../modelTiers.js';
 export { createPlacementHandle } from './placementHandle.js';
 import { markSharedModelResources, markSharedModelTextures, disposeOwnedMeshResources } from '../sharedModelResources.js';
 
 // #2553 (part of #2504/#2500's src/main.js module split, see #2503's design
 // comment for the full dependency map): the catalog-template -> Object3D
 // pipeline and the ground plane -- model loading/caching, the box-fallback
-// and crop/extensibility handling, LOD proxies, and dispose helpers, plus
+// and crop/extensibility handling, level-of-detail versions, and dispose helpers, plus
 // the one ground-plane Mesh every mode's own scene renders into. Depends
 // only on world/state.js (activeCatalog, LANDLET_SIDE_M); this module
 // exports `landlet` without adding it to any scene -- main.js forward-
@@ -275,8 +277,15 @@ export async function computeSkeletonSignature(url) {
 // ask for SkeletonUtils.clone, which rebinds each clone to its own bones.
 // Opt-in so every other caller (placed products, the shopper's own avatar)
 // keeps exactly the clone it always had.
-export async function loadModelInstance(url, { skeletonSafe = false } = {}) {
-  const cachedScene = await loadModelScene(url);
+export async function loadModelInstance(url, options) {
+  return instantiateScene(await loadModelScene(url), options);
+}
+
+// What loadModelInstance does with an already-loaded scene: a per-placement
+// clone with its own materials, stood up into the Z-up scene and recentered on
+// its own origin. Also how a placement gets its mid and far versions (#3416),
+// whether they were loaded from storage or built in the browser.
+function instantiateScene(cachedScene, { skeletonSafe = false } = {}) {
   const model = skeletonSafe ? cloneSkinned(cachedScene) : cachedScene.clone();
   // Object3D.clone() shares materials/geometries by reference. Geometry
   // being shared is fine (read-only), but materials need independent
@@ -364,44 +373,65 @@ export function meshDimensions(mesh) {
   };
 }
 
-// #3254: the proxy's color. template.color is the upload flow's generic grey
-// placeholder for a real uploaded model, so a distant product used to read as
-// a plain grey box (the owner's "grey cube" report). Use the loaded model's
-// own look instead: the first mesh's texture average (averageTextureColor,
-// the same helper the crop backing uses) or, for an untextured material, its
-// base color; fall back to template.color when there is no model to read.
-function lodProxyColor(object) {
-  let found = null;
-  object.traverse((child) => {
-    if (found || !child.isMesh) return;
-    const material = Array.isArray(child.material) ? child.material[0] : child.material;
-    if (!material) return;
-    found = averageTextureColor(material.map) || (material.color ? material.color.clone() : null);
+// #3412 / #3416 (Model tiers): a placed item is always its own model, in one of
+// three versions of it: the full model, a mid version (about a tenth of the
+// triangles) and a far version (a few dozen to about two hundred). Nothing
+// stands in for it as a box. A product with stored versions (modelMidUrl /
+// modelFarUrl on its template) loads them; one without has them built once in
+// the viewer's browser from its full model (src/modelTiers.js), inside the frame
+// budget, and cached for the session. Either way the versions of a product are
+// prepared once and every placement gets its own clone, like the full model.
+const tierScenesCache = new Map(); // template versions -> Promise<{ mid, far }>
+
+// A promise chain so only one in-browser build runs at a time: each one is cut
+// into slices that yield to rendering (#3396), and two at once would double the
+// share of every frame they take.
+let tierBuildTail = Promise.resolve();
+
+function nextAnimationFrame() {
+  return new Promise((resolve) => {
+    // requestAnimationFrame does not fire in a hidden tab; the timer keeps a
+    // build moving there, slowly.
+    const timer = setTimeout(resolve, 50);
+    requestAnimationFrame(() => { clearTimeout(timer); resolve(); });
   });
-  return found || new THREE.Color(object.userData.template.color);
 }
 
-// #2378 (docs/SPEC.md §1's near/middle-LOD/far-panoramic-backdrop chunk
-// loading, #2377): a cheap box stand-in for a model-loaded instance's full
-// geometry, shown at the middle LOD band instead of leaving full detail
-// loaded all the way out to the unload radius. Added as an extra child of
-// the instance's own object rather than swapping object identity, so every
-// other per-object hook (entry.objects, sign/calendar/review registration,
-// userData) keeps working completely unchanged — only this proxy's and the
-// real model's own children's `.visible`/hit-testable state toggle (see
-// setInstanceLodState below, which also establishes the correct initial
-// raycast state right after this returns — see its own call site). Box-
-// fallback/flooring instances (object.isMesh true, from
-// createMeshForInstance's own box-fallback branches) return null here:
-// they're already a single cheap box, nothing left to simplify.
-export function buildInstanceLodProxy(object) {
-  if (object.isMesh) return null;
-  const { width, depth, height } = meshDimensions(object);
-  const geometry = new THREE.BoxGeometry(width, depth, height);
-  const material = new THREE.MeshStandardMaterial({ color: lodProxyColor(object) });
-  const proxy = new THREE.Mesh(geometry, material);
-  proxy.visible = false;
-  return proxy;
+async function loadTierScenesUncached(template) {
+  const stored = { mid: null, far: null };
+  for (const [name, url] of [['mid', template.modelMidUrl], ['far', template.modelFarUrl]]) {
+    if (!url) continue;
+    try {
+      stored[name] = await loadModelScene(url);
+    } catch (err) {
+      console.warn(`Failed to load the ${name} model of "${template.templateId}" (${url}), building it instead:`, err);
+    }
+  }
+  if (stored.mid && stored.far) return stored;
+  let built = null;
+  try {
+    const full = await loadModelScene(template.modelUrl);
+    const run = tierBuildTail.then(() => buildModelTiers(full, { nextFrame: nextAnimationFrame }));
+    tierBuildTail = run.catch(() => {});
+    built = await run;
+  } catch (err) {
+    console.warn(`Failed to build the reduced models of "${template.templateId}", keeping its full model:`, err);
+  }
+  // A model the builder declines to simplify (skinned, or already tiny) comes
+  // back as itself: that tier is the full model, so there is nothing to add.
+  const pick = (name) => stored[name] || (built && !built[name].sharesFullModel ? built[name].object : null);
+  return { mid: pick('mid'), far: pick('far') };
+}
+
+// Resolves to { mid, far }: the cached scene of each reduced version, or null
+// where an item should simply stay on its full model. Never rejects.
+export function loadTierScenes(template) {
+  if (!template.modelUrl) return Promise.resolve({ mid: null, far: null });
+  const key = `${template.modelUrl}|${template.modelMidUrl ?? ''}|${template.modelFarUrl ?? ''}`;
+  if (!tierScenesCache.has(key)) {
+    tierScenesCache.set(key, loadTierScenesUncached(template).catch(() => ({ mid: null, far: null })));
+  }
+  return tierScenesCache.get(key);
 }
 
 // #2399: THREE.Raycaster's own tree walk (see intersect() in its source)
@@ -421,25 +451,50 @@ function setLodChildHitTestable(child, hitTestable) {
   else child.raycast = () => false;
 }
 
-// #2378: true switches an instance to its simplified middle-band proxy;
-// false restores full detail. A no-op for an instance with no proxy
-// (buildInstanceLodProxy returned null for it, stored as
-// object.userData.lodProxy in loadShopLandletInstances) — a box/flooring
-// instance has nothing to switch. Keeps hit-testability in sync with
-// visibility on both sides (#2399) — without this, the visible side of a
-// switch could tap-miss (invisible proxy/model still absorbing the hit)
-// while the hidden side keeps catching every tap meant for whichever
-// object the shopper can actually see.
-export function setInstanceLodState(object, isMiddle) {
-  const proxy = object.userData.lodProxy;
-  if (!proxy) return;
-  proxy.visible = isMiddle;
-  setLodChildHitTestable(proxy, isMiddle);
-  for (const child of object.children) {
-    if (child === proxy) continue;
-    child.visible = !isMiddle;
-    setLodChildHitTestable(child, !isMiddle);
+// Adds an item's mid and far versions as hidden children of its own object
+// (rather than swapping the object, so every other per-object hook —
+// entry.objects, sign/calendar/review registration, userData — keeps working
+// unchanged). `scenes` is loadTierScenes' result. An item with no reduced
+// version at all (both null) is left as it was: it stays on its full model at
+// every distance.
+export function attachInstanceTiers(object, scenes) {
+  const tiers = {};
+  for (const name of [TIER_MID, TIER_FAR]) {
+    if (!scenes[name]) continue;
+    const container = instantiateScene(scenes[name]);
+    container.visible = false;
+    setLodChildHitTestable(container, false);
+    object.add(container);
+    tiers[name] = container;
   }
+  if (!tiers.mid && !tiers.far) return false;
+  object.userData.lodTiers = tiers;
+  return true;
+}
+
+// Shows one version of an item and hides the others, keeping hit-testability in
+// sync with visibility on both sides (#2399) — without this, the visible side of
+// a switch could tap-miss (an invisible version still absorbing the hit) while
+// the hidden side keeps catching every tap meant for whichever the shopper can
+// actually see. Returns the tier now shown: a version the item does not have
+// falls back to the nearest one it does (mid <-> far), then to the full model.
+// A no-op returning 'full' for an item with no reduced versions.
+export function setInstanceLodState(object, tier) {
+  const tiers = object.userData.lodTiers;
+  if (!tiers) return TIER_FULL;
+  let shown = tier;
+  if (shown === TIER_FAR && !tiers.far) shown = tiers.mid ? TIER_MID : TIER_FULL;
+  if (shown === TIER_MID && !tiers.mid) shown = tiers.far ? TIER_FAR : TIER_FULL;
+  for (const child of object.children) {
+    let visible;
+    if (child === tiers.mid) visible = shown === TIER_MID;
+    else if (child === tiers.far) visible = shown === TIER_FAR;
+    else visible = shown === TIER_FULL;
+    child.visible = visible;
+    setLodChildHitTestable(child, visible);
+  }
+  object.userData.lodShown = shown;
+  return shown;
 }
 
 export const AXIS_DIMENSION_KEY = { x: 'width', y: 'depth', z: 'height' };

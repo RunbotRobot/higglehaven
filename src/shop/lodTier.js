@@ -2,34 +2,52 @@
 // looks on screen, not by a fixed distance. A fixed 75 m swapped a teacup and an
 // item many metres tall at the same range, so a huge item turned into a plain box
 // while it was still a prominent object on the shopper's screen (owner report,
-// 2026-11-10). The tier an item needs is "would the box be told apart from the
-// model": that depends on its size over its distance, and on the lens.
+// 2026-11-10). #3412 (Model tiers) then removed the box: an item is always its
+// own model, in one of three versions of it. 'full' is the model as uploaded,
+// 'mid' is about a tenth of its triangles, and 'far' is a few dozen to about two
+// hundred (src/modelTiers.js). The tier an item needs is "would the cheaper
+// version be told apart from the better one": that depends on its size over its
+// distance, and on the lens.
 //
 // Pure (no three.js, no DOM) so the rule is unit-tested directly
 // (src/shop/lodTier.test.js); src/shop/presenceAndContent.js feeds it the real
 // camera and item sizes.
 
-// An item swaps to its simplified box when its diameter on screen falls below
-// ENTER_PX CSS pixels, and back to the full model once it is above EXIT_PX. The
-// gap is the hysteresis: an item hovering at the boundary does not flip every
-// tick. A few dozen pixels is where a box and a model stop being distinguishable.
-export const LOD_ENTER_PX = 24;
-export const LOD_EXIT_PX = 36;
+export const TIER_FULL = 'full';
+export const TIER_MID = 'mid';
+export const TIER_FAR = 'far';
 
-// The most items kept at full detail at once, however big they look: the budget
-// that stands in for the old fixed distance as the cost bound on a phone. When
-// more want full detail than this, the smallest on screen drop to the box first.
-// Well above anything on screen in an ordinary build; it exists so one enormous
-// build (hundreds of large items in view) cannot ask the GPU for all of them.
+// An item steps down to the next cheaper version when its diameter on screen
+// falls below an ENTER size in CSS pixels, and back up once it is above the
+// matching EXIT size. The gap between the two is the hysteresis: an item
+// hovering at a boundary does not flip every tick.
+//   full <-> mid: below MID_ENTER_PX a tenth of the triangles reads the same.
+//   mid  <-> far: below FAR_ENTER_PX only the silhouette and colour read, which
+//                 is what the far version keeps (the sizes the old stand-in box
+//                 used, a few dozen pixels).
+export const LOD_MID_ENTER_PX = 80;
+export const LOD_MID_EXIT_PX = 110;
+export const LOD_FAR_ENTER_PX = 24;
+export const LOD_FAR_EXIT_PX = 36;
+
+// The most items kept at each detail level at once, however big they look: the
+// budget that stands in for the old fixed distance as the cost bound on a phone.
+// When more want full detail than MAX_FULL_DETAIL_ITEMS, the smallest on screen
+// drop to mid; when more want mid (including those just dropped) than
+// MAX_MID_DETAIL_ITEMS, the smallest of those drop to far. Nothing drops to a
+// box. Well above anything on screen in an ordinary build; they exist so one
+// enormous build (hundreds of large items in view) cannot ask the GPU for all
+// of them.
 export const MAX_FULL_DETAIL_ITEMS = 600;
+export const MAX_MID_DETAIL_ITEMS = 1500;
 
 // #3443: what is right beside the person is always the real model. An item
-// within this many metres (along the ground) of the avatar never takes the box,
+// within this many metres (along the ground) of the avatar never takes a cheaper version,
 // neither from the per-item size rule (a single brick is small, so it sits near
 // the enter/exit sizes even at close range) nor from the cap. The owner stood
 // next to an 829-brick wall and watched bricks flip between textured and plain
 // as he moved a metre; the cap's ranking by apparent size reshuffled which 229
-// bricks were boxes at every step. Protected items do not count against the cap
+// bricks were simplified at every step. Protected items do not count against the cap
 // either, so the rest of the world's budget is what is left over.
 export const NEAR_FULL_DETAIL_M = 10;
 
@@ -48,18 +66,58 @@ export function apparentSizePx(radiusM, distanceM, fovDeg, viewportHeightPx) {
   return 2 * radiusM * pxPerMetre;
 }
 
-// Should the item now be on the simplified box? `isMiddle` is its current tier
-// (null/undefined for an item with no tier yet, which starts at the plain
-// threshold with no hysteresis).
-export function nextIsMiddle(isMiddle, apparentPx) {
-  if (isMiddle === true) return apparentPx < LOD_EXIT_PX;
-  if (isMiddle === false) return apparentPx < LOD_ENTER_PX;
-  return apparentPx < LOD_ENTER_PX;
+// The tier an item should be in now, from its current tier (null/undefined for
+// an item with no tier yet, which starts at the plain enter sizes with no
+// hysteresis) and its apparent size in CSS pixels. Hysteresis applies at each
+// boundary separately: an item in 'mid' stays there until it falls below the far
+// enter size or rises above the mid exit size.
+export function nextTier(currentTier, apparentPx) {
+  if (currentTier === TIER_FAR) {
+    if (apparentPx < LOD_FAR_EXIT_PX) return TIER_FAR;
+    return apparentPx < LOD_MID_EXIT_PX ? TIER_MID : TIER_FULL;
+  }
+  if (currentTier === TIER_MID) {
+    if (apparentPx < LOD_FAR_ENTER_PX) return TIER_FAR;
+    return apparentPx < LOD_MID_EXIT_PX ? TIER_MID : TIER_FULL;
+  }
+  // 'full', or no tier yet: both step down at the plain enter sizes.
+  if (apparentPx < LOD_FAR_ENTER_PX) return TIER_FAR;
+  return apparentPx < LOD_MID_ENTER_PX ? TIER_MID : TIER_FULL;
 }
 
-// Given the apparent sizes (px) of every item that wants full detail, the size
-// below which items must drop to the box so no more than `cap` stay at full
-// detail: the cap-th largest size (items strictly smaller drop). 0 when they all
+// The tier every item ends up in once the budget is applied. `items` is a list
+// of { px, wanted, protected }: its apparent size, the tier nextTier asked for,
+// and whether it is protected (beside the avatar: always full, outside the
+// budget). Returns an array of the final tiers in the same order. The smallest
+// on screen drop first: full overflow goes to mid, and mid overflow (the items
+// that wanted mid plus those just dropped) goes to far.
+export function budgetedTiers(items, fullCap = MAX_FULL_DETAIL_ITEMS, midCap = MAX_MID_DETAIL_ITEMS) {
+  let protectedCount = 0;
+  const fullPxs = [];
+  for (const item of items) {
+    if (item.protected) protectedCount += 1;
+    else if (item.wanted === TIER_FULL) fullPxs.push(item.px);
+  }
+  const fullFloorPx = fullDetailFloorPx(fullPxs, Math.max(fullCap - protectedCount, 0));
+  const afterFull = items.map((item) => {
+    if (item.protected) return TIER_FULL;
+    if (item.wanted === TIER_FULL && item.px < fullFloorPx) return TIER_MID;
+    return item.wanted;
+  });
+  const midPxs = [];
+  items.forEach((item, index) => {
+    if (!item.protected && afterFull[index] === TIER_MID) midPxs.push(item.px);
+  });
+  const midFloorPx = fullDetailFloorPx(midPxs, midCap);
+  return items.map((item, index) => {
+    if (afterFull[index] === TIER_MID && item.px < midFloorPx) return TIER_FAR;
+    return afterFull[index];
+  });
+}
+
+// Given the apparent sizes (px) of every item that wants a detail level, the
+// size below which items must drop to the next cheaper level so no more than
+// `cap` stay at it: the cap-th largest size (items strictly smaller drop). 0 when they all
 // fit. Ties at the boundary keep full detail, so the count can exceed the cap by
 // the size of the tie; that is cheaper than splitting equals arbitrarily.
 export function fullDetailFloorPx(nearPxs, cap = MAX_FULL_DETAIL_ITEMS) {

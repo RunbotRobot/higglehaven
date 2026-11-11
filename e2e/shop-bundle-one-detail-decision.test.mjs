@@ -6,19 +6,34 @@
 //
 // Fixture: a bundle of 24 tiny (0.1 m) members in a 12 m row. Eight products
 // x three placements each, so no product reaches the instancing minimum and
-// every member is its own proxied mesh (the case the per-item rule used to
+// every member is its own mesh with its own tiers (the case the per-item rule used to
 // decide piecemeal). Judged: every member always shares one tier; nothing
-// within 10 m is ever the box; the wall as a whole keeps its real model out to
-// 40 m (where each brick on its own is a few pixels and would have been a box);
+// within 10 m is ever a reduced version; the wall as a whole keeps its real model out to
+// 40 m (where each brick on its own is a few pixels and would have been a reduced version);
 // and walking 2 m to 15 m and back three times causes zero tier changes.
-import fs from 'node:fs/promises';
+import * as THREE from 'three';
+import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { launchPage, chooseIdentity, claimLandlet, ensureAdminSession, finish } from './helpers.mjs';
 
 const BASE_URL = process.env.E2E_BASE_URL || 'http://127.0.0.1:8787';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
+
+// #3416: the bricks are a dense-enough sphere to have mid and far versions (the
+// repo's crate.glb is already cheap and has none), so the one-decision rule is
+// exercised on real tiers. Node has no FileReader; GLTFExporter's binary path uses it.
+globalThis.FileReader = class {
+  readAsArrayBuffer(blob) {
+    blob.arrayBuffer().then((buf) => {
+      this.result = buf;
+      this.onloadend?.();
+    });
+  }
+};
+const denseScene = new THREE.Scene();
+denseScene.add(new THREE.Mesh(new THREE.SphereGeometry(1, 48, 48), new THREE.MeshStandardMaterial({ color: '#c0392b' })));
+const denseBuffer = Buffer.from(await new GLTFExporter().parseAsync(denseScene, { binary: true }));
 
 const LABEL = 'Bundle One Detail Tester';
 const PRODUCT_COUNT = 8;
@@ -71,9 +86,9 @@ const json = (body, method = 'POST') => ({ method, headers: { 'content-type': 'a
 const { body: sellerMeBody } = await pageFetchJson('/api/sellers/me');
 const sellerId = sellerMeBody.seller.sellerId;
 
-const modelBytes = await fs.readFile(CRATE_MODEL_PATH);
+const modelBytes = denseBuffer;
 const modelForm = new FormData();
-modelForm.append('file', new Blob([modelBytes], { type: 'model/gltf-binary' }), 'bundle-lod-crate.glb');
+modelForm.append('file', new Blob([modelBytes], { type: 'model/gltf-binary' }), 'bundle-lod-sphere.glb');
 const modelUploadRes = await fetch(`${BASE_URL}/api/models`, { method: 'POST', body: modelForm });
 const modelUpload = await modelUploadRes.json();
 if (modelUploadRes.status !== 200 && modelUploadRes.status !== 201) throw new Error(`model upload failed: ${JSON.stringify(modelUpload)}`);
@@ -164,9 +179,9 @@ async function sampleAt(distanceM) {
 // the wall keeps its real model out to 40 m.
 for (const distance of [2, 8, 12, 15, 25, 40]) await sampleAt(distance);
 const uniform = samples.every((s) => new Set(s.bands).size === 1);
-const noBoxWithin10 = samples.filter((s) => s.distanceM <= 10).every((s) => s.bands.every((band) => band === 'near'));
-const wallFullOutTo40 = samples.every((s) => s.bands.every((band) => band === 'near'));
-for (const s of samples) console.log(`wall at ${s.distanceM} m, distinct tiers across its 24 members (should be 1, "near"):`, [...new Set(s.bands)].join(','));
+const noBoxWithin10 = samples.filter((s) => s.distanceM <= 10).every((s) => s.bands.every((band) => band === 'full'));
+const wallFullOutTo40 = samples.every((s) => s.bands.every((band) => band === 'full'));
+for (const s of samples) console.log(`wall at ${s.distanceM} m, distinct tiers across its 24 members (should be 1, "full"):`, [...new Set(s.bands)].join(','));
 
 // The walk the issue asks for: 2 m to 15 m and back, three times. Tier changes
 // counted by the app itself; none are expected, inside 10 m or beyond.
