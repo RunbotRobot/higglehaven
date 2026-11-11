@@ -103,7 +103,11 @@
       #loading-screen {
         position: fixed;
         inset: 0;
-        z-index: 15;
+        /* #3442: 19, above the Shop HUD tier (.shop-ui is 16) and below the
+           modals (20). At 15 it sat under every .shop-ui element, so any of
+           them marked visible early (the joysticks were) painted on top of
+           the title screen. Nothing else lives at 17-19. */
+        z-index: 19;
         display: flex;
         align-items: center;
         justify-content: center;

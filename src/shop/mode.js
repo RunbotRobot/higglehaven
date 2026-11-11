@@ -452,9 +452,7 @@ export async function enterShopMode() {
   // made that window long enough to reliably lose). Made visible below
   // instead, together with the moment the correct state is actually
   // decided.
-  for (const el of [shopStatusEl, shopMoveJoystickEl, shopLookJoystickEl]) {
-    el.classList.add('visible');
-  }
+  shopStatusEl.classList.add('visible');
   shopStatusEl.textContent = 'Loading the world…';
 
   // The builder scene's placeholder square (see applyLandletShape) has
@@ -742,6 +740,11 @@ export async function enterShopMode() {
   // Now that the correct grounded/flying look is actually applied, safe to
   // reveal (see this function's own comment on why these two specifically
   // wait until here, unlike the other Shop HUD elements above).
+  // #3442: the joysticks join the fly button and vertical controls here, so
+  // the whole control cluster arrives together rather than the joysticks
+  // leading (they used to be marked visible at the top of this function).
+  shopMoveJoystickEl.classList.add('visible');
+  shopLookJoystickEl.classList.add('visible');
   shopFlyBtn.classList.add('visible');
   shopVerticalControlsEl.classList.add('visible');
   // Not just clearing the text — an empty .visible pill still shows its
