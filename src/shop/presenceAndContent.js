@@ -495,12 +495,15 @@ function updateInstanceLodTiers() {
       const dy = entry.group.position.y + sphere.y - camera.position.y;
       const dz = entry.group.position.z + sphere.z - camera.position.z;
       set.px = apparentSizePx(sphere.radiusM, Math.hypot(dx, dy, dz), camera.fov, window.innerHeight);
+      // The protection has its own hysteresis (enter at 10 m, leave past 13 m),
+      // judged from last tick's answer.
+      const wasNear = set.near;
       set.near = false;
       for (const member of set.members) {
         if (isNearFullDetail(horizontalDistanceM(
           entry.group.position.x + member.position.x, entry.group.position.y + member.position.y,
           shopAvatarPosition.x, shopAvatarPosition.y,
-        ))) { set.near = true; break; }
+        ), wasNear)) { set.near = true; break; }
       }
     }
     for (const object of entry.objects) {
@@ -512,7 +515,8 @@ function updateInstanceLodTiers() {
       const nearAvatar = set ? set.near : isNearFullDetail(horizontalDistanceM(
         entry.group.position.x + object.position.x, entry.group.position.y + object.position.y,
         shopAvatarPosition.x, shopAvatarPosition.y,
-      ));
+      ), object.userData.lodNear === true);
+      if (!set) object.userData.lodNear = nearAvatar;
       // A set's current tier is its first member's, so the hysteresis band
       // applies to the set as a whole rather than to each member's own state;
       // every member of a set carries the set's size, so the budget drops or
