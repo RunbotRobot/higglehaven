@@ -224,6 +224,7 @@
       "number": "INTEGER|0||0",
       "posted_by": "TEXT|1|''|0",
       "pr_url": "TEXT|0||0",
+      "public_line": "TEXT|0||0",
       "session": "TEXT|1|''|0",
       "status": "TEXT|1|'queued'|0",
       "sub_issue_summaries": "TEXT|0||0",

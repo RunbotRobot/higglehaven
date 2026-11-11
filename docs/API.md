@@ -12074,7 +12074,7 @@ owner's own two named criteria from N31. An
 explicit `id` may be supplied (`409` if already taken); otherwise one is
 generated. Every other field (`kind`, `number`, `noteNumber`, `status`,
 `session`, `tag`, `url`, `prUrl`, `waitingOn`, `imageUrl`, `subIssues`,
-`subIssueSummaries`) is optional,
+`subIssueSummaries`, `publicLine`) is optional,
 defaulting to `'feedback'`/`null`/`'queued'`/`''`/`null` respectively,
 matching the Artifact-era board's own defaults for a freeform note.
 `subIssues`/`subIssueSummaries` (#998) can be set at creation time, not
@@ -12115,8 +12115,27 @@ Updates a task. **Requires `caller` (who is making this specific change)
 on every call — `400` if missing or blank, capped at 100 characters
 (#971).** Any of `status`, `session`,
 `note` (also stamps `noteUpdatedAt`), `tag`, `prUrl`, `waitingOn`,
-`viewed`, `awaitingClaude`, `subIssues`, `subIssueSummaries` may be
-included; only fields actually present in the body are touched.
+`viewed`, `awaitingClaude`, `subIssues`, `subIssueSummaries`,
+`publicLine` may be included; only fields actually present in the body
+are touched.
+
+**`publicLine` (#3446, part of #3444)** is the one sentence a shopper may
+be told about what a fleet session is working on, shown beside an
+assistant. A card's `title` and `note` are never public (they hold
+internals, issue numbers and sometimes security detail); this field is
+written for the public on purpose, so it is validated outright, `400` and
+nothing written otherwise: a single sentence of at most 140 characters,
+with no `#<number>` or "issue/PR <number>", no file path, file name,
+backtick or route, no URL or domain, and no line break. A session sets it
+when it sets a card `in_progress`, in a shopper's terms and present tense
+("smoothing the edge of the sky"); for work on security, moderation, money
+or another person's account it is neutral ("tidying up behind the
+scenes"). It is stored on create and returned as `publicLine` (`null` when
+unset), `null` or an empty string clears it, and an update that does not
+mention it leaves it alone. **It clears by itself** when the card becomes
+`done` or its `session` is cleared (a session standing down), whatever
+else the same request says, and a card created already `done` never stores
+one.
 
 `subIssues`/`subIssueSummaries` (#998) are how a top-level tracking
 task's card shows its breakdown — the admin page renders them as a
@@ -12176,6 +12195,19 @@ now actually implemented against this real API rather than just the
 (never-built) compose-form logic that doc originally described. Any
 other `from`, or a task not currently `waitingOn: 'owner'`, leaves
 `waitingOn` untouched.
+
+### `GET /api/control-room/agents`
+
+(#3446.) What each fleet session is doing, in the only shape that may leave
+the Control Room: `{ agents: [{ session, busy, publicLine }] }`, one entry
+per session name matching `higglehaven<number>` that has ever held a card,
+sorted by number. `busy` is whether that session has a card `in_progress`;
+`publicLine` is the most recently updated in-progress card's public
+sentence (`null` when it has none, or when the session is free). Nothing
+else from a card (title, note, number, URLs) is read by this endpoint. Same
+access gate as every other Control Room route (admin session or the API
+key). The Worker's own presence code calls `readFleetAgentWork(db)`
+(`worker/lib/control-room.js`) directly rather than this route.
 
 ### Admin page: `GET /admin/control-room`
 
