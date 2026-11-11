@@ -209,9 +209,16 @@ jobs:
       # Chromium's shared libraries the shard carries on, and if it does not
       # the launch check fails the job loudly, so this never turns a missing
       # dependency into a confusing test failure later.
+      #
+      # Each --with-deps attempt is capped at four minutes: under that outage
+      # apt retried for about ten minutes per attempt, so a shard spent ~20
+      # minutes failing before the fallback even started (measured on the
+      # run for PR #3489). A healthy install takes one to two minutes; if a
+      # slow-but-working one is ever cut off, the browser-only fallback below
+      # (which that run proved on the real runners) takes over.
       - run: |
           for attempt in 1 2; do
-            if npx playwright install --with-deps chromium; then
+            if timeout 240 npx playwright install --with-deps chromium; then
               exit 0
             fi
             echo "Attempt $attempt of playwright install failed — retrying after a short pause in case it was an apt-mirror hiccup..." >&2
