@@ -42,6 +42,9 @@ import {
 // shape as those, bucketed on the admin's own user_id.
 const UPLOADED_ASSET_DELETE_RATE_LIMIT_MAX = 20;
 
+// #3414: two reduced models per product, so twice the full-model allowance.
+const MODEL_TIER_UPLOAD_RATE_LIMIT_MAX = 40;
+
 async function handleUploadedAsset(request, env) {
   if (!env.MODELS) return json({ error: 'R2 binding MODELS is not configured' }, 500);
   if (request.method !== 'GET' && request.method !== 'HEAD' && request.method !== 'DELETE') {
@@ -110,6 +113,14 @@ async function handleUploadedAsset(request, env) {
       LIMIT 1
     `).bind(modelUrl).first();
     if (retainedBySnapshot) throw new HttpError('Uploaded model is still referenced', 409);
+    // #3414: and a mid/far model a product names (migrations/0220).
+    const referencedAsTier = await env.DB.prepare(`
+      SELECT 1 FROM catalog_templates WHERE model_mid_url = ? OR model_far_url = ?
+      UNION ALL
+      SELECT 1 FROM products WHERE model_mid_url = ? OR model_far_url = ?
+      LIMIT 1
+    `).bind(modelUrl, modelUrl, modelUrl, modelUrl).first();
+    if (referencedAsTier) throw new HttpError('Uploaded model is still referenced', 409);
     await env.MODELS.delete(key);
     // #829: same missed-audit-trail gap as /api/models/cleanup above — this
     // single-object delete never recorded which admin ran it.
@@ -155,7 +166,21 @@ async function handleModelUpload(request, env) {
   // MAX_TOTAL_STORAGE_BYTES cap, so an anonymous caller looping this
   // endpoint could otherwise exhaust R2 storage for everyone. Same
   // per-IP-throttle mitigation as signup/password-reset (checkRateLimit).
-  await checkRateLimit(env.DB, `model-upload:${clientIp(request)}`, 20);
+  // #3414 (Model tiers 2/7, #3412): an upload now stores a mid and a far model
+  // beside the full one, so a seller creating products would use their 20 a
+  // window three times as fast. The reduced models count against their own
+  // bucket (?tier=mid|far) and the full-model limit stays where it was. Storage
+  // is capped either way (MAX_TOTAL_STORAGE_BYTES, below), so this widens no
+  // abuse surface the byte budget does not already bound.
+  const tier = new URL(request.url).searchParams.get('tier');
+  if (tier !== null && tier !== 'mid' && tier !== 'far') {
+    throw new HttpError('tier must be "mid" or "far" when given', 400);
+  }
+  await checkRateLimit(
+    env.DB,
+    tier ? `model-upload-tier:${clientIp(request)}` : `model-upload:${clientIp(request)}`,
+    tier ? MODEL_TIER_UPLOAD_RATE_LIMIT_MAX : 20,
+  );
 
   const contentType = request.headers.get('content-type') || '';
   if (!contentType.includes('multipart/form-data')) {
@@ -292,6 +317,24 @@ async function selectModelUrlReferencesChunked(db, urls) {
       WHERE template_image_url IN (${placeholders}) AND restored_at IS NULL AND cleared_at IS NULL
     `).bind(...chunk, ...chunk, ...chunk).all();
     rows.push(...productResults);
+    // #3414 (Model tiers 2/7, #3412): the mid and far models a product names
+    // are keys into this same bucket. Without this a tier whose full model is
+    // still in use reads as unreferenced and is swept. A third query because
+    // the two above are at (or, for the second, near) D1's 5-term compound
+    // SELECT cap. Callers that only ask "is this URL referenced" need nothing
+    // more; the listing below reports it under its own heading.
+    // The id says which listing or product names it and in which role, so the
+    // admin view can show a reviewer what the object is for.
+    const { results: tierResults } = await db.prepare(`
+      SELECT 'tier' AS source, 'template ' || template_id || ' mid' AS id, model_mid_url AS url FROM catalog_templates WHERE model_mid_url IN (${placeholders})
+      UNION ALL
+      SELECT 'tier' AS source, 'template ' || template_id || ' far' AS id, model_far_url AS url FROM catalog_templates WHERE model_far_url IN (${placeholders})
+      UNION ALL
+      SELECT 'tier' AS source, 'product ' || product_id || ' mid' AS id, model_mid_url AS url FROM products WHERE model_mid_url IN (${placeholders})
+      UNION ALL
+      SELECT 'tier' AS source, 'product ' || product_id || ' far' AS id, model_far_url AS url FROM products WHERE model_far_url IN (${placeholders})
+    `).bind(...chunk, ...chunk, ...chunk, ...chunk).all();
+    rows.push(...tierResults);
   }
   return rows;
 }
@@ -316,6 +359,7 @@ async function handleModelListing(request, env, url) {
   const videoJobRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
   const controlRoomRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
   const snapshotRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
+  const tierRefs = new Map(modelUrls.map((modelUrl) => [modelUrl, []]));
   if (modelUrls.length > 0) {
     // #774: image_url (thumbnails) shares this same bucket/URL scheme as
     // model_url — checking model_url alone marked every live thumbnail
@@ -344,6 +388,7 @@ async function handleModelListing(request, env, url) {
       else if (row.source === 'product') productRefs.get(row.url).push(row.id);
       else if (row.source === 'videoJob') videoJobRefs.get(row.url).push(row.id);
       else if (row.source === 'suspendedSnapshot') snapshotRefs.get(row.url).push(row.id);
+      else if (row.source === 'tier') tierRefs.get(row.url).push(row.id);
       else controlRoomRefs.get(row.url).push(row.id);
     }
   }
@@ -355,6 +400,9 @@ async function handleModelListing(request, env, url) {
       const referencedByVideoJobIds = videoJobRefs.get(modelUrl);
       const referencedByControlRoomIds = controlRoomRefs.get(modelUrl);
       const referencedBySuspendedSnapshotIds = snapshotRefs.get(modelUrl);
+      // #3414: "template T mid" / "product P far": which listing or product
+      // uses this object as its reduced model, and which one.
+      const referencedAsTierBy = tierRefs.get(modelUrl);
       return {
         modelUrl,
         sizeBytes: object.size,
@@ -365,9 +413,10 @@ async function handleModelListing(request, env, url) {
         referencedByVideoJobIds,
         referencedByControlRoomIds,
         referencedBySuspendedSnapshotIds,
+        referencedAsTierBy,
         deletable: referencedByTemplateIds.length === 0 && referencedByProductIds.length === 0
           && referencedByVideoJobIds.length === 0 && referencedByControlRoomIds.length === 0
-          && referencedBySuspendedSnapshotIds.length === 0,
+          && referencedBySuspendedSnapshotIds.length === 0 && referencedAsTierBy.length === 0,
       };
     }),
     nextCursor: listing.truncated ? listing.cursor : null,

@@ -31,6 +31,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
 import { inlineConfirm } from '../ui/inlineConfirm.js';
 import { optimizeModelFile, rescaleModelFile, convertFbxToGlb } from '../modelOptimizer.js';
+import { createAndUploadModelTiers, rescaleAndUploadModelTiers } from './modelTierUpload.js';
 import { describeAvatarClips, describeNoAnimationsForAvatar, defaultClipPicks, pickClipRole, clipRolesFromPicks } from '../avatarClipNames.js';
 import { unitSuffix, toDisplayLength, fromDisplayLength, formatLength } from '../settings.js';
 import { ensureSellerIdentity } from '../account/identity.js';
@@ -195,6 +196,11 @@ let uploadModelUrl = null;
 // model-file-size cap — this is what step 'dimensions' passes through to
 // createCatalogTemplate as modelSizeBytes, alongside uploadModelUrl.
 let uploadModelSizeBytes = null;
+// #3414 (Model tiers 2/7, #3412): the stored mid and far versions of the model
+// above, or null when none were made. Passed to createCatalogTemplate beside
+// uploadModelUrl, and rescaled with it if the seller changes the size.
+let uploadModelMidUrl = null;
+let uploadModelFarUrl = null;
 // #1162: computed in showUploadDimensionPreview alongside the animation
 // detection below, passed through to createCatalogTemplate the same way
 // uploadModelSizeBytes already is.
@@ -329,6 +335,8 @@ function resetUploadModalToFileStep(mode = 'file') {
   uploadStep = 'file';
   uploadModelUrl = null;
   uploadModelSizeBytes = null;
+  uploadModelMidUrl = null;
+  uploadModelFarUrl = null;
   uploadSkeletonSignature = null;
   uploadOriginalDimensions = null;
   uploadModelSource = 'file';
@@ -751,11 +759,24 @@ async function handleUploadFileStep() {
     const { modelUrl, sizeBytes } = await uploadModelFile(uploadable);
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while uploading
 
+    // #3414: the mid and far versions, stored beside the full model. Best
+    // effort and folded into the same wait: it never fails the upload, and a
+    // product with none simply draws its full model at every distance.
+    const tiers = await createAndUploadModelTiers(uploadable, sizeBytes, {
+      onProgress: (status) => {
+        if (myFlowToken === uploadFlowToken) setUploadStatus(status);
+      },
+      shouldContinue: () => myFlowToken === uploadFlowToken,
+    });
+    if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while preparing the tiers
+
     setUploadStatus('Measuring model…');
     const dimensions = await measureModelDimensions(modelUrl);
     if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while measuring
     uploadModelUrl = modelUrl;
     uploadModelSizeBytes = sizeBytes;
+    uploadModelMidUrl = tiers.modelMidUrl;
+    uploadModelFarUrl = tiers.modelFarUrl;
     uploadOriginalDimensions = dimensions;
     setUploadDimensionInputs(dimensions);
     refreshUploadDimensionUnits();
@@ -992,6 +1013,8 @@ async function handleUploadDimensionsStep() {
   uploadSubmitBtn.disabled = true;
   try {
     let finalModelUrl = uploadModelUrl;
+    let finalModelMidUrl = uploadModelMidUrl;
+    let finalModelFarUrl = uploadModelFarUrl;
     // createMeshForInstance and (especially) loadCroppedModelInstance's
     // crop math both assume a template's declared dimensions exactly equal
     // the loaded model's own rendered size — see rescaleModelFile's own
@@ -1010,6 +1033,16 @@ async function handleUploadDimensionsStep() {
       finalModelUrl = rescaled.modelUrl;
       uploadModelSizeBytes = rescaled.sizeBytes;
       if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while uploading the resized model
+      // #3414: the reduced versions follow the full model's new size, or they
+      // would draw at the old one from a distance.
+      const resizedTiers = await rescaleAndUploadModelTiers(
+        { modelMidUrl: finalModelMidUrl, modelFarUrl: finalModelFarUrl },
+        scaleFactor,
+        rescaled.sizeBytes,
+      );
+      finalModelMidUrl = resizedTiers.modelMidUrl;
+      finalModelFarUrl = resizedTiers.modelFarUrl;
+      if (myFlowToken !== uploadFlowToken) return; // canceled/superseded while resizing the tiers
     }
 
     setUploadStatus('Creating product…');
@@ -1027,6 +1060,9 @@ async function handleUploadDimensionsStep() {
       dimensions,
       color: '#999999', // only ever used if the model itself fails to load later
       modelUrl: finalModelUrl,
+      // #3414: omitted rather than sent as null when there are none.
+      ...(finalModelMidUrl ? { modelMidUrl: finalModelMidUrl } : {}),
+      ...(finalModelFarUrl ? { modelFarUrl: finalModelFarUrl } : {}),
       modelSizeBytes: uploadModelSizeBytes,
       skeletonSignature: uploadSkeletonSignature,
       sellerId: uploaderSellerId,

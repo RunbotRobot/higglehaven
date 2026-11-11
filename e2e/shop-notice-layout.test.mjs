@@ -10,7 +10,9 @@ async function measureNotice(page, selector, longText) {
     const notice = document.querySelector(sel);
     // The Build status lives in a toolbar that is not shown in this mode, so
     // measure it where it can be laid out.
-    if (!notice.offsetParent && getComputedStyle(notice).position !== 'fixed') document.body.appendChild(notice);
+    // The orb notices live in #shop-notice-stack (#3441), which lays them out
+    // itself; moving one out of it would measure it without its layout rules.
+    if (!notice.closest('#shop-notice-stack') && !notice.offsetParent && getComputedStyle(notice).position !== 'fixed') document.body.appendChild(notice);
     notice.hidden = false;
     notice.classList.add('visible');
     const padX = (el) => parseFloat(getComputedStyle(el).paddingLeft) + parseFloat(getComputedStyle(el).paddingRight);

@@ -1121,6 +1121,20 @@ cost when it happens anyway:
   of #631) still ended up with three sessions independently picking it
   up despite this convention already existing, i.e. skipping step 3
   above is exactly what turns an advisory claim into a real collision.
+- **Set `public_line` in the same write that sets a card `in_progress`
+  (#3446, part of #3444).** Fleet sessions are visible to shoppers as
+  assistants, and an assistant can say what it is working on. The card's
+  title and note are never shown to anyone; `public_line` is the one
+  sentence that is, so write it for a shopper: present tense, plain words,
+  about what the world looks like, not what the code does ("smoothing the
+  edge of the sky"). For a card about security, moderation, money or
+  another person's account, use the neutral line ("tidying up behind the
+  scenes"). The API rejects a line that is not one short sentence or that
+  carries an issue number, a file name, a path, a URL or a route, and it
+  clears the line itself when the card is `done` or you stand down. On the
+  direct-D1 fallback there is no validator, so hold yourself to the same
+  rules: write the column only with a sentence you would be happy for a
+  shopper to read.
 - **Claim one task at a time.** Bundling several small unclaimed items
   into a single session/PR means one collision on any of them forces
   rework on the whole PR, not just that item. Prefer separate claims —

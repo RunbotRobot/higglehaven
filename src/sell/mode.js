@@ -65,6 +65,7 @@ import {
 import { consumeStripeReturnMarker, ownRequirementsDue, syncStripeStepPrompt } from '../stripeStep.js';
 import { buildCatalogPickerButtons } from '../catalog/picker.js';
 import { dimensionsChanged } from '../catalog/upload.js';
+import { rescaleAndUploadModelTiers } from '../catalog/modelTierUpload.js';
 import { updateSelectionUI } from '../build/scene.js';
 import {
   bootstrapPromise, catalogThumbnailCache, catalogThumbnailEmbeddingCache,
@@ -905,6 +906,19 @@ function renderSellerList() {
           const rescaled = await uploadModelFile(new File([rescaledBlob], 'model.glb', { type: 'model/gltf-binary' }));
           patch.modelUrl = rescaled.modelUrl;
           patch.modelSizeBytes = rescaled.sizeBytes;
+          // #3414: a new model file drops the product's reduced versions on the
+          // server (they reduce the OLD file), so they are rescaled and sent
+          // along. One that cannot be is simply left out and the product keeps
+          // the rest.
+          if (template.modelMidUrl || template.modelFarUrl) {
+            const tiers = await rescaleAndUploadModelTiers(
+              { modelMidUrl: template.modelMidUrl, modelFarUrl: template.modelFarUrl },
+              scaleFactor,
+              rescaled.sizeBytes,
+            );
+            if (tiers.modelMidUrl) patch.modelMidUrl = tiers.modelMidUrl;
+            if (tiers.modelFarUrl) patch.modelFarUrl = tiers.modelFarUrl;
+          }
         }
         sizeStatus.textContent = 'Saving…';
         const updated = await updateCatalogTemplate(template.templateId, patch);
@@ -1129,7 +1143,9 @@ function renderSellerList() {
           modelUrl: template.modelUrl,
           // modelUrl is copied by reference (see this button's own comment
           // above) — the underlying file, and so its size and skeleton, is
-          // identical.
+          // identical. #3414: so are its reduced versions, copied the same way.
+          modelMidUrl: template.modelMidUrl ?? undefined,
+          modelFarUrl: template.modelFarUrl ?? undefined,
           modelSizeBytes: template.modelSizeBytes,
           skeletonSignature: template.skeletonSignature,
           priceCents: template.priceCents,

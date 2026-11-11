@@ -807,10 +807,16 @@ export async function ungroupInstancesRemote(groupId) {
 
 // Uploads a .glb file directly. Distinct from requestJson above since this
 // needs a raw multipart body, not a JSON one.
-export async function uploadModelFile(file) {
+//
+// #3414 (Model tiers 2/7, #3412): { tier: 'mid' | 'far' } marks the upload as a
+// product's reduced model, which the server counts against its own, larger
+// rate-limit bucket so storing the two beside every full model does not use up
+// the full-model allowance three times as fast.
+export async function uploadModelFile(file, { tier } = {}) {
   const form = new FormData();
   form.append('file', file);
-  const response = await fetch(`${API_BASE}/models`, { method: 'POST', body: form });
+  const query = tier ? `?tier=${encodeURIComponent(tier)}` : '';
+  const response = await fetch(`${API_BASE}/models${query}`, { method: 'POST', body: form });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     // #2440: previously `Model upload failed with HTTP ${response.status}` -- see requestJson's own #2440 comment above.
@@ -2100,6 +2106,19 @@ export async function leaveFriendVoiceChannel(ownerBuilderId) {
 export async function fetchCreditOrbs(landletId) {
   const { orbs } = await requestJson(`/credit-orbs?landletId=${encodeURIComponent(landletId)}`);
   return orbs;
+}
+
+// #3441: where the signed-in person stands against the orb collect limit
+// ({ limit, windowSeconds, remaining, retryAfterSeconds }), so an orb over the
+// limit can be left alone before it is touched. Resolves to null when there is
+// no session or the read fails -- the server still enforces the limit either way.
+export async function fetchCreditOrbStanding() {
+  try {
+    const { standing } = await requestJson('/credit-orbs/standing');
+    return standing ?? null;
+  } catch {
+    return null;
+  }
 }
 
 // #1995: claims an orb on proximity auto-collect. The server's own atomic

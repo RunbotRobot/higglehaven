@@ -235,7 +235,11 @@ The same `checkRateLimit` helper also guards `POST /api/models` (see
 "Custom model uploads" below) — a different unauthenticated/repeatable
 endpoint with a different abuse shape: it doesn't send email, but each call
 can burn shared R2 storage headroom, so it's bucketed by client IP alone
-(no per-target email to key on), 20 attempts per 15-minute window.
+(no per-target email to key on), 20 attempts per 15-minute window. An upload
+sent as `POST /api/models?tier=mid` or `?tier=far` (#3414, a product's reduced
+models, see "Model tiers" below) counts against its own bucket, 40 per
+15-minute window, so a seller storing the two reduced models beside every full
+one does not use up the full-model allowance three times as fast.
 
 It also guards `POST /api/instances/:instanceId/purchase` (see "Simulated
 purchases" below), 30 attempts per 15-minute window — bucketed by the
@@ -2820,6 +2824,33 @@ an unvalidated arbitrary external URL here let any seller turn every
 visitor's browser into an unwitting requester of a URL of their choosing.
 Omit the field entirely (or pass `null`) for a plain colored-box template.
 
+### Model tiers (#3414, part of #3412)
+
+A template, and the shared product behind it, can name two simpler versions of
+its own model: `modelMidUrl` (about a tenth of the triangles, for middle
+distance) and `modelFarUrl` (a few dozen to about two hundred triangles, one
+mesh, colour baked into vertex colours, for the horizon). Both are ordinary
+`/uploads/models/<hash>.glb` keys from `POST /api/models` (sent as `?tier=mid`
+or `?tier=far`, see "Rate limiting"), both are optional, and a response carries
+`null` for one that was never generated: the upload wizard generates them in
+the seller's browser after the model is reduced, folded into that same step, and
+if generation fails the upload and the product still succeed with no tiers. The
+viewer falls back to the full model for a missing tier. Every product that
+predates this has `null` until it is backfilled.
+
+Validation mirrors `modelUrl`: each must start with `/uploads/`, reference an
+existing object under `models/` in the shared bucket (`400` otherwise), and
+needs a `modelUrl` to be a reduction of (`400` otherwise). A tier that is not
+smaller than the full model is rejected with `400`, since a reduction that is no
+smaller is dead weight. They are accepted on `POST /api/catalog`, `PUT /api/catalog/batch` and
+`PUT`/`PATCH /api/catalog/:id`; "Sell this too"
+(`POST /api/catalog/listings`) copies them from the product (dropping one that
+has since disappeared), and the Duplicate button sends the source product's.
+
+The tier objects are protected from the orphan sweep exactly like a full model:
+an object named by any template's or product's `model_mid_url`/`model_far_url`
+is referenced and is neither swept nor deletable through `DELETE /uploads/:key`.
+
 ### `POST /api/catalog/listings`
 
 Shared-products (#2745, #2747): lets a seller attach their own listing
@@ -2921,6 +2952,11 @@ move together (#1753). A request that changes `modelUrl` must also send
 stored signature is cleared to `null` rather than left describing the old
 model. Re-sending the current `modelUrl`, or any edit that does not touch
 it, leaves all three alone.
+
+`modelMidUrl` and `modelFarUrl` (#3414, part of #3412) are the same kind of
+thing and move with them: a `PATCH` that changes `modelUrl` and does not send a
+fresh `modelMidUrl`/`modelFarUrl` clears whichever it omits, so a reduction of
+the old file never keeps standing in for the new one at a distance.
 
 `clipRoles` (#3312, part of #3301) is the seller's own choice of which clip
 of an avatar model plays as idle, walk and fly, for a model whose clip names
@@ -10847,7 +10883,10 @@ the built-in catalog:
   enumerating every uploaded (including unregistered, in-progress) model to
   an ordinary session. Lists uploaded R2 models without returning their
   bodies. Results contain `modelUrl`, `sizeBytes`, `etag`, `uploadedAt`,
-  `deletable`, and sorted `referencedByTemplateIds`. Reference metadata is
+  `deletable`, and sorted `referencedByTemplateIds`. `referencedAsTierBy`
+  (#3414) lists `template <id> mid|far` / `product <id> mid|far` for an object
+  that is a product's reduced model, so the admin storage view shows what it is
+  for; it counts toward `deletable` like every other reference. Reference metadata is
   resolved with one bounded D1 query for the R2 page, allowing cleanup
   tooling to distinguish safe deletions without probing each object.
   `referencedByTemplateIds` covers a catalog template's `model_url` **or**
@@ -11237,6 +11276,20 @@ Optional `?landletId=` scopes the result to one landlet, for the frontend to
 poll only the landlet currently in view rather than every active orb
 world-wide.
 
+### `GET /api/credit-orbs/standing`
+
+#3441. Session-gated, read-only: where the signed-in builder stands against
+the collect limit, `{ "standing": { "limit", "windowSeconds", "remaining",
+"retryAfterSeconds" } }`. `remaining` is how many collect attempts are left in
+the current window (every attempt, including a 404 or 403, counts, exactly as
+`POST .../collect` enforces it); `retryAfterSeconds` is when the oldest
+in-window attempt ages out (when the next slot frees), `0` when none is used.
+It never spends a slot. The Shop reads it when a landlet's orbs load, and a
+successful collect returns the same object, so an orb touched at `remaining: 0`
+is left in place with the limit notice instead of being popped and reversed by
+a `429`; a `429` that still happens (two tabs, another device) is handled as
+before, and its notice says the orb came back.
+
 ### `POST /api/credit-orbs` (admin-only test/ops fixture)
 
 **Admin-only** (`requireAdmin`), same "escape hatch" reasoning as
@@ -11261,7 +11314,8 @@ orb_id = ? AND collected_by_builder_id = ?)` only matches once the first
 statement in the same batch has actually committed that builder as the
 collector, so the two statements either both land or neither does, and two
 shoppers racing the same orb can never both be credited for it. Returns
-`{ "collected": true }` on success. `404` if the orb doesn't exist, or
+`{ "collected": true, "standing": { ... } }` on success (`standing` as in
+`GET /api/credit-orbs/standing`, #3441). `404` if the orb doesn't exist, or
 already has a `collected_at` (someone else got there first — the frontend
 reads this as "it's already gone," not an error to surface loudly).
 Rate-limited (`CREDIT_ORB_COLLECT_RATE_LIMIT_MAX`, 20 per builder) like
@@ -12074,7 +12128,7 @@ owner's own two named criteria from N31. An
 explicit `id` may be supplied (`409` if already taken); otherwise one is
 generated. Every other field (`kind`, `number`, `noteNumber`, `status`,
 `session`, `tag`, `url`, `prUrl`, `waitingOn`, `imageUrl`, `subIssues`,
-`subIssueSummaries`) is optional,
+`subIssueSummaries`, `publicLine`) is optional,
 defaulting to `'feedback'`/`null`/`'queued'`/`''`/`null` respectively,
 matching the Artifact-era board's own defaults for a freeform note.
 `subIssues`/`subIssueSummaries` (#998) can be set at creation time, not
@@ -12115,8 +12169,27 @@ Updates a task. **Requires `caller` (who is making this specific change)
 on every call — `400` if missing or blank, capped at 100 characters
 (#971).** Any of `status`, `session`,
 `note` (also stamps `noteUpdatedAt`), `tag`, `prUrl`, `waitingOn`,
-`viewed`, `awaitingClaude`, `subIssues`, `subIssueSummaries` may be
-included; only fields actually present in the body are touched.
+`viewed`, `awaitingClaude`, `subIssues`, `subIssueSummaries`,
+`publicLine` may be included; only fields actually present in the body
+are touched.
+
+**`publicLine` (#3446, part of #3444)** is the one sentence a shopper may
+be told about what a fleet session is working on, shown beside an
+assistant. A card's `title` and `note` are never public (they hold
+internals, issue numbers and sometimes security detail); this field is
+written for the public on purpose, so it is validated outright, `400` and
+nothing written otherwise: a single sentence of at most 140 characters,
+with no `#<number>` or "issue/PR <number>", no file path, file name,
+backtick or route, no URL or domain, and no line break. A session sets it
+when it sets a card `in_progress`, in a shopper's terms and present tense
+("smoothing the edge of the sky"); for work on security, moderation, money
+or another person's account it is neutral ("tidying up behind the
+scenes"). It is stored on create and returned as `publicLine` (`null` when
+unset), `null` or an empty string clears it, and an update that does not
+mention it leaves it alone. **It clears by itself** when the card becomes
+`done` or its `session` is cleared (a session standing down), whatever
+else the same request says, and a card created already `done` never stores
+one.
 
 `subIssues`/`subIssueSummaries` (#998) are how a top-level tracking
 task's card shows its breakdown — the admin page renders them as a
@@ -12176,6 +12249,19 @@ now actually implemented against this real API rather than just the
 (never-built) compose-form logic that doc originally described. Any
 other `from`, or a task not currently `waitingOn: 'owner'`, leaves
 `waitingOn` untouched.
+
+### `GET /api/control-room/agents`
+
+(#3446.) What each fleet session is doing, in the only shape that may leave
+the Control Room: `{ agents: [{ session, busy, publicLine }] }`, one entry
+per session name matching `higglehaven<number>` that has ever held a card,
+sorted by number. `busy` is whether that session has a card `in_progress`;
+`publicLine` is the most recently updated in-progress card's public
+sentence (`null` when it has none, or when the session is free). Nothing
+else from a card (title, note, number, URLs) is read by this endpoint. Same
+access gate as every other Control Room route (admin session or the API
+key). The Worker's own presence code calls `readFleetAgentWork(db)`
+(`worker/lib/control-room.js`) directly rather than this route.
 
 ### Admin page: `GET /admin/control-room`
 

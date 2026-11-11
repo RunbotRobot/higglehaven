@@ -735,6 +735,36 @@ export async function createMeshForInstance(instance) {
   return object;
 }
 
+// #3402 (part of #3398): the model of a template as drawable parts, for a batch
+// of placements drawn by shared instanced meshes. One load for the whole batch.
+// Returns { container, parts: [{ geometry, material, matrix }] } where matrix is
+// each mesh's matrix inside the container (the placement's own transform is
+// applied on top, per instance). `container` owns the cloned materials and must
+// be disposed with the batch. Returns null when the model cannot be drawn this
+// way (it failed to load, has no meshes, or is skinned/animated), and the
+// caller falls back to ordinary per-item meshes.
+export async function loadBatchSource(template) {
+  let container;
+  try {
+    container = await withOneModelLoadRetry(() => loadModelInstance(template.modelUrl), template.templateId);
+  } catch (err) {
+    console.warn(`Failed to load model for batch "${template.templateId}" (${template.modelUrl}):`, err);
+    return null;
+  }
+  container.updateMatrixWorld(true);
+  const parts = [];
+  let drawable = true;
+  container.traverse((child) => {
+    if (child.isSkinnedMesh) drawable = false;
+    else if (child.isMesh) parts.push({ geometry: child.geometry, material: child.material, matrix: child.matrixWorld.clone() });
+  });
+  if (!drawable || parts.length === 0) {
+    disposeObject(container);
+    return null;
+  }
+  return { container, parts };
+}
+
 // #1359: material.dispose() releases the material's own WebGL program/
 // uniform resources but never the THREE.Texture instances it references
 // (map, normalMap, roughnessMap, ... — any PBR map a real uploaded GLTF/GLB
