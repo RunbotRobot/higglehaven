@@ -28,7 +28,7 @@ function setup({ loaded = new Set(), payloads } = {}) {
     rangeM: 600,
   });
   const advance = (ms) => { clock += ms; };
-  const settle = async () => { for (let i = 0; i < 4; i += 1) { advance(1000); view.update(); await flush(); await flush(); } await queue.drain(); };
+  const settle = async () => { for (let i = 0; i < 14; i += 1) { advance(1000); view.update(); await flush(); await flush(); } await queue.drain(); };
   return { view, queue, root, fetched, disposed, advance, settle };
 }
 
@@ -53,6 +53,37 @@ describe('createFarView (#3478)', () => {
     view.update();
     await flush();
     expect(root.children).toHaveLength(0);
+  });
+
+  it('starts nothing in the first seconds, so the page load is never kept busy by it (#3396)', async () => {
+    const { view, fetched, advance } = setup({ payloads: { '0,0': payload } });
+    view.update();
+    advance(2000); view.update();
+    await flush();
+    expect(fetched).toEqual([]);
+  });
+
+  it('waits while the world queue has nearby work, then goes one tile at a time with a gap', async () => {
+    const { view, queue, fetched, advance } = setup({ payloads: { '0,0': payload } });
+    queue.enqueue(() => {}, { priority: -50 }); // a nearby build waiting
+    for (let i = 0; i < 8; i += 1) { advance(1000); view.update(); await flush(); }
+    expect(fetched).toEqual([]);
+    await queue.drain();
+    for (let i = 0; i < 6; i += 1) { advance(1000); view.update(); await flush(); }
+    expect(fetched.length).toBeGreaterThan(0);
+    expect(fetched.length).toBeLessThanOrEqual(6); // at most one per second
+  });
+
+  it('queues its builds behind any nearby build', async () => {
+    const { view, queue, root, settle } = setup({ loaded: new Set(['loaded']), payloads: { '0,0': payload } });
+    await settle();
+    expect(root.children).toHaveLength(1);
+    const order = [];
+    queue.enqueue(() => order.push('nearby'), { priority: -1 });
+    queue.enqueue(() => order.push('far'), { priority: 1e6 - 1 });
+    await queue.drain();
+    expect(order).toEqual(['nearby', 'far']);
+    expect(view.stats().products).toBe(1);
   });
 
   it('removes a product that leaves the plan and frees everything on dispose', async () => {

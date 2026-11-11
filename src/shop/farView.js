@@ -18,8 +18,19 @@ const REPLAN_MIN_INTERVAL_MS = 500;
 const REPLAN_MAX_INTERVAL_MS = 3000;
 const REPLAN_MOVE_M = 25;
 const TILE_RETRY_MS = 30000;
-const MAX_TILE_FETCHES_IN_FLIGHT = 2;
-const MAX_SOURCE_LOADS_IN_FLIGHT = 3;
+// #3396 ("moving, looking and drawing never wait on loading"): the far view is
+// the last thing the world does. It starts only after START_DELAY_MS since the
+// first call and once the world's work queue has been quiet for QUIET_MS, then
+// reads one tile and loads one product at a time, with a gap between, so the
+// page's own loading (and a network that goes idle) is never kept busy by it,
+// and its builds sit behind every nearby build in the queue.
+const START_DELAY_MS = 4000;
+const QUIET_MS = 1500;
+const TILE_FETCH_GAP_MS = 1000;
+const SOURCE_LOAD_GAP_MS = 500;
+const MAX_TILE_FETCHES_IN_FLIGHT = 1;
+const MAX_SOURCE_LOADS_IN_FLIGHT = 1;
+const FAR_BUILD_PRIORITY = 1e6; // minus apparent size: after any nearby build, whose priority is minus its size
 const DISPOSE_PRIORITY = 1e9;
 
 export function createFarView({
@@ -39,6 +50,11 @@ export function createFarView({
   let lastLoadedKey = '';
   let lastStats = null;
   let disposed = false;
+  let firstUpdateAt = null;
+  let quietSince = null;
+  let lastTileStartAt = -Infinity;
+  let lastSourceStartAt = -Infinity;
+  let ownPending = 0; // units this view has queued and not yet run
 
   function startTile(tile) {
     const key = farViewTileKey(tile);
@@ -94,8 +110,10 @@ export function createFarView({
   function scheduleBuild(templateId, items, signature) {
     wanted.set(templateId, signature);
     const source = sources.get(templateId).source;
-    const priority = -Math.max(...items.map((item) => item.px));
+    const priority = FAR_BUILD_PRIORITY - Math.max(...items.map((item) => item.px));
+    ownPending += 1;
     queue.enqueue(() => {
+      ownPending -= 1;
       if (disposed || wanted.get(templateId) !== signature) return; // a newer plan replaced this one
       const dimensions = dimensionsFor(templateId);
       const meshes = buildFarMeshes(source.parts, items, elevationFor, dimensions);
@@ -113,12 +131,15 @@ export function createFarView({
   // model's materials belong to the product's source and stay until dispose().
   function retire(entry) {
     root.remove(entry.object);
-    queue.enqueue(() => { for (const mesh of entry.meshes) mesh.dispose(); }, { priority: DISPOSE_PRIORITY });
+    ownPending += 1;
+    queue.enqueue(() => { ownPending -= 1; for (const mesh of entry.meshes) mesh.dispose(); }, { priority: DISPOSE_PRIORITY });
   }
 
   function scheduleRemoval(templateId) {
     wanted.set(templateId, null);
+    ownPending += 1;
     queue.enqueue(() => {
+      ownPending -= 1;
       if (wanted.get(templateId) !== null) return;
       const entry = drawn.get(templateId);
       if (!entry) return;
@@ -131,6 +152,11 @@ export function createFarView({
     if (disposed) return;
     const camera = getCamera();
     const t = now();
+    if (firstUpdateAt === null) firstUpdateAt = t;
+    // Quiet = nothing but this view's own work waiting in the world queue.
+    if (queue.pending() > ownPending) quietSince = null;
+    else if (quietSince === null) quietSince = t;
+    const mayStart = t - firstUpdateAt >= START_DELAY_MS && quietSince !== null && t - quietSince >= QUIET_MS;
     // Tiles: read one when it comes into range, retry a failed one after a
     // while, forget one that has left range by more than a tile.
     const inRange = farViewTilesInRange(camera.x, camera.y, rangeM);
@@ -139,9 +165,11 @@ export function createFarView({
       const key = farViewTileKey(tile);
       keep.add(key);
       const record = tiles.get(key);
+      const mayFetch = mayStart && tilesInFlight < MAX_TILE_FETCHES_IN_FLIGHT && t - lastTileStartAt >= TILE_FETCH_GAP_MS;
       if (!record) {
-        if (tilesInFlight < MAX_TILE_FETCHES_IN_FLIGHT) startTile(tile);
-      } else if (record.state === 'failed' && t - record.failedAt > TILE_RETRY_MS && tilesInFlight < MAX_TILE_FETCHES_IN_FLIGHT) {
+        if (mayFetch) { lastTileStartAt = t; startTile(tile); }
+      } else if (record.state === 'failed' && t - record.failedAt > TILE_RETRY_MS && mayFetch) {
+        lastTileStartAt = t;
         startTile(tile);
       }
     }
@@ -155,7 +183,10 @@ export function createFarView({
 
     const { landlets, templateIds } = gatherLandlets();
     for (const templateId of templateIds) {
-      if (!sources.has(templateId) && sourcesInFlight < MAX_SOURCE_LOADS_IN_FLIGHT) startSource(templateId);
+      if (!sources.has(templateId) && mayStart && sourcesInFlight < MAX_SOURCE_LOADS_IN_FLIGHT && t - lastSourceStartAt >= SOURCE_LOAD_GAP_MS) {
+        lastSourceStartAt = t;
+        startSource(templateId);
+      }
     }
 
     const loaded = loadedLandletIds();
