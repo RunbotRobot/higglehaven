@@ -55,6 +55,7 @@
 import * as THREE from 'three';
 import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
+import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
 import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
@@ -1081,18 +1082,32 @@ async function loadShopLandletInstances(entry, myToken) {
   if (entry.loadGroup) worldWorkQueue.dropGroup(entry.loadGroup);
   const group = {};
   entry.loadGroup = group;
+  // #3407 ("things arrive in the world through fog; nothing pops in"): the
+  // instance list is known now, long before any model is built, so each
+  // cluster's fog starts at its known position right away and its items
+  // resolve out of it as they become ready (src/shop/arrivalRun.js). A newer
+  // load replaces the previous run, releasing its fogs and materials.
+  entry.arrivalRun?.dispose();
+  const run = createArrivalRun({
+    parent: entry.group,
+    instances,
+    templateFor: findTemplate,
+    anchor: shopArrivalAnchor(entry),
+  });
+  entry.arrivalRun = run;
+  exposeArrivalStats(run);
   // #3402: placements that look exactly the same (same product, same size, no
   // crop) are drawn by one instanced mesh per model part instead of one cloned
   // mesh each; everything else is built one by one as before.
   const { batches, singles } = groupPlacements(instances, findTemplate);
   for (const members of batches.values()) {
-    worldWorkQueue.enqueue(() => buildAndAttachBatch(entry, members, myToken, group), {
+    worldWorkQueue.enqueue(() => buildAndAttachBatch(entry, members, myToken, group, run), {
       group,
       priority: Math.min(...members.map((instance) => instanceLoadPriority(entry, instance))),
     });
   }
   for (const instance of singles) {
-    worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, myToken), {
+    worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, myToken, run), {
       group,
       priority: instanceLoadPriority(entry, instance),
     });
@@ -1104,13 +1119,17 @@ async function loadShopLandletInstances(entry, myToken) {
 // sit/lean search, attention and reviews see it like any placed item; only the
 // drawing is shared. A model that cannot be drawn this way falls back to
 // ordinary per-item meshes for the whole batch.
-async function buildAndAttachBatch(entry, members, myToken, group) {
-  if (myToken !== entry.loadToken) return; // superseded while queued
+async function buildAndAttachBatch(entry, members, myToken, group, run) {
+  const settleAll = () => { for (const instance of members) run?.itemSettled(instance.instanceId); };
+  if (myToken !== entry.loadToken) { // superseded while queued
+    settleAll();
+    return;
+  }
   const template = findTemplate(members[0].templateId);
   const source = await loadBatchSource(template);
   if (!source) {
     for (const instance of members) {
-      worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, myToken), {
+      worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, myToken, run), {
         group,
         priority: instanceLoadPriority(entry, instance),
       });
@@ -1121,13 +1140,19 @@ async function buildAndAttachBatch(entry, members, myToken, group) {
     // Same hazard and same e2e-visible counter as buildAndAttachInstance below.
     disposeObject3D(source.container);
     window.__shopInstanceDisposedCount = (window.__shopInstanceDisposedCount ?? 0) + 1;
+    settleAll();
     return;
   }
   const handles = members.map((instance) => createPlacementHandle(instance, template));
   for (const handle of handles) entry.group.add(handle);
   const batch = buildInstancedBatch(source.parts, handles);
   batch.container = source.container;
-  for (const mesh of batch.meshes) entry.group.add(mesh);
+  // One root for the batch's instanced meshes: the arrival dissolve (#3407)
+  // swaps the materials of everything under the root it is given, and unload
+  // removes the root.
+  batch.root = new THREE.Group();
+  for (const mesh of batch.meshes) batch.root.add(mesh);
+  entry.group.add(batch.root);
   entry.batches.push(batch);
   let topZ = -Infinity;
   for (const handle of handles) {
@@ -1136,6 +1161,11 @@ async function buildAndAttachBatch(entry, members, myToken, group) {
     registerShopReview(handle, entry);
   }
   growShopDomeToHeight(topZ);
+  // #3407: the batch dissolves in with its first member's cluster; the other
+  // members have nothing of their own to dissolve, so they settle at once and
+  // never hold their clusters' fog.
+  run?.itemReady(members[0].instanceId, batch.root);
+  for (const instance of members.slice(1)) run?.itemSettled(instance.instanceId);
 }
 
 // How soon an item should be built: the bigger it will look on screen, the
@@ -1155,10 +1185,13 @@ function instanceLoadPriority(entry, instance) {
 // One item of a landlet load (#3396): build it, attach it, register it. The
 // loop this came from checked its token before and after the build; those
 // checks are unchanged.
-async function buildAndAttachInstance(entry, instance, myToken) {
+async function buildAndAttachInstance(entry, instance, myToken, run) {
   if (myToken !== entry.loadToken) return; // superseded while queued
   const object = await createMeshForInstance(instance);
-  if (!object) return;
+  if (!object) {
+    run?.itemSettled(instance.instanceId); // never arrives; do not hold its fog
+    return;
+  }
   // #1445: object was already fully built above (a real GLTF load) before
   // this guard runs — same hazard #1426/#1427 already fixed for their own
   // async-supersede loaders. Without disposing it here, the superseded-
@@ -1173,6 +1206,7 @@ async function buildAndAttachInstance(entry, instance, myToken) {
     // above actually ran, same reasoning as window.__sellerShowcaseDisposedMeshCount
     // (#1427/#1432) and window.__supersededAvatarDisposals (#1426).
     window.__shopInstanceDisposedCount = (window.__shopInstanceDisposedCount ?? 0) + 1;
+    run?.itemSettled(instance.instanceId);
     return;
   }
   entry.group.add(object);
@@ -1201,6 +1235,32 @@ async function buildAndAttachInstance(entry, instance, myToken) {
   // reviewable by definition (see docs/API.md's "Product reviews"), so
   // this registers unconditionally.
   registerShopReview(object, entry);
+  // #3407: last, so the dissolve covers everything attached above (the LOD
+  // proxy included). The item stays fully dissolved until its whole cluster has
+  // arrived, then resolves out of the fog.
+  run?.itemReady(instance.instanceId, object);
+}
+
+// Where the fogs of a landlet are ranked from when there are more clusters
+// than the cap allows: the shopper's position in the landlet's own frame.
+function shopArrivalAnchor(entry) {
+  return {
+    x: camera.position.x - entry.group.position.x,
+    y: camera.position.y - entry.group.position.y,
+  };
+}
+
+// Drives every landlet's arrival effects (one cheap loop over the clusters
+// still arriving; a landlet at rest has none). Called once per frame from
+// updateShopWorldServices.
+export function updateShopArrivals() {
+  for (const entry of shopLandlets.values()) entry.arrivalRun?.update();
+}
+
+// Diagnostics for the e2e (and a bug report): what the latest arrival did.
+function exposeArrivalStats(run) {
+  window.__shopArrivalRun = run;
+  window.__shopArrivalFogsAlive = aliveArrivalFogCount;
 }
 
 // Unlike signs/calendars/reviews above, a credit orb isn't a placed

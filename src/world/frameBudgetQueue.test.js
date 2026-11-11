@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createFrameBudgetQueue } from './frameBudgetQueue.js';
+import { DroppedWorkError, createFrameBudgetQueue } from './frameBudgetQueue.js';
 
 // A fake clock and frame scheduler: a "frame" runs only when the test says so.
 function harness({ budgetMs = 4 } = {}) {
@@ -168,5 +168,63 @@ describe('frameBudgetQueue (#3396)', () => {
     for (let i = 0; i < 5; i += 1) h.queue.enqueue(() => h.advance(2), { priority: i });
     await h.runAllFrames();
     expect(h.queue.stats()).toMatchObject({ unitsRun: 5, ticks: 3, pending: 0 });
+  });
+
+  describe('run (#3427)', () => {
+    it('resolves with the unit\'s result once a frame has run it', async () => {
+      const h = harness();
+      const promise = h.queue.run(() => 42);
+      let settled = false;
+      promise.then(() => { settled = true; });
+      await Promise.resolve();
+      expect(settled).toBe(false); // nothing runs until a frame does
+      await h.runAllFrames();
+      await expect(promise).resolves.toBe(42);
+    });
+
+    it('awaits an async unit and resolves with its value', async () => {
+      const h = harness();
+      const promise = h.queue.run(async () => { await Promise.resolve(); return 'built'; });
+      await h.runAllFrames();
+      await expect(promise).resolves.toBe('built');
+    });
+
+    it('rejects the promise when the unit throws, without calling onError, and keeps going', async () => {
+      const h = harness({ budgetMs: 1000 });
+      const failing = h.queue.run(() => { throw new Error('boom'); });
+      const after = h.queue.run(() => 'still ran');
+      await h.runAllFrames();
+      await expect(failing).rejects.toThrow('boom');
+      await expect(after).resolves.toBe('still ran');
+      expect(h.errors).toEqual([]);
+    });
+
+    it('orders run units with enqueued ones by priority', async () => {
+      const h = harness({ budgetMs: 1000 });
+      const order = [];
+      h.queue.enqueue(() => order.push('enqueued-late'), { priority: 9 });
+      const a = h.queue.run(() => { order.push('run-1'); }, { priority: 1 });
+      const b = h.queue.run(() => { order.push('run-2'); }, { priority: 1 });
+      await h.runAllFrames();
+      await Promise.all([a, b]);
+      expect(order).toEqual(['run-1', 'run-2', 'enqueued-late']);
+    });
+
+    it('queues many units up front and finishes them across frames inside the budget', async () => {
+      const h = harness({ budgetMs: 4 });
+      const promises = Array.from({ length: 10 }, (_, i) => h.queue.run(() => { h.advance(1); return i; }));
+      const frames = await h.runAllFrames();
+      expect(frames).toBeGreaterThan(1); // not all in one tick
+      await expect(Promise.all(promises)).resolves.toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    });
+
+    it('rejects with DroppedWorkError when its group is dropped before it ran', async () => {
+      const h = harness();
+      const group = {};
+      const promise = h.queue.run(() => 'never', { group });
+      const caught = promise.catch((error) => error);
+      expect(h.queue.dropGroup(group)).toBe(1);
+      expect(await caught).toBeInstanceOf(DroppedWorkError);
+    });
   });
 });

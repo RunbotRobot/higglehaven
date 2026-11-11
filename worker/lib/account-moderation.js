@@ -37,6 +37,8 @@ const ADMIN_BOOTSTRAP_RATE_LIMIT_MAX = 10;
 export async function handleAdminBootstrap(request, env, db) {
   if (!env.ADMIN_BOOTSTRAP_SECRET) throw new HttpError('Admin bootstrap is not configured', 404);
   const user = await requireCurrentUser(request, db);
+  // #3429: a fleet account is never an admin (migrations/0211 also enforces it).
+  if (user.is_fleet === 1) throw new HttpError('A fleet account cannot become an admin', 403);
   await checkRateLimit(db, `admin-bootstrap:${clientIp(request)}`, ADMIN_BOOTSTRAP_RATE_LIMIT_MAX);
   const input = await readJson(request);
   const secret = stringValue(input.secret, 'secret');
@@ -83,6 +85,8 @@ export async function handleGrantAdmin(request, db) {
   const email = normalizeEmail(input.email);
   const row = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
   if (!row) throw new HttpError('No account with that email', 404);
+  // #3429: a fleet account is never an admin (migrations/0211 also enforces it).
+  if (row.is_fleet === 1) throw new HttpError('A fleet account cannot become an admin', 403);
   // #814: this is privilege escalation with a real security blast radius
   // (see admin_action_log's own migration comment) — log who granted it,
   // batched with the grant itself so the two can never diverge.

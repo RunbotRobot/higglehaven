@@ -4182,6 +4182,32 @@ for 60 s (`x-far-placements-cache: hit|miss`); activating a landlet version
 drops its tile's entry in the same data centre, other changes show within the
 TTL.
 
+Decisions recorded for this read (#3417):
+
+- **Freshness.** Draft edits, delisting a product, suspending or closing a
+  seller and suspending a builder are not wired to invalidate the cache. They
+  reach far view within the 60 s TTL. The cache (`caches.default`) is per data
+  centre, so an explicit drop could only ever help the one data centre that
+  handled the write and every other one would wait out the TTL anyway; more than
+  twenty write paths (every placement edit, plus the suspension and delist
+  cascades) would carry that call for no change in the worst case. Anyone near
+  the content reads the uncached per-landlet lists, which change immediately, so
+  the lag only affects a distant silhouette.
+- **No rate limit.** The sibling public landlet reads have none, and the limiter
+  itself is a D1 write per call, which costs more than the one indexed read it
+  would protect. A repeat read is a cache hit and costs no query, and a tile
+  index beyond 1,000 either way is refused with `400` before any query.
+- **Size.** An 829-item landlet of one product is about 22.8 KB of JSON (27.5
+  bytes per item) and about 3.3 KB gzipped.
+- **Cost on the free tier.** Edge cache: no KV or R2 reads or writes. A miss is
+  one D1 query reading the tile's placements (plus index lookups for the product
+  visibility check); a hit reads nothing. With one miss per tile per data centre
+  per TTL at most, a continuously requested, dense tile costs roughly its row
+  count times 1,440 reads per day per data centre. Clients should therefore read
+  a tile when it comes into range, not poll it. Raise
+  `FAR_PLACEMENT_CACHE_TTL_S` if real traffic ever approaches the daily D1 read
+  allowance.
+
 ### `POST /api/landlets`
 
 Creates a landlet. `landletId` is optional; if omitted, the Worker generates
@@ -10119,6 +10145,43 @@ one passphrase and one session shape, and it has no concept of the
 coarser, all-or-nothing layer that sits in front of that real system, not a
 substitute for it: once past the gate, every route still enforces its own
 per-user auth exactly as documented elsewhere in this file.
+
+### Fleet access (Claude Code sessions)
+
+A session of the project's Claude Code fleet can use the live site as its own
+account, past the gate, without being given the passphrase (#3428, #3429). It
+is off until the Worker secret `FLEET_ACCESS_KEY` is set (any long random
+phrase); unsetting the secret turns it off again. The owner stores the same
+value once as a network secret for host `higglehaven.com`, header
+`x-fleet-key`, on the fleet's Claude Code environment, so the network proxy
+adds the header and no session reads the value.
+
+- **The gate.** A request whose `x-fleet-key` header equals the secret
+  (constant-time compare) passes the preview gate as if it held the `hh_access`
+  cookie. The header is removed from the request before any other code sees
+  it. A wrong value is counted per client IP (10 per 15 minutes, the same
+  window as `/__access/login`) and the limit is checked before the comparison,
+  so a spent budget stops guessing outright; a correct key is never counted.
+  With the secret unset the header does nothing.
+- **`POST /api/auth/fleet-login`** `{ "name": "higglehaven3" }`. Needs the key;
+  `404` otherwise, so the route does not exist without it. `name` must match
+  `higglehaven` plus one to three digits (`400` otherwise). The first call
+  creates the account (username = the name, `users.is_fleet = 1`, a
+  non-deliverable `@fleet.invalid` email, no usable password, marked
+  email-verified and age-attested because those checks only prove a mailbox
+  and a person); later calls sign in the same one. Returns the ordinary session
+  cookie. A name already held by a regular account is a `409`; the route never
+  signs in as a real person.
+- **What a fleet account cannot do.** It is never an admin (`admin-bootstrap`
+  and `grant-admin` refuse it, and a trigger in migration 0211 rejects any
+  write that would make it one). Its product flags are recorded with weight 0.
+  It cannot file conduct or voice reports, or leave product reviews or seller
+  feedback (`403`). It cannot buy while Stripe is in live mode (a `rk_live_` or
+  `sk_live_` `STRIPE_SECRET_KEY`); test-mode purchases are allowed. Suspension
+  and moderation apply to it like any account.
+- **Visibility.** Fleet avatars are visible to everyone like any other avatar
+  until a launch decision says otherwise; there is no search by name in the
+  app, so there is nothing to exclude from one.
 
 This depends on `wrangler.jsonc`'s `assets.run_worker_first: true`. Without
 it, Cloudflare serves static files (`/`, `/assets/*`) directly from the

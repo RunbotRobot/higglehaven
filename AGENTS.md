@@ -42,6 +42,45 @@
   and never edit an already-merged migration -- the same check rejects it (#805).
 - Commit each completed change.
 
+## Looking at the live site as a person (#3428, #3430)
+
+Every fleet session has its own account on the live site (`higglehaven3`,
+`higglehaven10`, ...) and `scripts/live-site.mjs` drives it in the
+pre-installed Chromium at the owner's phone size (390x844, touch; `--desktop`
+for 1280x800). It signs in through the fleet login, runs the steps you chain on
+the command line, and prints one JSON report: screenshot paths, console
+errors, failed requests, request timings for the routes you name, and frame
+figures (longest frame, long tasks). The proxy adds the fleet key; the script
+never prints or stores a cookie or a header. If the live site answers `401`
+the key is not configured for this environment: say so on your PR or issue and
+stop, and never go looking for a passphrase.
+
+```
+node scripts/live-site.mjs --name higglehaven10 --out "$SCRATCHPAD" \
+  idle shot:shop walk:forward:3000 fly shot:flying stats
+node scripts/live-site.mjs --name higglehaven10 --timing /api/credit-orbs idle
+```
+
+Steps: `walk:<forward|back|left|right>[:ms]`, `look:<dx>:<dy>`,
+`tap:<x>:<y>` or `tap:<selector>`, `mode:<shop|build|sell>`, `fly`,
+`settings`, `idle`, `wait:<ms>`, `shot[:name]`, `stats`. Read screenshots back
+with the Read tool. Against a local `wrangler dev`, add
+`--url http://127.0.0.1:8787 --login local`.
+
+**After a change of yours deploys, look at it on the live site at phone size
+before calling it done, and say in the PR or issue what you saw.**
+
+Rules of conduct on the live site:
+
+- Look at anything. Change only your own fleet account's data and the
+  landlets set aside for the fleet.
+- Never touch another person's content, and never friend, message, flag,
+  report or block a real user.
+- No load testing on the live site; stay inside the normal rate limits.
+- Clean up what you place outside your sandbox landlet.
+- After a change of yours deploys, look at it on the live site at phone size
+  before calling it done, and say what you saw.
+
 ## Bug-report feedback capture: extend deliberately, prune deliberately
 
 The in-app "Submit Feedback" bug-report tool (#2715) captures a
@@ -677,6 +716,38 @@ most likely to come up again.
   reasons still hold (no digest of routine status, one topic at a time).
   The principle: the owner's attention is the scarcest thing in the
   project, so every message to them has to earn its place.
+
+- **Higgles are earned one way: by building landlets. Nothing else
+  pays them.** (2026-11-10.) An idea that users would be paid higgles
+  for helping other users was dropped before anything was built. The
+  owner: "there is ambiguity in who gets paid how much. It's also an
+  abuse vector. And I want to revert back to the principle that the only
+  way to get higgles is by building lándlets." This is the same call as
+  the review bonus reversed in docs/SPEC.md v20. A reward whose
+  attribution rule is fuzzy (who helped, how much, was it real) is an
+  abuse vector, and a currency with one source stays legible. Do not
+  propose a second way to earn higgles; a new incentive has to be
+  something other than higgles, or it goes to the owner.
+
+- **Help comes from the fleet, in the world: agents are named
+  assistants that shoppers can see, who pause their work to help and
+  hand off when busy.** (2026-11-10, #3444.) With no paid user helpers,
+  the owner chose the fleet: "people can see higglehaven agents milling
+  around improving the world... The parallel there is a worker stocking
+  a shelf. If a customer comes up to them and asks them a question, the
+  worker practices good customer service skills and pauses their task
+  to assist", and hands off with a friendly word about what they are
+  going back to, "where not a security risk". Fleet accounts are
+  therefore visible to shoppers, never hidden, and each agent has a
+  real name in place of its session name. The world should show the
+  work that goes into it, the way a shop floor does. (higglehaven1's
+  limits on this, not the owner's words: what an agent says about its
+  work is a sentence written for the public, never a card's title or
+  note; a shopper's text never reaches a session that can merge or
+  deploy; and until the owner confirms what their CCO approved,
+  assistants give how-to help only and send money, disputes and account
+  questions to the formal contact channel, per docs/SPEC.md P122 and
+  #1419.)
 
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
