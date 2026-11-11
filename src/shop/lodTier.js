@@ -68,3 +68,31 @@ export function fullDetailFloorPx(nearPxs, cap = MAX_FULL_DETAIL_ITEMS) {
   const sorted = Float64Array.from(nearPxs).sort();
   return sorted[sorted.length - cap];
 }
+
+// #3443: items placed together as one bundle (a wall of bricks that are not all
+// the same product, a house) change detail together: one decision for the whole
+// set, from the set's size on screen, not item by item. "A wall is a wall; it
+// does not dissolve piecemeal." Each member is { x, y, z, radiusM } in a common
+// space (its landlet's local coordinates, the same space for every member of a
+// set). Returns the smallest axis-aligned box's centre and half-diagonal around
+// every member's own bounding sphere, which is cheap and never smaller than the
+// set. An empty list is a zero sphere.
+export function setBoundingSphere(members) {
+  if (members.length === 0) return { x: 0, y: 0, z: 0, radiusM: 0 };
+  let minX = Infinity, minY = Infinity, minZ = Infinity;
+  let maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+  for (const member of members) {
+    if (member.x - member.radiusM < minX) minX = member.x - member.radiusM;
+    if (member.y - member.radiusM < minY) minY = member.y - member.radiusM;
+    if (member.z - member.radiusM < minZ) minZ = member.z - member.radiusM;
+    if (member.x + member.radiusM > maxX) maxX = member.x + member.radiusM;
+    if (member.y + member.radiusM > maxY) maxY = member.y + member.radiusM;
+    if (member.z + member.radiusM > maxZ) maxZ = member.z + member.radiusM;
+  }
+  return {
+    x: (minX + maxX) / 2,
+    y: (minY + maxY) / 2,
+    z: (minZ + maxZ) / 2,
+    radiusM: 0.5 * Math.hypot(maxX - minX, maxY - minY, maxZ - minZ),
+  };
+}
