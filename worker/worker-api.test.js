@@ -5381,6 +5381,11 @@ describe('Top-level fetch() routing (#1232)', () => {
     const policy = page.headers.get('content-security-policy');
     expect(policy).toContain("default-src 'self'");
     expect(policy).toContain('https://js.stripe.com');
+    // #3465: the edge-injected Web Analytics beacon, by exact host only.
+    const csp = Object.fromEntries(policy.split('; ').map((d) => [d.split(' ')[0], d.split(' ').slice(1)]));
+    expect(csp['script-src']).toContain('https://static.cloudflareinsights.com');
+    expect(csp['connect-src']).toContain('https://cloudflareinsights.com');
+    expect(csp['script-src'].filter((s) => s.includes('*'))).toEqual([]);
     expect(policy).toContain("frame-ancestors 'none'");
     expect(policy).toContain('report-uri /api/csp-report');
     // #1360: scripts and style elements are file-only; the one remaining
