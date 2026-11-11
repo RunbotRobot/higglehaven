@@ -60,40 +60,53 @@ export function rateLimitStandingFromRow(row, maxAttempts) {
   };
 }
 
-export async function checkRateLimit(db, bucketKey, maxAttempts) {
+// #3464: the check-and-increment INSERT as a prepared statement, so a caller
+// already sending a db.batch can add it to that round trip. Pair it with
+// rateLimitRefusal() on the statement's result.
+export function rateLimitInsertStatement(db, bucketKey, maxAttempts) {
   const now = Date.now();
   // A separate SELECT-then-INSERT here would be a check-then-act race:
   // concurrent requests sharing a bucket (e.g. a burst from one IP) could
   // all read the same under-the-limit count before any of their inserts
   // committed, letting a burst blow well past maxAttempts. Folding the
   // count check into the INSERT's own WHERE clause makes the whole
-  // check-and-increment one atomic statement instead — nothing can
+  // check-and-increment one atomic statement instead -- nothing can
   // interleave inside it. `changes` is 0 exactly when the subquery's count
   // was already at or over the limit, i.e. the guard blocked the insert.
   // Old rows outside the window are filtered here rather than actively
-  // deleted per call now — actual cleanup is pruneExpiredAuthState's job
+  // deleted per call now -- actual cleanup is pruneExpiredAuthState's job
   // (run from the same cron as world growth), so a rate-limit check no
   // longer needs its own separate write just to stay tidy.
-  const result = await db.prepare(`
+  return db.prepare(`
     INSERT INTO rate_limit_events (bucket_key, created_at)
     SELECT ?1, ?2
     WHERE (SELECT COUNT(*) FROM rate_limit_events WHERE bucket_key = ?1 AND created_at >= ?3) < ?4
-  `).bind(bucketKey, now, now - RATE_LIMIT_WINDOW_MS, maxAttempts).run();
-  if (result.meta.changes === 0) {
-    // #3258 (owner decision: a message that limits an action states how much
-    // and until when): the 429 body carries the numbers so no client has to
-    // hard-code a limit the server owns. The bucket is back under its limit
-    // once its oldest in-window event ages out, so that is the wait. Only the
-    // failure path pays for this extra read.
-    const oldest = await db.prepare(
-      'SELECT MIN(created_at) AS oldest FROM rate_limit_events WHERE bucket_key = ? AND created_at >= ?',
-    ).bind(bucketKey, now - RATE_LIMIT_WINDOW_MS).first();
-    const oldestMs = oldest?.oldest ?? now;
-    const retryAfterSeconds = Math.max(1, Math.ceil((oldestMs + RATE_LIMIT_WINDOW_MS - now) / 1000));
-    throw new HttpError('Too many attempts. Please wait a while and try again.', 429, {
-      limit: maxAttempts,
-      windowSeconds: RATE_LIMIT_WINDOW_MS / 1000,
-      retryAfterSeconds,
-    });
-  }
+  `).bind(bucketKey, now, now - RATE_LIMIT_WINDOW_MS, maxAttempts);
+}
+
+// #3464: throws the 429 when the insert above was blocked (changes === 0);
+// does nothing when it went through.
+export async function rateLimitRefusal(db, result, bucketKey, maxAttempts) {
+  if (result.meta.changes !== 0) return;
+  const now = Date.now();
+  // #3258 (owner decision: a message that limits an action states how much
+  // and until when): the 429 body carries the numbers so no client has to
+  // hard-code a limit the server owns. The bucket is back under its limit
+  // once its oldest in-window event ages out, so that is the wait. Only the
+  // failure path pays for this extra read.
+  const oldest = await db.prepare(
+    'SELECT MIN(created_at) AS oldest FROM rate_limit_events WHERE bucket_key = ? AND created_at >= ?',
+  ).bind(bucketKey, now - RATE_LIMIT_WINDOW_MS).first();
+  const oldestMs = oldest?.oldest ?? now;
+  const retryAfterSeconds = Math.max(1, Math.ceil((oldestMs + RATE_LIMIT_WINDOW_MS - now) / 1000));
+  throw new HttpError('Too many attempts. Please wait a while and try again.', 429, {
+    limit: maxAttempts,
+    windowSeconds: RATE_LIMIT_WINDOW_MS / 1000,
+    retryAfterSeconds,
+  });
+}
+
+export async function checkRateLimit(db, bucketKey, maxAttempts) {
+  const result = await rateLimitInsertStatement(db, bucketKey, maxAttempts).run();
+  await rateLimitRefusal(db, result, bucketKey, maxAttempts);
 }
