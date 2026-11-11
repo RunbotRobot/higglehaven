@@ -168,6 +168,52 @@ check(loaded.geometries - baseline.geometries < 20, `batches share geometry inst
 // item by its instance id (its review is registered on its handle).
 const tapped = await page.evaluate((id) => window.__testTapShopProductByInstanceId(id), 'instanced-batches-400');
 check(tapped === true, 'a batched placement resolves for tap-to-inspect by instance id');
+// The preview that opened covers the screen; close it so the real taps below reach the canvas.
+await page.click('#shop-product-preview-close-btn');
+await page.waitForTimeout(300);
+
+// A real tap, on the pixels where a brick is drawn, opens that brick's product:
+// the click is raycast against the batch's instanced mesh and the instance index
+// maps back to the placement. The camera looks along a fixed heading and stays a
+// fixed distance behind the avatar, so stand where it looks at the wall.
+await moveTo([cx, cy]);
+await page.waitForTimeout(700);
+const view = await page.evaluate(() => window.__testShopCameraView());
+const heading = Math.hypot(view.dx, view.dy) || 1;
+console.log('camera view:', JSON.stringify(view));
+let target = null;
+for (const back of [10, 16, 22, 6]) {
+  if (target) break;
+  await moveTo([cx - (view.dx / heading) * back, cy - (view.dy / heading) * back]);
+  await page.waitForTimeout(700);
+  target = await page.evaluate((count) => {
+    let best = null;
+    for (let i = 0; i < count; i += 1) {
+      const point = window.__testShopScreenPointOfInstance(`instanced-batches-${i}`);
+      if (!point || !point.inFront || Math.abs(point.ndcX) > 0.4 || point.ndcY < -0.4 || point.ndcY > 0.4) continue;
+      const distance = Math.hypot(point.ndcX, point.ndcY);
+      if (!best || distance < best.distance) best = { id: `instanced-batches-${i}`, x: point.x, y: point.y, distance };
+    }
+    return best;
+  }, COUNT);
+}
+const inView = await page.evaluate(() => window.__testShopDrawStats());
+console.log(`wall in view: ${JSON.stringify(inView)}`);
+check(target !== null, 'standing where the camera looks at the wall puts some bricks in the middle of the screen');
+if (target) {
+  await page.mouse.click(target.x, target.y);
+  await page.waitForTimeout(500);
+  const tappedId = await page.evaluate(() => window.__testShopTappedInstanceId());
+  const modalOpen = await page.locator('#shop-product-preview-modal').evaluate((el) => el.classList.contains('visible'));
+  console.log(`tapped (${Math.round(target.x)}, ${Math.round(target.y)}) near ${target.id}; resolved to ${tappedId}; preview open: ${modalOpen}`);
+  check(typeof tappedId === 'string' && tappedId.startsWith('instanced-batches-'), `a real tap on a brick resolves to one of the wall's placements (${tappedId})`);
+  check(modalOpen, 'a real tap on a brick opens its product preview');
+  // The tapped brick is drawn where the tap landed: its centre is within a
+  // brick's size of the tap, not somewhere else in the wall.
+  const hit = tappedId ? await page.evaluate((id) => window.__testShopScreenPointOfInstance(id), tappedId) : null;
+  const offPx = hit ? Math.hypot(hit.x - target.x, hit.y - target.y) : Infinity;
+  check(offPx < 140, `the tapped brick is the one under the finger (${Math.round(offPx)} px away)`);
+}
 
 // Leaving releases what the batches held, and nothing stays loaded.
 await moveTo(farPoint);

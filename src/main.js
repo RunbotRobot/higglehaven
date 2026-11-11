@@ -289,7 +289,7 @@ import {
 import {
   shopSigns, shopCalendars, shopReviews,
   nearestActiveSign, nearestActiveCalendar,
-  setShopTappedProduct,
+  shopTappedProduct, setShopTappedProduct,
   rebuildSignSprites, rebuildCalendarSprites,
   findTappedShopProductFromHit,
 } from './shop/worldSprites.js';
@@ -1334,6 +1334,30 @@ window.__testShopDrawStats = () => {
     geometries: memory.geometries, textures: memory.textures,
   };
 };
+// #3404: e2e-only. Where a loaded placement is on screen (client pixels) and
+// whether it is in front of the camera, so a test can tap exactly on it; and
+// which placement the last tap resolved to.
+window.__testShopScreenPointOfInstance = (instanceId) => {
+  for (const entry of shopLandlets.values()) {
+    const object = entry.objects.find((o) => o.userData.instanceId === instanceId);
+    if (!object) continue;
+    const p = object.getWorldPosition(new THREE.Vector3()).project(camera);
+    const rect = renderer.domElement.getBoundingClientRect();
+    return {
+      x: rect.left + ((p.x + 1) / 2) * rect.width,
+      y: rect.top + ((1 - p.y) / 2) * rect.height,
+      ndcX: p.x, ndcY: p.y, inFront: p.z > -1 && p.z < 1,
+    };
+  }
+  return null;
+};
+// The camera's position and the direction it looks in, so a test can stand where
+// the camera looks at something (the tap needs it on screen).
+window.__testShopCameraView = () => {
+  const direction = camera.getWorldDirection(new THREE.Vector3());
+  return { x: camera.position.x, y: camera.position.y, z: camera.position.z, dx: direction.x, dy: direction.y, dz: direction.z };
+};
+window.__testShopTappedInstanceId = () => shopTappedProduct?.mesh.userData.instanceId ?? null;
 window.__testShopLoadedInstanceCount = () => {
   let count = 0;
   for (const entry of shopLandlets.values()) count += entry.objects.length;
