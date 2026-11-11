@@ -9,7 +9,7 @@
 // duplicated from worker/index.js, not imported -- see that duplication's
 // own comment for why.
 import { json, HttpError, ERROR_CODES } from './http.js';
-import { checkRateLimit, rateLimitStanding } from './rate-limit.js';
+import { checkRateLimit, rateLimitStanding, rateLimitStandingStatement, rateLimitStandingFromRow } from './rate-limit.js';
 import { requireAdmin, requireSessionBuilder } from './auth.js';
 import { readJson, stringValue, finiteNumber } from './validation.js';
 import { adminActionLogStatement } from './admin-log.js';
@@ -217,7 +217,7 @@ export async function handleCreditOrbs(request, db, route, url) {
     if (!nearby) {
       throw new HttpError('You need to be near this credit orb in the world to collect it', 403);
     }
-    const [claim] = await db.batch([
+    const [claim, , standingRead] = await db.batch([
       db.prepare(`
         UPDATE credit_orbs SET collected_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), collected_by_builder_id = ?
         WHERE orb_id = ? AND collected_at IS NULL
@@ -228,6 +228,9 @@ export async function handleCreditOrbs(request, db, route, url) {
           SELECT 1 FROM credit_orbs WHERE orb_id = ? AND collected_by_builder_id = ?
         )
       `).bind(sessionBuilder.builder_id, orbId, sessionBuilder.builder_id),
+      // #3464: the standing rides in the claim's round trip (its rate-limit
+      // insert already ran above, so it does not depend on the claim).
+      rateLimitStandingStatement(db, `credit-orb-collect:${sessionBuilder.builder_id}`),
     ]);
     if (claim.meta.changes === 0) {
       throw new HttpError('This credit orb is no longer available -- someone else may have already collected it.', 404);
@@ -236,7 +239,7 @@ export async function handleCreditOrbs(request, db, route, url) {
     // knows the limit has been reached before the next orb, not after it.
     return json({
       collected: true,
-      standing: await rateLimitStanding(db, `credit-orb-collect:${sessionBuilder.builder_id}`, CREDIT_ORB_COLLECT_RATE_LIMIT_MAX),
+      standing: rateLimitStandingFromRow(standingRead.results[0], CREDIT_ORB_COLLECT_RATE_LIMIT_MAX),
     });
   }
   return json({ error: 'Not found' }, 404);

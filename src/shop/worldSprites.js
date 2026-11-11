@@ -60,6 +60,7 @@ import { addSelectionOutline, removeSelectionOutline } from '../build/scene.js';
 import {
   fetchSignPosts, fetchCalendarEvents, triggerCalendarEvent, fetchProductReviews,
 } from '../api.js';
+import { createReviewCache } from './reviewCache.js';
 import {
   shopEquippedAvatarSkeletonSignature, formatPriceCents, DIGITAL_GOOD_DISCLAIMER_TEXT,
 } from '../main.js';
@@ -339,21 +340,26 @@ export function updateCalendarFade() {
   }
 }
 
-// Every placed instance starts with no reviews loaded — fetched once, here,
-// right as it enters the world, keyed by the instance's underlying
-// templateId (the product), not its own instanceId, since the same review
-// list is shared by every placement of that product. Each placement fetches
-// independently rather than sharing a per-template cache — a shopper
-// posting a review near one placement won't instantly update another
-// loaded instance of the same product elsewhere (an edge case rare enough,
-// and purely cosmetic enough, that a shared cache isn't worth the added
-// bookkeeping here).
+// Every placed instance starts with no reviews loaded. The list belongs to the
+// product (templateId), not to the placement, so #3463 made one request per
+// product, shared by every placement of it (see reviewCache.js): an 829-brick
+// wall used to fire 829 identical requests as it loaded. Each placement gets
+// its own copy of the answer, so a review a shopper posts next to one
+// placement still changes only that one until the next load (the same
+// cosmetic edge case as before).
+const productReviewCache = createReviewCache({ fetchReviews: (templateId) => fetchProductReviews(templateId) });
+
+// A shopper's own post, edit or delete: the next placement to load must ask again.
+export function invalidateProductReviews(templateId) {
+  productReviewCache.invalidate(templateId);
+}
+
 export function registerShopReview(mesh, entry) {
   const review = { mesh, group: entry.group, templateId: mesh.userData.template.templateId, reviews: [], sprites: [] };
   shopReviews.push(review);
-  fetchProductReviews(review.templateId).then(({ reviews }) => {
+  productReviewCache.get(review.templateId).then(({ reviews }) => {
     if (!shopReviews.includes(review)) return;
-    review.reviews = reviews;
+    review.reviews = reviews.slice();
     rebuildReviewSprites(review);
   }).catch(() => {});
 }
