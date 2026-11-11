@@ -57,7 +57,7 @@ import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
 import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
-import { apparentSizePx, nextIsMiddle, fullDetailFloorPx } from './lodTier.js';
+import { apparentSizePx, nextIsMiddle, fullDetailFloorPx, isNearFullDetail, MAX_FULL_DETAIL_ITEMS } from './lodTier.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
 import { isNetworkError } from '../build/scene.js';
@@ -365,18 +365,26 @@ function lodApparentPx(entry, object) {
 const lodNearPxScratch = [];
 function updateInstanceLodTiers() {
   lodNearPxScratch.length = 0;
+  let protectedCount = 0;
   for (const entry of shopLandlets.values()) {
     if (!entry.loaded) continue;
     for (const object of entry.objects) {
       if (!object.userData.lodProxy) continue;
       const px = lodApparentPx(entry, object);
       object.userData.lodPx = px;
-      const wantMiddle = nextIsMiddle(object.userData.lodMiddle, px);
+      // #3443: beside the avatar is always the real model, outside the cap too.
+      const nearAvatar = isNearFullDetail(horizontalDistanceM(
+        entry.group.position.x + object.position.x, entry.group.position.y + object.position.y,
+        shopAvatarPosition.x, shopAvatarPosition.y,
+      ));
+      object.userData.lodProtected = nearAvatar;
+      const wantMiddle = !nearAvatar && nextIsMiddle(object.userData.lodMiddle, px);
       object.userData.lodWantMiddle = wantMiddle;
-      if (!wantMiddle) lodNearPxScratch.push(px);
+      if (nearAvatar) protectedCount += 1;
+      else if (!wantMiddle) lodNearPxScratch.push(px);
     }
   }
-  const floorPx = fullDetailFloorPx(lodNearPxScratch);
+  const floorPx = fullDetailFloorPx(lodNearPxScratch, Math.max(MAX_FULL_DETAIL_ITEMS - protectedCount, 0));
   // #3396: flipping hundreds of items in one tick is a batch like any other, so
   // it stops when its slice of the frame is spent; the items not reached keep
   // their state and flip on the next tick.
@@ -385,7 +393,7 @@ function updateInstanceLodTiers() {
     if (!entry.loaded) continue;
     for (const object of entry.objects) {
       if (!object.userData.lodProxy) continue;
-      const isMiddle = object.userData.lodWantMiddle || object.userData.lodPx < floorPx;
+      const isMiddle = !object.userData.lodProtected && (object.userData.lodWantMiddle || object.userData.lodPx < floorPx);
       if (isMiddle !== object.userData.lodMiddle) {
         object.userData.lodMiddle = isMiddle;
         setInstanceLodState(object, isMiddle);

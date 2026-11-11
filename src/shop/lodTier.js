@@ -23,6 +23,20 @@ export const LOD_EXIT_PX = 36;
 // build (hundreds of large items in view) cannot ask the GPU for all of them.
 export const MAX_FULL_DETAIL_ITEMS = 600;
 
+// #3443: what is right beside the person is always the real model. An item
+// within this many metres (along the ground) of the avatar never takes the box,
+// neither from the per-item size rule (a single brick is small, so it sits near
+// the enter/exit sizes even at close range) nor from the cap. The owner stood
+// next to an 829-brick wall and watched bricks flip between textured and plain
+// as he moved a metre; the cap's ranking by apparent size reshuffled which 229
+// bricks were boxes at every step. Protected items do not count against the cap
+// either, so the rest of the world's budget is what is left over.
+export const NEAR_FULL_DETAIL_M = 10;
+
+export function isNearFullDetail(groundDistanceM) {
+  return groundDistanceM <= NEAR_FULL_DETAIL_M;
+}
+
 // The item's diameter on screen in CSS pixels: a sphere of `radiusM` at
 // `distanceM`, seen through a vertical field of view of `fovDeg` on a viewport
 // `viewportHeightPx` tall. Distance is floored so an item the camera is inside
@@ -50,6 +64,7 @@ export function nextIsMiddle(isMiddle, apparentPx) {
 // the size of the tie; that is cheaper than splitting equals arbitrarily.
 export function fullDetailFloorPx(nearPxs, cap = MAX_FULL_DETAIL_ITEMS) {
   if (nearPxs.length <= cap) return 0;
+  if (cap <= 0) return Infinity; // no budget left: every unprotected item simplifies
   const sorted = Float64Array.from(nearPxs).sort();
   return sorted[sorted.length - cap];
 }

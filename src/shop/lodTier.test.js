@@ -1,7 +1,7 @@
 // #3373: the pure level-of-detail rule: apparent size, hysteresis, and the cap.
 import { describe, expect, it } from 'vitest';
 import {
-  apparentSizePx, nextIsMiddle, fullDetailFloorPx, LOD_ENTER_PX, LOD_EXIT_PX, MAX_FULL_DETAIL_ITEMS,
+  apparentSizePx, nextIsMiddle, fullDetailFloorPx, isNearFullDetail, NEAR_FULL_DETAIL_M, LOD_ENTER_PX, LOD_EXIT_PX, MAX_FULL_DETAIL_ITEMS,
 } from './lodTier.js';
 
 const FOV = 60;
@@ -91,5 +91,28 @@ describe('fullDetailFloorPx (the cap)', () => {
   it('has a sensible default budget', () => {
     expect(MAX_FULL_DETAIL_ITEMS).toBeGreaterThan(100);
     expect(fullDetailFloorPx(new Array(MAX_FULL_DETAIL_ITEMS).fill(40))).toBe(0);
+  });
+});
+
+describe('the protected radius around the avatar (#3443)', () => {
+  it('covers everything within NEAR_FULL_DETAIL_M on the ground, and nothing beyond', () => {
+    expect(isNearFullDetail(0)).toBe(true);
+    expect(isNearFullDetail(NEAR_FULL_DETAIL_M)).toBe(true);
+    expect(isNearFullDetail(NEAR_FULL_DETAIL_M + 0.01)).toBe(false);
+  });
+
+  it('a brick 10 m away would otherwise be inside the swap band, which is why it is protected', () => {
+    const px = apparentSizePx(0.2, NEAR_FULL_DETAIL_M, FOV, VIEWPORT_H);
+    expect(px).toBeLessThan(LOD_EXIT_PX);
+  });
+
+  it('protected items use up the cap: with none left, every unprotected item simplifies', () => {
+    const floor = fullDetailFloorPx([10, 20, 30], Math.max(MAX_FULL_DETAIL_ITEMS - 829, 0));
+    expect([10, 20, 30].filter((p) => p >= floor)).toEqual([]);
+  });
+
+  it('and with protected items fewer than the cap, the rest keep the remaining budget', () => {
+    const floor = fullDetailFloorPx([10, 20, 30, 40], 2);
+    expect([10, 20, 30, 40].filter((p) => p >= floor)).toEqual([30, 40]);
   });
 });
