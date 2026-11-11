@@ -106,12 +106,12 @@ export const accountMenuLandletInfoEl = document.getElementById('account-menu-la
 // that's entirely water can't spin this loop forever.
 const SHOP_SPAWN_LOCATION_MAX_ATTEMPTS = 20;
 
-// This near/far load-unload distance (plus the middle-LOD band just below,
-// #2378 of docs/SPEC.md §1's fuller near/middle-LOD/far-panoramic-backdrop
-// system, #2377) is the only "chunk loading" that exists today — the far
-// band's own pre-rendered panoramic backdrop isn't built yet (still just
-// the flat sky-dome color beyond SHOP_UNLOAD_RADIUS_M), so there's no
-// per-band curvature concern to check for it yet. And even if there were:
+// This near/far load-unload distance (plus the per-item level of detail just
+// below, docs/SPEC.md §1 "Chunk loading") is the only chunk loading that
+// exists today — the far view of every landlet out to the horizon (#3412,
+// #3418) isn't built yet (still just the flat sky-dome color beyond
+// SHOP_UNLOAD_RADIUS_M), so there's no per-band curvature concern to check
+// for it yet. And even if there were:
 // worker/earthCurvature.js's curvatureDropM says the real curved surface
 // sags a mere ~0.3-0.6mm below the flat plane at these radii, ~2cm even out
 // at 500m, and still only ~8cm at a hypothetical 1km world radius (this
