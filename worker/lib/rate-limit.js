@@ -36,10 +36,21 @@ export const RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
 // second copy of the limit. retryAfterSeconds is when the next slot frees (the
 // oldest in-window event ageing out); 0 when nothing is used yet.
 export async function rateLimitStanding(db, bucketKey, maxAttempts) {
-  const now = Date.now();
-  const row = await db.prepare(
+  const row = await rateLimitStandingStatement(db, bucketKey).first();
+  return rateLimitStandingFromRow(row, maxAttempts);
+}
+
+// #3464: the standing's one query as a prepared statement, so a caller that
+// is already sending a db.batch can add it to that round trip instead of
+// paying another one after it.
+export function rateLimitStandingStatement(db, bucketKey) {
+  return db.prepare(
     'SELECT COUNT(*) AS used, MIN(created_at) AS oldest FROM rate_limit_events WHERE bucket_key = ? AND created_at >= ?',
-  ).bind(bucketKey, now - RATE_LIMIT_WINDOW_MS).first();
+  ).bind(bucketKey, Date.now() - RATE_LIMIT_WINDOW_MS);
+}
+
+export function rateLimitStandingFromRow(row, maxAttempts) {
+  const now = Date.now();
   const used = row?.used ?? 0;
   return {
     limit: maxAttempts,
