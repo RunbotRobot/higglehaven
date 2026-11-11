@@ -438,10 +438,10 @@ describe('collect round trips (#3464)', () => {
     const request = new Request(`https://higglehaven.test/api/credit-orbs/${orbId}/collect`, init);
     const response = await handleCreditOrbs(request, db, ['credit-orbs', orbId, 'collect'], new URL(request.url));
     expect(response.status).toBe(200);
-    // session+user read, suspension read, builder read (its activity write is
-    // throttled and the account was just active), orb+presence+rate-limit
-    // batch, claim+standing batch.
-    expect(counter.trips).toBe(5);
+    // session+user+suspension read (one statement, #3464), builder read (its
+    // activity write is throttled and the account was just active),
+    // orb+presence+rate-limit batch, claim+standing batch.
+    expect(counter.trips).toBe(4);
   });
 
   it('a refusal (no such orb) never reaches the claim batch', async () => {
@@ -450,7 +450,7 @@ describe('collect round trips (#3464)', () => {
     const request = new Request('https://higglehaven.test/api/credit-orbs/nope/collect', builder.session({ method: 'POST' }));
     await expect(handleCreditOrbs(request, db, ['credit-orbs', 'nope', 'collect'], new URL(request.url)))
       .rejects.toMatchObject({ status: 404 });
-    expect(counter.trips).toBe(4);
+    expect(counter.trips).toBe(3);
   });
 });
 
