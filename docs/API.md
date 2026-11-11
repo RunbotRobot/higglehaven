@@ -10334,6 +10334,31 @@ Rules the endpoints keep:
   wrote, their last few messages under `QUOTED FROM THE SHOPPER (untrusted
   text...)`. `201 { cardId }`.
 
+### The assistant's shift programs (#3458)
+
+An assistant session has a shell and these two programs, nothing else (no
+repository, no browser, no credentials beyond the live site's gate, which the
+session's network proxy adds). Both sign in through fleet login as
+`assistant-<name>` (`--name juniper`), print one JSON line and never print a
+cookie or a header. `--url` defaults to the live site; a local server needs
+`LIVE_SITE_FLEET_KEY` set to its throwaway key.
+
+- `node scripts/assistant-shift.mjs --name juniper`: goes on shift, then polls
+  `GET /api/assistant-inbox/next` every 5 seconds (`--poll`, at most 30, so the
+  90-second shift window never lapses) and **exits with the reply on stdout**:
+  a shopper message (`{ conversationId, shopper, message, history }`), a
+  conversation that ended without the assistant (`{ ended }`), or
+  `{ "idle": true, "reason": "time limit" }` after `--max-seconds` (default 55
+  minutes) so the session simply runs it again. It costs no model time while it
+  waits. A 5xx, a 429 or no answer is retried; five in a row, or any other
+  refusal, exits 1 with one plain line on stderr.
+- `node scripts/assistant-reply.mjs --name juniper reply|end|escalate
+  <conversationId> [--text "..."]`: `reply` posts an answer, `end` ends the
+  conversation, `escalate` files the team card (`--text` is the assistant's own
+  summary; the server adds the shopper's words in the quoted field).
+
+Handing a conversation to another assistant is not here yet (#3448).
+
 ## Frontend integration notes
 
 - The current API already matches the frontend's Z-up placement convention via
