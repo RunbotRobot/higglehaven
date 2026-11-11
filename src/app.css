@@ -103,7 +103,11 @@
       #loading-screen {
         position: fixed;
         inset: 0;
-        z-index: 15;
+        /* #3442: 19, above the Shop HUD tier (.shop-ui is 16) and below the
+           modals (20). At 15 it sat under every .shop-ui element, so any of
+           them marked visible early (the joysticks were) painted on top of
+           the title screen. Nothing else lives at 17-19. */
+        z-index: 19;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -113,6 +117,10 @@
       }
       #loading-screen.loading-screen-hidden {
         opacity: 0;
+        /* #3442: the splash now sits above the Shop HUD, so while it fades
+           out it must not swallow a tap or drag meant for the controls
+           beneath it. */
+        pointer-events: none;
       }
       #loading-screen img {
         width: min(240px, 60vw);
@@ -536,33 +544,6 @@
          Stacked one slot above the toast per that comment's own stacking
          idiom, so a success toast firing right as connectivity returns
          doesn't collide with this notice fading out. */
-      #shop-credit-orb-offline-notice {
-        position: fixed;
-        /* #3377: size to the text up to 90vw. Without this a fixed box at left: 50%
-           shrink-wraps into the right half of the screen only. */
-        width: max-content;
-        z-index: 16;
-        bottom: 330px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgb(var(--pill-rgb) / 0.9);
-        padding: 8px 16px;
-        border-radius: 8px;
-        color: var(--pill-text);
-        font: 13px/1.4 sans-serif;
-        max-width: 90vw;
-        pointer-events: none;
-        opacity: 0;
-        transition: opacity 0.4s;
-      }
-      #shop-credit-orb-offline-notice.visible {
-        opacity: 1;
-        /* #3303: readable text is selectable while it is shown; the hidden
-           (opacity 0) state stays click-through so it never blocks a tap. */
-        pointer-events: auto;
-        user-select: text;
-        -webkit-user-select: text;
-      }
       /* Reported directly by a player ("It won't let me collect more
          orbs!") -- a 429 from CREDIT_ORB_COLLECT_RATE_LIMIT_MAX used to
          leave the orb in place with no explanation at all. Auto-hides on
@@ -571,62 +552,47 @@
          the cooldown it's timed to is a known, fixed duration rather than
          "until a request finally succeeds." Stacked one slot above the
          offline notice per its own stacking idiom. */
-      #shop-credit-orb-rate-limit-notice {
-        position: fixed;
-        /* #3377: size to the text up to 90vw. Without this a fixed box at left: 50%
-           shrink-wraps into the right half of the screen only. */
-        width: max-content;
-        z-index: 16;
-        bottom: 380px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: rgb(var(--pill-rgb) / 0.9);
-        padding: 8px 16px;
-        border-radius: 8px;
-        color: var(--pill-text);
-        font: 13px/1.4 sans-serif;
-        max-width: 90vw;
-        pointer-events: none;
-        opacity: 0;
-        transition: opacity 0.4s;
-      }
-      #shop-credit-orb-rate-limit-notice.visible {
-        opacity: 1;
-        /* #3303: readable text is selectable while it is shown; the hidden
-           (opacity 0) state stays click-through so it never blocks a tap. */
-        pointer-events: auto;
-        user-select: text;
-        -webkit-user-select: text;
-      }
       /* #3392: a collect the server refused after the orb had already popped
          (someone else got it first, or it could not be confirmed); stays until
          dismissed, like the other orb notices. One slot above the rate-limit notice. */
-      #shop-credit-orb-problem-notice {
+      /* #3441: one bottom-anchored stack for the orb notices (offline, limit,
+         problem). They used to sit in separate fixed slots 50px apart, so a
+         notice taller than one line covered the slot above it and an older
+         message could be hidden by a newer one. In the stack each takes its own
+         height, the one raised last has the highest `order` and sits nearest the
+         controls (set in presenceAndContent.js), and a notice that is not shown
+         takes no room. Text stays selectable (#3303); each dismissible one keeps
+         its x in its upper-right corner (.shop-notice-dismiss-btn). */
+      #shop-notice-stack {
         position: fixed;
-        /* #3377: size to the text up to 90vw. Without this a fixed box at left: 50%
-           shrink-wraps into the right half of the screen only. */
-        width: max-content;
         z-index: 16;
-        bottom: 430px;
+        bottom: 330px;
         left: 50%;
         transform: translateX(-50%);
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+        align-items: center;
+        gap: 8px;
+        max-width: 90vw;
+        pointer-events: none;
+      }
+      #shop-notice-stack .shop-notice {
+        position: relative;
+        width: max-content;
+        max-width: 90vw;
+        box-sizing: border-box;
         background: rgb(var(--pill-rgb) / 0.9);
         padding: 8px 16px;
         border-radius: 8px;
         color: var(--pill-text);
         font: 13px/1.4 sans-serif;
-        max-width: 90vw;
-        pointer-events: none;
-        opacity: 0;
-        transition: opacity 0.4s;
-      }
-      #shop-credit-orb-problem-notice.visible {
-        opacity: 1;
-        /* #3303: readable text is selectable while it is shown; the hidden
-           (opacity 0) state stays click-through so it never blocks a tap. */
         pointer-events: auto;
         user-select: text;
         -webkit-user-select: text;
+      }
+      #shop-notice-stack .shop-notice:not(.visible) {
+        display: none;
       }
       /* #3335 / #3377: one layout for every notice (orb notices, the Build
          selection-action status). A notice that can be dismissed carries its x

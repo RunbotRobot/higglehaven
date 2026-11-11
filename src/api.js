@@ -2102,6 +2102,19 @@ export async function fetchCreditOrbs(landletId) {
   return orbs;
 }
 
+// #3441: where the signed-in person stands against the orb collect limit
+// ({ limit, windowSeconds, remaining, retryAfterSeconds }), so an orb over the
+// limit can be left alone before it is touched. Resolves to null when there is
+// no session or the read fails -- the server still enforces the limit either way.
+export async function fetchCreditOrbStanding() {
+  try {
+    const { standing } = await requestJson('/credit-orbs/standing');
+    return standing ?? null;
+  } catch {
+    return null;
+  }
+}
+
 // #1995: claims an orb on proximity auto-collect. The server's own atomic
 // "first builder wins" check is authoritative — a 404 here just means
 // someone else got there first, not a real error, so callers should treat

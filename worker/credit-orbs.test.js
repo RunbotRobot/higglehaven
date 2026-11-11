@@ -355,6 +355,50 @@ describe('POST /api/credit-orbs/:orbId/collect (#1995)', () => {
   });
 });
 
+// #3441: where a builder stands against the collect limit, on a successful
+// collect and on a read that spends nothing, so the Shop can leave an orb
+// alone (and say when it frees up) before touching it, instead of popping it
+// and reversing the pop on a 429.
+describe('collect standing (#3441)', () => {
+  it('GET /credit-orbs/standing needs a session and spends no slot', async () => {
+    const anonymous = await api('/credit-orbs/standing');
+    expect(anonymous.response.status).toBe(401);
+    const builder = await signupBuilder('orb-standing-reader');
+    const first = await api('/credit-orbs/standing', builder.session());
+    expect(first.response.status).toBe(200);
+    expect(first.body.standing).toEqual({ limit: 20, windowSeconds: 900, remaining: 20, retryAfterSeconds: 0 });
+    const again = await api('/credit-orbs/standing', builder.session());
+    expect(again.body.standing.remaining).toBe(20); // reading never counts
+  });
+
+  it('a successful collect reports what is left, and the standing agrees', async () => {
+    const landlet = await seedLandlet('greenbelt');
+    const orbId = await seedOrb(landlet);
+    const builder = await signupBuilder('orb-standing-collector');
+    await seedPresence(builder.builderId, { x: DEFAULT_LANDLET_CENTER_X, y: DEFAULT_LANDLET_CENTER_Y });
+    const collected = await api(`/credit-orbs/${orbId}/collect`, builder.session({ method: 'POST' }));
+    expect(collected.response.status).toBe(200);
+    expect(collected.body.standing.remaining).toBe(19);
+    expect(collected.body.standing.limit).toBe(20);
+    expect(collected.body.standing.retryAfterSeconds).toBeGreaterThan(0);
+    const read = await api('/credit-orbs/standing', builder.session());
+    expect(read.body.standing.remaining).toBe(19);
+  });
+
+  it('reaches zero remaining exactly when the next attempt would be a 429', async () => {
+    const builder = await signupBuilder('orb-standing-limit');
+    for (let i = 0; i < 20; i += 1) {
+      await api('/credit-orbs/not-a-real-orb/collect', builder.session({ method: 'POST' }));
+    }
+    const read = await api('/credit-orbs/standing', builder.session());
+    expect(read.body.standing.remaining).toBe(0);
+    expect(read.body.standing.retryAfterSeconds).toBeGreaterThan(0);
+    expect(read.body.standing.retryAfterSeconds).toBeLessThanOrEqual(900);
+    const over = await api('/credit-orbs/not-a-real-orb/collect', builder.session({ method: 'POST' }));
+    expect(over.response.status).toBe(429);
+  });
+});
+
 // #2223: spawnCreditOrbIfDue only ever targets a 'greenbelt' landlet, and
 // nothing else used to ever delete a credit_orbs row -- an orb left
 // uncollected on a landlet that then got claimed survived forever,

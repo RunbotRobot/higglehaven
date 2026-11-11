@@ -310,6 +310,18 @@ export function unloadShopLandletInstances(entry) {
     worldWorkQueue.enqueue(() => disposeObject3D(object), { priority: DISPOSE_QUEUE_PRIORITY });
   }
   entry.objects = [];
+  // #3402: batches of identical placements drawn by shared instanced meshes
+  // (their handles are in entry.objects above and were removed with them). The
+  // instance buffers and the model clone that owns the materials are released
+  // like everything else, a few at a time inside the frame budget.
+  for (const batch of entry.batches) {
+    entry.group.remove(batch.root);
+    worldWorkQueue.enqueue(() => {
+      for (const mesh of batch.meshes) mesh.dispose();
+      disposeObject3D(batch.container);
+    }, { priority: DISPOSE_QUEUE_PRIORITY });
+  }
+  entry.batches = [];
   for (const sign of [...shopSigns]) {
     if (sign.group !== entry.group) continue;
     disposeSignSprites(sign);
@@ -452,9 +464,7 @@ export async function enterShopMode() {
   // made that window long enough to reliably lose). Made visible below
   // instead, together with the moment the correct state is actually
   // decided.
-  for (const el of [shopStatusEl, shopMoveJoystickEl, shopLookJoystickEl]) {
-    el.classList.add('visible');
-  }
+  shopStatusEl.classList.add('visible');
   shopStatusEl.textContent = 'Loading the world…';
 
   // The builder scene's placeholder square (see applyLandletShape) has
@@ -711,7 +721,7 @@ export async function enterShopMode() {
     group.add(groundMesh);
     scene.add(group);
     shopLandlets.set(record.landletId, {
-      record, group, groundMesh, loaded: false, loadToken: 0, objects: [],
+      record, group, groundMesh, loaded: false, loadToken: 0, objects: [], batches: [],
       // #1995: orbs' own load state, independent of loaded/loadToken/
       // objects above -- see updateShopProximity's own comment on why.
       orbsLoaded: false, orbLoadToken: 0,
@@ -742,6 +752,11 @@ export async function enterShopMode() {
   // Now that the correct grounded/flying look is actually applied, safe to
   // reveal (see this function's own comment on why these two specifically
   // wait until here, unlike the other Shop HUD elements above).
+  // #3442: the joysticks join the fly button and vertical controls here, so
+  // the whole control cluster arrives together rather than the joysticks
+  // leading (they used to be marked visible at the top of this function).
+  shopMoveJoystickEl.classList.add('visible');
+  shopLookJoystickEl.classList.add('visible');
   shopFlyBtn.classList.add('visible');
   shopVerticalControlsEl.classList.add('visible');
   // Not just clearing the text — an empty .visible pill still shows its

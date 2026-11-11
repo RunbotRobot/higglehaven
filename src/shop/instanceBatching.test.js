@@ -1,6 +1,6 @@
 // #3400: the pure batching rules.
 import { describe, expect, it } from 'vitest';
-import { MIN_BATCH_SIZE, batchKey, groupPlacements, placementUserData } from './instanceBatching.js';
+import { MIN_BATCH_SIZE, batchKey, groupPlacements, handleForInstanceHit, placementTopZ, placementUserData } from './instanceBatching.js';
 
 const brick = { templateId: 'brick', modelUrl: '/m/brick.glb', metadata: {} };
 const chair = { templateId: 'chair', modelUrl: '/m/chair.glb', metadata: {} };
@@ -27,6 +27,7 @@ describe('batchKey', () => {
     expect(batchKey(place('a', 'crate'), crate)).toBeNull();
     expect(batchKey(place('a', 'brick', { isCommunitySign: true }), brick)).toBeNull();
     expect(batchKey(place('a', 'brick', { isCommunityCalendar: true }), brick)).toBeNull();
+    expect(batchKey(place('a', 'brick'), { ...brick, metadata: { extensible: { x: { minM: 0.05 } } } })).toBeNull();
     expect(batchKey(place('a', 'ghost'), undefined)).toBeNull();
     expect(batchKey(null, brick)).toBeNull();
   });
@@ -92,5 +93,32 @@ describe('placementUserData (#3401)', () => {
     const data = placementUserData(instance, brick);
     data.crop.x = 9;
     expect(instance.crop.x).toBe(1);
+  });
+});
+
+describe('placementTopZ (#3402)', () => {
+  const dims = { width: 2, depth: 2, height: 4 };
+  it('reaches half the height above the centre when upright or turned about the vertical axis', () => {
+    expect(placementTopZ(10, 0, 0, dims)).toBe(12);
+    expect(placementTopZ(10, undefined, undefined, dims)).toBe(12);
+  });
+  it('uses half the diagonal when tilted, never less than the upright reach', () => {
+    const tilted = placementTopZ(10, 0.3, 0, dims);
+    expect(tilted).toBeCloseTo(10 + 0.5 * Math.hypot(2, 2, 4));
+    expect(tilted).toBeGreaterThanOrEqual(placementTopZ(10, 0, 0, dims));
+  });
+});
+
+describe('handleForInstanceHit (#3402)', () => {
+  const handles = [{ id: 'a' }, { id: 'b' }];
+  it('maps an instance index to its placement handle', () => {
+    expect(handleForInstanceHit(handles, 1)).toBe(handles[1]);
+    expect(handleForInstanceHit(handles, 0)).toBe(handles[0]);
+  });
+  it('is null for no handle list, a missing instance id or an out-of-range index', () => {
+    expect(handleForInstanceHit(undefined, 0)).toBeNull();
+    expect(handleForInstanceHit(handles, undefined)).toBeNull();
+    expect(handleForInstanceHit(handles, 5)).toBeNull();
+    expect(handleForInstanceHit(handles, 0.5)).toBeNull();
   });
 });

@@ -90,15 +90,24 @@ describe('POST /api/auth/fleet-login', () => {
     }
   });
 
+  it('repairs a fleet account left at the lowest trust tier on its next login (#3430)', async () => {
+    await fleetLogin('higglehaven7');
+    await env.DB.prepare("UPDATE users SET trust_tier = 'none' WHERE username = 'higglehaven7'").run();
+    await fleetLogin('higglehaven7');
+    const row = await env.DB.prepare("SELECT trust_tier FROM users WHERE username = 'higglehaven7'").first();
+    expect(row.trust_tier).toBe('credit_card');
+  });
+
   it('creates the account once, then signs in the same one; the session works', async () => {
     const first = await fleetLogin('higglehaven3');
     expect(first.response.status).toBe(200);
     expect(first.token).toBeTruthy();
     const second = await fleetLogin('higglehaven3');
     expect(second.body.user.userId).toBe(first.body.user.userId);
-    const rows = await env.DB.prepare("SELECT user_id, is_fleet, email_verified_at, is_admin FROM users WHERE username = 'higglehaven3'").all();
+    const rows = await env.DB.prepare("SELECT user_id, is_fleet, email_verified_at, is_admin, trust_tier FROM users WHERE username = 'higglehaven3'").all();
     expect(rows.results).toHaveLength(1);
-    expect(rows.results[0]).toMatchObject({ is_fleet: 1, is_admin: 0 });
+    // #3430: past the app's age-and-card verify step, which a fleet account cannot do.
+    expect(rows.results[0]).toMatchObject({ is_fleet: 1, is_admin: 0, trust_tier: 'credit_card' });
     expect(rows.results[0].email_verified_at).not.toBeNull();
 
     const me = await fleetFetch('/api/auth/me', { key: FLEET_KEY, headers: { cookie: `hh_session=${second.token}` } });

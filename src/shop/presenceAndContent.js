@@ -56,7 +56,9 @@ import * as THREE from 'three';
 import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
-import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
+import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
+import { groupPlacements, placementTopZ } from './instanceBatching.js';
+import { buildInstancedBatch } from './instancedBatches.js';
 import { apparentSizePx, nextIsMiddle, fullDetailFloorPx } from './lodTier.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
@@ -64,7 +66,7 @@ import { isNetworkError } from '../build/scene.js';
 import { currentAuthUser } from '../account/auth.js';
 import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
-  fetchCreditOrbs, collectCreditOrb, reportPresence, fetchNearbyPresence,
+  fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence,
 } from '../api.js';
 import { applyAssistantLook } from './assistantAvatar.js';
 import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
@@ -74,7 +76,7 @@ import {
   animationForAvatar, locomotionStateFor,
 } from './otherAvatarModels.js';
 import { shopMaxRadiusM, shopFlightState, shopFlightAltitudeM } from './flightMovement.js';
-import { growShopDomeIfNeeded } from './sky.js';
+import { growShopDomeIfNeeded, growShopDomeToHeight } from './sky.js';
 import {
   SHOP_BASE_LOAD_RADIUS_M, SHOP_BASE_UNLOAD_RADIUS_M, shopUnloadRadiusM, horizontalDistanceM, pickLandletsToLoad,
 } from './loadRadius.js';
@@ -89,6 +91,7 @@ import {
 import { disposeObject3D, unloadShopLandletInstances, buildShopGroundMesh } from './mode.js';
 import { registerShopSign, registerShopCalendar, registerShopReview } from './worldSprites.js';
 import { rateLimitNoticeText } from '../rateLimitNotice.js';
+import { creditOrbStandingState, creditOrbLimitNow } from './creditOrbStanding.js';
 import { recordVisibleMessage } from '../ui/visibleMessages.js';
 
 const shopCreditOrbToastEl = document.getElementById('shop-credit-orb-toast');
@@ -1098,12 +1101,76 @@ async function loadShopLandletInstances(entry, myToken) {
   });
   entry.arrivalRun = run;
   exposeArrivalStats(run);
-  for (const instance of instances) {
+  // #3402: placements that look exactly the same (same product, same size, no
+  // crop) are drawn by one instanced mesh per model part instead of one cloned
+  // mesh each; everything else is built one by one as before.
+  const { batches, singles } = groupPlacements(instances, findTemplate);
+  for (const members of batches.values()) {
+    worldWorkQueue.enqueue(() => buildAndAttachBatch(entry, members, myToken, group, run), {
+      group,
+      priority: Math.min(...members.map((instance) => instanceLoadPriority(entry, instance))),
+    });
+  }
+  for (const instance of singles) {
     worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, myToken, run), {
       group,
       priority: instanceLoadPriority(entry, instance),
     });
   }
+}
+
+// #3402: one batch of identical placements. Each placement still gets its own
+// lightweight handle (createPlacementHandle) in entry.objects, so collision,
+// sit/lean search, attention and reviews see it like any placed item; only the
+// drawing is shared. A model that cannot be drawn this way falls back to
+// ordinary per-item meshes for the whole batch.
+async function buildAndAttachBatch(entry, members, myToken, group, run) {
+  const settleAll = () => { for (const instance of members) run?.itemSettled(instance.instanceId); };
+  if (myToken !== entry.loadToken) { // superseded while queued
+    settleAll();
+    return;
+  }
+  const template = findTemplate(members[0].templateId);
+  const source = await loadBatchSource(template);
+  if (!source) {
+    for (const instance of members) {
+      worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, myToken, run), {
+        group,
+        priority: instanceLoadPriority(entry, instance),
+      });
+    }
+    return;
+  }
+  if (myToken !== entry.loadToken) {
+    // Same hazard and same e2e-visible counter as buildAndAttachInstance below.
+    disposeObject3D(source.container);
+    window.__shopInstanceDisposedCount = (window.__shopInstanceDisposedCount ?? 0) + 1;
+    settleAll();
+    return;
+  }
+  const handles = members.map((instance) => createPlacementHandle(instance, template));
+  for (const handle of handles) entry.group.add(handle);
+  const batch = buildInstancedBatch(source.parts, handles);
+  batch.container = source.container;
+  // One root for the batch's instanced meshes: the arrival dissolve (#3407)
+  // swaps the materials of everything under the root it is given, and unload
+  // removes the root.
+  batch.root = new THREE.Group();
+  for (const mesh of batch.meshes) batch.root.add(mesh);
+  entry.group.add(batch.root);
+  entry.batches.push(batch);
+  let topZ = -Infinity;
+  for (const handle of handles) {
+    entry.objects.push(handle);
+    topZ = Math.max(topZ, entry.group.position.z + placementTopZ(handle.position.z, handle.rotation.x, handle.rotation.y, meshDimensions(handle)));
+    registerShopReview(handle, entry);
+  }
+  growShopDomeToHeight(topZ);
+  // #3407: the batch dissolves in with its first member's cluster; the other
+  // members have nothing of their own to dissolve, so they settle at once and
+  // never hold their clusters' fog.
+  run?.itemReady(members[0].instanceId, batch.root);
+  for (const instance of members.slice(1)) run?.itemSettled(instance.instanceId);
 }
 
 // How soon an item should be built: the bigger it will look on screen, the
@@ -1223,6 +1290,9 @@ async function loadCreditOrbsForLandlet(entry, myToken) {
     return;
   }
   if (myToken !== entry.orbLoadToken) return; // superseded while this was in flight
+  // #3441: so a reload at the limit does not buy one more pop that the next
+  // 429 takes back. Best effort; the server still enforces the limit.
+  if (orbs.length > 0) fetchCreditOrbStanding().then(applyCreditOrbStanding);
   for (const orb of orbs) {
     const mesh = createCreditOrbMesh();
     mesh.position.set(orb.x, orb.y, orb.z + CREDIT_ORB_FLOAT_HEIGHT_M);
@@ -1330,6 +1400,15 @@ const scratchCreditOrbWorldPos = new THREE.Vector3();
 // CREDIT_ORB_COLLECT_RATE_LIMIT_MAX is keyed by builder id, so hitting it
 // near one orb means every other orb in range would 429 too if retried.
 let creditOrbRateLimitedUntilMs = null;
+// #3441: where the server says the person stands against that limit (see
+// creditOrbStanding.js), from the orb list load and from every collect reply.
+// An orb touched while this says "at the limit" is left in place and the
+// notice shows, instead of popping and being reversed by the next 429.
+let creditOrbStanding = null;
+function applyCreditOrbStanding(reply) {
+  const state = creditOrbStandingState(reply, performance.now());
+  if (state) creditOrbStanding = state;
+}
 
 // Called every Shop-mode frame, unthrottled like updateSignFade/
 // updateCalendarFade — the shimmer needs to read as continuous, and
@@ -1338,7 +1417,9 @@ export function updateCreditOrbs(dt) {
   creditOrbShimmerElapsedS += dt;
   const shimmer = CREDIT_ORB_SHIMMER_MIN + (CREDIT_ORB_SHIMMER_MAX - CREDIT_ORB_SHIMMER_MIN)
     * (0.5 + 0.5 * Math.sin(creditOrbShimmerElapsedS * CREDIT_ORB_SHIMMER_SPEED_RAD_S));
-  const rateLimited = creditOrbRateLimitedUntilMs !== null && performance.now() < creditOrbRateLimitedUntilMs;
+  const standingLimit = creditOrbLimitNow(creditOrbStanding, performance.now());
+  const rateLimited = standingLimit !== null
+    || (creditOrbRateLimitedUntilMs !== null && performance.now() < creditOrbRateLimitedUntilMs);
   // Deliberately the avatar's own position, not camera.position (unlike
   // updateSignFade/updateCalendarFade's fade distance) -- positionShopCamera
   // holds the third-person camera SHOP_CAMERA_FOLLOW_DISTANCE_M (4.2m) behind
@@ -1384,7 +1465,7 @@ export function updateCreditOrbs(dt) {
     if (rateLimited) {
       if (!orb.noticeShownForContact) {
         orb.noticeShownForContact = true;
-        showCreditOrbRateLimitNotice(creditOrbLastRateLimit);
+        showCreditOrbRateLimitNotice(standingLimit ?? creditOrbLastRateLimit);
       }
       continue;
     }
@@ -1410,7 +1491,8 @@ function popAndCollectCreditOrb(orb) {
   showCreditOrbToast();
   const startedAt = performance.now();
   const attempt = () => {
-    collectCreditOrb(snapshot.orbId).then(() => {
+    collectCreditOrb(snapshot.orbId).then((reply) => {
+      applyCreditOrbStanding(reply?.standing);
       markCreditOrbCollectReachedServer();
       hideCreditOrbRateLimitNotice(); // #3303: a successful collect means the limit lifted
     }).catch((error) => {
@@ -1448,8 +1530,11 @@ function popAndCollectCreditOrb(orb) {
       // standing in range is not a retry storm.
       creditOrbRateLimitedUntilMs = performance.now() + CREDIT_ORB_RATE_LIMIT_RETRY_COOLDOWN_MS;
       creditOrbLastRateLimit = error.rateLimit;
+      if (error.rateLimit) applyCreditOrbStanding({ ...error.rateLimit, remaining: 0 });
       restoreCreditOrb(snapshot);
-      showCreditOrbRateLimitNotice(error.rateLimit);
+      // #3441: said in the same sentence as the limit, so a person who saw the
+      // pop knows the orb was given back.
+      showCreditOrbRateLimitNotice(error.rateLimit, { orbCameBack: true });
     });
   };
   attempt();
@@ -1487,7 +1572,10 @@ function markCreditOrbCollectFailedToReachServer() {
     return;
   }
   if (now - creditOrbOfflineStreakStartedAt >= CREDIT_ORB_OFFLINE_NOTICE_THRESHOLD_MS) {
-    if (!shopCreditOrbOfflineNoticeEl.classList.contains('visible')) recordVisibleMessage(shopCreditOrbOfflineNoticeTextEl.textContent); // #3303
+    if (!shopCreditOrbOfflineNoticeEl.classList.contains('visible')) {
+      recordVisibleMessage(shopCreditOrbOfflineNoticeTextEl.textContent); // #3303
+      bringShopNoticeToFront(shopCreditOrbOfflineNoticeEl);
+    }
     shopCreditOrbOfflineNoticeEl.classList.add('visible');
   }
 }
@@ -1533,9 +1621,20 @@ function hideCreditOrbToast() {
 // the page, so it cannot linger into Build/Sell.
 const shopCreditOrbRateLimitNoticeTextEl = shopCreditOrbRateLimitNoticeEl.querySelector('.shop-notice-text');
 const shopCreditOrbOfflineNoticeTextEl = shopCreditOrbOfflineNoticeEl.querySelector('.shop-notice-text');
-function showCreditOrbRateLimitNotice(rateLimit) {
+// #3441: the orb notices share one stack (#shop-notice-stack) so two showing at
+// once are both readable, and the one raised last sits nearest the controls
+// (highest `order`; the stack is bottom-anchored). Nothing here ever hides
+// another notice.
+let shopNoticeOrderCounter = 0;
+function bringShopNoticeToFront(noticeEl) {
+  shopNoticeOrderCounter += 1;
+  noticeEl.style.order = String(shopNoticeOrderCounter);
+}
+function showCreditOrbRateLimitNotice(rateLimit, { orbCameBack = false } = {}) {
   const text = rateLimitNoticeText('orbs', rateLimit);
-  if (text) shopCreditOrbRateLimitNoticeTextEl.textContent = text;
+  if (text) shopCreditOrbRateLimitNoticeTextEl.textContent = orbCameBack ? `That orb is back where it was. ${text}` : text;
+  else if (orbCameBack) shopCreditOrbRateLimitNoticeTextEl.textContent = "That orb is back where it was. You've reached the orb limit for now. Try again in a bit.";
+  bringShopNoticeToFront(shopCreditOrbRateLimitNoticeEl);
   shopCreditOrbRateLimitNoticeEl.classList.add('visible');
   recordVisibleMessage(shopCreditOrbRateLimitNoticeTextEl.textContent);
 }
@@ -1548,6 +1647,7 @@ shopCreditOrbRateLimitNoticeEl.querySelector('.shop-notice-dismiss-btn').addEven
 const shopCreditOrbProblemNoticeTextEl = shopCreditOrbProblemNoticeEl.querySelector('.shop-notice-text');
 function showCreditOrbProblemNotice(text) {
   shopCreditOrbProblemNoticeTextEl.textContent = text;
+  bringShopNoticeToFront(shopCreditOrbProblemNoticeEl);
   shopCreditOrbProblemNoticeEl.classList.add('visible');
   recordVisibleMessage(text);
 }
