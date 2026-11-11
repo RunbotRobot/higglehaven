@@ -372,6 +372,26 @@ describe('chunked execution', () => {
     expect(chunked.stats).toEqual(buildModelTiersSync(denseScan()).stats);
   });
 
+  // #3483: reading a texture back and shrinking it is per-pixel work; on a
+  // large texture that used to be one step of hundreds of milliseconds.
+  it('spreads the downsizing of a large texture over many steps', () => {
+    const texturedPlate = (size) => {
+      const group = new THREE.Group();
+      const material = new THREE.MeshStandardMaterial({ map: checkerTexture(size, [200, 30, 30], [30, 30, 200]) });
+      group.add(new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), material));
+      return group;
+    };
+    const stepsFor = (model) => {
+      const steps = modelTierSteps(model);
+      let count = 0;
+      while (!steps.next().done) count += 1;
+      return count;
+    };
+    const small = stepsFor(texturedPlate(64)); // already under the mid texture size: nothing to shrink
+    const large = stepsFor(texturedPlate(2048)); // 4 million pixels to average
+    expect(large - small).toBeGreaterThanOrEqual(12);
+  });
+
   it('does not hand control back when the budget is never crossed', async () => {
     let frames = 0;
     await buildModelTiers(chair(), {

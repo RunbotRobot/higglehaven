@@ -222,8 +222,10 @@ async function lodStats(id = instanceId) {
   return page.evaluate((i) => window.__testShopInstanceLodStats(i), id);
 }
 // Reduced versions are made on first need, so a step down is polled for rather
-// than read at once.
-async function waitBand(expected, id = instanceId, timeoutMs = 15000) {
+// than read at once. They are built in small per-frame steps (#3483: moving and
+// drawing never wait on loading), so on a slow runner the first one takes a while
+// of wall-clock; the wait is generous because only a build that never finishes is a failure.
+async function waitBand(expected, id = instanceId, timeoutMs = 60000) {
   const deadlineAt = Date.now() + timeoutMs;
   let band = await lodBand(id);
   while (band !== expected && Date.now() < deadlineAt) {
