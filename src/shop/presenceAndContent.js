@@ -56,9 +56,10 @@ import * as THREE from 'three';
 import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
-import { setInstanceLodState, attachInstanceTiers, loadTierScenes, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
+import { setInstanceLodState, attachInstanceTiers, loadTierScenes, loadFarViewSource, disposeObject, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
+import { createFarView } from './farView.js';
 import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL } from './lodTier.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
@@ -66,7 +67,7 @@ import { isNetworkError } from '../build/scene.js';
 import { currentAuthUser } from '../account/auth.js';
 import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
-  fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence,
+  fetchFarPlacements, fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence,
 } from '../api.js';
 import { applyAssistantLook } from './assistantAvatar.js';
 import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
@@ -359,6 +360,41 @@ export function updateShopProximity() {
     loadShopLandletInstances(entry, ++entry.loadToken);
   }
   updateInstanceLodTiers();
+  updateFarView();
+}
+
+// #3478 (part of #3418): distant landlets drawn from their products' far
+// models, in one shared group in the scene. Created on first use; the world
+// frame budget (#3396) paces every build, so this only schedules work.
+let shopFarView = null;
+function updateFarView() {
+  if (!shopFarView) {
+    const root = new THREE.Group();
+    root.name = 'shop-far-view';
+    scene.add(root);
+    shopFarView = createFarView({
+      queue: worldWorkQueue,
+      root,
+      fetchTile: fetchFarPlacements,
+      loadSource: async (templateId) => {
+        const template = findTemplate(templateId);
+        const source = template ? await loadFarViewSource(template) : null;
+        return source && { ...source, dispose: () => disposeObject(source.container) };
+      },
+      dimensionsFor: (templateId) => findTemplate(templateId)?.dimensions ?? null,
+      elevationFor: (landletId) => shopLandlets.get(landletId)?.record.elevationM ?? 0,
+      loadedLandletIds: () => {
+        const ids = new Set();
+        for (const [id, entry] of shopLandlets) if (entry.loaded) ids.add(id);
+        return ids;
+      },
+      getCamera: () => camera.position,
+      getView: () => ({ fovDeg: camera.fov, viewportHeightPx: window.innerHeight }),
+    });
+    // Read by the 390px e2e (#3480): draw calls and instances in view.
+    window.__shopFarViewStats = () => shopFarView.stats();
+  }
+  shopFarView.update();
 }
 
 // #3373: how big a placed item looks on screen right now (its bounding sphere's
