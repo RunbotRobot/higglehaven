@@ -97,4 +97,57 @@ describe('createFarView (#3478)', () => {
     view.dispose();
     expect(disposed).toEqual(['tpl']);
   });
+
+  // #3479: hand-over with the normal loader.
+  const scaleOf = (mesh, index) => {
+    const m = new THREE.Matrix4();
+    mesh.getMatrixAt(index, m);
+    return new THREE.Vector3().setFromMatrixScale(m).x;
+  };
+
+  it('hides a landlet\'s far instances in place the moment its real content has arrived, then rebuilds without it', async () => {
+    const loaded = new Set();
+    const { view, queue, root, advance, settle } = setup({ loaded, payloads: { '0,0': payload } });
+    await settle();
+    const mesh = root.children[0].children[0];
+    expect(mesh.count).toBe(3);
+    const hiddenIndexBefore = [0, 1, 2].filter((i) => scaleOf(mesh, i) === 0);
+    expect(hiddenIndexBefore).toEqual([]);
+    loaded.add('loaded'); // its arrival run has settled
+    advance(1000); view.update(); // no await, no queue: same frame
+    expect([0, 1, 2].filter((i) => scaleOf(mesh, i) === 0)).toHaveLength(1);
+    expect(root.children[0].children[0]).toBe(mesh); // still the same mesh, nothing popped
+    await queue.drain();
+    expect(root.children[0].children[0].count).toBe(2); // rebuilt without it
+  });
+
+  it('draws a landlet\'s far models again, ahead of other far work, as soon as the real one unloads', async () => {
+    const loaded = new Set(['loaded']);
+    const { view, queue, root, advance, settle } = setup({ loaded, payloads: { '0,0': payload } });
+    await settle();
+    expect(root.children[0].children[0].count).toBe(2);
+    loaded.delete('loaded'); // unloaded
+    advance(10); view.update(); // well inside the usual replan gap
+    const order = [];
+    queue.enqueue(() => order.push('nearby'), { priority: -1 });
+    queue.enqueue(() => order.push('far-late'), { priority: 1e6 - 1 });
+    queue.enqueue(() => order.push('far-urgent'), { priority: -1e6 });
+    await queue.drain();
+    expect(root.children[0].children[0].count).toBe(3);
+    expect(order[0]).toBe('far-urgent');
+  });
+
+  it('rebuilds when a landlet that was hidden in place unloads before the rebuild ran', async () => {
+    const loaded = new Set();
+    const { view, queue, root, advance, settle } = setup({ loaded, payloads: { '0,0': payload } });
+    await settle();
+    loaded.add('loaded');
+    advance(1000); view.update();
+    loaded.delete('loaded'); // unloads again before the queue ever rebuilt
+    advance(1000); view.update();
+    await queue.drain();
+    const mesh = root.children[0].children[0];
+    expect(mesh.count).toBe(3);
+    expect([0, 1, 2].filter((i) => scaleOf(mesh, i) === 0)).toEqual([]);
+  });
 });

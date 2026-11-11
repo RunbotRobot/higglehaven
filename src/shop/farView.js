@@ -7,9 +7,16 @@
 // and drawing never wait on it. Every dependency is passed in, so it runs in
 // the plain unit-test pool.
 //
-// Not here: the hand-over with the normal loader (fog, no gap, no double draw
-// at the moment a landlet loads) is #3479; a landlet that has started loading
-// is simply left out of this plan.
+// Hand-over with the normal loader (#3479, 3/4 of #3418): `loadedLandletIds`
+// means "landlets whose real content is fully drawn" (not merely "started
+// loading"), so a landlet keeps its far models until the loaded one has arrived
+// out of its fog (arrivalRun.js, #3407): no frame with neither. The moment a
+// landlet joins that set its far instances are hidden in place (a zero-scale
+// matrix, a cheap in-memory write, same frame), so there is no frame with both
+// either; the meshes are rebuilt without it later, behind nearby work. When a
+// landlet leaves the set (unload) the next plan is made at once and its builds
+// jump the queue, so the far version replaces the real one with the shortest
+// gap the frame budget allows.
 import * as THREE from 'three';
 import { farViewTilesInRange, farViewTileKey, decodeFarPlacementsPayload, planFarView, FAR_VIEW_RANGE_M, FAR_VIEW_TILE_M } from './farViewPlan.js';
 import { buildFarMeshes, triangleCount, farItemsSignature } from './farViewDraw.js';
@@ -31,7 +38,9 @@ const SOURCE_LOAD_GAP_MS = 500;
 const MAX_TILE_FETCHES_IN_FLIGHT = 1;
 const MAX_SOURCE_LOADS_IN_FLIGHT = 1;
 const FAR_BUILD_PRIORITY = 1e6; // minus apparent size: after any nearby build, whose priority is minus its size
+const URGENT_PRIORITY = -1e6; // #3479: an unloaded landlet's far models, ahead of everything
 const DISPOSE_PRIORITY = 1e9;
+const HIDDEN_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
 
 export function createFarView({
   queue, root, fetchTile, loadSource, dimensionsFor, elevationFor, loadedLandletIds, getCamera, getView,
@@ -55,6 +64,8 @@ export function createFarView({
   let lastTileStartAt = -Infinity;
   let lastSourceStartAt = -Infinity;
   let ownPending = 0; // units this view has queued and not yet run
+  let previousLoaded = new Set();
+  let urgent = false; // a landlet just unloaded: replan now, build first
 
   function startTile(tile) {
     const key = farViewTileKey(tile);
@@ -110,7 +121,7 @@ export function createFarView({
   function scheduleBuild(templateId, items, signature) {
     wanted.set(templateId, signature);
     const source = sources.get(templateId).source;
-    const priority = FAR_BUILD_PRIORITY - Math.max(...items.map((item) => item.px));
+    const priority = (urgent ? URGENT_PRIORITY : FAR_BUILD_PRIORITY) - Math.max(...items.map((item) => item.px));
     ownPending += 1;
     queue.enqueue(() => {
       ownPending -= 1;
@@ -121,7 +132,7 @@ export function createFarView({
       for (const mesh of meshes) object.add(mesh);
       root.add(object);
       const previous = drawn.get(templateId);
-      drawn.set(templateId, { signature, object, meshes });
+      drawn.set(templateId, { signature, object, meshes, items });
       if (previous) retire(previous);
     }, { group, priority });
   }
@@ -133,6 +144,23 @@ export function createFarView({
     root.remove(entry.object);
     ownPending += 1;
     queue.enqueue(() => { ownPending -= 1; for (const mesh of entry.meshes) mesh.dispose(); }, { priority: DISPOSE_PRIORITY });
+  }
+
+  // #3479: hides, in place, every drawn instance that belongs to one of
+  // `landletIds` (the real landlet has just finished arriving over it).
+  function hideLandlets(landletIds) {
+    for (const entry of drawn.values()) {
+      let touched = false;
+      entry.items.forEach((item, index) => {
+        if (!landletIds.has(item.landletId)) return;
+        for (const mesh of entry.meshes) mesh.setMatrixAt(index, HIDDEN_MATRIX);
+        touched = true;
+      });
+      if (touched) {
+        entry.hidden = true; // drawn with holes: a plan that wants the same list again must rebuild
+        for (const mesh of entry.meshes) mesh.instanceMatrix.needsUpdate = true;
+      }
+    }
   }
 
   function scheduleRemoval(templateId) {
@@ -191,12 +219,18 @@ export function createFarView({
 
     const loaded = loadedLandletIds();
     const loadedKey = [...loaded].sort().join('|');
+    if (loadedKey !== lastLoadedKey) {
+      const joined = new Set([...loaded].filter((id) => !previousLoaded.has(id)));
+      if (joined.size > 0) hideLandlets(joined);
+      if ([...previousLoaded].some((id) => !loaded.has(id))) urgent = true;
+      previousLoaded = new Set(loaded);
+    }
     const moved = lastPlanCamera
       ? Math.hypot(camera.x - lastPlanCamera.x, camera.y - lastPlanCamera.y, camera.z - lastPlanCamera.z) > REPLAN_MOVE_M
       : true;
     const changed = dirty || loadedKey !== lastLoadedKey;
     const since = t - lastPlanAt;
-    if (since < REPLAN_MIN_INTERVAL_MS) return;
+    if (since < REPLAN_MIN_INTERVAL_MS && !urgent) return;
     if (!changed && !moved && since < REPLAN_MAX_INTERVAL_MS) return;
     dirty = false;
     lastPlanAt = t;
@@ -217,10 +251,12 @@ export function createFarView({
     // Largest on screen first: the queue runs lower priority first.
     for (const [templateId, items] of plan.byTemplate) {
       const signature = farItemsSignature(items);
-      if (drawn.get(templateId)?.signature === signature && wanted.get(templateId) === signature) continue;
-      if (wanted.get(templateId) === signature) continue; // already queued
+      const current = drawn.get(templateId);
+      if (current?.signature === signature && !current.hidden && wanted.get(templateId) === signature) continue;
+      if (wanted.get(templateId) === signature && current?.signature !== signature) continue; // already queued
       scheduleBuild(templateId, items, signature);
     }
+    urgent = false;
     for (const templateId of drawn.keys()) {
       if (!plan.byTemplate.has(templateId) && wanted.get(templateId) !== null) scheduleRemoval(templateId);
     }

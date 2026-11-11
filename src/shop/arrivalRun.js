@@ -177,6 +177,12 @@ export function createArrivalRun({
         if (levels.done) finish(state);
       }
     },
+    // #3479: true once every cluster has finished arriving (fog gone, plain
+    // materials back): the landlet is fully drawn as itself. A landlet with
+    // nothing to show is settled at once.
+    settled() {
+      return disposed || states.length === 0;
+    },
     // Releases every fog and puts every original material back. Safe to call
     // twice, and after items have arrived.
     dispose() {

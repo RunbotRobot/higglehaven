@@ -385,7 +385,10 @@ function updateFarView() {
       elevationFor: (landletId) => shopLandlets.get(landletId)?.record.elevationM ?? 0,
       loadedLandletIds: () => {
         const ids = new Set();
-        for (const [id, entry] of shopLandlets) if (entry.loaded) ids.add(id);
+        // #3479: a landlet counts as loaded for the far view only once its real
+        // content has finished arriving out of its fog, so the far models stay
+        // until then and nothing is ever missing.
+        for (const [id, entry] of shopLandlets) if (entry.loaded && entry.arrivalRun?.settled()) ids.add(id);
         return ids;
       },
       getCamera: () => camera.position,
