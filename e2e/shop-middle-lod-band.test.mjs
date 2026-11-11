@@ -23,6 +23,7 @@ const CRATE_MODEL_PATH = path.join(REPO_ROOT, 'public', 'models', 'crate.glb');
 const LABEL = 'Middle LOD Band Suite Tester';
 const PRODUCT_NAME = 'Suite Middle LOD Band Product';
 const LARGE_PRODUCT_NAME = 'Suite Middle LOD Band Large Product';
+const TINY_PRODUCT_NAME = 'Suite Middle LOD Band Tiny Product';
 
 async function adminFetch(pathAndQuery, cookie, options = {}) {
   const response = await fetch(`${BASE_URL}/api${pathAndQuery}`, {
@@ -133,6 +134,24 @@ if (largeTemplateRes.status !== 200 && largeTemplateRes.status !== 201) {
 }
 const largeTemplate = largeTemplateBody.template;
 
+// #3443: a speck of an item (0.1 m across: ~13 px at 10 m, ~16 px at 8 m, under the 24 px swap-down
+// size) stands in for one brick of a big wall. Beside the avatar it must stay the real
+// model however small it looks; past the protected radius the size rule applies again.
+const tinyTemplateRes = await fetch(`${BASE_URL}/api/catalog`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', cookie: cookieHeader },
+  body: JSON.stringify({
+    name: TINY_PRODUCT_NAME, category: 'placeholder', color: '#8899aa',
+    dimensions: { width: 0.1, depth: 0.1, height: 0.1 },
+    sellerId, modelUrl: modelUpload.modelUrl, modelSizeBytes: modelUpload.sizeBytes, priceCents: 500,
+  }),
+});
+const tinyTemplateBody = await tinyTemplateRes.json();
+if (tinyTemplateRes.status !== 200 && tinyTemplateRes.status !== 201) {
+  throw new Error(`tiny catalog template create failed (${tinyTemplateRes.status}): ${JSON.stringify(tinyTemplateBody)}`);
+}
+const tinyTemplate = tinyTemplateBody.template;
+
 const { body: buildersBody } = await pageFetchJson('/api/builders');
 const me = buildersBody.builders.find((b) => b.label === LABEL);
 const { body: landletsBody } = await pageFetchJson(`/api/landlets?status=claimed&ownerBuilderId=${me.builderId}&limit=100`);
@@ -151,6 +170,15 @@ await pageFetchJson('/api/instances', {
   method: 'POST',
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ instanceId: largeInstanceId, landletId: landlet.landletId, templateId: largeTemplate.templateId, x: 10, y: 10 }),
+});
+
+const tinyInstanceId = `middle-lod-tiny-instance-${crypto.randomUUID()}`;
+const TINY_LOCAL_X = -10;
+const TINY_LOCAL_Y = -10;
+await pageFetchJson('/api/instances', {
+  method: 'POST',
+  headers: { 'content-type': 'application/json' },
+  body: JSON.stringify({ instanceId: tinyInstanceId, landletId: landlet.landletId, templateId: tinyTemplate.templateId, x: TINY_LOCAL_X, y: TINY_LOCAL_Y }),
 });
 
 const landletCenterX = landlet.center.x;
@@ -236,6 +264,26 @@ const bandInGapFromNear = await lodBand();
 console.log('small item inside the size hysteresis band, approaching from near (should still be "near"):', bandInGapFromNear);
 await teleportShopAvatar(25);
 
+// #3443: the speck, beside the avatar (8 m away on the ground) and then well past the
+// protected radius (30 m away).
+const tinyWorldX = landletCenterX + TINY_LOCAL_X;
+const tinyWorldY = landletCenterY + TINY_LOCAL_Y;
+async function teleportToTinyOffset(offsetM) {
+  await page.evaluate(([tx, ty]) => {
+    window.__testTeleportShopAvatar(tx, ty, 0);
+    window.__testForceShopProximityCheck();
+  }, [tinyWorldX + offsetM, tinyWorldY]);
+}
+await teleportToTinyOffset(8);
+await page.waitForTimeout(300);
+const tinyBandBeside = await lodBand(tinyInstanceId);
+console.log('speck 8 m from the avatar (should be "near": protected):', tinyBandBeside);
+await teleportToTinyOffset(30);
+await page.waitForTimeout(300);
+const tinyBandAway = await lodBand(tinyInstanceId);
+console.log('speck 30 m away (should be "middle": size rule applies):', tinyBandAway);
+await teleportShopAvatar(25);
+
 // #3254: the proxy takes the model's own color, not the template's generic
 // placeholder (#8899aa here). crate.glb's material is orange (red-dominant).
 const proxyColorHex = await page.evaluate((id) => window.__testShopInstanceLodProxyColor(id), instanceId);
@@ -251,6 +299,8 @@ const pass = !!landlet
   && bandInHysteresisGap === 'middle'
   && bandAfterReapproach === 'near'
   && bandInGapFromNear === 'near'
+  && tinyBandBeside === 'near'
+  && tinyBandAway === 'middle'
   && errors.length === 0;
 await finish(browser, {
   pass,
