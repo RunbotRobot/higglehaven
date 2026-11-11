@@ -29,6 +29,7 @@ import {
 import { fireNotification } from './notifications.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 import { assertNotFleetAccount } from './fleet.js';
+import { isAssistantUsername } from './fleet-agents.js';
 
 // #3145: blocks key on user_id and friendships now do too, so the friendship
 // paths check blocks directly on user ids.
@@ -1239,11 +1240,11 @@ function avatarPresenceFromRow(row) {
     heading: row.heading,
     flying: Boolean(row.flying),
     updatedAt: row.updated_at,
-    // #3445: a fleet account is shown as a named assistant. Derived here from
-    // users.is_fleet, never from anything a client sends; present only for a
-    // fleet account (the key is absent for everyone else) and carries the name
-    // to show, which is the agent name set at fleet login.
-    ...(row.is_fleet === 1 ? { assistant: { name: row.fleet_username } } : {}),
+    // #3445: an assistant account is shown as a named assistant. Derived here
+    // from users.is_fleet plus the username being one of the assistants' agent
+    // names, never from anything a client sends; the key is absent for everyone
+    // else, coding sessions' accounts included (owner decision 2026-11-11).
+    ...(row.is_fleet === 1 && isAssistantUsername(row.fleet_username) ? { assistant: { name: row.fleet_username } } : {}),
   };
 }
 
