@@ -24,15 +24,16 @@ function isCropped(crop) {
 // - no template, or no real model (a plain coloured box has nothing to share);
 // - flooring (a thin tinted slab built by its own path);
 // - a community sign or calendar (each needs its own sprite and hit target);
-// - a placement the builder cropped (its geometry is its own).
-// An extensible template (a brick that can be cut down) is batchable while the
-// instance is uncropped; the renderer (#3402) must confirm the uncropped
-// cropped-loader result matches the plain model before relying on that.
-// The scale is part of the key so a batch's cached dimensions are one number.
+// - a placement the builder cropped (its geometry is its own);
+// - an extensible template (one the builder can cut down): it loads through the
+//   cropping path, whose geometry is not guaranteed to equal the plain model's,
+//   so it keeps its own mesh until that is verified (#3402 left it out).
+// The scale is part of the key so every placement in a batch is one size.
 export function batchKey(instance, template) {
   if (!instance || !template) return null;
   if (!template.modelUrl) return null;
   if (template.metadata?.flooring === true) return null;
+  if (template.metadata?.extensible) return null;
   if (instance.isCommunitySign || instance.isCommunityCalendar) return null;
   if (isCropped(instance.crop)) return null;
   const scale = instance.scale ?? 1;
@@ -83,4 +84,22 @@ export function placementUserData(instance, template) {
     bundleId: instance.bundleId ?? null,
     label: instance.label ?? null,
   };
+}
+
+// #3402: how high a placement reaches, for growing the Shop dome without
+// measuring geometry. `dims` is meshDimensions(handle) (already scaled). An
+// upright or turned-about-vertical item reaches half its height above its
+// centre; a tilted one can reach as far as half its diagonal, so that is used
+// (an upper bound, never too low).
+export function placementTopZ(z, rotationX, rotationY, dims) {
+  const tilted = (rotationX ?? 0) !== 0 || (rotationY ?? 0) !== 0;
+  return z + (tilted ? 0.5 * Math.hypot(dims.width, dims.depth, dims.height) : dims.height / 2);
+}
+
+// #3402: the placement handle a raycast hit on a batch's instanced mesh refers
+// to: `handles` is the batch's handle list in instance order (the same order
+// the instance matrices were written), `instanceId` is three.js's hit field.
+export function handleForInstanceHit(handles, instanceId) {
+  if (!Array.isArray(handles) || !Number.isInteger(instanceId)) return null;
+  return handles[instanceId] ?? null;
 }

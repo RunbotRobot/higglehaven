@@ -56,7 +56,9 @@ import * as THREE from 'three';
 import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
-import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
+import { setInstanceLodState, buildInstanceLodProxy, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
+import { groupPlacements, placementTopZ } from './instanceBatching.js';
+import { buildInstancedBatch } from './instancedBatches.js';
 import { apparentSizePx, nextIsMiddle, fullDetailFloorPx } from './lodTier.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
@@ -73,7 +75,7 @@ import {
   animationForAvatar, locomotionStateFor,
 } from './otherAvatarModels.js';
 import { shopMaxRadiusM, shopFlightState, shopFlightAltitudeM } from './flightMovement.js';
-import { growShopDomeIfNeeded } from './sky.js';
+import { growShopDomeIfNeeded, growShopDomeToHeight } from './sky.js';
 import {
   SHOP_BASE_LOAD_RADIUS_M, SHOP_BASE_UNLOAD_RADIUS_M, shopUnloadRadiusM, horizontalDistanceM, pickLandletsToLoad,
 } from './loadRadius.js';
@@ -1094,12 +1096,76 @@ async function loadShopLandletInstances(entry, myToken) {
   });
   entry.arrivalRun = run;
   exposeArrivalStats(run);
-  for (const instance of instances) {
+  // #3402: placements that look exactly the same (same product, same size, no
+  // crop) are drawn by one instanced mesh per model part instead of one cloned
+  // mesh each; everything else is built one by one as before.
+  const { batches, singles } = groupPlacements(instances, findTemplate);
+  for (const members of batches.values()) {
+    worldWorkQueue.enqueue(() => buildAndAttachBatch(entry, members, myToken, group, run), {
+      group,
+      priority: Math.min(...members.map((instance) => instanceLoadPriority(entry, instance))),
+    });
+  }
+  for (const instance of singles) {
     worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, myToken, run), {
       group,
       priority: instanceLoadPriority(entry, instance),
     });
   }
+}
+
+// #3402: one batch of identical placements. Each placement still gets its own
+// lightweight handle (createPlacementHandle) in entry.objects, so collision,
+// sit/lean search, attention and reviews see it like any placed item; only the
+// drawing is shared. A model that cannot be drawn this way falls back to
+// ordinary per-item meshes for the whole batch.
+async function buildAndAttachBatch(entry, members, myToken, group, run) {
+  const settleAll = () => { for (const instance of members) run?.itemSettled(instance.instanceId); };
+  if (myToken !== entry.loadToken) { // superseded while queued
+    settleAll();
+    return;
+  }
+  const template = findTemplate(members[0].templateId);
+  const source = await loadBatchSource(template);
+  if (!source) {
+    for (const instance of members) {
+      worldWorkQueue.enqueue(() => buildAndAttachInstance(entry, instance, myToken, run), {
+        group,
+        priority: instanceLoadPriority(entry, instance),
+      });
+    }
+    return;
+  }
+  if (myToken !== entry.loadToken) {
+    // Same hazard and same e2e-visible counter as buildAndAttachInstance below.
+    disposeObject3D(source.container);
+    window.__shopInstanceDisposedCount = (window.__shopInstanceDisposedCount ?? 0) + 1;
+    settleAll();
+    return;
+  }
+  const handles = members.map((instance) => createPlacementHandle(instance, template));
+  for (const handle of handles) entry.group.add(handle);
+  const batch = buildInstancedBatch(source.parts, handles);
+  batch.container = source.container;
+  // One root for the batch's instanced meshes: the arrival dissolve (#3407)
+  // swaps the materials of everything under the root it is given, and unload
+  // removes the root.
+  batch.root = new THREE.Group();
+  for (const mesh of batch.meshes) batch.root.add(mesh);
+  entry.group.add(batch.root);
+  entry.batches.push(batch);
+  let topZ = -Infinity;
+  for (const handle of handles) {
+    entry.objects.push(handle);
+    topZ = Math.max(topZ, entry.group.position.z + placementTopZ(handle.position.z, handle.rotation.x, handle.rotation.y, meshDimensions(handle)));
+    registerShopReview(handle, entry);
+  }
+  growShopDomeToHeight(topZ);
+  // #3407: the batch dissolves in with its first member's cluster; the other
+  // members have nothing of their own to dissolve, so they settle at once and
+  // never hold their clusters' fog.
+  run?.itemReady(members[0].instanceId, batch.root);
+  for (const instance of members.slice(1)) run?.itemSettled(instance.instanceId);
 }
 
 // How soon an item should be built: the bigger it will look on screen, the
