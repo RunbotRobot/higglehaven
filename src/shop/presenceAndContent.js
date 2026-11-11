@@ -269,6 +269,23 @@ let shopLastReportedFlying; // #2043: same undefined-until-first-report shape as
 // comment on why that fixed assumption produces a visible freeze/catch-up
 // snap under an uneven poll cadence) }.
 export const shopOtherAvatars = new Map();
+
+// #3447: the assistant, if any, whose drawn avatar a raycast hit belongs to.
+// Walks up from the hit mesh to the avatar's group; only assistants answer a tap.
+export function assistantFromHit(hit) {
+  for (const entry of shopOtherAvatars.values()) {
+    if (!entry.assistantName || !entry.userId) continue;
+    for (let node = hit.object; node; node = node.parent) {
+      if (node === entry.group) return { userId: entry.userId, name: entry.assistantName };
+    }
+  }
+  return null;
+}
+
+// #3447: every assistant avatar currently drawn, as raycast targets.
+export function assistantGroups() {
+  return [...shopOtherAvatars.values()].filter((entry) => entry.assistantName && entry.userId).map((entry) => entry.group);
+}
 // #2045: templateId -> when its model last failed to load (fail open: the
 // default body is shown and the load is retried only after
 // CUSTOM_AVATAR_RETRY_AFTER_MS, see otherAvatarModels.js).
@@ -897,6 +914,7 @@ export async function pollNearbyPresenceIfNeeded(now) {
     entry.equippedAvatar = normalizeEquippedAvatar(avatar.equippedAvatar); // #2045
     entry.equippedAnimation = normalizeEquippedAnimation(avatar.equippedAnimation); // #3230
     applyAssistantLook(entry, avatar.assistant); // #3445: a fleet account is drawn as a named assistant
+    entry.userId = avatar.userId ?? null; // #3447: the account to ask when a shopper taps an assistant
   }
   // #2436: a single poll missing an avatar that's genuinely still nearby
   // (report/poll cadence phase gap, or the avatar's own report briefly
@@ -1104,6 +1122,7 @@ function despawnOtherShopAvatars() {
 function refreshOtherShopAvatarsDiagnostic() {
   window.__shopOtherAvatars = [...shopOtherAvatars.entries()].map(([builderId, entry]) => ({
     builderId, x: entry.toX, y: entry.toY, z: entry.toZ, heading: entry.toHeading,
+    userId: entry.userId ?? null, // added for #3447 -- e2e taps an assistant by its account, as it cannot aim at a pixel
     assistantName: entry.assistantName ?? null, // added for #3445 -- e2e needs to see that a fleet avatar carries its name tag and shirt, and an ordinary one does not
     hasAssistantShirt: Boolean(entry.assistantShirt), // added for #3445, same reason
     bodyTemplateId: entry.bodyTemplateId, // added for #2045 -- e2e needs to see which model each other avatar actually drew

@@ -74,6 +74,22 @@
         <button type="submit">Send</button>
       </form>
     </div>
+    <!-- #3447 (part of #3444): the panel a shopper gets on tapping an assistant
+         in the world (src/shop/assistantChat.js). The close button is in the
+         upper right and ends the conversation, so an assistant is never left
+         waiting on someone who walked away. -->
+    <div id="assistant-chat-panel" role="dialog" aria-labelledby="assistant-chat-name" hidden>
+      <div id="assistant-chat-header">
+        <div id="assistant-chat-title"><span id="assistant-chat-name"></span> <span id="assistant-chat-badge">assistant</span></div>
+        <button id="assistant-chat-close" type="button" aria-label="End the conversation and close">&times;</button>
+      </div>
+      <div id="assistant-chat-log" role="log" aria-live="polite"></div>
+      <div id="assistant-chat-status" role="status" aria-live="polite"></div>
+      <form id="assistant-chat-form">
+        <input id="assistant-chat-input" type="text" maxlength="280" placeholder="Ask a question…" autocomplete="off" />
+        <button id="assistant-chat-send" type="submit">Send</button>
+      </form>
+    </div>
     <!-- #2818 (sub-issue of #2780, itself sub-issue of #2777): proximity
          voice chat's mic toggle. Same live trustTier-driven visibility as
          #shop-nearby-chat-btn above (src/shop/voiceChat.js's own
