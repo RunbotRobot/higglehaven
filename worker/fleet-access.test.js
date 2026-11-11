@@ -341,4 +341,46 @@ describe('Fleet assistants: agent names', () => {
     expect(ordinary).toBeDefined();
     expect('assistant' in ordinary).toBe(false);
   });
+
+  // #3445: nearby chat says who is speaking only when it is an assistant.
+  it('nearby chat lines carry the assistant flag for an assistant sender only', async () => {
+    const admin = await signupAdmin('fleet-chat-admin');
+    const landletId = 'fleet-chat-landlet';
+    await createGreenbeltLandletAs(admin.session, landletId);
+    const viewer = await signupBuilder('fleet-chat-viewer');
+    const other = await signupBuilder('fleet-chat-ordinary');
+    const coding = await fleetLogin('higglehaven7');
+    const assistant = await fleetLogin('assistant-sorrel');
+    const verify = (userIdSql, bind) => env.DB.prepare(`UPDATE users SET trust_tier = 'id_verified' WHERE user_id = ${userIdSql}`).bind(bind).run();
+    const setPresence = (userIdSql, bind) => env.DB.prepare(`
+      INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
+      VALUES (${userIdSql}, ?, 0, 0, 0, 0, 0, ?)
+      ON CONFLICT (user_id) DO UPDATE SET landlet_id = excluded.landlet_id, updated_at = excluded.updated_at
+    `).bind(bind, landletId, new Date().toISOString()).run();
+    const byBuilder = '(SELECT user_id FROM builders WHERE builder_id = ?)';
+    await verify(byBuilder, viewer.builderId);
+    await verify(byBuilder, other.builderId);
+    await verify('?', assistant.body.user.userId);
+    await verify('?', coding.body.user.userId);
+    await setPresence(byBuilder, viewer.builderId);
+    await setPresence(byBuilder, other.builderId);
+    await setPresence('?', assistant.body.user.userId);
+    await setPresence('?', coding.body.user.userId);
+
+    const say = (token, text) => fleetFetch('/api/nearby-chat', {
+      method: 'POST', key: FLEET_KEY, body: JSON.stringify({ text }),
+      headers: { cookie: `hh_session=${token}` },
+    });
+    // The assistant and the coding session speak through their own sessions;
+    // the ordinary shopper through the standard test helper.
+    expect((await say(assistant.token, 'Hello, I can help.')).status).toBe(201);
+    expect((await say(coding.token, 'coding session line')).status).toBe(201);
+    expect((await api('/nearby-chat', other.session({ method: 'POST', body: JSON.stringify({ text: 'shopper line' }) }))).response.status).toBe(201);
+
+    const { body } = await api('/nearby-chat', viewer.session());
+    const line = (text) => body.messages.find((m) => m.text === text);
+    expect(line('Hello, I can help.').assistant).toEqual({ name: 'Sorrel' });
+    expect('assistant' in line('coding session line')).toBe(false);
+    expect('assistant' in line('shopper line')).toBe(false);
+  });
 });
