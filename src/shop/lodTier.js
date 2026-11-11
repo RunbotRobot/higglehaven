@@ -50,9 +50,17 @@ export const MAX_MID_DETAIL_ITEMS = 1500;
 // bricks were simplified at every step. Protected items do not count against the cap
 // either, so the rest of the world's budget is what is left over.
 export const NEAR_FULL_DETAIL_M = 10;
+// #3443: the protection has its own hysteresis, like every other boundary here.
+// An item enters it at NEAR_FULL_DETAIL_M and leaves only past this distance, so
+// standing, or walking back and forth, at the 10 m line does not toggle the
+// bricks that straddle it (a simulation of the 829-brick wall flipped thousands
+// of tier changes in 200 ticks of a few centimetres' jitter without this).
+export const NEAR_FULL_DETAIL_EXIT_M = 13;
 
-export function isNearFullDetail(groundDistanceM) {
-  return groundDistanceM <= NEAR_FULL_DETAIL_M;
+// `wasNear` is whether the item was protected on the previous tick (false for
+// an item with no history, which uses the plain enter distance).
+export function isNearFullDetail(groundDistanceM, wasNear = false) {
+  return groundDistanceM <= (wasNear ? NEAR_FULL_DETAIL_EXIT_M : NEAR_FULL_DETAIL_M);
 }
 
 // The item's diameter on screen in CSS pixels: a sphere of `radiusM` at
