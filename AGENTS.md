@@ -717,6 +717,38 @@ most likely to come up again.
   The principle: the owner's attention is the scarcest thing in the
   project, so every message to them has to earn its place.
 
+- **Higgles are earned one way: by building landlets. Nothing else
+  pays them.** (2026-11-10.) An idea that users would be paid higgles
+  for helping other users was dropped before anything was built. The
+  owner: "there is ambiguity in who gets paid how much. It's also an
+  abuse vector. And I want to revert back to the principle that the only
+  way to get higgles is by building lándlets." This is the same call as
+  the review bonus reversed in docs/SPEC.md v20. A reward whose
+  attribution rule is fuzzy (who helped, how much, was it real) is an
+  abuse vector, and a currency with one source stays legible. Do not
+  propose a second way to earn higgles; a new incentive has to be
+  something other than higgles, or it goes to the owner.
+
+- **Help comes from the fleet, in the world: agents are named
+  assistants that shoppers can see, who pause their work to help and
+  hand off when busy.** (2026-11-10, #3444.) With no paid user helpers,
+  the owner chose the fleet: "people can see higglehaven agents milling
+  around improving the world... The parallel there is a worker stocking
+  a shelf. If a customer comes up to them and asks them a question, the
+  worker practices good customer service skills and pauses their task
+  to assist", and hands off with a friendly word about what they are
+  going back to, "where not a security risk". Fleet accounts are
+  therefore visible to shoppers, never hidden, and each agent has a
+  real name in place of its session name. The world should show the
+  work that goes into it, the way a shop floor does. (higglehaven1's
+  limits on this, not the owner's words: what an agent says about its
+  work is a sentence written for the public, never a card's title or
+  note; a shopper's text never reaches a session that can merge or
+  deploy; and until the owner confirms what their CCO approved,
+  assistants give how-to help only and send money, disputes and account
+  questions to the formal contact channel, per docs/SPEC.md P122 and
+  #1419.)
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
@@ -1089,6 +1121,20 @@ cost when it happens anyway:
   of #631) still ended up with three sessions independently picking it
   up despite this convention already existing, i.e. skipping step 3
   above is exactly what turns an advisory claim into a real collision.
+- **Set `public_line` in the same write that sets a card `in_progress`
+  (#3446, part of #3444).** Fleet sessions are visible to shoppers as
+  assistants, and an assistant can say what it is working on. The card's
+  title and note are never shown to anyone; `public_line` is the one
+  sentence that is, so write it for a shopper: present tense, plain words,
+  about what the world looks like, not what the code does ("smoothing the
+  edge of the sky"). For a card about security, moderation, money or
+  another person's account, use the neutral line ("tidying up behind the
+  scenes"). The API rejects a line that is not one short sentence or that
+  carries an issue number, a file name, a path, a URL or a route, and it
+  clears the line itself when the card is `done` or you stand down. On the
+  direct-D1 fallback there is no validator, so hold yourself to the same
+  rules: write the column only with a sentence you would be happy for a
+  shopper to read.
 - **Claim one task at a time.** Bundling several small unclaimed items
   into a single session/PR means one collision on any of them forces
   rework on the whole PR, not just that item. Prefer separate claims —

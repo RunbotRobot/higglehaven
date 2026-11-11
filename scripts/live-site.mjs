@@ -60,7 +60,12 @@ if (!isLocal && process.env.HTTPS_PROXY) launchOptions.proxy = { server: process
 
 const device = options.desktop ? DESKTOP : PHONE;
 const browser = await chromium.launch(launchOptions);
+// Only for a local run against a wrangler dev started with its own throwaway
+// FLEET_ACCESS_KEY (the e2e): there is no proxy to add the header. On the live
+// site the proxy adds it and this stays unset. Never printed.
+const localFleetKey = process.env.LIVE_SITE_FLEET_KEY;
 const context = await browser.newContext({
+  ...(localFleetKey && isLocal ? { extraHTTPHeaders: { 'x-fleet-key': localFleetKey } } : {}),
   viewport: { width: device.width, height: device.height },
   deviceScaleFactor: device.deviceScaleFactor,
   isMobile: device.isMobile,

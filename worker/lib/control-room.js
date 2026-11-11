@@ -121,6 +121,7 @@ export function controlRoomTaskFromRow(row) {
     url: row.url,
     pr: row.pr_url,
     waitingOn: row.waiting_on,
+    publicLine: row.public_line ?? null,
     viewed: !!row.viewed,
     awaitingClaude: !!row.awaiting_claude,
     lastReplyFrom: row.last_reply_from,
@@ -234,7 +235,39 @@ export async function handleControlRoom(request, env, route, url) {
     if (request.method === 'POST') return handleControlRoomReplyCreate(request, env, db, taskId);
     return json({ error: 'Not found' }, 404);
   }
+  if (route.length === 2 && route[1] === 'agents' && request.method === 'GET') {
+    await requireControlRoomAccess(request, env, db);
+    return json({ agents: await readFleetAgentWork(db) });
+  }
   return json({ error: 'Not found' }, 404);
+}
+
+// #3446 (part of #3444): what each fleet session is doing, in the only form
+// that may leave the Control Room: the session name, whether it has a card in
+// progress, and that card's public sentence. Nothing else from a card (title,
+// note, numbers, urls) is read here, so a caller cannot leak it by accident.
+// The roster is every session name that has ever held a card; one that holds
+// nothing now is free. When several cards are in progress the most recently
+// updated one's sentence is used. Used by the Worker's own presence code
+// (assistants, #3449) as well as the access-gated route above.
+export const FLEET_SESSION_NAME_PATTERN = /^higglehaven\d+$/;
+export async function readFleetAgentWork(db) {
+  const { results } = await db.prepare(`
+    SELECT session, status, public_line FROM control_room_tasks
+    WHERE session LIKE 'higglehaven%'
+    ORDER BY updated_at DESC
+  `).all();
+  const agents = new Map();
+  for (const row of results) {
+    if (!FLEET_SESSION_NAME_PATTERN.test(row.session)) continue;
+    const entry = agents.get(row.session) ?? { session: row.session, busy: false, publicLine: null };
+    if (row.status === 'in_progress') {
+      if (!entry.busy) entry.publicLine = row.public_line ?? null;
+      entry.busy = true;
+    }
+    agents.set(row.session, entry);
+  }
+  return [...agents.values()].sort((a, b) => a.session.localeCompare(b.session, 'en', { numeric: true }));
 }
 
 // Read access stays open to any Control Room caller with the right access
@@ -309,6 +342,32 @@ function imageUrlValue(value, field) {
   const url = labelValue(value, field);
   if (/^https?:\/\//i.test(url) || url.startsWith('/uploads/')) return url;
   throw new HttpError(`${field} must be an http:// or https:// URL, or a /uploads/ path`, 400);
+}
+
+// #3446 (part of #3444): the public sentence about what a fleet session is
+// working on, shown to shoppers by name beside an assistant. It is written for
+// the public on purpose, so it is validated hard: one short sentence in a
+// shopper's terms, with nothing that could carry internals. The card's own
+// title and note stay private.
+export const PUBLIC_LINE_MAX_LENGTH = 140;
+export function publicLineValue(value) {
+  const text = stringValue(value, 'publicLine').trim();
+  if (text.length > PUBLIC_LINE_MAX_LENGTH) {
+    throw new HttpError(`publicLine must be ${PUBLIC_LINE_MAX_LENGTH} characters or fewer`, 400);
+  }
+  if (/[\r\n]/.test(text) || /[.!?]\s+\S/.test(text)) {
+    throw new HttpError('publicLine must be a single sentence', 400);
+  }
+  if (/#\s*\d/.test(text) || /\b(issue|pr|pull request|ticket)\s*#?\d/i.test(text)) {
+    throw new HttpError('publicLine must not mention an issue or pull request number', 400);
+  }
+  if (/[\\/`]/.test(text) || /\w\.(js|mjs|ts|css|html|json|sql|md|yml|yaml)\b/i.test(text)) {
+    throw new HttpError('publicLine must not contain a file path, file name or route', 400);
+  }
+  if (/:\/\/|\bwww\.|\b[a-z0-9-]+\.(com|net|org|io|dev|app)\b/i.test(text)) {
+    throw new HttpError('publicLine must not contain a URL', 400);
+  }
+  return text;
 }
 
 // Control Room tracking-task sub-issue links (e.g. issue-326 listing #583-
@@ -419,10 +478,10 @@ async function handleControlRoomTaskCreate(request, env, db) {
       INSERT INTO control_room_tasks
         (task_id, kind, number, note_number, title, status, session, posted_by, tag, url, pr_url,
          waiting_on, image_url, sub_issues, sub_issue_summaries, created_at, updated_at,
-         last_reply_from, last_reply_at)
+         last_reply_from, last_reply_at, public_line)
       VALUES (?, ?, ?, ${autoAssignNoteNumber
         ? '(SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks)'
-        : '?'}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        : '?'}, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       taskId,
       canonicalKind,
@@ -446,6 +505,8 @@ async function handleControlRoomTaskCreate(request, env, db) {
       // settingWaitingOnOwner branch (#2254).
       waitingOn === 'owner' ? canonicalReplyFrom(postedBy) : null,
       waitingOn === 'owner' ? now : null,
+      // #3446: never stored on a card that is already done.
+      body.publicLine && body.status !== 'done' ? publicLineValue(body.publicLine) : null,
     ),
   ];
   if (waitingOn === 'owner') {
@@ -511,6 +572,14 @@ async function handleControlRoomTaskUpdate(request, env, db, taskId) {
     setIfPresent('note_author', body.note ? caller : null);
   }
   if (body.tag !== undefined) setIfPresent('tag', body.tag ? labelValue(body.tag, 'tag') : null);
+  // #3446: the public sentence is set with the claim and goes away with it: a
+  // card that becomes done, or a session standing down (session cleared),
+  // clears it, whatever else this request says, so a stale "what I'm working
+  // on" never outlives the work.
+  const endsTheWork = (body.status !== undefined && body.status === 'done')
+    || (body.session !== undefined && !body.session);
+  if (endsTheWork) setIfPresent('public_line', null);
+  else if (body.publicLine !== undefined) setIfPresent('public_line', body.publicLine ? publicLineValue(body.publicLine) : null);
   if (body.prUrl !== undefined) setIfPresent('pr_url', body.prUrl ? urlValue(body.prUrl, 'prUrl') : null);
   if (body.waitingOn !== undefined) setIfPresent('waiting_on', normalizedIncomingWaitingOn);
   // #1550: settingWaitingOnOwner inserts a real linked reply below (the

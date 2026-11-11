@@ -79,8 +79,8 @@ export async function handleFleetLogin(request, env, db, url, keyOk) {
   // only prove a mailbox and a person; it has neither and needs neither.
   const email = `${name}@fleet.invalid`;
   await db.prepare(`
-    INSERT INTO users (user_id, email, password_hash, username, email_canonical, email_verified_at, age_attested_at, is_fleet)
-    SELECT ?, ?, 'fleet-account-no-password', ?, ?, ?, ?, 1
+    INSERT INTO users (user_id, email, password_hash, username, email_canonical, email_verified_at, age_attested_at, is_fleet, trust_tier)
+    SELECT ?, ?, 'fleet-account-no-password', ?, ?, ?, ?, 1, 'credit_card'
     WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = ? OR email = ?)
   `).bind(userId, email, name, email, now, now, name, email).run();
 
@@ -88,6 +88,12 @@ export async function handleFleetLogin(request, env, db, url, keyOk) {
   // Never sign in as a real person who happens to hold this username.
   if (!user || user.is_fleet !== 1) {
     throw new HttpError('That name belongs to a regular account', 409);
+  }
+  // #3430: the app's verify step (age plus card) would otherwise block a fleet
+  // account at its first screen, and there is no card to give. The lowest
+  // verified tier clears it; also repairs an account made before this.
+  if (user.trust_tier === 'none') {
+    await db.prepare("UPDATE users SET trust_tier = 'credit_card' WHERE user_id = ? AND is_fleet = 1").bind(user.user_id).run();
   }
   await getOrCreateBuilderForUser(db, user);
   const token = await createSession(db, user.user_id);
