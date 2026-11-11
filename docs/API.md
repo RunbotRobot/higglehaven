@@ -4244,6 +4244,14 @@ Decisions recorded for this read (#3417):
   `FAR_PLACEMENT_CACHE_TTL_S` if real traffic ever approaches the daily D1 read
   allowance.
 
+Client side (#3477, #3418): `src/shop/farViewPlan.js` chooses what the far view
+draws from these tiles. Landlets the normal loader has loaded are left out (no
+double draw); an item narrower than 1 CSS pixel on screen is dropped
+(`FAR_VIEW_MIN_PX`); and a phone-class device keeps at most 4,000 far instances
+and 400,000 far triangles in view, the smallest on screen dropped first. Tiles
+within 2,500 m of the avatar are read, nearest first, once when they come into
+range.
+
 ### `POST /api/landlets`
 
 Creates a landlet. `landletId` is optional; if omitted, the Worker generates
