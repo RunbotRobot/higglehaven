@@ -30,6 +30,7 @@ import { fireNotification } from './notifications.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
 import { assertNotFleetAccount } from './fleet.js';
 import { isAssistantUsername } from './fleet-agents.js';
+import { onShiftAssistantRowsFor } from './assistant-shift.js';
 
 // #3145: blocks key on user_id and friendships now do too, so the friendship
 // paths check blocks directly on user ids.
@@ -322,7 +323,10 @@ export async function handlePresence(request, db, route, url) {
     // own discretion to respect. Never withhold the caller's own row from
     // themselves (irrelevant here, this query already excludes user_id =
     // self) or from GET .../me (that endpoint is "where was I," unaffected).
-    const visible = results.filter((row) => !row.flying);
+    // #3449: assistants on shift stand on public land and report no position of
+    // their own; the server places them (assistant-shift.js).
+    const shiftRows = await onShiftAssistantRowsFor(db, landletId, [sessionBuilder.user_id, ...results.map((row) => row.user_id)]);
+    const visible = [...results, ...shiftRows].filter((row) => !row.flying);
     const visibleIds = visible.map((row) => row.builder_id);
     const [equipped, animations] = await Promise.all([
       equippedAvatarsByBuilder(db, visibleIds),
@@ -1265,7 +1269,12 @@ function avatarPresenceFromRow(row) {
     // from users.is_fleet plus the username being one of the assistants' agent
     // names, never from anything a client sends; the key is absent for everyone
     // else, coding sessions' accounts included (owner decision 2026-11-11).
-    ...assistantFlagFromRow(row),
+    // #3449: an avatar's flag also says whether the assistant is helping someone
+    // right now (chat lines keep the bare flag).
+    ...(() => {
+      const flag = assistantFlagFromRow(row);
+      return flag.assistant ? { assistant: { ...flag.assistant, busy: Boolean(row.assistant_busy) } } : {};
+    })(),
   };
 }
 

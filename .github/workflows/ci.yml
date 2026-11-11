@@ -198,16 +198,45 @@ jobs:
       # Retries once on failure too, same rationale/shape as the shard
       # retry below, as a fallback for any other transient apt/network
       # issue this step's install-deps step might still hit.
+      #
+      # #3488: on 2026-11-11 the runners' DNS could not resolve any Ubuntu
+      # apt mirror for over an hour (security.ubuntu.com, archive.ubuntu.com),
+      # so every shard on every branch died here before running a test, and
+      # no retry inside the job could outlast it. Only the --with-deps half
+      # needs apt; the browser itself comes from Playwright's own CDN. So
+      # after the two --with-deps attempts, fall back to installing the
+      # browser alone and prove it launches: if the runner image already has
+      # Chromium's shared libraries the shard carries on, and if it does not
+      # the launch check fails the job loudly, so this never turns a missing
+      # dependency into a confusing test failure later.
+      #
+      # Each --with-deps attempt is capped at four minutes: under that outage
+      # apt retried for about ten minutes per attempt, so a shard spent ~20
+      # minutes failing before the fallback even started (measured on the
+      # run for PR #3489). A healthy install takes one to two minutes; if a
+      # slow-but-working one is ever cut off, the browser-only fallback below
+      # (which that run proved on the real runners) takes over.
       - run: |
           for attempt in 1 2; do
-            if npx playwright install --with-deps chromium; then
+            if timeout 240 npx playwright install --with-deps chromium; then
               exit 0
             fi
             echo "Attempt $attempt of playwright install failed — retrying after a short pause in case it was an apt-mirror hiccup..." >&2
             sleep 10
           done
-          echo "playwright install failed twice — treating as a real failure, not a transient one." >&2
-          exit 1
+          echo "playwright install --with-deps failed twice (apt mirrors unreachable?) — installing the browser alone from Playwright's own CDN and checking it launches." >&2
+          npx playwright install chromium
+          node --input-type=module -e "
+            import { chromium } from 'playwright';
+            try {
+              const browser = await chromium.launch();
+              await browser.close();
+            } catch (error) {
+              console.error('chromium does not launch without the apt-installed libraries:', error.message);
+              process.exit(1);
+            }
+          "
+          echo "Browser-only install launches; continuing without --with-deps (apt was unavailable)." >&2
       # .dev.vars is gitignored (wrangler's standard local-only-override
       # mechanism — see docs/API.md's own note on it), so CI recreates the
       # one value e2e/run-all.mjs's own wrangler dev needs. Not a real

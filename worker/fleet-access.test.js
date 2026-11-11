@@ -2,6 +2,7 @@ import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { api, extractSessionCookie, withSession, signupBuilder, signupSeller, signupAdmin, createGreenbeltLandletAs } from './test-helpers.js';
 import { FLEET_AGENT_NAMES } from './lib/fleet-agents.js';
+import { assistantSpot, ASSISTANT_SHIFT_STALE_AFTER_MS } from './lib/assistant-shift.js';
 
 // #3429 (part of #3428): fleet access. Own file (own isolate) because it sets
 // env.ACCESS_PASSPHRASE and env.FLEET_ACCESS_KEY, which every other test file
@@ -315,7 +316,7 @@ describe('Fleet assistants: agent names', () => {
     const assistantAvatar = body.avatars.find((a) => a.userId === assistant.body.user.userId);
     expect(codingAvatar).toBeDefined();
     expect('assistant' in codingAvatar).toBe(false);
-    expect(assistantAvatar.assistant).toEqual({ name: 'Clover' });
+    expect(assistantAvatar.assistant).toEqual({ name: 'Clover', busy: false });
   });
 
   it('the presence payload carries the assistant flag and name for an assistant account only', async () => {
@@ -337,7 +338,7 @@ describe('Fleet assistants: agent names', () => {
     const { body } = await api('/presence', viewer.session());
     const fleetAvatar = body.avatars.find((a) => a.userId === fleet.body.user.userId);
     const ordinary = body.avatars.find((a) => a.builderId === other.builderId);
-    expect(fleetAvatar.assistant).toEqual({ name: 'Fig' });
+    expect(fleetAvatar.assistant).toEqual({ name: 'Fig', busy: false });
     expect(ordinary).toBeDefined();
     expect('assistant' in ordinary).toBe(false);
   });
@@ -382,5 +383,76 @@ describe('Fleet assistants: agent names', () => {
     expect(line('Hello, I can help.').assistant).toEqual({ name: 'Sorrel' });
     expect('assistant' in line('coding session line')).toBe(false);
     expect('assistant' in line('shopper line')).toBe(false);
+  });
+});
+
+// #3449 (part of #3444): an assistant is in the world while its heartbeat is fresh.
+describe('Assistant shifts', () => {
+  beforeAll(() => { env.ACCESS_PASSPHRASE = undefined; });
+  async function greenbelt() {
+    const { results } = await env.DB.prepare(
+      "SELECT landlet_id, center_x_m, center_y_m, elevation_m FROM landlets WHERE status = 'greenbelt'",
+    ).all();
+    return results;
+  }
+  const beat = (token, body = {}) => fleetFetch('/api/assistant/heartbeat', {
+    method: 'POST', key: FLEET_KEY, headers: { cookie: `hh_session=${token}` }, body: JSON.stringify(body),
+  });
+  async function viewerOn(landletId, name) {
+    const viewer = await signupBuilder(name);
+    await env.DB.prepare(`
+      INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
+      VALUES ((SELECT user_id FROM builders WHERE builder_id = ?), ?, 0, 0, 0, 0, 0, ?)
+    `).bind(viewer.builderId, landletId, new Date().toISOString()).run();
+    return viewer;
+  }
+
+  it('a fresh heartbeat shows the assistant with its name and free/busy; a lapsed one removes it', async () => {
+    const admin = await signupAdmin('shift-admin');
+    await createGreenbeltLandletAs(admin.session, 'shift-landlet');
+    const login = await fleetLogin('assistant-juniper');
+    expect((await beat(login.token, { busy: true })).status).toBe(200);
+    const spot = assistantSpot('Juniper', await greenbelt());
+    const viewer = await viewerOn(spot.landletId, 'shift-viewer');
+    let { body } = await api('/presence', viewer.session());
+    let found = body.avatars.find((a) => a.userId === login.body.user.userId);
+    expect(found.assistant).toEqual({ name: 'Juniper', busy: true });
+    expect(found.landletId).toBe(spot.landletId);
+
+    // busy omitted keeps the last value; false clears it.
+    await beat(login.token);
+    ({ body } = await api('/presence', viewer.session()));
+    expect(body.avatars.find((a) => a.userId === login.body.user.userId).assistant.busy).toBe(true);
+    await beat(login.token, { busy: false });
+    ({ body } = await api('/presence', viewer.session()));
+    expect(body.avatars.find((a) => a.userId === login.body.user.userId).assistant.busy).toBe(false);
+
+    const old = new Date(Date.now() - ASSISTANT_SHIFT_STALE_AFTER_MS - 1000).toISOString();
+    await env.DB.prepare('UPDATE assistant_shifts SET last_seen_at = ? WHERE user_id = ?').bind(old, login.body.user.userId).run();
+    ({ body } = await api('/presence', viewer.session()));
+    expect(body.avatars.find((a) => a.userId === login.body.user.userId)).toBeUndefined();
+  });
+
+  it('only an assistant account may send a heartbeat; a coding session or a shopper is refused and never appears', async () => {
+    const coding = await fleetLogin('higglehaven7');
+    expect((await beat(coding.token)).status).toBe(403);
+    const shopper = await signupBuilder('shift-shopper');
+    const response = await beat(shopper.sessionToken);
+    expect(response.status).toBe(403);
+    const row = await env.DB.prepare('SELECT 1 AS n FROM assistant_shifts WHERE user_id = ?').bind(coding.body.user.userId).first();
+    expect(row).toBeNull();
+  });
+
+  it('an on-shift assistant is not shown on a landlet other than its spot', async () => {
+    const admin = await signupAdmin('shift-admin-2');
+    await createGreenbeltLandletAs(admin.session, 'shift-landlet-a', { x: 500, y: 500 });
+    await createGreenbeltLandletAs(admin.session, 'shift-landlet-b', { x: 900, y: 900 });
+    const login = await fleetLogin('assistant-clover');
+    await beat(login.token);
+    const spot = assistantSpot('Clover', await greenbelt());
+    const other = (await greenbelt()).find((l) => l.landlet_id !== spot.landletId);
+    const viewer = await viewerOn(other.landlet_id, 'shift-viewer-2');
+    const { body } = await api('/presence', viewer.session());
+    expect(body.avatars.find((a) => a.userId === login.body.user.userId)).toBeUndefined();
   });
 });

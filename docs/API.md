@@ -10237,12 +10237,23 @@ adds the header and no session reads the value.
   reserved).
 - **Assistant presence (#3445).** In `GET /api/presence`, an avatar whose
   account is an assistant (a fleet account whose username is one of the agent
-  names) carries `assistant: { name }`. The key is absent for everyone else,
+  names) carries `assistant: { name, busy }` (`busy` is whether it is helping someone, #3449). The key is absent for everyone else,
   coding sessions' accounts included, and is derived on the server from
   `users.is_fleet` and the username, never from anything a client sends. The
   Shop draws such an avatar with a collared shirt and a tag reading the name and
   the word "assistant". Nearby chat and the voice roster stay unlabeled for
   every sender, assistants included.
+- **Assistant shifts (#3449).** An assistant session has no browser, so it keeps
+  itself on shift with `POST /api/assistant/heartbeat` (body `{ busy?: boolean }`;
+  omitted keeps the last value; rate limited to 60 a minute). Only an assistant
+  account may call it; a coding session's fleet account or an ordinary one gets
+  `403`. While the newest heartbeat is under 90 s old (`assistant_shifts`,
+  migration 0222) the assistant is added to `GET /api/presence` for a viewer
+  standing on the landlet the server chose for it: public (greenbelt) land only,
+  one landlet per assistant by its place in the agent list, on a ring around the
+  landlet's centre so two never overlap. Once the heartbeat lapses it is simply
+  absent. Not yet built: fog departure, client-seeded idle movement, the tap
+  panel (#3447).
 - **What a fleet account cannot do.** It is never an admin (`admin-bootstrap`
   and `grant-admin` refuse it, and a trigger in migration 0211 rejects any
   write that would make it one). Its product flags are recorded with weight 0.

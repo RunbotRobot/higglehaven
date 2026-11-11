@@ -17,9 +17,15 @@ export function assistantNameFrom(raw) {
   return name || null;
 }
 
-export function assistantTagLines(name) {
+// #3449: whether the assistant is helping someone right now; only a literal
+// true counts, so an older server's payload reads as free.
+export function assistantBusyFrom(raw) {
+  return Boolean(raw && typeof raw === 'object' && raw.busy === true);
+}
+
+export function assistantTagLines(name, busy = false) {
   const shown = name.length > ASSISTANT_NAME_MAX_CHARS ? `${name.slice(0, ASSISTANT_NAME_MAX_CHARS - 1)}…` : name;
-  return [shown, ASSISTANT_WORD];
+  return [shown, busy ? `${ASSISTANT_WORD} · busy` : ASSISTANT_WORD];
 }
 
 // One line for places that list people as text (nearby chat, the voice
