@@ -177,8 +177,8 @@ export async function handleSignup(request, env, db, url) {
   const email = emailValue(input.email);
   const password = passwordValue(input.password);
   const username = usernameValue(input.username);
-  // #3445: the fleet's session names and its assistants' agent names belong to
-  // the fleet; nobody else can sign up as one.
+  // #3445: the assistants' agent names belong to the fleet; nobody else can
+  // sign up as one.
   if (isReservedUsername(username)) {
     throw new HttpError('Username is already taken', 409);
   }

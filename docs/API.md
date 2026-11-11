@@ -10177,10 +10177,12 @@ adds the header and no session reads the value.
   `username` (and its builder label) to the mapped name on create and on every
   login, so a change in the mapping applies at that session's next login; a
   session with no entry keeps its session name. The account is found by its
-  `@fleet.invalid` email, not its username. A session name or a mapped agent
-  name cannot be claimed at signup (`409 Username is already taken`, ignoring
-  case and surrounding space), and a mapped name a regular account already
-  holds makes that session's login a `409` rather than a takeover.
+  `@fleet.invalid` email, not its username. A mapped agent name cannot be
+  claimed at signup (`409 Username is already taken`, ignoring case and
+  surrounding space); session names stay open at signup, because
+  `scripts/live-site.mjs --login local` signs up an ordinary account under one
+  on a throwaway local instance. A mapped name a regular account already holds
+  makes that session's login a `409` rather than a takeover.
 - **Assistant presence (#3445).** In `GET /api/presence`, an avatar whose
   account is a fleet account carries `assistant: { name }` (the username, i.e.
   the agent name). The key is absent for everyone else, and is derived from

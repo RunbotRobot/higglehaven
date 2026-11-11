@@ -243,9 +243,9 @@ describe('Fleet assistants: agent names', () => {
     });
   });
 
-  it('signup cannot claim a session name or an agent name, in any case', async () => {
+  it('signup cannot claim an agent name, in any case, but session names stay open (local mode needs them)', async () => {
     await withMapping({ higglehaven9: 'Reserved Agent' }, async () => {
-      for (const username of ['higglehaven9', 'Higglehaven5', 'reserved agent', ' Reserved Agent ']) {
+      for (const username of ['Reserved Agent', 'reserved agent', ' Reserved Agent ']) {
         const result = await api('/auth/signup', {
           method: 'POST',
           headers: ip(),
@@ -253,6 +253,12 @@ describe('Fleet assistants: agent names', () => {
         });
         expect(result.response.status, username).toBe(409);
       }
+      const sessionName = await api('/auth/signup', {
+        method: 'POST',
+        headers: ip(),
+        body: JSON.stringify({ email: `${crypto.randomUUID()}@example.test`, password: 'correct horse battery', username: 'higglehaven2', ageAttested: true }),
+      });
+      expect(sessionName.response.status).toBe(201);
     });
   });
 

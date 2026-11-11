@@ -30,11 +30,15 @@ export function agentNameFor(sessionName) {
 
 const normalise = (value) => String(value).trim().toLowerCase();
 
-// True for a username only the fleet may hold: any session name
-// ("higglehaven" plus digits) or any mapped agent name, ignoring case and
-// surrounding space so "Higglehaven3" or " Name " cannot sneak past.
+// True for a username only the fleet may hold: a mapped agent name, ignoring
+// case and surrounding space so "Name" or " name " cannot sneak past.
+//
+// Session names ("higglehaven3") are deliberately NOT reserved here: they are
+// never shown to a shopper once mapped, and scripts/live-site.mjs's local mode
+// (--login local, against a throwaway wrangler dev) signs up an ordinary
+// account under the session name. fleet-login already refuses to sign in as a
+// regular account that holds one.
 export function isReservedUsername(username) {
   const name = normalise(username);
-  if (FLEET_NAME_PATTERN.test(name)) return true;
   return Object.values(FLEET_AGENT_NAMES).some((agent) => normalise(agent) === name);
 }
