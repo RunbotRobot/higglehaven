@@ -109,6 +109,8 @@ function builderFromRow(row) {
 // primary way a builder profile comes to exist, so this should really
 // only ever hit the "already exists" path in practice. 401 with no
 // session (requireCurrentUser); never a 404 either way.
+const LAST_ACTIVE_WRITE_INTERVAL_MS = 60 * 1000;
+
 export async function getOrCreateBuilderForUser(db, user) {
   // #946: INSERT OR IGNORE + unconditional re-read (mirroring
   // ownedAvatarStatement below) rather than SELECT-then-conditionally-
@@ -116,10 +118,18 @@ export async function getOrCreateBuilderForUser(db, user) {
   // account's builder profile against the partial UNIQUE INDEX on
   // builders.user_id (migrations/0054), surfacing to the loser as a
   // confusing 409 instead of a clean idempotent get-or-create.
-  const builderId = `builder-${crypto.randomUUID()}`;
-  await db.prepare('INSERT OR IGNORE INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
-    .bind(builderId, user.username, user.user_id).run();
-  const row = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(user.user_id).first();
+  // #3464: the common case (the profile exists) is one read, not an
+  // INSERT, a SELECT and an UPDATE -- every authenticated builder-scoped
+  // request paid those three D1 round trips. The INSERT OR IGNORE + re-read
+  // above still runs when the row is missing, so the #946 race stays
+  // idempotent.
+  let row = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(user.user_id).first();
+  if (!row) {
+    const builderId = `builder-${crypto.randomUUID()}`;
+    await db.prepare('INSERT OR IGNORE INTO builders (builder_id, label, user_id) VALUES (?, ?, ?)')
+      .bind(builderId, user.username, user.user_id).run();
+    row = await db.prepare('SELECT * FROM builders WHERE user_id = ?').bind(user.user_id).first();
+  }
   // #336/#325: keeps a real "was this builder recently active" signal
   // fresh — see migrations/0067's own comment for why neither of this
   // table's existing timestamps works for that. Bumped here (every
@@ -135,6 +145,14 @@ export async function getOrCreateBuilderForUser(db, user) {
   // inactivity cycle, so warnInactiveLandletOwners should be free to warn
   // again the next time this builder goes quiet, rather than staying
   // permanently silenced by a warning from a previous cycle.
+  // #3464: the activity write is throttled to once a minute (inactivity
+  // thresholds are measured in days), unless a warning is pending and must
+  // be re-armed right away.
+  const lastActiveMs = row.last_active_at ? Date.parse(row.last_active_at) : NaN;
+  const activityFresh = Number.isFinite(lastActiveMs)
+    && Date.now() - lastActiveMs < LAST_ACTIVE_WRITE_INTERVAL_MS
+    && !row.inactivity_warning_sent_at;
+  if (activityFresh) return row;
   await db.prepare(
     `UPDATE builders SET last_active_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'), inactivity_warning_sent_at = NULL WHERE builder_id = ?`,
   ).bind(row.builder_id).run();
