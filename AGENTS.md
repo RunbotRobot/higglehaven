@@ -729,25 +729,45 @@ most likely to come up again.
   propose a second way to earn higgles; a new incentive has to be
   something other than higgles, or it goes to the owner.
 
-- **Help comes from the fleet, in the world: agents are named
-  assistants that shoppers can see, who pause their work to help and
-  hand off when busy.** (2026-11-10, #3444.) With no paid user helpers,
-  the owner chose the fleet: "people can see higglehaven agents milling
-  around improving the world... The parallel there is a worker stocking
-  a shelf. If a customer comes up to them and asks them a question, the
-  worker practices good customer service skills and pauses their task
-  to assist", and hands off with a friendly word about what they are
-  going back to, "where not a security risk". Fleet accounts are
-  therefore visible to shoppers, never hidden, and each agent has a
-  real name in place of its session name. The world should show the
-  work that goes into it, the way a shop floor does. (higglehaven1's
-  limits on this, not the owner's words: what an agent says about its
-  work is a sentence written for the public, never a card's title or
-  note; a shopper's text never reaches a session that can merge or
-  deploy; and until the owner confirms what their CCO approved,
-  assistants give how-to help only and send money, disputes and account
-  questions to the formal contact channel, per docs/SPEC.md P122 and
-  #1419.)
+- **Help comes from assistants in the world: AI sessions whose only
+  job is helping people, separate from the sessions that write the
+  code.** (2026-11-10, revised by the owner 2026-11-11, #3444.) With no
+  paid user helpers, the owner first pictured the coding fleet as
+  visible workers who pause to help ("a worker stocking a shelf"), then
+  chose the simpler shape: "It may be that I'm pushing too hard to make
+  this fit when it's just cumbersome. We can have our coding agents work
+  behind the scenes and have customer service avatars separately. We can
+  then scale the two kinds of agents independently based on need and
+  resources." So coding sessions stay behind the scenes and never read a
+  shopper's message; assistant sessions are named avatars in the world
+  that people walk up to. When a design is being bent to make one thing
+  do two jobs, split it into two things that each do one. (higglehaven1's
+  condition, stated to the owner: a shopper's text is untrusted, so an
+  assistant session has no repository, no connectors and no credentials
+  beyond the live site; if that cannot be shown, it does not go live.)
+
+- **AI may be the contact point for users.** (2026-11-11, #1419, after
+  the owner spoke with their CCO.) "We should be good to allow full AI
+  assistance to users, given that there is a layer of separation between
+  AI interacting with users and myself, and because we have measures in
+  place to restrict minors from utilizing the site." This supersedes
+  docs/SPEC.md P122's "never through an AI agent" (#3459). The two
+  conditions are the principle: the owner never handles customer contact
+  personally, and the adult-only gate holds. A change that would weaken
+  either (an assistant acting with the owner's own accounts, loosening
+  age verification) reopens the question and goes back to the owner.
+
+- **Grow a cost with the revenue that pays for it; until then, accept
+  the limit and let it show.** (2026-11-11.) Offered a small metered
+  answering service, the owner declined: use the sessions the
+  subscription already pays for, and "if that proves insufficient, it
+  ought to be only because we actually have gained a user base", paid
+  from revenue that scales with the usage. "The limited number of
+  session avatars available for people to talk to provides a real-world
+  feel for the potential problem of an assistant not currently being
+  available." A scarce resource is presented honestly as scarce (an
+  assistant is busy, or nobody is on the floor right now), not hidden
+  behind a metered service bought ahead of demand. This extends "Spend".
 
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
