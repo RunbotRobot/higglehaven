@@ -19,13 +19,11 @@ import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './rate-limit.js';
 import { readJson, stringValue } from './validation.js';
 import { createSession, sessionCookieHeader, SESSION_TTL_MS } from './auth-routes.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
+import { agentNameFor, FLEET_NAME_PATTERN } from './fleet-agents.js';
+export { FLEET_NAME_PATTERN };
 
 export const FLEET_KEY_HEADER = 'x-fleet-key';
 export const FLEET_LOGIN_PATH = '/api/auth/fleet-login';
-// The allow-list: `higglehaven` plus digits, exactly the session names
-// AGENTS.md assigns. Anything else is refused, so the key cannot be used to
-// mint an account under any other name (or to sign in as a real person).
-export const FLEET_NAME_PATTERN = /^higglehaven[0-9]{1,3}$/;
 // Wrong keys are limited per client IP, like /__access/login. A request with
 // the right key is never counted, so the fleet cannot lock itself out.
 const FLEET_KEY_WRONG_MAX = 10;
@@ -78,14 +76,18 @@ export async function handleFleetLogin(request, env, db, url, keyOk) {
   // A fleet account counts as verified and age-attested because those checks
   // only prove a mailbox and a person; it has neither and needs neither.
   const email = `${name}@fleet.invalid`;
+  // #3445: the account is found by its fleet email (stable), not by username,
+  // because the username is the agent name and can change when the mapping in
+  // fleet-agents.js does. It is never a name a regular account already holds.
+  const username = agentNameFor(name);
   await db.prepare(`
     INSERT INTO users (user_id, email, password_hash, username, email_canonical, email_verified_at, age_attested_at, is_fleet, trust_tier)
     SELECT ?, ?, 'fleet-account-no-password', ?, ?, ?, ?, 1, 'credit_card'
     WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = ? OR email = ?)
-  `).bind(userId, email, name, email, now, now, name, email).run();
+  `).bind(userId, email, username, email, now, now, username, email).run();
 
-  const user = await db.prepare('SELECT * FROM users WHERE username = ?').bind(name).first();
-  // Never sign in as a real person who happens to hold this username.
+  let user = await db.prepare('SELECT * FROM users WHERE email = ?').bind(email).first();
+  // Never sign in as a real person who happens to hold this name.
   if (!user || user.is_fleet !== 1) {
     throw new HttpError('That name belongs to a regular account', 409);
   }
@@ -95,7 +97,24 @@ export async function handleFleetLogin(request, env, db, url, keyOk) {
   if (user.trust_tier === 'none') {
     await db.prepare("UPDATE users SET trust_tier = 'credit_card' WHERE user_id = ? AND is_fleet = 1").bind(user.user_id).run();
   }
-  await getOrCreateBuilderForUser(db, user);
+  if (user.username !== username) {
+    // A rename in the mapping: applied on this login, never onto a name
+    // another account holds.
+    await db.prepare(`
+      UPDATE users SET username = ?
+      WHERE user_id = ? AND is_fleet = 1
+        AND NOT EXISTS (SELECT 1 FROM users WHERE username = ? AND user_id != ?)
+    `).bind(username, user.user_id, username, user.user_id).run();
+    user = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
+    if (user.username !== username) {
+      throw new HttpError('That name belongs to a regular account', 409);
+    }
+  }
+  const builder = await getOrCreateBuilderForUser(db, user);
+  // One alias per person: the builder label follows the username.
+  if (builder.label !== username) {
+    await db.prepare('UPDATE builders SET label = ? WHERE user_id = ?').bind(username, user.user_id).run();
+  }
   const token = await createSession(db, user.user_id);
   return json(
     { user: { userId: user.user_id, username: user.username, isFleet: true } },

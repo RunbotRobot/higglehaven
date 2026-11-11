@@ -306,9 +306,11 @@ export async function handlePresence(request, db, route, url) {
     // (and a person with no builder profile right now has nothing to render,
     // which is what the old ON DELETE CASCADE on a profile reset did too).
     const { results } = await db.prepare(`
-      SELECT avatar_presence.*, builders.builder_id AS builder_id
+      SELECT avatar_presence.*, builders.builder_id AS builder_id,
+        users.is_fleet AS is_fleet, users.username AS fleet_username
       FROM avatar_presence
       JOIN builders ON builders.user_id = avatar_presence.user_id
+      JOIN users ON users.user_id = avatar_presence.user_id
       WHERE avatar_presence.landlet_id = ? AND avatar_presence.user_id != ? AND avatar_presence.updated_at >= ?
         AND ${notBlockedEitherWayByUserSql('?', 'avatar_presence.user_id')}
       ORDER BY avatar_presence.updated_at DESC LIMIT ${PRESENCE_NEARBY_LIMIT}
@@ -1237,6 +1239,11 @@ function avatarPresenceFromRow(row) {
     heading: row.heading,
     flying: Boolean(row.flying),
     updatedAt: row.updated_at,
+    // #3445: a fleet account is shown as a named assistant. Derived here from
+    // users.is_fleet, never from anything a client sends; present only for a
+    // fleet account (the key is absent for everyone else) and carries the name
+    // to show, which is the agent name set at fleet login.
+    ...(row.is_fleet === 1 ? { assistant: { name: row.fleet_username } } : {}),
   };
 }
 

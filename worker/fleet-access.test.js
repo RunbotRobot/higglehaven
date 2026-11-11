@@ -1,6 +1,7 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { api, extractSessionCookie, withSession, signupBuilder, signupSeller, signupAdmin } from './test-helpers.js';
+import { api, extractSessionCookie, withSession, signupBuilder, signupSeller, signupAdmin, createGreenbeltLandletAs } from './test-helpers.js';
+import { FLEET_AGENT_NAMES } from './lib/fleet-agents.js';
 
 // #3429 (part of #3428): fleet access. Own file (own isolate) because it sets
 // env.ACCESS_PASSPHRASE and env.FLEET_ACCESS_KEY, which every other test file
@@ -202,3 +203,104 @@ describe('Live-mode guard', () => {
     expect(stripeIsLive({})).toBe(false);
   });
 });
+
+// #3445 (part of #3444): the name a shopper sees for an assistant.
+describe('Fleet assistants: agent names', () => {
+  // Like the block above: the shared helpers sign up without a gate
+  // credential, so the preview gate is off here; fleet-login still needs the key.
+  beforeAll(() => { env.ACCESS_PASSPHRASE = undefined; });
+  afterAll(() => { env.ACCESS_PASSPHRASE = 'test-access-passphrase'; });
+
+  async function withMapping(entries, fn) {
+    Object.assign(FLEET_AGENT_NAMES, entries);
+    try {
+      await fn();
+    } finally {
+      for (const key of Object.keys(entries)) delete FLEET_AGENT_NAMES[key];
+    }
+  }
+
+  it('fleet-login sets the mapped username and builder label, and applies a rename at the next login', async () => {
+    await withMapping({ higglehaven12: 'Test Agent' }, async () => {
+      const first = await fleetLogin('higglehaven12');
+      expect(first.response.status).toBe(200);
+      expect(first.body.user.username).toBe('Test Agent');
+      const label = () => env.DB.prepare('SELECT label FROM builders WHERE user_id = ?').bind(first.body.user.userId).first();
+      expect((await label()).label).toBe('Test Agent');
+
+      FLEET_AGENT_NAMES.higglehaven12 = 'Renamed Agent';
+      const second = await fleetLogin('higglehaven12');
+      expect(second.body.user.userId).toBe(first.body.user.userId);
+      expect(second.body.user.username).toBe('Renamed Agent');
+      expect((await label()).label).toBe('Renamed Agent');
+    });
+  });
+
+  it('an unmapped session keeps its session name as before', async () => {
+    const { body } = await fleetLogin('higglehaven11');
+    expect(body.user.username).toBe('higglehaven11');
+  });
+
+  it('refuses a mapped name that a regular account already holds', async () => {
+    await withMapping({ higglehaven10: 'Held Name' }, async () => {
+      await env.DB.prepare(
+        "INSERT INTO users (user_id, email, password_hash, username, email_canonical) VALUES ('user-real-held', 'real-held@example.test', 'x', 'Held Name', 'real-held@example.test')",
+      ).run();
+      const result = await fleetLogin('higglehaven10');
+      expect(result.response.status).toBe(409);
+      expect(result.token).toBeNull();
+    });
+  });
+
+  it('signup cannot claim an agent name, in any case, but session names stay open (local mode needs them)', async () => {
+    await withMapping({ higglehaven9: 'Reserved Agent' }, async () => {
+      for (const username of ['Reserved Agent', 'reserved agent', ' Reserved Agent ']) {
+        const result = await api('/auth/signup', {
+          method: 'POST',
+          headers: ip(),
+          body: JSON.stringify({ email: `${crypto.randomUUID()}@example.test`, password: 'correct horse battery', username, ageAttested: true }),
+        });
+        expect(result.response.status, username).toBe(409);
+      }
+      const sessionName = await api('/auth/signup', {
+        method: 'POST',
+        headers: ip(),
+        body: JSON.stringify({ email: `${crypto.randomUUID()}@example.test`, password: 'correct horse battery', username: 'higglehaven2', ageAttested: true }),
+      });
+      expect(sessionName.response.status).toBe(201);
+    });
+  });
+
+  it('the presence payload carries the assistant flag and name for a fleet account only', async () => {
+    const admin = await signupAdmin('fleet-presence-admin');
+    const landletId = 'fleet-presence-landlet';
+    await createGreenbeltLandletAs(admin.session, landletId);
+    const viewer = await signupBuilder('fleet-presence-viewer');
+    const other = await signupBuilder('fleet-presence-ordinary');
+    const fleet = await withMappingResult({ higglehaven8: 'Presence Agent' }, () => fleetLogin('higglehaven8'));
+    const setPresence = (userIdSql, bind) => env.DB.prepare(`
+      INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
+      VALUES (${userIdSql}, ?, 0, 0, 0, 0, 0, ?)
+      ON CONFLICT (user_id) DO UPDATE SET landlet_id = excluded.landlet_id, updated_at = excluded.updated_at
+    `).bind(bind, landletId, new Date().toISOString()).run();
+    await setPresence('(SELECT user_id FROM builders WHERE builder_id = ?)', viewer.builderId);
+    await setPresence('(SELECT user_id FROM builders WHERE builder_id = ?)', other.builderId);
+    await setPresence('?', fleet.body.user.userId);
+
+    const { body } = await api('/presence', viewer.session());
+    const fleetAvatar = body.avatars.find((a) => a.userId === fleet.body.user.userId);
+    const ordinary = body.avatars.find((a) => a.builderId === other.builderId);
+    expect(fleetAvatar.assistant).toEqual({ name: 'Presence Agent' });
+    expect(ordinary).toBeDefined();
+    expect('assistant' in ordinary).toBe(false);
+  });
+});
+
+async function withMappingResult(entries, fn) {
+  Object.assign(FLEET_AGENT_NAMES, entries);
+  try {
+    return await fn();
+  } finally {
+    for (const key of Object.keys(entries)) delete FLEET_AGENT_NAMES[key];
+  }
+}

@@ -68,6 +68,7 @@ import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
   fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence,
 } from '../api.js';
+import { applyAssistantLook } from './assistantAvatar.js';
 import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
 import { creditOrbContact, creditOrbRefusalKind, creditOrbMayRetry, CREDIT_ORB_RETRY_INTERVAL_MS } from './creditOrbCollect.js';
 import {
@@ -803,6 +804,7 @@ export async function pollNearbyPresenceIfNeeded(now) {
     entry.missedPolls = 0; // #2436: seen again -- clear any pending despawn countdown
     entry.equippedAvatar = normalizeEquippedAvatar(avatar.equippedAvatar); // #2045
     entry.equippedAnimation = normalizeEquippedAnimation(avatar.equippedAnimation); // #3230
+    applyAssistantLook(entry, avatar.assistant); // #3445: a fleet account is drawn as a named assistant
   }
   // #2436: a single poll missing an avatar that's genuinely still nearby
   // (report/poll cadence phase gap, or the avatar's own report briefly
@@ -1010,6 +1012,8 @@ function despawnOtherShopAvatars() {
 function refreshOtherShopAvatarsDiagnostic() {
   window.__shopOtherAvatars = [...shopOtherAvatars.entries()].map(([builderId, entry]) => ({
     builderId, x: entry.toX, y: entry.toY, z: entry.toZ, heading: entry.toHeading,
+    assistantName: entry.assistantName ?? null, // added for #3445 -- e2e needs to see that a fleet avatar carries its name tag and shirt, and an ordinary one does not
+    hasAssistantShirt: Boolean(entry.assistantShirt), // added for #3445, same reason
     bodyTemplateId: entry.bodyTemplateId, // added for #2045 -- e2e needs to see which model each other avatar actually drew
     animationSource: entry.animationSource, // added for #3230 -- e2e needs to see whether an avatar plays its own clips, an applied animation's, or none
     animState: entry.animState, // added for #3230 -- idle vs walk, to check clips follow observed movement

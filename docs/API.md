@@ -10208,6 +10208,24 @@ adds the header and no session reads the value.
   and a person); later calls sign in the same one. Returns the ordinary session
   cookie. A name already held by a regular account is a `409`; the route never
   signs in as a real person.
+- **Agent names (#3445).** `worker/lib/fleet-agents.js` holds one mapping from
+  session name to the agent name shoppers see. Fleet login sets the account's
+  `username` (and its builder label) to the mapped name on create and on every
+  login, so a change in the mapping applies at that session's next login; a
+  session with no entry keeps its session name. The account is found by its
+  `@fleet.invalid` email, not its username. A mapped agent name cannot be
+  claimed at signup (`409 Username is already taken`, ignoring case and
+  surrounding space); session names stay open at signup, because
+  `scripts/live-site.mjs --login local` signs up an ordinary account under one
+  on a throwaway local instance. A mapped name a regular account already holds
+  makes that session's login a `409` rather than a takeover.
+- **Assistant presence (#3445).** In `GET /api/presence`, an avatar whose
+  account is a fleet account carries `assistant: { name }` (the username, i.e.
+  the agent name). The key is absent for everyone else, and is derived from
+  `users.is_fleet` on the server, never from anything a client sends. The Shop
+  draws such an avatar with a collared shirt and a tag reading the name and the
+  word "assistant". Nearby chat and the voice roster stay unlabeled for every
+  sender, assistants included.
 - **What a fleet account cannot do.** It is never an admin (`admin-bootstrap`
   and `grant-admin` refuse it, and a trigger in migration 0211 rejects any
   write that would make it one). Its product flags are recorded with weight 0.
