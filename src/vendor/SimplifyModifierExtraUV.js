@@ -31,15 +31,25 @@ import {
 	Vector3,
 	Vector4
 } from 'three';
-import * as BufferGeometryUtils from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeVerticesSteps } from './mergeVerticesSteps.js'; // SLICED: the stock mergeVertices, as steps
 
 const _cb = new Vector3(), _ab = new Vector3();
 
 const EXTRA_UV_NAMES = ['uv1', 'uv2', 'uv3']; // EXTRA UV
 
+// SLICED (#3483): how many vertices or faces the setup and output loops handle
+// between yields. The collapse loop yields after every collapse: each one scans
+// every remaining vertex for the cheapest edge, so a step is already the cost of
+// a pass over the mesh, and a yield costs nothing next to it.
+const SLICE_ITEMS = 512;
+
 class SimplifyModifier {
 
-	modify( geometry, count ) {
+	// SLICED (#3483): the whole algorithm as a generator that yields between small
+	// pieces of work, so a caller with a per-frame budget (src/modelTiers.js) can
+	// run it across frames instead of in one task of seconds on a large mesh.
+	// Returns the simplified geometry, exactly what modify() returns.
+	*modifySteps( geometry, count ) {
 
 		geometry = geometry.clone();
 
@@ -53,7 +63,7 @@ class SimplifyModifier {
 
 		}
 
-		geometry = BufferGeometryUtils.mergeVertices( geometry );
+		geometry = yield* mergeVerticesSteps( geometry ); // SLICED
 
 		const vertices = [];
 		const faces = [];
@@ -103,6 +113,7 @@ class SimplifyModifier {
 
 			const vertex = new Vertex( v, v2, nor, t, col, extraUv ); // EXTRA UV
 			vertices.push( vertex );
+			if ( i % SLICE_ITEMS === SLICE_ITEMS - 1 ) yield; // SLICED
 
 		}
 
@@ -118,6 +129,7 @@ class SimplifyModifier {
 
 				const triangle = new Triangle( vertices[ a ], vertices[ b ], vertices[ c ], a, b, c );
 				faces.push( triangle );
+				if ( faces.length % SLICE_ITEMS === 0 ) yield; // SLICED
 
 			}
 
@@ -131,6 +143,7 @@ class SimplifyModifier {
 
 				const triangle = new Triangle( vertices[ a ], vertices[ b ], vertices[ c ], a, b, c );
 				faces.push( triangle );
+				if ( faces.length % SLICE_ITEMS === 0 ) yield; // SLICED
 
 			}
 
@@ -139,6 +152,17 @@ class SimplifyModifier {
 		for ( let i = 0, il = vertices.length; i < il; i ++ ) {
 
 			computeEdgeCostAtVertex( vertices[ i ] );
+			if ( i % SLICE_ITEMS === SLICE_ITEMS - 1 ) yield; // SLICED
+
+		}
+
+		// SLICED (#3483): `count` may be a function of the number of vertices left
+		// after merging, which is the unit this algorithm works in; it returns how
+		// many to remove, and nothing to remove means nothing to return.
+		if ( typeof count === 'function' ) {
+
+			count = count( vertices.length );
+			if ( count <= 0 ) return null;
 
 		}
 
@@ -158,6 +182,7 @@ class SimplifyModifier {
 			}
 
 			collapse( vertices, faces, nextVertex, nextVertex.collapseNeighbor );
+			yield; // SLICED
 
 		}
 
@@ -209,6 +234,7 @@ class SimplifyModifier {
 			// EXTRA UV end
 
 			vertex.id = i;
+			if ( i % SLICE_ITEMS === SLICE_ITEMS - 1 ) yield; // SLICED
 
 		}
 
@@ -216,6 +242,7 @@ class SimplifyModifier {
 
 			const face = faces[ i ];
 			index.push( face.v1.id, face.v2.id, face.v3.id );
+			if ( i % SLICE_ITEMS === SLICE_ITEMS - 1 ) yield; // SLICED
 
 		}
 
@@ -235,6 +262,20 @@ class SimplifyModifier {
 		simplifiedGeometry.setIndex( index );
 
 		return simplifiedGeometry;
+
+	}
+
+	// The original entry point: runs the steps above to completion in one go.
+	modify( geometry, count ) {
+
+		const steps = this.modifySteps( geometry, count );
+
+		for ( ;; ) {
+
+			const step = steps.next();
+			if ( step.done ) return step.value;
+
+		}
 
 	}
 

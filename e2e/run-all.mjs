@@ -69,7 +69,7 @@ function realStripeWranglerVars(testFile) {
 // login (#3429) needs the fleet key set on its own wrangler dev; every other
 // file runs with fleet access off, as production does until the owner sets the
 // secret. A throwaway test value, never a real key.
-const FLEET_KEY_TEST_FILES = new Set(['live-site-script.test.mjs']);
+const FLEET_KEY_TEST_FILES = new Set(['live-site-script.test.mjs', 'assistant-shift-scripts.test.mjs']);
 const E2E_FLEET_ACCESS_KEY = 'e2e-fleet-key-not-a-secret';
 function fleetWranglerVars(testFile) {
   return FLEET_KEY_TEST_FILES.has(testFile) ? ['--var', `FLEET_ACCESS_KEY:${E2E_FLEET_ACCESS_KEY}`] : [];

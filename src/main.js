@@ -277,7 +277,10 @@ import {
   shopLandlets, updateShopProximity, updateShopLandletInfo, pickShopSpawnLocation,
   setShopBuilderLabel, setShopBuilderLabels, resetShopCurrentLandletEntry,
   accountMenuLandletInfoEl, SHOP_LOAD_RADIUS_M, refreshShopLandletRecordsNow,
+  shopOtherAvatars, assistantFromHit, assistantGroups,
 } from './shop/presenceAndContent.js';
+// #3447: tapping an assistant in the Shop world opens its chat panel.
+import { openAssistantChat, closeAssistantChat } from './shop/assistantChat.js';
 // #2627 (leaf of #2563/#2504/#2500, depends on #2626 above): Shop mode's
 // proximity-faded sign-post/calendar-event/product-review sprite
 // rendering now lives in src/shop/worldSprites.js -- see that module's own
@@ -397,6 +400,7 @@ export let shopActive = false;
 // setShopAvatarFacing's own below.
 export function setShopActive(value) {
   shopActive = value;
+  if (!value) closeAssistantChat(); // #3447: the assistant panel belongs to the Shop world
 }
 
 // #2559 (part of #2504/#2500's src/main.js module split, see #2503's
@@ -1584,6 +1588,18 @@ renderer.domElement.addEventListener('click', (event) => {
     for (const batch of entry.batches) tapTargets.push(...batch.meshes);
   }
   const hits = raycaster.intersectObjects(tapTargets, true);
+  // #3447: an assistant standing in front of a product is what was tapped, so
+  // it is checked first and wins only when it is the nearer hit.
+  const assistantHit = raycaster.intersectObjects(assistantGroups(), true)[0];
+  const tappedAssistant = assistantHit && (hits.length === 0 || assistantHit.distance < hits[0].distance)
+    ? assistantFromHit(assistantHit)
+    : null;
+  if (tappedAssistant) {
+    setShopTappedProduct(null);
+    closeShopProductPreviewModal();
+    openAssistantChat(tappedAssistant);
+    return;
+  }
   const review = hits.length > 0 ? findTappedShopProductFromHit(hits[0]) : null;
   setShopTappedProduct(review);
   if (review) openShopProductPreviewModal(review);
@@ -1603,6 +1619,16 @@ renderer.domElement.addEventListener('click', (event) => {
 // near it first via window.__testTeleportShopAvatar, same as every other
 // window.__test* hook here. Always inert (returns false) unless a test
 // calls it with a real, currently-in-range instanceId.
+// #3447: e2e-only, same reason as the product hook below -- a real tap on an
+// assistant needs aiming at a pixel, which this suite never automates. Opens the
+// real chat panel for an assistant currently drawn in the world, by its account.
+window.__testTapAssistantByUserId = (userId) => {
+  const entry = [...shopOtherAvatars.values()].find((e) => e.userId === userId && e.assistantName);
+  if (!entry) return false;
+  openAssistantChat({ userId: entry.userId, name: entry.assistantName });
+  return true;
+};
+
 window.__testTapShopProductByInstanceId = (instanceId) => {
   const review = shopReviews.find((r) => r.mesh.userData.instanceId === instanceId);
   if (!review) return false;

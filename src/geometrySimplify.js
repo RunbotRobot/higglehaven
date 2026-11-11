@@ -4,7 +4,6 @@
 // Extracted from modelOptimizer.js's optimizeModelFile (#3413) so the upload
 // optimiser and the model-tier builder (src/modelTiers.js) run the exact same
 // guards instead of two copies that drift apart.
-import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 // A locally patched copy, not the stock addon — see its own doc comment.
 // It carries uv1/uv2/uv3 through decimation, which the stock one drops.
 import { SimplifyModifier } from './vendor/SimplifyModifierExtraUV.js';
@@ -41,7 +40,13 @@ export function isSkinnedGeometry(geometry) {
 // Returns a new, simplified geometry, or null when nothing should change
 // (already at or under the target, skinned, or nothing removable). The input
 // is never modified or disposed; the caller owns both geometries.
-export function simplifyGeometryOnePass(geometry, targetTriangles) {
+//
+// #3483: written as a generator that yields between small pieces of work, so a
+// caller with a per-frame budget (src/modelTiers.js, building a product's mid
+// and far versions in the shopper's browser) can spread one pass across frames.
+// A pass on a 50k-triangle mesh took several seconds as one task. The result is
+// the same as simplifyGeometryOnePass's.
+export function* simplifyGeometryOnePassSteps(geometry, targetTriangles) {
   const triangleCount = countTriangles(geometry);
   if (triangleCount <= targetTriangles) return null;
   if (isSkinnedGeometry(geometry)) return null;
@@ -54,14 +59,27 @@ export function simplifyGeometryOnePass(geometry, targetTriangles) {
   // Without this, removeCount is computed against that inflated raw count
   // and can vastly overshoot the actual mergeable vertices, decimating the
   // mesh down to nothing instead of ~targetTriangles.
-  const mergedForCount = mergeVertices(geometry);
-  const vertexCount = mergedForCount.attributes.position.count;
-  mergedForCount.dispose();
-  const targetVertexCount = Math.max(3, Math.round(vertexCount * (targetTriangles / triangleCount)));
-  const uncappedRemoveCount = vertexCount - targetVertexCount;
-  if (uncappedRemoveCount <= 0) return null;
-  // #2744: see MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION's own comment.
-  const removeCount = Math.min(uncappedRemoveCount, Math.floor(vertexCount * MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION));
+  //
+  // #3483: the modifier now hands that merged vertex count to this function
+  // itself, so the mesh is merged once instead of once to count and again to
+  // simplify (each merge is a pass over every triangle corner).
+  const removeCountFor = (vertexCount) => {
+    const targetVertexCount = Math.max(3, Math.round(vertexCount * (targetTriangles / triangleCount)));
+    const uncappedRemoveCount = vertexCount - targetVertexCount;
+    if (uncappedRemoveCount <= 0) return 0;
+    // #2744: see MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION's own comment.
+    return Math.min(uncappedRemoveCount, Math.floor(vertexCount * MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION));
+  };
 
-  return simplifier.modify(geometry, removeCount);
+  return yield* simplifier.modifySteps(geometry, removeCountFor);
+}
+
+// The same pass run to completion in one go, for callers with nothing to keep
+// responsive (the upload optimiser, node scripts, tests).
+export function simplifyGeometryOnePass(geometry, targetTriangles) {
+  const steps = simplifyGeometryOnePassSteps(geometry, targetTriangles);
+  for (;;) {
+    const step = steps.next();
+    if (step.done) return step.value;
+  }
 }

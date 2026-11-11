@@ -46,7 +46,7 @@ import {
   Vector3,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { countTriangles, isSkinnedGeometry, simplifyGeometryOnePass } from './geometrySimplify.js';
+import { countTriangles, isSkinnedGeometry, simplifyGeometryOnePassSteps } from './geometrySimplify.js';
 
 // ---- Tunables (one place, so the leaves that measure and tune them agree) ----
 
@@ -127,15 +127,15 @@ function positionsAreFinite(geometry) {
 }
 
 // Repeats simplification passes on one geometry until it is at the target,
-// stuck, or out of passes. Yields after every pass so a caller can enforce a
-// frame budget. Never modifies or disposes the input; returns either the
+// stuck, or out of passes. Yields many times within every pass (#3483) so a
+// caller can enforce a frame budget. Never modifies or disposes the input; returns either the
 // input itself or a geometry this function created.
 function* simplifyToTarget(geometry, targetTriangles) {
   let current = geometry;
   for (let pass = 0; pass < MAX_SIMPLIFY_PASSES; pass++) {
     const before = countTriangles(current);
     if (before <= targetTriangles) break;
-    const next = simplifyGeometryOnePass(current, targetTriangles);
+    const next = yield* simplifyGeometryOnePassSteps(current, targetTriangles);
     yield;
     if (!next) break;
     const after = countTriangles(next);
@@ -191,9 +191,15 @@ export function readTexturePixels(texture, readImagePixels = readImagePixelsWith
 }
 
 // Area-average (box filter) downsample of RGBA8 pixels to the given size.
-function boxDownsample(pixels, newWidth, newHeight) {
+//
+// #3483: a generator that yields after about BOX_SLICE_SOURCE_PIXELS source
+// pixels have been read, so one large texture is spread across frames instead of
+// being a single task (a 4096 x 4096 texture is sixteen million pixels).
+const BOX_SLICE_SOURCE_PIXELS = 1 << 18;
+function* boxDownsample(pixels, newWidth, newHeight) {
   const { data, width, height } = pixels;
   const out = new Uint8Array(newWidth * newHeight * 4);
+  let sincePause = 0;
   for (let y = 0; y < newHeight; y++) {
     const y0 = Math.floor((y * height) / newHeight);
     const y1 = Math.max(y0 + 1, Math.floor(((y + 1) * height) / newHeight));
@@ -220,6 +226,11 @@ function boxDownsample(pixels, newWidth, newHeight) {
       out[o + 1] = Math.round(g / n);
       out[o + 2] = Math.round(b / n);
       out[o + 3] = Math.round(a / n);
+      sincePause += n;
+    }
+    if (sincePause >= BOX_SLICE_SOURCE_PIXELS) {
+      sincePause = 0;
+      yield;
     }
   }
   return out;
@@ -227,15 +238,16 @@ function boxDownsample(pixels, newWidth, newHeight) {
 
 // A smaller copy of a texture, or the texture itself when it is already
 // small enough or its pixels cannot be read.
-function downsizeTexture(texture, maxSize, getPixels) {
+function* downsizeTexture(texture, maxSize, getPixels) {
   const pixels = getPixels(texture);
+  yield; // #3483: reading a large image back is a task of its own
   if (!pixels) return texture;
   const longest = Math.max(pixels.width, pixels.height);
   if (longest <= maxSize) return texture;
   const scale = maxSize / longest;
   const newWidth = Math.max(1, Math.floor(pixels.width * scale));
   const newHeight = Math.max(1, Math.floor(pixels.height * scale));
-  const out = new DataTexture(boxDownsample(pixels, newWidth, newHeight), newWidth, newHeight, RGBAFormat, UnsignedByteType);
+  const out = new DataTexture(yield* boxDownsample(pixels, newWidth, newHeight), newWidth, newHeight, RGBAFormat, UnsignedByteType);
   out.name = texture.name;
   out.colorSpace = texture.colorSpace;
   out.wrapS = texture.wrapS;
@@ -256,14 +268,14 @@ function downsizeTexture(texture, maxSize, getPixels) {
 // A copy of the material with every over-sized texture replaced by a smaller
 // one, or the material itself when nothing needed shrinking. Cached so
 // meshes that share a material keep sharing it in the mid model.
-function downsizeMaterial(material, maxSize, getPixels, cache) {
+function* downsizeMaterial(material, maxSize, getPixels, cache) {
   if (!material) return material;
   if (cache.has(material)) return cache.get(material);
   let replaced = null;
   for (const key of Object.keys(material)) {
     const value = material[key];
     if (!value || !value.isTexture) continue;
-    const smaller = downsizeTexture(value, maxSize, getPixels);
+    const smaller = yield* downsizeTexture(value, maxSize, getPixels);
     if (smaller !== value) {
       if (!replaced) replaced = material.clone();
       replaced[key] = smaller;
@@ -301,7 +313,8 @@ function* buildMid(model, meshes, options, getPixels) {
       }
     }
     const materials = Array.isArray(cloneMesh.material) ? cloneMesh.material : [cloneMesh.material];
-    const resized = materials.map((material) => downsizeMaterial(material, maxTextureSize, getPixels, materialCache));
+    const resized = [];
+    for (const material of materials) resized.push(yield* downsizeMaterial(material, maxTextureSize, getPixels, materialCache));
     if (resized.some((material, index) => material !== materials[index])) {
       cloneMesh.material = Array.isArray(cloneMesh.material) ? resized : resized[0];
       changed = true;

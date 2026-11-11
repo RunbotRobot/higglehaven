@@ -56,9 +56,10 @@ import * as THREE from 'three';
 import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
-import { setInstanceLodState, attachInstanceTiers, loadTierScenes, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
+import { setInstanceLodState, attachInstanceTiers, loadTierScenes, loadFarViewSource, disposeObject, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
+import { createFarView } from './farView.js';
 import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL } from './lodTier.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
@@ -66,7 +67,7 @@ import { isNetworkError } from '../build/scene.js';
 import { currentAuthUser } from '../account/auth.js';
 import {
   fetchLandlet, fetchLandletVersion, fetchInstances, fetchAllLandlets,
-  fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence,
+  fetchFarPlacements, fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence,
 } from '../api.js';
 import { applyAssistantLook } from './assistantAvatar.js';
 import { idleState } from './assistantIdle.js';
@@ -272,6 +273,23 @@ let shopLastReportedFlying; // #2043: same undefined-until-first-report shape as
 // comment on why that fixed assumption produces a visible freeze/catch-up
 // snap under an uneven poll cadence) }.
 export const shopOtherAvatars = new Map();
+
+// #3447: the assistant, if any, whose drawn avatar a raycast hit belongs to.
+// Walks up from the hit mesh to the avatar's group; only assistants answer a tap.
+export function assistantFromHit(hit) {
+  for (const entry of shopOtherAvatars.values()) {
+    if (!entry.assistantName || !entry.userId) continue;
+    for (let node = hit.object; node; node = node.parent) {
+      if (node === entry.group) return { userId: entry.userId, name: entry.assistantName };
+    }
+  }
+  return null;
+}
+
+// #3447: every assistant avatar currently drawn, as raycast targets.
+export function assistantGroups() {
+  return [...shopOtherAvatars.values()].filter((entry) => entry.assistantName && entry.userId).map((entry) => entry.group);
+}
 // #2045: templateId -> when its model last failed to load (fail open: the
 // default body is shown and the load is retried only after
 // CUSTOM_AVATAR_RETRY_AFTER_MS, see otherAvatarModels.js).
@@ -345,6 +363,41 @@ export function updateShopProximity() {
     loadShopLandletInstances(entry, ++entry.loadToken);
   }
   updateInstanceLodTiers();
+  updateFarView();
+}
+
+// #3478 (part of #3418): distant landlets drawn from their products' far
+// models, in one shared group in the scene. Created on first use; the world
+// frame budget (#3396) paces every build, so this only schedules work.
+let shopFarView = null;
+function updateFarView() {
+  if (!shopFarView) {
+    const root = new THREE.Group();
+    root.name = 'shop-far-view';
+    scene.add(root);
+    shopFarView = createFarView({
+      queue: worldWorkQueue,
+      root,
+      fetchTile: fetchFarPlacements,
+      loadSource: async (templateId) => {
+        const template = findTemplate(templateId);
+        const source = template ? await loadFarViewSource(template) : null;
+        return source && { ...source, dispose: () => disposeObject(source.container) };
+      },
+      dimensionsFor: (templateId) => findTemplate(templateId)?.dimensions ?? null,
+      elevationFor: (landletId) => shopLandlets.get(landletId)?.record.elevationM ?? 0,
+      loadedLandletIds: () => {
+        const ids = new Set();
+        for (const [id, entry] of shopLandlets) if (entry.loaded) ids.add(id);
+        return ids;
+      },
+      getCamera: () => camera.position,
+      getView: () => ({ fovDeg: camera.fov, viewportHeightPx: window.innerHeight }),
+    });
+    // Read by the 390px e2e (#3480): draw calls and instances in view.
+    window.__shopFarViewStats = () => shopFarView.stats();
+  }
+  shopFarView.update();
 }
 
 // #3373: how big a placed item looks on screen right now (its bounding sphere's
@@ -910,6 +963,7 @@ export async function pollNearbyPresenceIfNeeded(now) {
     } else if (isNewEntry && entry.assistantName) {
       startAssistantTransition(entry, 'arrive', performance.now()); // the frame clock, not the poll's `now`, which is stale by the fetch's latency
     }
+    entry.userId = avatar.userId ?? null; // #3447: the account to ask when a shopper taps an assistant
   }
   // #2436: a single poll missing an avatar that's genuinely still nearby
   // (report/poll cadence phase gap, or the avatar's own report briefly
@@ -1151,6 +1205,7 @@ function despawnOtherShopAvatars() {
 function refreshOtherShopAvatarsDiagnostic() {
   window.__shopOtherAvatars = [...shopOtherAvatars.entries()].map(([builderId, entry]) => ({
     builderId, x: entry.toX, y: entry.toY, z: entry.toZ, heading: entry.toHeading,
+    userId: entry.userId ?? null, // added for #3447 -- e2e taps an assistant by its account, as it cannot aim at a pixel
     assistantName: entry.assistantName ?? null, // added for #3445 -- e2e needs to see that a fleet avatar carries its name tag and shirt, and an ordinary one does not
     hasAssistantShirt: Boolean(entry.assistantShirt), // added for #3445, same reason
     bodyTemplateId: entry.bodyTemplateId, // added for #2045 -- e2e needs to see which model each other avatar actually drew
