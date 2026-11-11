@@ -28,7 +28,7 @@ function prefersReducedMotion() {
 }
 
 export function createTierCrossfades({
-  createDissolve = createArrivalDissolve,
+  createDissolve = (root) => createArrivalDissolve(root, { uniformName: 'uTierFadeLevel' }),
   clock = () => performance.now(),
   durationMs = TIER_CROSSFADE_MS,
   maxInFlight = TIER_CROSSFADE_MAX_IN_FLIGHT,

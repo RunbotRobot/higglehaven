@@ -82,6 +82,18 @@ describe('patchDissolveShader', () => {
     expect(shader.fragmentShader.indexOf('discard')).toBeGreaterThan(shader.fragmentShader.indexOf('void main'));
   });
 
+  it('a second dissolve with its own uniform name patches the same shader without redeclaring (#3494)', () => {
+    const arrival = { value: 1 };
+    const fade = { value: 0 };
+    const shader = { uniforms: {}, fragmentShader: SOURCE };
+    expect(patchDissolveShader(shader, arrival)).toBe(true);
+    expect(patchDissolveShader(shader, fade, 'uTierFadeLevel')).toBe(true);
+    expect(shader.fragmentShader.match(/uniform float uArrivalLevel;/g)).toHaveLength(1);
+    expect(shader.fragmentShader.match(/uniform float uTierFadeLevel;/g)).toHaveLength(1);
+    expect(shader.uniforms.uArrivalLevel).toBe(arrival);
+    expect(shader.uniforms.uTierFadeLevel).toBe(fade);
+  });
+
   it('leaves a shader without the expected markers untouched', () => {
     const shader = { uniforms: {}, fragmentShader: 'void main() { gl_FragColor = vec4(1.0); }' };
     expect(patchDissolveShader(shader, { value: 0 })).toBe(false);

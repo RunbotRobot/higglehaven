@@ -122,22 +122,26 @@ export function createArrivalFog({ center, extent, seed = 0 }) {
 
 // The dissolve: interleaved gradient noise from the fragment's screen position,
 // kept where the noise is below the level. Level 1 keeps every fragment.
-const DISSOLVE_UNIFORM_DECLARATION = 'uniform float uArrivalLevel;';
-const DISSOLVE_DISCARD = `
-  if (fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))) >= uArrivalLevel) discard;
+// #3494: the uniform's name is a parameter so a second dissolve (the tier
+// cross-fade) can sit on a material the arrival dissolve already patched
+// without redeclaring the same uniform.
+export const ARRIVAL_UNIFORM_NAME = 'uArrivalLevel';
+const dissolveUniformDeclaration = (name) => `uniform float ${name};`;
+const dissolveDiscard = (name) => `
+  if (fract(52.9829189 * fract(dot(gl_FragCoord.xy, vec2(0.06711056, 0.00583715)))) >= ${name}) discard;
 `;
 
 // Patches a shader's fragment source. Returns false (and changes nothing) for a
 // material whose shader lacks the markers, which then simply stays opaque.
-export function patchDissolveShader(shader, uniform) {
+export function patchDissolveShader(shader, uniform, name = ARRIVAL_UNIFORM_NAME) {
   const source = shader.fragmentShader;
   if (!source.includes('#include <common>') || !source.includes('#include <clipping_planes_fragment>')) {
     return false;
   }
-  shader.uniforms.uArrivalLevel = uniform;
+  shader.uniforms[name] = uniform;
   shader.fragmentShader = source
-    .replace('#include <common>', `#include <common>\n${DISSOLVE_UNIFORM_DECLARATION}`)
-    .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>${DISSOLVE_DISCARD}`);
+    .replace('#include <common>', `#include <common>\n${dissolveUniformDeclaration(name)}`)
+    .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>${dissolveDiscard(name)}`);
   return true;
 }
 
@@ -145,7 +149,7 @@ export function patchDissolveShader(shader, uniform) {
 // replaced by one clone carrying the patched shader (originals are shared with
 // the cached model and are never modified); restore() puts the originals back
 // and disposes the clones. setLevel(0..1): 0 shows nothing, 1 the whole item.
-export function createArrivalDissolve(root) {
+export function createArrivalDissolve(root, { uniformName = ARRIVAL_UNIFORM_NAME } = {}) {
   const uniform = { value: 0 };
   const clones = new Map(); // original material -> clone
   const swaps = []; // { mesh, original }
@@ -157,12 +161,12 @@ export function createArrivalDissolve(root) {
       const previous = original.onBeforeCompile;
       clone.onBeforeCompile = (shader, renderer) => {
         previous?.call(clone, shader, renderer);
-        patchDissolveShader(shader, uniform);
+        patchDissolveShader(shader, uniform, uniformName);
       };
       // One program for every clone of the same material type, and none shared
       // with the unpatched one.
       const baseKey = original.customProgramCacheKey ? original.customProgramCacheKey() : '';
-      clone.customProgramCacheKey = () => `${baseKey}|arrival-dissolve`;
+      clone.customProgramCacheKey = () => `${baseKey}|arrival-dissolve|${uniformName}`;
       clone.needsUpdate = true;
       clones.set(original, clone);
     }
