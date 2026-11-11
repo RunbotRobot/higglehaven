@@ -23,6 +23,13 @@ describe('assistantTagLines', () => {
   });
 });
 
+describe('assistantTagLines busy state (#3449)', () => {
+  it('says busy only when the assistant is helping someone', () => {
+    expect(assistantTagLines('Fig')[1]).toBe('assistant');
+    expect(assistantTagLines('Fig', true)[1]).toBe('assistant · busy');
+  });
+});
+
 describe('assistantSpeakerLabel', () => {
   it('is one line, the name then the plain word assistant', () => {
     expect(assistantSpeakerLabel('Juniper')).toBe('Juniper \u00b7 assistant');
