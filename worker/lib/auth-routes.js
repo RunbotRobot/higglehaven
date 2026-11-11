@@ -53,6 +53,7 @@ import { checkRateLimit } from './rate-limit.js';
 import { readJson, stringValue } from './validation.js';
 import { timingSafeEqual, bytesToHex, hexToBytes } from './crypto.js';
 import { turnstileConfigured, verifyTurnstileToken } from './turnstile.js';
+import { isReservedUsername } from './fleet-agents.js';
 import {
   SESSION_COOKIE_NAME, parseCookies, sha256Hex, currentUser, requireCurrentUser,
 } from './auth.js';
@@ -176,6 +177,11 @@ export async function handleSignup(request, env, db, url) {
   const email = emailValue(input.email);
   const password = passwordValue(input.password);
   const username = usernameValue(input.username);
+  // #3445: the fleet's session names and its assistants' agent names belong to
+  // the fleet; nobody else can sign up as one.
+  if (isReservedUsername(username)) {
+    throw new HttpError('Username is already taken', 409);
+  }
 
   await checkRateLimit(db, `signup:${clientIp(request)}:${email}`, 5);
 
