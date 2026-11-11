@@ -103,7 +103,11 @@
       #loading-screen {
         position: fixed;
         inset: 0;
-        z-index: 15;
+        /* #3442: 19, above the Shop HUD tier (.shop-ui is 16) and below the
+           modals (20). At 15 it sat under every .shop-ui element, so any of
+           them marked visible early (the joysticks were) painted on top of
+           the title screen. Nothing else lives at 17-19. */
+        z-index: 19;
         display: flex;
         align-items: center;
         justify-content: center;
@@ -113,6 +117,10 @@
       }
       #loading-screen.loading-screen-hidden {
         opacity: 0;
+        /* #3442: the splash now sits above the Shop HUD, so while it fades
+           out it must not swallow a tap or drag meant for the controls
+           beneath it. */
+        pointer-events: none;
       }
       #loading-screen img {
         width: min(240px, 60vw);
