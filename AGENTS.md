@@ -716,6 +716,19 @@ most likely to come up again.
   reasons still hold (no digest of routine status, one topic at a time).
   The principle: the owner's attention is the scarcest thing in the
   project, so every message to them has to earn its place.
+  **Tightened 2026-11-11:** "From now on, please assume I'm not reading
+  anything in the chat window at all." The owner sends a prompt, turns
+  to other work, and comes back hours or days later; an answer given
+  only in chat is lost, and they had begun holding back new information
+  until every open question was settled for fear of losing track. Their
+  inbox is the list of what is open: "I have the email, and I won't
+  archive it until I've responded to its contents." So every answer goes
+  by email, however small; one topic per email, strictly, so each can be
+  answered and archived by itself; every email stands alone and ends by
+  saying exactly what is needed from the owner, or that nothing is. A
+  question that is not in an email has not been asked. The wider
+  principle for anything built for a busy person: put each open item
+  where they keep their open items, one item per unit they can close.
 
 - **Higgles are earned one way: by building landlets. Nothing else
   pays them.** (2026-11-10.) An idea that users would be paid higgles
