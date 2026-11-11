@@ -4467,6 +4467,11 @@ export function templateFromRow(row) {
     priceCents: row.price_cents,
     sellerId: row.seller_id,
     modelUrl: row.model_url,
+    // #3414 (Model tiers 2/7, #3412): simpler stored versions of the model, or
+    // null when none were generated (a failed generation, or a product older
+    // than the backfill); the viewer then falls back to the full model.
+    modelMidUrl: row.model_mid_url ?? null,
+    modelFarUrl: row.model_far_url ?? null,
     modelSizeBytes: row.model_size_bytes,
     skeletonSignature: row.skeleton_signature,
     // #3312: the seller's own idle/walk/fly clip choice, or null when nobody chose.

@@ -88,6 +88,8 @@
         if (row.referencedByTemplateIds.length) refs.push('template: ' + row.referencedByTemplateIds.join(', '));
         if (row.referencedByVideoJobIds.length) refs.push('videoJob: ' + row.referencedByVideoJobIds.join(', '));
         if (row.referencedByControlRoomIds.length) refs.push('controlRoom: ' + row.referencedByControlRoomIds.join(', '));
+        // #3414: a product's mid/far model, so a mismatched reduction is visible here.
+        if ((row.referencedAsTierBy || []).length) refs.push('reduced model of: ' + row.referencedAsTierBy.join(', '));
         return '<tr>' +
           '<td>' + escapeHtml(row.modelUrl) + '</td>' +
           '<td>' + formatBytes(row.sizeBytes) + '</td>' +

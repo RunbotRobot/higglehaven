@@ -21,10 +21,14 @@ await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: true });
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });
 await page.waitForTimeout(300);
 
-// Collect every model upload body so the stored GLB can be inspected.
+// Collect every model upload body so the stored GLB can be inspected. An
+// upload also stores a mid and a far version of the model (#3414, sent as
+// ?tier=mid|far), and the far one has no textures by design, so the full
+// model is the upload that carries no tier.
 const uploadBodies = [];
 page.on('request', (req) => {
-  if (req.method() === 'POST' && /\/api\/models$/.test(new URL(req.url()).pathname)) {
+  const url = new URL(req.url());
+  if (req.method() === 'POST' && /\/api\/models$/.test(url.pathname) && !url.searchParams.has('tier')) {
     const buf = req.postDataBuffer();
     if (buf) uploadBodies.push(buf);
   }

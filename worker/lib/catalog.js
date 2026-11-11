@@ -220,6 +220,12 @@ function validateTemplate(input, fallbackId) {
     stockQuantity: optionalStockQuantity(input.stockQuantity),
     sellerId: optionalStringValue(input.sellerId, 'sellerId'),
     modelUrl: input.modelUrl || null,
+    // #3414 (Model tiers 2/7, #3412): simpler stored versions of the model for
+    // middle distance and the horizon. Optional, and only meaningful beside a
+    // full model; both are checked against the bucket (and against the full
+    // model's size) by assertUploadedModelTiers.
+    modelMidUrl: input.modelMidUrl || null,
+    modelFarUrl: input.modelFarUrl || null,
     // #540: the seller's own "faux lándlet" 3D array paginates by a
     // cumulative model-file-size cap, not a fixed item count — this is the
     // one place that size (already computed and returned by
@@ -253,6 +259,14 @@ function validateTemplate(input, fallbackId) {
   // model reference.
   if (template.modelUrl !== null && (typeof template.modelUrl !== 'string' || !template.modelUrl.startsWith('/uploads/'))) {
     throw new HttpError('modelUrl must reference an uploaded model (starting with /uploads/) or be omitted', 400);
+  }
+  for (const [field, value] of [['modelMidUrl', template.modelMidUrl], ['modelFarUrl', template.modelFarUrl]]) {
+    if (value !== null && (typeof value !== 'string' || !value.startsWith('/uploads/'))) {
+      throw new HttpError(`${field} must reference an uploaded model (starting with /uploads/) or be omitted`, 400);
+    }
+    if (value !== null && template.modelUrl === null) {
+      throw new HttpError(`${field} needs a modelUrl: it is a reduced version of that model`, 400);
+    }
   }
   JSON.stringify(template.metadata);
   assertNotProhibitedContent(template);
@@ -367,7 +381,7 @@ function clipRolesToText(clipRoles) {
 }
 
 function templateParams(template) {
-  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata), template.stockQuantity, clipRolesToText(template.clipRoles)];
+  return [template.templateId, template.name, template.category, template.subcategory, template.color, template.dimensions.width, template.dimensions.depth, template.dimensions.height, template.priceCents, template.sellerId, template.modelUrl, template.modelSizeBytes, template.skeletonSignature, JSON.stringify(template.metadata), template.stockQuantity, clipRolesToText(template.clipRoles), template.modelMidUrl ?? null, template.modelFarUrl ?? null];
 }
 
 // #1758: compares an existing row (raw DB shape) against a freshly
@@ -910,6 +924,49 @@ async function assertUploadedModelExists(bucket, modelUrl) {
   }
 }
 
+// #3414: for copying a stored product's tier references onto something new.
+// Unlike a request body, a stored reference can have gone stale, and a missing
+// tier is not worth failing the whole copy over: it is dropped, and the full
+// model carries on alone.
+async function usableTierUrls(bucket, { modelUrl, modelMidUrl, modelFarUrl }) {
+  const out = { modelMidUrl: modelMidUrl ?? null, modelFarUrl: modelFarUrl ?? null };
+  try {
+    await assertUploadedModelTiers(bucket, { modelUrl, modelMidUrl: out.modelMidUrl, modelFarUrl: out.modelFarUrl });
+    return out;
+  } catch (err) {
+    if (!(err instanceof HttpError)) throw err;
+    return { modelMidUrl: null, modelFarUrl: null };
+  }
+}
+
+// #3414 (Model tiers 2/7, #3412): a template's mid and far models are stored
+// objects in the same bucket and must be as real as the full model: under
+// models/ (so a thumbnail or concept image cannot stand in) and present. A
+// reduced version is only worth storing if it is smaller than what it reduces,
+// so one that is not is refused rather than kept as dead weight. Anything
+// that is not a /uploads/ reference was already rejected by validateTemplate.
+async function assertUploadedModelTiers(bucket, template) {
+  const tiers = [['modelMidUrl', template.modelMidUrl], ['modelFarUrl', template.modelFarUrl]]
+    .filter(([, url]) => url);
+  if (tiers.length === 0) return;
+  await assertUploadedModelExists(bucket, template.modelUrl);
+  const fullKey = decodeURIComponent(template.modelUrl.slice('/uploads/'.length));
+  const full = await bucket.head(fullKey);
+  for (const [field, url] of tiers) {
+    await assertUploadedModelExists(bucket, url).catch((err) => {
+      if (err instanceof HttpError && err.status === 400) {
+        throw new HttpError(`${field} does not reference an existing uploaded model`, 400);
+      }
+      throw err;
+    });
+    const key = decodeURIComponent(url.slice('/uploads/'.length));
+    const tier = await bucket.head(key);
+    if (full && tier && tier.size >= full.size) {
+      throw new HttpError(`${field} must be smaller than the full model`, 400);
+    }
+  }
+}
+
 // ---- Prompt-mode concept-image generation (#328, sub-issue of #323) —
 // given a builder's free-text prompt, calls an external image-gen API to
 // produce a concept image that a later step (#329's similarity search,
@@ -1118,7 +1175,10 @@ export async function handleCatalog(request, db, route, url, models, env) {
     // sibling (worker/index.js's own handler for /catalog/:templateId)
     // already rate-limits before its own assertUploadedModelExists call;
     // this brings the batch endpoint in line with that ordering.
-    await Promise.all(templates.map((template) => assertUploadedModelExists(models, template.modelUrl)));
+    await Promise.all(templates.map(async (template) => {
+      await assertUploadedModelExists(models, template.modelUrl);
+      await assertUploadedModelTiers(models, template);
+    }));
     const conflictClause = request.method === 'PUT' ? `
       ON CONFLICT(template_id) DO UPDATE SET
         name = excluded.name, category = excluded.category, subcategory = excluded.subcategory,
@@ -1126,6 +1186,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
         height_m = excluded.height_m, price_cents = excluded.price_cents,
         seller_id = excluded.seller_id, model_url = excluded.model_url,
         model_size_bytes = excluded.model_size_bytes,
+        model_mid_url = excluded.model_mid_url, model_far_url = excluded.model_far_url,
         skeleton_signature = excluded.skeleton_signature,
         clip_roles = excluded.clip_roles,
         metadata_json = excluded.metadata_json,
@@ -1157,8 +1218,8 @@ export async function handleCatalog(request, db, route, url, models, env) {
     }
     await db.batch(templates.map((template) => db.prepare(`
       INSERT INTO catalog_templates
-        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity, clip_roles)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity, clip_roles, model_mid_url, model_far_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ${conflictClause}
     `).bind(...templateParams(existingSellerIdById.has(template.templateId)
       ? { ...template, sellerId: existingSellerIdById.get(template.templateId) }
@@ -1623,6 +1684,7 @@ export async function handleCatalog(request, db, route, url, models, env) {
       }
     }
     await assertUploadedModelExists(models, template.modelUrl);
+    await assertUploadedModelTiers(models, template);
     // #2748 (leaf of #2745's shared-products redesign): migrations/0153_
     // shared_products.sql's own comment explicitly leaves "every listing
     // has a product_id" unenforced by the database, to be wired up by
@@ -1651,26 +1713,29 @@ export async function handleCatalog(request, db, route, url, models, env) {
       db.prepare(`
         INSERT INTO products
           (product_id, name, category, subcategory, color, width_m, depth_m, height_m,
-           model_url, metadata_json, model_size_bytes, skeleton_signature, original_seller_id, clip_roles)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           model_url, metadata_json, model_size_bytes, skeleton_signature, original_seller_id, clip_roles,
+           model_mid_url, model_far_url)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(product_id) DO UPDATE SET
           name = excluded.name, category = excluded.category, subcategory = excluded.subcategory,
           color = excluded.color, width_m = excluded.width_m, depth_m = excluded.depth_m,
           height_m = excluded.height_m, model_url = excluded.model_url,
           metadata_json = excluded.metadata_json, model_size_bytes = excluded.model_size_bytes,
           skeleton_signature = excluded.skeleton_signature, original_seller_id = excluded.original_seller_id,
-          clip_roles = excluded.clip_roles
+          clip_roles = excluded.clip_roles,
+          model_mid_url = excluded.model_mid_url, model_far_url = excluded.model_far_url
         WHERE NOT EXISTS (SELECT 1 FROM catalog_templates WHERE product_id = excluded.product_id)
       `).bind(
         template.templateId, template.name, template.category, template.subcategory, template.color,
         template.dimensions.width, template.dimensions.depth, template.dimensions.height,
         template.modelUrl, JSON.stringify(template.metadata), template.modelSizeBytes, template.skeletonSignature,
         template.sellerId, clipRolesToText(template.clipRoles),
+        template.modelMidUrl, template.modelFarUrl,
       ),
       db.prepare(`
         INSERT INTO catalog_templates
-          (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity, clip_roles, product_id)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          (template_id, name, category, subcategory, color, width_m, depth_m, height_m, price_cents, seller_id, model_url, model_size_bytes, skeleton_signature, metadata_json, stock_quantity, clip_roles, model_mid_url, model_far_url, product_id)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(...templateParams(template), template.templateId),
     ]);
     // #976: re-select and map through templateFromRow rather than handing
@@ -1734,6 +1799,10 @@ export async function handleCatalog(request, db, route, url, models, env) {
     // could already be gone from R2 by the time an old productId gets
     // reused here.
     await assertUploadedModelExists(models, product.model_url);
+    // #3414: a tier the product names that has since disappeared is dropped
+    // rather than copied onto the new listing; the full model is what matters.
+    const productTiers = { modelUrl: product.model_url, modelMidUrl: product.model_mid_url, modelFarUrl: product.model_far_url };
+    const tierUrls = await usableTierUrls(models, productTiers);
     // #3110: a product row created before thumbnails were written through to
     // it has no image of its own; fall back to the earliest existing listing
     // of it that does, so the new listing starts with a thumbnail too.
@@ -1751,13 +1820,15 @@ export async function handleCatalog(request, db, route, url, models, env) {
       INSERT INTO catalog_templates
         (template_id, name, category, subcategory, color, width_m, depth_m, height_m,
          price_cents, seller_id, model_url, model_size_bytes, skeleton_signature,
-         image_url, image_embedding, is_test_model, metadata_json, stock_quantity, product_id, clip_roles)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         image_url, image_embedding, is_test_model, metadata_json, stock_quantity, product_id, clip_roles,
+         model_mid_url, model_far_url)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       templateId, product.name, product.category, product.subcategory, product.color,
       product.width_m, product.depth_m, product.height_m,
       priceCents, sessionSeller.seller_id, product.model_url, product.model_size_bytes, product.skeleton_signature,
       imageUrl, imageEmbedding, product.is_test_model, product.metadata_json, stockQuantity, productId, product.clip_roles ?? null,
+      tierUrls.modelMidUrl, tierUrls.modelFarUrl,
     ).run();
     const stored = await db.prepare('SELECT * FROM catalog_templates WHERE template_id = ?').bind(templateId).first();
     return json({ template: templateFromRow(stored) }, 201);
@@ -1816,6 +1887,11 @@ export async function handleCatalog(request, db, route, url, models, env) {
       throw new HttpError('modelSizeBytes is required when modelUrl changes', 400);
     }
     const clearSkeletonSignature = modelUrlChanged && input.skeletonSignature === undefined;
+    // #3414: likewise the tiers are reductions of the OLD file. A new model
+    // drops them unless the same request brings fresh ones, so a stale tier
+    // never keeps drawing the previous model at a distance.
+    const clearMidUrl = modelUrlChanged && input.modelMidUrl === undefined;
+    const clearFarUrl = modelUrlChanged && input.modelFarUrl === undefined;
     // #3312: a seller's clip choice names clips of the OLD file, so a new
     // model file drops it unless the same request brings a fresh one.
     // Likewise when the product stops being an avatar (clipRoles is avatar-only).
@@ -1826,10 +1902,13 @@ export async function handleCatalog(request, db, route, url, models, env) {
       ...input,
       ...(clearSkeletonSignature ? { skeletonSignature: null } : {}),
       ...(clearClipRoles ? { clipRoles: null } : {}),
+      ...(clearMidUrl ? { modelMidUrl: null } : {}),
+      ...(clearFarUrl ? { modelFarUrl: null } : {}),
       templateId: route[1],
       sellerId: existing.seller_id,
     }, route[1]);
     await assertUploadedModelExists(models, template.modelUrl);
+    await assertUploadedModelTiers(models, template);
     // #1742: same lost-update race #468 already fixed for bundles -- two
     // concurrent partial PATCHes to *different* fields (a price change and
     // a separate dimension resize, say) each merged their write from this
@@ -1873,6 +1952,8 @@ export async function handleCatalog(request, db, route, url, models, env) {
           price_cents = CASE WHEN ? = 1 THEN ? ELSE price_cents END, seller_id = ?,
           model_url = CASE WHEN ? = 1 THEN ? ELSE model_url END,
           model_size_bytes = CASE WHEN ? = 1 THEN ? ELSE model_size_bytes END,
+          model_mid_url = CASE WHEN ? = 1 THEN ? ELSE model_mid_url END,
+          model_far_url = CASE WHEN ? = 1 THEN ? ELSE model_far_url END,
           skeleton_signature = CASE WHEN ? = 1 THEN ? ELSE skeleton_signature END,
           clip_roles = CASE WHEN ? = 1 THEN ? ELSE clip_roles END,
           metadata_json = CASE WHEN ? = 1 THEN ? ELSE metadata_json END,
@@ -1891,6 +1972,8 @@ export async function handleCatalog(request, db, route, url, models, env) {
       template.sellerId,
       input.modelUrl === undefined ? 0 : 1, template.modelUrl,
       input.modelSizeBytes === undefined ? 0 : 1, template.modelSizeBytes,
+      input.modelMidUrl === undefined && !clearMidUrl ? 0 : 1, template.modelMidUrl,
+      input.modelFarUrl === undefined && !clearFarUrl ? 0 : 1, template.modelFarUrl,
       input.skeletonSignature === undefined && !clearSkeletonSignature ? 0 : 1, template.skeletonSignature,
       input.clipRoles === undefined && !clearClipRoles ? 0 : 1, clipRolesToText(template.clipRoles),
       input.metadata === undefined ? 0 : 1, JSON.stringify(template.metadata),
