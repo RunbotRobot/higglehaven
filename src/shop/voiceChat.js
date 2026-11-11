@@ -33,6 +33,7 @@ import {
   leaveFriendVoiceChannel as apiLeaveFriendVoiceChannel,
 } from '../api.js';
 import { shopOtherAvatars } from './presenceAndContent.js';
+import { assistantSpeakerLabel } from './assistantLabel.js';
 import { createPersistentMuteSet } from './mutePersistence.js';
 import { shopAvatarPosition } from '../main.js';
 import { promptReportReason } from '../ui/reportReasonModal.js';
@@ -513,6 +514,10 @@ function teardownPeer(builderId) {
 // (bounded by how many avatars can realistically be in voice range at
 // once) and event handling is delegated at the panel level below, so a
 // full rebuild never loses or duplicates a listener.
+function escapeVoiceLabel(text) {
+  return String(text).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
+
 function renderVoicePeersList() {
   if (!voicePeersPanelEl || !voicePeersListEl) return;
   const connected = [...peers.entries()]
@@ -521,8 +526,14 @@ function renderVoicePeersList() {
   voicePeersPanelEl.classList.toggle('open', connected.length > 0);
   voicePeersListEl.innerHTML = connected.map(([builderId, entry]) => {
     const muted = mutedPeers.has(builderId);
+    // #3445: an assistant is listed by name with its "assistant" word; every
+    // other peer stays the anonymous numbered "Nearby voice N". The name comes
+    // from the presence poll's server-derived flag (shopOtherAvatars), and is
+    // escaped because this row is built as HTML.
+    const assistantName = shopOtherAvatars.get(builderId)?.assistantName;
+    const label = assistantName ? escapeVoiceLabel(assistantSpeakerLabel(assistantName)) : `Nearby voice ${entry.displaySeq}`;
     return `<div class="shop-voice-peer-row" data-builder-id="${builderId}">`
-      + `<span class="shop-voice-peer-label">Nearby voice ${entry.displaySeq}</span>`
+      + `<span class="shop-voice-peer-label">${label}</span>`
       + `<button type="button" data-action="mute" class="${muted ? 'shop-voice-peer-muted' : ''}">${muted ? 'Unmute' : 'Mute'}</button>`
       + '<button type="button" data-action="report">Report</button>'
       + '<button type="button" data-action="block">Block</button>'
