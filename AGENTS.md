@@ -741,7 +741,10 @@ most likely to come up again.
   resources." So coding sessions stay behind the scenes and never read a
   shopper's message; assistant sessions are named avatars in the world
   that people walk up to. When a design is being bent to make one thing
-  do two jobs, split it into two things that each do one. (higglehaven1's
+  do two jobs, split it into two things that each do one. Assistants
+  are named after plants and come into service in this order (owner,
+  2026-11-11): Juniper, Clover, Fig, Sorrel, Maple, Tansy, Bramble,
+  Moss, Basil, Fern, Sage; a later one continues the theme. (higglehaven1's
   condition, stated to the owner: a shopper's text is untrusted, so an
   assistant session has no repository, no connectors and no credentials
   beyond the live site; if that cannot be shown, it does not go live.)
@@ -1142,10 +1145,11 @@ cost when it happens anyway:
   up despite this convention already existing, i.e. skipping step 3
   above is exactly what turns an advisory claim into a real collision.
 - **Set `public_line` in the same write that sets a card `in_progress`
-  (#3446, part of #3444).** Fleet sessions are visible to shoppers as
-  assistants, and an assistant can say what it is working on. The card's
-  title and note are never shown to anyone; `public_line` is the one
-  sentence that is, so write it for a shopper: present tense, plain words,
+  (#3446, part of #3444).** Coding sessions stay behind the scenes (owner,
+  2026-11-11), but an assistant in the world can tell a shopper what the
+  team is working on, and this sentence is where it reads that from. The
+  card's title and note are never shown to anyone; `public_line` is the
+  one sentence that is, so write it for a shopper: present tense, plain words,
   about what the world looks like, not what the code does ("smoothing the
   edge of the sky"). For a card about security, moderation, money or
   another person's account, use the neutral line ("tidying up behind the
