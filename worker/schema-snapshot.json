@@ -64,6 +64,25 @@
       "y_m": "REAL|1||0",
       "z_m": "REAL|1||0"
     },
+    "assistant_conversations": {
+      "assistant_told_ended_at": "TEXT|0||0",
+      "assistant_user_id": "TEXT|1||0",
+      "conversation_id": "TEXT|0||1",
+      "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "ended_at": "TEXT|0||0",
+      "ended_by": "TEXT|0||0",
+      "last_activity_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "shopper_user_id": "TEXT|1||0",
+      "status": "TEXT|1|'open'|0"
+    },
+    "assistant_messages": {
+      "conversation_id": "TEXT|1||0",
+      "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "delivered_at": "TEXT|0||0",
+      "message_id": "TEXT|0||1",
+      "sender": "TEXT|1||0",
+      "text": "TEXT|1||0"
+    },
     "assistant_shifts": {
       "busy": "INTEGER|1|0|0",
       "last_seen_at": "TEXT|1||0",
@@ -767,6 +786,7 @@
     },
     "users": {
       "age_attested_at": "TEXT|0||0",
+      "assistant_seen_at": "TEXT|0||0",
       "card_funding": "TEXT|0||0",
       "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
       "deleted_at": "TEXT|0||0",
@@ -878,6 +898,26 @@
     "index:idx_archived_landlet_versions_builder_id": {
       "tbl": "archived_landlet_versions",
       "sql": "CREATE INDEX idx_archived_landlet_versions_builder_id ON archived_landlet_versions(builder_id, created_at DESC)"
+    },
+    "index:idx_assistant_conversations_ended_at": {
+      "tbl": "assistant_conversations",
+      "sql": "CREATE INDEX idx_assistant_conversations_ended_at ON assistant_conversations (ended_at)"
+    },
+    "index:idx_assistant_conversations_one_open_per_assistant": {
+      "tbl": "assistant_conversations",
+      "sql": "CREATE UNIQUE INDEX idx_assistant_conversations_one_open_per_assistant ON assistant_conversations (assistant_user_id) WHERE status = 'open'"
+    },
+    "index:idx_assistant_conversations_one_open_per_shopper": {
+      "tbl": "assistant_conversations",
+      "sql": "CREATE UNIQUE INDEX idx_assistant_conversations_one_open_per_shopper ON assistant_conversations (shopper_user_id) WHERE status = 'open'"
+    },
+    "index:idx_assistant_messages_conversation": {
+      "tbl": "assistant_messages",
+      "sql": "CREATE INDEX idx_assistant_messages_conversation ON assistant_messages (conversation_id, created_at)"
+    },
+    "index:idx_assistant_messages_created_at": {
+      "tbl": "assistant_messages",
+      "sql": "CREATE INDEX idx_assistant_messages_created_at ON assistant_messages (created_at)"
     },
     "index:idx_auction_bids_auction_id": {
       "tbl": "auction_bids",

@@ -9,6 +9,7 @@ import schemaSnapshot from './schema-snapshot.json';
 // the call-site counts that justified pulling it out of this file.
 import { json, HttpError, JSON_HEADERS, clientIp, htmlResponse, ERROR_CODES } from './lib/http.js';
 import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './lib/rate-limit.js';
+import { handleAssistantChat, handleAssistantInbox, pruneStaleAssistantChat } from './lib/assistant-chat.js';
 import { fleetKeyStatus, withoutFleetKey, handleFleetLogin, FLEET_LOGIN_PATH } from './lib/fleet.js';
 import { adminActionLogStatement } from './lib/admin-log.js';
 import { timingSafeEqual, bytesToHex, hexToBytes } from './lib/crypto.js';
@@ -532,6 +533,10 @@ export default {
     ctx.waitUntil(pruneStaleNearbyChatMessages(env.DB).catch((error) => {
       console.error('pruneStaleNearbyChatMessages failed', error);
     }));
+    // #3447: assistant conversations are kept no longer than nearby chat.
+    ctx.waitUntil(pruneStaleAssistantChat(env.DB).catch((error) => {
+      console.error('pruneStaleAssistantChat failed', error);
+    }));
     // #2817 (sub-issue of #2780, itself sub-issue of #2777): without this,
     // a voice signaling message sits in voice_signaling_messages forever --
     // nothing else ever deletes one.
@@ -745,6 +750,15 @@ async function handleApi(request, env, url, ctx) {
   // #2779 (sub-issue of #2777): proximity text chat.
   if (route[0] === 'nearby-chat') {
     return handleNearbyChat(request, env.DB, route, url);
+  }
+
+  // #3447 (part of #3444): a shopper asking an assistant a question, and the
+  // assistant's own inbox (worker/lib/assistant-chat.js).
+  if (route[0] === 'assistant-chat') {
+    return handleAssistantChat(request, env.DB, route, url);
+  }
+  if (route[0] === 'assistant-inbox') {
+    return handleAssistantInbox(request, env.DB, route);
   }
 
   // #2817 (sub-issue of #2780, itself sub-issue of #2777): proximity

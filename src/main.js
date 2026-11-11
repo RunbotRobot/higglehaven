@@ -1189,9 +1189,9 @@ export const SHOP_IDLE_HEAD_TURN_EASE_PER_S = 1.5;
 // mode UI to add/remove/view a level) shipped — levels do render real
 // geometry today (src/build/scene.js's renderLevelControls/addLevel/
 // navigateToLevel) — and the horizontal case now has a real near/middle
-// LOD band too (#2378: world/models.js's buildInstanceLodProxy/
-// setInstanceLodState swap a placed instance to a simplified proxy mid-
-// distance rather than the old binary load/unload). Only the horizontal
+// LOD band too (#2378, now #3416: world/models.js's attachInstanceTiers/
+// setInstanceLodState swap a placed instance to a reduced version of its own
+// model mid-distance rather than the old binary load/unload). Only the horizontal
 // far-band panoramic-backdrop piece is still missing (#2377's remaining
 // sub-issues) — the near/middle scheme this comment wanted to reuse for a
 // vertical distance metric already exists, so vertical LOD banding itself
@@ -1363,68 +1363,93 @@ window.__testShopLoadedInstanceCount = () => {
   for (const entry of shopLandlets.values()) count += entry.objects.length;
   return count;
 };
-// #2378: read-only test hook reporting an instance's actual rendered LOD
-// state, rather than just the tier the decision (#3373, shop/lodTier.js)
-// intended -- reads object.userData.lodProxy.visible directly (the real signal
-// setInstanceLodState toggles), so a bug in that toggle itself still shows
-// up here even if the decision flipped correctly. Returns 'near' (full detail
-// visible), 'middle' (simplified proxy visible), 'none' (no proxy at all --
-// a box/flooring fallback instance, nothing to simplify), or null if the
-// instance isn't currently loaded. Same minimal-exposure-for-verification
+// #2378 / #3416: read-only test hook reporting which version of an instance is
+// actually rendered, rather than just the tier the decision (#3373,
+// shop/lodTier.js) intended -- reads the visibility setInstanceLodState wrote
+// onto the item's own children, so a bug in that switch itself still shows up
+// here even if the decision flipped correctly. Returns 'full' (the model as
+// uploaded), 'mid' or 'far' (the reduced versions of that same model), 'none'
+// (not a loaded model at all -- a box/flooring fallback or a batched
+// placement's handle, nothing to switch), or null if the instance isn't
+// currently loaded. An item whose reduced versions are not ready yet is on its
+// full model, and reads 'full'. Same minimal-exposure-for-verification
 // precedent as window.__shopInstanceDisposedCount (#1427) and
 // window.__testShopAvatarPosition above. Always inert unless a test calls it.
 window.__testShopInstanceLodBand = (instanceId) => {
   for (const entry of shopLandlets.values()) {
     const object = entry.objects.find((o) => o.userData.instanceId === instanceId);
     if (!object) continue;
-    const proxy = object.userData.lodProxy;
-    if (!proxy) return 'none';
-    return proxy.visible ? 'middle' : 'near';
+    if (!object.userData.model) return 'none';
+    return object.userData.lodShown ?? 'full';
   }
   return null;
 };
-// #3254: read-only test hook reporting the LOD proxy's color as a hex string
-// (no leading #), or null if the instance isn't loaded or has no proxy.
-window.__testShopInstanceLodProxyColor = (instanceId) => {
+// #3416: read-only test hook describing what an instance puts on screen right
+// now: the tier shown, whether its reduced versions are ready, the triangle
+// count of the meshes actually visible, and whether any visible mesh is a
+// stand-in box (the old simplified proxy; there must be none for a placed
+// model). Null if the instance isn't loaded.
+window.__testShopInstanceLodStats = (instanceId) => {
   for (const entry of shopLandlets.values()) {
     const object = entry.objects.find((o) => o.userData.instanceId === instanceId);
     if (!object) continue;
-    return object.userData.lodProxy?.material.color.getHexString() ?? null;
+    let visibleTriangles = 0;
+    let boxStandIns = 0;
+    const walk = (node) => {
+      if (!node.visible) return;
+      if (node.isMesh && node.geometry) {
+        const index = node.geometry.index;
+        visibleTriangles += (index ? index.count : (node.geometry.attributes.position?.count ?? 0)) / 3;
+        if (node.geometry.type === 'BoxGeometry' && node !== object) boxStandIns += 1;
+      }
+      for (const child of node.children) walk(child);
+    };
+    for (const child of object.children) walk(child);
+    return {
+      tier: object.userData.model ? (object.userData.lodShown ?? 'full') : 'none',
+      tiersState: object.userData.lodTiersState ?? null,
+      hasMid: Boolean(object.userData.lodTiers?.mid),
+      hasFar: Boolean(object.userData.lodTiers?.far),
+      apparentPx: object.userData.lodPx ?? null,
+      visibleTriangles,
+      boxStandIns,
+    };
   }
   return null;
 };
-// #2399: read-only test hook exercising the *real* raycast pipeline (the
+// #2399 / #3416: read-only test hook exercising the *real* raycast pipeline (the
 // same THREE.Raycaster/shopReviews.map(r => r.mesh) pair the tap-to-inspect
 // click handler below uses) against a ray aimed straight down through the
-// exact center of the proxy's own world-space bounding box -- computed via
-// THREE.Box3 rather than assumed local coordinates, so it works regardless
-// of whether the proxy or the real model is currently visible. Reports
-// which representation actually absorbed the hit ('proxy', 'real', or
-// 'none' for no hit at all), independent of findTappedShopProduct's own
-// walk-up-to-the-shared-parent resolution (which would mask this -- both
-// representations share the same top-level `object`, so tapping either one
-// still resolves to the same product; this hook is what actually shows
-// setInstanceLodState's own hit-testable toggle working, or not). Always
-// inert unless a test calls it, same convention as the other window.__test*
-// hooks here.
+// exact center of the shown version's own world-space bounding box -- computed
+// via THREE.Box3 rather than assumed local coordinates. Reports which version
+// of the item actually absorbed the hit ('full', 'mid' or 'far'), or 'none'
+// for no hit at all, independent of findTappedShopProduct's own walk-up-to-the-
+// shared-parent resolution (which would mask this -- every version shares the
+// same top-level `object`, so tapping any of them still resolves to the same
+// product; this hook is what actually shows setInstanceLodState's own
+// hit-testable toggle working, or not). Null for an item with no versions.
+// Always inert unless a test calls it, same convention as the other
+// window.__test* hooks here.
 window.__testShopInstanceLodHitSource = (instanceId) => {
   for (const entry of shopLandlets.values()) {
     const object = entry.objects.find((o) => o.userData.instanceId === instanceId);
     if (!object) continue;
-    const proxy = object.userData.lodProxy;
-    if (!proxy) return null;
-    const box = new THREE.Box3().setFromObject(proxy);
+    const tiers = object.userData.lodTiers;
+    if (!tiers) return null;
+    const shown = object.userData.lodShown ?? 'full';
+    const shownRoot = shown === 'mid' ? tiers.mid : shown === 'far' ? tiers.far : object.children.find((c) => c !== tiers.mid && c !== tiers.far);
+    if (!shownRoot) return null;
+    const box = new THREE.Box3().setFromObject(shownRoot);
     const center = box.getCenter(new THREE.Vector3());
     const origin = new THREE.Vector3(center.x, center.y, box.max.z + 10);
     const downRaycaster = new THREE.Raycaster(origin, new THREE.Vector3(0, 0, -1));
     const hits = downRaycaster.intersectObjects(shopReviews.map((r) => r.mesh), true);
     if (hits.length === 0) return 'none';
     let current = hits[0].object;
-    while (current) {
-      if (current === proxy) return 'proxy';
-      current = current.parent;
-    }
-    return 'real';
+    while (current && current.parent !== object) current = current.parent;
+    if (current === tiers.mid) return 'mid';
+    if (current === tiers.far) return 'far';
+    return 'full';
   }
   return null;
 };

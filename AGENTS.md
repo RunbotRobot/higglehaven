@@ -76,6 +76,10 @@ Rules of conduct on the live site:
   landlets set aside for the fleet.
 - Never touch another person's content, and never friend, message, flag,
   report or block a real user.
+  A coding session never messages a real user, however it got to the site.
+  Assistant sessions (their own accounts, with no repository, connectors or
+  credentials) are the only sessions that talk to shoppers, and only through
+  the assistant inbox (`/api/assistant-inbox`, docs/API.md "Assistant chat").
 - No load testing on the live site; stay inside the normal rate limits.
 - Clean up what you place outside your sandbox landlet.
 - After a change of yours deploys, look at it on the live site at phone size

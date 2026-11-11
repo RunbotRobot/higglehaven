@@ -187,7 +187,7 @@ async function teleportOntoLandletAndTick() {
 
 // null once the instance isn't currently loaded for this id at all (never
 // loaded, or torn down by unloadShopLandletInstances); 'none' for a loaded
-// box-fallback instance (no lodProxy) -- see window.__testShopInstanceLodBand's
+// box-fallback instance (no model, so no tiers) -- see window.__testShopInstanceLodBand's
 // own comment in main.js. Either non-null value is enough to tell "loaded"
 // from "not" here; this test never puts the avatar far enough away to reach
 // the middle-LOD band.
