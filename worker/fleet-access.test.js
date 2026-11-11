@@ -271,13 +271,60 @@ describe('Fleet assistants: agent names', () => {
     });
   });
 
-  it('the presence payload carries the assistant flag and name for a fleet account only', async () => {
+  it('the owner\'s eleven assistant names are reserved and each has a login of its own', async () => {
+    const names = ['Juniper', 'Clover', 'Fig', 'Sorrel', 'Maple', 'Tansy', 'Bramble', 'Moss', 'Basil', 'Fern', 'Sage'];
+    expect(Object.values(FLEET_AGENT_NAMES)).toEqual(names);
+    for (const name of names) {
+      const login = `assistant-${name.toLowerCase()}`;
+      expect(FLEET_AGENT_NAMES[login]).toBe(name);
+      const signup = await api('/auth/signup', {
+        method: 'POST',
+        headers: ip(),
+        body: JSON.stringify({ email: `${crypto.randomUUID()}@example.test`, password: 'correct horse battery', username: name.toUpperCase(), ageAttested: true }),
+      });
+      expect(signup.response.status, name).toBe(409);
+    }
+    const first = await fleetLogin('assistant-juniper');
+    expect(first.response.status).toBe(200);
+    expect(first.body.user.username).toBe('Juniper');
+    const again = await fleetLogin('assistant-juniper');
+    expect(again.body.user.userId).toBe(first.body.user.userId);
+    // A name that is neither a coding session nor an assistant login is refused.
+    expect((await fleetLogin('assistant-nobody')).response.status).toBe(400);
+    expect((await fleetLogin('juniper')).response.status).toBe(400);
+  });
+
+  it('only an assistant is shown as one: a coding session\'s account is an ordinary avatar in presence', async () => {
+    const admin = await signupAdmin('fleet-coding-presence-admin');
+    const landletId = 'fleet-coding-presence-landlet';
+    await createGreenbeltLandletAs(admin.session, landletId);
+    const viewer = await signupBuilder('fleet-coding-presence-viewer');
+    const coding = await fleetLogin('higglehaven6');
+    const assistant = await fleetLogin('assistant-clover');
+    const setPresence = (userIdSql, bind) => env.DB.prepare(`
+      INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
+      VALUES (${userIdSql}, ?, 0, 0, 0, 0, 0, ?)
+      ON CONFLICT (user_id) DO UPDATE SET landlet_id = excluded.landlet_id, updated_at = excluded.updated_at
+    `).bind(bind, landletId, new Date().toISOString()).run();
+    await setPresence('(SELECT user_id FROM builders WHERE builder_id = ?)', viewer.builderId);
+    await setPresence('?', coding.body.user.userId);
+    await setPresence('?', assistant.body.user.userId);
+
+    const { body } = await api('/presence', viewer.session());
+    const codingAvatar = body.avatars.find((a) => a.userId === coding.body.user.userId);
+    const assistantAvatar = body.avatars.find((a) => a.userId === assistant.body.user.userId);
+    expect(codingAvatar).toBeDefined();
+    expect('assistant' in codingAvatar).toBe(false);
+    expect(assistantAvatar.assistant).toEqual({ name: 'Clover' });
+  });
+
+  it('the presence payload carries the assistant flag and name for an assistant account only', async () => {
     const admin = await signupAdmin('fleet-presence-admin');
     const landletId = 'fleet-presence-landlet';
     await createGreenbeltLandletAs(admin.session, landletId);
     const viewer = await signupBuilder('fleet-presence-viewer');
     const other = await signupBuilder('fleet-presence-ordinary');
-    const fleet = await withMappingResult({ higglehaven8: 'Presence Agent' }, () => fleetLogin('higglehaven8'));
+    const fleet = await fleetLogin('assistant-fig');
     const setPresence = (userIdSql, bind) => env.DB.prepare(`
       INSERT INTO avatar_presence (user_id, landlet_id, x, y, z, heading, flying, updated_at)
       VALUES (${userIdSql}, ?, 0, 0, 0, 0, 0, ?)
@@ -290,17 +337,8 @@ describe('Fleet assistants: agent names', () => {
     const { body } = await api('/presence', viewer.session());
     const fleetAvatar = body.avatars.find((a) => a.userId === fleet.body.user.userId);
     const ordinary = body.avatars.find((a) => a.builderId === other.builderId);
-    expect(fleetAvatar.assistant).toEqual({ name: 'Presence Agent' });
+    expect(fleetAvatar.assistant).toEqual({ name: 'Fig' });
     expect(ordinary).toBeDefined();
     expect('assistant' in ordinary).toBe(false);
   });
 });
-
-async function withMappingResult(entries, fn) {
-  Object.assign(FLEET_AGENT_NAMES, entries);
-  try {
-    return await fn();
-  } finally {
-    for (const key of Object.keys(entries)) delete FLEET_AGENT_NAMES[key];
-  }
-}

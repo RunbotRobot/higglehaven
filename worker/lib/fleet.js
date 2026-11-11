@@ -19,7 +19,7 @@ import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './rate-limit.js';
 import { readJson, stringValue } from './validation.js';
 import { createSession, sessionCookieHeader, SESSION_TTL_MS } from './auth-routes.js';
 import { getOrCreateBuilderForUser } from './builder-profile.js';
-import { agentNameFor, FLEET_NAME_PATTERN } from './fleet-agents.js';
+import { agentNameFor, FLEET_NAME_PATTERN, isFleetLoginName } from './fleet-agents.js';
 export { FLEET_NAME_PATTERN };
 
 export const FLEET_KEY_HEADER = 'x-fleet-key';
@@ -65,7 +65,7 @@ export async function handleFleetLogin(request, env, db, url, keyOk) {
   if (!keyOk) return json({ error: 'Not found' }, 404);
   const input = await readJson(request);
   const name = stringValue(input.name, 'name');
-  if (!FLEET_NAME_PATTERN.test(name)) {
+  if (!isFleetLoginName(name)) {
     throw new HttpError('name must be a fleet session name such as higglehaven3', 400);
   }
 

@@ -1,9 +1,11 @@
-// #3445 (part of #3444): a fleet account is drawn as a named assistant. A is an
-// ordinary shopper at phone width; B stands in the same landlet. While B is an
-// ordinary account A's view of it carries no assistant look. Once B's account
-// is flagged as a fleet account (users.is_fleet, set directly in the local D1:
-// fleet-login itself needs a deployment secret), A's next polls show B with its
-// name tag (the username the server sends) and the shirt. Setup is
+// #3445 (part of #3444): an assistant account is drawn as a named assistant. A
+// is an ordinary shopper at phone width; B stands in the same landlet. While B
+// is an ordinary account A's view of it carries no assistant look. Once B's
+// account is an assistant account (users.is_fleet plus one of the assistants'
+// reserved agent names, set directly in the local D1: fleet-login itself needs a
+// deployment secret), A's next polls show B with its name tag (the username the
+// server sends) and the shirt. A coding session's fleet account is not an
+// assistant and stays an ordinary avatar (worker/fleet-access.test.js). Setup is
 // e2e/multiplayer-presence.test.mjs's, minus its position checks.
 import { execSync } from 'node:child_process';
 import { launchPage, chooseIdentity, finish } from './helpers.mjs';
@@ -152,8 +154,11 @@ const bAsSeenBefore = (await otherAs(pageA)).find((a) => a.builderId === builder
 console.log('B as A sees it while B is an ordinary account:', JSON.stringify(bAsSeenBefore));
 
 const bUsername = (await fetchJson(pageB, '/api/auth/me')).body.user.username;
+// Only an assistant account is drawn as one (owner decision 2026-11-11), so B
+// is given one of the assistants' reserved agent names as well as the flag.
+const ASSISTANT_NAME = 'Juniper';
 execSync(
-  `npx wrangler d1 execute higglehaven-db --local --command "UPDATE users SET is_fleet = 1 WHERE username = '${bUsername.replace(/'/g, "''")}'"`,
+  `npx wrangler d1 execute higglehaven-db --local --command "UPDATE users SET is_fleet = 1, username = '${ASSISTANT_NAME}' WHERE username = '${bUsername.replace(/'/g, "''")}'"`,
   { cwd: new URL('..', import.meta.url).pathname, stdio: 'pipe' },
 );
 await pageA.waitForFunction(
@@ -162,16 +167,16 @@ await pageA.waitForFunction(
   { timeout: 15000 },
 ).catch(() => {});
 const bAsSeenAfter = (await otherAs(pageA)).find((a) => a.builderId === builderB.builderId);
-console.log('B as A sees it once B is a fleet account:', JSON.stringify(bAsSeenAfter), 'expected name:', bUsername);
+console.log('B as A sees it once B is an assistant account:', JSON.stringify(bAsSeenAfter), 'expected name:', ASSISTANT_NAME);
 
 const pass = Boolean(bAsSeenBefore)
   && bAsSeenBefore.assistantName === null && bAsSeenBefore.hasAssistantShirt === false
   && Boolean(bAsSeenAfter)
-  && bAsSeenAfter.assistantName === bUsername && bAsSeenAfter.hasAssistantShirt === true
+  && bAsSeenAfter.assistantName === ASSISTANT_NAME && bAsSeenAfter.hasAssistantShirt === true
   && sessionA.errors.length === 0;
 await finish(sessionA.browser, {
   pass,
-  label: '#3445: a fleet account is drawn as a named assistant with a shirt; an ordinary account is not',
+  label: '#3445: an assistant account is drawn as a named assistant with a shirt; an ordinary account is not',
   errors: sessionA.errors,
 });
 await sessionB.browser.close();

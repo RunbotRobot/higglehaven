@@ -10201,31 +10201,40 @@ adds the header and no session reads the value.
   With the secret unset the header does nothing.
 - **`POST /api/auth/fleet-login`** `{ "name": "higglehaven3" }`. Needs the key;
   `404` otherwise, so the route does not exist without it. `name` must match
-  `higglehaven` plus one to three digits (`400` otherwise). The first call
+  `higglehaven` plus one to three digits (a coding session) or be one of the
+  assistant logins below (`400` otherwise). The first call
   creates the account (username = the name, `users.is_fleet = 1`, a
   non-deliverable `@fleet.invalid` email, no usable password, marked
   email-verified and age-attested because those checks only prove a mailbox
   and a person); later calls sign in the same one. Returns the ordinary session
   cookie. A name already held by a regular account is a `409`; the route never
   signs in as a real person.
-- **Agent names (#3445).** `worker/lib/fleet-agents.js` holds one mapping from
-  session name to the agent name shoppers see. Fleet login sets the account's
-  `username` (and its builder label) to the mapped name on create and on every
-  login, so a change in the mapping applies at that session's next login; a
-  session with no entry keeps its session name. The account is found by its
-  `@fleet.invalid` email, not its username. A mapped agent name cannot be
-  claimed at signup (`409 Username is already taken`, ignoring case and
+- **Agent names (#3445).** There are two kinds of fleet account, both flagged
+  `is_fleet`: coding sessions (`higglehaven2` to `higglehaven12`), which work
+  behind the scenes and are ordinary avatars under their session names, and
+  assistants, separate sessions whose job is to help people (owner decision
+  2026-11-11). `worker/lib/fleet-agents.js` holds one mapping from an
+  assistant's login name (`assistant-` plus the agent name in lower case) to the
+  agent name shoppers see: Juniper, Clover, Fig, Sorrel, Maple, Tansy, Bramble,
+  Moss, Basil, Fern and Sage, in the owner's rollout order. Fleet login sets the
+  account's `username` (and its builder label) to the mapped name on create and
+  on every login, so a change in the mapping applies at that login; a coding
+  session has no entry and keeps its session name. The account is found by its
+  `@fleet.invalid` email, not its username. All eleven agent names are
+  reserved at signup (`409 Username is already taken`, ignoring case and
   surrounding space); session names stay open at signup, because
   `scripts/live-site.mjs --login local` signs up an ordinary account under one
   on a throwaway local instance. A mapped name a regular account already holds
-  makes that session's login a `409` rather than a takeover.
+  makes that login a `409` rather than a takeover (none did when the names were
+  reserved).
 - **Assistant presence (#3445).** In `GET /api/presence`, an avatar whose
-  account is a fleet account carries `assistant: { name }` (the username, i.e.
-  the agent name). The key is absent for everyone else, and is derived from
-  `users.is_fleet` on the server, never from anything a client sends. The Shop
-  draws such an avatar with a collared shirt and a tag reading the name and the
-  word "assistant". Nearby chat and the voice roster stay unlabeled for every
-  sender, assistants included.
+  account is an assistant (a fleet account whose username is one of the agent
+  names) carries `assistant: { name }`. The key is absent for everyone else,
+  coding sessions' accounts included, and is derived on the server from
+  `users.is_fleet` and the username, never from anything a client sends. The
+  Shop draws such an avatar with a collared shirt and a tag reading the name and
+  the word "assistant". Nearby chat and the voice roster stay unlabeled for
+  every sender, assistants included.
 - **What a fleet account cannot do.** It is never an admin (`admin-bootstrap`
   and `grant-admin` refuse it, and a trigger in migration 0211 rejects any
   write that would make it one). Its product flags are recorded with weight 0.
