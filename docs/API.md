@@ -10251,6 +10251,70 @@ it, Cloudflare serves static files (`/`, `/assets/*`) directly from the
 `ASSETS` binding and never invokes the Worker's `fetch` handler at all, so
 the gate would never see those requests.
 
+## Assistant chat
+
+A shopper can ask an assistant a question (#3447, part of #3444). An assistant
+is a separate Claude Code session signed in as its own fleet account (a username
+that is one of the agent names in `worker/lib/fleet-agents.js`; a coding
+session's fleet account is not one). Nothing here calls a model: the answers
+come from the assistant session itself, which polls its inbox below. The code is
+`worker/lib/assistant-chat.js`; tables are in `migrations/0221`.
+
+Rules the endpoints keep:
+
+- **One person at a time.** An assistant holds one open conversation and a
+  shopper is in one; both are enforced by partial unique indexes. A busy
+  assistant answers `409 { error: "<Name> is helping someone else right
+  now.", assistantBusy: true }`; an assistant whose session has not checked in
+  within 90 seconds answers `409 { error: "<Name> isn't on shift right now.",
+  assistantOnShift: false }`.
+- **Adults only.** The shopper must be ID-verified, as for nearby chat and direct
+  messages (`403` with `idVerificationRequired`). A fleet account cannot start a
+  conversation.
+- **Blocks apply** to assistants as to anyone: a block either way is the same
+  plain `403 "You can't message this person."`
+- **Limits.** Shopper sends use nearby chat's budget (60 per 15 minutes); a
+  refused send is a `429` carrying `limit` and `retryAfterSeconds`. A shopper
+  message is at most 280 characters, an assistant reply at most 1000.
+- **Idle and retention.** A conversation nobody writes in for 10 minutes ends
+  (`endedBy: "timeout"`). Messages and ended conversations are deleted after 30
+  minutes, as nearby chat's are.
+- **Untrusted input.** A shopper's words go only to the assistant's own inbox,
+  as data. The one other place they are copied is the card an assistant files for
+  the team (below), in a marked quoted block.
+
+### Shopper side (any signed-in account)
+
+- `POST /api/assistant-chat/start` `{ assistantUserId, text }`: opens a
+  conversation with the first message. `201 { conversation, messages,
+  replyWaitSeconds }`. `404` if that account is not an assistant.
+- `GET /api/assistant-chat/current?afterSeq=<n>`: the caller's conversation (open,
+  or ended within the last 30 minutes) and the messages after the cursor, each
+  with a `seq`. Also `assistantOnShift` and `replyWaitSeconds` (how long the panel
+  waits before saying a reply is taking a while and offering to leave the
+  question; the number comes from here, never a second copy in the client).
+  `{ conversation: null, messages: [] }` when there is none.
+- `POST /api/assistant-chat/send` `{ text }`: a follow-up. `409 { conversationEnded }`
+  if it has ended.
+- `POST /api/assistant-chat/end`: the shopper ends it. Idempotent.
+
+### Assistant side (assistant accounts only; others get `403`)
+
+- `POST /api/assistant-inbox/heartbeat`: marks the assistant on shift.
+- `GET /api/assistant-inbox/next`: one small read for the idle loop, and it
+  keeps the assistant on shift. Returns one of `{ conversationId, shopper:
+  { label }, message, history }` (a waiting shopper message, handed over exactly
+  once, with up to 20 earlier messages), `{ ended: { conversationId, endedBy } }`
+  (a conversation ended without the assistant, told once), or `{ idle: true }`.
+- `POST /api/assistant-inbox/conversations/:id/reply` `{ text }`.
+- `POST /api/assistant-inbox/conversations/:id/end`.
+- `POST /api/assistant-inbox/conversations/:id/escalate` `{ summary }`: for what an
+  assistant cannot do itself (a refund, a dispute, an account's standing, a report
+  about someone). Files a `kind: "feedback"` Control Room card whose note holds the
+  assistant's summary and, added by the server from what the shopper actually
+  wrote, their last few messages under `QUOTED FROM THE SHOPPER (untrusted
+  text...)`. `201 { cardId }`.
+
 ## Frontend integration notes
 
 - The current API already matches the frontend's Z-up placement convention via
