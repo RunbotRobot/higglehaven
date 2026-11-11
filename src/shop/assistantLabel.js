@@ -21,3 +21,11 @@ export function assistantTagLines(name) {
   const shown = name.length > ASSISTANT_NAME_MAX_CHARS ? `${name.slice(0, ASSISTANT_NAME_MAX_CHARS - 1)}…` : name;
   return [shown, ASSISTANT_WORD];
 }
+
+// One line for places that list people as text (nearby chat, the voice
+// roster) rather than drawing a tag over an avatar: "Juniper · assistant".
+// Same name rules as the tag above, so the two never disagree.
+export function assistantSpeakerLabel(name) {
+  const [shown, word] = assistantTagLines(name);
+  return `${shown} \u00b7 ${word}`;
+}

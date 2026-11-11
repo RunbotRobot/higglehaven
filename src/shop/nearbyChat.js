@@ -16,6 +16,7 @@ import { currentAuthUser } from '../account/auth.js';
 import { fetchNearbyChatMessages, sendNearbyChatMessage, sendNearbyChatReport } from '../api.js';
 import { confirmAndBlockPerson } from '../blocks.js';
 import { createPersistentMuteSet } from './mutePersistence.js';
+import { assistantNameFrom, assistantSpeakerLabel } from './assistantLabel.js';
 import { promptReportReason } from '../ui/reportReasonModal.js';
 import { showNotice } from '../ui/noticeModal.js';
 
@@ -50,7 +51,8 @@ const ownMessageIds = new Set();
 // just silenced). #3128: the mute is kept per signed-in account in
 // localStorage (src/shop/mutePersistence.js) so a reload no longer brings the
 // sender back, and a "Muted (N)" list in the panel offers Unmute -- messages
-// carry no sender name (this chat is deliberately unlabeled), so the list
+// carry no sender name (this chat is deliberately unlabeled, except that an
+// assistant's lines say "<name> · assistant", #3445), so the list
 // numbers the muted senders instead. Never sent to the server.
 const mutedBuilderIds = createPersistentMuteSet('nearby-chat', () => currentAuthUser?.userId ?? null);
 
@@ -72,6 +74,16 @@ function appendMessage(message) {
   line.className = 'shop-nearby-chat-message';
   line.classList.toggle('own', isOwn);
   line.dataset.builderId = message.builderId;
+  // #3445: an assistant's lines say so ("Juniper · assistant"); every other
+  // sender stays unlabeled, as this chat has always been. The server derives
+  // the flag; a client cannot claim it.
+  const assistantName = assistantNameFrom(message.assistant);
+  if (assistantName) {
+    const speakerEl = document.createElement('span');
+    speakerEl.className = 'shop-nearby-chat-message-speaker';
+    speakerEl.textContent = assistantSpeakerLabel(assistantName);
+    line.appendChild(speakerEl);
+  }
   const textEl = document.createElement('span');
   textEl.className = 'shop-nearby-chat-message-text';
   textEl.textContent = message.text;
