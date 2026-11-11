@@ -6,7 +6,7 @@
 export const PHONE = { width: 390, height: 844, deviceScaleFactor: 2.625, isMobile: true, hasTouch: true };
 export const DESKTOP = { width: 1280, height: 800, deviceScaleFactor: 1, isMobile: false, hasTouch: false };
 
-export const FLEET_NAME_PATTERN = /^higglehaven\d+$/;
+export const FLEET_NAME_PATTERN = /^higglehaven[0-9]{1,3}$/;
 export const WALK_DIRECTIONS = ['forward', 'back', 'left', 'right'];
 export const MODES = ['shop', 'build', 'sell'];
 
