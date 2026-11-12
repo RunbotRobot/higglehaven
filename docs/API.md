@@ -10382,6 +10382,24 @@ Rules the endpoints keep:
   to a question already taken back or handed elsewhere is `409 { questionClosed }`.
 - `POST /api/assistant-inbox/conversations/:id/reply` `{ text }`.
 - `POST /api/assistant-inbox/conversations/:id/end`.
+- `POST /api/assistant-inbox/conversations/:id/handover` `{ toAssistantUserId? }`
+  (#3448): passes an open conversation to another assistant. With no target the
+  server picks one who is on shift, has nobody open and is not blocked either
+  way with the shopper. `200 { handedOver: { conversationId, to: { userId, name } } }`.
+  One atomic update moves it only if the target has nobody open. `409` when the
+  conversation has ended (`conversationEnded`), nobody is free
+  (`noFreeAssistant`), or the named target is busy (`assistantBusy`), off shift
+  (`assistantOnShift: false`) or blocked with the shopper (`assistantBlocked`);
+  `404` for a conversation that is not this assistant's or a target that is not
+  an assistant; `400` for naming itself. Migration `0224`.
+  The new assistant's `GET /api/assistant-inbox/next` then returns, once and
+  before anything else, `{ handover: { conversationId, shopper: { label },
+  fromAssistant, history } }` (the last 20 messages; unread shopper messages in
+  it count as delivered, so nothing is handed over twice). The shopper's
+  `GET /api/assistant-chat/current` shows the new assistant as
+  `conversation.assistant`, plus `conversation.handedOver: { at, fromName }`
+  (`null` for a conversation never handed over), and each assistant message
+  carries `authorName` so the log keeps naming who wrote what.
 - `POST /api/assistant-inbox/conversations/:id/escalate` `{ summary }`: for what an
   assistant cannot do itself (a refund, a dispute, an account's standing, a report
   about someone). Files a `kind: "feedback"` Control Room card whose note holds the

@@ -403,3 +403,113 @@ describe('leaving a question', () => {
     expect(left.n).toBe(0);
   });
 });
+
+// #3448: handing a conversation from one assistant to another.
+describe('handing a conversation to another assistant', () => {
+  let clover;
+  const handover = (conversationId, body) =>
+    post(assistant.session, `/assistant-inbox/conversations/${conversationId}/handover`, body);
+  const cloverNext = () => api('/assistant-inbox/next', clover.session());
+
+  beforeAll(async () => {
+    clover = await fleetLogin('assistant-clover');
+  });
+
+  async function setUp(label) {
+    await endEverything();
+    await goOnShift();
+    await post(clover.session, '/assistant-inbox/heartbeat');
+    const shopper = await adult(label);
+    const started = await start(shopper, 'Where is the bakery?');
+    expect(started.response.status).toBe(201);
+    return { shopper, conversationId: started.body.conversation.conversationId };
+  }
+
+  it('gives the second assistant the conversation so far once, and tells the shopper who they are talking to now', async () => {
+    const { shopper, conversationId } = await setUp('ho-flow-shopper');
+    // The first assistant has been handed the opening message and answered.
+    expect((await next()).body.message.text).toBe('Where is the bakery?');
+    await post(assistant.session, `/assistant-inbox/conversations/${conversationId}/reply`, { text: 'Up the hill, past the fountain.' });
+    // A message the first assistant has not read yet when the hand-over happens.
+    await post(shopper.session, '/assistant-chat/send', { text: 'And the library?' });
+
+    const result = await handover(conversationId, { toAssistantUserId: clover.userId });
+    expect(result.response.status).toBe(200);
+    expect(result.body.handedOver.to).toEqual({ userId: clover.userId, name: 'Clover' });
+
+    // The second assistant is handed everything so far, once.
+    const received = await cloverNext();
+    expect(received.body.handover.fromAssistant).toBe('Juniper');
+    expect(received.body.handover.conversationId).toBe(conversationId);
+    expect(received.body.handover.history.map((m) => m.text)).toEqual([
+      'Where is the bakery?', 'Up the hill, past the fountain.', 'And the library?',
+    ]);
+    // The unread shopper message was in that history, so it is not delivered again.
+    expect((await cloverNext()).body).toEqual({ idle: true });
+
+    // The first assistant no longer owns it.
+    const stale = await post(assistant.session, `/assistant-inbox/conversations/${conversationId}/reply`, { text: 'Still me?' });
+    expect(stale.response.status).toBe(404);
+
+    // The shopper sees who they are talking to now, and who wrote what.
+    const view = await api('/assistant-chat/current', shopper.session());
+    expect(view.body.conversation.assistant.name).toBe('Clover');
+    expect(view.body.conversation.handedOver).toMatchObject({ fromName: 'Juniper' });
+    await post(clover.session, `/assistant-inbox/conversations/${conversationId}/reply`, { text: 'The library is next to it.' });
+    const after = await api('/assistant-chat/current', shopper.session());
+    const authors = after.body.messages.filter((m) => m.sender === 'assistant').map((m) => m.authorName);
+    expect(authors).toEqual(['Juniper', 'Clover']);
+    // A conversation that was never handed over says so.
+    expect(result.body.handedOver.conversationId).toBe(conversationId);
+  });
+
+  it('picks a free assistant when none is named, and says so when nobody is free', async () => {
+    const { conversationId } = await setUp('ho-default-shopper');
+    const picked = await handover(conversationId);
+    expect(picked.body.handedOver.to.name).toBe('Clover');
+    // Now Clover holds it and Juniper is free: it can be passed back with nobody named.
+    const back = await post(clover.session, `/assistant-inbox/conversations/${conversationId}/handover`, {});
+    expect(back.body.handedOver.to.name).toBe('Juniper');
+    // Clover goes off shift: Juniper has nobody to hand to.
+    await env.DB.prepare('UPDATE users SET assistant_seen_at = NULL WHERE user_id = ?').bind(clover.userId).run();
+    const none = await handover(conversationId);
+    expect(none.response.status).toBe(409);
+    expect(none.body).toMatchObject({ noFreeAssistant: true });
+  });
+
+  it('refuses a busy, off-shift, blocked, unknown or self target, a non-assistant caller and an ended conversation', async () => {
+    const { shopper, conversationId } = await setUp('ho-refuse-shopper');
+    const other = await adult('ho-refuse-other');
+    // Clover is busy with someone else.
+    const cloverStart = await post(other.session, '/assistant-chat/start', { assistantUserId: clover.userId, text: 'Hi Clover' });
+    expect(cloverStart.response.status).toBe(201);
+    const busy = await handover(conversationId, { toAssistantUserId: clover.userId });
+    expect(busy.response.status).toBe(409);
+    expect(busy.body).toMatchObject({ assistantBusy: true });
+    await post(other.session, '/assistant-chat/end');
+    await cloverNext(); // hears the end, as it would
+
+    // Off shift.
+    await env.DB.prepare('UPDATE users SET assistant_seen_at = NULL WHERE user_id = ?').bind(clover.userId).run();
+    expect((await handover(conversationId, { toAssistantUserId: clover.userId })).body).toMatchObject({ assistantOnShift: false });
+    await post(clover.session, '/assistant-inbox/heartbeat');
+
+    // Blocked either way with this shopper.
+    await env.DB.prepare('INSERT INTO user_blocks (blocker_user_id, blocked_user_id) VALUES (?, ?)').bind(shopper.userId, clover.userId).run();
+    expect((await handover(conversationId, { toAssistantUserId: clover.userId })).body).toMatchObject({ assistantBlocked: true });
+    await env.DB.prepare('DELETE FROM user_blocks WHERE blocker_user_id = ?').bind(shopper.userId).run();
+
+    // Not an assistant, not yourself, and not a real account.
+    expect((await handover(conversationId, { toAssistantUserId: shopper.userId })).response.status).toBe(404);
+    expect((await handover(conversationId, { toAssistantUserId: assistant.userId })).response.status).toBe(400);
+    expect((await handover(conversationId, { toAssistantUserId: 'nobody' })).response.status).toBe(404);
+
+    // Only an assistant can hand over, and only its own conversation.
+    expect((await post(shopper.session, `/assistant-inbox/conversations/${conversationId}/handover`, {})).response.status).toBe(403);
+    expect((await post(clover.session, `/assistant-inbox/conversations/${conversationId}/handover`, {})).response.status).toBe(404);
+
+    // An ended conversation cannot be handed on.
+    await post(shopper.session, '/assistant-chat/end');
+    expect((await handover(conversationId, { toAssistantUserId: clover.userId })).response.status).toBe(409);
+  });
+});

@@ -15,7 +15,7 @@ import {
 } from '../api.js';
 import { confirmAndBlockPerson } from '../blocks.js';
 import {
-  mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel,
+  mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, handoverNotice, offerLabel,
   canLeaveQuestion, questionNotice, questionInLine, leaveLabel, withdrawLabel, doneLabel,
 } from './assistantChatLogic.js';
 
@@ -102,12 +102,22 @@ function renderLog() {
     note.textContent = disclosureText(assistant.name);
     logEl.append(note);
   }
+  // #3448: once the conversation has been passed on, say so above the log.
+  const handed = conversationOpen() ? handoverNotice(conversation) : null;
+  if (handed) {
+    const note = document.createElement('div');
+    note.className = 'assistant-chat-note';
+    note.textContent = handed;
+    logEl.append(note);
+  }
   for (const message of messages) {
     const row = document.createElement('div');
     row.className = `assistant-chat-message ${message.sender}`;
     const who = document.createElement('span');
     who.className = 'who';
-    who.textContent = message.sender === 'shopper' ? 'You' : assistant.name;
+    // A reply names the assistant who wrote it (a conversation can pass between
+    // assistants); older rows fall back to the one in the panel.
+    who.textContent = message.sender === 'shopper' ? 'You' : (message.authorName || assistant.name);
     const text = document.createElement('span');
     text.textContent = message.text;
     row.append(who, text);
@@ -133,6 +143,7 @@ function render() {
     open: isOpen(),
     assistantName: assistant?.name ?? null,
     conversationStatus: conversation?.status ?? null,
+    handoverNotice: conversationOpen() ? handoverNotice(conversation) : null, // added for #3448
     messages: messages.map((message) => ({ sender: message.sender, text: message.text })),
     status: statusEl.textContent,
     offer: offer ? { userId: offer.userId, name: offer.name } : null,
@@ -187,7 +198,12 @@ function adopt(reply) {
   if (typeof reply.assistantOnShift === 'boolean') assistantOnShift = reply.assistantOnShift;
   if (reply.conversation) {
     conversation = reply.conversation;
+    // After a hand-over the assistant is a different account: its builder id (the
+    // Block target) is not known here, so drop the old one rather than block the
+    // wrong person.
+    const changed = assistant?.userId !== reply.conversation.assistant.userId;
     assistant = { ...assistant, userId: reply.conversation.assistant.userId, name: reply.conversation.assistant.name ?? assistant?.name };
+    if (changed && assistant.builderId) assistant.builderId = undefined;
   }
   if (reply.messages) messages = mergeMessages(messages, reply.messages);
 }

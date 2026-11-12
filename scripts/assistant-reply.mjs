@@ -6,6 +6,11 @@
 //   node scripts/assistant-reply.mjs --name juniper reply    <conversationId> --text "Hi! ..."
 //   node scripts/assistant-reply.mjs --name juniper end      <conversationId>
 //   node scripts/assistant-reply.mjs --name juniper escalate <conversationId> --text "They are asking about a refund."
+//   node scripts/assistant-reply.mjs --name juniper handover <conversationId>
+//
+// `handover` passes the conversation to another assistant who is on shift and
+// free (the server picks one; it answers 409 if nobody is). Tell the person who
+// they are talking to now. The next assistant is given the conversation so far.
 //
 // A question left for the assistants (the shift program prints it as
 // { "question": ... }) is answered or passed on by its id:
@@ -30,11 +35,11 @@ try {
 const { options, positional } = parsed;
 const [action, conversationId] = positional; // the id is a conversation's, or a question's for the two *-question commands
 if (!options.name) fail('--name is required (for example --name juniper)');
-if (!['reply', 'end', 'escalate', 'answer-question', 'escalate-question'].includes(action)) {
-  fail('the first word must be reply, end, escalate, answer-question or escalate-question');
+if (!['reply', 'end', 'escalate', 'handover', 'answer-question', 'escalate-question'].includes(action)) {
+  fail('the first word must be reply, end, escalate, handover, answer-question or escalate-question');
 }
 if (!conversationId || !/^[A-Za-z0-9_-]+$/.test(conversationId)) fail('an id is required after the command');
-if (action !== 'end' && !(options.text || '').trim()) fail(`${action} needs --text "..."`);
+if (action !== 'end' && action !== 'handover' && !(options.text || '').trim()) fail(`${action} needs --text "..."`);
 const baseUrl = options.url || 'https://higglehaven.com';
 
 if (needsProxyRelaunch(baseUrl, process.env)) {
@@ -50,6 +55,7 @@ try {
     reply: `/api/assistant-inbox/conversations/${id}/reply`,
     end: `/api/assistant-inbox/conversations/${id}/end`,
     escalate: `/api/assistant-inbox/conversations/${id}/escalate`,
+    handover: `/api/assistant-inbox/conversations/${id}/handover`,
     'answer-question': `/api/assistant-inbox/questions/${id}/answer`,
     'escalate-question': `/api/assistant-inbox/questions/${id}/escalate`,
   }[action];
