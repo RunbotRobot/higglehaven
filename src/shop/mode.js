@@ -92,7 +92,7 @@ import {
 } from './sky.js';
 import {
   shopLandlets, pickShopSpawnLocation, setShopBuilderLabels, updateShopLandletInfo,
-  resetShopCurrentLandletEntry, accountMenuLandletInfoEl,
+  resetShopCurrentLandletEntry, accountMenuLandletInfoEl, isAccountSessionEnding,
 } from './presenceAndContent.js';
 import {
   shopSigns, shopCalendars, shopReviews,
@@ -731,7 +731,7 @@ export async function enterShopMode() {
   // #3294: one shared function builds and mounts the avatar (see
   // src/shop/mountShopAvatar.js for the behaviour it keeps, including the
   // #1358 dispose of a previous round trip's avatar and the fallbacks).
-  await mountShopAvatar({ scene, isLoggedIn: Boolean(currentAuthUser) }, {
+  await mountShopAvatar({ scene, isLoggedIn: () => Boolean(currentAuthUser) && !isAccountSessionEnding() }, {
     fetchMyEquippedAvatar, fetchMyEquippedAnimation,
     setEquippedAvatarSkeletonSignature: setShopEquippedAvatarSkeletonSignature,
     getShopAvatar: () => shopAvatar, setShopAvatar, disposeObject3D,

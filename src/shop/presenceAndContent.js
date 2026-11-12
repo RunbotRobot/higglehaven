@@ -780,6 +780,12 @@ export function setAccountSessionEnding(value) {
   accountSessionEnding = value;
 }
 
+// #3498: read by the Shop avatar mount, which makes two authenticated fetches
+// one after the other and must not send the second once a logout has begun.
+export function isAccountSessionEnding() {
+  return accountSessionEnding;
+}
+
 function hasVerifiedSession() {
   return !!currentAuthUser && currentAuthUser.ageAttested && currentAuthUser.trustTier !== 'none' && !accountSessionEnding;
 }

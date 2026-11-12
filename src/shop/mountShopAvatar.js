@@ -15,7 +15,13 @@
 // - a custom avatar that fails to load falls back to the default avatar;
 // - the window.__shopAvatar* diagnostics are published and the idle state is
 //   reset (#2623).
+//
+// isLoggedIn is a boolean, or a function asked again before each fetch (#3498:
+// a logout that lands between the two fetches, or while Shop mode is still
+// starting on a slow machine, must not send the next one; it would 401 and show
+// up as a console error even when caught).
 export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
+  const loggedIn = () => (typeof isLoggedIn === 'function' ? Boolean(isLoggedIn()) : Boolean(isLoggedIn));
   const {
     fetchMyEquippedAvatar, fetchMyEquippedAnimation, setEquippedAvatarSkeletonSignature,
     getShopAvatar, setShopAvatar, disposeObject3D, createCustomShopAvatar, createShopAvatar,
@@ -31,7 +37,7 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
   // whether the animation's clips apply (#1162's compatibility check) or the
   // avatar falls back to its own.
   let equippedAnimation = null;
-  if (isLoggedIn) {
+  if (loggedIn()) {
     try {
       const avatar = await fetchMyEquippedAvatar();
       equippedAvatarModelUrl = avatar.modelUrl;
@@ -40,11 +46,13 @@ export async function mountShopAvatar({ scene, isLoggedIn }, deps) {
     } catch (err) {
       console.warn('Could not fetch equipped avatar, using the default avatar:', err);
     }
-    try {
-      const animation = await fetchMyEquippedAnimation();
-      if (animation.equippedTemplateId) equippedAnimation = animation;
-    } catch (err) {
-      console.warn('Could not fetch applied animation, falling back to the equipped avatar\'s own clips:', err);
+    if (loggedIn()) {
+      try {
+        const animation = await fetchMyEquippedAnimation();
+        if (animation.equippedTemplateId) equippedAnimation = animation;
+      } catch (err) {
+        console.warn('Could not fetch applied animation, falling back to the equipped avatar\'s own clips:', err);
+      }
     }
   }
 
