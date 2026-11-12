@@ -45,7 +45,8 @@ if [ -f "\$DIR/.commit" ] && [ "\$(cat "\$DIR/.commit")" = "\$COMMIT" ] && verif
   echo "assistant programs already at \$COMMIT"
   exit 0
 fi
-TMP="\$(mktemp -d)"
+mkdir -p "\$(dirname "\$DIR")"
+TMP="\$(mktemp -d "\$(dirname "\$DIR")/.assistant.XXXXXX")"
 trap 'rm -rf "\$TMP"' EXIT
 for f in ${PROGRAM_FILES.join(' ')}; do
   curl --fail --silent --show-error --max-time 30 --retry 2 "\$BASE/\$f" --output "\$TMP/\$f"
@@ -54,10 +55,10 @@ verify "\$TMP" || { echo "assistant programs: checksum mismatch, nothing install
 printf '%s\\n' "\$COMMIT" > "\$TMP/.commit"
 chmod 755 "\$TMP"
 chmod 444 "\$TMP"/*.mjs "\$TMP/.commit"
-chmod 555 "\$TMP"
+if [ -d "\$DIR" ]; then chmod -R u+w "\$DIR"; fi
 rm -rf "\$DIR"
-mkdir -p "\$(dirname "\$DIR")"
 mv "\$TMP" "\$DIR"
+chmod 555 "\$DIR"
 trap - EXIT
 echo "assistant programs installed at \$COMMIT"
 `;

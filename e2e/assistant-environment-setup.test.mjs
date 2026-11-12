@@ -72,5 +72,6 @@ check(spawnSync('bash', ['-n', script]).status === 0, 'bash accepts the generate
   check(again.status === 0 && fs.readFileSync(path.join(install, 'assistant-lib.mjs'), 'utf8') === CONTENT['assistant-lib.mjs'], `an edited install is restored (${again.stderr.trim().slice(0, 200)})`);
 }
 
+spawnSync('chmod', ['-R', 'u+w', tmp]);
 fs.rmSync(tmp, { recursive: true, force: true });
 await finish({ close: async () => {} }, { pass, label: '#3458: the assistant environment setup script installs only checksummed files and fails closed' });
