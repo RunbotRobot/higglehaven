@@ -19,6 +19,17 @@ export const WALK_VECTORS = {
   right: [1, 0],
 };
 
+// #3479: the camera is steered by the look joystick (held, it turns the view at a
+// steady rate; up and down are the pitch), not by dragging the page, so `aim`
+// holds that joystick. Directions are as the thumb moves it, on the screen.
+export const AIM_VECTORS = {
+  up: [0, -1],
+  down: [0, 1],
+  left: [-1, 0],
+  right: [1, 0],
+};
+export const AIM_DIRECTIONS = Object.keys(AIM_VECTORS);
+
 // A step is `command` or `command:arg:arg`. Returns { command, args } or throws
 // one plain line naming what is wrong.
 export function parseStep(token) {
@@ -30,6 +41,11 @@ export function parseStep(token) {
     case 'walk':
       need(1);
       if (!WALK_DIRECTIONS.includes(args[0])) throw new Error(`step "${token}": direction must be one of ${WALK_DIRECTIONS.join(', ')}`);
+      if (args[1] !== undefined && !(Number(args[1]) > 0)) throw new Error(`step "${token}": milliseconds must be a positive number`);
+      return { command, args: [args[0], Number(args[1] ?? 1000)] };
+    case 'aim':
+      need(1);
+      if (!AIM_DIRECTIONS.includes(args[0])) throw new Error(`step "${token}": direction must be one of ${AIM_DIRECTIONS.join(', ')}`);
       if (args[1] !== undefined && !(Number(args[1]) > 0)) throw new Error(`step "${token}": milliseconds must be a positive number`);
       return { command, args: [args[0], Number(args[1] ?? 1000)] };
     case 'look':
@@ -58,7 +74,7 @@ export function parseStep(token) {
     case 'stats':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: walk, look, tap, mode, wait, shot, fly, settings, idle, stats)`);
+      throw new Error(`unknown step "${token}" (steps: walk, aim, look, tap, mode, wait, shot, fly, settings, idle, stats)`);
   }
 }
 

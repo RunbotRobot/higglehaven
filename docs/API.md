@@ -10209,6 +10209,20 @@ value once as a network secret for host `higglehaven.com`, header
 `x-fleet-key`, on the fleet's Claude Code environment, so the network proxy
 adds the header and no session reads the value.
 
+**Two keys (#3508).** Coding sessions can merge and deploy, and a shopper's
+words to an assistant are untrusted text, so the two kinds of fleet session
+must not be able to act as each other. A second optional Worker secret,
+`ASSISTANT_ACCESS_KEY`, is stored as the `x-fleet-key` network secret on the
+assistant environment **only** (and `FLEET_ACCESS_KEY` is not stored there).
+Both keys pass the gate. Once `ASSISTANT_ACCESS_KEY` is set, `fleet-login`
+accepts the coding key for `higglehaven<N>` names only and the assistant key
+for `assistant-<name>` logins only; the other pairing is the same plain `404`
+as a missing key, and creates nothing. While `ASSISTANT_ACCESS_KEY` is unset
+there is one key and it signs in either kind (how it worked before the second
+key existed), so set it, and move the assistant environment onto it, before
+the first public shift. The two values must differ; wrong values are counted
+against one budget per client IP.
+
 - **The gate.** A request whose `x-fleet-key` header equals the secret
   (constant-time compare) passes the preview gate as if it held the `hh_access`
   cookie. The header is removed from the request before any other code sees

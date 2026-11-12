@@ -2,7 +2,12 @@
 // live site, so a session can see and use the app the way a person does.
 //
 // Two pieces, both inert until the Worker secret FLEET_ACCESS_KEY is set
-// (removing the secret turns fleet access off):
+// (removing the secret turns fleet access off). #3508: a second secret,
+// ASSISTANT_ACCESS_KEY, belongs to the assistant sessions' environment alone;
+// once it is set each key signs in only its own kind of account (see
+// fleetLoginAllowed), so the coding fleet (which can merge and deploy) cannot
+// read what a shopper tells an assistant, and an assistant cannot sign in as a
+// coding session:
 //   1. The fleet key. A request carrying it in `x-fleet-key` passes the
 //      private-preview gate as if it held the `hh_access` cookie. The owner
 //      stores the same value as a network secret on the fleet's environment,
@@ -28,15 +33,20 @@ export const FLEET_LOGIN_PATH = '/api/auth/fleet-login';
 // the right key is never counted, so the fleet cannot lock itself out.
 const FLEET_KEY_WRONG_MAX = 10;
 
-// 'off'    FLEET_ACCESS_KEY is not set: the header means nothing.
+// status:
+// 'off'    neither key is set: the header means nothing.
 // 'absent' no header on the request.
-// 'ok'     the header equals the key.
-// 'wrong'  a header that does not equal the key (already counted against the
+// 'ok'     the header equals one of the keys; `kind` says which.
+// 'wrong'  a header that matches neither key (already counted against the
 //          caller's budget; throws 429 once that budget is spent).
-export async function fleetKeyStatus(request, env) {
-  if (!env.FLEET_ACCESS_KEY) return 'off';
+// kind (only with 'ok'): 'coding' for FLEET_ACCESS_KEY, 'assistant' for
+// ASSISTANT_ACCESS_KEY.
+export async function fleetKeyCheck(request, env) {
+  const codingKey = env.FLEET_ACCESS_KEY || '';
+  const assistantKey = env.ASSISTANT_ACCESS_KEY || '';
+  if (!codingKey && !assistantKey) return { status: 'off', kind: null };
   const submitted = request.headers.get(FLEET_KEY_HEADER);
-  if (submitted === null) return 'absent';
+  if (submitted === null) return { status: 'absent', kind: null };
   const bucket = `fleet-key-wrong:${clientIp(request)}`;
   // Look before comparing: otherwise, once the budget is spent, every further
   // guess would still be compared for free and a correct one would get in.
@@ -46,9 +56,28 @@ export async function fleetKeyStatus(request, env) {
   if ((spent?.n ?? 0) >= FLEET_KEY_WRONG_MAX) {
     await checkRateLimit(env.DB, bucket, FLEET_KEY_WRONG_MAX); // throws the 429
   }
-  if (timingSafeEqual(submitted, env.FLEET_ACCESS_KEY)) return 'ok';
+  // Both comparisons always run, so which key was set does not show in timing.
+  const isCoding = codingKey !== '' && timingSafeEqual(submitted, codingKey);
+  const isAssistant = assistantKey !== '' && timingSafeEqual(submitted, assistantKey);
+  if (isCoding) return { status: 'ok', kind: 'coding' };
+  if (isAssistant) return { status: 'ok', kind: 'assistant' };
   await checkRateLimit(env.DB, bucket, FLEET_KEY_WRONG_MAX);
-  return 'wrong';
+  return { status: 'wrong', kind: null };
+}
+
+export async function fleetKeyStatus(request, env) {
+  return (await fleetKeyCheck(request, env)).status;
+}
+
+// #3508: whether the key kind that arrived may sign in as this name. While
+// ASSISTANT_ACCESS_KEY is unset there is only one key and it signs in either
+// kind (the behaviour before the second key existed); once it is set, each key
+// signs in only its own kind. Assistant logins are the names in fleet-agents.js
+// (`assistant-<name>`); coding sessions are `higglehaven<N>`.
+export function fleetLoginAllowed(env, keyKind, name) {
+  if (!env.ASSISTANT_ACCESS_KEY) return true;
+  const isAssistantName = !FLEET_NAME_PATTERN.test(name);
+  return keyKind === (isAssistantName ? 'assistant' : 'coding');
 }
 
 // The header is a credential: nothing downstream (logs, echoed requests, a
@@ -73,14 +102,18 @@ export function asFleetTraffic(request) {
   return new Request(request, { headers });
 }
 
-export async function handleFleetLogin(request, env, db, url, keyOk) {
+// keyKind: 'coding' | 'assistant' for a request that carried a right key,
+// anything falsy otherwise.
+export async function handleFleetLogin(request, env, db, url, keyKind) {
   // Invisible without the key: the same 404 any unknown route gives.
-  if (!keyOk) return json({ error: 'Not found' }, 404);
+  if (!keyKind) return json({ error: 'Not found' }, 404);
   const input = await readJson(request);
   const name = stringValue(input.name, 'name');
   if (!isFleetLoginName(name)) {
     throw new HttpError('name must be a fleet session name such as higglehaven3', 400);
   }
+  // #3508: the other kind's key is no key at all for this name.
+  if (!fleetLoginAllowed(env, keyKind, name)) return json({ error: 'Not found' }, 404);
 
   const now = new Date().toISOString();
   const userId = `user-${crypto.randomUUID()}`;

@@ -61,8 +61,11 @@ node scripts/live-site.mjs --name higglehaven10 --out "$SCRATCHPAD" \
 node scripts/live-site.mjs --name higglehaven10 --timing /api/credit-orbs idle
 ```
 
-Steps: `walk:<forward|back|left|right>[:ms]`, `look:<dx>:<dy>`,
-`tap:<x>:<y>` or `tap:<selector>`, `mode:<shop|build|sell>`, `fly`,
+Steps: `walk:<forward|back|left|right>[:ms]`,
+`aim:<up|down|left|right>[:ms]` (holds the look joystick, which is what steers
+the camera: `aim:up:350` after `fly` brings the horizon into view, a long hold
+looks at the sky; `look` drags the page and does not turn the camera in Shop),
+`look:<dx>:<dy>`, `tap:<x>:<y>` or `tap:<selector>`, `mode:<shop|build|sell>`, `fly`,
 `settings`, `idle`, `wait:<ms>`, `shot[:name]`, `stats`. Read screenshots back
 with the Read tool. Against a local `wrangler dev`, add
 `--url http://127.0.0.1:8787 --login local`.
