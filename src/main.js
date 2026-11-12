@@ -1445,8 +1445,10 @@ window.__testShopInstanceLodHitSource = (instanceId) => {
   for (const entry of shopLandlets.values()) {
     const object = entry.objects.find((o) => o.userData.instanceId === instanceId);
     if (!object) continue;
-    const tiers = object.userData.lodTiers;
-    if (!tiers) return null;
+    // An item that has stayed within the protected distance never needed its reduced
+    // versions built (they load on the first step away), so it has none: its only
+    // version is the full one.
+    const tiers = object.userData.lodTiers ?? {};
     const shown = object.userData.lodShown ?? 'full';
     const shownRoot = shown === 'mid' ? tiers.mid : shown === 'far' ? tiers.far : object.children.find((c) => c !== tiers.mid && c !== tiers.far);
     if (!shownRoot) return null;
