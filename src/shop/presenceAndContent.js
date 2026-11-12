@@ -56,6 +56,7 @@ import * as THREE from 'three';
 import { camera, scene } from '../world/scene.js';
 import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { createArrivalRun, aliveArrivalFogCount } from './arrivalRun.js';
+import { createTierCrossfades } from './tierCrossfade.js';
 import { setInstanceLodState, attachInstanceTiers, loadTierScenes, loadFarViewSource, disposeObject, extensibleAxes, createMeshForInstance, createPlacementHandle, loadBatchSource, loadModelInstance, loadModelAnimations, meshDimensions, findTemplate } from '../world/models.js';
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
@@ -548,11 +549,13 @@ function updateInstanceLodTiers() {
     if (tier !== TIER_FULL && object.userData.lodTiersState === undefined) requestInstanceTiers(entry, object);
     if (object.userData.lodTiersState !== 'ready' || tier === object.userData.lodApplied) continue;
     object.userData.lodApplied = tier;
-    setInstanceLodState(object, tier);
+    setInstanceLodState(object, tier, tierCrossfades);
     window.__shopLodFlipCount = (window.__shopLodFlipCount ?? 0) + 1; // #3443: e2e counts tier changes
     if (performance.now() - flipStartMs > SHOP_LOD_FLIP_BUDGET_MS) return;
   }
 }
+// #3494: the incoming version of a changing item dissolves in over the outgoing one.
+const tierCrossfades = createTierCrossfades();
 const SHOP_LOD_FLIP_BUDGET_MS = 4; // #3396: the part of a frame one tick's tier flips may use
 
 // True if the given world point falls inside this landlet's own footprint
@@ -1500,6 +1503,7 @@ function shopArrivalAnchor(entry) {
 // updateShopWorldServices.
 export function updateShopArrivals() {
   for (const entry of shopLandlets.values()) entry.arrivalRun?.update();
+  tierCrossfades.update(); // #3494
 }
 
 // Diagnostics for the e2e (and a bug report): what the latest arrival did.
