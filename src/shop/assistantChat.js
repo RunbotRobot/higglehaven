@@ -9,19 +9,27 @@
 // ("Any text a user can read, they can copy"). The close button is in the upper
 // right and ends the conversation, so an assistant is never left waiting on
 // someone who walked away.
-import { startAssistantChat, fetchAssistantChat, sendAssistantChat, endAssistantChat } from '../api.js';
+import {
+  startAssistantChat, fetchAssistantChat, sendAssistantChat, endAssistantChat,
+  leaveAssistantQuestion, fetchAssistantQuestion, closeAssistantQuestion,
+} from '../api.js';
 import { confirmAndBlockPerson } from '../blocks.js';
 import {
   mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel,
+  canLeaveQuestion, questionNotice, questionInLine, leaveLabel, withdrawLabel, doneLabel,
 } from './assistantChatLogic.js';
 
 const POLL_INTERVAL_MS = 2000;
+// A left question is not a live chat, so it is checked less often.
+const QUESTION_POLL_INTERVAL_MS = 5000;
 
 const panelEl = document.getElementById('assistant-chat-panel');
 const nameEl = document.getElementById('assistant-chat-name');
 const closeEl = document.getElementById('assistant-chat-close');
 const blockEl = document.getElementById('assistant-chat-block');
 const offerEl = document.getElementById('assistant-chat-offer');
+const leaveEl = document.getElementById('assistant-chat-leave');
+const withdrawEl = document.getElementById('assistant-chat-withdraw');
 const logEl = document.getElementById('assistant-chat-log');
 const statusEl = document.getElementById('assistant-chat-status');
 const formEl = document.getElementById('assistant-chat-form');
@@ -36,7 +44,12 @@ let assistantOnShift = true;
 let endedText = null; // why the last conversation ended, shown until the next send
 let errorText = null; // the last failed action's message, shown until the next action
 let offer = null; // a free assistant the server named after a busy/off-shift refusal (#3448)
+let question = null; // #3448: the shopper's left question (the server's view), or null
+let keptDays = 7; // replaced by the server's number on every reply
+let assistantsOnShift = null; // how many are on the floor; from the server
+let canLeave = false; // the last refusal said an assistant was busy or off shift
 let pollTimer = null;
+let questionTimer = null;
 let inFlight = false;
 let openToken = 0; // a stale open() must not write into a newer one
 
@@ -49,6 +62,8 @@ function renderStatus() {
   if (errorText) {
     text = errorText;
     isError = true;
+  } else if (question) {
+    text = questionNotice(question, { keptDays, assistantsOnShift });
   } else if (conversationOpen()) {
     const state = replyState({ messages, nowMs: Date.now(), replyWaitSeconds });
     if (!assistantOnShift) text = offShiftNotice(assistant.name);
@@ -63,6 +78,23 @@ function renderStatus() {
 
 function renderLog() {
   logEl.replaceChildren();
+  if (question) {
+    const rows = [['You', question.text, 'shopper']];
+    if (question.answer) rows.push([question.answer.assistantName || 'An assistant', question.answer.text, 'assistant']);
+    for (const [name, body, sender] of rows) {
+      const row = document.createElement('div');
+      row.className = `assistant-chat-message ${sender}`;
+      const who = document.createElement('span');
+      who.className = 'who';
+      who.textContent = name;
+      const text = document.createElement('span');
+      text.textContent = body;
+      row.append(who, text);
+      logEl.append(row);
+    }
+    logEl.scrollTop = logEl.scrollHeight;
+    return;
+  }
   if (!assistant) return;
   if (messages.length === 0 && !conversationOpen()) {
     const note = document.createElement('div');
@@ -85,7 +117,12 @@ function renderLog() {
 }
 
 function render() {
-  nameEl.textContent = assistant ? assistant.name : '';
+  nameEl.textContent = assistant ? assistant.name : 'Assistants';
+  formEl.hidden = question !== null;
+  leaveEl.hidden = !(canLeave && question === null);
+  leaveEl.textContent = leaveLabel;
+  withdrawEl.hidden = question === null;
+  withdrawEl.textContent = question && questionInLine(question) ? withdrawLabel : doneLabel;
   blockEl.hidden = !assistant?.builderId;
   offerEl.hidden = !offer;
   offerEl.textContent = offer ? offerLabel(offer.name) : '';
@@ -99,6 +136,10 @@ function render() {
     messages: messages.map((message) => ({ sender: message.sender, text: message.text })),
     status: statusEl.textContent,
     offer: offer ? { userId: offer.userId, name: offer.name } : null,
+    canLeaveQuestion: !leaveEl.hidden,
+    question: question ? {
+      status: question.status, position: question.position ?? null, text: question.text, answer: question.answer?.text ?? null,
+    } : null,
     statusIsError: statusEl.classList.contains('error'),
   };
 }
@@ -106,6 +147,39 @@ function render() {
 function stopPolling() {
   if (pollTimer !== null) clearInterval(pollTimer);
   pollTimer = null;
+}
+
+function stopQuestionPolling() {
+  if (questionTimer !== null) clearInterval(questionTimer);
+  questionTimer = null;
+}
+
+// Takes the server's view of the shopper's left question (or none) into the
+// panel, and checks it every few seconds while it is still in line.
+function adoptQuestion(reply) {
+  if (reply.keptDays) keptDays = reply.keptDays;
+  if (typeof reply.assistantsOnShift === 'number') assistantsOnShift = reply.assistantsOnShift;
+  question = reply.question ?? null;
+  if (question && questionInLine(question)) startQuestionPolling();
+  else stopQuestionPolling();
+}
+
+async function pollQuestion(token) {
+  let reply;
+  try {
+    reply = await fetchAssistantQuestion();
+  } catch {
+    return; // retried on the next tick
+  }
+  if (token !== openToken || !isOpen()) return;
+  adoptQuestion(reply);
+  render();
+}
+
+function startQuestionPolling() {
+  if (questionTimer !== null) return;
+  const token = openToken;
+  questionTimer = setInterval(() => { pollQuestion(token); }, QUESTION_POLL_INTERVAL_MS);
 }
 
 function adopt(reply) {
@@ -153,12 +227,15 @@ export async function openAssistantChat(target) {
   }
   const token = ++openToken;
   stopPolling();
-  assistant = { userId: target.userId, builderId: target.builderId ?? null, name: target.name };
+  assistant = target ? { userId: target.userId, builderId: target.builderId ?? null, name: target.name } : null;
   conversation = null;
   messages = [];
   endedText = null;
   errorText = null;
   offer = null;
+  question = null;
+  canLeave = false;
+  stopQuestionPolling();
   panelEl.hidden = false;
   render();
   inputEl.focus();
@@ -172,13 +249,30 @@ export async function openAssistantChat(target) {
   } catch {
     // Nothing to resume; the first send reports any real problem.
   }
+  // #3448: a question the shopper left earlier (an answer may be waiting).
+  if (!conversationOpen()) {
+    try {
+      const reply = await fetchAssistantQuestion();
+      if (token !== openToken) return;
+      adoptQuestion(reply);
+    } catch {
+      // The first send reports any real problem.
+    }
+  }
   render();
+}
+
+// #3448: the Settings entry. Asking from here needs no assistant to be standing
+// in the world: the question goes in line and the first free assistant takes it.
+export function openAssistantQuestions() {
+  return openAssistantChat(null);
 }
 
 export async function closeAssistantChat() {
   if (!isOpen()) return;
   openToken += 1;
   stopPolling();
+  stopQuestionPolling();
   const wasOpen = conversationOpen();
   panelEl.hidden = true;
   assistant = null;
@@ -187,6 +281,8 @@ export async function closeAssistantChat() {
   endedText = null;
   errorText = null;
   offer = null;
+  question = null; // a question left in line stays there: closing the panel keeps the place
+  canLeave = false;
   render();
   if (wasOpen) {
     try { await endAssistantChat(); } catch { /* the server ends an idle conversation by itself */ }
@@ -196,7 +292,11 @@ export async function closeAssistantChat() {
 formEl.addEventListener('submit', async (event) => {
   event.preventDefault();
   const text = inputEl.value.trim();
-  if (!text || inFlight || !assistant) return;
+  if (!text || inFlight) return;
+  if (!assistant) {
+    await leaveQuestion(text); // opened from Settings: there is no one to start a chat with
+    return;
+  }
   inFlight = true;
   sendEl.disabled = true;
   errorText = null;
@@ -220,6 +320,7 @@ formEl.addEventListener('submit', async (event) => {
     if (token !== openToken) return;
     errorText = err.message;
     offer = freeAssistantOffer(err.body);
+    canLeave = canLeaveQuestion(err.body);
     if (err.body?.conversationEnded) {
       if (conversation) conversation = { ...conversation, status: 'ended' };
       stopPolling();
@@ -231,6 +332,65 @@ formEl.addEventListener('submit', async (event) => {
   } finally {
     inFlight = false;
     sendEl.disabled = false;
+    if (token === openToken) render();
+  }
+});
+
+async function leaveQuestion(text) {
+  inFlight = true;
+  sendEl.disabled = true;
+  leaveEl.disabled = true;
+  errorText = null;
+  endedText = null;
+  offer = null;
+  const token = openToken;
+  try {
+    adoptQuestion(await leaveAssistantQuestion(text));
+    canLeave = false;
+    inputEl.value = '';
+  } catch (err) {
+    if (token !== openToken) return;
+    errorText = err.message;
+    if (err.body?.question) adoptQuestion({ question: err.body.question }); // already has one: show it
+    if (err.body?.conversationId) {
+      try { adopt(await fetchAssistantChat()); startPolling(); } catch { /* shown below */ }
+    }
+  } finally {
+    inFlight = false;
+    sendEl.disabled = false;
+    leaveEl.disabled = false;
+    if (token === openToken) render();
+  }
+}
+
+leaveEl.addEventListener('click', () => {
+  const text = inputEl.value.trim();
+  if (!text) {
+    errorText = 'Type your question first, then tap again.';
+    render();
+    inputEl.focus();
+    return;
+  }
+  if (!inFlight) leaveQuestion(text);
+});
+
+// Takes a question back while it is in line, or closes an answered or expired
+// one once it has been read.
+withdrawEl.addEventListener('click', async () => {
+  if (!question || inFlight) return;
+  inFlight = true;
+  const token = openToken;
+  try {
+    await closeAssistantQuestion();
+    if (token !== openToken) return;
+    question = null;
+    stopQuestionPolling();
+    errorText = null;
+  } catch (err) {
+    if (token !== openToken) return;
+    errorText = err.message;
+  } finally {
+    inFlight = false;
     if (token === openToken) render();
   }
 });

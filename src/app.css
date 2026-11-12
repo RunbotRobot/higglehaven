@@ -1232,7 +1232,9 @@
       #assistant-chat-status.error {
         color: #ff8a80;
       }
-      #assistant-chat-offer {
+      #assistant-chat-offer,
+      #assistant-chat-leave,
+      #assistant-chat-withdraw {
         align-self: flex-start;
         min-height: 36px;
         padding: 0 12px;

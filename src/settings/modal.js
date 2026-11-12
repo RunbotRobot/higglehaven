@@ -41,6 +41,7 @@ import { trimUnitLabelEls } from '../main.js';
 import { renderShopSettingsSection } from '../shop/mode.js';
 import { renderBuildSettingsSection } from '../build/scene.js';
 import { renderSellSettingsSection } from '../sell/mode.js';
+import { openAssistantQuestions } from '../shop/assistantChat.js';
 
 // Settings: local, per-device display preferences — nothing here is ever
 // sent to the server (see settings.js). Four sections exist as fixed tabs
@@ -647,6 +648,12 @@ settingsBtn.addEventListener('click', openSettingsModal);
 // Settings; closing it returns to Settings (see openFeedbackModal's returnTo).
 document.getElementById('settings-feedback-btn').addEventListener('click', () => {
   openFeedbackModal({ el: settingsModalEl, close: closeSettingsModal });
+});
+// #3448: Ask an assistant, in every mode. Works with no assistant standing in
+// the world: the question goes in line, and an answer waits for the shopper.
+document.getElementById('settings-assistant-btn').addEventListener('click', () => {
+  closeSettingsModal();
+  openAssistantQuestions();
 });
 settingsCloseBtn.addEventListener('click', closeSettingsModal);
 

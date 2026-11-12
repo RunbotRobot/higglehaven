@@ -182,6 +182,67 @@ await pageA.unroute('**/api/assistant-chat/start');
 await pageA.click('#assistant-chat-close');
 await pageA.waitForSelector('#assistant-chat-panel[hidden]', { state: 'attached', timeout: 5000 });
 
+// #3448: when nobody is free, leave the question. The refusal is faked (the real
+// ones are in worker/assistant-chat.test.js); the leave, the place in line, the
+// answer and the Settings entry are all real.
+await pageA.evaluate((id) => window.__testTapAssistantByUserId(id), assistantUserId);
+await pageA.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
+await pageA.route('**/api/assistant-chat/start', (route) => route.fulfill({
+  status: 409,
+  contentType: 'application/json',
+  body: JSON.stringify({ error: `${ASSISTANT_NAME} is helping someone else right now.`, assistantBusy: true, freeAssistant: null }),
+}));
+await pageA.fill('#assistant-chat-input', 'Can I sell a hat?');
+await pageA.click('#assistant-chat-send');
+await pageA.waitForSelector('#assistant-chat-leave:not([hidden])', { timeout: 5000 });
+await pageA.unroute('**/api/assistant-chat/start');
+const leaveOffered = await pageA.evaluate(() => ({
+  label: document.getElementById('assistant-chat-leave').textContent,
+  kept: document.getElementById('assistant-chat-input').value,
+}));
+await pageA.click('#assistant-chat-leave');
+await pageA.waitForFunction(() => window.__assistantChat?.question?.status === 'waiting', null, { timeout: 5000 });
+const inLine = await pageA.evaluate(() => ({
+  question: window.__assistantChat.question,
+  status: window.__assistantChat.status,
+  formHidden: document.getElementById('assistant-chat-form').hidden,
+  withdraw: document.getElementById('assistant-chat-withdraw').textContent,
+  box: document.getElementById('assistant-chat-panel').getBoundingClientRect().toJSON(),
+  vw: window.innerWidth, vh: window.innerHeight,
+}));
+console.log('left question:', JSON.stringify({ leaveOffered, inLine: { ...inLine, box: undefined } }));
+const questionPanelFits = inLine.box.left >= 0 && inLine.box.right <= inLine.vw && inLine.box.bottom <= inLine.vh;
+
+// Closing the panel keeps the place. The assistant's session is handed the question and answers it.
+await pageA.click('#assistant-chat-close');
+await pageA.waitForSelector('#assistant-chat-panel[hidden]', { state: 'attached', timeout: 5000 });
+let handedQuestion = null;
+for (let i = 0; i < 20 && !handedQuestion?.body?.question; i++) {
+  handedQuestion = await fetchJson(pageB, '/api/assistant-inbox/next');
+  if (!handedQuestion.body.question) await pageB.waitForTimeout(300);
+}
+console.log('assistant was handed the left question:', handedQuestion.body.question?.text);
+const answerPosted = await postJson(pageB, `/api/assistant-inbox/questions/${handedQuestion.body.question.questionId}/answer`, { text: 'Yes! Open Sell mode and add it.' });
+
+// The shopper comes back through Settings (no assistant needs to be in view) and reads it.
+await pageA.click('#account-menu-toggle');
+await pageA.click('#settings-btn');
+await pageA.waitForSelector('#settings-assistant-btn', { state: 'visible', timeout: 5000 });
+await pageA.click('#settings-assistant-btn');
+await pageA.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
+await pageA.waitForFunction(() => window.__assistantChat?.question?.status === 'answered', null, { timeout: 5000 });
+const readAnswer = await pageA.evaluate(() => ({
+  log: document.getElementById('assistant-chat-log').textContent,
+  name: window.__assistantChat.assistantName,
+  withdraw: document.getElementById('assistant-chat-withdraw').textContent,
+  settingsOpen: document.getElementById('settings-modal').classList.contains('visible'),
+}));
+console.log('answer read after coming back:', JSON.stringify(readAnswer));
+await pageA.click('#assistant-chat-withdraw');
+await pageA.waitForFunction(() => window.__assistantChat?.question === null, null, { timeout: 5000 });
+await pageA.click('#assistant-chat-close');
+await pageA.waitForSelector('#assistant-chat-panel[hidden]', { state: 'attached', timeout: 5000 });
+
 // Blocking an assistant is blocking anyone: reopen the panel, press Block, confirm
 // in the in-app dialog. The panel closes and a new question is refused with the
 // same plain message a stranger would get.
@@ -210,11 +271,17 @@ const pass = tapped === true
   && told.body.ended?.endedBy === 'shopper'
   && /helping someone else/.test(offerShown.status) && offerShown.text === 'Clover is free. Talk to Clover instead' && offerShown.kept === 'Is anyone free?'
   && afterOffer.name === 'Clover' && afterOffer.offerHidden && afterOffer.status === '' && afterOffer.kept === 'Is anyone free?'
+  && leaveOffered.label === 'Leave my question for the assistants' && leaveOffered.kept === 'Can I sell a hat?'
+  && inLine.question.position === 1 && /number 1 in line/.test(inLine.status) && /your place is kept/.test(inLine.status)
+  && inLine.formHidden && inLine.withdraw === 'Take my question back' && questionPanelFits
+  && handedQuestion.body.question?.text === 'Can I sell a hat?' && answerPosted.status === 201
+  && readAnswer.log.includes('Yes! Open Sell mode and add it.') && readAnswer.log.includes('Can I sell a hat?')
+  && readAnswer.withdraw === 'Done' && !readAnswer.settingsOpen
   && blockShown && afterBlock.status === 403 && afterBlock.body.error === "You can't message this person."
   && unexpectedErrors.length === 0;
 await finish(sessionA.browser, {
   pass,
-  label: '#3447: tap an assistant, ask, read the reply, see it end, and closing the panel ends the conversation, and Block blocks the assistant',
+  label: '#3447/#3448: tap an assistant, ask, read the reply, see it end, closing ends the conversation; leave a question, keep the place, read the answer from Settings; Block blocks the assistant',
   errors: unexpectedErrors,
 });
 await sessionB.browser.close();
