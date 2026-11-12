@@ -77,6 +77,33 @@ describe('Fleet key and the preview gate', () => {
   });
 });
 
+describe('Fleet traffic and shared rate-limit budgets (#3429)', () => {
+  it('counts a fleet request in IP buckets of its own, never the address a real person shares', async () => {
+    const headers = ip();
+    const address = headers['cf-connecting-ip'];
+    await fleetFetch('/api/auth/login', {
+      method: 'POST', key: FLEET_KEY, headers, body: JSON.stringify({ email: 'nobody@example.com', password: 'wrong-password-1' }),
+    });
+    const fleetRows = await env.DB.prepare('SELECT COUNT(*) AS n FROM rate_limit_events WHERE bucket_key = ?').bind(`login:fleet:${address}`).first();
+    const sharedRows = await env.DB.prepare('SELECT COUNT(*) AS n FROM rate_limit_events WHERE bucket_key = ?').bind(`login:${address}`).first();
+    expect(fleetRows.n).toBe(1);
+    expect(sharedRows.n).toBe(0);
+  });
+
+  it('a caller cannot choose the prefix: a header claiming one is overwritten, and without the key the gate refuses first', async () => {
+    const headers = { 'cf-connecting-ip': `fleet:test-${crypto.randomUUID()}` };
+    expect((await fleetFetch('/api/auth/login', { method: 'POST', headers, body: '{}' })).status).toBe(401);
+    const address = headers['cf-connecting-ip'];
+    await fleetFetch('/api/auth/login', {
+      method: 'POST', key: FLEET_KEY, headers, body: JSON.stringify({ email: 'nobody@example.com', password: 'wrong-password-1' }),
+    });
+    // The claimed prefix is just part of the address; the real one is added on top.
+    const rows = await env.DB.prepare('SELECT bucket_key FROM rate_limit_events WHERE bucket_key IN (?, ?)')
+      .bind(`login:${address}`, `login:fleet:${address}`).all();
+    expect(rows.results.map((row) => row.bucket_key)).toEqual([`login:fleet:${address}`]);
+  });
+});
+
 describe('POST /api/auth/fleet-login', () => {
   it('is a 404 without the key, with a wrong key, and when the secret is unset', async () => {
     const body = JSON.stringify({ name: 'higglehaven7' });
