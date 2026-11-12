@@ -153,6 +153,13 @@ gate, never a routine digest); it now reaches the owner as a short
 `[hh]` email from higglehaven1, not as chat text. See "The owner reads
 email, not the session log" under "Standing owner decisions".
 
+**Update (owner, 2026-11-12): the channel is now the owner's todo
+list.** Email arrives in the order it was sent, and the owner needs
+what is open in the order it matters. Each item now becomes a task in
+the owner's own todo app, placed by higglehaven1 in one priority order
+with the rest of their life. See "Open items live in the owner's todo
+list, in priority order" under "Standing owner decisions".
+
 Multiple Claude Code sessions work on this repo at once, each with a
 fixed session name assigned by the project owner — `higglehaven1`
 through `higglehaven12` as of writing, with more (`higglehaven13`, ...)
@@ -736,6 +743,57 @@ most likely to come up again.
   question that is not in an email has not been asked. The wider
   principle for anything built for a busy person: put each open item
   where they keep their open items, one item per unit they can close.
+
+- **Open items live in the owner's todo list, in priority order; email
+  is for emergencies.** (2026-11-12; replaces email as the channel in
+  the entry above.) Two days of one-topic emails showed the flaw. The
+  owner, busy with a job and courier driving, had not got past the first
+  step of the first long email, and: "Meanwhile, I don't know what
+  higher priority things might have come up. If we were already live and
+  using this workflow, there could be a major concern that I'm oblivious
+  to. I'd like to work through your emails from oldest to newest, but
+  shifting priorities makes that unwise." Their fix: "We shift your
+  email-sending to task creation/editing in the todo app. You will
+  maintain the priority order for things having to do with higglehaven
+  as well as tasks from other parts of my life. If you have new
+  information about a lower-priority task, you can modify the task
+  without me noticing it until it's time to do the task." The principle:
+  an inbox is ordered by arrival, and a busy person needs what is open
+  ordered by importance, in the one list they already work from, with
+  each item kept current in place so that nothing has to be re-read. A
+  message asks for attention now; a task waits its turn. The owner
+  called the idea "only partially thought-through", so the working rules
+  below are higglehaven1's and are open to correction:
+  - One task per open item, in the owner's todo app (RunbotRobot/todo;
+    only higglehaven1 has access). Its first line starts "higglehaven:"
+    and says what to do; the lines under it carry everything needed to
+    do it, written in the owner's voice ("my phone") with higglehaven1
+    as "Claude". A decision states the exact words to type and the
+    recommended answer. No task depends on an email or on chat.
+  - New information edits the task it belongs to. Things that have
+    shipped and are ready to try are added to the one standing "try the
+    latest changes on my phone" task, not given tasks of their own.
+  - higglehaven1 places each task in a single priority order across the
+    owner's whole life (the nightly re-sort already keeps that order)
+    and moves it when its importance changes. Quick decisions that
+    unblock the fleet sit above long errands and below anything with a
+    deadline, money, health or compliance at stake.
+  - higglehaven1 creates, edits and re-places only its own tasks. In
+    the owner's own tasks it never completes, deletes or rewords
+    anything; where one concerns higglehaven it may add lines beginning
+    "Claude:" under the owner's words.
+  - The owner answers by typing in chat whenever they reach the task,
+    or by completing it when it only needed reading or trying.
+    higglehaven1 then removes or updates the task. Anything that moves
+    money, changes access or credentials, or deletes data still needs
+    the yes typed in chat.
+  - An emergency (the site down, a security incident, money going
+    wrong) goes to the very top of the list and also gets one email
+    whose subject starts "[hh] URGENT". Nothing else is emailed.
+  - Coding sessions are unchanged: set `waitingOn: "owner"` with the
+    reason on the card or issue, and higglehaven1 carries it into the
+    list. The older owner-gated cards go in one at a time, not as a
+    batch.
 
 - **Higgles are earned one way: by building landlets. Nothing else
   pays them.** (2026-11-10.) An idea that users would be paid higgles
