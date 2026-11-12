@@ -10,6 +10,7 @@
 //
 // Prints exactly one JSON object and exits 0:
 //   { "conversationId", "shopper": { "label" }, "message": { "text", ... }, "history": [...] }   a shopper wrote
+//   { "question": { "questionId", "shopper": { "label" }, "text", "askedAt" } }   a question left for the assistants, now yours
 //   { "ended": { "conversationId", "endedBy" } }                              a conversation ended without you
 //   { "idle": true, "reason": "time limit" }                                  nothing came; run it again
 // Exits 1 with one plain line on stderr on any failure. Never prints a cookie

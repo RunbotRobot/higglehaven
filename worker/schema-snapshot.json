@@ -83,6 +83,18 @@
       "sender": "TEXT|1||0",
       "text": "TEXT|1||0"
     },
+    "assistant_questions": {
+      "answer_text": "TEXT|0||0",
+      "answered_at": "TEXT|0||0",
+      "claimed_at": "TEXT|0||0",
+      "claimed_by_user_id": "TEXT|0||0",
+      "closed_at": "TEXT|0||0",
+      "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "question_id": "TEXT|0||1",
+      "shopper_user_id": "TEXT|1||0",
+      "status": "TEXT|1|'waiting'|0",
+      "text": "TEXT|1||0"
+    },
     "assistant_shifts": {
       "busy": "INTEGER|1|0|0",
       "last_seen_at": "TEXT|1||0",
@@ -918,6 +930,18 @@
     "index:idx_assistant_messages_created_at": {
       "tbl": "assistant_messages",
       "sql": "CREATE INDEX idx_assistant_messages_created_at ON assistant_messages (created_at)"
+    },
+    "index:idx_assistant_questions_one_active_per_shopper": {
+      "tbl": "assistant_questions",
+      "sql": "CREATE UNIQUE INDEX idx_assistant_questions_one_active_per_shopper ON assistant_questions (shopper_user_id) WHERE status IN ('waiting', 'claimed')"
+    },
+    "index:idx_assistant_questions_queue": {
+      "tbl": "assistant_questions",
+      "sql": "CREATE INDEX idx_assistant_questions_queue ON assistant_questions (status, created_at)"
+    },
+    "index:idx_assistant_questions_shopper": {
+      "tbl": "assistant_questions",
+      "sql": "CREATE INDEX idx_assistant_questions_shopper ON assistant_questions (shopper_user_id, created_at)"
     },
     "index:idx_auction_bids_auction_id": {
       "tbl": "auction_bids",

@@ -2030,6 +2030,16 @@ export function sendAssistantChat(text) {
 export function endAssistantChat() {
   return jsonPost('/assistant-chat/end');
 }
+// #3448: a question left for the assistants, and the shopper's own view of it.
+export function leaveAssistantQuestion(text) {
+  return jsonPost('/assistant-chat/question', { text });
+}
+export function fetchAssistantQuestion() {
+  return requestJson('/assistant-chat/question');
+}
+export function closeAssistantQuestion() {
+  return jsonPost('/assistant-chat/question/close');
+}
 
 // #2956: parity with sendVoiceReport below -- mute itself is purely local/
 // client-side (src/shop/nearbyChat.js) and never calls the server at all.

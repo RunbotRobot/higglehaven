@@ -10336,6 +10336,31 @@ Rules the endpoints keep:
 - `POST /api/assistant-chat/send` `{ text }`: a follow-up. `409 { conversationEnded }`
   if it has ended.
 - `POST /api/assistant-chat/end`: the shopper ends it. Idempotent.
+- **Leaving a question (#3448).** When no assistant is free (the 409s above), the
+  shopper can leave the question instead of walking away empty-handed. "Wait in
+  line" and "leave a question" are one thing: the question is the shopper's place
+  in line, and it stays queued until an assistant answers it or the shopper
+  withdraws it, up to `keptDays` (7) days, after which it expires and the shopper
+  is told. Closing the panel keeps the place. Table `assistant_questions`
+  (`migrations/0223`); one active question per shopper (a partial unique index).
+  - `POST /api/assistant-chat/question` `{ text }`: same adult-only gate, same
+    280-character limit and send budget as `start`; a fleet account cannot. `409`
+    if the shopper is in a live conversation or already has a question waiting
+    (that one comes back as `question`). `201 { question, assistantsOnShift,
+    keptDays }`.
+  - `GET /api/assistant-chat/question`: the shopper's latest question, or
+    `{ question: null }`. `question` is `{ questionId, text, status, createdAt }`
+    plus `position` (1 is next; only while `waiting` or `claimed`) or, once
+    answered, `answer: { text, answeredAt, assistantName }`. `status` is
+    `waiting`, `claimed` (an assistant is reading it), `answered` or `expired`.
+    `assistantsOnShift` is how many assistants are on shift, so the panel can say
+    nobody is on the floor right now.
+  - `POST /api/assistant-chat/question/close`: withdraws a question still in line,
+    or closes an answered or expired one once read. Idempotent.
+  - An answer is stored, so a shopper who left reads it when they next open the
+    panel, and a notification ("<Name> answered the question you left.") tells
+    them. An answer nobody came back for is deleted after `keptDays` days, as are
+    finished questions.
 
 ### Assistant side (assistant accounts only; others get `403`)
 
@@ -10344,7 +10369,17 @@ Rules the endpoints keep:
   keeps the assistant on shift. Returns one of `{ conversationId, shopper:
   { label }, message, history }` (a waiting shopper message, handed over exactly
   once, with up to 20 earlier messages), `{ ended: { conversationId, endedBy } }`
-  (a conversation ended without the assistant, told once), or `{ idle: true }`.
+  (a conversation ended without the assistant, told once), `{ question: {
+  questionId, shopper: { label }, text, askedAt } }` (#3448: with nothing live to
+  do, the oldest question left for the assistants, handed to this assistant
+  atomically and once; an assistant holding one takes no second, and one it does
+  not answer within 15 minutes goes back in line; a question from someone with a
+  block either way is skipped), or `{ idle: true }`.
+- `POST /api/assistant-inbox/questions/:id/answer` `{ text }` (at most 1000
+  characters), and `POST /api/assistant-inbox/questions/:id/escalate`
+  `{ summary }` (as for a conversation; the quoted field holds the question).
+  Only the assistant it was handed to may call them (`404` otherwise); an answer
+  to a question already taken back or handed elsewhere is `409 { questionClosed }`.
 - `POST /api/assistant-inbox/conversations/:id/reply` `{ text }`.
 - `POST /api/assistant-inbox/conversations/:id/end`.
 - `POST /api/assistant-inbox/conversations/:id/escalate` `{ summary }`: for what an
@@ -10376,6 +10411,8 @@ cookie or a header. `--url` defaults to the live site; a local server needs
   <conversationId> [--text "..."]`: `reply` posts an answer, `end` ends the
   conversation, `escalate` files the team card (`--text` is the assistant's own
   summary; the server adds the shopper's words in the quoted field).
+  `answer-question` and `escalate-question` do the same for a left question by its
+  `questionId`, which the shift program prints as `{ question }` (#3448).
 
 Handing a conversation to another assistant is not here yet (#3448).
 

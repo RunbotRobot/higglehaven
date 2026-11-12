@@ -59,3 +59,32 @@ export function freeAssistantOffer(body) {
 export function offerLabel(name) {
   return `${name} is free. Talk to ${name} instead`;
 }
+
+// #3448: when no assistant is free, a shopper can leave the question instead.
+// The server's refusal says which case it was (busy, or off shift); anything
+// else (a block, the adult-only gate, a rate limit) is not a reason to offer it.
+export function canLeaveQuestion(body) {
+  return Boolean(body) && (body.assistantBusy === true || body.assistantOnShift === false);
+}
+
+export const leaveLabel = 'Leave my question for the assistants';
+export const withdrawLabel = 'Take my question back';
+export const doneLabel = 'Done';
+
+const isInLine = (question) => question.status === 'waiting' || question.status === 'claimed';
+export const questionInLine = isInLine;
+
+// What the panel says about a left question, in a shopper's words. Every number
+// (the place in line, how many days it is kept, how many assistants are on the
+// floor) arrives in the server's reply; nothing is a second copy of a limit.
+export function questionNotice(question, { keptDays, assistantsOnShift }) {
+  if (question.status === 'expired') {
+    return `Nobody answered your question within ${keptDays} days. You can ask again.`;
+  }
+  if (!isInLine(question)) return '';
+  const place = question.status === 'claimed'
+    ? 'An assistant is reading your question.'
+    : `You're number ${question.position} in line.`;
+  const floor = assistantsOnShift === 0 ? ' No assistant is on the floor right now, so this may take a while.' : '';
+  return `${place}${floor} You can close this and your place is kept: you'll get a notification when it's answered. Questions are kept for ${keptDays} days.`;
+}
