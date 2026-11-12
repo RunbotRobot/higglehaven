@@ -33,7 +33,7 @@ async function run(args, { login = 'fleet', key = FLEET_KEY } = {}) {
 }
 
 // ---- 1. A phone-size run: walk, screenshot, a timing, frame figures ----
-const phone = await run(['--name', 'higglehaven9', '--timing', '/api/landlets', 'idle', 'walk:forward:1500', 'shot:walked', 'stats']);
+const phone = await run(['--name', 'higglehaven9', '--timing', '/api/landlets', 'idle', 'walk:forward:1500', 'aim:up:300', 'aim:down:300', 'shot:walked', 'stats']);
 check(phone.code === 0, `phone run exits 0 (code ${phone.code}, stderr ${phone.stderr.slice(0, 200)})`);
 let report = {};
 try {

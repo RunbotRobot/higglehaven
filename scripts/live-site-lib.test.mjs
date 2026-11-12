@@ -7,6 +7,8 @@ describe('live-site steps (#3430)', () => {
   it('parses each step with its arguments', () => {
     expect(parseStep('walk:forward:3000')).toEqual({ command: 'walk', args: ['forward', 3000] });
     expect(parseStep('walk:left')).toEqual({ command: 'walk', args: ['left', 1000] });
+    expect(parseStep('aim:up:1500')).toEqual({ command: 'aim', args: ['up', 1500] });
+    expect(parseStep('aim:left')).toEqual({ command: 'aim', args: ['left', 1000] });
     expect(parseStep('look:40:-20')).toEqual({ command: 'look', args: [40, -20] });
     expect(parseStep('tap:120:300')).toEqual({ command: 'tap', args: [120, 300] });
     expect(parseStep('tap:#shop-fly-btn')).toEqual({ command: 'tap', args: ['#shop-fly-btn'] });
@@ -20,6 +22,8 @@ describe('live-site steps (#3430)', () => {
   it('refuses a bad step with one plain line naming it', () => {
     expect(() => parseStep('walk:sideways')).toThrow(/direction must be one of/);
     expect(() => parseStep('walk')).toThrow(/needs 1 argument/);
+    expect(() => parseStep('aim:forward')).toThrow(/direction must be one of up, down, left, right/);
+    expect(() => parseStep('aim:up:0')).toThrow(/positive number/);
     expect(() => parseStep('look:1')).toThrow(/needs 2 argument/);
     expect(() => parseStep('mode:moon')).toThrow(/mode must be one of/);
     expect(() => parseStep('dance')).toThrow(/unknown step "dance"/);
