@@ -70,6 +70,9 @@ import {
   fetchFarPlacements, fetchCreditOrbs, fetchCreditOrbStanding, collectCreditOrb, reportPresence, fetchNearbyPresence,
 } from '../api.js';
 import { applyAssistantLook } from './assistantAvatar.js';
+import { idleState } from './assistantIdle.js';
+import { createAssistantTransition, assistantArrivalLevels, assistantDepartureLevels } from './assistantFog.js';
+import { createArrivalFog, createArrivalDissolve } from './arrivalEffect.js';
 import { createShopAvatar, setShopAvatarAnimationState, CUSTOM_AVATAR_FRONT_YAW_RAD, shopAvatarCollisionHalfM } from './avatar.js';
 import { creditOrbContact, creditOrbRefusalKind, creditOrbMayRetry, CREDIT_ORB_RETRY_INTERVAL_MS } from './creditOrbCollect.js';
 import {
@@ -907,6 +910,7 @@ export async function pollNearbyPresenceIfNeeded(now) {
   for (const avatar of avatars) {
     seenBuilderIds.add(avatar.builderId);
     let entry = shopOtherAvatars.get(avatar.builderId);
+    const isNewEntry = !entry;
     if (!entry) {
       // #2045: entry.group is a stable outer transform (position/heading are
       // lerped on it, and flightMovement/voiceChat read it); the visible body
@@ -963,6 +967,15 @@ export async function pollNearbyPresenceIfNeeded(now) {
     entry.equippedAvatar = normalizeEquippedAvatar(avatar.equippedAvatar); // #2045
     entry.equippedAnimation = normalizeEquippedAnimation(avatar.equippedAnimation); // #3230
     applyAssistantLook(entry, avatar.assistant); // #3445: a fleet account is drawn as a named assistant
+    // #3449: an assistant that comes on shift appears out of fog; one that was
+    // on its way out and is back (a late heartbeat) simply stays.
+    if (entry.transitionKind === 'depart') {
+      entry.transition?.cancel();
+      entry.transition = null;
+      entry.transitionKind = null;
+    } else if (isNewEntry && entry.assistantName) {
+      startAssistantTransition(entry, 'arrive', performance.now()); // the frame clock, not the poll's `now`, which is stale by the fetch's latency
+    }
     entry.userId = avatar.userId ?? null; // #3447: the account to ask when a shopper taps an assistant
   }
   // #2436: a single poll missing an avatar that's genuinely still nearby
@@ -976,11 +989,16 @@ export async function pollNearbyPresenceIfNeeded(now) {
   // nudge, which never gets a second chance once that frame has passed.
   for (const [builderId, entry] of shopOtherAvatars) {
     if (seenBuilderIds.has(builderId)) continue;
+    if (entry.transitionKind === 'depart') continue; // already leaving; updateOtherShopAvatars removes it
     entry.missedPolls = (entry.missedPolls ?? 0) + 1;
     if (entry.missedPolls < SHOP_OTHER_AVATAR_MISSED_POLLS_BEFORE_DESPAWN) continue;
-    scene.remove(entry.group);
-    disposeOtherAvatarClips(entry);
-    disposeObject3D(entry.group);
+    if (entry.assistantName) {
+      // #3449: an assistant whose heartbeat lapsed goes back into the fog, not out
+      // with a pop. The frame loop removes it once the fog has cleared.
+      startAssistantTransition(entry, 'depart', performance.now());
+      continue;
+    }
+    releaseOtherAvatarEntry(entry);
     shopOtherAvatars.delete(builderId);
   }
   reconcileOtherAvatarBodies(now);
@@ -1152,12 +1170,41 @@ async function setUpOtherAvatarClips(entry, body, appliedAnimation, animationId,
   refreshOtherShopAvatarsDiagnostic();
 }
 
-function despawnOtherShopAvatars() {
-  for (const entry of shopOtherAvatars.values()) {
-    scene.remove(entry.group);
-    disposeOtherAvatarClips(entry);
-    disposeObject3D(entry.group);
+// #3449: an assistant comes into the world out of fog and leaves into it
+// (#3397's treatment, assistantFog.js). The transition owns a fog and a dissolve
+// on the entry's group; every place that removes an entry cancels it first so
+// nothing it made outlives the avatar.
+function otherAvatarReducedMotion() {
+  try {
+    return !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return false;
   }
+}
+
+function startAssistantTransition(entry, kind, now) {
+  entry.transition?.cancel();
+  const reducedMotion = otherAvatarReducedMotion();
+  const levels = kind === 'depart'
+    ? (age) => assistantDepartureLevels(age, { reducedMotion })
+    : (age) => assistantArrivalLevels(age, { reducedMotion });
+  entry.transitionKind = kind;
+  entry.transition = createAssistantTransition({
+    entry, parent: scene, levels, startedAtMs: now,
+    effects: { createFog: createArrivalFog, createDissolve: createArrivalDissolve },
+  });
+}
+
+function releaseOtherAvatarEntry(entry) {
+  entry.transition?.cancel();
+  entry.transition = null;
+  scene.remove(entry.group);
+  disposeOtherAvatarClips(entry);
+  disposeObject3D(entry.group);
+}
+
+function despawnOtherShopAvatars() {
+  for (const entry of shopOtherAvatars.values()) releaseOtherAvatarEntry(entry);
   shopOtherAvatars.clear();
   refreshOtherShopAvatarsDiagnostic();
 }
@@ -1181,12 +1228,25 @@ function refreshOtherShopAvatarsDiagnostic() {
   }));
 }
 
+// #3449: read-only test hook for the pose each other avatar is actually drawn
+// at this frame (the polled position plus an assistant's client-side wander),
+// as opposed to the once-a-poll snapshot above. e2e needs it to see that an
+// assistant on shift moves, stays near its spot and turns to a shopper.
+window.__testShopOtherAvatarPoses = () => [...shopOtherAvatars.values()].map((entry) => ({
+  assistantName: entry.assistantName ?? null,
+  busy: Boolean(entry.assistantBusy),
+  departing: entry.transitionKind === 'depart',
+  offsetX: entry.idleOffsetX ?? 0, offsetY: entry.idleOffsetY ?? 0, // the wander alone, relative to the placed spot
+  x: entry.group.position.x, y: entry.group.position.y, heading: entry.group.rotation.z,
+  spotX: entry.toX, spotY: entry.toY,
+}));
+
 // #1100: lerps every tracked other-avatar from its previous poll snapshot
 // toward its latest one over the poll interval, every frame — what makes a
 // once-a-second polling transport read as continuous motion rather than a
 // visible snap/teleport on each poll tick (the issue's own "smoothing").
 export function updateOtherShopAvatars(now) {
-  for (const entry of shopOtherAvatars.values()) {
+  for (const [builderId, entry] of shopOtherAvatars) {
     const t = Math.min(1, (now - entry.receivedAt) / entry.lerpDurationMs);
     entry.group.position.set(
       THREE.MathUtils.lerp(entry.fromX, entry.toX, t),
@@ -1194,13 +1254,44 @@ export function updateOtherShopAvatars(now) {
       THREE.MathUtils.lerp(entry.fromZ, entry.toZ, t),
     );
     entry.group.rotation.z = entry.fromHeading + shortestAngleDelta(entry.fromHeading, entry.toHeading) * t;
+    // #3449: an assistant on shift is placed by the server and never reports a
+    // position of its own, so it wanders a little around that spot on the
+    // client (assistantIdle.js: seeded from its name and the clock, nothing to
+    // fetch) and faces a shopper who walks up. Positions are the player's own,
+    // read here, never sent anywhere.
+    let idle = null;
+    if (entry.assistantName) {
+      idle = idleState({
+        seed: entry.assistantName,
+        nowMs: Date.now(),
+        busy: Boolean(entry.assistantBusy),
+        toShopper: { dx: shopAvatarPosition.x - entry.group.position.x, dy: shopAvatarPosition.y - entry.group.position.y },
+        baseHeading: entry.group.rotation.z,
+      });
+      entry.group.position.x += idle.x;
+      entry.group.position.y += idle.y;
+      entry.group.rotation.z = idle.heading;
+      entry.idleOffsetX = idle.x; // for the e2e hook below: the wander alone, apart from the polled spot's own lerp
+      entry.idleOffsetY = idle.y;
+    }
     // #3230: clips follow the movement the lerp above is already showing.
     if (entry.mixer) {
-      setShopAvatarAnimationState(entry, locomotionStateFor(entry.fromX, entry.fromY, entry.toX, entry.toY, entry.lerpDurationMs, t));
+      setShopAvatarAnimationState(entry, idle ? (idle.moving ? 'walk' : 'idle') : locomotionStateFor(entry.fromX, entry.fromY, entry.toX, entry.toY, entry.lerpDurationMs, t));
       const dt = entry.lastFrameAt === null ? 0 : Math.min((now - entry.lastFrameAt) / 1000, 0.1); // same clamp the other per-frame dt uses
       entry.mixer.update(dt);
     }
     entry.lastFrameAt = now;
+    // #3449: advance an assistant's arrival or departure; a finished departure
+    // removes the avatar for good.
+    if (entry.transition && entry.transition.step(now)) {
+      const departed = entry.transitionKind === 'depart';
+      entry.transition = null;
+      entry.transitionKind = null;
+      if (departed) {
+        releaseOtherAvatarEntry(entry);
+        shopOtherAvatars.delete(builderId);
+      }
+    }
   }
 }
 
