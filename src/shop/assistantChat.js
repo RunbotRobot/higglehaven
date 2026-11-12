@@ -10,6 +10,7 @@
 // right and ends the conversation, so an assistant is never left waiting on
 // someone who walked away.
 import { startAssistantChat, fetchAssistantChat, sendAssistantChat, endAssistantChat } from '../api.js';
+import { confirmAndBlockPerson } from '../blocks.js';
 import {
   mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText,
 } from './assistantChatLogic.js';
@@ -19,13 +20,14 @@ const POLL_INTERVAL_MS = 2000;
 const panelEl = document.getElementById('assistant-chat-panel');
 const nameEl = document.getElementById('assistant-chat-name');
 const closeEl = document.getElementById('assistant-chat-close');
+const blockEl = document.getElementById('assistant-chat-block');
 const logEl = document.getElementById('assistant-chat-log');
 const statusEl = document.getElementById('assistant-chat-status');
 const formEl = document.getElementById('assistant-chat-form');
 const inputEl = document.getElementById('assistant-chat-input');
 const sendEl = document.getElementById('assistant-chat-send');
 
-let assistant = null; // { userId, name } of whoever the panel is for
+let assistant = null; // { userId, builderId, name } of whoever the panel is for
 let conversation = null; // the server's open conversation, or null
 let messages = [];
 let replyWaitSeconds = 90; // replaced by the server's number on every reply
@@ -82,6 +84,7 @@ function renderLog() {
 
 function render() {
   nameEl.textContent = assistant ? assistant.name : '';
+  blockEl.hidden = !assistant?.builderId;
   renderLog();
   renderStatus();
   // Exposed for the e2e (added for #3447): what the panel actually shows.
@@ -105,7 +108,7 @@ function adopt(reply) {
   if (typeof reply.assistantOnShift === 'boolean') assistantOnShift = reply.assistantOnShift;
   if (reply.conversation) {
     conversation = reply.conversation;
-    assistant = { userId: reply.conversation.assistant.userId, name: reply.conversation.assistant.name ?? assistant?.name };
+    assistant = { ...assistant, userId: reply.conversation.assistant.userId, name: reply.conversation.assistant.name ?? assistant?.name };
   }
   if (reply.messages) messages = mergeMessages(messages, reply.messages);
 }
@@ -145,7 +148,7 @@ export async function openAssistantChat(target) {
   }
   const token = ++openToken;
   stopPolling();
-  assistant = { userId: target.userId, name: target.name };
+  assistant = { userId: target.userId, builderId: target.builderId ?? null, name: target.name };
   conversation = null;
   messages = [];
   endedText = null;
@@ -224,5 +227,16 @@ formEl.addEventListener('submit', async (event) => {
 });
 
 closeEl.addEventListener('click', () => { closeAssistantChat(); });
+
+// Blocking an assistant is blocking anyone: the same confirmation, the same
+// effect (they are gone from the world and cannot be messaged). It ends the
+// conversation and closes the panel. Without a builder id (a conversation
+// resumed from another tab before the avatar was seen) there is nothing to
+// block by, so the button is hidden.
+blockEl.addEventListener('click', async () => {
+  if (!assistant?.builderId) return;
+  const blocked = await confirmAndBlockPerson(assistant.builderId, { returnFocusEl: blockEl });
+  if (blocked) closeAssistantChat();
+});
 
 render();

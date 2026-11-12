@@ -278,10 +278,11 @@ export const shopOtherAvatars = new Map();
 // #3447: the assistant, if any, whose drawn avatar a raycast hit belongs to.
 // Walks up from the hit mesh to the avatar's group; only assistants answer a tap.
 export function assistantFromHit(hit) {
-  for (const entry of shopOtherAvatars.values()) {
+  for (const [builderId, entry] of shopOtherAvatars) {
     if (!entry.assistantName || !entry.userId) continue;
     for (let node = hit.object; node; node = node.parent) {
-      if (node === entry.group) return { userId: entry.userId, name: entry.assistantName };
+      // builderId is what blocking someone is keyed on (src/blocks.js).
+      if (node === entry.group) return { userId: entry.userId, builderId, name: entry.assistantName };
     }
   }
   return null;

@@ -1632,9 +1632,9 @@ renderer.domElement.addEventListener('click', (event) => {
 // assistant needs aiming at a pixel, which this suite never automates. Opens the
 // real chat panel for an assistant currently drawn in the world, by its account.
 window.__testTapAssistantByUserId = (userId) => {
-  const entry = [...shopOtherAvatars.values()].find((e) => e.userId === userId && e.assistantName);
-  if (!entry) return false;
-  openAssistantChat({ userId: entry.userId, name: entry.assistantName });
+  const found = [...shopOtherAvatars].find(([, e]) => e.userId === userId && e.assistantName);
+  if (!found) return false;
+  openAssistantChat({ userId: found[1].userId, builderId: found[0], name: found[1].assistantName });
   return true;
 };
 

@@ -148,6 +148,22 @@ for (let i = 0; i < 20; i++) {
 }
 console.log('assistant told after the shopper closed the panel:', JSON.stringify(told.body));
 
+// Blocking an assistant is blocking anyone: reopen the panel, press Block, confirm
+// in the in-app dialog. The panel closes and a new question is refused with the
+// same plain message a stranger would get.
+await pageA.evaluate((id) => window.__testTapAssistantByUserId(id), assistantUserId);
+await pageA.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
+const blockShown = await pageA.evaluate(() => !document.getElementById('assistant-chat-block').hidden);
+await pageA.click('#assistant-chat-block');
+await pageA.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
+await pageA.click('#confirm-modal-confirm-btn');
+await pageA.waitForSelector('#assistant-chat-panel[hidden]', { state: 'attached', timeout: 10000 });
+const afterBlock = await postJson(pageA, '/api/assistant-chat/start', { assistantUserId, text: 'Hello again' });
+console.log('start after blocking (should be 403):', afterBlock.status, afterBlock.body.error);
+
+// The refused question above is a deliberate 403, which the browser logs as a
+// failed resource load; it is the only page error this test expects.
+const unexpectedErrors = sessionA.errors.filter((error) => !/status of 403/.test(String(error)));
 const pass = tapped === true
   && opened.name === ASSISTANT_NAME && opened.badge === 'assistant'
   && opened.log.includes('AI assistant')
@@ -158,10 +174,11 @@ const pass = tapped === true
   && answered.log.includes('Head north past the fountain!') && answered.status === ''
   && ended === `${ASSISTANT_NAME} ended the conversation.`
   && told.body.ended?.endedBy === 'shopper'
-  && sessionA.errors.length === 0;
+  && blockShown && afterBlock.status === 403 && afterBlock.body.error === "You can't message this person."
+  && unexpectedErrors.length === 0;
 await finish(sessionA.browser, {
   pass,
-  label: '#3447: tap an assistant, ask, read the reply, see it end, and closing the panel ends the conversation',
-  errors: sessionA.errors,
+  label: '#3447: tap an assistant, ask, read the reply, see it end, and closing the panel ends the conversation, and Block blocks the assistant',
+  errors: unexpectedErrors,
 });
 await sessionB.browser.close();

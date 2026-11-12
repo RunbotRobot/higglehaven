@@ -81,7 +81,10 @@
     <div id="assistant-chat-panel" role="dialog" aria-labelledby="assistant-chat-name" hidden>
       <div id="assistant-chat-header">
         <div id="assistant-chat-title"><span id="assistant-chat-name"></span> <span id="assistant-chat-badge">assistant</span></div>
-        <button id="assistant-chat-close" type="button" aria-label="End the conversation and close">&times;</button>
+        <div id="assistant-chat-header-actions">
+          <button id="assistant-chat-block" type="button">Block</button>
+          <button id="assistant-chat-close" type="button" aria-label="End the conversation and close">&times;</button>
+        </div>
       </div>
       <div id="assistant-chat-log" role="log" aria-live="polite"></div>
       <div id="assistant-chat-status" role="status" aria-live="polite"></div>

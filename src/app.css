@@ -1175,6 +1175,21 @@
         font-size: 11px;
         font-weight: 400;
       }
+      #assistant-chat-header-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      #assistant-chat-block {
+        min-height: 32px;
+        padding: 0 10px;
+        border: none;
+        border-radius: 8px;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        font: 12px/1 sans-serif;
+        cursor: pointer;
+      }
       #assistant-chat-close {
         min-width: 32px;
         min-height: 32px;
