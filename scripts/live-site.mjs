@@ -11,7 +11,9 @@
 //
 // Steps (each `name` or `name:arg:arg`):
 //   walk:<forward|back|left|right>[:ms]   hold the joystick that way (default 1000 ms)
-//   look:<dx>:<dy>                        drag the camera by that many pixels
+//   aim:<up|down|left|right>[:ms]        hold the look joystick that way (default 1000 ms):
+//                                         turns the camera, up and down are the pitch
+//   look:<dx>:<dy>                        drag the page by that many pixels
 //   tap:<x>:<y> | tap:<css selector>      tap a point or a named control
 //   mode:<shop|build|sell>                switch mode
 //   fly                                   toggle flying
@@ -33,7 +35,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  PHONE, DESKTOP, WALK_VECTORS, parseArgs, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage,
+  PHONE, DESKTOP, WALK_VECTORS, AIM_VECTORS, parseArgs, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage,
 } from './live-site-lib.mjs';
 
 const fail = (message) => {
@@ -142,13 +144,13 @@ const settle = async () => {
   await page.waitForTimeout(500);
 };
 
-async function holdJoystick(direction, ms) {
+async function holdJoystick(direction, ms, { selector = '#shop-move-joystick', vectors = WALK_VECTORS } = {}) {
   await page.waitForSelector('#shop-fly-btn.visible', { timeout: 30000 }).catch(() => {});
-  const box = await page.locator('#shop-move-joystick').boundingBox();
+  const box = await page.locator(selector).boundingBox();
   if (!box) throw new Error('the joystick is not on screen (is this Shop mode?)');
   const cx = box.x + box.width / 2;
   const cy = box.y + box.height / 2;
-  const [vx, vy] = WALK_VECTORS[direction];
+  const [vx, vy] = vectors[direction];
   await page.mouse.move(cx, cy);
   await page.mouse.down();
   await page.mouse.move(cx + (vx * box.width) / 2, cy + (vy * box.height) / 2, { steps: 4 });
@@ -161,6 +163,9 @@ async function runStep(step, index) {
   switch (step.command) {
     case 'walk':
       await holdJoystick(a, b);
+      return null;
+    case 'aim':
+      await holdJoystick(a, b, { selector: '#shop-look-joystick', vectors: AIM_VECTORS });
       return null;
     case 'look': {
       const startX = device.width / 2;
