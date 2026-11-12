@@ -49,6 +49,10 @@ describe('shift tool helpers', () => {
   it('classifies what the inbox returns', () => {
     expect(classifyNext({ idle: true }).kind).toBe('idle');
     expect(classifyNext({ ended: { conversationId: 'c', endedBy: 'shopper' } }).kind).toBe('ended');
+    // A left question was already handed to this assistant: the loop must return it, never drop it (#3448).
+    const asked = { question: { questionId: 'q', shopper: { label: 'x' }, text: 'hi', askedAt: 't' } };
+    expect(classifyNext(asked)).toEqual({ kind: 'question', output: asked });
+    expect(classifyNext({ question: {} }).kind).toBe('idle');
     expect(classifyNext({ conversationId: 'c', message: { text: 'hi' }, shopper: { label: 'x' }, history: [] }).kind).toBe('message');
   });
 
