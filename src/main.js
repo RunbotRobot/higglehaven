@@ -1408,7 +1408,14 @@ window.__testShopInstanceLodStats = (instanceId) => {
       }
       for (const child of node.children) walk(child);
     };
-    for (const child of object.children) walk(child);
+    // #3494: while a swap cross-fades the version being left is still drawn; the
+    // stats describe the version now shown.
+    const lodTiers = object.userData.lodTiers;
+    const shownTier = object.userData.lodShown ?? 'full';
+    for (const child of object.children) {
+      const childTier = !lodTiers ? shownTier : child === lodTiers.mid ? 'mid' : child === lodTiers.far ? 'far' : 'full';
+      if (childTier === shownTier) walk(child);
+    }
     return {
       tier: object.userData.model ? (object.userData.lodShown ?? 'full') : 'none',
       tiersState: object.userData.lodTiersState ?? null,
@@ -1438,8 +1445,10 @@ window.__testShopInstanceLodHitSource = (instanceId) => {
   for (const entry of shopLandlets.values()) {
     const object = entry.objects.find((o) => o.userData.instanceId === instanceId);
     if (!object) continue;
-    const tiers = object.userData.lodTiers;
-    if (!tiers) return null;
+    // An item that has stayed within the protected distance never needed its reduced
+    // versions built (they load on the first step away), so it has none: its only
+    // version is the full one.
+    const tiers = object.userData.lodTiers ?? {};
     const shown = object.userData.lodShown ?? 'full';
     const shownRoot = shown === 'mid' ? tiers.mid : shown === 'far' ? tiers.far : object.children.find((c) => c !== tiers.mid && c !== tiers.far);
     if (!shownRoot) return null;
