@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   apparentSizePx, nextTier, budgetedTiers, fullDetailFloorPx, isNearFullDetail, NEAR_FULL_DETAIL_M,
   LOD_MID_ENTER_PX, LOD_MID_EXIT_PX, LOD_FAR_ENTER_PX, LOD_FAR_EXIT_PX, MAX_FULL_DETAIL_ITEMS, MAX_MID_DETAIL_ITEMS,
-  TIER_FULL, TIER_MID, TIER_FAR, setBoundingSphere,
+  TIER_FULL, TIER_MID, TIER_FAR, setBoundingSphere, largestFirst,
 } from './lodTier.js';
 
 const FOV = 60;
@@ -184,5 +184,20 @@ describe('setBoundingSphere (#3443)', () => {
       expect(Math.hypot(member.x - sphere.x, member.y - sphere.y, member.z - sphere.z) + member.radiusM)
         .toBeLessThanOrEqual(sphere.radiusM * Math.sqrt(3) + 1e-9);
     }
+  });
+});
+
+// #3494: which items change version first when many are due at once.
+describe('largestFirst', () => {
+  it('orders the items due to change by size on screen, biggest first', () => {
+    const items = [{ px: 40 }, { px: 120 }, { px: 15 }, { px: 80 }];
+    expect(largestFirst([0, 1, 2, 3], items)).toEqual([1, 3, 0, 2]);
+  });
+
+  it('keeps equal sizes in their original order and handles none or one', () => {
+    const items = [{ px: 50 }, { px: 50 }, { px: 50 }];
+    expect(largestFirst([2, 0, 1], items)).toEqual([2, 0, 1]);
+    expect(largestFirst([], items)).toEqual([]);
+    expect(largestFirst([1], items)).toEqual([1]);
   });
 });

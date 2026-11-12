@@ -61,7 +61,7 @@ import { setInstanceLodState, attachInstanceTiers, loadTierScenes, loadFarViewSo
 import { groupPlacements, placementTopZ } from './instanceBatching.js';
 import { buildInstancedBatch } from './instancedBatches.js';
 import { createFarView } from './farView.js';
-import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL } from './lodTier.js';
+import { apparentSizePx, nextTier, budgetedTiers, isNearFullDetail, setBoundingSphere, TIER_FULL, largestFirst } from './lodTier.js';
 import { sampleUniformDiskRadiusM } from '../spawnLocation.js';
 import { pickAvatarClips } from '../avatarClipNames.js';
 import { isNetworkError } from '../build/scene.js';
@@ -459,6 +459,7 @@ function requestInstanceTiers(entry, object) {
 // has nothing to switch.
 const lodItemsScratch = [];
 const lodObjectsScratch = [];
+const lodFlipScratch = []; // positions of the items due to change version this tick
 
 // #3443: the placed bundles of a loaded landlet that have more than one
 // member with versions to switch between, each with its bounding sphere, found once per change in the
@@ -538,16 +539,27 @@ function updateInstanceLodTiers() {
     }
   }
   const tiers = budgetedTiers(lodItemsScratch);
-  // #3396: flipping hundreds of items in one tick is a batch like any other, so
-  // it stops when its slice of the frame is spent; the items not reached keep
-  // their state and flip on the next tick.
-  const flipStartMs = performance.now();
+  // First note every item's wanted version (and ask for the reduced versions of
+  // any that will need them); the ones due to change are collected to be applied
+  // largest first.
+  lodFlipScratch.length = 0;
   for (let i = 0; i < lodObjectsScratch.length; i++) {
     const { entry, object } = lodObjectsScratch[i];
     const tier = tiers[i];
     object.userData.lodTier = tier;
     if (tier !== TIER_FULL && object.userData.lodTiersState === undefined) requestInstanceTiers(entry, object);
     if (object.userData.lodTiersState !== 'ready' || tier === object.userData.lodApplied) continue;
+    lodFlipScratch.push(i);
+  }
+  // #3396: flipping hundreds of items in one tick is a batch like any other, so
+  // it stops when its slice of the frame is spent; the items not reached keep
+  // their state and flip on the next tick. #3494: the biggest on screen go first,
+  // so they are the ones that get a cross-fade (few can run at once) and the
+  // ones served before the slice runs out.
+  const flipStartMs = performance.now();
+  for (const i of largestFirst(lodFlipScratch, lodItemsScratch)) {
+    const object = lodObjectsScratch[i].object;
+    const tier = tiers[i];
     object.userData.lodApplied = tier;
     setInstanceLodState(object, tier, tierCrossfades);
     window.__shopLodFlipCount = (window.__shopLodFlipCount ?? 0) + 1; // #3443: e2e counts tier changes
