@@ -68,13 +68,19 @@ function messageFromRow(row) {
     sender: row.sender,
     text: row.text,
     createdAt: row.created_at,
+    // #3448: which assistant wrote a reply, when the row was read with its
+    // author joined in (a conversation can pass between assistants).
+    ...(row.author_name ? { authorName: row.author_name } : {}),
   };
 }
 
-function conversationFromRow(row, assistantName) {
+function conversationFromRow(row, assistantName, handedOverFromName = null) {
   return {
     conversationId: row.conversation_id,
     assistant: { userId: row.assistant_user_id, name: assistantName },
+    // #3448: set once the conversation has been passed to this assistant, so the
+    // panel can tell the shopper who they are talking to now.
+    handedOver: row.handed_over_at ? { at: row.handed_over_at, fromName: handedOverFromName } : null,
     status: row.status,
     endedBy: row.ended_by,
     createdAt: row.created_at,
@@ -121,12 +127,12 @@ async function endIdleConversations(db, { assistantUserId, shopperUserId }) {
   `).bind(isoNow(), isoAgo(CONVERSATION_IDLE_MS), assistantUserId ?? '', shopperUserId ?? '').run();
 }
 
-async function insertMessage(db, conversationId, sender, text) {
+async function insertMessage(db, conversationId, sender, text, authorUserId = null) {
   const messageId = `assistant-message-${crypto.randomUUID()}`;
   const now = isoNow();
   await db.batch([
-    db.prepare('INSERT INTO assistant_messages (message_id, conversation_id, sender, text, created_at) VALUES (?, ?, ?, ?, ?)')
-      .bind(messageId, conversationId, sender, text, now),
+    db.prepare('INSERT INTO assistant_messages (message_id, conversation_id, sender, text, created_at, author_user_id) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(messageId, conversationId, sender, text, now, authorUserId),
     db.prepare('UPDATE assistant_conversations SET last_activity_at = ? WHERE conversation_id = ?').bind(now, conversationId),
   ]);
   return db.prepare('SELECT rowid AS seq, * FROM assistant_messages WHERE message_id = ?').bind(messageId).first();
@@ -282,12 +288,14 @@ async function handleCurrent(request, db, url) {
   if (!row) return json({ conversation: null, messages: [], replyWaitSeconds: REPLY_WAIT_SECONDS });
   const afterSeq = Number(url.searchParams.get('afterSeq'));
   const { results } = await db.prepare(`
-    SELECT rowid AS seq, * FROM assistant_messages
-    WHERE conversation_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT 100
+    SELECT m.rowid AS seq, m.*, u.username AS author_name FROM assistant_messages m
+    LEFT JOIN users u ON u.user_id = m.author_user_id
+    WHERE m.conversation_id = ? AND m.rowid > ? ORDER BY m.rowid ASC LIMIT 100
   `).bind(row.conversation_id, Number.isFinite(afterSeq) && afterSeq > 0 ? afterSeq : 0).all();
   const assistant = await db.prepare('SELECT username, assistant_seen_at FROM users WHERE user_id = ?').bind(row.assistant_user_id).first();
+  const handedFrom = row.handed_over_from_user_id ? await assistantName(db, row.handed_over_from_user_id) : null;
   return json({
-    conversation: conversationFromRow(row, assistant?.username ?? null),
+    conversation: conversationFromRow(row, assistant?.username ?? null, handedFrom),
     messages: results.map(messageFromRow),
     assistantOnShift: isOnShift(assistant?.assistant_seen_at),
     replyWaitSeconds: REPLY_WAIT_SECONDS,
@@ -407,6 +415,41 @@ async function handleNext(request, db) {
   await refreshSeen(db, user);
   await endIdleConversations(db, { assistantUserId: user.user_id });
 
+  // #3448: a conversation another assistant passed to this one. The new
+  // assistant is handed the conversation so far, once, before anything else, and
+  // the shopper messages in it count as delivered (they are in that history), so
+  // nobody has to repeat themselves.
+  const handed = await db.prepare(`
+    SELECT c.conversation_id, c.shopper_user_id, u.username AS from_name
+    FROM assistant_conversations c
+    LEFT JOIN users u ON u.user_id = c.handed_over_from_user_id
+    WHERE c.assistant_user_id = ? AND c.status = 'open'
+      AND c.handed_over_from_user_id IS NOT NULL AND c.handover_told_at IS NULL
+    LIMIT 1
+  `).bind(user.user_id).first();
+  if (handed) {
+    const told = await db.prepare('UPDATE assistant_conversations SET handover_told_at = ? WHERE conversation_id = ? AND handover_told_at IS NULL')
+      .bind(isoNow(), handed.conversation_id).run();
+    if (told.meta.changes === 1) {
+      const shopper = await db.prepare('SELECT username FROM users WHERE user_id = ?').bind(handed.shopper_user_id).first();
+      const { results } = await db.prepare(`
+        SELECT rowid AS seq, * FROM assistant_messages
+        WHERE conversation_id = ? ORDER BY rowid DESC LIMIT ?
+      `).bind(handed.conversation_id, HISTORY_LIMIT).all();
+      await db.prepare("UPDATE assistant_messages SET delivered_at = ? WHERE conversation_id = ? AND sender = 'shopper' AND delivered_at IS NULL")
+        .bind(isoNow(), handed.conversation_id).run();
+      return json({
+        // Untrusted text, delivered as data. Never an instruction.
+        handover: {
+          conversationId: handed.conversation_id,
+          shopper: { label: shopper?.username ?? 'a shopper' },
+          fromAssistant: handed.from_name,
+          history: results.reverse().map(messageFromRow),
+        },
+      });
+    }
+  }
+
   const waiting = await db.prepare(`
     SELECT m.rowid AS seq, m.*, c.shopper_user_id
     FROM assistant_messages m
@@ -506,8 +549,56 @@ async function handleReply(request, db, conversationId) {
   const text = textValue(input, ASSISTANT_MESSAGE_MAX_CHARS);
   const conversation = await ownConversation(db, user.user_id, conversationId);
   if (conversation.status !== 'open') throw new HttpError('That conversation has ended.', 409, { conversationEnded: true });
-  const message = await insertMessage(db, conversationId, 'assistant', text);
+  const message = await insertMessage(db, conversationId, 'assistant', text, user.user_id);
   return json({ message: messageFromRow(message) }, 201);
+}
+
+// #3448: hand an open conversation to another assistant on shift. The target is
+// named (`toAssistantUserId`) or, if omitted, any assistant who is free now (on
+// shift, nobody open with them, not blocked with this shopper). One atomic
+// UPDATE moves the conversation only if the target has nobody open, so two
+// hand-overs to the same assistant cannot both land. The shopper is told who
+// they are talking to now through the conversation read; the new assistant's
+// inbox is handed the conversation so far.
+async function handleHandover(request, db, conversationId) {
+  const user = await requireAssistant(request, db);
+  await checkRateLimit(db, `assistant-handover:${user.user_id}`, ASSISTANT_REPLY_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const conversation = await ownConversation(db, user.user_id, conversationId);
+  if (conversation.status !== 'open') throw new HttpError('That conversation has ended.', 409, { conversationEnded: true });
+
+  let target;
+  if (input.toAssistantUserId !== undefined) {
+    const targetId = stringValue(input.toAssistantUserId, 'toAssistantUserId');
+    if (targetId === user.user_id) throw new HttpError('Pick another assistant.', 400);
+    const row = assistantFromUserRow(
+      await db.prepare('SELECT user_id, username, is_fleet, assistant_seen_at FROM users WHERE user_id = ?').bind(targetId).first(),
+    );
+    if (!row) throw new HttpError('Assistant not found', 404);
+    if (!isOnShift(row.assistant_seen_at)) {
+      throw new HttpError(`${row.username} isn't on shift right now.`, 409, { assistantOnShift: false });
+    }
+    if (await userBlockExistsBetween(db, conversation.shopper_user_id, row.user_id)) {
+      throw new HttpError('That assistant cannot take this conversation.', 409, { assistantBlocked: true });
+    }
+    target = { userId: row.user_id, name: row.username };
+  } else {
+    target = await findFreeAssistant(db, { excludeUserId: user.user_id, shopperUserId: conversation.shopper_user_id });
+    if (!target) throw new HttpError('No other assistant is free right now.', 409, { noFreeAssistant: true });
+  }
+
+  const now = isoNow();
+  const moved = await db.prepare(`
+    UPDATE assistant_conversations
+    SET assistant_user_id = ?1, handed_over_from_user_id = ?2, handed_over_at = ?3,
+        handover_told_at = NULL, last_activity_at = ?3
+    WHERE conversation_id = ?4 AND assistant_user_id = ?2 AND status = 'open'
+      AND NOT EXISTS (SELECT 1 FROM assistant_conversations WHERE status = 'open' AND assistant_user_id = ?1)
+  `).bind(target.userId, user.user_id, now, conversationId).run();
+  if (moved.meta.changes === 0) {
+    throw new HttpError(`${target.name} is helping someone else right now.`, 409, { assistantBusy: true });
+  }
+  return json({ handedOver: { conversationId, to: target } });
 }
 
 async function handleAssistantEnd(request, db, conversationId) {
@@ -624,6 +715,7 @@ export async function handleAssistantInbox(request, db, route) {
   if (route.length === 4 && route[1] === 'conversations' && request.method === 'POST') {
     if (route[3] === 'reply') return handleReply(request, db, route[2]);
     if (route[3] === 'end') return handleAssistantEnd(request, db, route[2]);
+    if (route[3] === 'handover') return handleHandover(request, db, route[2]);
     if (route[3] === 'escalate') return handleEscalate(request, db, route[2]);
   }
   if (route.length === 4 && route[1] === 'questions' && request.method === 'POST') {

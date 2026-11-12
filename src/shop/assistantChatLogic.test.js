@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel, canLeaveQuestion, questionNotice, questionInLine } from './assistantChatLogic.js';
+import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel, canLeaveQuestion, questionNotice, questionInLine, handoverNotice } from './assistantChatLogic.js';
 
 const msg = (seq, sender, createdAt = '2026-11-11T10:00:00.000Z') => ({ seq, sender, text: `m${seq}`, createdAt });
 
@@ -90,5 +90,20 @@ describe('left questions (#3448)', () => {
     expect(questionNotice({ status: 'answered' }, { keptDays: 7, assistantsOnShift: 1 })).toBe('');
     expect(questionInLine({ status: 'waiting' })).toBe(true);
     expect(questionInLine({ status: 'answered' })).toBe(false);
+  });
+});
+
+describe('handoverNotice (#3448)', () => {
+  it('says who passed the conversation to whom, and that nothing needs repeating', () => {
+    expect(handoverNotice({ assistant: { name: 'Clover' }, handedOver: { at: 'x', fromName: 'Juniper' } }))
+      .toBe('Juniper passed your conversation to Clover, who can see everything you wrote.');
+  });
+  it('still says it when the first assistant is no longer known', () => {
+    expect(handoverNotice({ assistant: { name: 'Clover' }, handedOver: { at: 'x', fromName: null } }))
+      .toBe('Your conversation was passed to Clover, who can see everything you wrote.');
+  });
+  it('is null for a conversation that was never handed over', () => {
+    expect(handoverNotice({ assistant: { name: 'Clover' }, handedOver: null })).toBeNull();
+    expect(handoverNotice(null)).toBeNull();
   });
 });

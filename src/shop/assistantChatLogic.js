@@ -28,6 +28,18 @@ export function endedNotice({ endedBy }, name) {
   return 'This conversation has ended.';
 }
 
+// #3448: shown when a conversation was passed from one assistant to another, so
+// the shopper knows who they are talking to now and that nothing has to be
+// repeated. Null when it was never handed over.
+export function handoverNotice(conversation) {
+  const handedOver = conversation?.handedOver;
+  const to = conversation?.assistant?.name;
+  if (!handedOver || !to) return null;
+  return handedOver.fromName
+    ? `${handedOver.fromName} passed your conversation to ${to}, who can see everything you wrote.`
+    : `Your conversation was passed to ${to}, who can see everything you wrote.`;
+}
+
 export function readingNotice(name) {
   return `${name} is reading your message…`;
 }
