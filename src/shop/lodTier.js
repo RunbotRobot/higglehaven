@@ -162,3 +162,13 @@ export function setBoundingSphere(members) {
     radiusM: 0.5 * Math.hypot(maxX - minX, maxY - minY, maxZ - minZ),
   };
 }
+
+// #3494 / #3396: when several items are due to change version in one tick, the
+// biggest on screen go first ("nearest and largest first"). That decides which
+// of them get one of the few cross-fades that can run at once, and who is
+// served before the tick's time slice runs out; the rest follow on later ticks.
+// `indices` are positions in `items` ({ px }); returns them, largest first, with
+// ties kept in their original order (the sort is stable). Sorts in place.
+export function largestFirst(indices, items) {
+  return indices.sort((a, b) => items[b].px - items[a].px);
+}
