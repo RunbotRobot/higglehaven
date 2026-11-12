@@ -148,6 +148,77 @@ describe('POST /api/auth/fleet-login', () => {
   });
 });
 
+// #3508: with ASSISTANT_ACCESS_KEY set, the coding fleet's key and the
+// assistant environment's key each sign in only their own kind of account.
+describe('Two fleet keys: coding and assistant (#3508)', () => {
+  const ASSISTANT_KEY = 'test-assistant-access-key';
+  beforeAll(() => { env.ASSISTANT_ACCESS_KEY = ASSISTANT_KEY; });
+  afterAll(() => { env.ASSISTANT_ACCESS_KEY = undefined; });
+
+  const loginWith = (key, name, headers) => fleetFetch('/api/auth/fleet-login', {
+    method: 'POST', key, headers, body: JSON.stringify({ name }),
+  });
+
+  it('both keys pass the preview gate', async () => {
+    expect((await fleetFetch('/api/auth/me', { key: FLEET_KEY })).status).not.toBe(401);
+    expect((await fleetFetch('/api/auth/me', { key: ASSISTANT_KEY })).status).not.toBe(401);
+  });
+
+  it('the coding key signs in a coding session and not an assistant', async () => {
+    expect((await loginWith(FLEET_KEY, 'higglehaven5')).status).toBe(200);
+    const refused = await loginWith(FLEET_KEY, 'assistant-juniper');
+    expect(refused.status).toBe(404);
+    expect(extractSessionCookie(refused)).toBeFalsy();
+  });
+
+  it('the assistant key signs in an assistant and not a coding session', async () => {
+    expect((await loginWith(ASSISTANT_KEY, 'assistant-juniper')).status).toBe(200);
+    const refused = await loginWith(ASSISTANT_KEY, 'higglehaven5');
+    expect(refused.status).toBe(404);
+    expect(extractSessionCookie(refused)).toBeFalsy();
+  });
+
+  it('the refusal is the plain "Not found" 404 the route gives without a key, and a refused login creates no account', async () => {
+    const refused = await loginWith(ASSISTANT_KEY, 'higglehaven77');
+    expect(refused.status).toBe(404);
+    expect(await refused.json()).toEqual({ error: 'Not found' });
+    const row = await env.DB.prepare("SELECT 1 FROM users WHERE email = 'higglehaven77@fleet.invalid'").first();
+    expect(row).toBeNull();
+  });
+
+  it('a wrong key is counted the same, and neither real key is counted', async () => {
+    const headers = ip();
+    for (let i = 0; i < 10; i++) {
+      expect((await fleetFetch('/api/auth/me', { key: `wrong-${i}`, headers })).status).toBe(401);
+    }
+    expect((await fleetFetch('/api/auth/me', { key: ASSISTANT_KEY, headers })).status).toBe(429);
+    const other = ip();
+    for (let i = 0; i < 12; i++) {
+      expect((await fleetFetch('/api/auth/me', { key: i % 2 ? FLEET_KEY : ASSISTANT_KEY, headers: other })).status).not.toBe(429);
+    }
+  });
+
+  it('the assistant key alone turns the gate on for assistants, and the coding key being unset turns coding off', async () => {
+    env.FLEET_ACCESS_KEY = undefined;
+    try {
+      expect((await loginWith(ASSISTANT_KEY, 'assistant-fig')).status).toBe(200);
+      expect((await loginWith(FLEET_KEY, 'higglehaven5')).status).toBe(401);
+    } finally {
+      env.FLEET_ACCESS_KEY = FLEET_KEY;
+    }
+  });
+
+  it('with ASSISTANT_ACCESS_KEY unset the one key still signs in either kind', async () => {
+    env.ASSISTANT_ACCESS_KEY = undefined;
+    try {
+      expect((await loginWith(FLEET_KEY, 'assistant-sage')).status).toBe(200);
+      expect((await loginWith(FLEET_KEY, 'higglehaven6')).status).toBe(200);
+    } finally {
+      env.ASSISTANT_ACCESS_KEY = ASSISTANT_KEY;
+    }
+  });
+});
+
 describe('What a fleet account cannot do', () => {
   // The shared helpers sign up without any gate credential, so this block runs
   // with the preview gate off; fleet-login still needs (and uses) the key.
