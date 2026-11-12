@@ -38,22 +38,40 @@ export async function sha256Hex(text) {
   return bytesToHex(new Uint8Array(digest));
 }
 
-export async function currentUser(request, db) {
+// #3464: one read for the session, its user and the user's suspension
+// standing. requireCurrentUser used to pay a second sequential D1 round trip
+// for the suspension lookup on every authenticated request; the EXISTS
+// subquery runs inside the same statement (same predicate as before: an
+// active, un-escalated account_suspensions row), so a suspended account is
+// refused exactly as it was, one trip sooner. Returns { user, suspended },
+// or null when there is no valid session.
+async function sessionUserWithStanding(request, db) {
   const cookies = parseCookies(request.headers.get('cookie'));
   const token = cookies[SESSION_COOKIE_NAME];
   if (!token) return null;
   const tokenHash = await sha256Hex(token);
   const row = await db.prepare(`
-    SELECT users.* FROM sessions
+    SELECT users.*, EXISTS (
+      SELECT 1 FROM account_suspensions
+      WHERE account_suspensions.user_id = users.user_id
+        AND account_suspensions.lifted_at IS NULL AND account_suspensions.escalated_at IS NULL
+    ) AS suspended_standing FROM sessions
     JOIN users ON users.user_id = sessions.user_id
     WHERE sessions.token_hash = ? AND sessions.expires_at > strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
   `).bind(tokenHash).first();
-  return row || null;
+  if (!row) return null;
+  const { suspended_standing: suspendedStanding, ...user } = row;
+  return { user, suspended: suspendedStanding === 1 };
+}
+
+export async function currentUser(request, db) {
+  const found = await sessionUserWithStanding(request, db);
+  return found ? found.user : null;
 }
 
 export async function requireCurrentUser(request, db) {
-  const user = await currentUser(request, db);
-  if (!user) throw new HttpError('Not authenticated', 401);
+  const found = await sessionUserWithStanding(request, db);
+  if (!found) throw new HttpError('Not authenticated', 401);
   // #2030 (sub-issue of #1201): the single join point every authenticated
   // request goes through -- enforcing the check here, rather than in
   // currentUser() itself, is what lets this throw a distinct, client-
@@ -64,11 +82,8 @@ export async function requireCurrentUser(request, db) {
   // never through currentUser/requireCurrentUser, so they're unaffected by
   // this -- only the CALLING admin's own session goes through this check,
   // the same as any other authenticated action.
-  const activeSuspension = await db.prepare(`
-    SELECT 1 FROM account_suspensions WHERE user_id = ? AND lifted_at IS NULL AND escalated_at IS NULL
-  `).bind(user.user_id).first();
-  if (activeSuspension) throw new HttpError('Your account is suspended', 403, { suspended: true });
-  return user;
+  if (found.suspended) throw new HttpError('Your account is suspended', 403, { suspended: true });
+  return found.user;
 }
 
 // #3088: the admin "override" branches of the moderation-delete endpoints

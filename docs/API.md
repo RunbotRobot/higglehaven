@@ -4252,6 +4252,15 @@ and 400,000 far triangles in view, the smallest on screen dropped first. Tiles
 within 2,500 m of the avatar are read, nearest first, once when they come into
 range.
 
+Drawing (#3478): `src/shop/farView.js` loads each product's far model once
+(`loadFarViewSource`: far, else mid, else the full model of a product with no
+reduced version) and draws every distant placement of it with one
+`InstancedMesh` per part, across all landlets in view, built through the
+frame-budgeted world queue, largest on screen first. Placements use the
+landlet's centre plus its `elevationM`, the same transform the loaded landlet's
+group applies. A landlet the normal loader has started loading is left out of
+the far draw; the smooth hand-over is #3479.
+
 ### `POST /api/landlets`
 
 Creates a landlet. `landletId` is optional; if omitted, the Worker generates

@@ -6,7 +6,7 @@
 // scope, not this file's.
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { spawnCreditOrbIfDue } from './lib/credit-orbs.js';
+import { handleCreditOrbs, spawnCreditOrbIfDue } from './lib/credit-orbs.js';
 import { api, signupAdmin, signupBuilder } from './test-helpers.js';
 
 beforeAll(async () => {
@@ -396,6 +396,61 @@ describe('collect standing (#3441)', () => {
     expect(read.body.standing.retryAfterSeconds).toBeLessThanOrEqual(900);
     const over = await api('/credit-orbs/not-a-real-orb/collect', builder.session({ method: 'POST' }));
     expect(over.response.status).toBe(429);
+  });
+});
+
+// #3464: the collect path is a chain of awaited D1 round trips, and each one
+// is time before the confirmation (or a reversal) reaches the person. Counts
+// the trips so a later change cannot quietly add one: every awaited
+// first()/run()/all()/raw() and every db.batch() is one trip.
+function countingDb(real) {
+  const unwrap = new WeakMap();
+  const counter = { trips: 0 };
+  const wrapStatement = (stmt) => {
+    const proxy = new Proxy(stmt, {
+      get(target, prop) {
+        if (prop === 'bind') return (...args) => wrapStatement(target.bind(...args));
+        if (['first', 'run', 'all', 'raw'].includes(prop)) {
+          return (...args) => { counter.trips += 1; return target[prop](...args); };
+        }
+        const value = target[prop];
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    unwrap.set(proxy, stmt);
+    return proxy;
+  };
+  const db = {
+    prepare: (sql) => wrapStatement(real.prepare(sql)),
+    batch: (statements) => { counter.trips += 1; return real.batch(statements.map((st) => unwrap.get(st) ?? st)); },
+  };
+  return { db, counter };
+}
+
+describe('collect round trips (#3464)', () => {
+  it('a successful collect is a fixed number of D1 trips', async () => {
+    const landlet = await seedLandlet('greenbelt');
+    const orbId = await seedOrb(landlet);
+    const builder = await signupBuilder('orb-trip-counter');
+    await seedPresence(builder.builderId, { x: DEFAULT_LANDLET_CENTER_X, y: DEFAULT_LANDLET_CENTER_Y });
+    const { db, counter } = countingDb(env.DB);
+    const init = builder.session({ method: 'POST' });
+    const request = new Request(`https://higglehaven.test/api/credit-orbs/${orbId}/collect`, init);
+    const response = await handleCreditOrbs(request, db, ['credit-orbs', orbId, 'collect'], new URL(request.url));
+    expect(response.status).toBe(200);
+    // session+user+suspension read (one statement, #3464), builder read (its
+    // activity write is throttled and the account was just active),
+    // orb+presence+rate-limit batch, claim+standing batch.
+    expect(counter.trips).toBe(4);
+  });
+
+  it('a refusal (no such orb) never reaches the claim batch', async () => {
+    const builder = await signupBuilder('orb-trip-counter-404');
+    const { db, counter } = countingDb(env.DB);
+    const request = new Request('https://higglehaven.test/api/credit-orbs/nope/collect', builder.session({ method: 'POST' }));
+    await expect(handleCreditOrbs(request, db, ['credit-orbs', 'nope', 'collect'], new URL(request.url)))
+      .rejects.toMatchObject({ status: 404 });
+    expect(counter.trips).toBe(3);
   });
 });
 
