@@ -60,6 +60,19 @@ export function withoutFleetKey(request) {
   return new Request(request, { headers });
 }
 
+// #3429: IP-keyed rate-limit buckets (dozens of them, all via clientIp) are
+// shared by everyone behind one address. A fleet session's traffic arrives from
+// the fleet's own proxy, so give it its own address space: its requests are
+// counted in buckets of their own (`fleet:<ip>`) and can neither use up a real
+// person's budget nor be limited by one. Only a request that already proved the
+// fleet key gets this; nothing a caller sends can pick the prefix.
+export const FLEET_IP_PREFIX = 'fleet:';
+export function asFleetTraffic(request) {
+  const headers = new Headers(request.headers);
+  headers.set('cf-connecting-ip', `${FLEET_IP_PREFIX}${request.headers.get('cf-connecting-ip') || 'unknown'}`);
+  return new Request(request, { headers });
+}
+
 export async function handleFleetLogin(request, env, db, url, keyOk) {
   // Invisible without the key: the same 404 any unknown route gives.
   if (!keyOk) return json({ error: 'Not found' }, 404);

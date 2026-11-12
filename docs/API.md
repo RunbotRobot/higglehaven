@@ -10216,6 +10216,14 @@ adds the header and no session reads the value.
   window as `/__access/login`) and the limit is checked before the comparison,
   so a spent budget stops guessing outright; a correct key is never counted.
   With the secret unset the header does nothing.
+- **Its own rate-limit space (#3429).** A request that proved the key has its
+  `cf-connecting-ip` rewritten to `fleet:<ip>` before any handler runs, so every
+  IP-keyed bucket (`login:`, `purchase-finalize:`, `catalog-patch:` and the rest)
+  counts fleet traffic separately from anyone behind the same address. Fleet
+  sessions neither use up a real person's budget nor are limited by one. A caller
+  cannot choose the prefix; it is added only after the key checks out. There is
+  no count of real users anywhere in the admin API today, so there is nothing
+  to exclude fleet accounts from; a new one must filter `users.is_fleet = 0`.
 - **`POST /api/auth/fleet-login`** `{ "name": "higglehaven3" }`. Needs the key;
   `404` otherwise, so the route does not exist without it. `name` must match
   `higglehaven` plus one to three digits (a coding session) or be one of the
