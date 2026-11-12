@@ -55,6 +55,11 @@ const timingKeys = Object.keys(report.timings || {});
 check(timingKeys.some((k) => k.includes('/api/landlets') && report.timings[k].count > 0 && report.timings[k].maxMs >= 0), `a timing is read back for /api/landlets (${timingKeys.join(', ')})`);
 check(report.frame && Number.isFinite(report.frame.longestFrameMs) && report.frame.longestFrameMs > 0, `a frame-time figure is reported (${JSON.stringify(report.frame)})`);
 check(report.frame && typeof report.frame.longTasks?.count === 'number', 'a long-task count is reported');
+// #3483: where in the run a long task fell. Each step says when it ended in the
+// page's clock, and the startup phase (before the first step) is reported on
+// its own, so a stall on the title screen is not mistaken for one in flight.
+check(report.steps?.every((s) => Number.isFinite(s.endedAtMs)), `every step reports when it ended (${JSON.stringify(report.steps)})`);
+check(report.startup && typeof report.startup.longTasks?.count === 'number', `the startup phase is reported on its own (${JSON.stringify(report.startup)})`);
 check(!/hh_session|set-cookie/i.test(phone.stdout + phone.stderr), 'no cookie or header appears in the output');
 
 // ---- 2. Desktop on request ----

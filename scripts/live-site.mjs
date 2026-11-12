@@ -214,13 +214,20 @@ try {
   if (landing && landing.status() === 401) fail(`live-site: ${gateRefusalMessage(401)}`);
   await settle();
   if (options.login === 'local') await clearLocalVerifyModal();
+  // #3483: what happened before the first step (the title screen and first
+  // load), kept apart from the steps' own figures, which start from a reset.
+  result.startup = await frameStats().catch(() => null);
   await page.evaluate(() => window.__frameMonitor?.reset()).catch(() => {});
   for (let i = 0; i < steps.length; i += 1) {
     const step = steps[i];
     const label = [step.command, ...step.args].join(':');
     try {
       const value = await runStep(step, i + 1);
-      result.steps.push({ step: label, ok: true, ...(value !== null && step.command === 'stats' ? { stats: value } : {}) });
+      // #3483: when the step ended, in the page's own clock (ms since
+      // navigation), the same one `stats.longTasks.longestAtMs` uses, so a
+      // reader can tell which step a long task fell in.
+      const endedAtMs = await page.evaluate(() => Math.round(performance.now())).catch(() => null);
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && step.command === 'stats' ? { stats: value } : {}) });
     } catch (error) {
       result.steps.push({ step: label, ok: false, error: error.message.split('\n')[0] });
       break;

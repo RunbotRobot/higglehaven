@@ -820,6 +820,34 @@ export async function loadBatchSource(template) {
   return { container, parts };
 }
 
+// #3478 (part of #3418, #3412): the model a distant landlet's copy of a product
+// is drawn from. The far version if the product has one, else the mid version,
+// else the full model (a product the builder declined to simplify is already
+// tiny), standing in the same container the full model does so the placement
+// transform applies unchanged. Same shape as loadBatchSource: { container,
+// parts }, with `container` owning its cloned materials (geometry stays shared
+// with the cache) and disposed by the caller. Null when there is nothing
+// drawable (no model, failed to load, skinned).
+export async function loadFarViewSource(template) {
+  if (!template?.modelUrl) return null;
+  const scenes = await loadTierScenes(template);
+  const cached = scenes.far || scenes.mid;
+  if (!cached) return loadBatchSource(template);
+  const container = instantiateScene(cached);
+  container.updateMatrixWorld(true);
+  const parts = [];
+  let drawable = true;
+  container.traverse((child) => {
+    if (child.isSkinnedMesh) drawable = false;
+    else if (child.isMesh) parts.push({ geometry: child.geometry, material: child.material, matrix: child.matrixWorld.clone() });
+  });
+  if (!drawable || parts.length === 0) {
+    disposeObject(container);
+    return null;
+  }
+  return { container, parts };
+}
+
 // #1359: material.dispose() releases the material's own WebGL program/
 // uniform resources but never the THREE.Texture instances it references
 // (map, normalMap, roughnessMap, ... — any PBR map a real uploaded GLTF/GLB
