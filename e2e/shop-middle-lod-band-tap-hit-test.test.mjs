@@ -194,7 +194,15 @@ async function waitBand(expected, timeoutMs = 15000) {
 await teleportShopAvatar(9);
 const band = await waitBand('full');
 console.log('tier once loaded close (should be "full"):', band);
-const hitSourceFull = await lodHitSource();
+// The mid and far models are built in the browser a little after the full one is
+// shown (#3486 spreads that work over frames), and an item with no versions yet
+// reports null, so wait for the versions to exist before asking which one a tap
+// would land on.
+let hitSourceFull = await lodHitSource();
+for (let waited = 0; hitSourceFull === null && waited < 20000; waited += 200) {
+  await page.waitForTimeout(200);
+  hitSourceFull = await lodHitSource();
+}
 console.log('hit source while full (should be "full"):', hitSourceFull);
 
 // 25 m (~52 px): the mid version.
