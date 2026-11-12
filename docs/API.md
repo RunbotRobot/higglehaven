@@ -10295,7 +10295,10 @@ Rules the endpoints keep:
   assistant answers `409 { error: "<Name> is helping someone else right
   now.", assistantBusy: true }`; an assistant whose session has not checked in
   within 90 seconds answers `409 { error: "<Name> isn't on shift right now.",
-  assistantOnShift: false }`.
+  assistantOnShift: false }`. Both 409s also carry `freeAssistant`
+  (`{ userId, name }` of another assistant who is on shift, has nobody open and
+  is not blocked either way with this shopper, or `null` when nobody is free);
+  the panel offers a tap to go to them (#3448).
 - **Adults only.** The shopper must be ID-verified, as for nearby chat and direct
   messages (`403` with `idVerificationRequired`). A fleet account cannot start a
   conversation.

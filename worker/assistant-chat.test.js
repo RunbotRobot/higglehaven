@@ -109,6 +109,33 @@ describe('asking an assistant', () => {
     expect((await start(two)).response.status).toBe(201);
   });
 
+  it('names an assistant who is free when the one asked is busy or off shift, and null when nobody is (#3448)', async () => {
+    await endEverything();
+    await goOnShift();
+    const clover = await fleetLogin('assistant-clover');
+    await env.DB.prepare('UPDATE users SET assistant_seen_at = NULL WHERE user_id = ?').bind(clover.userId).run();
+    const [one, two, three] = [await adult('ac-free-one'), await adult('ac-free-two'), await adult('ac-free-three')];
+    expect((await start(one)).response.status).toBe(201);
+    // Juniper is busy and Clover is off shift: nobody to point to.
+    const none = await start(two);
+    expect(none.body).toMatchObject({ assistantBusy: true, freeAssistant: null });
+    // Clover comes on shift: the busy refusal names her.
+    await post(clover.session, '/assistant-inbox/heartbeat');
+    const named = await start(two);
+    expect(named.body.freeAssistant).toEqual({ userId: clover.userId, name: 'Clover' });
+    // A shopper who blocked Clover is not pointed at her.
+    await env.DB.prepare('INSERT INTO user_blocks (blocker_user_id, blocked_user_id) VALUES (?, ?)').bind(three.userId, clover.userId).run();
+    expect((await start(three)).body.freeAssistant).toBeNull();
+    // Off shift: the one asked about is skipped, Clover is named.
+    await post(one.session, '/assistant-chat/end');
+    await next(); // the assistant's inbox hears the end, as it would
+    await env.DB.prepare('UPDATE users SET assistant_seen_at = NULL WHERE user_id = ?').bind(assistant.userId).run();
+    const offShift = await start(two);
+    expect(offShift.body).toMatchObject({ assistantOnShift: false, freeAssistant: { name: 'Clover' } });
+    await env.DB.prepare('UPDATE users SET assistant_seen_at = NULL WHERE user_id = ?').bind(clover.userId).run();
+    await endEverything();
+  });
+
   it('says plainly when the assistant is not on shift', async () => {
     await endEverything();
     await env.DB.prepare('UPDATE users SET assistant_seen_at = NULL WHERE user_id = ?').bind(assistant.userId).run();

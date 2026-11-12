@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText } from './assistantChatLogic.js';
+import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel } from './assistantChatLogic.js';
 
 const msg = (seq, sender, createdAt = '2026-11-11T10:00:00.000Z') => ({ seq, sender, text: `m${seq}`, createdAt });
 
@@ -46,5 +46,19 @@ describe('notices', () => {
       expect(text).not.toMatch(/#\d|docs\/|API|issue/i);
     }
     expect(disclosureText('Fig')).toContain('AI assistant');
+  });
+});
+
+describe('free assistant offer (#3448)', () => {
+  it('offers the assistant the server named, and nobody otherwise', () => {
+    expect(freeAssistantOffer({ freeAssistant: { userId: 'u-1', name: 'Clover' } })).toEqual({ userId: 'u-1', name: 'Clover' });
+    expect(freeAssistantOffer({ freeAssistant: null })).toBeNull();
+    expect(freeAssistantOffer({})).toBeNull();
+    expect(freeAssistantOffer(null)).toBeNull();
+    expect(freeAssistantOffer({ freeAssistant: { userId: 3, name: 'Clover' } })).toBeNull();
+    expect(freeAssistantOffer({ freeAssistant: { userId: 'u-1', name: '' } })).toBeNull();
+  });
+  it('words the offer with the name and no internals', () => {
+    expect(offerLabel('Clover')).toBe('Clover is free. Talk to Clover instead');
   });
 });

@@ -1232,6 +1232,17 @@
       #assistant-chat-status.error {
         color: #ff8a80;
       }
+      #assistant-chat-offer {
+        align-self: flex-start;
+        min-height: 36px;
+        padding: 0 12px;
+        border: none;
+        border-radius: 8px;
+        background: rgb(var(--ink-rgb) / 0.12);
+        color: var(--pill-text);
+        font: 13px/1 sans-serif;
+        cursor: pointer;
+      }
       #assistant-chat-form {
         display: flex;
         gap: 6px;

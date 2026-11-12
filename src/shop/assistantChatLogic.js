@@ -45,3 +45,17 @@ export function offShiftNotice(name) {
 export function disclosureText(name) {
   return `${name} is an AI assistant. It can help with questions about the world. For anything about money, an order, or an account, it will tell you what happens next and pass it to the team.`;
 }
+
+// #3448: when the assistant a shopper asked is busy or off shift, the server
+// names one who is free (error body `freeAssistant`). Returns who to offer, or
+// null when it named nobody or sent something unusable.
+export function freeAssistantOffer(body) {
+  const free = body && body.freeAssistant;
+  if (!free || typeof free.userId !== 'string' || !free.userId) return null;
+  if (typeof free.name !== 'string' || !free.name) return null;
+  return { userId: free.userId, name: free.name };
+}
+
+export function offerLabel(name) {
+  return `${name} is free. Talk to ${name} instead`;
+}
