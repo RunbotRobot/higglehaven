@@ -1516,6 +1516,8 @@ function shopArrivalAnchor(entry) {
 // updateShopWorldServices.
 export function updateShopArrivals() {
   for (const entry of shopLandlets.values()) entry.arrivalRun?.update();
+  // #3479: far models dissolving in (a no-op when none are).
+  shopFarView?.tick();
   tierCrossfades.update(); // #3494
 }
 

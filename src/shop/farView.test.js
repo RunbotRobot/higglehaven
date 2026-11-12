@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import * as THREE from 'three';
-import { createFarView } from './farView.js';
+import { createFarView, FAR_FADE_MS } from './farView.js';
 import { createFrameBudgetQueue } from '../world/frameBudgetQueue.js';
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
 
-function setup({ loaded = new Set(), payloads } = {}) {
+function setup({ loaded = new Set(), payloads, reducedMotion = true, createDissolve } = {}) {
   let clock = 0;
   const queue = createFrameBudgetQueue({ now: () => clock, schedule: () => {} });
   const root = new THREE.Group();
@@ -26,6 +26,8 @@ function setup({ loaded = new Set(), payloads } = {}) {
     getView: () => ({ fovDeg: 60, viewportHeightPx: 844 }),
     now: () => clock,
     rangeM: 600,
+    reducedMotion,
+    ...(createDissolve ? { createDissolve } : {}),
   });
   const advance = (ms) => { clock += ms; };
   const settle = async () => { for (let i = 0; i < 14; i += 1) { advance(1000); view.update(); await flush(); await flush(); } await queue.drain(); };
@@ -149,5 +151,98 @@ describe('createFarView (#3478)', () => {
     const mesh = root.children[0].children[0];
     expect(mesh.count).toBe(3);
     expect([0, 1, 2].filter((i) => scaleOf(mesh, i) === 0)).toEqual([]);
+  });
+
+  // #3479: far models resolve in rather than pop.
+  describe('dissolving in', () => {
+    function recorder() {
+      const made = [];
+      const createDissolve = (object) => {
+        const record = { object, levels: [], restored: false };
+        made.push(record);
+        return { setLevel: (l) => record.levels.push(l), restore: () => { record.restored = true; } };
+      };
+      return { made, createDissolve };
+    }
+
+    it('starts a product at nothing and brings it to full over FAR_FADE_MS, then gives back the real materials', async () => {
+      const { made, createDissolve } = recorder();
+      const { view, advance, settle } = setup({ loaded: new Set(['loaded']), payloads: { '0,0': payload }, reducedMotion: false, createDissolve });
+      await settle();
+      expect(made).toHaveLength(1);
+      expect(made[0].levels).toEqual([0]);
+      advance(FAR_FADE_MS / 2); view.tick();
+      expect(made[0].levels.at(-1)).toBeCloseTo(0.5, 1);
+      expect(made[0].restored).toBe(false);
+      advance(FAR_FADE_MS); view.tick();
+      expect(made[0].restored).toBe(true);
+      const calls = made[0].levels.length;
+      view.tick(); // nothing left to drive
+      expect(made[0].levels).toHaveLength(calls);
+    });
+
+    it('keeps what a rebuild replaces drawn underneath until the new meshes are fully in, so there is never a gap', async () => {
+      const loaded = new Set(['loaded']);
+      const { made, createDissolve } = recorder();
+      const { view, root, queue, advance, settle } = setup({ loaded, payloads: { '0,0': payload }, reducedMotion: false, createDissolve });
+      await settle();
+      advance(FAR_FADE_MS * 2); view.tick(); // the first build is done fading
+      expect(root.children).toHaveLength(1);
+      loaded.delete('loaded'); // its far models are wanted again: a rebuild
+      advance(1000); view.update(); await queue.drain();
+      expect(root.children).toHaveLength(2); // old and new both in the scene
+      expect(made.at(-1).restored).toBe(false);
+      advance(FAR_FADE_MS * 2); view.tick();
+      expect(root.children).toHaveLength(1);
+      await queue.drain();
+      expect(made.at(-1).restored).toBe(true);
+    });
+
+    it('completes a fade that a newer build interrupts, and hides a landlet in the meshes still underneath', async () => {
+      const loaded = new Set(['loaded']);
+      const { made, createDissolve } = recorder();
+      const { view, root, queue, advance, settle } = setup({ loaded, payloads: { '0,0': payload }, reducedMotion: false, createDissolve });
+      await settle();
+      advance(FAR_FADE_MS * 2); view.tick();
+      loaded.delete('loaded');
+      advance(1000); view.update(); await queue.drain(); // second build, fading, first underneath
+      loaded.add('near'); // a landlet's real content arrives while that fade runs
+      advance(10); view.update();
+      const scales = root.children.flatMap((child) => child.children).map((mesh) => {
+        const out = [];
+        for (let i = 0; i < mesh.count; i += 1) out.push(scaleOf(mesh, i));
+        return out.filter((v) => v === 0).length;
+      });
+      expect(scales.every((n) => n >= 1)).toBe(true); // hidden in the new meshes and in the ones underneath
+      advance(1000); view.update(); await queue.drain(); // third build while the second was still fading
+      expect(made.filter((m) => m.restored).length).toBeGreaterThanOrEqual(2);
+      expect(root.children.length).toBeLessThanOrEqual(2);
+    });
+
+    it('with the real dissolve, the meshes carry a patched clone while fading and the shared material afterwards', async () => {
+      const { view, root, advance, settle } = setup({ loaded: new Set(['loaded']), payloads: { '0,0': payload }, reducedMotion: false });
+      await settle();
+      const mesh = root.children[0].children[0];
+      const during = mesh.material;
+      expect(during.type).toBe('MeshBasicMaterial');
+      advance(FAR_FADE_MS * 2); view.tick();
+      expect(mesh.material).not.toBe(during); // the clone is gone, the product's own material is back
+    });
+
+    it('skips the dissolve entirely when the person prefers reduced motion', async () => {
+      const { made, createDissolve } = recorder();
+      const { settle } = setup({ loaded: new Set(['loaded']), payloads: { '0,0': payload }, reducedMotion: true, createDissolve });
+      await settle();
+      expect(made).toHaveLength(0);
+    });
+
+    it('releases the dissolve on dispose, mid-fade', async () => {
+      const { made, createDissolve } = recorder();
+      const { view, settle } = setup({ loaded: new Set(['loaded']), payloads: { '0,0': payload }, reducedMotion: false, createDissolve });
+      await settle();
+      expect(made[0].restored).toBe(false);
+      view.dispose();
+      expect(made[0].restored).toBe(true);
+    });
   });
 });
