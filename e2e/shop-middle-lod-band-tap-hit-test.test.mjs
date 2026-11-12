@@ -180,13 +180,22 @@ await page.waitForTimeout(100);
 await page.mouse.up();
 await page.waitForTimeout(100);
 
-async function waitBand(expected, timeoutMs = 15000) {
+// #3512: the mid and far versions are built in the browser the first time an
+// item needs one (a frame at a time since #3486): about 5 s for this dense
+// sphere on a quiet machine here; on a loaded CI shard the old 15 s wait gave up
+// with the item still on its full model (the 80 m step then reached far at once,
+// so the versions were ready just after the wait ended). This test is
+// about which version a tap lands on, not how fast they build, so it waits long
+// enough for a slow runner and logs how long the wait took.
+async function waitBand(expected, timeoutMs = 90000) {
+  const startedAt = Date.now();
   const deadlineAt = Date.now() + timeoutMs;
   let band = await lodBand();
   while (band !== expected && Date.now() < deadlineAt) {
     await page.waitForTimeout(100);
     band = await lodBand();
   }
+  console.log(`waited ${Date.now() - startedAt} ms for band "${expected}", got "${band}"`);
   return band;
 }
 
