@@ -128,6 +128,27 @@ async function assistantName(db, userId) {
   return row?.username ?? null;
 }
 
+// #3448 (part of #3444): when the assistant a shopper tapped is busy or off
+// shift, name one who is free right now (on shift, nobody open with them, not
+// blocked either way) so the panel can offer a tap to go to them. Null when
+// nobody is free, which is when the shopper is told so plainly.
+async function findFreeAssistant(db, { excludeUserId, shopperUserId }) {
+  const { results } = await db.prepare(`
+    SELECT user_id, username, is_fleet FROM users
+    WHERE is_fleet = 1 AND user_id != ?1 AND assistant_seen_at >= ?2
+      AND NOT EXISTS (
+        SELECT 1 FROM assistant_conversations c
+        WHERE c.status = 'open' AND c.assistant_user_id = users.user_id)
+    ORDER BY assistant_seen_at DESC LIMIT 10
+  `).bind(excludeUserId, new Date(Date.now() - ASSISTANT_ON_SHIFT_WINDOW_MS).toISOString()).all();
+  for (const row of results) {
+    if (!assistantFromUserRow(row)) continue;
+    if (await userBlockExistsBetween(db, shopperUserId, row.user_id)) continue;
+    return { userId: row.user_id, name: row.username };
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------- shopper side
 
 async function handleStart(request, db) {
@@ -152,7 +173,8 @@ async function handleStart(request, db) {
   await endIdleConversations(db, { assistantUserId: assistant.user_id, shopperUserId: user.user_id });
 
   if (!isOnShift(assistant.assistant_seen_at)) {
-    throw new HttpError(`${assistant.username} isn't on shift right now.`, 409, { assistantOnShift: false });
+    const freeAssistant = await findFreeAssistant(db, { excludeUserId: assistant.user_id, shopperUserId: user.user_id });
+    throw new HttpError(`${assistant.username} isn't on shift right now.`, 409, { assistantOnShift: false, freeAssistant });
   }
 
   const conversationId = `assistant-conversation-${crypto.randomUUID()}`;
@@ -171,7 +193,8 @@ async function handleStart(request, db) {
     if (mine) {
       throw new HttpError("You're already talking with an assistant.", 409, { conversationId: mine.conversation_id });
     }
-    throw new HttpError(`${assistant.username} is helping someone else right now.`, 409, { assistantBusy: true });
+    const freeAssistant = await findFreeAssistant(db, { excludeUserId: assistant.user_id, shopperUserId: user.user_id });
+    throw new HttpError(`${assistant.username} is helping someone else right now.`, 409, { assistantBusy: true, freeAssistant });
   }
 
   const message = await insertMessage(db, conversationId, 'shopper', text);

@@ -12,7 +12,7 @@
 import { startAssistantChat, fetchAssistantChat, sendAssistantChat, endAssistantChat } from '../api.js';
 import { confirmAndBlockPerson } from '../blocks.js';
 import {
-  mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText,
+  mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel,
 } from './assistantChatLogic.js';
 
 const POLL_INTERVAL_MS = 2000;
@@ -21,6 +21,7 @@ const panelEl = document.getElementById('assistant-chat-panel');
 const nameEl = document.getElementById('assistant-chat-name');
 const closeEl = document.getElementById('assistant-chat-close');
 const blockEl = document.getElementById('assistant-chat-block');
+const offerEl = document.getElementById('assistant-chat-offer');
 const logEl = document.getElementById('assistant-chat-log');
 const statusEl = document.getElementById('assistant-chat-status');
 const formEl = document.getElementById('assistant-chat-form');
@@ -34,6 +35,7 @@ let replyWaitSeconds = 90; // replaced by the server's number on every reply
 let assistantOnShift = true;
 let endedText = null; // why the last conversation ended, shown until the next send
 let errorText = null; // the last failed action's message, shown until the next action
+let offer = null; // a free assistant the server named after a busy/off-shift refusal (#3448)
 let pollTimer = null;
 let inFlight = false;
 let openToken = 0; // a stale open() must not write into a newer one
@@ -85,6 +87,8 @@ function renderLog() {
 function render() {
   nameEl.textContent = assistant ? assistant.name : '';
   blockEl.hidden = !assistant?.builderId;
+  offerEl.hidden = !offer;
+  offerEl.textContent = offer ? offerLabel(offer.name) : '';
   renderLog();
   renderStatus();
   // Exposed for the e2e (added for #3447): what the panel actually shows.
@@ -94,6 +98,7 @@ function render() {
     conversationStatus: conversation?.status ?? null,
     messages: messages.map((message) => ({ sender: message.sender, text: message.text })),
     status: statusEl.textContent,
+    offer: offer ? { userId: offer.userId, name: offer.name } : null,
     statusIsError: statusEl.classList.contains('error'),
   };
 }
@@ -153,6 +158,7 @@ export async function openAssistantChat(target) {
   messages = [];
   endedText = null;
   errorText = null;
+  offer = null;
   panelEl.hidden = false;
   render();
   inputEl.focus();
@@ -180,6 +186,7 @@ export async function closeAssistantChat() {
   messages = [];
   endedText = null;
   errorText = null;
+  offer = null;
   render();
   if (wasOpen) {
     try { await endAssistantChat(); } catch { /* the server ends an idle conversation by itself */ }
@@ -194,6 +201,7 @@ formEl.addEventListener('submit', async (event) => {
   sendEl.disabled = true;
   errorText = null;
   endedText = null;
+  offer = null;
   const token = openToken;
   try {
     let reply;
@@ -211,6 +219,7 @@ formEl.addEventListener('submit', async (event) => {
   } catch (err) {
     if (token !== openToken) return;
     errorText = err.message;
+    offer = freeAssistantOffer(err.body);
     if (err.body?.conversationEnded) {
       if (conversation) conversation = { ...conversation, status: 'ended' };
       stopPolling();
@@ -227,6 +236,20 @@ formEl.addEventListener('submit', async (event) => {
 });
 
 closeEl.addEventListener('click', () => { closeAssistantChat(); });
+
+// Go to the free assistant the server named. The shopper's typed question stays
+// in the box, so asking again is one tap on Send. A conversation is never open
+// here (the refusal means none was made), so nothing needs ending first.
+offerEl.addEventListener('click', () => {
+  if (!offer) return;
+  assistant = { userId: offer.userId, builderId: null, name: offer.name };
+  offer = null;
+  errorText = null;
+  endedText = null;
+  assistantOnShift = true;
+  render();
+  inputEl.focus();
+});
 
 // Blocking an assistant is blocking anyone: the same confirmation, the same
 // effect (they are gone from the world and cannot be messaged). It ends the

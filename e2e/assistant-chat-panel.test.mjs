@@ -148,6 +148,40 @@ for (let i = 0; i < 20; i++) {
 }
 console.log('assistant told after the shopper closed the panel:', JSON.stringify(told.body));
 
+// #3448: when the assistant asked is busy, the server names one who is free and
+// the panel offers a tap to go to them. The server's answer is faked here (the
+// real one is covered by worker/assistant-chat.test.js); the panel is real.
+await pageA.evaluate((id) => window.__testTapAssistantByUserId(id), assistantUserId);
+await pageA.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
+await pageA.route('**/api/assistant-chat/start', (route) => route.fulfill({
+  status: 409,
+  contentType: 'application/json',
+  body: JSON.stringify({
+    error: `${ASSISTANT_NAME} is helping someone else right now.`,
+    assistantBusy: true,
+    freeAssistant: { userId: 'assistant-user-clover', name: 'Clover' },
+  }),
+}));
+await pageA.fill('#assistant-chat-input', 'Is anyone free?');
+await pageA.click('#assistant-chat-send');
+await pageA.waitForSelector('#assistant-chat-offer:not([hidden])', { timeout: 5000 });
+const offerShown = await pageA.evaluate(() => ({
+  text: document.getElementById('assistant-chat-offer').textContent,
+  status: window.__assistantChat.status,
+  kept: document.getElementById('assistant-chat-input').value,
+}));
+await pageA.click('#assistant-chat-offer');
+const afterOffer = await pageA.evaluate(() => ({
+  name: window.__assistantChat.assistantName,
+  offerHidden: document.getElementById('assistant-chat-offer').hidden,
+  status: window.__assistantChat.status,
+  kept: document.getElementById('assistant-chat-input').value,
+}));
+console.log('offer:', JSON.stringify({ offerShown, afterOffer }));
+await pageA.unroute('**/api/assistant-chat/start');
+await pageA.click('#assistant-chat-close');
+await pageA.waitForSelector('#assistant-chat-panel[hidden]', { state: 'attached', timeout: 5000 });
+
 // Blocking an assistant is blocking anyone: reopen the panel, press Block, confirm
 // in the in-app dialog. The panel closes and a new question is refused with the
 // same plain message a stranger would get.
@@ -163,7 +197,7 @@ console.log('start after blocking (should be 403):', afterBlock.status, afterBlo
 
 // The refused question above is a deliberate 403, which the browser logs as a
 // failed resource load; it is the only page error this test expects.
-const unexpectedErrors = sessionA.errors.filter((error) => !/status of 403/.test(String(error)));
+const unexpectedErrors = sessionA.errors.filter((error) => !/status of (403|409)/.test(String(error)));
 const pass = tapped === true
   && opened.name === ASSISTANT_NAME && opened.badge === 'assistant'
   && opened.log.includes('AI assistant')
@@ -174,6 +208,8 @@ const pass = tapped === true
   && answered.log.includes('Head north past the fountain!') && answered.status === ''
   && ended === `${ASSISTANT_NAME} ended the conversation.`
   && told.body.ended?.endedBy === 'shopper'
+  && /helping someone else/.test(offerShown.status) && offerShown.text === 'Clover is free. Talk to Clover instead' && offerShown.kept === 'Is anyone free?'
+  && afterOffer.name === 'Clover' && afterOffer.offerHidden && afterOffer.status === '' && afterOffer.kept === 'Is anyone free?'
   && blockShown && afterBlock.status === 403 && afterBlock.body.error === "You can't message this person."
   && unexpectedErrors.length === 0;
 await finish(sessionA.browser, {
