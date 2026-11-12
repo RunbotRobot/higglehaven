@@ -35,6 +35,23 @@ describe('mountShopAvatar (#3294)', () => {
     expect(t.scene.add).toHaveBeenCalledWith('default-group');
   });
 
+  it('asks again before the animation fetch, so a logout that began meanwhile sends no 401 (#3498)', async () => {
+    const t = setup();
+    let loggedIn = true;
+    t.deps.fetchMyEquippedAvatar.mockImplementation(async () => { loggedIn = false; return { modelUrl: null, skeletonSignature: 'sig-none' }; });
+    const result = await mountShopAvatar({ scene: t.scene, isLoggedIn: () => loggedIn }, t.deps);
+    expect(t.deps.fetchMyEquippedAvatar).toHaveBeenCalledTimes(1);
+    expect(t.deps.fetchMyEquippedAnimation).not.toHaveBeenCalled();
+    expect(result).toBe(t.defaultAvatar);
+  });
+
+  it('sends neither fetch when the logout began before the mount ran (#3498)', async () => {
+    const t = setup();
+    await mountShopAvatar({ scene: t.scene, isLoggedIn: () => false }, t.deps);
+    expect(t.deps.fetchMyEquippedAvatar).not.toHaveBeenCalled();
+    expect(t.deps.fetchMyEquippedAnimation).not.toHaveBeenCalled();
+  });
+
   it('falls back to the default avatar, without throwing, when the equipped-avatar fetch fails', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const t = setup({ avatar: new Error('boom') });

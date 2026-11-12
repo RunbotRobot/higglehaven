@@ -87,6 +87,20 @@ describe('createArrivalRun', () => {
     expect(run.stats().arriving).toBe(0);
   });
 
+  it('is settled only once every cluster has fully arrived (#3479: the far view waits for this)', () => {
+    const { run, advance } = setup(wall(2));
+    expect(run.settled()).toBe(false);
+    run.itemReady('w0', {});
+    run.itemReady('w1', {});
+    advance(500);
+    run.update();
+    expect(run.settled()).toBe(false); // still resolving out of its fog
+    advance(ARRIVAL_RESOLVE_S * 2000);
+    run.update();
+    expect(run.settled()).toBe(true);
+    expect(setup([]).run.settled()).toBe(true); // nothing to show
+  });
+
   it('an item that never arrives does not hold its cluster back', () => {
     const { run, log, advance } = setup(wall(2));
     run.itemReady('w0', {});

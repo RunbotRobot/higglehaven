@@ -385,7 +385,10 @@ function updateFarView() {
       elevationFor: (landletId) => shopLandlets.get(landletId)?.record.elevationM ?? 0,
       loadedLandletIds: () => {
         const ids = new Set();
-        for (const [id, entry] of shopLandlets) if (entry.loaded) ids.add(id);
+        // #3479: a landlet counts as loaded for the far view only once its real
+        // content has finished arriving out of its fog, so the far models stay
+        // until then and nothing is ever missing.
+        for (const [id, entry] of shopLandlets) if (entry.loaded && entry.arrivalRun?.settled()) ids.add(id);
         return ids;
       },
       getCamera: () => camera.position,
@@ -779,6 +782,12 @@ let accountSessionEnding = false;
 // this directly from here now, not via main.js.
 export function setAccountSessionEnding(value) {
   accountSessionEnding = value;
+}
+
+// #3498: read by the Shop avatar mount, which makes two authenticated fetches
+// one after the other and must not send the second once a logout has begun.
+export function isAccountSessionEnding() {
+  return accountSessionEnding;
 }
 
 function hasVerifiedSession() {

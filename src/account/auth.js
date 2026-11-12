@@ -834,6 +834,11 @@ authLogoutBtn.addEventListener('click', async () => {
   // costs nothing when it does.
   authLogoutBtn.disabled = true;
   setAuthStatus('Logging out…');
+  // #3498: set before the await, like delete-account below. The session is
+  // gone server-side before this await resolves, and a presence report or the
+  // Shop avatar's follow-up fetch issued in that window would 401 and show up
+  // as a console error (seen on a slow CI runner right after logout).
+  setAccountSessionEnding(true);
   try {
     await logOut();
   } catch {
@@ -844,6 +849,7 @@ authLogoutBtn.addEventListener('click', async () => {
   authLogoutBtn.disabled = false;
   resetLocalSessionState();
   if (leaveAccountScopedModeIfNeeded()) return;
+  setAccountSessionEnding(false);
   refreshAccountAuthUI();
   closeAuthModal();
 });
