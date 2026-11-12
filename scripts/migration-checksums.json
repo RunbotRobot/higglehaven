@@ -204,5 +204,6 @@
   "0212_control_room_public_line.sql": "db798a37f4935268fe48fa1f2ddca99aa2c0b06f587060c4e299dbdb31b38da8",
   "0220_model_tiers.sql": "2650450c4469ed8cca42598f47a5b6997c6d2b6964e89a5261b09f721ceedeff",
   "0221_assistant_chat.sql": "0163443c197ea78aab5b655156f7de3dabf30d116aab3fdcee22323f635f31e2",
-  "0222_assistant_shifts.sql": "de43eb7a361b02837b2a6b1f8b60feafb052fae15f6fb3a1070eeb49fceaea1b"
+  "0222_assistant_shifts.sql": "de43eb7a361b02837b2a6b1f8b60feafb052fae15f6fb3a1070eeb49fceaea1b",
+  "0223_assistant_questions.sql": "a4251b542a3d90ea071232c92959dc115764e4325d0f903aa7298de86b35fd11"
 }

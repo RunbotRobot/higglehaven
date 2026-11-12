@@ -83,12 +83,37 @@ check(filed.code === 0 && JSON.parse(filed.stdout || '{}').cardId, `escalate fil
 const ended = await reply(['end', conversationId]);
 check(ended.code === 0, `end succeeds (${ended.stderr.trim().slice(0, 160)})`);
 
+// #3448: a question left for the assistants. The shift program, run again, exits
+// with it as { question }; answer-question stores the answer; the shopper reads it.
+const shift2 = spawn('node', ['scripts/assistant-shift.mjs', '--url', BASE_URL, '--name', 'juniper', '--poll', '1', '--max-seconds', '120'], { cwd: root, env });
+let shift2Out = ''; let shift2Err = '';
+shift2.stdout.on('data', (d) => { shift2Out += d; });
+shift2.stderr.on('data', (d) => { shift2Err += d; });
+const shift2Exited = new Promise((resolve) => shift2.on('exit', (exitCode) => resolve(exitCode)));
+const left = await fetch(`${BASE_URL}/api/assistant-chat/question`, {
+  method: 'POST',
+  headers: { 'content-type': 'application/json', cookie },
+  body: JSON.stringify({ text: 'Can I sell a hat?' }),
+});
+check(left.status === 201, `the shopper can leave a question (${left.status})`);
+const code2 = await Promise.race([shift2Exited, sleep(30000).then(() => 'timeout')]);
+if (code2 === 'timeout') shift2.kill();
+check(code2 === 0, `the shift program exits 0 when a left question is handed over (${code2}; ${shift2Err.trim().slice(0, 160)})`);
+let handed = {};
+try { handed = JSON.parse(shift2Out); } catch { check(false, `the shift program prints one JSON object for a question (${shift2Out.slice(0, 160)})`); }
+check(handed.question?.text === 'Can I sell a hat?' && handed.question?.questionId, `it carries the question and its id (${JSON.stringify(handed.question)})`);
+const answered = await reply(['answer-question', handed.question?.questionId || 'missing', '--text', 'Yes! Open Sell mode and add it.']);
+check(answered.code === 0, `answer-question succeeds (${answered.stderr.trim().slice(0, 160)})`);
+const mine = await (await fetch(`${BASE_URL}/api/assistant-chat/question`, { headers: { cookie } })).json();
+check(mine.question?.status === 'answered' && /Open Sell mode/.test(mine.question?.answer?.text || ''), `the shopper reads the stored answer (${JSON.stringify(mine.question)})`);
+await fetch(`${BASE_URL}/api/assistant-chat/question/close`, { method: 'POST', headers: { cookie } });
+
 // Plain failures, one line each.
 const noText = await reply(['reply', conversationId]);
 check(noText.code === 1 && /needs --text/.test(noText.stderr), `a reply with no text is refused (${noText.stderr.trim()})`);
 const badName = await exec('node', ['scripts/assistant-shift.mjs', '--url', BASE_URL, '--name', 'higglehaven4'], { cwd: root, env }).then(() => ({ code: 0, stderr: '' }), (e) => ({ code: e.code, stderr: e.stderr }));
 check(badName.code === 1 && /not an assistant name/.test(badName.stderr), `a coding session's name is not an assistant (${badName.stderr.trim()})`);
 
-check(!(shiftOut + shiftErr + sent.stdout + sent.stderr + filed.stdout + filed.stderr).match(new RegExp(`hh_session|set-cookie|${FLEET_KEY}`, 'i')), 'no cookie or key appears in any output');
+check(!(shiftOut + shiftErr + shift2Out + shift2Err + answered.stdout + answered.stderr + sent.stdout + sent.stderr + filed.stdout + filed.stderr).match(new RegExp(`hh_session|set-cookie|${FLEET_KEY}`, 'i')), 'no cookie or key appears in any output');
 
 await finish({ close: async () => {} }, { pass, label: '#3458: the assistant shift programs wait, hand back a question, reply, file a card and end, without printing a credential' });

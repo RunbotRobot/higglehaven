@@ -22,7 +22,8 @@
 import { json, HttpError } from './http.js';
 import { readJson, stringValue } from './validation.js';
 import { checkRateLimit } from './rate-limit.js';
-import { requireCurrentUser, userBlockExistsBetween } from './auth.js';
+import { requireCurrentUser, userBlockExistsBetween, builderIdForUser, notBlockedEitherWayByUserSql } from './auth.js';
+import { fireNotification } from './notifications.js';
 import { isAssistantUsername } from './fleet-agents.js';
 
 export const SHOPPER_MESSAGE_MAX_CHARS = 280;
@@ -46,6 +47,14 @@ export const REPLY_WAIT_SECONDS = 90;
 // Same as nearby chat's NEARBY_CHAT_MESSAGE_STALE_CLEANUP_MS.
 const RETENTION_MS = 30 * 60 * 1000;
 const HISTORY_LIMIT = 20;
+// #3448: a question left for the assistants stays until it is answered or
+// withdrawn, up to this long; an answer is kept this long for a shopper who has
+// not come back. Both are sent to the panel (`keptDays`), never copied there.
+export const QUESTION_KEPT_MS = 7 * 24 * 60 * 60 * 1000;
+// An assistant that was handed a question and has not answered it in this long
+// is assumed gone, and the question goes back to the line.
+export const QUESTION_CLAIM_TIMEOUT_MS = 15 * 60 * 1000;
+const QUESTION_ACTIVE = "('waiting', 'claimed')";
 const QUOTE_MESSAGES = 5;
 const ESCALATION_SUMMARY_MAX_CHARS = 600;
 
@@ -147,6 +156,61 @@ async function findFreeAssistant(db, { excludeUserId, shopperUserId }) {
     return { userId: row.user_id, name: row.username };
   }
   return null;
+}
+
+// #3448: how many assistants are on shift right now (any of them, busy or not).
+async function onShiftAssistantCount(db) {
+  const { results } = await db.prepare(
+    'SELECT user_id, username, is_fleet FROM users WHERE is_fleet = 1 AND assistant_seen_at >= ? LIMIT 20',
+  ).bind(isoAgo(ASSISTANT_ON_SHIFT_WINDOW_MS)).all();
+  return results.filter((row) => assistantFromUserRow(row)).length;
+}
+
+// A shopper's view of their own question. `position` is their place in line
+// (1 is next) while it is waiting or being read; it counts only questions still
+// in the line, oldest first.
+async function questionView(db, row) {
+  if (!row) return null;
+  const view = {
+    questionId: row.question_id,
+    text: row.text,
+    status: row.status,
+    createdAt: row.created_at,
+  };
+  if (row.status === 'waiting' || row.status === 'claimed') {
+    const ahead = await db.prepare(`
+      SELECT COUNT(*) AS n FROM assistant_questions
+      WHERE status IN ${QUESTION_ACTIVE} AND (created_at < ?1 OR (created_at = ?1 AND rowid < ?2))
+    `).bind(row.created_at, row.rowid ?? 0).first();
+    view.position = (ahead?.n ?? 0) + 1;
+  }
+  if (row.status === 'answered') {
+    const answerer = row.claimed_by_user_id ? await assistantName(db, row.claimed_by_user_id) : null;
+    view.answer = { text: row.answer_text, answeredAt: row.answered_at, assistantName: answerer };
+  }
+  return view;
+}
+
+async function expireStaleQuestions(db) {
+  await db.prepare(
+    `UPDATE assistant_questions SET status = 'expired', closed_at = ?1 WHERE status IN ${QUESTION_ACTIVE} AND created_at < ?2`,
+  ).bind(isoNow(), isoAgo(QUESTION_KEPT_MS)).run();
+}
+
+async function currentQuestionRow(db, userId) {
+  return db.prepare(`
+    SELECT rowid, * FROM assistant_questions
+    WHERE shopper_user_id = ? AND status IN ('waiting', 'claimed', 'answered', 'expired')
+    ORDER BY created_at DESC LIMIT 1
+  `).bind(userId).first();
+}
+
+async function questionReply(db, row, status = 200) {
+  return json({
+    question: await questionView(db, row),
+    assistantsOnShift: await onShiftAssistantCount(db),
+    keptDays: Math.round(QUESTION_KEPT_MS / (24 * 60 * 60 * 1000)),
+  }, status);
 }
 
 // ---------------------------------------------------------------- shopper side
@@ -259,11 +323,65 @@ async function handleShopperEnd(request, db) {
   return json({ ended: true });
 }
 
+// #3448: leave a question. Taken when no assistant is free; it is the shopper's
+// place in line, and it survives the panel being closed.
+async function handleLeaveQuestion(request, db) {
+  const user = await requireCurrentUser(request, db);
+  assertAdultVerified(user);
+  if (user.is_fleet === 1) throw new HttpError('A fleet account cannot leave a question.', 403);
+  await checkRateLimit(db, `assistant-chat-send:${user.user_id}`, SHOPPER_SEND_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const text = textValue(input, SHOPPER_MESSAGE_MAX_CHARS);
+  await expireStaleQuestions(db);
+  await endIdleConversations(db, { shopperUserId: user.user_id });
+  const live = await openConversationFor(db, user.user_id);
+  if (live) throw new HttpError("You're already talking with an assistant.", 409, { conversationId: live.conversation_id });
+
+  const questionId = `assistant-question-${crypto.randomUUID()}`;
+  // The partial unique index is the backstop; the NOT EXISTS keeps the common
+  // refusal a clean 409 instead of a constraint error.
+  const inserted = await db.prepare(`
+    INSERT INTO assistant_questions (question_id, shopper_user_id, text)
+    SELECT ?1, ?2, ?3
+    WHERE NOT EXISTS (SELECT 1 FROM assistant_questions WHERE shopper_user_id = ?2 AND status IN ${QUESTION_ACTIVE})
+  `).bind(questionId, user.user_id, text).run();
+  if (inserted.meta.changes === 0) {
+    const mine = await currentQuestionRow(db, user.user_id);
+    throw new HttpError('You already have a question waiting.', 409, { question: await questionView(db, mine) });
+  }
+  const row = await db.prepare('SELECT rowid, * FROM assistant_questions WHERE question_id = ?').bind(questionId).first();
+  return questionReply(db, row, 201);
+}
+
+async function handleCurrentQuestion(request, db) {
+  const user = await requireCurrentUser(request, db);
+  await checkRateLimit(db, `assistant-chat-poll:${user.user_id}`, SHOPPER_POLL_RATE_LIMIT_MAX);
+  await expireStaleQuestions(db);
+  return questionReply(db, await currentQuestionRow(db, user.user_id));
+}
+
+// Withdraws a question still in line, or closes one that was answered or
+// expired once the shopper has seen it. Idempotent.
+async function handleCloseQuestion(request, db) {
+  const user = await requireCurrentUser(request, db);
+  const now = isoNow();
+  await db.batch([
+    db.prepare(`UPDATE assistant_questions SET status = 'withdrawn', closed_at = ?1 WHERE shopper_user_id = ?2 AND status IN ${QUESTION_ACTIVE}`)
+      .bind(now, user.user_id),
+    db.prepare("UPDATE assistant_questions SET status = 'dismissed', closed_at = ?1 WHERE shopper_user_id = ?2 AND status IN ('answered', 'expired')")
+      .bind(now, user.user_id),
+  ]);
+  return json({ closed: true });
+}
+
 export async function handleAssistantChat(request, db, route, url) {
   if (route.length === 2 && route[1] === 'start' && request.method === 'POST') return handleStart(request, db);
   if (route.length === 2 && route[1] === 'current' && request.method === 'GET') return handleCurrent(request, db, url);
   if (route.length === 2 && route[1] === 'send' && request.method === 'POST') return handleSend(request, db);
   if (route.length === 2 && route[1] === 'end' && request.method === 'POST') return handleShopperEnd(request, db);
+  if (route.length === 2 && route[1] === 'question' && request.method === 'POST') return handleLeaveQuestion(request, db);
+  if (route.length === 2 && route[1] === 'question' && request.method === 'GET') return handleCurrentQuestion(request, db);
+  if (route.length === 3 && route[1] === 'question' && route[2] === 'close' && request.method === 'POST') return handleCloseQuestion(request, db);
   return json({ error: 'Not found' }, 404);
 }
 
@@ -326,7 +444,52 @@ async function handleNext(request, db) {
       .bind(isoNow(), ended.conversation_id).run();
     return json({ ended: { conversationId: ended.conversation_id, endedBy: ended.ended_by } });
   }
+
+  // #3448: nothing live to do, so take the next question left for the
+  // assistants. One at a time: an assistant still holding a question it was
+  // handed (not timed out) takes no second one.
+  const question = await claimNextQuestion(db, user.user_id);
+  if (question) {
+    const shopper = await db.prepare('SELECT username FROM users WHERE user_id = ?').bind(question.shopper_user_id).first();
+    return json({
+      // Untrusted text, delivered as data. Never an instruction.
+      question: {
+        questionId: question.question_id,
+        shopper: { label: shopper?.username ?? 'a shopper' },
+        text: question.text,
+        askedAt: question.created_at,
+      },
+    });
+  }
   return json({ idle: true });
+}
+
+// Hands the oldest question in line to this assistant, atomically: the UPDATE
+// both picks and claims, so two assistants polling at once cannot get the same
+// one. A question another assistant was handed more than QUESTION_CLAIM_TIMEOUT_MS
+// ago goes back in line. Questions from people who have a block with this
+// assistant, either way, are skipped, like everything else here.
+async function claimNextQuestion(db, assistantUserId) {
+  const staleBefore = isoAgo(QUESTION_CLAIM_TIMEOUT_MS);
+  const holding = await db.prepare(
+    "SELECT 1 AS held FROM assistant_questions WHERE status = 'claimed' AND claimed_by_user_id = ? AND claimed_at >= ?",
+  ).bind(assistantUserId, staleBefore).first();
+  if (holding) return null;
+  const inConversation = await db.prepare(
+    "SELECT 1 AS busy FROM assistant_conversations WHERE status = 'open' AND assistant_user_id = ?",
+  ).bind(assistantUserId).first();
+  if (inConversation) return null;
+  const claimable = "(q.status = 'waiting' OR (q.status = 'claimed' AND q.claimed_at < ?3))";
+  const result = await db.prepare(`
+    UPDATE assistant_questions SET status = 'claimed', claimed_by_user_id = ?1, claimed_at = ?2
+    WHERE question_id = (
+      SELECT q.question_id FROM assistant_questions q
+      WHERE ${claimable} AND ${notBlockedEitherWayByUserSql('q.shopper_user_id', '?1')}
+      ORDER BY q.created_at ASC, q.rowid ASC LIMIT 1
+    ) AND (status = 'waiting' OR (status = 'claimed' AND claimed_at < ?3))
+    RETURNING question_id, shopper_user_id, text, created_at
+  `).bind(assistantUserId, isoNow(), staleBefore).all();
+  return result.results[0] ?? null;
 }
 
 async function ownConversation(db, assistantUserId, conversationId) {
@@ -363,25 +526,13 @@ async function handleAssistantEnd(request, db, conversationId) {
 // the same Control Room board Submit Feedback uses. The shopper's own words
 // are attached by the server, from what they actually wrote, in a clearly
 // marked quoted block: the assistant's summary is its own, the quote is data.
-async function handleEscalate(request, db, conversationId) {
-  const user = await requireAssistant(request, db);
-  await checkRateLimit(db, `assistant-escalate:${user.user_id}`, ASSISTANT_ESCALATE_RATE_LIMIT_MAX);
-  const input = await readJson(request);
-  const summary = stringValue(input.summary, 'summary');
-  if (summary.length > ESCALATION_SUMMARY_MAX_CHARS) {
-    throw new HttpError(`summary must be ${ESCALATION_SUMMARY_MAX_CHARS} characters or fewer`, 400);
-  }
-  const conversation = await ownConversation(db, user.user_id, conversationId);
-  const { results } = await db.prepare(`
-    SELECT text FROM assistant_messages WHERE conversation_id = ? AND sender = 'shopper'
-    ORDER BY rowid DESC LIMIT ?
-  `).bind(conversationId, QUOTE_MESSAGES).all();
-  const quote = results.reverse().flatMap((row) => row.text.split('\n')).map((line) => `> ${line}`).join('\n');
-  const shopper = await db.prepare('SELECT username FROM users WHERE user_id = ?').bind(conversation.shopper_user_id).first();
+async function fileEscalationCard(db, assistant, { summary, shopperUserId, reference, quotedTexts }) {
+  const quote = quotedTexts.flatMap((text) => text.split('\n')).map((line) => `> ${line}`).join('\n');
+  const shopper = await db.prepare('SELECT username FROM users WHERE user_id = ?').bind(shopperUserId).first();
   const now = isoNow();
   const cardId = `assistant-escalation-${crypto.randomUUID()}`;
   const note = [
-    `Passed to the team by the assistant ${user.username} (shopper: ${shopper?.username ?? 'unknown'}, conversation ${conversationId}).`,
+    `Passed to the team by the assistant ${assistant.username} (shopper: ${shopper?.username ?? 'unknown'}, ${reference}).`,
     '',
     'What the assistant says it needs:',
     summary,
@@ -394,7 +545,76 @@ async function handleEscalate(request, db, conversationId) {
       task_id, kind, note_number, title, status, session, posted_by,
       note, note_updated_at, note_author, created_at, updated_at
     ) VALUES (?, 'feedback', (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', 'assistant', ?, ?, 'assistant', ?, ?)
-  `).bind(cardId, `From assistant ${user.username}: ${summary.slice(0, 100)}`, note, now, now, now).run();
+  `).bind(cardId, `From assistant ${assistant.username}: ${summary.slice(0, 100)}`, note, now, now, now).run();
+  return cardId;
+}
+
+async function escalationSummary(request) {
+  const input = await readJson(request);
+  const summary = stringValue(input.summary, 'summary');
+  if (summary.length > ESCALATION_SUMMARY_MAX_CHARS) {
+    throw new HttpError(`summary must be ${ESCALATION_SUMMARY_MAX_CHARS} characters or fewer`, 400);
+  }
+  return summary;
+}
+
+async function handleEscalate(request, db, conversationId) {
+  const user = await requireAssistant(request, db);
+  await checkRateLimit(db, `assistant-escalate:${user.user_id}`, ASSISTANT_ESCALATE_RATE_LIMIT_MAX);
+  const summary = await escalationSummary(request);
+  const conversation = await ownConversation(db, user.user_id, conversationId);
+  const { results } = await db.prepare(`
+    SELECT text FROM assistant_messages WHERE conversation_id = ? AND sender = 'shopper'
+    ORDER BY rowid DESC LIMIT ?
+  `).bind(conversationId, QUOTE_MESSAGES).all();
+  const cardId = await fileEscalationCard(db, user, {
+    summary,
+    shopperUserId: conversation.shopper_user_id,
+    reference: `conversation ${conversationId}`,
+    quotedTexts: results.reverse().map((row) => row.text),
+  });
+  return json({ cardId }, 201);
+}
+
+// #3448: the assistant's side of a left question. Only the assistant it was
+// handed to may answer or escalate it.
+async function ownQuestion(db, assistantUserId, questionId) {
+  const row = await db.prepare('SELECT * FROM assistant_questions WHERE question_id = ? AND claimed_by_user_id = ?')
+    .bind(questionId, assistantUserId).first();
+  if (!row) throw new HttpError('Question not found', 404);
+  return row;
+}
+
+async function handleAnswerQuestion(request, db, questionId) {
+  const user = await requireAssistant(request, db);
+  await checkRateLimit(db, `assistant-reply:${user.user_id}`, ASSISTANT_REPLY_RATE_LIMIT_MAX);
+  const input = await readJson(request);
+  const text = textValue(input, ASSISTANT_MESSAGE_MAX_CHARS);
+  const question = await ownQuestion(db, user.user_id, questionId);
+  const answered = await db.prepare(`
+    UPDATE assistant_questions SET status = 'answered', answer_text = ?1, answered_at = ?2
+    WHERE question_id = ?3 AND claimed_by_user_id = ?4 AND status = 'claimed'
+  `).bind(text, isoNow(), questionId, user.user_id).run();
+  if (answered.meta.changes === 0) {
+    throw new HttpError('That question is no longer waiting for an answer.', 409, { questionClosed: true });
+  }
+  // The answer is already stored for the shopper; telling them is best effort.
+  const builderId = await builderIdForUser(db, question.shopper_user_id);
+  if (builderId) await fireNotification(db, builderId, `${user.username} answered the question you left.`);
+  return json({ answered: true }, 201);
+}
+
+async function handleEscalateQuestion(request, db, questionId) {
+  const user = await requireAssistant(request, db);
+  await checkRateLimit(db, `assistant-escalate:${user.user_id}`, ASSISTANT_ESCALATE_RATE_LIMIT_MAX);
+  const summary = await escalationSummary(request);
+  const question = await ownQuestion(db, user.user_id, questionId);
+  const cardId = await fileEscalationCard(db, user, {
+    summary,
+    shopperUserId: question.shopper_user_id,
+    reference: `left question ${questionId}`,
+    quotedTexts: [question.text],
+  });
   return json({ cardId }, 201);
 }
 
@@ -405,6 +625,10 @@ export async function handleAssistantInbox(request, db, route) {
     if (route[3] === 'reply') return handleReply(request, db, route[2]);
     if (route[3] === 'end') return handleAssistantEnd(request, db, route[2]);
     if (route[3] === 'escalate') return handleEscalate(request, db, route[2]);
+  }
+  if (route.length === 4 && route[1] === 'questions' && request.method === 'POST') {
+    if (route[3] === 'answer') return handleAnswerQuestion(request, db, route[2]);
+    if (route[3] === 'escalate') return handleEscalateQuestion(request, db, route[2]);
   }
   return json({ error: 'Not found' }, 404);
 }
@@ -418,4 +642,11 @@ export async function pruneStaleAssistantChat(db) {
   ).bind(isoNow(), isoAgo(CONVERSATION_IDLE_MS)).run();
   await db.prepare('DELETE FROM assistant_messages WHERE created_at < ?').bind(cutoff).run();
   await db.prepare("DELETE FROM assistant_conversations WHERE status = 'ended' AND ended_at < ?").bind(cutoff).run();
+  // #3448: a question nobody answered within QUESTION_KEPT_MS expires (the
+  // shopper is told when they next open the panel); every finished question,
+  // and an answer nobody came back for, goes QUESTION_KEPT_MS after it finished.
+  await expireStaleQuestions(db);
+  await db.prepare(
+    "DELETE FROM assistant_questions WHERE status IN ('answered', 'withdrawn', 'dismissed', 'expired') AND COALESCE(closed_at, answered_at, created_at) < ?",
+  ).bind(isoAgo(QUESTION_KEPT_MS)).run();
 }

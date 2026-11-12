@@ -50,11 +50,14 @@ export function positiveSeconds(value, fallback, max = Infinity) {
   return n;
 }
 
-// What the idle loop does with one /next reply. `message` and `ended` hand
-// control back to the session (the program prints it and exits); anything else
-// keeps waiting.
+// What the idle loop does with one /next reply. `message`, `question` and
+// `ended` hand control back to the session (the program prints it and exits);
+// anything else keeps waiting. A `question` is one the server has already
+// handed to this assistant, so dropping it here would leave it stuck until it
+// times out (#3448).
 export function classifyNext(body) {
   if (body && body.conversationId && body.message) return { kind: 'message', output: body };
+  if (body && body.question && body.question.questionId) return { kind: 'question', output: body };
   if (body && body.ended) return { kind: 'ended', output: body };
   return { kind: 'idle' };
 }
