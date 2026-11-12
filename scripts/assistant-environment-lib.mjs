@@ -14,7 +14,7 @@ export const DEFAULT_REPO = 'RunbotRobot/higglehaven';
 // The one extra host the environment's network must allow: public file content.
 export const PROGRAMS_HOST = 'raw.githubusercontent.com';
 // What assistant-reply.mjs accepts as its first word.
-export const REPLY_ACTIONS = ['reply', 'end', 'escalate', 'answer-question', 'escalate-question'];
+export const REPLY_ACTIONS = ['reply', 'end', 'escalate', 'handover', 'answer-question', 'escalate-question'];
 
 const SHA256 = /^[0-9a-f]{64}$/;
 const COMMIT = /^[0-9a-f]{40}$/;

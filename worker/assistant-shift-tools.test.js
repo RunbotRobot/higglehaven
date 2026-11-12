@@ -53,6 +53,10 @@ describe('shift tool helpers', () => {
     const asked = { question: { questionId: 'q', shopper: { label: 'x' }, text: 'hi', askedAt: 't' } };
     expect(classifyNext(asked)).toEqual({ kind: 'question', output: asked });
     expect(classifyNext({ question: {} }).kind).toBe('idle');
+    // A conversation passed from another assistant is handed over once: the loop must return it (#3448).
+    const passed = { handover: { conversationId: 'c', shopper: { label: 'x' }, fromAssistant: 'Juniper', history: [] } };
+    expect(classifyNext(passed)).toEqual({ kind: 'handover', output: passed });
+    expect(classifyNext({ handover: {} }).kind).toBe('idle');
     expect(classifyNext({ conversationId: 'c', message: { text: 'hi' }, shopper: { label: 'x' }, history: [] }).kind).toBe('message');
   });
 

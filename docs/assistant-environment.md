@@ -26,7 +26,7 @@ permission mode `default`, with only these commands pre-approved:
 
 - `node /opt/assistant/assistant-shift.mjs --name <name>`
 - `node /opt/assistant/assistant-reply.mjs --name <name> <action>:*` for each of
-  `reply`, `end`, `escalate`, `answer-question`, `escalate-question`.
+  `reply`, `end`, `escalate`, `handover`, `answer-question`, `escalate-question`.
 
 Everything else asks, and nobody is there to answer, so it does not run.
 
