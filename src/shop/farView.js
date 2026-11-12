@@ -20,6 +20,7 @@
 import * as THREE from 'three';
 import { farViewTilesInRange, farViewTileKey, decodeFarPlacementsPayload, planFarView, FAR_VIEW_RANGE_M, FAR_VIEW_TILE_M } from './farViewPlan.js';
 import { buildFarMeshes, triangleCount, farItemsSignature } from './farViewDraw.js';
+import { createArrivalDissolve } from './arrivalEffect.js';
 
 const REPLAN_MIN_INTERVAL_MS = 500;
 const REPLAN_MAX_INTERVAL_MS = 3000;
@@ -41,15 +42,31 @@ const FAR_BUILD_PRIORITY = 1e6; // minus apparent size: after any nearby build, 
 const URGENT_PRIORITY = -1e6; // #3479: an unloaded landlet's far models, ahead of everything
 const DISPOSE_PRIORITY = 1e9;
 const HIDDEN_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
+// #3479 ("Things arrive in the world through fog; nothing pops in", applied to
+// the far models): a product's freshly built meshes dissolve in over this long
+// (the arrival dither of arrivalEffect.js, one uniform for the whole product)
+// while the meshes they replace stay drawn underneath, so a landlet coming into
+// range is never a pop and never a gap. Skipped under prefers-reduced-motion.
+export const FAR_FADE_MS = 600;
+
+function prefersReducedMotion() {
+  try {
+    return typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  } catch {
+    return false;
+  }
+}
 
 export function createFarView({
   queue, root, fetchTile, loadSource, dimensionsFor, elevationFor, loadedLandletIds, getCamera, getView,
   now = () => performance.now(), rangeM = FAR_VIEW_RANGE_M,
+  createDissolve = createArrivalDissolve, reducedMotion = prefersReducedMotion(),
 }) {
   const group = {}; // queue group, so dispose() cancels what has not run
   const tiles = new Map(); // key -> { state, landlets, failedAt }
   const sources = new Map(); // templateId -> { state, source, triangles }
-  const drawn = new Map(); // templateId -> { signature, object, meshes }
+  const drawn = new Map(); // templateId -> { signature, object, meshes, items, fade }
+  const fading = new Set(); // entries whose meshes are dissolving in
   const wanted = new Map(); // templateId -> signature the latest plan asks for
   let tilesInFlight = 0;
   let sourcesInFlight = 0;
@@ -132,9 +149,53 @@ export function createFarView({
       for (const mesh of meshes) object.add(mesh);
       root.add(object);
       const previous = drawn.get(templateId);
-      drawn.set(templateId, { signature, object, meshes, items });
-      if (previous) retire(previous);
+      // A build arriving while the previous one is still fading in: that one is
+      // complete now (it is what the new one replaces).
+      if (previous?.fade) finishFade(previous);
+      const entry = { signature, object, meshes, items, fade: null };
+      drawn.set(templateId, entry);
+      if (reducedMotion) {
+        if (previous) retire(previous);
+      } else {
+        // #3479: dissolve in over FAR_FADE_MS; the replaced meshes stay drawn
+        // underneath until it is done (same geometry, same places).
+        const dissolve = createDissolve(object);
+        dissolve.setLevel(0);
+        entry.fade = { dissolve, startedAt: now(), previous: previous || null };
+        fading.add(entry);
+      }
     }, { group, priority });
+  }
+
+  // The fade is over (or cut short): the real materials come back, and the
+  // meshes it covered are released.
+  function finishFade(entry) {
+    const fade = entry.fade;
+    if (!fade) return;
+    entry.fade = null;
+    fading.delete(entry);
+    fade.dissolve.restore();
+    if (fade.previous) retire(fade.previous);
+  }
+
+  // Called once per frame (cheap: only what is still fading in).
+  function tick() {
+    if (disposed || fading.size === 0) return;
+    const t = now();
+    for (const entry of [...fading]) {
+      const level = (t - entry.fade.startedAt) / FAR_FADE_MS;
+      if (level >= 1) finishFade(entry);
+      else entry.fade.dissolve.setLevel(level);
+    }
+  }
+
+  // Every entry whose meshes are in the scene, including the ones a fade is
+  // still keeping underneath a newer build.
+  function* drawnEntries() {
+    for (const entry of drawn.values()) {
+      yield entry;
+      if (entry.fade?.previous) yield entry.fade.previous;
+    }
   }
 
   // Meshes leave the scene now; their instance buffers are released later,
@@ -149,7 +210,7 @@ export function createFarView({
   // #3479: hides, in place, every drawn instance that belongs to one of
   // `landletIds` (the real landlet has just finished arriving over it).
   function hideLandlets(landletIds) {
-    for (const entry of drawn.values()) {
+    for (const entry of drawnEntries()) {
       let touched = false;
       entry.items.forEach((item, index) => {
         if (!landletIds.has(item.landletId)) return;
@@ -172,6 +233,7 @@ export function createFarView({
       const entry = drawn.get(templateId);
       if (!entry) return;
       drawn.delete(templateId);
+      finishFade(entry);
       retire(entry);
     }, { group, priority: DISPOSE_PRIORITY - 1 });
   }
@@ -265,11 +327,13 @@ export function createFarView({
   function dispose() {
     disposed = true;
     queue.dropGroup(group);
-    for (const entry of drawn.values()) {
+    for (const entry of [...drawnEntries()]) {
+      entry.fade?.dissolve.restore();
       root.remove(entry.object);
       for (const mesh of entry.meshes) mesh.dispose();
     }
     drawn.clear();
+    fading.clear();
     for (const record of sources.values()) record.source?.dispose?.();
     sources.clear();
     tiles.clear();
@@ -277,6 +341,7 @@ export function createFarView({
 
   return {
     update,
+    tick,
     dispose,
     stats: () => ({
       tiles: tiles.size, products: drawn.size, plan: lastStats,
