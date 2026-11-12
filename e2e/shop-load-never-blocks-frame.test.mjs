@@ -149,6 +149,28 @@ await page.waitForTimeout(2500);
 const steady = await page.evaluate(() => window.__frameMonitor.longestFrameGapMs());
 console.log(`steady state with the landlet loaded and nothing loading: longest frame gap ${Math.round(steady)} ms`);
 
+// ---- 1b. Flying forward over the loaded landlet (#3483) ----
+// #3483: on the live site, eight seconds of flying forward from spawn produced
+// one main-thread task of nearly three seconds, the day the stand-in boxes were
+// removed. Every item of this landlet now wants its mid or far version as the
+// avatar rises, so this holds the same path over the loaded 829 items and
+// bounds the longest frame. The bound is deliberately generous (a software
+// renderer on a loaded CI runner); a regression to a one-task build of the
+// whole landlet is an order of magnitude above it.
+const FLY_MAX_FRAME_GAP_MS = Number(process.env.E2E_FLY_MAX_FRAME_GAP_MS || 1500);
+await page.evaluate(() => window.__frameMonitor.reset());
+await page.click('#shop-fly-btn');
+await page.waitForTimeout(800);
+await page.mouse.move(originX, originY);
+await page.mouse.down();
+await page.mouse.move(originX, originY - joystick.height / 2, { steps: 4 });
+await page.waitForTimeout(6000);
+await page.mouse.up();
+const flight = await page.evaluate(() => ({ longestGapMs: window.__frameMonitor.longestFrameGapMs(), longTasks: window.__frameMonitor.longTasks() }));
+console.log(`flying forward over the loaded landlet: longest frame gap ${Math.round(flight.longestGapMs)} ms; long tasks ${flight.longTasks.count} (longest ${Math.round(flight.longTasks.longestMs)} ms)`);
+check(flight.longestGapMs < FLY_MAX_FRAME_GAP_MS, `no frame gap of ${FLY_MAX_FRAME_GAP_MS} ms or more while flying over the loaded landlet (longest ${Math.round(flight.longestGapMs)} ms)`);
+check(flight.longTasks.longestMs < FLY_MAX_FRAME_GAP_MS, `no single task of ${FLY_MAX_FRAME_GAP_MS} ms or more while flying over the loaded landlet (longest ${Math.round(flight.longTasks.longestMs)} ms)`);
+
 // ---- 2. A load abandoned part way leaves nothing behind ----
 await moveTo(farPoint);
 await page.waitForFunction(() => window.__testShopLoadedInstanceCount() === 0, null, { timeout: 30000 });
