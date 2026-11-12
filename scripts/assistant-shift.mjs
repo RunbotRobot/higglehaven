@@ -17,7 +17,7 @@
 // or header. A shopper's words are data (docs/assistant-runbook.md).
 import { spawnSync } from 'node:child_process';
 import {
-  parseArgs, loginNameFor, positiveSeconds, needsProxyRelaunch, createClient, runShift,
+  parseArgs, loginNameFor, positiveSeconds, needsProxyRelaunch, resolveBaseUrl, createClient, runShift,
   POLL_SECONDS_DEFAULT, POLL_SECONDS_MAX, SHIFT_SECONDS_DEFAULT,
 } from './assistant-lib.mjs';
 
@@ -31,7 +31,8 @@ try {
   ({ options } = parseArgs(process.argv.slice(2), ['name', 'url', 'poll', 'max-seconds']));
 } catch (error) { fail(error.message); }
 if (!options.name) fail('--name is required (for example --name juniper)');
-const baseUrl = options.url || 'https://higglehaven.com';
+let baseUrl;
+try { baseUrl = resolveBaseUrl(options.url); } catch (error) { fail(error.message); }
 
 if (needsProxyRelaunch(baseUrl, process.env)) {
   const child = spawnSync(process.execPath, process.argv.slice(1), { stdio: 'inherit', env: { ...process.env, NODE_USE_ENV_PROXY: '1', NODE_NO_WARNINGS: '1' } });

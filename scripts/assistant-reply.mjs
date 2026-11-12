@@ -21,7 +21,7 @@
 // being asked. The server adds the shopper's own words in a quoted field, so
 // never paste their words into the summary. docs/API.md "Assistant chat".
 import { spawnSync } from 'node:child_process';
-import { parseArgs, loginNameFor, needsProxyRelaunch, createClient } from './assistant-lib.mjs';
+import { parseArgs, loginNameFor, needsProxyRelaunch, resolveBaseUrl, createClient } from './assistant-lib.mjs';
 
 const fail = (message) => {
   console.error(`assistant-reply: ${message}`);
@@ -40,7 +40,8 @@ if (!['reply', 'end', 'escalate', 'handover', 'answer-question', 'escalate-quest
 }
 if (!conversationId || !/^[A-Za-z0-9_-]+$/.test(conversationId)) fail('an id is required after the command');
 if (action !== 'end' && action !== 'handover' && !(options.text || '').trim()) fail(`${action} needs --text "..."`);
-const baseUrl = options.url || 'https://higglehaven.com';
+let baseUrl;
+try { baseUrl = resolveBaseUrl(options.url); } catch (error) { fail(error.message); }
 
 if (needsProxyRelaunch(baseUrl, process.env)) {
   const child = spawnSync(process.execPath, process.argv.slice(1), { stdio: 'inherit', env: { ...process.env, NODE_USE_ENV_PROXY: '1', NODE_NO_WARNINGS: '1' } });

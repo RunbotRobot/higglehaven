@@ -73,6 +73,18 @@ export function needsProxyRelaunch(baseUrl, env) {
   return !isLocal && Boolean(env.HTTPS_PROXY || env.https_proxy) && !env.NODE_USE_ENV_PROXY;
 }
 
+// The address the programs talk to is fixed: the live site, or a local server
+// for testing. A permission rule that lets `--name juniper reply ...` through
+// also lets later flags through, so --url must not be able to point a session's
+// requests (and the fleet key its proxy adds) anywhere else.
+export const LIVE_SITE_URL = 'https://higglehaven.com';
+export function resolveBaseUrl(url) {
+  if (url === undefined) return LIVE_SITE_URL;
+  const trimmed = String(url).replace(/\/$/, '');
+  if (trimmed === LIVE_SITE_URL || /^https?:\/\/(127\.0\.0\.1|localhost)(:\d+)?$/.test(trimmed)) return trimmed;
+  throw new Error('--url may only be the live site or a local server');
+}
+
 export class SiteError extends Error {
   constructor(message, status) {
     super(message);
