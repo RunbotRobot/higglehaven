@@ -10,7 +10,7 @@ import schemaSnapshot from './schema-snapshot.json';
 import { json, HttpError, JSON_HEADERS, clientIp, htmlResponse, ERROR_CODES } from './lib/http.js';
 import { checkRateLimit, RATE_LIMIT_WINDOW_MS } from './lib/rate-limit.js';
 import { handleAssistantChat, handleAssistantInbox, pruneStaleAssistantChat } from './lib/assistant-chat.js';
-import { fleetKeyStatus, withoutFleetKey, asFleetTraffic, handleFleetLogin, FLEET_LOGIN_PATH } from './lib/fleet.js';
+import { fleetKeyCheck, withoutFleetKey, asFleetTraffic, handleFleetLogin, FLEET_LOGIN_PATH } from './lib/fleet.js';
 import { adminActionLogStatement } from './lib/admin-log.js';
 import { timingSafeEqual, bytesToHex, hexToBytes } from './lib/crypto.js';
 import {
@@ -364,23 +364,23 @@ async function routeRequest(request, env, ctx) {
   // stripped from the request so nothing downstream can log or echo it.
   let fleetKey;
   try {
-    fleetKey = await fleetKeyStatus(request, env);
+    fleetKey = await fleetKeyCheck(request, env);
   } catch (error) {
     if (error instanceof HttpError) return json({ error: error.message, ...(error.extra ?? {}) }, error.status);
     throw error;
   }
   request = withoutFleetKey(request);
   // #3429: fleet traffic gets its own IP-keyed rate-limit buckets.
-  if (fleetKey === 'ok') request = asFleetTraffic(request);
+  if (fleetKey.status === 'ok') request = asFleetTraffic(request);
 
-  if (env.ACCESS_PASSPHRASE && fleetKey !== 'ok') {
+  if (env.ACCESS_PASSPHRASE && fleetKey.status !== 'ok') {
     const gateResponse = await checkAccessGate(request, url, env);
     if (gateResponse) return gateResponse;
   }
 
   if (url.pathname === FLEET_LOGIN_PATH && request.method === 'POST') {
     try {
-      return await handleFleetLogin(request, env, env.DB, url, fleetKey === 'ok');
+      return await handleFleetLogin(request, env, env.DB, url, fleetKey.kind);
     } catch (error) {
       if (error instanceof HttpError) return json({ error: error.message, ...(error.extra ?? {}) }, error.status);
       throw error;
