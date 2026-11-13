@@ -1,6 +1,7 @@
 import { applyD1Migrations, env } from 'cloudflare:test';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { api, signupAdmin, signupBuilder } from './test-helpers.js';
+import { buildTax1099CreateBody } from './lib/seller-payouts-tax.js';
 
 // Own file (own D1/worker isolate — same reasoning as worker/tax-id-form
 // .test.js's own comment): setting TAX_ID_ENCRYPTION_KEY/TAX_1099_EFILING_*
@@ -21,7 +22,14 @@ import { api, signupAdmin, signupBuilder } from './test-helpers.js';
 // outright" test already uses for a different external vendor).
 let adminSession;
 let createCallCount = 0;
+let transmitCallCount = 0;
+// #3517: the order of vendor calls, the body of the last Transmit, and what the
+// next Create/Transmit should do instead of succeeding.
+let vendorCallOrder = [];
+let lastTransmitRequestBody = null;
 let nextCreateShouldFail = false;
+let nextCreateReturnsErrors = false;
+let nextTransmitStatus = null; // null = succeed; a string = answer with that FederalStatus
 // #2939: the vendor payload itself, captured so a test can assert on the
 // actual State/CountryCd values transmitted -- every other test in this
 // file only cares that a call happened, not what was in it.
@@ -45,14 +53,35 @@ beforeAll(async () => {
     if (url.includes('tbsauth')) {
       return new Response(JSON.stringify({ AccessToken: 'test-access-token' }), { status: 200 });
     }
-    if (url.includes('/Form1099NEC/Create') || url.includes('/Form1099K/Create')) {
+    // #3517: API v2.0.0 -- Create only creates; a separate Transmit files it.
+    if (/\/v2\.0\.0\/(Form1099NEC\/Create|form1099K\/create)$/i.test(url)) {
       createCallCount += 1;
+      vendorCallOrder.push('create');
       lastCreateRequestBody = rest[0]?.body ? JSON.parse(rest[0].body) : null;
       if (nextCreateShouldFail) {
         nextCreateShouldFail = false;
         return new Response(JSON.stringify({ StatusMessage: 'simulated vendor failure' }), { status: 502 });
       }
+      if (nextCreateReturnsErrors) {
+        nextCreateReturnsErrors = false;
+        return new Response(JSON.stringify({
+          SubmissionId: `sub-${createCallCount}`,
+          Form1099Records: { ErrorRecords: [{ Errors: [{ Id: 'E1', Name: 'Invalid', Message: 'simulated record validation error' }] }] },
+        }), { status: 207 });
+      }
       return new Response(JSON.stringify({ SubmissionId: `sub-${createCallCount}` }), { status: 200 });
+    }
+    if (/\/v2\.0\.0\/Form1099\/transmit$/i.test(url)) {
+      transmitCallCount += 1;
+      vendorCallOrder.push('transmit');
+      lastTransmitRequestBody = rest[0]?.body ? JSON.parse(rest[0].body) : null;
+      const status = nextTransmitStatus;
+      nextTransmitStatus = null;
+      if (status === 'FAIL') return new Response(JSON.stringify({ StatusMessage: 'simulated transmit failure' }), { status: 502 });
+      return new Response(JSON.stringify({
+        SubmissionId: lastTransmitRequestBody?.SubmissionId,
+        Form1099Records: [{ FormType: 'Form1099NEC', RecordId: 'rec-1', FederalStatus: { Status: status ?? 'TRANSMITTED', Message: status ? `simulated status ${status}` : null } }],
+      }), { status: 200 });
     }
     return originalFetch(input, ...rest);
   };
@@ -105,6 +134,7 @@ describe('1099 e-filing transmission race (#1410)', () => {
   it('transmits to the e-filing vendor exactly once even when two /file requests race', async () => {
     const formId = await approvedFormFor('tax-1099-file-race-concurrent');
     const before = createCallCount;
+    const transmitsBefore = transmitCallCount;
 
     // Fired together, not awaited one at a time -- same genuinely-concurrent
     // pattern worker/commerce.test.js's own concurrent-approve/concurrent-void
@@ -122,6 +152,7 @@ describe('1099 e-filing transmission race (#1410)', () => {
 
     expect(statuses).toEqual([200, 409]);
     expect(createCallCount - before).toBe(1);
+    expect(transmitCallCount - transmitsBefore).toBe(1);
     expect(row.status).toBe('filed');
     expect(row.filing_reference).toBeTruthy();
   });
@@ -143,6 +174,113 @@ describe('1099 e-filing transmission race (#1410)', () => {
   });
 });
 
+// #3517: API v2.0.0 files in two vendor calls. Create only creates a submission
+// (nothing reaches the IRS); a separate Transmit files it. A form must only ever
+// be called filed once Transmit says so, and a failure between the two must not
+// lead to a second submission on retry.
+describe('1099 e-filing is Create then Transmit (#3517)', () => {
+  const nonTransmittingStatus = 'REJECTED';
+
+  it('creates, stores the submission id, transmits that id, and only then calls the form filed', async () => {
+    const formId = await approvedFormFor('tax-1099-v2-create-then-transmit');
+    vendorCallOrder = [];
+
+    const filed = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
+    expect(filed.response.status).toBe(200);
+    expect(vendorCallOrder).toEqual(['create', 'transmit']);
+    const row = await env.DB.prepare('SELECT status, filing_reference, efiling_submission_id FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
+    expect(row.status).toBe('filed');
+    expect(row.efiling_submission_id).toBeTruthy();
+    expect(row.filing_reference).toBe(row.efiling_submission_id);
+    // Transmit is sent the submission id only (every record under it).
+    expect(lastTransmitRequestBody).toEqual({ SubmissionId: row.efiling_submission_id });
+  });
+
+  it('after a failed Transmit the form returns to approved with its submission id kept, and the retry transmits that submission instead of creating a second', async () => {
+    const formId = await approvedFormFor('tax-1099-v2-retry-no-second-create');
+    vendorCallOrder = [];
+    nextTransmitStatus = 'FAIL';
+
+    const failed = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
+    expect(failed.response.status).toBe(502);
+    expect(vendorCallOrder).toEqual(['create', 'transmit']);
+    const after = await env.DB.prepare('SELECT status, filing_reference, efiling_submission_id FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
+    expect(after.status).toBe('approved');
+    expect(after.efiling_submission_id).toBeTruthy(); // kept for the retry
+    expect(after.filing_reference).toBeNull(); // not filed
+
+    const createsBefore = createCallCount;
+    vendorCallOrder = [];
+    const retried = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
+    expect(retried.response.status).toBe(200);
+    expect(createCallCount).toBe(createsBefore); // no second submission
+    expect(vendorCallOrder).toEqual(['transmit']);
+    expect(lastTransmitRequestBody.SubmissionId).toBe(after.efiling_submission_id);
+    const done = await env.DB.prepare('SELECT status, filing_reference FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
+    expect(done.status).toBe('filed');
+    expect(done.filing_reference).toBe(after.efiling_submission_id);
+  });
+
+  it('does not transmit, store a submission or call the form filed when Create reports a validation error', async () => {
+    const formId = await approvedFormFor('tax-1099-v2-create-errors');
+    vendorCallOrder = [];
+    nextCreateReturnsErrors = true;
+
+    const rejected = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
+    expect(rejected.response.status).toBe(502);
+    expect(rejected.body.error).toMatch(/simulated record validation error/);
+    expect(vendorCallOrder).toEqual(['create']); // never reached Transmit
+    const row = await env.DB.prepare('SELECT status, efiling_submission_id, filing_reference FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
+    expect(row).toEqual({ status: 'approved', efiling_submission_id: null, filing_reference: null });
+  });
+
+  it('does not call the form filed when Transmit answers with a status that is not a transmission', async () => {
+    const formId = await approvedFormFor('tax-1099-v2-transmit-not-transmitted');
+    nextTransmitStatus = nonTransmittingStatus;
+
+    const rejected = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
+    expect(rejected.response.status).toBe(502);
+    expect(rejected.body.error).toMatch(/simulated status REJECTED/);
+    const row = await env.DB.prepare('SELECT status, filing_reference FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
+    expect(row.status).toBe('approved');
+    expect(row.filing_reference).toBeNull();
+  });
+
+  it('refuses a payee whose legal name cannot be split into a first and last name, before any vendor call', async () => {
+    const formId = await approvedFormFor('tax-1099-v2-single-name', { legalName: 'Cher' });
+    vendorCallOrder = [];
+
+    const rejected = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
+    expect(rejected.response.status).toBe(400);
+    expect(rejected.body.error).toMatch(/legal name/i);
+    expect(vendorCallOrder).toEqual([]);
+    const row = await env.DB.prepare('SELECT status FROM tax_1099_forms WHERE form_id = ?').bind(formId).first();
+    expect(row.status).toBe('approved');
+  });
+
+  it('builds the v2.0.0 body for both forms: payer under the manifest, a Recipient, and the amount where that form keeps it', () => {
+    const payeeTaxId = {
+      formType: 'w9', legalName: 'Grace Brewster Hopper', addressLine1: '1 Compiler Lane', city: 'Arlington',
+      state: 'VA', postalCode: '22201', taxIdNumber: '123-45-6789',
+    };
+    const base = { env: { TAX_1099_PAYER_NAME: 'Payer Co', TAX_1099_PAYER_EIN: '00-0000000' }, payeeTaxId, payeeEmail: 'grace@example.com' };
+    const nec = buildTax1099CreateBody(base.env, { ...base, form: { form_type: '1099-nec', tax_year: 2026, gross_income_cents: 123456 } });
+    expect(nec.SubmissionManifest).toEqual({
+      TaxYear: '2026',
+      IsFederal: true,
+      ReturnHeader: { Business: { BusinessNm: 'Payer Co', TINDetails: { Format: 'PLAIN_TIN', TINType: 'EIN', TIN: '00-0000000' } } },
+    });
+    expect(nec.ReturnData[0].ReturnManifest).toEqual({ IsFederal: true });
+    expect(nec.ReturnData[0].Recipient.IndividualNm).toEqual({ FirstNm: 'Grace Brewster', LastNm: 'Hopper' });
+    expect(nec.ReturnData[0].Recipient.TINDetails).toEqual({ Format: 'PLAIN_TIN', TINType: 'SSN', TIN: '123-45-6789' });
+    expect(nec.ReturnData[0].NECFormData).toEqual({ NEC: 1234.56 });
+    expect(nec.ReturnData[0].KFormData).toBeUndefined();
+    const kForm = buildTax1099CreateBody(base.env, { ...base, form: { form_type: '1099-k', tax_year: 2026, gross_income_cents: 2000000 } });
+    expect(kForm.ReturnData[0].KFormData).toEqual({ GrossAmt: 20000 });
+    expect(kForm.ReturnData[0].NECFormData).toBeUndefined();
+  });
+});
+
 // #2939: transmitTax1099Form used to forward the payee's own free-text
 // state/country form input straight into the vendor's real IRS-e-filing
 // Address.State/Address.CountryCd fields -- 2-letter-code fields, not
@@ -155,8 +293,8 @@ describe('1099 e-filing transmission country/state normalization (#2939)', () =>
 
     const filed = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
     expect(filed.response.status).toBe(200);
-    expect(lastCreateRequestBody.ReturnData[0].Payee.Address.State).toBe('CA');
-    expect(lastCreateRequestBody.ReturnData[0].Payee.Address.CountryCd).toBe('US');
+    expect(lastCreateRequestBody.ReturnData[0].Recipient.Address.ProvinceOrState).toBe('CA');
+    expect(lastCreateRequestBody.ReturnData[0].Recipient.Address.Country).toBe('US');
   });
 
   // #2951: usStateNameToCode was originally written only for
@@ -171,7 +309,7 @@ describe('1099 e-filing transmission country/state normalization (#2939)', () =>
 
     const filed = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
     expect(filed.response.status).toBe(200);
-    expect(lastCreateRequestBody.ReturnData[0].Payee.Address.State).toBe('PR');
+    expect(lastCreateRequestBody.ReturnData[0].Recipient.Address.ProvinceOrState).toBe('PR');
   });
 
   it('normalizes a spelled-out country to its 2-letter code before e-filing a W-8BEN payee', async () => {
@@ -185,8 +323,10 @@ describe('1099 e-filing transmission country/state normalization (#2939)', () =>
 
     const filed = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
     expect(filed.response.status).toBe(200);
-    expect(lastCreateRequestBody.ReturnData[0].Payee.Address.CountryCd).toBe('FR');
-    expect(lastCreateRequestBody.ReturnData[0].Payee.TINType).toBe('FOREIGNTIN');
+    expect(lastCreateRequestBody.ReturnData[0].Recipient.Address.Country).toBe('FR');
+    // #3517: a foreign payee has no US TIN field in v2.0.0 (an assumption to
+    // check on the first Sandbox filing, see buildTax1099CreateBody's comment).
+    expect(lastCreateRequestBody.ReturnData[0].Recipient.TINDetails).toEqual({ TINType: 'NA' });
   });
 
   it('rejects filing (without transmitting) when a W-9 state cannot be resolved to a valid code', async () => {

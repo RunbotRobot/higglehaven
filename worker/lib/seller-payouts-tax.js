@@ -1159,10 +1159,14 @@ function tax1099EfilingConfigured(env) {
 // returns (status, code, message), what format the domain is entered in, or how
 // the Referer value is matched; handle whatever the first Sandbox call with
 // whitelisting switched on shows (see fetchTax1099EfilingToken's and
-// transmitTax1099Form's !response.ok branches, which surface the vendor's own
+// createTax1099Submission's and transmitTax1099Submission's error branches, which surface the vendor's own
 // StatusMessage).
 const TAX_1099_EFILING_TOKEN_URL = 'https://testoauth.expressauth.net/v2/tbsauth';
-const TAX_1099_EFILING_API_BASE = 'https://testapi.taxbandits.com/v1.7.3';
+// #3517: API v2.0.0 (tax year 2026 is v2.0.0 only; the vendor's versioning page
+// gives the Live API host as https://api.taxbandits.com/ plus the version, so
+// the Live pair is 'https://oauth.expressauth.net/v2/tbsauth' and
+// 'https://api.taxbandits.com/v2.0.0'). One version, no v1.7.3 path beside it.
+const TAX_1099_EFILING_API_BASE = 'https://testapi.taxbandits.com/v2.0.0';
 // Switched together with the two hosts above (a pair, not independently).
 const TAX_1099_EFILING_IS_LIVE = false;
 
@@ -1222,20 +1226,39 @@ async function fetchTax1099EfilingToken(env) {
   return data.AccessToken;
 }
 
-// Assembles and transmits one form, returning the vendor's own submission
-// reference to store as filing_reference. payeeTaxId is the decrypted
-// W-9/W-8BEN payload from decryptTaxIdPayload — never logged or returned,
-// only forwarded to the vendor over HTTPS.
-async function transmitTax1099Form(env, { form, payeeEmail, payeeTaxId }) {
-  const accessToken = await fetchTax1099EfilingToken(env);
-  const endpoint = form.form_type === '1099-nec' ? 'Form1099NEC' : 'Form1099K';
+// #3517: API v2.0.0 files in two vendor calls. Create makes a submission that
+// sits at status CREATED, "not transmitted yet" (nothing reaches the IRS); a
+// separate Transmit sends it. So the filing route does Create, stores the
+// submission id, then Transmit, and only calls the form filed once the vendor says
+// it was transmitted. (v1.7.3's single Create call is gone: no second code path.)
+//
+// The request body below follows the v2.0.0 Create pages
+// (developer.taxbandits.com/docs/2.0.0/Form1099NEC/Create, .../Form1099K/Create):
+// the payer is SubmissionManifest.ReturnHeader.Business, the payee is a
+// `Recipient` with TINDetails, and the amount is NECFormData.NEC / KFormData.GrossAmt.
+// Create validates before anything is sent, so a wrong field name here comes back
+// as a 400 from Create (nothing transmitted), not as a bad filing. STILL
+// UNVERIFIED against a live call, and these mappings are assumptions to check on
+// the first real Sandbox filing: a payee's single legal-name string is split on
+// its last space into FirstNm/LastNm (anything we cannot split is refused rather
+// than guessed); a W-8BEN payee is sent as TINType "NA" with no TIN (the foreign
+// tax id is not a US TIN field); the payer's address and contact are not sent
+// (the vendor's stored business record is assumed to carry them, as it did on
+// v1.7.3); the OAuth scope Transmit needs is not asked for explicitly.
+function splitLegalName(legalName) {
+  const trimmed = String(legalName ?? '').trim().replace(/\s+/g, ' ');
+  const lastSpace = trimmed.lastIndexOf(' ');
+  if (lastSpace <= 0) return null;
+  return { FirstNm: trimmed.slice(0, lastSpace), LastNm: trimmed.slice(lastSpace + 1) };
+}
+
+export function buildTax1099CreateBody(env, { form, payeeEmail, payeeTaxId }) {
   // #2939: payeeTaxId.state/.country are the payee's own free-text form
   // input (no code-picker -- see country-codes.js's own header comment),
-  // but Address.State/.CountryCd below are the vendor's real IRS-e-filing
-  // 2-letter-code fields. getUserTaxJurisdiction (this file, above)
-  // already normalizes these exact raw fields for the tax-education
-  // jurisdiction lookup; this is that same normalization, just also
-  // applied where it actually matters -- a real outbound federal filing.
+  // but the vendor's address fields are real IRS-e-filing 2-letter codes.
+  // getUserTaxJurisdiction (this file, above) already normalizes these exact raw
+  // fields for the tax-education jurisdiction lookup; this is that same
+  // normalization, applied where it matters -- a real outbound federal filing.
   // Fails closed (never silently sends unmapped free text) since an
   // unresolvable value here means the stored form itself can't be
   // correctly filed, not a transient vendor-side problem.
@@ -1247,33 +1270,60 @@ async function transmitTax1099Form(env, { form, payeeEmail, payeeTaxId }) {
   if (!countryCode) {
     throw new HttpError(`This payee's W-8BEN country ("${payeeTaxId.country}") could not be resolved to a valid country code for e-filing`, 400);
   }
-  const body = {
-    SubmissionManifest: { TaxYear: String(form.tax_year), IsFederalFiling: true },
-    ReturnHeader: {
-      Business: {
-        BusinessNm: env.TAX_1099_PAYER_NAME,
-        EIN: env.TAX_1099_PAYER_EIN,
+  const name = splitLegalName(payeeTaxId.legalName);
+  if (!name) {
+    throw new HttpError(`This payee's legal name ("${payeeTaxId.legalName}") could not be split into a first and last name for e-filing`, 400);
+  }
+  const amount = form.gross_income_cents / 100;
+  const isNec = form.form_type === '1099-nec';
+  return {
+    SubmissionManifest: {
+      TaxYear: String(form.tax_year),
+      IsFederal: true,
+      ReturnHeader: {
+        Business: {
+          BusinessNm: env.TAX_1099_PAYER_NAME,
+          TINDetails: { Format: 'PLAIN_TIN', TINType: 'EIN', TIN: env.TAX_1099_PAYER_EIN },
+        },
       },
     },
     ReturnData: [{
-      Payee: {
-        TINType: payeeTaxId.formType === 'w9' ? 'SSN' : 'FOREIGNTIN',
-        TIN: payeeTaxId.taxIdNumber || payeeTaxId.foreignTaxId,
-        PayeeName: payeeTaxId.legalName,
+      ReturnManifest: { IsFederal: true },
+      Recipient: {
+        TINDetails: payeeTaxId.formType === 'w9'
+          ? { Format: 'PLAIN_TIN', TINType: 'SSN', TIN: payeeTaxId.taxIdNumber }
+          : { TINType: 'NA' },
+        IndividualNm: name,
         Email: payeeEmail,
         Address: {
-          Line1: payeeTaxId.addressLine1,
+          Address1: payeeTaxId.addressLine1,
           City: payeeTaxId.city,
-          State: stateCode,
+          ProvinceOrState: stateCode,
           ZipCd: payeeTaxId.postalCode,
-          CountryCd: countryCode,
+          Country: countryCode,
         },
       },
-      NonEmployeeCompensation: form.form_type === '1099-nec' ? (form.gross_income_cents / 100) : undefined,
-      GrossAmountOfPayments: form.form_type === '1099-k' ? (form.gross_income_cents / 100) : undefined,
+      ...(isNec ? { NECFormData: { NEC: amount } } : { KFormData: { GrossAmt: amount } }),
     }],
   };
-  const response = await fetch(`${TAX_1099_EFILING_API_BASE}/${endpoint}/Create`, {
+}
+
+// The first error the vendor reports, from a failed or partially failed reply.
+function vendorErrorMessage(data, fallback) {
+  const records = data?.Form1099Records;
+  const recordErrors = Array.isArray(records) ? records.flatMap((r) => r?.Errors ?? []) : records?.ErrorRecords?.flatMap((r) => r?.Errors ?? []) ?? [];
+  const first = data?.Errors?.[0] ?? recordErrors[0];
+  return first?.Message || data?.StatusMessage || fallback;
+}
+
+// Creates one submission at the vendor (nothing is transmitted to the IRS) and
+// returns its id. payeeTaxId is the decrypted W-9/W-8BEN payload from
+// decryptTaxIdPayload -- never logged or returned, only forwarded to the vendor
+// over HTTPS.
+export async function createTax1099Submission(env, accessToken, { form, payeeEmail, payeeTaxId }) {
+  const body = buildTax1099CreateBody(env, { form, payeeEmail, payeeTaxId });
+  const endpoint = form.form_type === '1099-nec' ? 'Form1099NEC/Create' : 'form1099K/create';
+  const response = await fetch(`${TAX_1099_EFILING_API_BASE}/${endpoint}`, {
     method: 'POST',
     headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json', ...tax1099EfilingDomainHeaders(env) },
     body: JSON.stringify(body),
@@ -1281,16 +1331,37 @@ async function transmitTax1099Form(env, { form, payeeEmail, payeeTaxId }) {
   // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
   // upstream gateway error page makes response.json() itself throw before
   // the !response.ok check below ever runs, otherwise surfacing as an
-  // uncaught 500 instead of this function's own intended 502. Orthogonal to
-  // #1475's own ambiguous-post-transmission-failure question (whether the
-  // vendor actually received this submission before failing) -- this only
-  // changes an unparseable response from a raw 500 into the same clean 502
-  // every other failure here already gets, not what a 502 then implies.
+  // uncaught 500 instead of this function's own intended 502.
   const data = await response.json().catch(() => null);
-  if (!response.ok || !data?.SubmissionId) {
-    throw new HttpError(data?.StatusMessage || '1099 e-filing transmission failed', 502);
+  // A 207 (multi-status) or a 200 that still lists errors for the record means
+  // the submission is not good to transmit.
+  const recordErrored = data?.Errors?.length || (Array.isArray(data?.Form1099Records) ? data.Form1099Records.some((r) => r?.Errors?.length) : data?.Form1099Records?.ErrorRecords?.length);
+  if (!response.ok || !data?.SubmissionId || recordErrored) {
+    throw new HttpError(vendorErrorMessage(data, '1099 e-filing submission could not be created'), 502);
   }
   return data.SubmissionId;
+}
+
+// The federal statuses that mean the vendor has taken the submission for the IRS.
+const TAX_1099_TRANSMITTED_STATUSES = new Set(['TRANSMITTED', 'SENT_TO_AGENCY', 'ACCEPTED']);
+
+// Transmits a created submission (all its records: only the SubmissionId is
+// sent). Resolves only when the vendor reports it transmitted; anything else is
+// an error, so the form is never called filed on a guess. "Once a form is
+// transmitted, it cannot be edited or deleted" (the vendor's Transmit page).
+export async function transmitTax1099Submission(env, accessToken, submissionId) {
+  const response = await fetch(`${TAX_1099_EFILING_API_BASE}/Form1099/transmit`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json', ...tax1099EfilingDomainHeaders(env) },
+    body: JSON.stringify({ SubmissionId: submissionId }),
+  });
+  const data = await response.json().catch(() => null);
+  const records = Array.isArray(data?.Form1099Records) ? data.Form1099Records : [];
+  const statuses = records.map((r) => r?.FederalStatus?.Status);
+  if (!response.ok || records.length === 0 || !statuses.every((status) => TAX_1099_TRANSMITTED_STATUSES.has(status))) {
+    const detail = records.map((r) => r?.FederalStatus?.Message).find(Boolean);
+    throw new HttpError(detail || vendorErrorMessage(data, '1099 e-filing transmission failed'), 502);
+  }
 }
 
 // GET returns the current user's combined gross-income summary (higgles
@@ -1301,7 +1372,7 @@ async function transmitTax1099Form(env, { form, payeeEmail, payeeTaxId }) {
 // with no seller profile yet just gets sellerPayoutCents: 0, the same as
 // any other builder who's never sold anything.
 // #2082: the admin-forms approve/file/void trio fires real outbound
-// 1099-e-filing-vendor calls (/file, via transmitTax1099Form) on the shared
+// 1099-e-filing-vendor calls (/file, via createTax1099Submission and transmitTax1099Submission) on the shared
 // TAX_1099_EFILING credentials, the same "real outbound vendor call on a
 // shared key" shape STRIPE_RATE_LIMIT_MAX's own callers (handlePurchaseRefund
 // etc.) already guard — being requireAdmin-gated doesn't exempt it, same as
@@ -1454,7 +1525,7 @@ export async function handleTax(request, env, db, route, url) {
   // tax1099EfilingConfigured (to have somewhere to send it) — same
   // guarded-secret 503 as every other unconfigured vendor integration
   // here, not a silent no-op.
-  // #1410: transmitTax1099Form is a real, irreversible outbound call to
+  // #1410: transmitting is a real, irreversible outbound call to
   // the e-filing vendor -- a status='approved' guard on the UPDATE
   // *after* that call only serializes the database row, not the external
   // side effect, so two concurrent /file requests could both pass the
@@ -1494,10 +1565,23 @@ export async function handleTax(request, env, db, route, url) {
       WHERE form_id = ? AND status = 'approved'
     `).bind(claimedAt, formId).run();
     if (claim.meta.changes === 0) throw new HttpError('Tax form was no longer approved', 409);
-    let filingReference;
+    // #3517: Create, then Transmit. The submission id Create returns is stored
+    // before Transmit is tried, so a retry after a failed or interrupted Transmit
+    // sends that same submission rather than creating a second one. Nothing is
+    // transmitted by Create, so a failure before Transmit never reaches the IRS.
+    let filingReference = form.efiling_submission_id;
     try {
       const payeeTaxId = await decryptTaxIdPayload(env, form.payee_tax_id_encrypted);
-      filingReference = await transmitTax1099Form(env, { form, payeeEmail: form.payee_email, payeeTaxId });
+      const accessToken = await fetchTax1099EfilingToken(env);
+      if (!filingReference) {
+        filingReference = await createTax1099Submission(env, accessToken, { form, payeeEmail: form.payee_email, payeeTaxId });
+        const stored = await db.prepare(`
+          UPDATE tax_1099_forms SET efiling_submission_id = ?, updated_at = ?
+          WHERE form_id = ? AND status = 'filing'
+        `).bind(filingReference, new Date().toISOString(), formId).run();
+        if (stored.meta.changes === 0) throw new HttpError('Tax form claim was lost before its submission could be recorded', 409);
+      }
+      await transmitTax1099Submission(env, accessToken, filingReference);
     } catch (err) {
       await db.prepare(`
         UPDATE tax_1099_forms SET status = 'approved', updated_at = ?
