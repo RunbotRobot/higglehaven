@@ -10015,10 +10015,25 @@ named `authentication` rather than `authorization`. Still, no session has
 had real Sandbox credentials to exercise this against the actual API — treat
 it as doc-verified, not call-verified, until the owner runs a real Sandbox
 filing through it. The two host consts (`TAX_1099_EFILING_TOKEN_URL`/
-`TAX_1099_EFILING_API_BASE`) are hardcoded to TaxBandits' Sandbox hosts;
-switching to Live also requires TaxBandits to whitelist this Worker's
-outbound IP(s), which needs confirming with their support for a serverless/
-edge deployment (no single static egress IP).
+`TAX_1099_EFILING_API_BASE`) are hardcoded to TaxBandits' Sandbox hosts.
+
+**Domain whitelisting (#3517).** The vendor's Live API only accepts whitelisted
+sources, and a Worker has no fixed outbound IP, so whitelisting is by *domain*
+(confirmed by the vendor's developer support, 2026-11-11): in the vendor console
+(Settings > IP/Domain Whitelisting > Add Domain) they generate a "Domain
+Reference Id", which has to be sent in the `Referer` header of every call, on
+both the OAuth URL and the API URL. It is the optional Worker secret
+`TAX_1099_EFILING_DOMAIN_REFERENCE_ID`: when set, `fetchTax1099EfilingToken` and
+`transmitTax1099Form` send it as `Referer` (and so does the admin connection
+test); it is never logged or returned. It is optional in the Sandbox
+(whitelisting is self-serve there) and required once the host pair is switched
+to Live (`TAX_1099_EFILING_IS_LIVE`): Live without it answers `503` ("...domain
+whitelisting reference is not configured on this server yet."). Not yet learned
+from a real call: what a blocked request returns, what format the domain is
+entered in, and how the Referer value is matched. A Worker's outbound `fetch`
+delivers a caller-set `Referer` (checked against a local echo server under
+workerd); the first Sandbox call with whitelisting switched on is the check on
+the production edge.
 
 #### Testing note
 

@@ -1142,14 +1142,41 @@ function tax1099EfilingConfigured(env) {
 
 // Sandbox hosts (a free, separate developer account signed up for at
 // sandbox.taxbandits.com — distinct from the regular taxbandits.com filing
-// account used to actually e-file). Once the owner is certified for Live
-// (which also requires TaxBandits to whitelist this Worker's outbound IPs —
-// confirm with TaxBandits support how that works for a Cloudflare Workers
-// deployment, since it has no single static egress IP), swap these two for
-// the Live hosts: 'https://oauth.expressauth.net/v2/tbsauth' and
-// 'https://api.taxbandits.com/v1.7.3'.
+// account used to actually e-file). Once the owner is certified for Live,
+// swap these two for the Live hosts ('https://oauth.expressauth.net/v2/tbsauth'
+// and the matching Live API host) and set TAX_1099_EFILING_IS_LIVE below.
+//
+// #3517: whitelisting is by domain, not IP. A Worker has no fixed outbound IP,
+// and TaxBandits' developer support confirmed (2026-11-11) that domain
+// whitelisting is the path for a serverless deployment. In their console
+// (Settings > IP/Domain Whitelisting > Add Domain) they generate a "Domain
+// Reference Id", which has to be sent in the `Referer` header of every call, on
+// both the OAuth and the API URLs (developer.taxbandits.com/docs/Whitelisting/
+// DomainWhitelisting). It is the optional Worker secret
+// TAX_1099_EFILING_DOMAIN_REFERENCE_ID: optional in the Sandbox (whitelisting is
+// self-serve there), required for Live. Treated like a credential: never logged,
+// never returned. NOT YET LEARNED from a real call: what a blocked request
+// returns (status, code, message), what format the domain is entered in, or how
+// the Referer value is matched; handle whatever the first Sandbox call with
+// whitelisting switched on shows (see fetchTax1099EfilingToken's and
+// transmitTax1099Form's !response.ok branches, which surface the vendor's own
+// StatusMessage).
 const TAX_1099_EFILING_TOKEN_URL = 'https://testoauth.expressauth.net/v2/tbsauth';
 const TAX_1099_EFILING_API_BASE = 'https://testapi.taxbandits.com/v1.7.3';
+// Switched together with the two hosts above (a pair, not independently).
+const TAX_1099_EFILING_IS_LIVE = false;
+
+// The Referer header the vendor's domain whitelisting needs, or nothing when no
+// Domain Reference Id is configured. Live refuses to run without one (a clear
+// admin-facing 503) rather than make a call the vendor will block.
+export function tax1099EfilingDomainHeaders(env, live = TAX_1099_EFILING_IS_LIVE) {
+  const referenceId = env.TAX_1099_EFILING_DOMAIN_REFERENCE_ID;
+  if (referenceId) return { referer: referenceId };
+  if (live) {
+    throw new HttpError('1099 e-filing is set to Live but its domain whitelisting reference is not configured on this server yet.', 503);
+  }
+  return {};
+}
 
 function base64UrlEncode(bytes) {
   let binary = '';
@@ -1183,7 +1210,7 @@ async function fetchTax1099EfilingToken(env) {
   );
   const signature = await crypto.subtle.sign('HMAC', key, encoder.encode(unsigned));
   const jws = `${unsigned}.${base64UrlEncode(new Uint8Array(signature))}`;
-  const response = await fetch(TAX_1099_EFILING_TOKEN_URL, { headers: { authentication: jws } });
+  const response = await fetch(TAX_1099_EFILING_TOKEN_URL, { headers: { authentication: jws, ...tax1099EfilingDomainHeaders(env) } });
   // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
   // upstream gateway error page makes response.json() itself throw before
   // the !response.ok check below ever runs, otherwise surfacing as an
@@ -1248,7 +1275,7 @@ async function transmitTax1099Form(env, { form, payeeEmail, payeeTaxId }) {
   };
   const response = await fetch(`${TAX_1099_EFILING_API_BASE}/${endpoint}/Create`, {
     method: 'POST',
-    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json' },
+    headers: { authorization: `Bearer ${accessToken}`, 'content-type': 'application/json', ...tax1099EfilingDomainHeaders(env) },
     body: JSON.stringify(body),
   });
   // #2486: .catch(() => null), same as tripoRequest/tripoUploadFile -- an
