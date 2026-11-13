@@ -1005,7 +1005,7 @@ async function generateConceptImageBytes(env, prompt) {
   // runs, otherwise surfacing as an uncaught 500 instead of this function's
   // own intended 502.
   const data = await response.json().catch(() => null);
-  // #1548: same response-shape validation fetchTax1099EfilingToken/transmitTax1099Form
+  // #1548: same response-shape validation fetchTax1099EfilingToken/transmitTax1099Submission
   // already do for their own third-party JSON -- without it, a 200 response with an
   // unexpected shape throws an uncaught TypeError instead of a clean 502.
   if (!response.ok || !data?.data?.[0]?.b64_json) {

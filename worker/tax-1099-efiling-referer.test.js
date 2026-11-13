@@ -35,9 +35,13 @@ beforeAll(async () => {
       vendorCalls.push({ kind: 'token', referer: headers.get('referer') });
       return new Response(JSON.stringify({ AccessToken: 'test-access-token' }), { status: 200 });
     }
-    if (url.includes('/Create')) {
+    if (/\/v2\.0\.0\/(Form1099NEC\/Create|form1099K\/create)$/i.test(url)) {
       vendorCalls.push({ kind: 'create', referer: headers.get('referer') });
       return new Response(JSON.stringify({ SubmissionId: 'sub-referer' }), { status: 200 });
+    }
+    if (/\/v2\.0\.0\/Form1099\/transmit$/i.test(url)) {
+      vendorCalls.push({ kind: 'transmit', referer: headers.get('referer') });
+      return new Response(JSON.stringify({ Form1099Records: [{ FederalStatus: { Status: 'TRANSMITTED' } }] }), { status: 200 });
     }
     return originalFetch(input, init);
   };
@@ -83,18 +87,18 @@ describe('domain whitelisting Referer on the e-filing vendor calls (#3517)', () 
     vendorCalls = [];
     const filed = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
     expect(filed.response.status).toBe(200);
-    expect(vendorCalls.map((c) => c.kind)).toEqual(['token', 'create']);
+    expect(vendorCalls.map((c) => c.kind)).toEqual(['token', 'create', 'transmit']);
     expect(vendorCalls.every((c) => c.referer === null)).toBe(true);
   });
 
-  it('sends the Domain Reference Id as Referer on both the token request and the filing call', async () => {
+  it('sends the Domain Reference Id as Referer on the token request and on both the Create and Transmit calls', async () => {
     env.TAX_1099_EFILING_DOMAIN_REFERENCE_ID = REFERENCE_ID;
     const formId = await approvedForm('tax-1099-referer-set');
     vendorCalls = [];
     const filed = await api(`/tax/admin-forms/${formId}/file`, adminSession({ method: 'POST' }));
     expect(filed.response.status).toBe(200);
-    expect(vendorCalls.map((c) => c.kind)).toEqual(['token', 'create']);
-    expect(vendorCalls.map((c) => c.referer)).toEqual([REFERENCE_ID, REFERENCE_ID]);
+    expect(vendorCalls.map((c) => c.kind)).toEqual(['token', 'create', 'transmit']);
+    expect(vendorCalls.map((c) => c.referer)).toEqual([REFERENCE_ID, REFERENCE_ID, REFERENCE_ID]);
     // Treated like a credential: never returned to the admin.
     expect(JSON.stringify(filed.body)).not.toContain(REFERENCE_ID);
   });

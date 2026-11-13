@@ -761,6 +761,7 @@
     },
     "tax_1099_forms": {
       "approved_at": "TEXT|0||0",
+      "efiling_submission_id": "TEXT|0||0",
       "filed_at": "TEXT|0||0",
       "filing_reference": "TEXT|0||0",
       "form_id": "TEXT|0||1",

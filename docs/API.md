@@ -9970,7 +9970,19 @@ uses for auction bids/purchase claims). `404` for an unknown `formId`.
 
 `POST /:formId/file` transitions an `"approved"` form to `"filed"`,
 transmitting it to TaxBandits and stamping `filedAt`/`filingReference`
-(the vendor's own submission id) on success. Decrypts the form's own
+(the vendor's own submission id) on success. **Two vendor calls (#3517, API
+v2.0.0):** Create makes a submission that sits at status `CREATED` (nothing
+reaches the IRS), then a separate Transmit sends it. The submission id Create
+returns is stored (`efiling_submission_id`, migration 0225) before Transmit is
+tried, and the form is called `"filed"` only once the vendor reports the
+submission transmitted (`TRANSMITTED`, `SENT_TO_AGENCY` or `ACCEPTED`). If Create
+reports an error, or Transmit fails or answers with any other status, the form
+goes back to `"approved"` with a `502` carrying the vendor's own message, and
+nothing is marked filed. A retry after a failed Transmit sends the stored
+submission instead of creating a second one (a form whose stored submission can
+never be transmitted, for example one the vendor keeps rejecting, is voided; the
+untransmitted submission it leaves at the vendor is not deleted from here).
+Decrypts the form's own
 `payee_tax_id_encrypted` snapshot (set at `/approve`, not a live lookup —
 see above), so filing still works even if the payee's account has since
 been deleted. Requires
@@ -10004,7 +10016,8 @@ draft afterward — same locked-terminal-state behavior as `"approved"`/
 `"filed"` in `upsertTax1099Draft`'s own guard.
 
 **Unverified against a live vendor**: the OAuth2/JWT-signed request shape
-(`worker/index.js`'s `fetchTax1099EfilingToken`/`transmitTax1099Form`) has
+(`worker/lib/seller-payouts-tax.js`'s `fetchTax1099EfilingToken` and the Create and
+Transmit calls) has
 been checked against TaxBandits' published developer docs a second time
 (2026-09) — that pass found and fixed three bugs: `TAX_1099_EFILING_API_BASE`
 pointed at the Sandbox *console* host instead of the Sandbox *API* host
@@ -10015,7 +10028,18 @@ named `authentication` rather than `authorization`. Still, no session has
 had real Sandbox credentials to exercise this against the actual API — treat
 it as doc-verified, not call-verified, until the owner runs a real Sandbox
 filing through it. The two host consts (`TAX_1099_EFILING_TOKEN_URL`/
-`TAX_1099_EFILING_API_BASE`) are hardcoded to TaxBandits' Sandbox hosts.
+`TAX_1099_EFILING_API_BASE`) are hardcoded to TaxBandits' Sandbox hosts, API
+version v2.0.0 (#3517; tax year 2026 is v2.0.0 only; the Live pair is
+`https://oauth.expressauth.net/v2/tbsauth` and `https://api.taxbandits.com/v2.0.0`).
+The v2.0.0 Create body follows the vendor's v2.0.0 Create pages (payer under
+`SubmissionManifest.ReturnHeader.Business` with `TINDetails`, a `Recipient`, the
+amount in `NECFormData.NEC` / `KFormData.GrossAmt`). Assumptions to confirm on the
+first real Sandbox filing: a payee's legal name is split on its last space into
+`FirstNm`/`LastNm` (an unsplittable name is refused with a `400` before any vendor
+call); a W-8BEN payee is sent as `TINType: "NA"` with no TIN; the payer's address
+and contact are not sent; the OAuth scope Transmit needs is not asked for
+explicitly. Create validates before anything is sent, so a wrong field name comes
+back as a vendor error from Create, not as a bad filing.
 
 **Domain whitelisting (#3517).** The vendor's Live API only accepts whitelisted
 sources, and a Worker has no fixed outbound IP, so whitelisting is by *domain*
@@ -10024,7 +10048,7 @@ sources, and a Worker has no fixed outbound IP, so whitelisting is by *domain*
 Reference Id", which has to be sent in the `Referer` header of every call, on
 both the OAuth URL and the API URL. It is the optional Worker secret
 `TAX_1099_EFILING_DOMAIN_REFERENCE_ID`: when set, `fetchTax1099EfilingToken` and
-`transmitTax1099Form` send it as `Referer` (and so does the admin connection
+`createTax1099Submission` and `transmitTax1099Submission` send it as `Referer` (and so does the admin connection
 test); it is never logged or returned. It is optional in the Sandbox
 (whitelisting is self-serve there) and required once the host pair is switched
 to Live (`TAX_1099_EFILING_IS_LIVE`): Live without it answers `503` ("...domain
