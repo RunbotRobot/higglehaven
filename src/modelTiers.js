@@ -44,6 +44,7 @@ import {
   SRGBColorSpace,
   UnsignedByteType,
   Vector3,
+  CanvasTexture,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { countTriangles, isSkinnedGeometry, simplifyGeometryOnePassSteps } from './geometrySimplify.js';
@@ -176,6 +177,27 @@ function readImagePixelsWithCanvas(image) {
   }
 }
 
+// #3521: a canvas holding RGBA8 pixels, or null where no canvas exists. The
+// glTF exporter merges a separate metalness map and roughness map by drawing
+// both into a canvas (`drawImage`), which a DataTexture's raw pixel array cannot
+// be, so a downsized texture has to carry something drawable where the browser
+// can make one.
+function canvasImageFromPixels(data, width, height) {
+  let canvas = null;
+  if (typeof document !== 'undefined') canvas = document.createElement('canvas');
+  else if (typeof OffscreenCanvas !== 'undefined') canvas = new OffscreenCanvas(width, height);
+  if (!canvas) return null;
+  try {
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(data), width, height), 0, 0);
+    return canvas;
+  } catch {
+    return null;
+  }
+}
+
 // RGBA8 pixels of a texture, row 0 first, or null if unreadable. A
 // DataTexture-style image ({data, width, height}) is read directly, with no
 // canvas; anything else goes through readImagePixels.
@@ -238,7 +260,7 @@ function* boxDownsample(pixels, newWidth, newHeight) {
 
 // A smaller copy of a texture, or the texture itself when it is already
 // small enough or its pixels cannot be read.
-function* downsizeTexture(texture, maxSize, getPixels) {
+function* downsizeTexture(texture, maxSize, getPixels, makeImage) {
   const pixels = getPixels(texture);
   yield; // #3483: reading a large image back is a task of its own
   if (!pixels) return texture;
@@ -247,7 +269,10 @@ function* downsizeTexture(texture, maxSize, getPixels) {
   const scale = maxSize / longest;
   const newWidth = Math.max(1, Math.floor(pixels.width * scale));
   const newHeight = Math.max(1, Math.floor(pixels.height * scale));
-  const out = new DataTexture(yield* boxDownsample(pixels, newWidth, newHeight), newWidth, newHeight, RGBAFormat, UnsignedByteType);
+  const data = yield* boxDownsample(pixels, newWidth, newHeight);
+  // Drawable where a canvas exists (#3521), raw pixels otherwise (node, workers).
+  const image = makeImage(data, newWidth, newHeight);
+  const out = image ? new CanvasTexture(image) : new DataTexture(data, newWidth, newHeight, RGBAFormat, UnsignedByteType);
   out.name = texture.name;
   out.colorSpace = texture.colorSpace;
   out.wrapS = texture.wrapS;
@@ -268,14 +293,14 @@ function* downsizeTexture(texture, maxSize, getPixels) {
 // A copy of the material with every over-sized texture replaced by a smaller
 // one, or the material itself when nothing needed shrinking. Cached so
 // meshes that share a material keep sharing it in the mid model.
-function* downsizeMaterial(material, maxSize, getPixels, cache) {
+function* downsizeMaterial(material, maxSize, getPixels, cache, makeImage) {
   if (!material) return material;
   if (cache.has(material)) return cache.get(material);
   let replaced = null;
   for (const key of Object.keys(material)) {
     const value = material[key];
     if (!value || !value.isTexture) continue;
-    const smaller = yield* downsizeTexture(value, maxSize, getPixels);
+    const smaller = yield* downsizeTexture(value, maxSize, getPixels, makeImage);
     if (smaller !== value) {
       if (!replaced) replaced = material.clone();
       replaced[key] = smaller;
@@ -289,6 +314,7 @@ function* downsizeMaterial(material, maxSize, getPixels, cache) {
 // ---- Mid ----
 
 function* buildMid(model, meshes, options, getPixels) {
+  const makeImage = options.makeImage ?? canvasImageFromPixels;
   const total = meshes.reduce((sum, mesh) => sum + countTriangles(mesh.geometry), 0);
   const target = clamp(Math.round(total * MID_TRIANGLE_FRACTION), MID_MIN_TRIANGLES, MID_MAX_TRIANGLES);
 
@@ -314,7 +340,7 @@ function* buildMid(model, meshes, options, getPixels) {
     }
     const materials = Array.isArray(cloneMesh.material) ? cloneMesh.material : [cloneMesh.material];
     const resized = [];
-    for (const material of materials) resized.push(yield* downsizeMaterial(material, maxTextureSize, getPixels, materialCache));
+    for (const material of materials) resized.push(yield* downsizeMaterial(material, maxTextureSize, getPixels, materialCache, makeImage));
     if (resized.some((material, index) => material !== materials[index])) {
       cloneMesh.material = Array.isArray(cloneMesh.material) ? resized : resized[0];
       changed = true;
@@ -554,6 +580,8 @@ function triangleCountOf(object) {
 //
 // options.readImagePixels(image) -> { data, width, height } | null reads a
 // decoded image's RGBA8 pixels (the default uses a canvas where one exists);
+// options.makeImage(data, width, height) -> a drawable image or null makes the
+// image a downsized texture carries (the default is a canvas where one exists);
 // options.midTextureMaxSize overrides MID_TEXTURE_MAX_SIZE.
 export function* modelTierSteps(model, options = {}) {
   const meshes = collectMeshes(model);
