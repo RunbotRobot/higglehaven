@@ -17,6 +17,23 @@ export const POLL_SECONDS_MAX = 30;
 export const SHIFT_SECONDS_DEFAULT = 55 * 60;
 
 // `--name juniper` (or `--name assistant-juniper`) -> the login name.
+// #3523: the text of a reply, summary or answer is typed into a shell command
+// line, and the permission rules match the command text. So that a stranger's
+// words can never become part of a command, a --text is one line of at most
+// TEXT_MAX characters made only of letters, digits, spaces and plain
+// punctuation: never a double quote, dollar sign, backtick, backslash or line
+// break (the characters that can end the quotes or start a substitution).
+// Returns null when the text is fine, otherwise one plain sentence saying why.
+export const TEXT_MAX = 1000;
+export function checkCommandText(text) {
+  const value = String(text ?? '');
+  if (value.length > TEXT_MAX) return `--text is too long (${value.length} characters; at most ${TEXT_MAX})`;
+  if (!/^[\p{L}\p{N} .,;:!?'()/-]+$/u.test(value)) {
+    return 'the text may only use letters, digits, spaces and . , ; : ! ? \' ( ) / - on one line; never a double quote, dollar sign, backtick, backslash or line break';
+  }
+  return null;
+}
+
 export function loginNameFor(name) {
   const lower = String(name || '').trim().toLowerCase();
   const login = lower.startsWith('assistant-') ? lower : `assistant-${lower}`;
