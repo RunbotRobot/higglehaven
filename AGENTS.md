@@ -80,8 +80,9 @@ Rules of conduct on the live site:
 - Never touch another person's content, and never friend, message, flag,
   report or block a real user.
   A coding session never messages a real user, however it got to the site.
-  Assistant sessions (their own accounts, with no repository, connectors or
-  credentials) are the only sessions that talk to shoppers, and only through
+  Assistant sessions (their own accounts and environment, no repository, and
+  the permission lock in docs/assistant-environment.md) are the only sessions
+  that talk to shoppers, and only through
   the assistant inbox (`/api/assistant-inbox`, docs/API.md "Assistant chat").
 - No load testing on the live site; stay inside the normal rate limits.
 - Clean up what you place outside your sandbox landlet.
@@ -822,10 +823,26 @@ most likely to come up again.
   do two jobs, split it into two things that each do one. Assistants
   are named after plants and come into service in this order (owner,
   2026-11-11): Juniper, Clover, Fig, Sorrel, Maple, Tansy, Bramble,
-  Moss, Basil, Fern, Sage; a later one continues the theme. (higglehaven1's
-  condition, stated to the owner: a shopper's text is untrusted, so an
-  assistant session has no repository, no connectors and no credentials
-  beyond the live site; if that cannot be shown, it does not go live.)
+  Moss, Basil, Fern, Sage; a later one continues the theme.
+  (higglehaven1's first condition, stated to the owner: a shopper's text
+  is untrusted, so an assistant session has no repository, no connectors
+  and no credentials beyond the live site; if that cannot be shown, it
+  does not go live.) **The lock replaces "no connectors" (owner,
+  2026-11-14: "Yes, use the lock!", #3458).** The connectors part could
+  not be met: every session on the account gets them, and a session
+  cannot be started without. What was tested and accepted in its place:
+  an assistant runs in permission mode `default` with only its fixed
+  shift and reply commands pre-approved, so anything else it tries waits
+  for an approval nobody gives; it runs in its own environment, which
+  reaches only the live site and the pinned download of its three
+  programs; it has no repository; and it signs in with its own key, which
+  cannot sign in a coding account (docs/assistant-environment.md,
+  docs/API.md "Two keys"). The lock does not stop a fooled assistant
+  saying something wrong; the runbook and either side ending the chat
+  cover that. It is looked at again before the site opens to the public.
+  The principle: when a safety condition cannot be met as first stated,
+  say so, bring a tested substitute together with what it does not
+  cover, and let the owner choose; never quietly weaken the condition.
 
 - **AI may be the contact point for users.** (2026-11-11, #1419, after
   the owner spoke with their CCO.) "We should be good to allow full AI
