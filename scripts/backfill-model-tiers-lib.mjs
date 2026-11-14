@@ -22,10 +22,20 @@
 // or a seller replacing a model, cannot overwrite a newer value.
 import { validateGlb, MAX_MODEL_BYTES } from '../worker/lib/storage.js';
 
-// The only shape of model reference the script will build SQL from. Every
-// value interpolated into a statement has matched this first.
+// The shape of a stored tier (and of any model uploaded since models were
+// content-addressed). Every tier URL interpolated into a statement has matched
+// this first; a source model may also be a legacy name (below).
 export const MODEL_URL_PATTERN = /^\/uploads\/models\/[0-9a-f]{64}\.glb$/;
 export const MODEL_KEY_PATTERN = /^models\/[0-9a-f]{64}\.glb$/;
+// #3522: models uploaded before models were content-addressed are stored under
+// a random UUID (models/<uuid>.glb) and are still what some products point at
+// (the owner's brick among them). They are valid SOURCES: the script may read
+// them and key an UPDATE on them. A TIER the script stores is always
+// content-addressed, so MODEL_URL_PATTERN above still guards every tier URL.
+export const LEGACY_MODEL_URL_PATTERN = /^\/uploads\/models\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.glb$/;
+export function isSourceModelUrl(value) {
+  return typeof value === 'string' && (MODEL_URL_PATTERN.test(value) || LEGACY_MODEL_URL_PATTERN.test(value));
+}
 export const GLB_CONTENT_TYPE = 'model/gltf-binary';
 
 export const DEFAULT_DATABASE = 'higglehaven-db';
@@ -45,7 +55,7 @@ SELECT model_url, category FROM (
 ) ORDER BY model_url`.trim();
 
 export function modelUrlToKey(modelUrl) {
-  if (!MODEL_URL_PATTERN.test(modelUrl)) throw new Error(`Not a stored model URL: ${modelUrl}`);
+  if (!isSourceModelUrl(modelUrl)) throw new Error(`Not a stored model URL: ${modelUrl}`);
   return modelUrl.slice('/uploads/'.length);
 }
 
@@ -66,13 +76,26 @@ export async function sha256Hex(bytes) {
 // being downloaded; a model shared with a non-avatar row is kept (the
 // generator itself declines anything skinned). Rows whose URL is not a stored
 // model (a hand-edited or legacy value) are reported, not guessed at.
+// A built-in model is a static file shipped with the app (/models/brick.glb and
+// the like), not an upload (#3522). It is not read from the bucket and the
+// tier columns only hold /uploads/ URLs, so the script leaves it alone on
+// purpose: the viewer builds its simpler versions in the browser from the full
+// file, exactly as for any product without stored ones (src/world/models.js),
+// so it is still drawn as itself at every distance.
+export const BUILT_IN_MODEL_PATTERN = /^\/models\/[A-Za-z0-9_-]+\.glb$/;
+
 export function groupCandidates(rows) {
   const byUrl = new Map();
   const unrecognised = [];
+  const builtIn = [];
   for (const row of rows) {
     const modelUrl = row.model_url ?? row.modelUrl;
     const category = row.category ?? null;
-    if (!MODEL_URL_PATTERN.test(modelUrl)) {
+    if (BUILT_IN_MODEL_PATTERN.test(modelUrl)) {
+      if (!builtIn.includes(modelUrl)) builtIn.push(modelUrl);
+      continue;
+    }
+    if (!isSourceModelUrl(modelUrl)) {
       if (!unrecognised.includes(modelUrl)) unrecognised.push(modelUrl);
       continue;
     }
@@ -82,8 +105,21 @@ export function groupCandidates(rows) {
   }
   return {
     candidates: [...byUrl.values()].sort((a, b) => (a.modelUrl < b.modelUrl ? -1 : 1)),
+    builtIn: builtIn.sort(),
     unrecognised,
   };
+}
+
+// Every value interpolated into a statement is checked here first: the model
+// is a stored model URL (content-addressed or a legacy UUID name) and a tier is
+// a content-addressed one, so none can carry SQL.
+function assertSafeForSql(modelUrl, midUrl, farUrl) {
+  if (!isSourceModelUrl(modelUrl)) throw new Error(`Refusing to build SQL from ${String(modelUrl)}`);
+  for (const value of [midUrl, farUrl]) {
+    if (value !== null && value !== undefined && !MODEL_URL_PATTERN.test(value)) {
+      throw new Error(`Refusing to build SQL from ${String(value)}`);
+    }
+  }
 }
 
 // The UPDATE statements that record a model's tiers. Guarded on the model
@@ -92,11 +128,7 @@ export function groupCandidates(rows) {
 // brought its own tiers is never overwritten. Every interpolated value is a
 // URL that matched MODEL_URL_PATTERN, so none can carry SQL.
 export function buildRecordStatements(modelUrl, { midUrl, farUrl }) {
-  for (const value of [modelUrl, midUrl, farUrl]) {
-    if (value !== null && value !== undefined && !MODEL_URL_PATTERN.test(value)) {
-      throw new Error(`Refusing to build SQL from ${String(value)}`);
-    }
-  }
+  assertSafeForSql(modelUrl, midUrl, farUrl);
   const quote = (value) => (value ? `'${value}'` : 'NULL');
   return ['catalog_templates', 'products'].map((table) => (
     `UPDATE ${table} SET model_mid_url = ${quote(midUrl)}, model_far_url = ${quote(farUrl)} `
@@ -109,11 +141,7 @@ export function buildRecordStatements(modelUrl, { midUrl, farUrl }) {
 // target (the local one omits it), so the count is read back instead; zero
 // means a newer value was already there and nothing was recorded.
 export function buildRecordedCountStatement(modelUrl, { midUrl, farUrl }) {
-  for (const value of [modelUrl, midUrl, farUrl]) {
-    if (value !== null && value !== undefined && !MODEL_URL_PATTERN.test(value)) {
-      throw new Error(`Refusing to build SQL from ${String(value)}`);
-    }
-  }
+  assertSafeForSql(modelUrl, midUrl, farUrl);
   const quote = (value) => (value ? `'${value}'` : 'NULL');
   const count = (table) => (
     `(SELECT COUNT(*) FROM ${table} WHERE model_url = '${modelUrl}' `

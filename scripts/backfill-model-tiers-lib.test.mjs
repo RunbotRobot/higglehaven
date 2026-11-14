@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CANDIDATES_SQL, MODEL_URL_PATTERN, buildRecordStatements, buildRecordedCountStatement, formatSummary, groupCandidates,
+  CANDIDATES_SQL, LEGACY_MODEL_URL_PATTERN, MODEL_URL_PATTERN, buildRecordStatements, buildRecordedCountStatement, formatSummary, groupCandidates,
   keyToModelUrl, modelUrlToKey, parseArgs, runBackfill, sha256Hex, tierProblem,
 } from './backfill-model-tiers-lib.mjs';
 
@@ -74,7 +74,7 @@ describe('selecting the models to backfill (#3415)', () => {
     const a = `/uploads/models/${'a'.repeat(64)}.glb`;
     const b = `/uploads/models/${'b'.repeat(64)}.glb`;
     const c = `/uploads/models/${'c'.repeat(64)}.glb`;
-    const { candidates, unrecognised } = groupCandidates([
+    const { candidates, unrecognised, builtIn } = groupCandidates([
       { model_url: b, category: 'furniture' },
       { model_url: a, category: 'avatar' },
       { model_url: a, category: 'avatar' },
@@ -87,7 +87,23 @@ describe('selecting the models to backfill (#3415)', () => {
       { modelUrl: b, avatarOnly: false },
       { modelUrl: c, avatarOnly: false },
     ]);
-    expect(unrecognised).toEqual(['/models/brick.glb']);
+    // A built-in static model is reported on its own, not as an unrecognised value (#3522).
+    expect(builtIn).toEqual(['/models/brick.glb']);
+    expect(unrecognised).toEqual([]);
+  });
+
+  it('keeps an upload stored under an older UUID name, and still reports a value that is neither', () => {
+    const legacy = '/uploads/models/121033e5-790f-4a22-9353-ecf9735b158a.glb';
+    const { candidates, unrecognised, builtIn } = groupCandidates([
+      { model_url: legacy, category: 'building-material' },
+      { model_url: legacy, category: 'building-material' },
+      { model_url: '/uploads/models/not-a-uuid.glb', category: 'decor' },
+      { model_url: '/models/chair.glb', category: 'furniture' },
+      { model_url: '/models/tree.glb', category: 'furniture' },
+    ]);
+    expect(candidates).toEqual([{ modelUrl: legacy, avatarOnly: false }]);
+    expect(unrecognised).toEqual(['/uploads/models/not-a-uuid.glb']);
+    expect(builtIn).toEqual(['/models/chair.glb', '/models/tree.glb']);
   });
 
   it('selects only rows with a model and no tiers, from both tables', () => {
@@ -104,6 +120,19 @@ describe('selecting the models to backfill (#3415)', () => {
     expect(() => modelUrlToKey('/uploads/models/../etc.glb')).toThrow();
     expect(() => keyToModelUrl('models/short.glb')).toThrow();
     expect(MODEL_URL_PATTERN.test(`${url}'; DROP TABLE products; --`)).toBe(false);
+  });
+
+  it('reads a legacy-named upload by its key, but never accepts one as a tier or with SQL attached', () => {
+    const legacy = '/uploads/models/121033e5-790f-4a22-9353-ecf9735b158a.glb';
+    expect(modelUrlToKey(legacy)).toBe('models/121033e5-790f-4a22-9353-ecf9735b158a.glb');
+    expect(MODEL_URL_PATTERN.test(legacy)).toBe(false);
+    expect(LEGACY_MODEL_URL_PATTERN.test(`${legacy}'; DROP TABLE products; --`)).toBe(false);
+    expect(() => modelUrlToKey('/uploads/models/121033e5-790f-4a22-9353-ecf9735b158.glb')).toThrow();
+    const tier = `/uploads/models/${'b'.repeat(64)}.glb`;
+    const [statement] = buildRecordStatements(legacy, { midUrl: tier, farUrl: null });
+    expect(statement).toContain(`WHERE model_url = '${legacy}'`);
+    expect(() => buildRecordStatements(tier, { midUrl: legacy, farUrl: null })).toThrow(/Refusing/);
+    expect(() => buildRecordStatements(`${legacy}'; --`, { midUrl: tier, farUrl: null })).toThrow(/Refusing/);
   });
 });
 
@@ -177,6 +206,23 @@ describe('running the backfill (#3415)', () => {
     }
     expect(world.rows.products.find((row) => row.model_url === lamp).model_far_url).toMatch(MODEL_URL_PATTERN);
     expect(world.rows.products.some((row) => row.model_url === avatar && row.model_mid_url)).toBe(false);
+  });
+
+  it('gives an upload stored under an older UUID name its tiers, content-addressed (#3522)', async () => {
+    const world = makeWorld();
+    const legacy = '/uploads/models/121033e5-790f-4a22-9353-ecf9735b158a.glb';
+    const bytes = makeGlb(4000, 'brick');
+    world.objects.set(legacy.slice('/uploads/'.length), bytes);
+    for (const table of ['catalog_templates', 'products']) world.rows[table].push({ model_url: legacy, category: 'building-material', model_mid_url: null, model_far_url: null });
+    const { candidates } = groupCandidates(world.candidateRows());
+    expect(candidates).toHaveLength(1);
+    const summary = await runBackfill({ candidates, io: world.io(async (b) => halve(b)) });
+    expect(summary).toMatchObject({ modelsWithTiers: 1, tiersStored: 2, rowsRecorded: 2, failed: [] });
+    for (const row of [...world.rows.catalog_templates, ...world.rows.products]) {
+      expect(row.model_url).toBe(legacy);
+      expect(row.model_mid_url).toMatch(MODEL_URL_PATTERN);
+      expect(row.model_far_url).toMatch(MODEL_URL_PATTERN);
+    }
   });
 
   it('is idempotent: a second run finds nothing left to do and changes nothing', async () => {

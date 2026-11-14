@@ -77,7 +77,8 @@ process.on('exit', () => fs.rmSync(scratch, { recursive: true, force: true }));
 
 async function main() {
   const rows = runSql(CANDIDATES_SQL)[0].results;
-  const { candidates, unrecognised } = groupCandidates(rows);
+  const { candidates, unrecognised, builtIn } = groupCandidates(rows);
+  for (const url of builtIn) console.log(`Built-in model, no stored versions by design (the viewer builds them): ${url}`);
   for (const url of unrecognised) console.warn(`Not a stored model, left alone: ${url}`);
   console.log(`Target: ${options.mode} database "${options.database}", bucket "${options.bucket}"${options.dryRun ? ' (dry run)' : ''}`);
   console.log(`Products without tiers: ${rows.length} rows over ${candidates.length} distinct models`);
