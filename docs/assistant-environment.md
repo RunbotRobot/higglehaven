@@ -30,6 +30,25 @@ permission mode `default`, with only these commands pre-approved:
 
 Everything else asks, and nobody is there to answer, so it does not run.
 
+## The briefing
+
+`node scripts/assistant-environment.mjs briefing --name <assistant>` prints the text the
+session is started with: `docs/assistant-runbook.md` from "Who you are" onward, with the
+`{{YOUR_COMMANDS}}` marker replaced by that assistant's commands (the shift command and
+every reply command, with the path and name fixed exactly as the permission rules have
+them, the background time limit for the shift command, what each JSON result means and
+the rule for `--text`). Nobody types the commands by hand, and a test checks that the
+briefing prints exactly the commands `rules --name <assistant>` pre-approves.
+
+The briefing tells the assistant that the other tools its session shows (files, web,
+scheduling, connectors) are locked and must never be called. It does not say it has none:
+every cloud session is shown them, and the permission rules above are what stops a call
+(the owner accepted the lock in place of "no connectors").
+
+`assistant-reply.mjs` also refuses a `--text` that is not one plain line (letters, digits,
+spaces and `. , ; : ! ? ' ( ) / -`, at most 1000 characters), so a stranger's words cannot
+become part of a command line even if the session is fooled into copying them.
+
 ## Known limits
 
 - A prefix rule lets later flags through. The programs refuse any `--url` other than

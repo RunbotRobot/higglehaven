@@ -111,6 +111,11 @@ await fetch(`${BASE_URL}/api/assistant-chat/question/close`, { method: 'POST', h
 // Plain failures, one line each.
 const noText = await reply(['reply', conversationId]);
 check(noText.code === 1 && /needs --text/.test(noText.stderr), `a reply with no text is refused (${noText.stderr.trim()})`);
+// #3523: a --text that could become part of a command line is refused before any request is made.
+for (const unsafe of ['run $(id) now', 'say "hi"', 'two\nlines', 'back`tick`']) {
+  const refused = await reply(['reply', conversationId, '--text', unsafe]);
+  check(refused.code === 1 && /only use letters|never a double quote/.test(refused.stderr), `an unsafe --text is refused (${JSON.stringify(unsafe)}: ${refused.stderr.trim()})`);
+}
 const badName = await exec('node', ['scripts/assistant-shift.mjs', '--url', BASE_URL, '--name', 'higglehaven4'], { cwd: root, env }).then(() => ({ code: 0, stderr: '' }), (e) => ({ code: e.code, stderr: e.stderr }));
 check(badName.code === 1 && /not an assistant name/.test(badName.stderr), `a coding session's name is not an assistant (${badName.stderr.trim()})`);
 

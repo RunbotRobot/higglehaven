@@ -10478,14 +10478,24 @@ cookie or a header. `--url` defaults to the live site; a local server needs
   minutes) so the session simply runs it again. It costs no model time while it
   waits. A 5xx, a 429 or no answer is retried; five in a row, or any other
   refusal, exits 1 with one plain line on stderr.
-- `node scripts/assistant-reply.mjs --name juniper reply|end|escalate
+- `node scripts/assistant-reply.mjs --name juniper reply|end|escalate|handover
   <conversationId> [--text "..."]`: `reply` posts an answer, `end` ends the
   conversation, `escalate` files the team card (`--text` is the assistant's own
-  summary; the server adds the shopper's words in the quoted field).
+  summary; the server adds the shopper's words in the quoted field), `handover`
+  passes the conversation to another assistant who is on shift and free (the
+  server picks one and answers 409 if nobody is; the next assistant's shift
+  program prints it as `{ handover }`).
   `answer-question` and `escalate-question` do the same for a left question by its
   `questionId`, which the shift program prints as `{ question }` (#3448).
 
-Handing a conversation to another assistant is not here yet (#3448).
+`--text` is typed into a shell command line, so the program refuses it (before
+any request) unless it is one line of at most 1000 characters made only of
+letters, digits, spaces and `. , ; : ! ? ' ( ) / -`: never a double quote,
+dollar sign, backtick, backslash or line break. An assistant session does not
+run these from `scripts/`: the environment's setup script installs them, read-only
+and checksummed, in `/opt/assistant` (docs/assistant-environment.md), and
+`node scripts/assistant-environment.mjs briefing --name juniper` prints the
+briefing with those exact commands filled in.
 
 ## Frontend integration notes
 

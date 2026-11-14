@@ -11,12 +11,17 @@
 //   node scripts/assistant-environment.mjs rules --name juniper
 //       the settings object (permission mode `default` plus the exact
 //       pre-approved commands) to start that assistant's session with.
+//   node scripts/assistant-environment.mjs briefing --name juniper
+//       the briefing that assistant's session is started with: the runbook
+//       (docs/assistant-runbook.md) from "Who you are" onward, with that
+//       assistant's exact commands filled in (#3523).
 //
-// Reads git objects only; never touches the network. docs/assistant-environment.md
+// Reads git objects and the runbook file only; never touches the network. docs/assistant-environment.md
 // explains where each goes and what it does and does not protect.
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { PROGRAM_FILES, buildSetupScript, permissionRules, DEFAULT_REPO } from './assistant-environment-lib.mjs';
+import { PROGRAM_FILES, buildSetupScript, buildBriefing, permissionRules, DEFAULT_REPO } from './assistant-environment-lib.mjs';
 import { parseArgs } from './assistant-lib.mjs';
 
 const fail = (message) => {
@@ -38,8 +43,12 @@ try {
   } else if (command === 'rules') {
     if (!options.name) fail('--name is required (for example --name juniper)');
     process.stdout.write(`${JSON.stringify(permissionRules(options.name), null, 2)}\n`);
+  } else if (command === 'briefing') {
+    if (!options.name) fail('--name is required (for example --name juniper)');
+    const runbook = readFileSync(new URL('../docs/assistant-runbook.md', import.meta.url), 'utf8');
+    process.stdout.write(`${buildBriefing({ runbook, name: options.name })}\n`);
   } else {
-    fail('the first word must be setup or rules');
+    fail('the first word must be setup, rules or briefing');
   }
 } catch (error) {
   fail(error.stderr ? `${error.message.split('\n')[0]} (is the commit fetched locally?)` : error.message);

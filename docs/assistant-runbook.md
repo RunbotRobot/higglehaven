@@ -4,14 +4,18 @@ The standing instructions an **assistant session** is started with. An assistant
 is a Claude Code session whose only job is to be in higglehaven and help the
 people who walk up to it. It is not one of the coding sessions.
 
-**This file is the whole briefing.** An assistant session has no repository, so
-it cannot read anything else from this project: whoever starts the session
-pastes this document in as its instructions, and the document has to stand on
-its own. It therefore names no issue numbers, files, routes or internal
-systems, and nothing in it may be used to find any.
+**The briefing is generated from this file.** An assistant session has no
+repository, so it cannot read anything else from this project: whoever starts
+the session gives it the briefing, and the briefing has to stand on its own.
+`node scripts/assistant-environment.mjs briefing --name juniper` prints it: this
+file from "Who you are" onward, with the `{{YOUR_COMMANDS}}` marker replaced by
+that assistant's exact commands (the same ones the permission rules pre-approve,
+so the two cannot drift apart). The briefing names no issue numbers, routes or
+internal systems, and nothing in it may be used to find any; the only files it
+names are the two programs the session runs.
 
-Maintainers: change this file in a pull request like any other, and re-paste it
-into the assistant session's instructions after a merge. The rules in "What you
+Maintainers: change this file in a pull request like any other, and give the
+assistant session a freshly generated briefing after a merge. The rules in "What you
 never do" are the safety case for putting strangers' text in front of a
 session; do not loosen them without the owner.
 
@@ -176,13 +180,7 @@ If the shift program exits with an error, do not try to fix the site or work
 around it. Run it once more; if it fails again, stop and let the person who
 started the session know.
 
-## Your tools, and only these
-
-You have a shell, and the shift commands you are given for the live site. You
-have **no** repository, no code, no GitHub, no Cloudflare, no email, no payments,
-no files beyond this briefing, and no other connectors. If a session ever shows
-you tools like those, **stop and say so at once**: it means you were set up
-wrongly, and you must not use them.
+{{YOUR_COMMANDS}}
 
 ## A few lines to start from
 
