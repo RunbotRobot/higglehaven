@@ -262,6 +262,34 @@ describe('buildModelTiersSync', () => {
     expect(countTriangles(meshesOf(model)[0].geometry)).toBe(5120);
   });
 
+  // #3521: the glTF exporter merges separate metalness and roughness maps by
+  // drawing both into a canvas, so a downsized map has to be drawable, not a bare
+  // pixel array, wherever a canvas exists.
+  it('gives downsized metalness and roughness maps a drawable image where a canvas exists', () => {
+    const model = denseScan();
+    const mat = meshesOf(model)[0].material;
+    mat.metalnessMap = checkerTexture(64, [255, 255, 255], [0, 0, 0]);
+    mat.roughnessMap = checkerTexture(64, [0, 255, 0], [0, 128, 0]);
+    const made = [];
+    const makeImage = (data, width, height) => {
+      const image = { width, height, drawable: true };
+      made.push({ data, image });
+      return image;
+    };
+    const { mid } = buildModelTiersSync(model, { midTextureMaxSize: 16, makeImage });
+    const midMaterial = meshesOf(mid.object)[0].material;
+    for (const key of ['map', 'metalnessMap', 'roughnessMap']) {
+      expect(midMaterial[key].isCanvasTexture).toBe(true);
+      expect(midMaterial[key].image.drawable).toBe(true);
+      expect(midMaterial[key].image.width).toBe(16);
+    }
+    expect(made).toHaveLength(3);
+    expect(made[0].data.length).toBe(16 * 16 * 4);
+    // Where no canvas can be made (node, a worker without one) the pixels stay raw.
+    const { mid: plain } = buildModelTiersSync(denseScan(), { midTextureMaxSize: 16, makeImage: () => null });
+    expect(meshesOf(plain.object)[0].material.map.isDataTexture).toBe(true);
+  });
+
   it('reduces the far version of a dense scan to one coloured mesh within the far budget', () => {
     const { far, stats } = buildModelTiersSync(denseScan());
     expect(stats.far).toBeGreaterThan(0);
