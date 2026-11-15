@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  CANDIDATES_SQL, LEGACY_MODEL_URL_PATTERN, MODEL_URL_PATTERN, buildRecordStatements, buildRecordedCountStatement, formatSummary, groupCandidates,
-  keyToModelUrl, modelUrlToKey, parseArgs, runBackfill, sha256Hex, tierProblem,
+  CANDIDATES_SQL, CRACKED_CANDIDATES_SQL, CRACK_TOLERANCE_EDGES, LEGACY_MODEL_URL_PATTERN, MODEL_URL_PATTERN, buildRecordStatements,
+  buildRecordedCountStatement, buildReplaceStatements, formatRedoSummary, formatSummary, groupCandidates, groupCrackCandidates,
+  keyToModelUrl, modelUrlToKey, parseArgs, runBackfill, runRedoCracked, sha256Hex, tierProblem,
 } from './backfill-model-tiers-lib.mjs';
 
 // A minimal valid binary glTF: header, one JSON chunk carrying asset.version,
@@ -352,5 +353,202 @@ describe('command line arguments (#3415)', () => {
     expect(() => parseArgs(['--local', '--limit', '0'])).toThrow(/at least 1/);
     expect(() => parseArgs(['--local', '--limit'])).toThrow(/needs a value/);
     expect(() => parseArgs(['--local', '--yolo'])).toThrow(/Unknown argument/);
+  });
+});
+
+// ---- Redoing tiers that were made with cracks (#3527) ----
+
+// The "hole edges" of a fake .glb are written into its extras as `holes:<n>`,
+// so a test can say which stored tiers are cracked without any geometry.
+const holesIn = (bytes) => {
+  const match = /holes:(\d+)/.exec(new TextDecoder().decode(bytes));
+  return match ? Number(match[1]) : 0;
+};
+
+async function makeTierWorld(specs) {
+  const objects = new Map();
+  const rows = [];
+  const put = async (bytes) => {
+    const url = await urlFor(bytes);
+    objects.set(url.slice('/uploads/'.length), bytes);
+    return url;
+  };
+  const models = {};
+  for (const spec of specs) {
+    const full = await put(makeGlb(6000, `full-${spec.name} holes:${spec.fullHoles ?? 0}`));
+    const mid = spec.midHoles === undefined ? null : await put(makeGlb(3000, `mid-${spec.name} holes:${spec.midHoles}`));
+    const far = spec.farHoles === undefined ? null : await put(makeGlb(1000, `far-${spec.name} holes:${spec.farHoles}`));
+    models[spec.name] = { full, mid, far };
+    for (const table of ['catalog_templates', 'products']) rows.push({ table, model_url: full, category: spec.category ?? 'furniture', model_mid_url: mid, model_far_url: far });
+  }
+  return {
+    objects,
+    rows,
+    models,
+    candidateRows: () => rows.filter((row) => row.model_mid_url || row.model_far_url).map(({ model_url, model_mid_url, model_far_url, category }) => ({ model_url, model_mid_url, model_far_url, category })),
+    io(generate) {
+      const reads = [];
+      return {
+        reads,
+        async readModel(key) { reads.push(key); return objects.get(key); },
+        generateTiers: generate,
+        async holeEdges(bytes) { return holesIn(bytes); },
+        async storeTier(key, bytes) { objects.set(key, bytes); },
+        async replaceTiers(modelUrl, old, { midUrl, farUrl }) {
+          let changed = 0;
+          for (const row of rows) {
+            if (row.model_url === modelUrl && row.model_mid_url === old.midUrl && row.model_far_url === old.farUrl) {
+              row.model_mid_url = midUrl;
+              row.model_far_url = farUrl;
+              changed += 1;
+            }
+          }
+          return changed;
+        },
+      };
+    },
+  };
+}
+
+const cleanTiers = async () => ({ skinned: false, mid: makeGlb(2500, 'mid-new holes:0'), far: makeGlb(800, 'far-new holes:0') });
+
+describe('selecting products whose tiers may be cracked (#3527)', () => {
+  it('selects products that carry a stored tier, from both tables', () => {
+    expect(CRACKED_CANDIDATES_SQL).toMatch(/FROM catalog_templates[\s\S]*UNION ALL[\s\S]*FROM products/);
+    expect(CRACKED_CANDIDATES_SQL).toContain('model_mid_url IS NOT NULL OR model_far_url IS NOT NULL');
+  });
+
+  it('groups by model with every distinct pair of tiers, and ignores a pair that is not made of stored tier URLs', () => {
+    const a = `/uploads/models/${'a'.repeat(64)}.glb`;
+    const b = `/uploads/models/${'b'.repeat(64)}.glb`;
+    const c = `/uploads/models/${'c'.repeat(64)}.glb`;
+    const { candidates } = groupCrackCandidates([
+      { model_url: a, model_mid_url: b, model_far_url: c, category: 'furniture' },
+      { model_url: a, model_mid_url: b, model_far_url: c, category: 'furniture' },
+      { model_url: a, model_mid_url: b, model_far_url: null, category: 'furniture' },
+      { model_url: a, model_mid_url: "x'; DROP TABLE products; --", model_far_url: null, category: 'furniture' },
+      { model_url: c, model_mid_url: null, model_far_url: null, category: 'furniture' },
+      { model_url: b, model_mid_url: a, model_far_url: null, category: 'avatar' },
+    ]);
+    expect(candidates.map((entry) => entry.modelUrl)).toEqual([a, b]);
+    expect(candidates[0].tiers).toEqual([{ midUrl: b, farUrl: c }, { midUrl: b, farUrl: null }]);
+    expect(candidates[1]).toMatchObject({ avatarOnly: true, tiers: [{ midUrl: a, farUrl: null }] });
+  });
+
+  it('builds a swap that only touches rows still carrying the old pair, NULL-safely, and refuses anything unsafe', () => {
+    const a = `/uploads/models/${'a'.repeat(64)}.glb`;
+    const b = `/uploads/models/${'b'.repeat(64)}.glb`;
+    const c = `/uploads/models/${'c'.repeat(64)}.glb`;
+    const statements = buildReplaceStatements(a, { midUrl: b, farUrl: null }, { midUrl: c, farUrl: null });
+    expect(statements).toHaveLength(2);
+    expect(statements[0]).toBe(`UPDATE catalog_templates SET model_mid_url = '${c}', model_far_url = NULL WHERE model_url = '${a}' AND model_mid_url IS '${b}' AND model_far_url IS NULL`);
+    expect(statements[1]).toContain('UPDATE products');
+    expect(() => buildReplaceStatements(a, { midUrl: "b'; --", farUrl: null }, { midUrl: c, farUrl: null })).toThrow(/Refusing/);
+    expect(() => buildReplaceStatements(a, { midUrl: b, farUrl: null }, { midUrl: "c'; --", farUrl: null })).toThrow(/Refusing/);
+  });
+});
+
+describe('redoing cracked tiers (#3527)', () => {
+  it('regenerates a model whose stored tier has more hole edges than the model, and swaps both tables', async () => {
+    const world = await makeTierWorld([{ name: 'toilet', midHoles: 1255, farHoles: 0 }]);
+    const { candidates } = groupCrackCandidates(world.candidateRows());
+    const summary = await runRedoCracked({ candidates, io: world.io(cleanTiers) });
+    expect(summary).toMatchObject({ candidates: 1, sound: 0, redone: 1, rowsRecorded: 2, failed: [], tiersStored: 2 });
+    for (const row of world.rows) {
+      expect(row.model_mid_url).not.toBe(world.models.toilet.mid);
+      expect(row.model_mid_url).toMatch(MODEL_URL_PATTERN);
+      expect(row.model_far_url).toMatch(MODEL_URL_PATTERN);
+      expect(row.model_mid_url).toBe(await urlFor(world.objects.get(modelUrlToKey(row.model_mid_url))));
+    }
+    // Nothing is deleted: the old tiers stay in the bucket.
+    expect(world.objects.has(modelUrlToKey(world.models.toilet.mid))).toBe(true);
+  });
+
+  it('leaves a model alone whose tiers are no more cracked than the model itself, even if the model has holes of its own', async () => {
+    const world = await makeTierWorld([
+      { name: 'closed', fullHoles: 0, midHoles: 0, farHoles: 0 },
+      { name: 'open', fullHoles: 84, midHoles: 84 + CRACK_TOLERANCE_EDGES, farHoles: 10 },
+    ]);
+    const before = JSON.stringify(world.rows);
+    const { candidates } = groupCrackCandidates(world.candidateRows());
+    const io = world.io(cleanTiers);
+    const summary = await runRedoCracked({ candidates, io });
+    expect(summary).toMatchObject({ sound: 2, redone: 0, tiersStored: 0, rowsRecorded: 0 });
+    expect(JSON.stringify(world.rows)).toBe(before);
+  });
+
+  it('checks the far version too, and drops a regenerated tier that is still cracked rather than swap one crack for another', async () => {
+    const world = await makeTierWorld([{ name: 'dirty', fullHoles: 84, midHoles: 85, farHoles: 129 }]);
+    const { candidates } = groupCrackCandidates(world.candidateRows());
+    const logs = [];
+    const summary = await runRedoCracked({
+      candidates,
+      log: (line) => logs.push(line),
+      io: world.io(async () => ({ skinned: false, mid: makeGlb(2500, 'mid-new holes:400'), far: makeGlb(800, 'far-new holes:0') })),
+    });
+    expect(summary).toMatchObject({ redone: 1, tiersStored: 1, failed: [] });
+    expect(logs.some((line) => /drop .* mid still has 400 hole edges/.test(line))).toBe(true);
+    for (const row of world.rows) {
+      expect(row.model_mid_url).toBeNull();
+      expect(row.model_far_url).toMatch(MODEL_URL_PATTERN);
+    }
+  });
+
+  it('only swaps rows that still point at the old tiers, so a model replaced meanwhile is never overwritten', async () => {
+    const world = await makeTierWorld([{ name: 'toilet', midHoles: 500 }]);
+    const { candidates } = groupCrackCandidates(world.candidateRows());
+    const io = world.io(async (bytes) => {
+      // The seller replaces the model while the script is working.
+      for (const row of world.rows) row.model_mid_url = `/uploads/models/${'f'.repeat(64)}.glb`;
+      return cleanTiers(bytes);
+    });
+    const summary = await runRedoCracked({ candidates, io });
+    expect(summary.rowsRecorded).toBe(0);
+    for (const row of world.rows) expect(row.model_mid_url).toBe(`/uploads/models/${'f'.repeat(64)}.glb`);
+  });
+
+  it('skips avatars, reports a failing model and carries on, and counts a dry run without reading anything', async () => {
+    const world = await makeTierWorld([
+      { name: 'avatar', category: 'avatar', midHoles: 900 },
+      { name: 'broken', midHoles: 900 },
+      { name: 'toilet', midHoles: 900 },
+    ]);
+    const { candidates } = groupCrackCandidates(world.candidateRows());
+    let calls = 0;
+    const summary = await runRedoCracked({
+      candidates,
+      io: world.io(async (bytes) => {
+        calls += 1;
+        if (calls === 1) throw new Error('browser crashed');
+        return cleanTiers(bytes);
+      }),
+    });
+    expect(summary).toMatchObject({ skippedAvatar: 1, redone: 1 });
+    expect(summary.failed).toHaveLength(1);
+    expect(summary.failed[0].reason).toBe('browser crashed');
+
+    const fresh = await makeTierWorld([{ name: 'toilet', midHoles: 900 }]);
+    const io = fresh.io(cleanTiers);
+    const dry = await runRedoCracked({ candidates: groupCrackCandidates(fresh.candidateRows()).candidates, io, dryRun: true });
+    expect(dry).toMatchObject({ dryRun: true, wouldProcess: 1, redone: 0 });
+    expect(io.reads).toEqual([]);
+    expect(formatRedoSummary(dry)).toMatch(/would check: 1/);
+  });
+
+  it('reports what it did in plain words', async () => {
+    const world = await makeTierWorld([{ name: 'toilet', midHoles: 900 }, { name: 'fine', midHoles: 0 }]);
+    const summary = await runRedoCracked({ candidates: groupCrackCandidates(world.candidateRows()).candidates, io: world.io(cleanTiers) });
+    const text = formatRedoSummary(summary);
+    expect(text).toMatch(/sound, left alone: 1/);
+    expect(text).toMatch(/redone: 1 \(2 tier files/);
+    expect(text).toMatch(/failed: 0/);
+  });
+});
+
+describe('--redo-cracked (#3527)', () => {
+  it('is an opt-in flag that still needs an explicit database', () => {
+    expect(parseArgs(['--local']).redoCracked).toBe(false);
+    expect(parseArgs(['--remote', '--redo-cracked', '--dry-run'])).toMatchObject({ redoCracked: true, dryRun: true, mode: 'remote' });
+    expect(() => parseArgs(['--redo-cracked'])).toThrow(/--local .* or --remote/);
   });
 });

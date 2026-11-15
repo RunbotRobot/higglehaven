@@ -8,6 +8,7 @@
 // { skinned, mid, far } with each tier as base64 or null.
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { generateModelTierBlobs } from '/src/catalog/modelTierUpload.js';
+import { boundaryEdgeCountSteps } from '/src/geometrySimplify.js';
 
 const GLB_TYPE = 'model/gltf-binary';
 
@@ -51,6 +52,24 @@ window.backfillTiers = async (base64Glb) => {
     mid: tiers.mid ? await blobToBase64(tiers.mid) : null,
     far: tiers.far ? await blobToBase64(tiers.far) : null,
   };
+};
+
+// #3527: how many edges of a .glb sit on a hole, summed over its meshes (see
+// boundaryEdgeCountSteps). The redo of cracked tiers compares a stored tier's
+// count with the full model's.
+window.countHoleEdges = async (base64Glb) => {
+  const gltf = await new GLTFLoader().parseAsync(await base64ToBlob(base64Glb).arrayBuffer(), '');
+  let holes = 0;
+  const meshes = [];
+  gltf.scene.traverse((object) => { if (object.isMesh && object.geometry?.attributes?.position) meshes.push(object); });
+  for (const mesh of meshes) {
+    const steps = boundaryEdgeCountSteps(mesh.geometry);
+    for (;;) {
+      const step = steps.next();
+      if (step.done) { holes += step.value; break; }
+    }
+  }
+  return holes;
 };
 
 window.backfillTiersReady = true;
