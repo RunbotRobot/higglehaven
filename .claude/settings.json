@@ -22,7 +22,8 @@
       "Bash(grep *)",
       "Bash(date *)",
       "Bash(node -e *)",
-      "mcp__Gmail__delete_draft"
+      "mcp__Gmail__delete_draft",
+      "mcp__Gmail__unlabel_thread"
     ]
   },
   "autoMode": {
