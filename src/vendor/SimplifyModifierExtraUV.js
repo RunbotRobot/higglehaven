@@ -149,6 +149,13 @@ class SimplifyModifier {
 
 		}
 
+		// #3528: a vertex that shares its position with another one (a UV or
+		// normal seam keeps both copies after the merge) is locked: it is never
+		// collapsed away. Collapsing the two copies independently moves one side
+		// of the seam and not the other, which opens a crack (a hole) in a closed
+		// model; a toilet's mid version had more than half its edges on cracks.
+		yield* markSeamVertices( vertices ); // SLICED
+
 		for ( let i = 0, il = vertices.length; i < il; i ++ ) {
 
 			computeEdgeCostAtVertex( vertices[ i ] );
@@ -180,6 +187,10 @@ class SimplifyModifier {
 				break;
 
 			}
+
+			// #3528: everything left is a locked seam vertex; stop short of the
+			// target rather than tear the mesh.
+			if ( nextVertex.collapseCost === Infinity ) break;
 
 			collapse( vertices, faces, nextVertex, nextVertex.collapseNeighbor );
 			yield; // SLICED
@@ -344,12 +355,63 @@ function computeEdgeCollapseCost( u, v ) {
 
 }
 
+// #3528: marks every vertex whose position is shared with another vertex.
+// Positions are compared within a hundred-thousandth of the model's own size.
+function* markSeamVertices( vertices ) {
+
+	if ( vertices.length === 0 ) return;
+
+	const min = new Vector3( Infinity, Infinity, Infinity );
+	const max = new Vector3( - Infinity, - Infinity, - Infinity );
+
+	for ( let i = 0; i < vertices.length; i ++ ) {
+
+		min.min( vertices[ i ].position );
+		max.max( vertices[ i ].position );
+
+	}
+
+	const cell = Math.max( min.distanceTo( max ) * 1e-5, 1e-9 );
+	const first = new Map();
+
+	for ( let i = 0; i < vertices.length; i ++ ) {
+
+		const p = vertices[ i ].position;
+		const key = Math.round( p.x / cell ) + ',' + Math.round( p.y / cell ) + ',' + Math.round( p.z / cell );
+		const other = first.get( key );
+
+		if ( other === undefined ) {
+
+			first.set( key, vertices[ i ] );
+
+		} else {
+
+			other.locked = true;
+			vertices[ i ].locked = true;
+
+		}
+
+		if ( i % SLICE_ITEMS === SLICE_ITEMS - 1 ) yield; // SLICED
+
+	}
+
+}
+
 function computeEdgeCostAtVertex( v ) {
 
 	if ( v.neighbors.length === 0 ) {
 
 		v.collapseNeighbor = null;
 		v.collapseCost = - 0.01;
+
+		return;
+
+	}
+
+	if ( v.locked ) {
+
+		v.collapseNeighbor = v.neighbors[ 0 ];
+		v.collapseCost = Infinity;
 
 		return;
 
@@ -615,6 +677,7 @@ class Vertex {
 
 		this.collapseCost = 0;
 		this.collapseNeighbor = null;
+		this.locked = false; // #3528: shares its position with another vertex
 
 	}
 

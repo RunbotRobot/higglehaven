@@ -6,6 +6,7 @@
 // guards instead of two copies that drift apart.
 // A locally patched copy, not the stock addon — see its own doc comment.
 // It carries uv1/uv2/uv3 through decimation, which the stock one drops.
+import { Vector3 } from 'three';
 import { SimplifyModifier } from './vendor/SimplifyModifierExtraUV.js';
 
 // #2744: SimplifyModifier's edge-collapse algorithm (both the stock one and
@@ -46,7 +47,7 @@ export function isSkinnedGeometry(geometry) {
 // and far versions in the shopper's browser) can spread one pass across frames.
 // A pass on a 50k-triangle mesh took several seconds as one task. The result is
 // the same as simplifyGeometryOnePass's.
-export function* simplifyGeometryOnePassSteps(geometry, targetTriangles) {
+export function* simplifyGeometryOnePassSteps(geometry, targetTriangles, maxRemovalFraction = MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION) {
   const triangleCount = countTriangles(geometry);
   if (triangleCount <= targetTriangles) return null;
   if (isSkinnedGeometry(geometry)) return null;
@@ -68,10 +69,52 @@ export function* simplifyGeometryOnePassSteps(geometry, targetTriangles) {
     const uncappedRemoveCount = vertexCount - targetVertexCount;
     if (uncappedRemoveCount <= 0) return 0;
     // #2744: see MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION's own comment.
-    return Math.min(uncappedRemoveCount, Math.floor(vertexCount * MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION));
+    return Math.min(uncappedRemoveCount, Math.floor(vertexCount * maxRemovalFraction));
   };
 
   return yield* simplifier.modifySteps(geometry, removeCountFor);
+}
+
+// #3528: how many edges of a geometry belong to exactly one triangle, with
+// vertices that share a position counted as one (so a seam that only splits UVs
+// or normals is not a hole). A closed model has none; a model with a hole, or
+// a mesh the simplifier tore open, has some. Yields every few thousand corners
+// so a caller with a frame budget can spread it, the same as the pass itself.
+// Comparing the count before and after a pass is how a tear is noticed.
+const BOUNDARY_CHUNK_CORNERS = 6000;
+export function* boundaryEdgeCountSteps(geometry) {
+  const position = geometry.attributes.position;
+  const index = geometry.index;
+  const corners = index ? index.count : position.count;
+  if (!position || corners < 3) return 0;
+  geometry.computeBoundingBox();
+  const size = geometry.boundingBox.getSize(new Vector3());
+  // Weld within a hundred-thousandth of the model's own size, so the test means
+  // the same for a mug and for a house.
+  const cell = Math.max(size.length() * 1e-5, 1e-9);
+  const ids = new Map();
+  const idOf = (i) => {
+    const key = `${Math.round(position.getX(i) / cell)},${Math.round(position.getY(i) / cell)},${Math.round(position.getZ(i) / cell)}`;
+    let id = ids.get(key);
+    if (id === undefined) { id = ids.size; ids.set(key, id); }
+    return id;
+  };
+  const uses = new Map();
+  for (let c = 0; c + 2 < corners; c += 3) {
+    const a = idOf(index ? index.getX(c) : c);
+    const b = idOf(index ? index.getX(c + 1) : c + 1);
+    const d = idOf(index ? index.getX(c + 2) : c + 2);
+    if (a !== b && b !== d && a !== d) {
+      for (const [x, y] of [[a, b], [b, d], [d, a]]) {
+        const key = x < y ? `${x}-${y}` : `${y}-${x}`;
+        uses.set(key, (uses.get(key) || 0) + 1);
+      }
+    }
+    if (c % BOUNDARY_CHUNK_CORNERS === 0 && c > 0) yield;
+  }
+  let boundary = 0;
+  for (const n of uses.values()) if (n === 1) boundary++;
+  return boundary;
 }
 
 // The same pass run to completion in one go, for callers with nothing to keep
