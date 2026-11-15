@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { describe, expect, it } from 'vitest';
 import {
   FAR_BBOX_TOLERANCE,
@@ -8,8 +9,9 @@ import {
   buildModelTiers,
   buildModelTiersSync,
   modelTierSteps,
+  simplifyToTarget,
 } from './modelTiers.js';
-import { countTriangles } from './geometrySimplify.js';
+import { boundaryEdgeCountSteps, countTriangles } from './geometrySimplify.js';
 
 // ---- Fixtures: procedural stand-ins for real uploads ----
 
@@ -69,7 +71,10 @@ function chair() {
 
 // A dense, lumpy, textured mesh standing in for a photogrammetry scan.
 function denseScan() {
-  const geometry = new THREE.IcosahedronGeometry(1, 15);
+  // Indexed with shared vertices (only the UV seam is split), the way a scan
+  // exported with smooth normals is: a flat-shaded mesh, where every vertex is
+  // split per face, is the stuck case tested under "seams" below.
+  const geometry = mergeVertices(new THREE.IcosahedronGeometry(1, 15));
   const pos = geometry.attributes.position;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i);
@@ -427,5 +432,59 @@ describe('chunked execution', () => {
       nextFrame: async () => { frames++; },
     });
     expect(frames).toBe(0);
+  });
+});
+
+// #3528: a shopper saw a toilet "all jagged with holes" from a distance. The
+// simplifier can tear a closed mesh open, and repeated passes compound it, so a
+// pass that adds holes is not kept.
+function runToEnd(steps) {
+  for (;;) {
+    const step = steps.next();
+    if (step.done) return step.value;
+  }
+}
+
+describe('hole guard (#3528)', () => {
+  it('counts the edges that belong to one triangle, welding vertices that only differ in UVs or normals', () => {
+    // BoxGeometry repeats each corner per face for its normals: still a closed box.
+    expect(runToEnd(boundaryEdgeCountSteps(new THREE.BoxGeometry(1, 1, 1)))).toBe(0);
+    expect(runToEnd(boundaryEdgeCountSteps(new THREE.SphereGeometry(1, 16, 12)))).toBe(0);
+    // One quad: four edges on the outside.
+    expect(runToEnd(boundaryEdgeCountSteps(new THREE.PlaneGeometry(1, 1)))).toBe(4);
+    // A cylinder without caps has its two rims.
+    expect(runToEnd(boundaryEdgeCountSteps(new THREE.CylinderGeometry(1, 1, 2, 16, 1, true)))).toBe(32);
+  });
+
+  it('keeps a pass from tearing a closed mesh: simplifying a torus knot hard leaves no holes', () => {
+    const knot = new THREE.TorusKnotGeometry(1, 0.3, 300, 40);
+    const start = countTriangles(knot);
+    expect(runToEnd(boundaryEdgeCountSteps(knot))).toBe(0);
+    const result = runToEnd(simplifyToTarget(knot, Math.round(start * 0.05)));
+    expect(runToEnd(boundaryEdgeCountSteps(result))).toBe(0);
+    // It still got a good deal smaller; it just stopped where the next step would have torn.
+    expect(countTriangles(result)).toBeLessThan(start * 0.5);
+  });
+
+  it('does not count holes the model already had against the simplifier', () => {
+    const open = new THREE.CylinderGeometry(0.5, 0.5, 1.5, 64, 40, true);
+    const before = runToEnd(boundaryEdgeCountSteps(open));
+    expect(before).toBe(128);
+    const result = runToEnd(simplifyToTarget(open, Math.round(countTriangles(open) * 0.25)));
+    expect(countTriangles(result)).toBeLessThan(countTriangles(open) * 0.5);
+    expect(runToEnd(boundaryEdgeCountSteps(result))).toBeLessThanOrEqual(before);
+  });
+
+  it('seams: a vertex shared by two sides of a UV or normal seam is never collapsed, so a seam cannot crack open', () => {
+    // A smooth sphere keeps one UV seam: it still simplifies a lot, and stays closed.
+    const smooth = mergeVertices(new THREE.SphereGeometry(1, 96, 64));
+    const smoothStart = countTriangles(smooth);
+    const smoothResult = runToEnd(simplifyToTarget(smooth, Math.round(smoothStart * 0.1)));
+    expect(countTriangles(smoothResult)).toBeLessThan(smoothStart * 0.4);
+    expect(runToEnd(boundaryEdgeCountSteps(smoothResult))).toBe(0);
+    // A flat-shaded one splits every vertex per face: nothing may collapse, and it is returned as it is.
+    const flat = new THREE.IcosahedronGeometry(1, 8);
+    const flatResult = runToEnd(simplifyToTarget(flat, Math.round(countTriangles(flat) * 0.1)));
+    expect(runToEnd(boundaryEdgeCountSteps(flatResult))).toBe(0);
   });
 });
