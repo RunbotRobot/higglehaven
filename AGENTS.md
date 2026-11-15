@@ -893,6 +893,32 @@ most likely to come up again.
   dev team" (#3532), and a real bug reported through Juniper is fixed
   like any other bug-report card, with no owner step in between.
 
+- **The world is the product; every piece of interface has to earn the
+  space it takes from it.** (2026-11-15, #3539.) Setting aside a week of
+  doubled usage for the interface, the owner wrote: "It should be light,
+  airy, and playful. Clean. Sans-serif not just in font, but in artistic
+  philosophy... The 3D world is our big selling point. Every overlay of
+  text or modal or traditional user interface is a bit of a black stain
+  on this otherwise picturesque world. It would be fantastic for the
+  user interfaces to feel like an actual part of the world, not a
+  computer screen's popup... At the very least, nothing should read
+  like, 'Oh, here's another popup modal, just like every other one I've
+  seen in other apps.' Though the benefit of familiarity is that users
+  will be able to intuit how to access tools. So I suppose there's some
+  balancing that needs to be done between those two principles." So: a
+  tool is on screen when and where it is needed and gone otherwise; it
+  lives in the scene where it can (a sign by the thing, fog that
+  resolves into a card, something walked up to) before it is a rectangle
+  laid over the view; where a platform habit helps a person find a tool,
+  keep the habit and change the dress, never trading findability for
+  novelty; and an interface change says how much of the world it covers,
+  before and after. One sans family, generous space, few lines and
+  boxes, the brand's pale green and yellow. docs/DESIGN.md, once #3541
+  lands, is the working reference. This extends "The world's HUD carries
+  only what moving through and acting on the world needs" from the HUD
+  to every surface. The owner said they do not know how to get there:
+  bring options that can be looked at, not descriptions.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
