@@ -845,7 +845,18 @@ export function renderShopSettingsSection() {
   field.appendChild(label);
   const note = document.createElement('div');
   note.className = 'settings-empty-note';
-  note.textContent = 'Left stick to walk (push further to run) — right stick to look — double-tap 🕊️ (or double-press space) to fly.';
+  // #3530: the fly button's own picture, copied from the button as it is right
+  // now (the HUD swaps it between a perched and a flying robin with the flight
+  // state, src/shop/flightMovement.js), not an emoji dove, so the words
+  // describe what is actually on screen and cannot drift from it.
+  note.appendChild(document.createTextNode('Left stick to walk (push further to run) — right stick to look — double-tap '));
+  const flyIcon = document.createElement('img');
+  flyIcon.className = 'settings-fly-icon';
+  const hudFlyIcon = document.getElementById('shop-fly-btn-icon');
+  flyIcon.src = (hudFlyIcon && hudFlyIcon.getAttribute('src')) || '/bird-standing.png';
+  flyIcon.alt = 'the bird button';
+  note.appendChild(flyIcon);
+  note.appendChild(document.createTextNode(' (or double-press space) to fly.'));
   field.appendChild(note);
   settingsSectionEl.appendChild(field);
 
