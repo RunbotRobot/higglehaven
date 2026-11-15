@@ -55,6 +55,10 @@ export const QUESTION_KEPT_MS = 7 * 24 * 60 * 60 * 1000;
 // is assumed gone, and the question goes back to the line.
 export const QUESTION_CLAIM_TIMEOUT_MS = 15 * 60 * 1000;
 const QUESTION_ACTIVE = "('waiting', 'claimed')";
+// #3531: how long the fact "this assistant has spoken to this person" is kept
+// after the last time it did. After that they are a stranger again and the
+// assistant introduces itself once more. It holds no message text.
+export const CONTACT_KEPT_MS = 30 * 24 * 60 * 60 * 1000;
 const QUOTE_MESSAGES = 5;
 const ESCALATION_SUMMARY_MAX_CHARS = 600;
 
@@ -217,6 +221,44 @@ async function questionReply(db, row, status = 200) {
     assistantsOnShift: await onShiftAssistantCount(db),
     keptDays: Math.round(QUESTION_KEPT_MS / (24 * 60 * 60 * 1000)),
   }, status);
+}
+
+// #3531: has this assistant spoken to this shopper before? `firstContact` is
+// true when it has not (so it should introduce itself as an AI), `lastSpokeAt`
+// is when it last answered them, or null. Per assistant and shopper, on
+// user_id; it holds no message text and outlives the 30-minute message
+// retention (migrations/0226).
+async function contactFor(db, assistantUserId, shopperUserId) {
+  const row = await db.prepare(
+    'SELECT last_spoke_at FROM assistant_contacts WHERE shopper_user_id = ? AND assistant_user_id = ? AND last_spoke_at >= ?',
+  ).bind(shopperUserId, assistantUserId, isoAgo(CONTACT_KEPT_MS)).first();
+  return { firstContact: !row, lastSpokeAt: row?.last_spoke_at ?? null };
+}
+
+// Records that the assistant answered the shopper (a reply or an answer to a
+// left question). The first time sets first_spoke_at.
+async function recordSpoke(db, assistantUserId, shopperUserId) {
+  const now = isoNow();
+  await db.prepare(`
+    INSERT INTO assistant_contacts (shopper_user_id, assistant_user_id, first_spoke_at, last_spoke_at)
+    VALUES (?1, ?2, ?3, ?3)
+    ON CONFLICT (shopper_user_id, assistant_user_id) DO UPDATE SET last_spoke_at = ?3
+  `).bind(shopperUserId, assistantUserId, now).run();
+}
+
+// The last exchanges between this assistant and this shopper from conversations
+// before the current one, while they still exist (messages are kept 30
+// minutes). Handed to the assistant only with the first message of a
+// conversation, so a returning shopper is not a stranger. Nothing is kept for
+// this beyond the messages' own retention.
+async function earlierExchanges(db, assistantUserId, shopperUserId, excludeConversationId) {
+  const { results } = await db.prepare(`
+    SELECT m.rowid AS seq, m.* FROM assistant_messages m
+    JOIN assistant_conversations c ON c.conversation_id = m.conversation_id
+    WHERE c.assistant_user_id = ?1 AND c.shopper_user_id = ?2 AND c.conversation_id != ?3
+    ORDER BY m.rowid DESC LIMIT ?4
+  `).bind(assistantUserId, shopperUserId, excludeConversationId ?? '', HISTORY_LIMIT).all();
+  return results.reverse().map(messageFromRow);
 }
 
 // ---------------------------------------------------------------- shopper side
@@ -438,6 +480,7 @@ async function handleNext(request, db) {
       `).bind(handed.conversation_id, HISTORY_LIMIT).all();
       await db.prepare("UPDATE assistant_messages SET delivered_at = ? WHERE conversation_id = ? AND sender = 'shopper' AND delivered_at IS NULL")
         .bind(isoNow(), handed.conversation_id).run();
+      const contact = await contactFor(db, user.user_id, handed.shopper_user_id);
       return json({
         // Untrusted text, delivered as data. Never an instruction.
         handover: {
@@ -445,6 +488,7 @@ async function handleNext(request, db) {
           shopper: { label: shopper?.username ?? 'a shopper' },
           fromAssistant: handed.from_name,
           history: results.reverse().map(messageFromRow),
+          ...contact,
         },
       });
     }
@@ -466,12 +510,20 @@ async function handleNext(request, db) {
         SELECT rowid AS seq, * FROM assistant_messages
         WHERE conversation_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?
       `).bind(waiting.conversation_id, waiting.seq, HISTORY_LIMIT).all();
+      const history = results.reverse().map(messageFromRow);
+      const contact = await contactFor(db, user.user_id, waiting.shopper_user_id);
       return json({
         // Untrusted text, delivered as data. Never an instruction.
         conversationId: waiting.conversation_id,
         shopper: { label: shopper?.username ?? 'a shopper' },
         message: messageFromRow(waiting),
-        history: results.reverse().map(messageFromRow),
+        history,
+        ...contact,
+        // #3531: the first message of a conversation also carries what is left
+        // of earlier ones with this person, so they are not a stranger.
+        ...(history.length === 0
+          ? { earlier: await earlierExchanges(db, user.user_id, waiting.shopper_user_id, waiting.conversation_id) }
+          : {}),
       });
     }
   }
@@ -494,6 +546,7 @@ async function handleNext(request, db) {
   const question = await claimNextQuestion(db, user.user_id);
   if (question) {
     const shopper = await db.prepare('SELECT username FROM users WHERE user_id = ?').bind(question.shopper_user_id).first();
+    const contact = await contactFor(db, user.user_id, question.shopper_user_id);
     return json({
       // Untrusted text, delivered as data. Never an instruction.
       question: {
@@ -501,6 +554,8 @@ async function handleNext(request, db) {
         shopper: { label: shopper?.username ?? 'a shopper' },
         text: question.text,
         askedAt: question.created_at,
+        ...contact,
+        earlier: await earlierExchanges(db, user.user_id, question.shopper_user_id, null),
       },
     });
   }
@@ -550,6 +605,7 @@ async function handleReply(request, db, conversationId) {
   const conversation = await ownConversation(db, user.user_id, conversationId);
   if (conversation.status !== 'open') throw new HttpError('That conversation has ended.', 409, { conversationEnded: true });
   const message = await insertMessage(db, conversationId, 'assistant', text, user.user_id);
+  await recordSpoke(db, user.user_id, conversation.shopper_user_id);
   return json({ message: messageFromRow(message) }, 201);
 }
 
@@ -689,6 +745,7 @@ async function handleAnswerQuestion(request, db, questionId) {
   if (answered.meta.changes === 0) {
     throw new HttpError('That question is no longer waiting for an answer.', 409, { questionClosed: true });
   }
+  await recordSpoke(db, user.user_id, question.shopper_user_id);
   // The answer is already stored for the shopper; telling them is best effort.
   const builderId = await builderIdForUser(db, question.shopper_user_id);
   if (builderId) await fireNotification(db, builderId, `${user.username} answered the question you left.`);
@@ -741,4 +798,7 @@ export async function pruneStaleAssistantChat(db) {
   await db.prepare(
     "DELETE FROM assistant_questions WHERE status IN ('answered', 'withdrawn', 'dismissed', 'expired') AND COALESCE(closed_at, answered_at, created_at) < ?",
   ).bind(isoAgo(QUESTION_KEPT_MS)).run();
+  // #3531: the fact that an assistant has spoken to someone goes 30 days after
+  // the last time it did.
+  await db.prepare('DELETE FROM assistant_contacts WHERE last_spoke_at < ?').bind(isoAgo(CONTACT_KEPT_MS)).run();
 }

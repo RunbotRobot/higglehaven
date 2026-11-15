@@ -207,5 +207,6 @@
   "0222_assistant_shifts.sql": "de43eb7a361b02837b2a6b1f8b60feafb052fae15f6fb3a1070eeb49fceaea1b",
   "0223_assistant_questions.sql": "a4251b542a3d90ea071232c92959dc115764e4325d0f903aa7298de86b35fd11",
   "0224_assistant_handover.sql": "f49cacc8ed8aa8df41e14428ca3f65c9d15fa439ed1e4591ebed5a8d7138102c",
-  "0225_tax_1099_efiling_submission_id.sql": "f064ec8f82177a54efc667824b6e70a56f1a3739db8358969a7a26220ea43c79"
+  "0225_tax_1099_efiling_submission_id.sql": "f064ec8f82177a54efc667824b6e70a56f1a3739db8358969a7a26220ea43c79",
+  "0226_assistant_contacts.sql": "d5b1eef4119e2f577804ec0c3d73460f138c3d77d2f248b6640ab436cc2c249b"
 }

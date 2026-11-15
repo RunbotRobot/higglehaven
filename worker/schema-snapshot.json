@@ -64,6 +64,12 @@
       "y_m": "REAL|1||0",
       "z_m": "REAL|1||0"
     },
+    "assistant_contacts": {
+      "assistant_user_id": "TEXT|1||2",
+      "first_spoke_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "last_spoke_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "shopper_user_id": "TEXT|1||1"
+    },
     "assistant_conversations": {
       "assistant_told_ended_at": "TEXT|0||0",
       "assistant_user_id": "TEXT|1||0",
@@ -915,6 +921,10 @@
     "index:idx_archived_landlet_versions_builder_id": {
       "tbl": "archived_landlet_versions",
       "sql": "CREATE INDEX idx_archived_landlet_versions_builder_id ON archived_landlet_versions(builder_id, created_at DESC)"
+    },
+    "index:idx_assistant_contacts_last_spoke": {
+      "tbl": "assistant_contacts",
+      "sql": "CREATE INDEX idx_assistant_contacts_last_spoke ON assistant_contacts (last_spoke_at)"
     },
     "index:idx_assistant_conversations_ended_at": {
       "tbl": "assistant_conversations",
