@@ -19,6 +19,7 @@ import { createPersistentMuteSet } from './mutePersistence.js';
 import { assistantNameFrom, assistantSpeakerLabel } from './assistantLabel.js';
 import { promptReportReason } from '../ui/reportReasonModal.js';
 import { showNotice } from '../ui/noticeModal.js';
+import { showFadingNote } from '../ui/fadingNote.js';
 
 const NEARBY_CHAT_POLL_INTERVAL_MS = 2000;
 
@@ -120,9 +121,10 @@ async function reportNearbyChatSender(builderId) {
   if (answer === null) return;
   try {
     await sendNearbyChatReport({ reportedBuilderId: builderId, reason: answer.reason || undefined });
-    await showNotice({ title: 'Report submitted', message: 'Thank you.' });
-  } catch {
-    await showNotice({ title: 'Could not submit the report', message: 'Please try again.' });
+    // #3552: a success is a note that fades by itself, not a second modal.
+    showFadingNote('Report sent. Thank you.');
+  } catch (err) {
+    await showNotice({ title: 'Could not submit the report', message: err?.message || 'Please try again.' });
   }
 }
 

@@ -513,6 +513,30 @@
          while shown, see the .visible rule below). Centered
          just above #shop-sign-hint/#shop-calendar-hint's own stack so a
          collection near a sign/calendar doesn't collide with either. */
+      /* #3552: the self-fading success note (src/ui/fadingNote.js), same
+         shape as #shop-credit-orb-toast; above the open modal layers. */
+      #fading-note {
+        position: fixed;
+        z-index: 10000;
+        bottom: 120px;
+        left: 50%;
+        transform: translateX(-50%);
+        max-width: calc(100vw - 32px);
+        background: rgb(var(--pill-rgb) / 0.92);
+        padding: 8px 16px;
+        border-radius: 8px;
+        color: var(--pill-text);
+        font: 13px/1.4 sans-serif;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.4s;
+      }
+      #fading-note.visible {
+        opacity: 1;
+        pointer-events: auto;
+        user-select: text;
+        -webkit-user-select: text;
+      }
       #shop-credit-orb-toast {
         position: fixed;
         z-index: 16;

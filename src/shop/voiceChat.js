@@ -38,6 +38,7 @@ import { createPersistentMuteSet } from './mutePersistence.js';
 import { shopAvatarPosition } from '../main.js';
 import { promptReportReason } from '../ui/reportReasonModal.js';
 import { showNotice } from '../ui/noticeModal.js';
+import { showFadingNote } from '../ui/fadingNote.js';
 
 // docs/SPEC.md §2: "100 feet (~30m) of complete silence as the outer
 // range, with volume ramping up gradually as avatars get closer — not a
@@ -572,9 +573,10 @@ async function reportVoicePeer(builderId) {
   if (answer === null) return;
   try {
     await sendVoiceReport({ reportedBuilderId: builderId, reason: answer.reason || undefined });
-    await showNotice({ title: 'Report submitted', message: 'Thank you.' });
-  } catch {
-    await showNotice({ title: 'Could not submit the report', message: 'Please try again.' });
+    // #3552: a success is a note that fades by itself, not a second modal.
+    showFadingNote('Report sent. Thank you.');
+  } catch (err) {
+    await showNotice({ title: 'Could not submit the report', message: err?.message || 'Please try again.' });
   }
 }
 
