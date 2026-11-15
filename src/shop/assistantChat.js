@@ -16,7 +16,7 @@ import {
 import { confirmAndBlockPerson } from '../blocks.js';
 import {
   mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, handoverNotice, offerLabel,
-  canLeaveQuestion, questionNotice, questionInLine, leaveLabel, withdrawLabel, doneLabel, chatPollIntervalMs,
+  canLeaveQuestion, questionNotice, questionInLine, leaveLabel, withdrawLabel, doneLabel, pillLabel, hasNewAssistantMessage, chatPollIntervalMs,
 } from './assistantChatLogic.js';
 
 // A left question is not a live chat, so it is checked less often.
@@ -26,6 +26,8 @@ const panelEl = document.getElementById('assistant-chat-panel');
 const nameEl = document.getElementById('assistant-chat-name');
 const closeEl = document.getElementById('assistant-chat-close');
 const blockEl = document.getElementById('assistant-chat-block');
+const minimizeEl = document.getElementById('assistant-chat-minimize');
+const pillEl = document.getElementById('assistant-chat-pill');
 const offerEl = document.getElementById('assistant-chat-offer');
 const leaveEl = document.getElementById('assistant-chat-leave');
 const withdrawEl = document.getElementById('assistant-chat-withdraw');
@@ -47,6 +49,8 @@ let question = null; // #3448: the shopper's left question (the server's view), 
 let keptDays = 7; // replaced by the server's number on every reply
 let assistantsOnShift = null; // how many are on the floor; from the server
 let canLeave = false; // the last refusal said an assistant was busy or off shift
+let minimized = false; // #3529: the panel is tucked away as a pill; the conversation stays open
+let unread = false; // #3529: a reply arrived while minimised
 let pollTimer = null;
 let questionTimer = null;
 let inFlight = false;
@@ -133,6 +137,10 @@ function render() {
   withdrawEl.hidden = question === null;
   withdrawEl.textContent = question && questionInLine(question) ? withdrawLabel : doneLabel;
   blockEl.hidden = !assistant?.builderId;
+  panelEl.classList.toggle('minimized', minimized);
+  pillEl.hidden = !(isOpen() && minimized);
+  pillEl.textContent = pillLabel(assistant?.name, unread);
+  pillEl.classList.toggle('unread', unread);
   offerEl.hidden = !offer;
   offerEl.textContent = offer ? offerLabel(offer.name) : '';
   renderLog();
@@ -151,6 +159,9 @@ function render() {
       status: question.status, position: question.position ?? null, text: question.text, answer: question.answer?.text ?? null,
     } : null,
     statusIsError: statusEl.classList.contains('error'),
+    // added for #3529: the minimised state and what the pill shows
+    minimized,
+    pill: pillEl.hidden ? null : { text: pillEl.textContent, unread },
   };
 }
 
@@ -169,7 +180,9 @@ function stopQuestionPolling() {
 function adoptQuestion(reply) {
   if (reply.keptDays) keptDays = reply.keptDays;
   if (typeof reply.assistantsOnShift === 'number') assistantsOnShift = reply.assistantsOnShift;
+  const hadAnswer = Boolean(question?.answer);
   question = reply.question ?? null;
+  if (minimized && question?.answer && !hadAnswer) unread = true; // #3529
   if (question && questionInLine(question)) startQuestionPolling();
   else stopQuestionPolling();
 }
@@ -216,6 +229,7 @@ async function poll(token) {
     return; // a missed poll is retried on the next tick
   }
   if (token !== openToken || !isOpen()) return;
+  const before = messages;
   if (!reply.conversation || reply.conversation.status !== 'open') {
     if (reply.messages) messages = mergeMessages(messages, reply.messages);
     conversation = reply.conversation;
@@ -224,6 +238,8 @@ async function poll(token) {
   } else {
     adopt(reply);
   }
+  // #3529: a reply (or the end of the chat) while minimised lights the pill.
+  if (minimized && (hasNewAssistantMessage(before, messages) || !conversationOpen())) unread = true;
   render();
 }
 
@@ -245,7 +261,8 @@ function startPolling() {
 // conversation (this tab or another) it resumes that one: there is only ever one.
 export async function openAssistantChat(target) {
   if (isOpen() && conversationOpen()) {
-    inputEl.focus();
+    if (minimized) restorePanel(); // #3529: tapping the assistant again brings the panel back
+    else inputEl.focus();
     return;
   }
   const token = ++openToken;
@@ -258,6 +275,8 @@ export async function openAssistantChat(target) {
   offer = null;
   question = null;
   canLeave = false;
+  minimized = false;
+  unread = false;
   stopQuestionPolling();
   panelEl.hidden = false;
   render();
@@ -298,6 +317,8 @@ export async function closeAssistantChat() {
   stopQuestionPolling();
   const wasOpen = conversationOpen();
   panelEl.hidden = true;
+  minimized = false;
+  unread = false;
   assistant = null;
   conversation = null;
   messages = [];
@@ -419,6 +440,23 @@ withdrawEl.addEventListener('click', async () => {
 });
 
 closeEl.addEventListener('click', () => { closeAssistantChat(); });
+
+// #3529: minimising is not ending. The conversation, its polling and the
+// 10-minute idle rule are untouched; only the panel is tucked away, so the
+// shopper can try what the assistant suggested. Closing the keyboard first, so
+// the world is fully visible again.
+function restorePanel() {
+  minimized = false;
+  unread = false;
+  render();
+}
+minimizeEl.addEventListener('click', () => {
+  if (!isOpen()) return;
+  inputEl.blur();
+  minimized = true;
+  render();
+});
+pillEl.addEventListener('click', restorePanel);
 
 // Go to the free assistant the server named. The shopper's typed question stays
 // in the box, so asking again is one tap on Send. A conversation is never open

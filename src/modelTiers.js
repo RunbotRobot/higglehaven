@@ -47,7 +47,10 @@ import {
   CanvasTexture,
 } from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { countTriangles, isSkinnedGeometry, simplifyGeometryOnePassSteps } from './geometrySimplify.js';
+import {
+  boundaryEdgeCountSteps, countTriangles, isSkinnedGeometry, simplifyGeometryOnePassSteps,
+  MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION,
+} from './geometrySimplify.js';
 
 // ---- Tunables (one place, so the leaves that measure and tune them agree) ----
 
@@ -79,6 +82,12 @@ export const FAR_BBOX_TOLERANCE = 0.03;
 // Simplification stops when a pass removes less than this fraction of what
 // is left (it is stuck), or after this many passes.
 const MAX_SIMPLIFY_PASSES = 12;
+// #3528: how much of a mesh one pass may remove, tried in this order: the
+// simplifier's own cap, then a gentler pass if that one tore the mesh.
+const PASS_REMOVAL_FRACTIONS = [MAX_SINGLE_PASS_VERTEX_REMOVAL_FRACTION, 0.2];
+// A pass may add this many hole edges before it counts as a tear (rounding in
+// the weld, not a real hole).
+const HOLE_TOLERANCE_EDGES = 2;
 const MIN_PASS_PROGRESS = 0.98;
 // A pass that leaves fewer triangles than this is treated as degenerate
 // (#2744) and discarded in favour of the previous result.
@@ -131,13 +140,33 @@ function positionsAreFinite(geometry) {
 // stuck, or out of passes. Yields many times within every pass (#3483) so a
 // caller can enforce a frame budget. Never modifies or disposes the input; returns either the
 // input itself or a geometry this function created.
-function* simplifyToTarget(geometry, targetTriangles) {
+export function* simplifyToTarget(geometry, targetTriangles) {
   let current = geometry;
+  // #3528: a pass that opens new holes in the mesh is not kept. A shopper saw a
+  // toilet "all jagged with holes" from a distance: the full model is closed, its
+  // mid version had more than half its edges on a hole, because each pass is
+  // allowed to tear a little and twelve passes compound it. So after every pass
+  // the number of edges on a hole is counted; a pass that adds any is tried
+  // again removing less, and if that tears too the result stops there: a
+  // heavier simpler version with no holes beats a lighter one with them.
+  let currentBoundary = yield* boundaryEdgeCountSteps(current);
   for (let pass = 0; pass < MAX_SIMPLIFY_PASSES; pass++) {
     const before = countTriangles(current);
     if (before <= targetTriangles) break;
-    const next = yield* simplifyGeometryOnePassSteps(current, targetTriangles);
-    yield;
+    let next = null;
+    let nextBoundary = 0;
+    for (const fraction of PASS_REMOVAL_FRACTIONS) {
+      const candidate = yield* simplifyGeometryOnePassSteps(current, targetTriangles, fraction);
+      yield;
+      if (!candidate) break;
+      const count = yield* boundaryEdgeCountSteps(candidate);
+      if (count <= currentBoundary + HOLE_TOLERANCE_EDGES) {
+        next = candidate;
+        nextBoundary = count;
+        break;
+      }
+      candidate.dispose();
+    }
     if (!next) break;
     const after = countTriangles(next);
     if (after < MIN_RESULT_TRIANGLES || !positionsAreFinite(next) || after >= before * MIN_PASS_PROGRESS) {
@@ -146,6 +175,7 @@ function* simplifyToTarget(geometry, targetTriangles) {
     }
     if (current !== geometry) current.dispose();
     current = next;
+    currentBoundary = nextBoundary;
   }
   return current;
 }

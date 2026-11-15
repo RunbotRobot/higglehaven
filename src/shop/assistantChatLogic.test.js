@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel, canLeaveQuestion, questionNotice, questionInLine, handoverNotice, chatPollIntervalMs, WAITING_POLL_MS, IDLE_POLL_MS } from './assistantChatLogic.js';
+import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel, canLeaveQuestion, questionNotice, questionInLine, handoverNotice, pillLabel, hasNewAssistantMessage, chatPollIntervalMs, WAITING_POLL_MS, IDLE_POLL_MS } from './assistantChatLogic.js';
 
 const msg = (seq, sender, createdAt = '2026-11-11T10:00:00.000Z') => ({ seq, sender, text: `m${seq}`, createdAt });
 
@@ -116,5 +116,20 @@ describe('chatPollIntervalMs (#3532)', () => {
     expect(chatPollIntervalMs([msg(1, 'shopper')])).toBe(WAITING_POLL_MS);
     expect(chatPollIntervalMs([msg(1, 'shopper'), msg(2, 'assistant')])).toBe(IDLE_POLL_MS);
     expect(chatPollIntervalMs([msg(1, 'shopper'), msg(2, 'assistant'), msg(3, 'shopper')])).toBe(WAITING_POLL_MS);
+  });
+});
+
+describe('minimised panel (#3529)', () => {
+  it('labels the pill with the assistant, and says when a reply came in', () => {
+    expect(pillLabel('Juniper', false)).toBe('Juniper');
+    expect(pillLabel('Juniper', true)).toBe('Juniper replied');
+    expect(pillLabel(null, false)).toBe('Assistants');
+  });
+  it('sees a new assistant message, and nothing else', () => {
+    const before = [msg(1, 'shopper')];
+    expect(hasNewAssistantMessage(before, before)).toBe(false);
+    expect(hasNewAssistantMessage(before, [...before, msg(2, 'shopper')])).toBe(false);
+    expect(hasNewAssistantMessage(before, [...before, msg(2, 'assistant')])).toBe(true);
+    expect(hasNewAssistantMessage([...before, msg(2, 'assistant')], [...before, msg(2, 'assistant')])).toBe(false);
   });
 });

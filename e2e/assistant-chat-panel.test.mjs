@@ -127,6 +127,44 @@ await pageA.waitForFunction(
 const answered = await pageA.evaluate(() => ({ status: window.__assistantChat.status, log: document.getElementById('assistant-chat-log').textContent }));
 console.log('after the reply:', JSON.stringify(answered));
 
+// #3529: minimise. The conversation stays open, the world's controls are
+// tappable again, a reply that comes in lights the pill, and tapping it
+// brings the panel back with the conversation as it was.
+await pageA.click('#assistant-chat-minimize');
+const minimised = await pageA.evaluate(() => {
+  const rect = (el) => el.getBoundingClientRect();
+  const pill = document.getElementById('assistant-chat-pill');
+  const pillBox = rect(pill);
+  const overlaps = (a, b) => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+  const controls = ['#shop-fly-btn', '#shop-move-joystick', '#shop-look-joystick', '#mode-nav'];
+  return {
+    panelShown: getComputedStyle(document.getElementById('assistant-chat-panel')).display !== 'none',
+    pillShown: !pill.hidden && pillBox.width > 0,
+    pillText: pill.textContent,
+    pillBox: pillBox.toJSON(),
+    state: { open: window.__assistantChat.open, status: window.__assistantChat.conversationStatus, minimized: window.__assistantChat.minimized },
+    clear: controls.map((selector) => {
+      const el = document.querySelector(selector);
+      const box = rect(el);
+      const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+      return { selector, overlapsPill: overlaps(pillBox, box), tappable: Boolean(hit) && (el === hit || el.contains(hit)) };
+    }),
+    inViewport: pillBox.left >= 0 && pillBox.right <= window.innerWidth && pillBox.top >= 0 && pillBox.bottom <= window.innerHeight,
+  };
+});
+console.log('minimised:', JSON.stringify({ ...minimised, pillBox: undefined }));
+await postJson(pageB, `/api/assistant-inbox/conversations/${conversationId}/reply`, { text: 'Did that work for you?' });
+await pageA.waitForFunction(() => window.__assistantChat.pill?.unread === true, null, { timeout: 10000 });
+const litPill = await pageA.evaluate(() => document.getElementById('assistant-chat-pill').textContent);
+await pageA.click('#assistant-chat-pill');
+await pageA.waitForSelector('#assistant-chat-panel:not(.minimized)', { timeout: 5000 });
+const restored = await pageA.evaluate(() => ({
+  pillHidden: document.getElementById('assistant-chat-pill').hidden,
+  status: window.__assistantChat.conversationStatus,
+  log: document.getElementById('assistant-chat-log').textContent,
+}));
+console.log('after restoring:', JSON.stringify({ litPill, restored }));
+
 // The assistant ends it: the panel says so, in words.
 await postJson(pageB, `/api/assistant-inbox/conversations/${conversationId}/end`);
 await pageA.waitForFunction(() => window.__assistantChat.conversationStatus === 'ended', null, { timeout: 10000 });
@@ -267,6 +305,11 @@ const pass = tapped === true
   && /reading your message/.test(reading)
   && delivered.body.message?.text === 'Where do I find the bakery?'
   && answered.log.includes('Head north past the fountain!') && answered.status === ''
+  && minimised.pillShown && !minimised.panelShown && minimised.pillText === ASSISTANT_NAME && minimised.inViewport
+  && minimised.state.open === true && minimised.state.status === 'open' && minimised.state.minimized === true
+  && minimised.clear.every((c) => !c.overlapsPill && c.tappable)
+  && litPill === `${ASSISTANT_NAME} replied`
+  && restored.pillHidden && restored.status === 'open' && restored.log.includes('Head north past the fountain!') && restored.log.includes('Did that work for you?')
   && ended === `${ASSISTANT_NAME} ended the conversation.`
   && told.body.ended?.endedBy === 'shopper'
   && /helping someone else/.test(offerShown.status) && offerShown.text === 'Clover is free. Talk to Clover instead' && offerShown.kept === 'Is anyone free?'

@@ -1155,8 +1155,38 @@
         font: 13px/1.4 sans-serif;
         user-select: text;
       }
-      #assistant-chat-panel[hidden] {
+      #assistant-chat-panel[hidden],
+      #assistant-chat-panel.minimized {
         display: none;
+      }
+      /* #3529: the minimised panel -- a small pill on the left edge, mid-screen,
+         clear of the joysticks (bottom corners), the fly button (bottom centre)
+         and the mode buttons (top right). */
+      #assistant-chat-pill {
+        position: fixed;
+        z-index: 17;
+        left: 8px;
+        top: 38%;
+        min-height: 36px;
+        max-width: 150px;
+        padding: 0 12px;
+        border: none;
+        border-radius: 999px;
+        background: rgb(var(--pill-rgb) / 0.92);
+        color: var(--pill-text);
+        font: 13px/1 sans-serif;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        cursor: pointer;
+      }
+      #assistant-chat-pill[hidden] {
+        display: none;
+      }
+      #assistant-chat-pill.unread {
+        background: var(--brand-green);
+        color: #16240a;
+        font-weight: 600;
       }
       #assistant-chat-header {
         display: flex;
@@ -1190,6 +1220,7 @@
         font: 12px/1 sans-serif;
         cursor: pointer;
       }
+      #assistant-chat-minimize,
       #assistant-chat-close {
         min-width: 32px;
         min-height: 32px;
