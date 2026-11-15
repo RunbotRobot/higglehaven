@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel, canLeaveQuestion, questionNotice, questionInLine, handoverNotice } from './assistantChatLogic.js';
+import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel, canLeaveQuestion, questionNotice, questionInLine, handoverNotice, chatPollIntervalMs, WAITING_POLL_MS, IDLE_POLL_MS } from './assistantChatLogic.js';
 
 const msg = (seq, sender, createdAt = '2026-11-11T10:00:00.000Z') => ({ seq, sender, text: `m${seq}`, createdAt });
 
@@ -105,5 +105,16 @@ describe('handoverNotice (#3448)', () => {
   it('is null for a conversation that was never handed over', () => {
     expect(handoverNotice({ assistant: { name: 'Clover' }, handedOver: null })).toBeNull();
     expect(handoverNotice(null)).toBeNull();
+  });
+});
+
+describe('chatPollIntervalMs (#3532)', () => {
+  it('asks every second while the shopper waits for a reply, every two otherwise', () => {
+    expect(WAITING_POLL_MS).toBe(1000);
+    expect(IDLE_POLL_MS).toBe(2000);
+    expect(chatPollIntervalMs([])).toBe(IDLE_POLL_MS);
+    expect(chatPollIntervalMs([msg(1, 'shopper')])).toBe(WAITING_POLL_MS);
+    expect(chatPollIntervalMs([msg(1, 'shopper'), msg(2, 'assistant')])).toBe(IDLE_POLL_MS);
+    expect(chatPollIntervalMs([msg(1, 'shopper'), msg(2, 'assistant'), msg(3, 'shopper')])).toBe(WAITING_POLL_MS);
   });
 });

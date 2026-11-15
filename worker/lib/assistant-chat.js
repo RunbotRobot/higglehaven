@@ -35,6 +35,12 @@ const SHOPPER_POLL_RATE_LIMIT_MAX = 600;
 // An assistant's idle loop polls often; it is one small read each time.
 const ASSISTANT_POLL_RATE_LIMIT_MAX = 3000;
 const ASSISTANT_REPLY_RATE_LIMIT_MAX = 120;
+// #3532: while this assistant has a conversation open, its idle loop is told to
+// poll this often (instead of its slower resting rate), so a follow-up from the
+// shopper is picked up within about a second. It lasts only as long as the
+// conversation (which ends after CONVERSATION_IDLE_MS of silence), so the extra
+// writes the poll costs (its rate-limit row) are bounded to those minutes.
+export const OPEN_CONVERSATION_POLL_SECONDS = 1;
 const ASSISTANT_ESCALATE_RATE_LIMIT_MAX = 10;
 // An assistant is on shift while its session checked in this recently. The
 // inbox poll refreshes it (at most once per ASSISTANT_SEEN_REFRESH_MS).
@@ -504,7 +510,12 @@ async function handleNext(request, db) {
       },
     });
   }
-  return json({ idle: true });
+  // #3532: nothing waiting. If this assistant is in a conversation, say so, so its
+  // loop polls faster until it ends (an assistant on an older copy of the shift
+  // program ignores the field and keeps its own rate).
+  const live = await db.prepare("SELECT 1 AS open FROM assistant_conversations WHERE assistant_user_id = ? AND status = 'open'")
+    .bind(user.user_id).first();
+  return json(live ? { idle: true, pollAfterSeconds: OPEN_CONVERSATION_POLL_SECONDS } : { idle: true });
 }
 
 // Hands the oldest question in line to this assistant, atomically: the UPDATE

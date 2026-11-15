@@ -1,7 +1,7 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { api, extractSessionCookie, withSession, signupBuilder } from './test-helpers.js';
-import { pruneStaleAssistantChat, REPLY_WAIT_SECONDS } from './lib/assistant-chat.js';
+import { pruneStaleAssistantChat, REPLY_WAIT_SECONDS, OPEN_CONVERSATION_POLL_SECONDS } from './lib/assistant-chat.js';
 
 // #3447 (part of #3444): asking an assistant a question. Own file because it
 // sets env.FLEET_ACCESS_KEY to mint assistant accounts through fleet-login.
@@ -63,7 +63,10 @@ describe('asking an assistant', () => {
     expect(first.body.message.text).toBe('Where do I find the bakery?');
     expect(first.body.conversationId).toBe(conversationId);
     expect(first.body.shopper.label).toBe('ac-flow-shopper');
-    expect((await next()).body).toEqual({ idle: true });
+    // #3532: nothing more waiting, but a conversation is open, so the idle loop is
+    // told to poll every second until it ends (and the field is gone once it has,
+    // below).
+    expect((await next()).body).toEqual({ idle: true, pollAfterSeconds: OPEN_CONVERSATION_POLL_SECONDS });
 
     const replied = await post(assistant.session, `/assistant-inbox/conversations/${conversationId}/reply`, { text: 'Head north past the fountain!' });
     expect(replied.response.status).toBe(201);
@@ -444,8 +447,9 @@ describe('handing a conversation to another assistant', () => {
     expect(received.body.handover.history.map((m) => m.text)).toEqual([
       'Where is the bakery?', 'Up the hill, past the fountain.', 'And the library?',
     ]);
-    // The unread shopper message was in that history, so it is not delivered again.
-    expect((await cloverNext()).body).toEqual({ idle: true });
+    // The unread shopper message was in that history, so it is not delivered again
+    // (and Clover now holds an open conversation, so it polls faster, #3532).
+    expect((await cloverNext()).body).toEqual({ idle: true, pollAfterSeconds: OPEN_CONVERSATION_POLL_SECONDS });
 
     // The first assistant no longer owns it.
     const stale = await post(assistant.session, `/assistant-inbox/conversations/${conversationId}/reply`, { text: 'Still me?' });

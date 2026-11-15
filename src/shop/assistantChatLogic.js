@@ -21,6 +21,18 @@ export function replyState({ messages, nowMs, replyWaitSeconds }) {
   return waitedMs >= replyWaitSeconds * 1000 ? 'slow' : 'reading';
 }
 
+// #3532: how often the open panel asks the server for news. While the shopper is
+// waiting for a reply (their message is the last one) a reply is what the next
+// poll could bring, so it asks every second; otherwise every two seconds. This
+// only runs while a conversation is open and ends with it, so it costs nothing
+// at rest.
+export const WAITING_POLL_MS = 1000;
+export const IDLE_POLL_MS = 2000;
+export function chatPollIntervalMs(messages) {
+  const last = messages[messages.length - 1];
+  return last && last.sender === 'shopper' ? WAITING_POLL_MS : IDLE_POLL_MS;
+}
+
 // What the panel says when a conversation is over, in a shopper's words.
 export function endedNotice({ endedBy }, name) {
   if (endedBy === 'assistant') return `${name} ended the conversation.`;

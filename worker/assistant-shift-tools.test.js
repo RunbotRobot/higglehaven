@@ -2,7 +2,7 @@ import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { api, extractSessionCookie, withSession, signupBuilder } from './test-helpers.js';
 import {
-  loginNameFor, parseArgs, positiveSeconds, classifyNext, needsProxyRelaunch, createClient, runShift,
+  loginNameFor, parseArgs, positiveSeconds, classifyNext, nextPollSeconds, needsProxyRelaunch, createClient, runShift,
 } from '../scripts/assistant-lib.mjs';
 
 // #3458 (part of #3444): the assistant's shift tools (scripts/assistant-shift.mjs
@@ -46,6 +46,20 @@ describe('shift tool helpers', () => {
     expect(() => positiveSeconds('31', 5, 30)).toThrow();
   });
 
+  // #3532: the server says to poll sooner while this assistant has a conversation
+  // open; the loop never goes slower than its own rate or faster than twice a second.
+  it('polls sooner when the server says to, never slower than its own rate or faster than 0.5 s', () => {
+    expect(nextPollSeconds({ idle: true }, 5)).toBe(5);
+    expect(nextPollSeconds({ idle: true, pollAfterSeconds: 1 }, 5)).toBe(1);
+    expect(nextPollSeconds({ idle: true, pollAfterSeconds: 30 }, 5)).toBe(5);
+    expect(nextPollSeconds({ idle: true, pollAfterSeconds: 0.01 }, 5)).toBe(0.5);
+    expect(nextPollSeconds({ idle: true, pollAfterSeconds: 'soon' }, 5)).toBe(5);
+    expect(nextPollSeconds({ idle: true, pollAfterSeconds: 0 }, 5)).toBe(5);
+    expect(nextPollSeconds(null, 5)).toBe(5);
+    // A faster resting rate than the hint stays as it is.
+    expect(nextPollSeconds({ idle: true, pollAfterSeconds: 1 }, 0.5)).toBe(0.5);
+  });
+
   it('classifies what the inbox returns', () => {
     expect(classifyNext({ idle: true }).kind).toBe('idle');
     expect(classifyNext({ ended: { conversationId: 'c', endedBy: 'shopper' } }).kind).toBe('ended');
@@ -65,6 +79,24 @@ describe('shift tool helpers', () => {
     expect(needsProxyRelaunch('https://higglehaven.com', { HTTPS_PROXY: 'http://p', NODE_USE_ENV_PROXY: '1' })).toBe(false);
     expect(needsProxyRelaunch('http://127.0.0.1:8787', { HTTPS_PROXY: 'http://p' })).toBe(false);
     expect(needsProxyRelaunch('https://higglehaven.com', {})).toBe(false);
+  });
+});
+
+describe('the shift loop polls faster while a conversation is open (#3532)', () => {
+  it('sleeps for the hinted time, and for its own rate once the hint is gone', async () => {
+    const answers = [
+      { idle: true }, { idle: true, pollAfterSeconds: 1 }, { idle: true, pollAfterSeconds: 1 }, { idle: true },
+    ];
+    let nextCalls = 0;
+    const client = {
+      login: async () => {},
+      call: async (method, path) => (path.endsWith('/next') ? answers[Math.min(nextCalls++, answers.length - 1)] : {}),
+    };
+    let nowMs = 0;
+    const sleeps = [];
+    await runShift({ client, pollSeconds: 5, maxSeconds: 20, now: () => nowMs, sleep: async (ms) => { sleeps.push(ms); nowMs += ms; } });
+    // 5 s, then 1 s, 1 s (hinted), then back to 5 s.
+    expect(sleeps.slice(0, 4)).toEqual([5000, 1000, 1000, 5000]);
   });
 });
 
