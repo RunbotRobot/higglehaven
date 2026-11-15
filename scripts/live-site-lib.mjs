@@ -30,6 +30,95 @@ export const AIM_VECTORS = {
 };
 export const AIM_DIRECTIONS = Object.keys(AIM_VECTORS);
 
+// #3542 (part of #3539, "the world is the product; every piece of interface has to earn
+// the space it takes from it"): how much of the screen the interface covers, as a number
+// an interface change can report before and after.
+//
+// How it is counted: every visible element that paints something itself (a background,
+// a border, an image or icon, a form control, or its own text) is a rectangle; each is
+// clipped to the viewport and the share is the area of their UNION, so a button inside a
+// panel inside a sheet counts once. A translucent surface counts by its full area (a pale
+// pane hides less than a solid one, but it is still a pane over the world; the report does
+// not discount opacity); the separate "solid" share counts only what is opaque (a surface
+// with a background at least 95% opaque, an image, an icon, a control, or text), which is
+// what actually hides the world rather than dimming it. Text counts as the box of its
+// glyphs, not of the box it sits in.
+// An element's own children are not "distinct elements": the count is of ROOTS, painted
+// elements with no painted ancestor, so a panel with twelve controls is one.
+
+// Area of the union of axis-aligned rectangles ({ x, y, width, height }), by sweeping the
+// distinct x edges and merging the y intervals of every rectangle spanning each slab.
+export function unionArea(rects) {
+  const boxes = rects
+    .map((r) => ({ x0: r.x, x1: r.x + r.width, y0: r.y, y1: r.y + r.height }))
+    .filter((b) => b.x1 > b.x0 && b.y1 > b.y0);
+  if (!boxes.length) return 0;
+  const xs = [...new Set(boxes.flatMap((b) => [b.x0, b.x1]))].sort((a, b) => a - b);
+  let area = 0;
+  for (let i = 0; i + 1 < xs.length; i += 1) {
+    const left = xs[i];
+    const right = xs[i + 1];
+    const spans = boxes.filter((b) => b.x0 <= left && b.x1 >= right).map((b) => [b.y0, b.y1]).sort((a, b) => a[0] - b[0]);
+    let covered = 0;
+    let [curStart, curEnd] = spans.length ? spans[0] : [0, 0];
+    for (let k = 1; k < spans.length; k += 1) {
+      if (spans[k][0] > curEnd) {
+        covered += curEnd - curStart;
+        [curStart, curEnd] = spans[k];
+      } else if (spans[k][1] > curEnd) {
+        curEnd = spans[k][1];
+      }
+    }
+    covered += curEnd - curStart;
+    area += covered * (right - left);
+  }
+  return area;
+}
+
+function clipToViewport(rect, viewport) {
+  const x0 = Math.max(0, rect.x);
+  const y0 = Math.max(0, rect.y);
+  const x1 = Math.min(viewport.width, rect.x + rect.width);
+  const y1 = Math.min(viewport.height, rect.y + rect.height);
+  return { x: x0, y: y0, width: Math.max(0, x1 - x0), height: Math.max(0, y1 - y0) };
+}
+
+// elements: [{ selector, rect: { x, y, width, height }, root: boolean, solid: boolean }] as
+// the page reports them. Returns { coverShare, solidShare, elementCount, largest:
+// { selector, share } | null }, shares as fractions of the viewport rounded to four places.
+export function summariseCover(elements, viewport) {
+  const total = viewport.width * viewport.height;
+  const round = (n) => Math.round(n * 10000) / 10000;
+  const clipped = elements.map((el) => ({ el, rect: clipToViewport(el.rect, viewport) })).filter((c) => c.rect.width > 0 && c.rect.height > 0);
+  const roots = clipped.filter((c) => c.el.root);
+  let largest = null;
+  for (const c of roots) {
+    const share = (c.rect.width * c.rect.height) / total;
+    if (!largest || share > largest.share) largest = { selector: c.el.selector, share };
+  }
+  return {
+    coverShare: total > 0 ? round(unionArea(clipped.map((c) => c.rect)) / total) : 0,
+    solidShare: total > 0 ? round(unionArea(clipped.filter((c) => c.el.solid).map((c) => c.rect)) / total) : 0,
+    elementCount: roots.length,
+    largest: largest ? { selector: largest.selector, share: round(largest.share) } : null,
+  };
+}
+
+// One markdown table of states, as `--cover-report` prints it. rows: [{ state, cover?, note? }].
+export function coverTable(rows) {
+  const percent = (share) => `${(share * 100).toFixed(1)}%`;
+  const lines = ['| State | Covered | Solid | Elements | Largest (share of screen) |', '| --- | --- | --- | --- | --- |'];
+  for (const row of rows) {
+    if (!row.cover) {
+      lines.push(`| ${row.state} | not measured | | | ${row.note || ''} |`);
+      continue;
+    }
+    const { coverShare, solidShare, elementCount, largest } = row.cover;
+    lines.push(`| ${row.state} | ${percent(coverShare)} | ${percent(solidShare)} | ${elementCount} | ${largest ? `\`${largest.selector}\` (${percent(largest.share)})` : 'none'} |`);
+  }
+  return lines.join('\n');
+}
+
 // A step is `command` or `command:arg:arg`. Returns { command, args } or throws
 // one plain line naming what is wrong.
 export function parseStep(token) {
@@ -72,9 +161,10 @@ export function parseStep(token) {
     case 'settings':
     case 'idle':
     case 'stats':
+    case 'cover':
       return { command, args: [] };
     default:
-      throw new Error(`unknown step "${token}" (steps: walk, aim, look, tap, mode, wait, shot, fly, settings, idle, stats)`);
+      throw new Error(`unknown step "${token}" (steps: walk, aim, look, tap, mode, wait, shot, fly, settings, idle, stats, cover)`);
   }
 }
 
@@ -118,7 +208,7 @@ export function gateRefusalMessage(status) {
   return `The site answered ${status}: the preview gate did not accept this session, so the fleet key is not configured for this environment (see #3428). Nothing else was tried.`;
 }
 
-// The flags: --url, --name, --desktop, --login, --out, --timing (repeatable).
+// The flags: --url, --name, --desktop, --login, --out, --timing (repeatable), --cover-report.
 // Everything else is a step.
 export function parseArgs(argv, env = {}) {
   const options = {
@@ -128,6 +218,7 @@ export function parseArgs(argv, env = {}) {
     login: 'fleet',
     out: env.LIVE_SITE_OUT || null,
     timing: [],
+    coverReport: false,
   };
   const steps = [];
   for (let i = 0; i < argv.length; i += 1) {
@@ -143,6 +234,7 @@ export function parseArgs(argv, env = {}) {
     else if (arg === '--login') options.login = value();
     else if (arg === '--out') options.out = value();
     else if (arg === '--timing') options.timing.push(value());
+    else if (arg === '--cover-report') options.coverReport = true;
     else if (arg.startsWith('--')) throw new Error(`unknown flag ${arg}`);
     else steps.push(parseStep(arg));
   }

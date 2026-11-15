@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   parseStep, parseArgs, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage,
+  unionArea, summariseCover, coverTable,
 } from './live-site-lib.mjs';
 
 describe('live-site steps (#3430)', () => {
@@ -76,5 +77,81 @@ describe('live-site report helpers (#3430)', () => {
     const line = gateRefusalMessage(401);
     expect(line).toMatch(/fleet key is not configured/);
     expect(line).not.toMatch(/x-fleet-key/i);
+  });
+});
+
+// #3542: how much of the screen the interface covers.
+describe('unionArea', () => {
+  const rect = (x, y, width, height) => ({ x, y, width, height });
+
+  it('is the plain area of one rectangle and zero for none or empty ones', () => {
+    expect(unionArea([])).toBe(0);
+    expect(unionArea([rect(10, 10, 30, 20)])).toBe(600);
+    expect(unionArea([rect(0, 0, 0, 50), rect(5, 5, 10, 0)])).toBe(0);
+  });
+
+  it('counts overlap once', () => {
+    // Two 10x10 squares overlapping in a 5x5 corner: 100 + 100 - 25.
+    expect(unionArea([rect(0, 0, 10, 10), rect(5, 5, 10, 10)])).toBe(175);
+    // A rectangle inside another adds nothing; identical ones add nothing.
+    expect(unionArea([rect(0, 0, 100, 100), rect(10, 10, 20, 20), rect(0, 0, 100, 100)])).toBe(10000);
+  });
+
+  it('adds separate rectangles and handles a plus-shaped overlap', () => {
+    expect(unionArea([rect(0, 0, 10, 10), rect(20, 0, 10, 10)])).toBe(200);
+    // A 30x10 bar crossed by a 10x30 bar: 300 + 300 - 100.
+    expect(unionArea([rect(0, 10, 30, 10), rect(10, 0, 10, 30)])).toBe(500);
+  });
+
+  it('merges touching and chained intervals within a slab', () => {
+    // Three stacked rectangles in one column, the first two touching, the third overlapping the second.
+    expect(unionArea([rect(0, 0, 10, 10), rect(0, 10, 10, 10), rect(0, 15, 10, 10)])).toBe(250);
+  });
+});
+
+describe('summariseCover', () => {
+  const viewport = { width: 100, height: 100 };
+
+  it('reports the union share, the root count and the largest root', () => {
+    const elements = [
+      { selector: 'div#sheet', rect: { x: 0, y: 50, width: 100, height: 50 }, root: true, solid: false }, // half the screen, translucent
+      { selector: 'button.close', rect: { x: 80, y: 60, width: 10, height: 10 }, root: false, solid: true }, // inside the sheet
+      { selector: 'div.pill', rect: { x: 0, y: 0, width: 20, height: 10 }, root: true, solid: true },
+    ];
+    expect(summariseCover(elements, viewport)).toEqual({
+      coverShare: 0.52,
+      solidShare: 0.03, // the pill (2%) and the close button (1%): the dim sheet does not hide anything
+      elementCount: 2,
+      largest: { selector: 'div#sheet', share: 0.5 },
+    });
+  });
+
+  it('clips to the viewport, so what hangs off the edge is not counted', () => {
+    const elements = [{ selector: 'div.wide', rect: { x: 50, y: -20, width: 100, height: 40 }, root: true, solid: true }];
+    // Visible part: x 50..100, y 0..20.
+    expect(summariseCover(elements, viewport)).toEqual({ coverShare: 0.1, solidShare: 0.1, elementCount: 1, largest: { selector: 'div.wide', share: 0.1 } });
+  });
+
+  it('says so when nothing is over the world', () => {
+    expect(summariseCover([], viewport)).toEqual({ coverShare: 0, solidShare: 0, elementCount: 0, largest: null });
+    expect(summariseCover([{ selector: 'div.off', rect: { x: 200, y: 200, width: 10, height: 10 }, root: true, solid: true }], viewport).elementCount).toBe(0);
+  });
+});
+
+describe('coverTable and the cover flags', () => {
+  it('prints one row per state, with a reason for one that could not be measured', () => {
+    const table = coverTable([
+      { state: 'Shop', cover: { coverShare: 0.1234, solidShare: 0.08, elementCount: 7, largest: { selector: 'div#hud', share: 0.05 } } },
+      { state: 'Assistant panel', note: 'needs an assistant on shift' },
+    ]);
+    expect(table).toContain('| Shop | 12.3% | 8.0% | 7 | `div#hud` (5.0%) |');
+    expect(table).toContain('| Assistant panel | not measured | | | needs an assistant on shift |');
+    expect(table.split('\n')).toHaveLength(4);
+  });
+
+  it('parses the cover step and the --cover-report flag', () => {
+    expect(parseStep('cover')).toEqual({ command: 'cover', args: [] });
+    expect(parseArgs(['--name', 'higglehaven3', '--cover-report'], {}).options.coverReport).toBe(true);
+    expect(parseArgs(['--name', 'higglehaven3'], {}).options.coverReport).toBe(false);
   });
 });

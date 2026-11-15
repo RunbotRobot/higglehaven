@@ -22,10 +22,15 @@
 //   wait:<ms>                             wait
 //   shot[:name]                           screenshot at CSS-pixel scale (390x844 on a phone)
 //   stats                                 frame figures so far (longest frame, long tasks)
+//   cover                                 how much of the screen the interface covers right now
+//                                         (share of the viewport, number of separate elements, the
+//                                         largest one); how it is counted is in live-site-lib.mjs
 //
 // Flags: --url (default https://higglehaven.com), --name (required; this
 // session's name), --desktop (1280x800 instead of phone), --login fleet|local,
-// --out <dir> (screenshots; use your scratchpad), --timing <substring> (repeat).
+// --out <dir> (screenshots; use your scratchpad), --timing <substring> (repeat),
+// --cover-report (instead of steps: walk a fixed list of states and print one table of how
+// much of the screen the interface covers in each; for an interface change's before and after).
 //
 // Never prints or stores a cookie or a header value. Requests go through the
 // session's network proxy (HTTPS_PROXY), which adds the fleet key header; this
@@ -35,7 +40,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  PHONE, DESKTOP, WALK_VECTORS, AIM_VECTORS, parseArgs, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage,
+  PHONE, DESKTOP, WALK_VECTORS, AIM_VECTORS, parseArgs, summariseCover, coverTable, safeShotName, summarizeTimings, routeOf, durationFromTiming, gateRefusalMessage,
 } from './live-site-lib.mjs';
 
 const fail = (message) => {
@@ -135,6 +140,70 @@ async function clearLocalVerifyModal() {
   await settle();
 }
 
+
+// #3542: the page's own side of `cover`: every visible element that paints something itself,
+// as a rectangle, with whether it is a root (no painted ancestor). Self-contained, because
+// Playwright serialises it into the page. What counts is explained in live-site-lib.mjs.
+const collectInterfaceElements = () => {
+  const transparent = (color) => !color || color === 'transparent' || /,\s*0\)$/.test(color) || /\/\s*0\)$/.test(color);
+  const hasOwnText = (el) => [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim().length > 0);
+  const textRect = (el) => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    return range.getBoundingClientRect();
+  };
+  const mainCanvas = document.getElementById('app');
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const found = [];
+  for (const el of document.body.querySelectorAll('*')) {
+    if (el === mainCanvas || el.closest('script, style, noscript, template')) continue;
+    if (!el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })) continue;
+    // Something fading in or out at under 5% opacity (the title screen leaving) is not covering anything.
+    let effectiveOpacity = 1;
+    for (let a = el; a && a !== document.documentElement; a = a.parentElement) effectiveOpacity *= Number(getComputedStyle(a).opacity);
+    if (effectiveOpacity < 0.05) continue;
+    const style = getComputedStyle(el);
+    const tag = el.tagName.toLowerCase();
+    const paintsBox = !transparent(style.backgroundColor) || style.backgroundImage !== 'none'
+      || ['Top', 'Right', 'Bottom', 'Left'].some((side) => parseFloat(style[`border${side}Width`]) > 0 && !transparent(style[`border${side}Color`]))
+      || ['img', 'svg', 'video', 'canvas', 'input', 'textarea', 'select', 'iframe'].includes(tag);
+    const paintsText = !paintsBox && hasOwnText(el);
+    if (!paintsBox && !paintsText) continue;
+    // Solid: it hides what is behind it (a background at least 95% opaque, or something that is
+    // not a plain tinted box at all); a pale pane or a dim backdrop only tints it.
+    const alpha = (color) => {
+      const m = /rgba?\(([^)]*)\)/.exec(color);
+      if (!m) return 1;
+      const parts = m[1].split(/[,\s/]+/).filter(Boolean);
+      return parts.length >= 4 ? Number(parts[3]) : 1;
+    };
+    const tintedBoxOnly = paintsBox && style.backgroundImage === 'none' && !['img', 'svg', 'video', 'canvas', 'input', 'textarea', 'select', 'iframe'].includes(tag);
+    const solid = !tintedBoxOnly || alpha(style.backgroundColor) >= 0.95;
+    const r = paintsBox ? el.getBoundingClientRect() : textRect(el);
+    if (r.width < 1 || r.height < 1 || r.right <= 0 || r.bottom <= 0 || r.left >= vw || r.top >= vh) continue;
+    found.push({ el, solid, rect: { x: r.left, y: r.top, width: r.width, height: r.height } });
+  }
+  const painted = new Set(found.map((f) => f.el));
+  const selectorOf = (el) => {
+    if (el.id) return `${el.tagName.toLowerCase()}#${el.id}`;
+    const classes = [...el.classList].slice(0, 2).join('.');
+    return classes ? `${el.tagName.toLowerCase()}.${classes}` : el.tagName.toLowerCase();
+  };
+  const elements = found.map(({ el, rect, solid }) => {
+    let root = true;
+    for (let a = el.parentElement; a; a = a.parentElement) {
+      if (painted.has(a)) { root = false; break; }
+    }
+    return { selector: selectorOf(el), rect, root, solid };
+  });
+  return { viewport: { width: vw, height: vh }, elements };
+};
+const measureCover = async () => {
+  const { viewport, elements } = await page.evaluate(collectInterfaceElements);
+  return summariseCover(elements, viewport);
+};
+
 const frameStats = () => page.evaluate(() => {
   const monitor = window.__frameMonitor;
   return monitor ? { longestFrameMs: Math.round(monitor.longestFrameGapMs()), longTasks: monitor.longTasks() } : null;
@@ -208,9 +277,66 @@ async function runStep(step, index) {
     }
     case 'stats':
       return frameStats();
+    case 'cover':
+      return measureCover();
     default:
       throw new Error(`unhandled step ${step.command}`);
   }
+}
+
+
+// #3542: `--cover-report`. A fixed list of states, one row each, printed as a markdown table.
+// A state that cannot be reached from here (needs a product in view, an item placed, an
+// assistant on shift) is listed as not measured, with the reason, so the gaps are visible.
+async function runCoverReport() {
+  const rows = [];
+  const measure = async (state, action) => {
+    try {
+      if (action) await action();
+      // A mode switch reloads the page: wait for the title splash to be gone, or it is what gets measured.
+      await page.waitForFunction(() => {
+        const splash = document.getElementById('loading-screen');
+        return !splash || splash.classList.contains('loading-screen-hidden') || getComputedStyle(splash).display === 'none';
+      }, null, { timeout: 15000 }).catch(() => {});
+      await page.waitForTimeout(900);
+      const cover = await measureCover();
+      // One picture per state beside the table, to check the number against what is on screen.
+      await page.screenshot({ path: path.join(outDir, safeShotName(`cover-${state}`, rows.length + 1)) }).catch(() => {});
+      rows.push({ state, cover });
+    } catch (error) {
+      rows.push({ state, note: `could not reach it: ${error.message.split('\n')[0]}` });
+    }
+  };
+  await measure('Shop, arrival (flying)');
+  await measure('Shop, walking', () => page.click('#shop-fly-btn'));
+  await measure('Settings, General tab', async () => {
+    await page.click('#account-menu-toggle');
+    await page.click('#settings-btn');
+    await page.click('.settings-tab-btn[data-section="general"]');
+  });
+  for (const tab of ['shop', 'build', 'sell']) {
+    await measure(`Settings, ${tab[0].toUpperCase()}${tab.slice(1)} tab`, () => page.click(`.settings-tab-btn[data-section="${tab}"]`));
+  }
+  await page.click('#settings-close-btn').catch(() => {});
+  // Switching mode can show the title/loading screen again; measure once it has gone.
+  const switchMode = async (mode) => {
+    await page.click(`.mode-nav-btn[data-mode="${mode}"]`, { timeout: 8000 });
+    await settle();
+    await page.waitForSelector('#loading-screen', { state: 'hidden', timeout: 15000 }).catch(() => {});
+    await page.waitForTimeout(1200);
+  };
+  await measure('Build, no landlet (claim sheet)', () => switchMode('build'));
+  // The claim sheet sits over the mode buttons; close it to reach the next mode.
+  await page.click('#claim-back-btn', { timeout: 3000 }).catch(() => {});
+  await measure('Sell, idle', () => switchMode('sell'));
+  rows.push({ state: 'Shop, a product open', note: 'needs a product in view; not automated' });
+  rows.push({ state: 'Build, an item selected', note: 'needs a placed item; not automated' });
+  rows.push({ state: 'Assistant panel', note: 'needs an assistant on shift; not automated' });
+  const viewport = await page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }));
+  console.log(`Interface cover at ${viewport.width}x${viewport.height} (${options.desktop ? 'desktop' : 'phone'}), ${new Date().toISOString().slice(0, 10)}, ${baseUrl}.`);
+  console.log('Share of the screen covered by anything that paints over the 3D view, overlap counted once, translucent surfaces counted by full area.');
+  console.log('');
+  console.log(coverTable(rows));
 }
 
 try {
@@ -223,6 +349,11 @@ try {
   // load), kept apart from the steps' own figures, which start from a reset.
   result.startup = await frameStats().catch(() => null);
   await page.evaluate(() => window.__frameMonitor?.reset()).catch(() => {});
+  if (options.coverReport) {
+    await runCoverReport();
+    await browser.close();
+    process.exit(0);
+  }
   for (let i = 0; i < steps.length; i += 1) {
     const step = steps[i];
     const label = [step.command, ...step.args].join(':');
@@ -232,7 +363,7 @@ try {
       // navigation), the same one `stats.longTasks.longestAtMs` uses, so a
       // reader can tell which step a long task fell in.
       const endedAtMs = await page.evaluate(() => Math.round(performance.now())).catch(() => null);
-      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && step.command === 'stats' ? { stats: value } : {}) });
+      result.steps.push({ step: label, ok: true, endedAtMs, ...(value !== null && step.command === 'stats' ? { stats: value } : {}), ...(step.command === 'cover' ? { cover: value } : {}) });
     } catch (error) {
       result.steps.push({ step: label, ok: false, error: error.message.split('\n')[0] });
       break;
