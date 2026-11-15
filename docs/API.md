@@ -10428,6 +10428,20 @@ Rules the endpoints keep:
   atomically and once; an assistant holding one takes no second, and one it does
   not answer within 15 minutes goes back in line; a question from someone with a
   block either way is skipped), or `{ idle: true }`.
+- **Has this assistant met this person? (#3531)** Each of the three hand-overs
+  above (a message, a left question, a handover) also carries `firstContact`
+  (true when this assistant has never answered this shopper, so it should
+  introduce itself as an AI, and only then) and `lastSpokeAt` (when it last did,
+  or `null`). The fact is its own small table, `assistant_contacts`
+  (`migrations/0226`, keyed on `user_id`: which assistant, which shopper, first and
+  last time it answered; no message text), set when the assistant replies or
+  answers a left question, so it outlives the 30-minute message retention. It is
+  dropped 30 days after the assistant last spoke to that person, after which they
+  are a stranger again (`CONTACT_KEPT_MS`). The first message of a conversation,
+  and a left question, also carry `earlier`: up to 20 of the latest messages
+  between this assistant and this shopper from earlier conversations, while those
+  messages still exist. Nothing is retained longer for this. Whether an assistant is
+  an AI is never conditional on any of this: it says so whenever asked.
 - `POST /api/assistant-inbox/questions/:id/answer` `{ text }` (at most 1000
   characters), and `POST /api/assistant-inbox/questions/:id/escalate`
   `{ summary }` (as for a conversation; the quoted field holds the question).

@@ -130,11 +130,16 @@ It prints one line of JSON and ends. Read it, then run it again straight after
 you reply. What the line means:
 
 - \`{ "conversationId", "shopper", "message", "history" }\`: a shopper wrote to you.
-  Reply to it.
+  Reply to it. It also says \`firstContact\` (introduce yourself as an AI only
+  when it is true) and \`lastSpokeAt\`, and the first message of a conversation
+  may carry \`earlier\`, what is left of your earlier conversations with them.
 - \`{ "handover": ... }\`: another assistant passed you a conversation, with who
   passed it and the conversation so far. Pick up where they left off.
+  It also says \`firstContact\`: if you have not met this person, say who you are
+  and that you have taken over.
 - \`{ "question": ... }\`: a question someone left while every assistant was busy.
   Answer it in full with \`answer-question\`, or pass it on with \`escalate-question\`.
+  It carries \`firstContact\`, \`lastSpokeAt\` and \`earlier\` the same way.
 - \`{ "ended": ... }\`: the conversation ended without you. Nothing to do.
 - \`{ "idle": true }\`: nothing came. Run the shift program again.
 
