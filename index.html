@@ -83,6 +83,7 @@
         <div id="assistant-chat-title"><span id="assistant-chat-name"></span> <span id="assistant-chat-badge">assistant</span></div>
         <div id="assistant-chat-header-actions">
           <button id="assistant-chat-block" type="button">Block</button>
+          <button id="assistant-chat-minimize" type="button" aria-label="Minimise, keep the conversation open">&minus;</button>
           <button id="assistant-chat-close" type="button" aria-label="End the conversation and close">&times;</button>
         </div>
       </div>
@@ -96,6 +97,10 @@
         <button id="assistant-chat-send" type="submit">Send</button>
       </form>
     </div>
+    <!-- #3529: the minimised panel. A small pill at the left edge, clear of the
+         joysticks, the fly button and the mode buttons; the conversation stays
+         open and the pill says when a reply has come in. -->
+    <button id="assistant-chat-pill" type="button" hidden></button>
     <!-- #2818 (sub-issue of #2780, itself sub-issue of #2777): proximity
          voice chat's mic toggle. Same live trustTier-driven visibility as
          #shop-nearby-chat-btn above (src/shop/voiceChat.js's own

@@ -100,3 +100,17 @@ export function questionNotice(question, { keptDays, assistantsOnShift }) {
   const floor = assistantsOnShift === 0 ? ' No assistant is on the floor right now, so this may take a while.' : '';
   return `${place}${floor} You can close this and your place is kept: you'll get a notification when it's answered. Questions are kept for ${keptDays} days.`;
 }
+
+// #3529: the minimised panel's pill. `unread` is whether a reply has come in
+// since it was minimised.
+export function pillLabel(name, unread) {
+  const who = name || 'Assistants';
+  return unread ? `${who} replied` : who;
+}
+
+// #3529: whether `after` holds an assistant message that `before` did not, so a
+// reply that arrives while the panel is minimised can light up the pill.
+export function hasNewAssistantMessage(before, after) {
+  const seen = new Set(before.map((message) => message.seq));
+  return after.some((message) => message.sender === 'assistant' && !seen.has(message.seq));
+}

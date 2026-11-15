@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel, canLeaveQuestion, questionNotice, questionInLine, handoverNotice } from './assistantChatLogic.js';
+import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel, canLeaveQuestion, questionNotice, questionInLine, handoverNotice, pillLabel, hasNewAssistantMessage } from './assistantChatLogic.js';
 
 const msg = (seq, sender, createdAt = '2026-11-11T10:00:00.000Z') => ({ seq, sender, text: `m${seq}`, createdAt });
 
@@ -105,5 +105,20 @@ describe('handoverNotice (#3448)', () => {
   it('is null for a conversation that was never handed over', () => {
     expect(handoverNotice({ assistant: { name: 'Clover' }, handedOver: null })).toBeNull();
     expect(handoverNotice(null)).toBeNull();
+  });
+});
+
+describe('minimised panel (#3529)', () => {
+  it('labels the pill with the assistant, and says when a reply came in', () => {
+    expect(pillLabel('Juniper', false)).toBe('Juniper');
+    expect(pillLabel('Juniper', true)).toBe('Juniper replied');
+    expect(pillLabel(null, false)).toBe('Assistants');
+  });
+  it('sees a new assistant message, and nothing else', () => {
+    const before = [msg(1, 'shopper')];
+    expect(hasNewAssistantMessage(before, before)).toBe(false);
+    expect(hasNewAssistantMessage(before, [...before, msg(2, 'shopper')])).toBe(false);
+    expect(hasNewAssistantMessage(before, [...before, msg(2, 'assistant')])).toBe(true);
+    expect(hasNewAssistantMessage([...before, msg(2, 'assistant')], [...before, msg(2, 'assistant')])).toBe(false);
   });
 });
