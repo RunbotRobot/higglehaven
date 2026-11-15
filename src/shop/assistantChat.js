@@ -16,10 +16,9 @@ import {
 import { confirmAndBlockPerson } from '../blocks.js';
 import {
   mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, handoverNotice, offerLabel,
-  canLeaveQuestion, questionNotice, questionInLine, leaveLabel, withdrawLabel, doneLabel, pillLabel, hasNewAssistantMessage,
+  canLeaveQuestion, questionNotice, questionInLine, leaveLabel, withdrawLabel, doneLabel, pillLabel, hasNewAssistantMessage, chatPollIntervalMs,
 } from './assistantChatLogic.js';
 
-const POLL_INTERVAL_MS = 2000;
 // A left question is not a live chat, so it is checked less often.
 const QUESTION_POLL_INTERVAL_MS = 5000;
 
@@ -244,10 +243,18 @@ async function poll(token) {
   render();
 }
 
+// #3532: a chain of timeouts rather than a fixed interval, so the next poll comes
+// sooner (1 s, not 2 s) while the shopper is waiting for a reply. pollTimer stays
+// non-null for as long as polling is wanted; stopPolling() ends the chain.
 function startPolling() {
   if (pollTimer !== null) return;
   const token = openToken;
-  pollTimer = setInterval(() => { poll(token); }, POLL_INTERVAL_MS);
+  const tick = async () => {
+    await poll(token);
+    if (pollTimer === null || token !== openToken) return;
+    pollTimer = setTimeout(tick, chatPollIntervalMs(messages));
+  };
+  pollTimer = setTimeout(tick, chatPollIntervalMs(messages));
 }
 
 // Opens the panel for an assistant. If the shopper already has an open

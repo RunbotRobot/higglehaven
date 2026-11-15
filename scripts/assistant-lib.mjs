@@ -147,6 +147,15 @@ export function createClient({ baseUrl, loginName, fetchImpl = fetch, localFleet
   return { login, call };
 }
 
+// #3532: how long to wait before the next poll. The server says to poll sooner
+// (`pollAfterSeconds`) while this assistant has a conversation open; the loop
+// never polls slower than its own rate, and never faster than twice a second.
+export function nextPollSeconds(body, pollSeconds) {
+  const hinted = Number(body?.pollAfterSeconds);
+  if (!Number.isFinite(hinted) || hinted <= 0) return pollSeconds;
+  return Math.min(pollSeconds, Math.max(0.5, hinted));
+}
+
 // The idle loop. Signs in, goes on shift, then polls until a shopper writes, a
 // conversation ends without the assistant, or the time runs out. Returns the one
 // object the program prints. A short network or server hiccup (a 5xx, a 429 or
@@ -170,7 +179,7 @@ export async function runShift({ client, pollSeconds, maxSeconds, sleep, now = D
     }
     const outcome = classifyNext(body);
     if (outcome.kind !== 'idle') return outcome.output;
-    await sleep(pollSeconds * 1000);
+    await sleep(nextPollSeconds(body, pollSeconds) * 1000);
   }
   return { idle: true, reason: 'time limit' };
 }
