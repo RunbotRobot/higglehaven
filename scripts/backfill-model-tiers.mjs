@@ -16,6 +16,15 @@
 // --database <name>, --bucket <name>, --persist-to <dir> (with --local: use that
 // wrangler state directory instead of the default one).
 //
+// --redo-cracked (#3527): instead of products with no tiers, look at products
+// that HAVE them. Tiers made before #3528 can have holes along the model's UV
+// and normal seams; this counts the hole edges of each stored tier and of the
+// full model, and for a product whose tier has more it makes both tiers again
+// with the current code and swaps them in (only on rows still pointing at the
+// old tiers). A product with nothing cracked is left exactly as it is. Combine
+// with --dry-run to see how many models it would check, --limit to do some at a
+// time.
+//
 // Why wrangler and not the public API. The seller-side routes that record
 // tiers (PATCH /api/catalog/:id) belong to each product's own seller session,
 // which a script does not have for other people's products, and
@@ -36,7 +45,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  CANDIDATES_SQL, GLB_CONTENT_TYPE, buildRecordStatements, buildRecordedCountStatement, formatSummary, groupCandidates, parseArgs, runBackfill,
+  CANDIDATES_SQL, CRACKED_CANDIDATES_SQL, GLB_CONTENT_TYPE, buildRecordStatements, buildRecordedCountStatement, buildReplaceStatements, formatRedoSummary,
+  formatSummary, groupCandidates, groupCrackCandidates, parseArgs, runBackfill, runRedoCracked,
 } from './backfill-model-tiers-lib.mjs';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -51,7 +61,7 @@ let options;
 try {
   options = parseArgs(process.argv.slice(2));
 } catch (err) {
-  fail(`${err.message}\nUsage: node scripts/backfill-model-tiers.mjs (--local | --remote) [--dry-run] [--limit n] [--max-total-bytes n]`);
+  fail(`${err.message}\nUsage: node scripts/backfill-model-tiers.mjs (--local | --remote) [--dry-run] [--redo-cracked] [--limit n] [--max-total-bytes n]`);
 }
 if (options.mode === 'remote' && !process.env.CLOUDFLARE_API_TOKEN) {
   fail('--remote needs CLOUDFLARE_API_TOKEN in the environment (wrangler cannot reach production without it). Nothing was changed.');
@@ -76,12 +86,12 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'backfill-tiers-'));
 process.on('exit', () => fs.rmSync(scratch, { recursive: true, force: true }));
 
 async function main() {
-  const rows = runSql(CANDIDATES_SQL)[0].results;
-  const { candidates, unrecognised, builtIn } = groupCandidates(rows);
+  const rows = runSql(options.redoCracked ? CRACKED_CANDIDATES_SQL : CANDIDATES_SQL)[0].results;
+  const { candidates, unrecognised, builtIn } = options.redoCracked ? groupCrackCandidates(rows) : groupCandidates(rows);
   for (const url of builtIn) console.log(`Built-in model, no stored versions by design (the viewer builds them): ${url}`);
   for (const url of unrecognised) console.warn(`Not a stored model, left alone: ${url}`);
   console.log(`Target: ${options.mode} database "${options.database}", bucket "${options.bucket}"${options.dryRun ? ' (dry run)' : ''}`);
-  console.log(`Products without tiers: ${rows.length} rows over ${candidates.length} distinct models`);
+  console.log(`${options.redoCracked ? 'Products with tiers' : 'Products without tiers'}: ${rows.length} rows over ${candidates.length} distinct models`);
 
   let browser = null;
   let server = null;
@@ -122,6 +132,14 @@ async function main() {
       fs.writeFileSync(file, bytes);
       wrangler(['r2', 'object', 'put', `${options.bucket}/${key}`, '--file', file, '--content-type', GLB_CONTENT_TYPE, ...targetFlags]);
     },
+    async holeEdges(bytes) {
+      const target = await pageForGeneration();
+      return target.evaluate((base64) => window.countHoleEdges(base64), Buffer.from(bytes).toString('base64'));
+    },
+    async replaceTiers(modelUrl, oldTiers, urls) {
+      for (const statement of buildReplaceStatements(modelUrl, oldTiers, urls)) runSql(statement);
+      return runSql(buildRecordedCountStatement(modelUrl, urls))[0].results[0].recorded;
+    },
     async recordTiers(modelUrl, urls) {
       for (const statement of buildRecordStatements(modelUrl, urls)) runSql(statement);
       return runSql(buildRecordedCountStatement(modelUrl, urls))[0].results[0].recorded;
@@ -129,11 +147,12 @@ async function main() {
   };
 
   try {
-    const summary = await runBackfill({
+    const run = options.redoCracked ? runRedoCracked : runBackfill;
+    const summary = await run({
       candidates, io, dryRun: options.dryRun, limit: options.limit, maxTotalBytes: options.maxTotalBytes, log: (line) => console.log(line),
     });
-    console.log(formatSummary(summary));
-    if (!options.dryRun) {
+    console.log(options.redoCracked ? formatRedoSummary(summary) : formatSummary(summary));
+    if (!options.dryRun && !options.redoCracked) {
       const left = groupCandidates(runSql(CANDIDATES_SQL)[0].results).candidates.length;
       console.log(`  models still without tiers afterwards: ${left}`);
     }

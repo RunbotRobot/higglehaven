@@ -166,6 +166,34 @@ export function tierProblem(tierBytes, fullSizeBytes) {
   return null;
 }
 
+// Checks and stores the tiers a generator made for one model, content-addressed
+// (the same steps an upload takes) and returns the URLs it stored. A tier that
+// is empty, too big, not smaller than the model, or that `veto` refuses is
+// dropped with a line saying why. `veto(name, bytes)` returns a sentence or null.
+async function storeGeneratedTiers({
+  generated, full, io, summary, maxTotalBytes, label, log, veto = null,
+}) {
+  const urls = { midUrl: null, farUrl: null };
+  for (const [name, field] of [['mid', 'midUrl'], ['far', 'farUrl']]) {
+    const bytes = generated[name];
+    if (!bytes) continue;
+    const problem = tierProblem(bytes, full.byteLength) ?? (veto ? await veto(name, bytes) : null);
+    if (problem) {
+      log(`drop   ${label} ${name} ${problem}`);
+      continue;
+    }
+    if (summary.bytesAdded + bytes.byteLength > maxTotalBytes) {
+      throw new Error(`storing the ${name} version would pass the ${maxTotalBytes} byte limit for this run`);
+    }
+    const key = `models/${await sha256Hex(bytes)}.glb`;
+    await io.storeTier(key, bytes);
+    urls[field] = keyToModelUrl(key);
+    summary.tiersStored += 1;
+    summary.bytesAdded += bytes.byteLength;
+  }
+  return urls;
+}
+
 // io is:
 //   readModel(key)            -> Uint8Array of the stored full model
 //   generateTiers(bytes)      -> { skinned: boolean, mid: Uint8Array|null, far: Uint8Array|null }
@@ -216,24 +244,9 @@ export async function runBackfill({
         log(`skip   ${candidate.modelUrl} (skinned)`);
         continue;
       }
-      const urls = { midUrl: null, farUrl: null };
-      for (const [name, field] of [['mid', 'midUrl'], ['far', 'farUrl']]) {
-        const bytes = generated[name];
-        if (!bytes) continue;
-        const problem = tierProblem(bytes, full.byteLength);
-        if (problem) {
-          log(`drop   ${candidate.modelUrl} ${name} ${problem}`);
-          continue;
-        }
-        if (summary.bytesAdded + bytes.byteLength > maxTotalBytes) {
-          throw new Error(`storing the ${name} version would pass the ${maxTotalBytes} byte limit for this run`);
-        }
-        const key = `models/${await sha256Hex(bytes)}.glb`;
-        await io.storeTier(key, bytes);
-        urls[field] = keyToModelUrl(key);
-        summary.tiersStored += 1;
-        summary.bytesAdded += bytes.byteLength;
-      }
+      const urls = await storeGeneratedTiers({
+        generated, full, io, summary, maxTotalBytes, label: candidate.modelUrl, log,
+      });
       if (!urls.midUrl && !urls.farUrl) {
         summary.nothingToStore += 1;
         log(`none   ${candidate.modelUrl} (already small enough, or nothing to reduce)`);
@@ -248,6 +261,178 @@ export async function runBackfill({
     }
   }
   return summary;
+}
+
+// ---- Redoing tiers that were made with cracks (#3527) ----
+//
+// Until #3528 the simplifier cracked a model open along its UV and normal
+// seams, so a tier stored before then can have holes the full model does not
+// (a toilet's mid version had 1255 of its 2045 edges on holes). The ordinary
+// run never looks at a product that already has tiers, so --redo-cracked does:
+// it counts the hole edges of each stored tier and of the full model, and for a
+// product whose tier has more than the model it regenerates both tiers with the
+// current code and swaps them in. A swap is guarded on the row still pointing at
+// the old tiers, so a seller replacing the model, or another run, is never
+// overwritten. A model with nothing cracked is left exactly as it is.
+
+// A tier may have this many more hole edges than the model before it counts as
+// cracked (rounding in welding the vertices, not a real hole).
+export const CRACK_TOLERANCE_EDGES = 2;
+
+export const CRACKED_CANDIDATES_SQL = `
+SELECT model_url, model_mid_url, model_far_url, category FROM (
+  SELECT model_url, model_mid_url, model_far_url, category FROM catalog_templates
+  WHERE model_url IS NOT NULL AND (model_mid_url IS NOT NULL OR model_far_url IS NOT NULL)
+  UNION ALL
+  SELECT model_url, model_mid_url, model_far_url, category FROM products
+  WHERE model_url IS NOT NULL AND (model_mid_url IS NOT NULL OR model_far_url IS NOT NULL)
+) ORDER BY model_url`.trim();
+
+// Like groupCandidates, with every distinct { midUrl, farUrl } pair a model's
+// rows carry (a model's rows can differ if they were made by different
+// versions of the generator). A pair that is not made of stored tier URLs is
+// ignored: it is never read or written.
+export function groupCrackCandidates(rows) {
+  const { candidates, builtIn, unrecognised } = groupCandidates(rows);
+  const pairs = new Map(candidates.map((entry) => [entry.modelUrl, []]));
+  for (const row of rows) {
+    const modelUrl = row.model_url ?? row.modelUrl;
+    const list = pairs.get(modelUrl);
+    if (!list) continue;
+    const midUrl = row.model_mid_url ?? row.midUrl ?? null;
+    const farUrl = row.model_far_url ?? row.farUrl ?? null;
+    const valid = (value) => value === null || MODEL_URL_PATTERN.test(value);
+    if (!valid(midUrl) || !valid(farUrl) || (midUrl === null && farUrl === null)) continue;
+    if (!list.some((pair) => pair.midUrl === midUrl && pair.farUrl === farUrl)) list.push({ midUrl, farUrl });
+  }
+  return {
+    candidates: candidates.map((entry) => ({ ...entry, tiers: pairs.get(entry.modelUrl) })).filter((entry) => entry.tiers.length > 0),
+    builtIn,
+    unrecognised,
+  };
+}
+
+// Swaps one old pair of tiers for new ones on every row that still carries
+// exactly the old pair. `IS` compares NULL safely.
+export function buildReplaceStatements(modelUrl, oldTiers, { midUrl, farUrl }) {
+  assertSafeForSql(modelUrl, midUrl, farUrl);
+  assertSafeForSql(modelUrl, oldTiers.midUrl, oldTiers.farUrl);
+  const quote = (value) => (value ? `'${value}'` : 'NULL');
+  return ['catalog_templates', 'products'].map((table) => (
+    `UPDATE ${table} SET model_mid_url = ${quote(midUrl)}, model_far_url = ${quote(farUrl)} `
+    + `WHERE model_url = '${modelUrl}' AND model_mid_url IS ${quote(oldTiers.midUrl)} AND model_far_url IS ${quote(oldTiers.farUrl)}`
+  ));
+}
+
+// io is the same as for runBackfill, plus
+//   holeEdges(bytes)                          -> number of hole edges in a .glb
+//   replaceTiers(modelUrl, oldTiers, newUrls) -> number of rows swapped
+export async function runRedoCracked({
+  candidates, io, dryRun = false, limit = Infinity, maxTotalBytes = Infinity, log = () => {},
+}) {
+  const summary = {
+    dryRun,
+    candidates: candidates.length,
+    skippedAvatar: 0,
+    skippedSkinned: 0,
+    sound: 0,
+    redone: 0,
+    nothingToStore: 0,
+    tiersStored: 0,
+    bytesAdded: 0,
+    rowsRecorded: 0,
+    failed: [],
+    deferred: 0,
+    wouldProcess: 0,
+  };
+  let attempted = 0;
+  for (const candidate of candidates) {
+    if (candidate.avatarOnly) {
+      summary.skippedAvatar += 1;
+      log(`skip   ${candidate.modelUrl} (avatar)`);
+      continue;
+    }
+    if (attempted >= limit) {
+      summary.deferred += 1;
+      continue;
+    }
+    attempted += 1;
+    if (dryRun) {
+      summary.wouldProcess += 1;
+      log(`would  check ${candidate.modelUrl}`);
+      continue;
+    }
+    try {
+      const full = await io.readModel(modelUrlToKey(candidate.modelUrl));
+      validateGlb(full.buffer.slice(full.byteOffset, full.byteOffset + full.byteLength));
+      const fullHoles = await io.holeEdges(full);
+      const allowed = fullHoles + CRACK_TOLERANCE_EDGES;
+      const cracked = [];
+      for (const pair of candidate.tiers) {
+        let worst = 0;
+        for (const url of [pair.midUrl, pair.farUrl]) {
+          if (!url) continue;
+          worst = Math.max(worst, await io.holeEdges(await io.readModel(modelUrlToKey(url))));
+        }
+        if (worst > allowed) cracked.push({ pair, worst });
+      }
+      if (cracked.length === 0) {
+        summary.sound += 1;
+        log(`sound  ${candidate.modelUrl} (no tier has more hole edges than the model's ${fullHoles})`);
+        continue;
+      }
+      const generated = await io.generateTiers(full);
+      if (generated.skinned) {
+        summary.skippedSkinned += 1;
+        log(`skip   ${candidate.modelUrl} (skinned)`);
+        continue;
+      }
+      // Never swap a cracked tier for another cracked one.
+      const veto = async (name, bytes) => {
+        const holes = await io.holeEdges(bytes);
+        return holes > allowed ? `still has ${holes} hole edges (the model has ${fullHoles})` : null;
+      };
+      const urls = await storeGeneratedTiers({
+        generated, full, io, summary, maxTotalBytes, label: candidate.modelUrl, log, veto,
+      });
+      let rows = 0;
+      for (const { pair } of cracked) rows += await io.replaceTiers(candidate.modelUrl, pair, urls);
+      if (!urls.midUrl && !urls.farUrl) {
+        summary.nothingToStore += 1;
+        log(`cleared ${candidate.modelUrl} (nothing crack-free to store; the viewer builds its own)`);
+      } else {
+        log(`redone ${candidate.modelUrl} mid=${urls.midUrl ?? '-'} far=${urls.farUrl ?? '-'} (was ${cracked.map((c) => c.worst).join('/')} hole edges)`);
+      }
+      summary.redone += 1;
+      summary.rowsRecorded += rows;
+    } catch (err) {
+      summary.failed.push({ modelUrl: candidate.modelUrl, reason: err.message });
+      log(`FAILED ${candidate.modelUrl}: ${err.message}`);
+    }
+  }
+  return summary;
+}
+
+export function formatRedoSummary(summary) {
+  const lines = [
+    summary.dryRun ? 'Dry run: nothing was downloaded, stored or recorded.' : 'Redo of cracked tiers finished.',
+    `  models with stored tiers (distinct): ${summary.candidates}`,
+    `  skipped, avatar (not placed items): ${summary.skippedAvatar}`,
+  ];
+  if (summary.dryRun) {
+    lines.push(`  would check: ${summary.wouldProcess}`);
+  } else {
+    lines.push(
+      `  skipped, skinned: ${summary.skippedSkinned}`,
+      `  sound, left alone: ${summary.sound}`,
+      `  redone: ${summary.redone} (${summary.tiersStored} tier files, ${summary.bytesAdded} bytes)`,
+      `  database rows updated: ${summary.rowsRecorded}`,
+      `  failed: ${summary.failed.length}`,
+    );
+    for (const failure of summary.failed) lines.push(`    ${failure.modelUrl}: ${failure.reason}`);
+  }
+  if (summary.deferred > 0) lines.push(`  left for the next run (--limit): ${summary.deferred}`);
+  return lines.join('\n');
 }
 
 export function formatSummary(summary) {
@@ -274,7 +459,7 @@ export function formatSummary(summary) {
 
 export function parseArgs(argv) {
   const options = {
-    mode: null, dryRun: false, limit: Infinity, maxTotalBytes: 200 * 1024 * 1024,
+    mode: null, dryRun: false, redoCracked: false, limit: Infinity, maxTotalBytes: 200 * 1024 * 1024,
     database: DEFAULT_DATABASE, bucket: DEFAULT_BUCKET, persistTo: null,
   };
   const need = (flag, value) => {
@@ -289,6 +474,8 @@ export function parseArgs(argv) {
       options.mode = mode;
     } else if (arg === '--dry-run') {
       options.dryRun = true;
+    } else if (arg === '--redo-cracked') {
+      options.redoCracked = true;
     } else if (arg === '--limit' || arg === '--max-total-bytes') {
       const value = Number(need(arg, argv[i + 1]));
       i += 1;
