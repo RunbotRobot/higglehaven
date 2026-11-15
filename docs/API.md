@@ -10571,11 +10571,13 @@ same modals, just normal-flow rows inside the panel instead of independent
 `position: fixed` pills. The former `identity-btn` slot is now
 `account-auth-btn`, opening `#auth-modal` (real login, or the logged-in
 account panel — see "Authentication") instead of the old picker. This
-matters for `SHOP_HIDDEN_BUILDER_UI_IDS` (main.js) — Notices/Friends are
-still hidden in Shop mode (via `style.display = 'none'` on those specific
-row elements), while the login button, Settings, and the menu toggle
-itself all stay visible, since checking who's logged in (or logging in at
-all) and Settings are both relevant regardless of mode.
+matters for `SHOP_HIDDEN_BUILDER_UI_IDS` (main.js). **Notices and Friends
+are shown in every mode, Shop included (#3550)**: they were hidden in Shop
+when they were builder chrome, which left friend requests, direct messages
+and notices (such as an assistant's answer to a left question) unreachable
+where people are. They are hidden only in the signed-out access-gate state
+(`showShopAccessGate`). The login button, Settings, and the menu toggle
+itself are visible in every mode too.
 
 A small red dot appears on the collapsed toggle whenever either badge
 inside has an unread count — pure CSS
