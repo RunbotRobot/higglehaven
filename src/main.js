@@ -1891,9 +1891,17 @@ window.__currentRendererMemory = () => ({ geometries: renderer.info.memory.geome
 // Exported for src/shop/mode.js's own enterShopMode (#2629) -- a reverse
 // import, same shape as showShopAccessGate's own below.
 export const SHOP_HIDDEN_BUILDER_UI_IDS = [
-  'notifications-btn', 'friends-btn', 'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel',
+  'undo-redo-panel', 'product-info', 'gizmo-mode-controls', 'add-item-panel', 'camera-debug-panel',
   'level-controls', 'connectivity-indicator',
 ];
+
+// #3550: Notices and Friends are rows in the account menu behind the gear, so
+// they cost the world no screen space, and Shop is where people are: friend
+// requests, direct messages and the answer to a question left for an assistant
+// all land there. They used to be in the list above (back when they were
+// builder chrome) and were unreachable in Shop. They stay hidden only in the
+// signed-out access-gate state, where there is nothing for them to open.
+const SIGNED_OUT_HIDDEN_ACCOUNT_ROW_IDS = ['notifications-btn', 'friends-btn'];
 
 // N44: the shared "nothing to show, sign in to continue" end state for a
 // declined/failed login or verification — used by enterShopMode's own
@@ -1908,7 +1916,7 @@ export const SHOP_HIDDEN_BUILDER_UI_IDS = [
 // Landing on this same inert end state instead means declining anywhere
 // always reads the same way, with no redundant second prompt.
 export function showShopAccessGate() {
-  for (const id of SHOP_HIDDEN_BUILDER_UI_IDS) {
+  for (const id of [...SHOP_HIDDEN_BUILDER_UI_IDS, ...SIGNED_OUT_HIDDEN_ACCOUNT_ROW_IDS]) {
     const el = document.getElementById(id);
     if (el) el.style.display = 'none';
   }
