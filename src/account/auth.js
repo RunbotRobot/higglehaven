@@ -18,7 +18,7 @@ import {
   signUp, logIn, logOut, deleteAccount, exportMyData, changePassword,
   fetchCurrentUser, requestPasswordReset, resetPassword, verifyEmail,
   resendVerificationEmail, changeEmail, ageAttest, cardSetupIntent,
-  confirmCard, startDiditVerification, fetchDiditVerificationStatus,
+  confirmCard, reportCardRefusal, startDiditVerification, fetchDiditVerificationStatus,
   getTurnstileSitekey,
 } from '../api.js';
 import { openModalA11y, closeModalA11y } from '../ui/modal.js';
@@ -193,7 +193,11 @@ verifyContinueBtn.addEventListener('click', async () => {
         payment_method: { card: verifyCardElement },
       });
       // #3565: never Stripe's own sentence alone.
-      if (result.error) throw new Error(describeCardRefusal(result.error));
+      if (result.error) {
+        // #3565: record Stripe's refusal for support; never waits, never throws.
+        reportCardRefusal(result.error);
+        throw new Error(describeCardRefusal(result.error));
+      }
       setupIntentId = result.setupIntent.id;
     }
     const user = await confirmCard(setupIntentId);
