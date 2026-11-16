@@ -683,6 +683,12 @@
          own bottom + size + gap instead of a second hand-tuned number that
          could drift into it (it overlapped by 2px at 390x844). */
       :root {
+        /* Set from script by the assistant panel while the phone keyboard is
+           open (src/shop/assistantChat.js); these are the keyboard-closed
+           values, so check-design-tokens sees them declared. Same two lines as
+           #3642/#3637 (main's pretest is red without them); drops out on merge. */
+        --assistant-kb-inset: 0px;
+        --assistant-visible-height: 100dvh;
         --shop-fly-bottom: 78px;
         --shop-fly-size: 56px;
         --shop-fly-stack-gap: 12px;
@@ -1766,7 +1772,20 @@
         /* Reversed so the catalog picker opens upward, above the button,
            since the panel is anchored to the bottom of the screen. */
         flex-direction: column-reverse;
+        /* #3639: not the default stretch. With Multi-Select on, the Brush row
+           (about 205px) set the panel's width and stretch made every button
+           that wide, so "+ Add Item" lay over the left two thirds of the
+           Ground pill and a tap there did nothing. Buttons keep their own
+           width; only the Brush row is wide, and it sits above the pill's row. */
+        align-items: flex-start;
         gap: var(--space-sm);
+        /* ...and the container's own box (as wide as the Brush row, in every
+           row) must not catch taps in the empty space beside a narrower
+           button; its children take them instead. */
+        pointer-events: none;
+      }
+      #add-item-panel > * {
+        pointer-events: auto;
       }
       /* Vertical construction (issue #169) — bottom-center, clear of
          #add-item-panel (bottom-left) and #camera-debug-panel (bottom-
