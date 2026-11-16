@@ -784,9 +784,14 @@ most likely to come up again.
     do it, written in the owner's voice ("my phone") with higglehaven1
     as "Claude". A decision states the exact words to type and the
     recommended answer. No task depends on an email or on chat.
-  - New information edits the task it belongs to. Things that have
-    shipped and are ready to try are added to the one standing "try the
-    latest changes on my phone" task, not given tasks of their own.
+  - New information edits the task it belongs to. Each thing that has
+    shipped and is ready to try gets a task of its own: one test, its
+    steps and what to look for, placed by how much it matters. (Owner,
+    2026-11-16: "The 'Test this on your phone' task is too unwieldy to
+    do all at once. I'd prefer to have each test as its own task." This
+    replaces the single standing "try the latest changes on my phone"
+    task. The principle: a task is one thing a person can finish in one
+    sitting and then close.)
   - higglehaven1 places each task in a single priority order across the
     owner's whole life (the nightly re-sort already keeps that order)
     and moves it when its importance changes. Quick decisions that
