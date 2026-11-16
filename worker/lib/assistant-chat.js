@@ -18,7 +18,7 @@
 // - The shopper must be ID-verified (the same adult-only gate as nearby chat
 //   and direct messages), blocks apply to assistants as to anyone, and the
 //   per-person send limit is nearby chat's.
-// - Messages are kept no longer than nearby chat keeps its own.
+// - Messages are kept 30 days after the last one (THREAD_KEPT_MS, #3624), as one thread.
 import { json, HttpError } from './http.js';
 import { readJson, stringValue } from './validation.js';
 import { checkRateLimit } from './rate-limit.js';
@@ -51,7 +51,16 @@ export const CONVERSATION_IDLE_MS = 10 * 60 * 1000;
 // What the panel tells a shopper once a question has waited this long.
 export const REPLY_WAIT_SECONDS = 90;
 // Same as nearby chat's NEARBY_CHAT_MESSAGE_STALE_CLEANUP_MS.
-const RETENTION_MS = 30 * 60 * 1000;
+// How long an ended conversation still counts as "the current one" for the
+// shopper's panel and the assistant's told-it-ended notice.
+const RECENT_END_MS = 30 * 60 * 1000;
+// #3624: the thread. A person's messages with the assistants, and the
+// questions they left with their answers, are kept this long after the last
+// one, then deleted (and with the account), so the window reads as one ongoing
+// conversation instead of a chat that vanishes after half an hour. Same term as
+// CONTACT_KEPT_MS below.
+export const THREAD_KEPT_MS = 30 * 24 * 60 * 60 * 1000;
+export const THREAD_PAGE = 50;
 const HISTORY_LIMIT = 20;
 // #3448: a question left for the assistants stays until it is answered or
 // withdrawn, up to this long; an answer is kept this long for a shopper who has
@@ -237,8 +246,8 @@ async function questionReply(db, row, status = 200) {
 // #3531: has this assistant spoken to this shopper before? `firstContact` is
 // true when it has not (so it should introduce itself as an AI), `lastSpokeAt`
 // is when it last answered them, or null. Per assistant and shopper, on
-// user_id; it holds no message text and outlives the 30-minute message
-// retention (migrations/0226).
+// user_id; it holds no message text and has its own term, the same as the
+// thread's (migrations/0226).
 async function contactFor(db, assistantUserId, shopperUserId) {
   const row = await db.prepare(
     'SELECT last_spoke_at FROM assistant_contacts WHERE shopper_user_id = ? AND assistant_user_id = ? AND last_spoke_at >= ?',
@@ -337,9 +346,12 @@ async function handleCurrent(request, db, url) {
     SELECT * FROM assistant_conversations
     WHERE shopper_user_id = ? AND (status = 'open' OR ended_at >= ?)
     ORDER BY created_at DESC LIMIT 1
-  `).bind(user.user_id, isoAgo(RETENTION_MS)).first();
-  if (!row) return json({ conversation: null, messages: [], replyWaitSeconds: REPLY_WAIT_SECONDS });
+  `).bind(user.user_id, isoAgo(RECENT_END_MS)).first();
   const afterSeq = Number(url.searchParams.get('afterSeq'));
+  // #3624: the earlier part of the thread, sent with the first load (no
+  // afterSeq) so the poll that follows stays small.
+  const history = afterSeq > 0 ? undefined : await threadHistory(db, user.user_id, row?.status === 'open' ? row.conversation_id : null);
+  if (!row) return json({ conversation: null, messages: [], ...(history ? { history } : {}), replyWaitSeconds: REPLY_WAIT_SECONDS });
   const { results } = await db.prepare(`
     SELECT m.rowid AS seq, m.*, u.username AS author_name FROM assistant_messages m
     LEFT JOIN users u ON u.user_id = m.author_user_id
@@ -350,9 +362,54 @@ async function handleCurrent(request, db, url) {
   return json({
     conversation: conversationFromRow(row, assistant?.username ?? null, handedFrom),
     messages: results.map(messageFromRow),
+    ...(history ? { history } : {}),
     assistantOnShift: isOnShift(assistant?.assistant_seen_at),
     replyWaitSeconds: REPLY_WAIT_SECONDS,
   });
+}
+
+// #3624: the person's earlier messages with the assistants, oldest first, at
+// most THREAD_PAGE of the newest. Ordinary messages from earlier conversations
+// and the questions they left (their text, and the answer once there is one) in
+// one list, so the panel can show one thread. The open conversation being sent
+// alongside (`exceptConversationId`) is left out; its messages arrive in
+// `messages`. A question withdrawn before anyone read it is not part of the
+// thread.
+async function threadHistory(db, userId, exceptConversationId) {
+  const { results: messageRows } = await db.prepare(`
+    SELECT m.rowid AS seq, m.*, u.username AS author_name, c.conversation_id AS cid FROM assistant_messages m
+    JOIN assistant_conversations c ON c.conversation_id = m.conversation_id
+    LEFT JOIN users u ON u.user_id = m.author_user_id
+    WHERE c.shopper_user_id = ?1 AND c.conversation_id != ?2 AND m.created_at >= ?3
+    ORDER BY m.rowid DESC LIMIT ?4
+  `).bind(userId, exceptConversationId ?? '', isoAgo(THREAD_KEPT_MS), THREAD_PAGE).all();
+  const { results: questionRows } = await db.prepare(`
+    SELECT * FROM assistant_questions
+    WHERE shopper_user_id = ?1 AND status != 'withdrawn' AND created_at >= ?2
+    ORDER BY created_at DESC LIMIT ?3
+  `).bind(userId, isoAgo(THREAD_KEPT_MS), THREAD_PAGE).all();
+  const items = messageRows.reverse().map((row) => ({
+    sender: row.sender,
+    text: row.text,
+    createdAt: row.created_at,
+    conversationId: row.cid,
+    ...(row.author_name ? { authorName: row.author_name } : {}),
+  }));
+  for (const row of questionRows) {
+    items.push({ sender: 'shopper', text: row.text, createdAt: row.created_at, questionId: row.question_id, questionStatus: row.status });
+    if (row.answer_text) {
+      const answerer = row.claimed_by_user_id ? await assistantName(db, row.claimed_by_user_id) : null;
+      items.push({
+        sender: 'assistant',
+        text: row.answer_text,
+        createdAt: row.answered_at ?? row.created_at,
+        questionId: row.question_id,
+        ...(answerer ? { authorName: answerer } : {}),
+      });
+    }
+  }
+  items.sort((a, b) => (a.createdAt < b.createdAt ? -1 : a.createdAt > b.createdAt ? 1 : 0));
+  return items.slice(-THREAD_PAGE);
 }
 
 async function openConversationFor(db, userId) {
@@ -418,7 +475,10 @@ async function handleCurrentQuestion(request, db) {
   const user = await requireCurrentUser(request, db);
   await checkRateLimit(db, `assistant-chat-poll:${user.user_id}`, SHOPPER_POLL_RATE_LIMIT_MAX);
   await expireStaleQuestions(db);
-  return questionReply(db, await currentQuestionRow(db, user.user_id));
+  const row = await currentQuestionRow(db, user.user_id);
+  // #3624: an answer read in the panel is not announced as well.
+  if (row?.status === 'answered') await clearReplyNotices(db, user.user_id);
+  return questionReply(db, row);
 }
 
 // Withdraws a question still in line, or closes one that was answered or
@@ -544,7 +604,7 @@ async function handleNext(request, db) {
     WHERE assistant_user_id = ? AND status = 'ended' AND ended_by IN ('shopper', 'timeout')
       AND assistant_told_ended_at IS NULL AND ended_at >= ?
     ORDER BY ended_at ASC LIMIT 1
-  `).bind(user.user_id, isoAgo(RETENTION_MS)).first();
+  `).bind(user.user_id, isoAgo(RECENT_END_MS)).first();
   if (ended) {
     await db.prepare('UPDATE assistant_conversations SET assistant_told_ended_at = ? WHERE conversation_id = ?')
       .bind(isoNow(), ended.conversation_id).run();
@@ -770,8 +830,32 @@ async function handleAnswerQuestion(request, db, questionId) {
   await recordSpoke(db, user.user_id, question.shopper_user_id);
   // The answer is already stored for the shopper; telling them is best effort.
   const builderId = await builderIdForUser(db, question.shopper_user_id);
-  if (builderId) await fireNotification(db, builderId, `${user.username} answered the question you left.`);
+  if (builderId) await fireReplyNotice(db, builderId, user.username);
   return json({ answered: true }, 201);
+}
+
+// #3624: one quiet notification for an answer that arrives while the shopper is
+// away, never one per reply: if the same assistant's note is still unread, it
+// is that one. Reading the answer in the panel clears it (clearReplyNotices).
+// The wording is a conversation's, not a ticket's.
+const replyNoticeText = (name) => `${name} replied.`;
+
+async function fireReplyNotice(db, builderId, assistantUsername) {
+  const message = replyNoticeText(assistantUsername);
+  const unread = await db.prepare('SELECT 1 AS n FROM notifications WHERE builder_id = ? AND message = ? AND read_at IS NULL LIMIT 1')
+    .bind(builderId, message).first();
+  if (!unread) await fireNotification(db, builderId, message);
+}
+
+// The shopper is looking at the answer, so the note about it has done its job.
+async function clearReplyNotices(db, shopperUserId) {
+  const builderId = await builderIdForUser(db, shopperUserId);
+  if (!builderId) return;
+  await db.prepare(`
+    UPDATE notifications SET read_at = ?1
+    WHERE builder_id = ?2 AND read_at IS NULL
+      AND message IN (SELECT username || ' replied.' FROM users WHERE is_fleet = 1)
+  `).bind(isoNow(), builderId).run();
 }
 
 async function handleEscalateQuestion(request, db, questionId) {
@@ -808,7 +892,7 @@ export async function handleAssistantInbox(request, db, route) {
 // Messages are kept no longer than nearby chat keeps its own. Run from the
 // same scheduled sweep as pruneStaleNearbyChatMessages.
 export async function pruneStaleAssistantChat(db) {
-  const cutoff = isoAgo(RETENTION_MS);
+  const cutoff = isoAgo(THREAD_KEPT_MS);
   await db.prepare(
     "UPDATE assistant_conversations SET status = 'ended', ended_by = 'timeout', ended_at = ? WHERE status = 'open' AND last_activity_at < ?",
   ).bind(isoNow(), isoAgo(CONVERSATION_IDLE_MS)).run();
@@ -820,7 +904,7 @@ export async function pruneStaleAssistantChat(db) {
   await expireStaleQuestions(db);
   await db.prepare(
     "DELETE FROM assistant_questions WHERE status IN ('answered', 'withdrawn', 'dismissed', 'expired') AND COALESCE(closed_at, answered_at, created_at) < ?",
-  ).bind(isoAgo(QUESTION_KEPT_MS)).run();
+  ).bind(isoAgo(THREAD_KEPT_MS)).run();
   // #3531: the fact that an assistant has spoken to someone goes 30 days after
   // the last time it did.
   await db.prepare('DELETE FROM assistant_contacts WHERE last_spoke_at < ?').bind(isoAgo(CONTACT_KEPT_MS)).run();

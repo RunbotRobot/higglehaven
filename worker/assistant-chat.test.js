@@ -1,7 +1,7 @@
 import { applyD1Migrations, env, SELF } from 'cloudflare:test';
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import { api, extractSessionCookie, withSession, signupBuilder } from './test-helpers.js';
-import { pruneStaleAssistantChat, REPLY_WAIT_SECONDS, OPEN_CONVERSATION_POLL_SECONDS } from './lib/assistant-chat.js';
+import { pruneStaleAssistantChat, REPLY_WAIT_SECONDS, OPEN_CONVERSATION_POLL_SECONDS, THREAD_KEPT_MS } from './lib/assistant-chat.js';
 
 // #3447 (part of #3444): asking an assistant a question. Own file because it
 // sets env.FLEET_ACCESS_KEY to mint assistant accounts through fleet-login.
@@ -268,8 +268,114 @@ describe('what kind of card an assistant files (#3532)', () => {
   });
 });
 
+// #3624: one ongoing conversation. What was said before stays with the person.
+describe('the thread', () => {
+  const dayAgo = (days) => new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+  it('serves earlier messages, a left question and its answer as one list, oldest first, only on the first load', async () => {
+    await endEverything();
+    await env.DB.prepare('DELETE FROM assistant_questions').run();
+    await goOnShift();
+    const shopper = await adult('ac-thread');
+    const started = await start(shopper, 'First question');
+    const conversationId = started.body.conversation.conversationId;
+    await next();
+    await post(assistant.session, `/assistant-inbox/conversations/${conversationId}/reply`, { text: 'First answer' });
+    await post(shopper.session, '/assistant-chat/end');
+    // It was a week ago: the conversation itself is long over.
+    await env.DB.prepare('UPDATE assistant_messages SET created_at = ? WHERE conversation_id = ?').bind(dayAgo(7), conversationId).run();
+    await env.DB.prepare('UPDATE assistant_conversations SET ended_at = ? WHERE conversation_id = ?').bind(dayAgo(7), conversationId).run();
+
+    // Nobody is free later, so a question is left, and then answered.
+    await post(shopper.session, '/assistant-chat/question', { text: 'A left question' });
+    const handed = await next();
+    await post(assistant.session, `/assistant-inbox/questions/${handed.body.question.questionId}/answer`, { text: 'A left answer' });
+
+    const seen = await api('/assistant-chat/current', shopper.session());
+    expect(seen.body.conversation).toBeNull();
+    expect(seen.body.history.map((item) => [item.sender, item.text])).toEqual([
+      ['shopper', 'First question'], ['assistant', 'First answer'], ['shopper', 'A left question'], ['assistant', 'A left answer'],
+    ]);
+    expect(seen.body.history[3].authorName).toBe(assistantName);
+    // The poll that follows (with a cursor) stays small.
+    const poll = await api('/assistant-chat/current?afterSeq=1', shopper.session());
+    expect(poll.body.history).toBeUndefined();
+    // It is the person's own thread, nobody else's.
+    const stranger = await adult('ac-thread-stranger');
+    expect((await api('/assistant-chat/current', stranger.session())).body.history).toEqual([]);
+  });
+
+  it('includes a conversation that just ended in the history, but not the open one', async () => {
+    await endEverything();
+    await goOnShift();
+    const shopper = await adult('ac-thread-recent');
+    await start(shopper, 'Open one');
+    const open = await api('/assistant-chat/current', shopper.session());
+    expect(open.body.history).toEqual([]);
+    await post(shopper.session, '/assistant-chat/end');
+    const ended = await api('/assistant-chat/current', shopper.session());
+    expect(ended.body.conversation.status).toBe('ended');
+    expect(ended.body.history.map((item) => item.text)).toEqual(['Open one']);
+    await next(); // the assistant is told it ended
+    await next();
+  });
+
+  it('keeps the thread 30 days from the last message, then deletes it', async () => {
+    await endEverything();
+    await goOnShift();
+    const shopper = await adult('ac-thread-kept');
+    const started = await start(shopper, 'Still here?');
+    const conversationId = started.body.conversation.conversationId;
+    await post(shopper.session, '/assistant-chat/end');
+    const at = (days) => dayAgo(days);
+    await env.DB.prepare('UPDATE assistant_messages SET created_at = ? WHERE conversation_id = ?').bind(at(29), conversationId).run();
+    await env.DB.prepare('UPDATE assistant_conversations SET ended_at = ? WHERE conversation_id = ?').bind(at(29), conversationId).run();
+    await pruneStaleAssistantChat(env.DB);
+    const kept = await env.DB.prepare('SELECT COUNT(*) AS n FROM assistant_messages WHERE conversation_id = ?').bind(conversationId).first();
+    expect(kept.n).toBe(1);
+    await env.DB.prepare('UPDATE assistant_messages SET created_at = ? WHERE conversation_id = ?').bind(at(31), conversationId).run();
+    await env.DB.prepare('UPDATE assistant_conversations SET ended_at = ? WHERE conversation_id = ?').bind(at(31), conversationId).run();
+    await pruneStaleAssistantChat(env.DB);
+    const gone = await env.DB.prepare('SELECT COUNT(*) AS n FROM assistant_messages WHERE conversation_id = ?').bind(conversationId).first();
+    expect(gone.n).toBe(0);
+    expect(THREAD_KEPT_MS).toBe(30 * 24 * 60 * 60 * 1000);
+  });
+});
+
+// #3624: one quiet note for answers that arrive while the person is away.
+describe('the note about an answer', () => {
+  const notes = async (person) => {
+    const { body } = await api('/notifications', person.session());
+    const list = Array.isArray(body) ? body : (body.notifications ?? []);
+    return list.filter((n) => n.message === `${assistantName} replied.`);
+  };
+  async function leaveAndAnswer(person, text, answer) {
+    await post(person.session, '/assistant-chat/question', { text });
+    const handed = await next();
+    await post(assistant.session, `/assistant-inbox/questions/${handed.body.question.questionId}/answer`, { text: answer });
+  }
+
+  it('is one note, not one per answer, and reading the answer in the panel clears it', async () => {
+    await endEverything();
+    await env.DB.prepare('DELETE FROM assistant_questions').run();
+    await goOnShift();
+    const shopper = await adult('ac-note');
+    await leaveAndAnswer(shopper, 'First?', 'One.');
+    await post(shopper.session, '/assistant-chat/question/close');
+    await leaveAndAnswer(shopper, 'Second?', 'Two.');
+    const before = await notes(shopper);
+    expect(before).toHaveLength(1);
+    expect(before[0].readAt).toBeNull();
+    // Opening the panel reads the answer, and the note goes with it.
+    await api('/assistant-chat/question', shopper.session());
+    const after = await notes(shopper);
+    expect(after).toHaveLength(1);
+    expect(after[0].readAt).not.toBeNull();
+  });
+});
+
 describe('retention', () => {
-  it('keeps messages no longer than nearby chat does', async () => {
+  it('deletes messages and ended conversations past the thread term', async () => {
     await endEverything();
     await goOnShift();
     const shopper = await adult('ac-retention');
@@ -325,7 +431,8 @@ describe('leaving a question', () => {
     expect(seen.body.question.position).toBeUndefined();
     // A notification told them, even if they had closed the panel.
     const notices = await api('/notifications', first.session());
-    expect(JSON.stringify(notices.body)).toContain(`${assistantName} answered the question you left.`);
+    expect(JSON.stringify(notices.body)).toContain(`${assistantName} replied.`);
+    expect(JSON.stringify(notices.body)).not.toContain('answered the question you left');
     // Answering twice is refused.
     expect((await post(assistant.session, `/assistant-inbox/questions/${questionId}/answer`, { text: 'again' })).response.status).toBe(409);
 
