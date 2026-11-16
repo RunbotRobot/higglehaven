@@ -138,7 +138,7 @@
                meaning (pending incoming friend requests). -->
           <button id="friends-btn" type="button">Friends<span id="friends-badge" hidden>0</span><span id="dm-badge" hidden>0</span></button>
           <button id="my-purchases-btn" type="button">My Purchases</button>
-          <button id="my-lands-btn" type="button">My Lands</button>
+          <button id="my-lands-btn" type="button">My Lándlets</button>
           <button id="settings-btn" type="button">Settings</button>
           <div id="account-menu-landcap" hidden></div>
           <div id="account-menu-tax-notice" hidden role="status" aria-live="polite"></div>
@@ -183,7 +183,7 @@
       <span id="layout-preview-name"></span>
       <span id="layout-preview-selection-count"></span>
       <select id="layout-preview-paste-target" hidden></select>
-      <button id="layout-preview-paste-btn" type="button" hidden>Paste onto Land</button>
+      <button id="layout-preview-paste-btn" type="button" hidden>Paste onto Lándlet</button>
     </div>
     <div id="layout-preview-marquee"></div>
     <div id="multiselect-brush-indicator"></div>
@@ -785,10 +785,10 @@
     <div id="my-lands-modal" role="dialog" aria-modal="true" tabindex="-1">
       <div id="my-lands-modal-content">
         <button id="my-lands-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>My Lands</h2>
+        <h2>My Lándlets</h2>
         <div id="my-lands-status" role="status" aria-live="polite"></div>
         <div id="my-lands-list"></div>
-        <div id="my-lands-empty">You don't own any claimed land yet.</div>
+        <div id="my-lands-empty">You don't own any claimed lándlets yet.</div>
       </div>
     </div>
     <div id="sign-posts-modal" role="dialog" aria-modal="true" tabindex="-1">
@@ -825,7 +825,7 @@
       <div id="pending-restoration-modal-content">
         <button id="pending-restoration-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2>Removed Items</h2>
-        <p id="pending-restoration-intro">These were taken off your land because their seller was suspended. They come back automatically if the suspension is lifted, or you can clear one for good to free up the spot.</p>
+        <p id="pending-restoration-intro">These were taken off your lándlet because their seller was suspended. They come back automatically if the suspension is lifted, or you can clear one for good to free up the spot.</p>
         <div id="pending-restoration-list"></div>
         <div id="pending-restoration-empty">Nothing is waiting to be restored.</div>
       </div>
@@ -1026,7 +1026,7 @@
           <button id="auth-delete-account-btn" type="button">Delete Account</button>
           <form id="auth-delete-account-form" class="auth-form" hidden>
             <div class="auth-hint">
-              Permanently deletes your login — you'll be signed out everywhere, and this email and username become available for a new signup. Your builder/seller profile and any land you own are not affected (reset those separately in Settings if you want a fresh start there too). Financial and tax records are retained for as long as the law requires, disconnected from your identity. This cannot be undone.
+              Permanently deletes your login — you'll be signed out everywhere, and this email and username become available for a new signup. Your builder/seller profile and any lándlet you own are not affected (reset those separately in Settings if you want a fresh start there too). Financial and tax records are retained for as long as the law requires, disconnected from your identity. This cannot be undone.
             </div>
             <label>Confirm your password
               <div class="auth-password-field">
@@ -1045,7 +1045,7 @@
     <div id="claim-modal" role="dialog" aria-modal="true" tabindex="-1">
       <div id="claim-modal-content">
         <button id="claim-back-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
-        <h2>Claim a landlet</h2>
+        <h2>Claim a lándlet</h2>
         <div id="claim-hint">Fly around the world, tap a plot to see it, then claim it below. You can only claim one.</div>
         <div id="claim-map-wrap">
           <canvas id="claim-map-canvas"></canvas>

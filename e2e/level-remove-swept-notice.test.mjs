@@ -40,7 +40,7 @@ const sweptStatus = await status();
 console.log('status after removing a level holding one item:', JSON.stringify(sweptStatus));
 
 const pass = emptyStatus === '' &&
-  sweptStatus.includes('1 item on that level was taken off your land') &&
+  sweptStatus.includes('1 item on that level was taken off your lándlet') &&
   sweptStatus.includes('Saved Layouts') &&
   !/#\d+|docs\/|API\.md|swept|snapshot/i.test(sweptStatus) &&
   errors.filter((e) => !e.includes('Failed to load resource')).length === 0;

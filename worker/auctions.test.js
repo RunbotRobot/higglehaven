@@ -1201,7 +1201,7 @@ describe('Auctions', () => {
     expect(landlet.body.landlet.ownerBuilderId).toBe(owner.builderId);
 
     const notices = await api('/notifications', owner.session());
-    expect(notices.body.notifications.some((n) => n.message.includes('you keep the land'))).toBe(true);
+    expect(notices.body.notifications.some((n) => n.message.includes('you keep the lándlet'))).toBe(true);
   });
 
   it('notifies the seller of each new bid and the previous highest bidder of being outbid', async () => {

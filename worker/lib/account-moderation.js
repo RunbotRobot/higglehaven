@@ -290,7 +290,7 @@ export async function removeSuspendedSellerPlacedInstances(db, suspendedUserId) 
   if (!seller) return { instancesRemoved: 0 };
   const { removedByBuilder, removed } = await snapshotAndRemoveSellerInstances(db, seller.seller_id, { permanent: false });
   await notifyBuildersOfSuspendedSellerItems(db, removedByBuilder, (count) =>
-    `${itemPhrase(count)} from a seller who is currently suspended ${count === 1 ? 'was' : 'were'} taken off your land. ${count === 1 ? 'It is' : 'They are'} saved under Removed Items and will return if the suspension is lifted.`);
+    `${itemPhrase(count)} from a seller who is currently suspended ${count === 1 ? 'was' : 'were'} taken off your lándlet. ${count === 1 ? 'It is' : 'They are'} saved under Removed Items and will return if the suspension is lifted.`);
   return { instancesRemoved: removed };
 }
 
@@ -310,7 +310,7 @@ export async function removeClosedSellerPlacedInstances(db, sellerId) {
     const more = unique.length > 3 ? ` and ${unique.length - 3} more` : '';
     const one = removedByBuilder.get(builderId) === 1;
     await fireNotification(db, builderId,
-      `A seller has stopped selling, so ${shown}${more} ${one ? 'was' : 'were'} taken off your land and will not be coming back. ${one ? 'It stays' : 'They stay'} listed under Removed Items so you can see what used to be there -- clear ${one ? 'it' : 'them'} whenever you like to free up the spot.`);
+      `A seller has stopped selling, so ${shown}${more} ${one ? 'was' : 'were'} taken off your lándlet and will not be coming back. ${one ? 'It stays' : 'They stay'} listed under Removed Items so you can see what used to be there -- clear ${one ? 'it' : 'them'} whenever you like to free up the spot.`);
   }
   return { instancesRemoved: removed };
 }
@@ -459,7 +459,7 @@ async function restoreSuspendedSellerPlacedInstances(db, sellerId) {
   `).bind(sellerId, now).all();
   await notifyBuildersOfSuspendedSellerItems(db,
     new Map(restoredRows.map((row) => [row.builder_id, row.restored])),
-    (count) => `${itemPhrase(count)} from a seller whose suspension was lifted ${count === 1 ? 'is' : 'are'} back on your land.`);
+    (count) => `${itemPhrase(count)} from a seller whose suspension was lifted ${count === 1 ? 'is' : 'are'} back on your lándlet.`);
   return { instancesRestored: statements.length / 2 };
 }
 
@@ -528,7 +528,7 @@ export async function prepareSellerPermanentClosure(db, userId) {
         // suspension notice above) -- and it describes what the builder
         // sees, nothing internal.
         await fireNotification(db, builderId,
-          `A seller whose products were removed from your land has had their account permanently closed, so ${shown}${more} will not be coming back. They stay listed under Removed Items so you can see what used to be there -- clear them whenever you like to free up the spot.`);
+          `A seller whose products were removed from your lándlet has had their account permanently closed, so ${shown}${more} will not be coming back. They stay listed under Removed Items so you can see what used to be there -- clear them whenever you like to free up the spot.`);
       }
     },
     async rollback() {
