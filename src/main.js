@@ -645,6 +645,7 @@ import { promptBundleName } from './ui/bundleNameModal.js';
 import { showNotice } from './ui/noticeModal.js';
 import { openTextNoteModal } from './ui/textNoteModal.js';
 import './ui/copyableErrors.js'; // #3303: record modal error lines for bug reports
+import './ui/bud.js'; // #3649: the bud (the interface folds into one petal menu, #3648)
 
 // #2558: the catalog/bundle picker modal (Build's add-item flow, "prompt
 // mode" concept-image search, and the bundle picker's own tabs/rename/

@@ -14,7 +14,7 @@
 // Build, a move-joystick drag in Shop — the latter also doubles as the
 // navigation input that stops Shop's spawn orbit), not just its own static
 // initial value.
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, goToMode } from './helpers.mjs';
 
 const LABEL = 'Compass Tester';
 
@@ -82,7 +82,7 @@ for (let attempt = 1; attempt < 3 && Math.abs(rotatedBuildRotation - initialBuil
 }
 console.log('Build-mode needle rotation after dragging the camera (should differ meaningfully from the initial value):', rotatedBuildRotation);
 
-await page.click('.mode-nav-btn[data-mode="shop"]');
+await goToMode(page, 'shop');
 await page.waitForLoadState('networkidle', { timeout: 15000 }).catch(() => {});
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 const compassVisibleInShop = await page.locator('#compass-panel').isVisible();

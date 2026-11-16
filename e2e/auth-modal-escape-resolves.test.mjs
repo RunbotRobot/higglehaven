@@ -9,7 +9,7 @@
 // path (showShopAccessGate) ever ran. This mirrors e2e/identity-and-ui-
 // chrome.test.mjs's own "Cancel out entirely" assertions, but via Escape
 // instead of clicking #auth-close-btn.
-import { launchPage, finish } from './helpers.mjs';
+import { launchPage, finish, goToMode } from './helpers.mjs';
 
 const { browser, page, errors } = await launchPage({ promptAnswer: 'Auth Escape Suite' });
 
@@ -44,7 +44,7 @@ console.log('Shop access-gate status text after declining via Escape (should be 
 // The flow genuinely completed, not just "looks closed" -- a fresh
 // identity-requiring action (Sell nav) reopens the modal and works
 // normally, rather than hanging on the same already-exhausted promise.
-await page.click('.mode-nav-btn[data-mode="sell"]');
+await goToMode(page, 'sell');
 await page.waitForSelector('#auth-modal.visible', { timeout: 10000 });
 const reopenedForSellNav = (await page.locator('#auth-modal.visible').count()) === 1;
 console.log('auth modal reopens normally for a later identity-requiring action (should be true):', reopenedForSellNav);
