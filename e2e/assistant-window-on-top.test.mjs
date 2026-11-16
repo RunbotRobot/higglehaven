@@ -1,0 +1,85 @@
+// #3626: the assistant window is always in front. In Sell, My Products stays open
+// behind it (so the person can ask about it), and nothing but the destructive
+// confirmation, the age/ID verification and sign-in is allowed to paint over it,
+// in any mode. Two checks, at phone width: (1) the real flow the owner hit (Sell,
+// Settings, Ask an assistant, with My Products open) and what is at the centre of
+// the assistant window; (2) the computed stacking of every fixed element in the
+// page against the assistant window's, so a panel added later with a higher
+// z-index fails here.
+import { launchPage, chooseIdentity, openAccountMenu, finish } from './helpers.mjs';
+
+const { browser, page, errors } = await launchPage({ promptAnswer: 'Window On Top', viewport: { width: 390, height: 844 } });
+
+// Sell mode opens My Products on arrival.
+await chooseIdentity(page, { mode: 'sell', label: 'Window On Top', isNew: true });
+await page.waitForSelector('#seller-modal.visible', { timeout: 15000 });
+
+// The owner's path: Settings, then Ask an assistant, with My Products open.
+await openAccountMenu(page);
+await page.click('#settings-btn');
+await page.waitForSelector('#settings-modal.visible', { timeout: 5000 });
+await page.click('#settings-assistant-btn');
+await page.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 5000 });
+await page.waitForTimeout(500);
+
+const flow = await page.evaluate(() => {
+  const panel = document.getElementById('assistant-chat-panel');
+  const box = panel.getBoundingClientRect();
+  const centre = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+  const corners = [[box.left + 4, box.top + 4], [box.right - 4, box.top + 4], [box.left + 4, box.bottom - 4], [box.right - 4, box.bottom - 4]]
+    .map(([x, y]) => document.elementFromPoint(x, y));
+  return {
+    sellerStillOpen: document.getElementById('seller-modal').classList.contains('visible'),
+    centreInPanel: panel.contains(centre),
+    cornersInPanel: corners.every((el) => el && panel.contains(el)),
+    box: box.toJSON(),
+    vw: window.innerWidth, vh: window.innerHeight,
+  };
+});
+console.log('flow:', JSON.stringify({ ...flow, box: undefined }));
+
+// Minimised, the pill is in front too and My Products is as it was.
+await page.click('#assistant-chat-minimize').catch(() => {});
+await page.waitForTimeout(300);
+const pill = await page.evaluate(() => {
+  const el = document.getElementById('assistant-chat-pill');
+  if (!el || el.hidden) return { shown: false };
+  const box = el.getBoundingClientRect();
+  const hit = document.elementFromPoint(box.left + box.width / 2, box.top + box.height / 2);
+  return { shown: true, onTop: el.contains(hit), sellerStillOpen: document.getElementById('seller-modal').classList.contains('visible') };
+});
+console.log('pill:', JSON.stringify(pill));
+
+// Every fixed element with a stacking level at or above the assistant window's.
+const stacking = await page.evaluate(() => {
+  const z = (el) => { const n = Number.parseInt(getComputedStyle(el).zIndex, 10); return Number.isNaN(n) ? null : n; };
+  const panelZ = z(document.getElementById('assistant-chat-panel'));
+  const pillZ = z(document.getElementById('assistant-chat-pill'));
+  const level = Math.min(panelZ, pillZ);
+  const over = [];
+  for (const el of document.querySelectorAll('body *')) {
+    if (getComputedStyle(el).position !== 'fixed') continue;
+    const value = z(el);
+    if (value === null || value < level) continue;
+    if (el.id === 'assistant-chat-panel' || el.id === 'assistant-chat-pill') continue;
+    if (el.closest('#assistant-chat-panel, #assistant-chat-pill')) continue;
+    over.push({ id: el.id || el.className || el.tagName, z: value });
+  }
+  return { panelZ, pillZ, level, over };
+});
+console.log('stacking:', JSON.stringify(stacking));
+const ALLOWED_ABOVE = new Set(['confirm-modal', 'verify-modal', 'auth-modal', 'fading-note']);
+const unexpected = stacking.over.filter((entry) => !ALLOWED_ABOVE.has(entry.id));
+const mustWinAbove = ['confirm-modal', 'verify-modal', 'auth-modal'].every((id) => stacking.over.some((entry) => entry.id === id && entry.z > stacking.level));
+
+const pass = flow.sellerStillOpen && flow.centreInPanel && flow.cornersInPanel
+  && flow.box.left >= 0 && flow.box.right <= flow.vw && flow.box.bottom <= flow.vh
+  && pill.shown && pill.onTop && pill.sellerStillOpen
+  && stacking.panelZ === stacking.pillZ
+  && unexpected.length === 0 && mustWinAbove
+  && errors.length === 0;
+await finish(browser, {
+  pass,
+  label: '#3626: the assistant window and pill are in front of My Products and every panel; only confirmation, verification and sign-in are above',
+  errors,
+});
