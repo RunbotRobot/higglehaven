@@ -983,6 +983,31 @@ most likely to come up again.
   real places from somewhere that is not a real place. This is "One model,
   not a hybrid" applied to scenery.
 
+- **The word is "lándlet", always; a person never reads "land".**
+  (2026-11-16, #3613; docs/SPEC.md v18 retired "lánd" as a separate
+  word.) Juniper told the owner "placing things on your own land ...
+  claim your first landlet", repeating her own runbook, and the owner
+  asked: "We intended to streamline the wording to always be 'lándlet'
+  with an accent on the 'a', and never 'land' or 'lánd', correct?" Yes.
+  In anything a person can read (the app, emails, an assistant's reply,
+  a runbook an assistant speaks from) a plot is a "lándlet", with the
+  accent, whatever its size; never "land", "lánd", "plot" or "lot".
+  Internal names keep the plain `a`, as the top of this file says. The
+  principle: one thing has one name, and text written for a model to
+  speak from is customer-facing text.
+
+- **An assistant can only be as good as what it is given: when one
+  answers badly, fix what it knows before changing the model.**
+  (2026-11-16, #3614.) Juniper could not give the steps for building and
+  ended with "if something looks different, tell me". The owner asked
+  for "a detailed user SOP that assistants can draw from", and wondered
+  whether it was "just an issue of using a lower-powered model". It was
+  not: her runbook gave one line per area and told her to say so when
+  unsure, and she did. So assistants get a handbook of exact steps, kept
+  true by a test against the real controls, and the runbook says what to
+  do when the handbook has no answer. A stronger model is a later
+  question for the owner, since it draws on the same weekly allowance.
+
 ### Defaults derived from those decisions — apply and cite; flag if it stretches
 
 Generalised by higglehaven1 on 2026-11-02 from the decisions above and
