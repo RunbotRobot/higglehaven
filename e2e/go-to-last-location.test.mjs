@@ -100,6 +100,27 @@ const seedStatusB = await seedPresence(targetX, targetY, 1.1);
 await reenterShop();
 const visibleAfterSeedB = await lastLocationVisible();
 
+// #3570: the account menu opens over this button; the button steps aside
+// while the menu is open (so two surfaces never overlap) and returns after.
+await page.click('#account-menu-toggle');
+await page.waitForFunction(
+  () => Number(getComputedStyle(document.getElementById('shop-last-location-btn')).opacity) < 0.05,
+  null,
+  { timeout: 5000 },
+).catch(() => {}); // the fade takes 0.4s; read the settled value below
+const buttonStyleWithMenuOpen = await page.evaluate(() => {
+  const style = getComputedStyle(document.getElementById('shop-last-location-btn'));
+  return { opacity: Number(style.opacity), pointerEvents: style.pointerEvents };
+});
+await page.click('#account-menu-toggle');
+await page.waitForFunction(
+  () => Number(getComputedStyle(document.getElementById('shop-last-location-btn')).opacity) > 0.99,
+  null,
+  { timeout: 5000 },
+).catch(() => {});
+const buttonBackAfterMenuClosed = await lastLocationVisible()
+  && Number(await page.evaluate(() => getComputedStyle(document.getElementById('shop-last-location-btn')).opacity)) > 0.99;
+
 await page.click('#shop-last-location-btn');
 const hiddenImmediatelyAfterClick = !(await lastLocationVisible());
 
@@ -144,6 +165,8 @@ console.log('button still visible under 5s after navigating (should be true):', 
 console.log('button hidden 5s+ after navigating, via fade (should be true):', hiddenAfter5s);
 console.log('seed presence B status (should be 200):', seedStatusB);
 console.log('button visible after seeding + reentering (phase 3, should be true):', visibleAfterSeedB);
+console.log('button steps aside while the account menu is open (should be opacity 0, pointer-events none):', buttonStyleWithMenuOpen);
+console.log('button returns once the account menu closes (should be true):', buttonBackAfterMenuClosed);
 console.log('button hidden immediately on click, no countdown (should be true):', hiddenImmediatelyAfterClick);
 console.log('grounded again once the fade/teleport/fade/land sequence finishes (should be true):', groundedAfterSequence);
 console.log('a material is still stuck transparent after the sequence completes (should be false, i.e. NOT stuck):', transparentStuckAfterSequence);
@@ -156,6 +179,8 @@ const pass =
   hiddenAfter5s &&
   seedStatusB === 200 &&
   visibleAfterSeedB &&
+  buttonStyleWithMenuOpen.opacity < 0.05 && buttonStyleWithMenuOpen.pointerEvents === 'none' &&
+  buttonBackAfterMenuClosed &&
   hiddenImmediatelyAfterClick &&
   groundedAfterSequence &&
   !transparentStuckAfterSequence &&
