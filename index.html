@@ -715,9 +715,9 @@
       <div id="notifications-modal-content">
         <button id="notifications-close-btn" class="modal-close-btn" type="button" aria-label="Close">&times;</button>
         <h2>Notices</h2>
-        <div id="notifications-actions">
-          <button id="notifications-mark-all-btn" type="button">Mark all read</button>
-          <button id="notifications-clear-read-btn" type="button">Clear read</button>
+        <div id="notifications-actions" hidden>
+          <button id="notifications-mark-all-btn" type="button" hidden>Mark all read</button>
+          <button id="notifications-clear-read-btn" type="button" hidden>Clear read</button>
         </div>
         <div id="notifications-list"></div>
         <button id="notifications-load-more-btn" type="button" hidden>Load more</button>
@@ -752,18 +752,19 @@
              friend Join/Leave buttons live inline on each accepted
              friend's own row further down instead of duplicated here. -->
         <div id="friends-voice-channel-status" role="status" aria-live="polite"></div>
-        <h3>Requests</h3>
+        <!-- #3554: a section with nothing in it is not drawn (its heading
+             starts hidden and renderFriends/renderBlockedPeople reveal it only
+             when it has rows); one friendly line stands in when all four are
+             empty. -->
+        <h3 id="friends-incoming-heading" hidden>Requests</h3>
         <div id="friends-incoming-list"></div>
-        <div id="friends-incoming-empty">No pending requests.</div>
-        <h3>Sent</h3>
+        <h3 id="friends-outgoing-heading" hidden>Sent</h3>
         <div id="friends-outgoing-list"></div>
-        <div id="friends-outgoing-empty">No requests sent.</div>
-        <h3>Friends</h3>
+        <h3 id="friends-accepted-heading" hidden>Friends</h3>
         <div id="friends-accepted-list"></div>
-        <div id="friends-accepted-empty">No friends yet.</div>
-        <h3>Blocked people</h3>
+        <h3 id="friends-blocked-heading" hidden>Blocked people</h3>
         <div id="friends-blocked-list"></div>
-        <div id="friends-blocked-empty">You haven't blocked anyone.</div>
+        <div id="friends-panel-empty">No friends yet. Tap + Add Friend to invite someone.</div>
       </div>
     </div>
     <div id="friends-map-modal" role="dialog" aria-modal="true" tabindex="-1">

@@ -43,9 +43,11 @@ await openAccountMenu(alicePage);
 await alicePage.click('#friends-btn');
 await alicePage.waitForSelector('#friends-modal.visible', { timeout: 5000 });
 await alicePage.waitForFunction(() => document.querySelectorAll('#friends-accepted-list .friend-row').length === 1, null, { timeout: 30000 });
-const blockedEmptyBefore = await alicePage.locator('#friends-blocked-empty').isVisible();
-console.log('"You haven\'t blocked anyone" shown before blocking (should be true):', blockedEmptyBefore);
+// #3554: a section with nothing in it is not drawn.
+const blockedEmptyBefore = await alicePage.locator('#friends-blocked-heading').isHidden();
+console.log('Blocked people section not drawn before blocking (should be true):', blockedEmptyBefore);
 
+// The Blocked people heading appears the moment someone is blocked (checked below).
 // Block Bob from his friend row.
 const bobNoteCountBefore = (await fetchJson(bobPage, '/api/notifications')).body.notifications.length;
 await alicePage.locator('#friends-accepted-list .friend-row').filter({ hasText: BOB }).locator('button', { hasText: 'Block' }).click();
@@ -57,6 +59,7 @@ const blockNotice = await alicePage.textContent('#notice-modal-message');
 console.log('block notice (should mention Blocked people):', blockNotice);
 await alicePage.click('#notice-modal-ok-btn');
 await alicePage.waitForSelector('#notice-modal.visible', { state: 'hidden', timeout: 5000 });
+const blockedHeadingShown = await alicePage.locator('#friends-blocked-heading').isVisible();
 const friendRowsAfterBlock = await alicePage.locator('#friends-accepted-list .friend-row').count();
 const blockedRowText = await alicePage.locator('#friends-blocked-list .friend-row').first().textContent();
 console.log('Friends list is empty after blocking (should be 0):', friendRowsAfterBlock);
@@ -71,11 +74,11 @@ console.log('Bob\'s notification count is unchanged by the block (should be true
 // Unblock.
 await alicePage.locator('#friends-blocked-list .friend-row').first().locator('button', { hasText: 'Unblock' }).click();
 await alicePage.waitForFunction(() => document.querySelectorAll('#friends-blocked-list .friend-row').length === 0, null, { timeout: 30000 });
-const blockedEmptyAfter = await alicePage.locator('#friends-blocked-empty').isVisible();
-console.log('"You haven\'t blocked anyone" shown again after unblocking (should be true):', blockedEmptyAfter);
+const blockedEmptyAfter = await alicePage.locator('#friends-blocked-heading').isHidden();
+console.log('Blocked people section gone again after unblocking (should be true):', blockedEmptyAfter);
 
 const errors = [...aliceSession.errors, ...bobSession.errors];
-const pass = /Blocked people/.test(blockNotice) && blockedEmptyBefore &&
+const pass = /Blocked people/.test(blockNotice) && blockedEmptyBefore && blockedHeadingShown &&
   friendRowsAfterBlock === 0 &&
   blockedRowText.includes(BOB) &&
   bobFriendships.length === 0 &&

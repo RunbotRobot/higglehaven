@@ -4632,6 +4632,7 @@
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.6);
       }
+      #notifications-actions[hidden] { display: none; }
       #notifications-actions {
         display: flex;
         flex-wrap: wrap;
@@ -5083,7 +5084,7 @@
       .friend-row-actions button.danger {
         background: var(--danger);
       }
-      #friends-incoming-empty, #friends-outgoing-empty, #friends-accepted-empty, #friends-blocked-empty {
+      #friends-panel-empty {
         font-size: var(--text-sm);
         color: rgb(var(--ink-rgb) / 0.6);
       }
