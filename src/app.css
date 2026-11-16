@@ -1142,6 +1142,11 @@
         left: 8px;
         right: 8px;
         --assistant-bottom: 8px;
+        /* #3608: defaults for what syncVisibleArea (src/shop/assistantChat.js)
+           sets from visualViewport while the keyboard is up: how much of the
+           bottom it covers, and the height that is left. */
+        --assistant-kb-inset: 0px;
+        --assistant-visible-height: 100dvh;
         bottom: var(--assistant-bottom);
         /* #3608: never taller than the visible area above its own bottom
            offset, so its header can never be pushed off the top; the log is
