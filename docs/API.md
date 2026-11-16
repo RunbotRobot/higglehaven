@@ -10387,8 +10387,10 @@ Rules the endpoints keep:
   refused send is a `429` carrying `limit` and `retryAfterSeconds`. A shopper
   message is at most 280 characters, an assistant reply at most 1000.
 - **Idle and retention.** A conversation nobody writes in for 10 minutes ends
-  (`endedBy: "timeout"`). Messages and ended conversations are deleted after 30
-  minutes, as nearby chat's are.
+  (`endedBy: "timeout"`). The person's messages with the assistants, and the
+  questions they left with their answers, are one thread (#3624): kept 30 days
+  after the last message (`THREAD_KEPT_MS`), then deleted, and deleted with the
+  account. A question nobody answered still expires after 7 days.
 - **Untrusted input.** A shopper's words go only to the assistant's own inbox,
   as data. The one other place they are copied is the card an assistant files for
   the team (below), in a marked quoted block.
@@ -10400,10 +10402,14 @@ Rules the endpoints keep:
   replyWaitSeconds }`. `404` if that account is not an assistant.
 - `GET /api/assistant-chat/current?afterSeq=<n>`: the caller's conversation (open,
   or ended within the last 30 minutes) and the messages after the cursor, each
-  with a `seq`. Also `assistantOnShift` and `replyWaitSeconds` (how long the panel
+  with a `seq`. Without a cursor it also returns `history`: the earlier part of
+  the thread, oldest first, newest 50 at most: messages from earlier conversations
+  and left questions (`questionId`, `questionStatus`) with their answers, each
+  `{ sender, text, createdAt, authorName? }`, leaving out the conversation sent
+  alongside. Also `assistantOnShift` and `replyWaitSeconds` (how long the panel
   waits before saying a reply is taking a while and offering to leave the
   question; the number comes from here, never a second copy in the client).
-  `{ conversation: null, messages: [] }` when there is none.
+  `{ conversation: null, messages: [], history }` when there is none.
 - `POST /api/assistant-chat/send` `{ text }`: a follow-up. `409 { conversationEnded }`
   if it has ended.
 - `POST /api/assistant-chat/end`: the shopper ends it. Idempotent.
