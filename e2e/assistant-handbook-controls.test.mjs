@@ -9,7 +9,7 @@
 // file is read here and checked first, so a malformed handbook fails with a plain
 // sentence before any browser work.
 import { readFileSync } from 'node:fs';
-import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
+import { launchPage, chooseIdentity, claimLandlet, finish, goToMode } from './helpers.mjs';
 import { parseHandbook, validateHandbook, controlMatches } from '../scripts/assistant-handbook-lib.mjs';
 
 const entries = parseHandbook(readFileSync(new URL('../docs/assistant-handbook.md', import.meta.url), 'utf8'));
@@ -64,7 +64,7 @@ await claimLandlet(page);
 await page.waitForTimeout(1500);
 if (modes.includes('build') || firstMode === 'build') await checkMode('build');
 for (const mode of modes.filter((m) => m !== 'build')) {
-  await page.click(`.mode-nav-btn[data-mode="${mode}"]`);
+  await goToMode(page, mode); // in Shop the Build and Sell buttons are petals of the bud (#3649)
   await page.waitForLoadState('networkidle', { timeout: 20000 }).catch(() => {});
   await page.waitForTimeout(2500);
   await checkMode(mode);
