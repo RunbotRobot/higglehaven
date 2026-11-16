@@ -10354,6 +10354,17 @@ against one budget per client IP.
   purpose). There is no transfer between builders. A refund's clawback also
   debits, but it reverses a credit rather than spending, so it stays. Selling
   land (starting an auction) only credits, so it is allowed.
+- **Selling side and rankings (#3597).** A sale of a product placed on a fleet
+  account's lándlet goes through the ordinary purchase path: the builder's share
+  (`builderShareCents`) is credited to `builders.higgles_balance_cents` with a
+  `higgles_earnings_events` row, and the commission caps, holds and refund
+  clawbacks key on `builder_id` and never read `users.is_fleet`, so nothing
+  refuses or miscounts for a fleet builder (`worker/fleet-lot-sales.test.js`
+  pins the credit). The only fleet checks on the money path are on the buyer
+  (`createPurchaseCheckout` refuses a fleet buyer while payments are live) and on
+  the two debits above. No ranking, leaderboard or top-builders surface exists
+  today (reviews and seller feedback are per seller and a fleet account cannot
+  leave them); a new one must filter `users.is_fleet = 0`.
 - **Visibility.** Fleet avatars are visible to everyone like any other avatar
   until a launch decision says otherwise; there is no search by name in the
   app, so there is nothing to exclude from one.

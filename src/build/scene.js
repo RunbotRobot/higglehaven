@@ -924,6 +924,21 @@ rotateControls.addEventListener('objectChange', () => {
 // reads as the orientation most of its members share (see referenceOrientation).
 // The text is selectable (#3303) and stays up between drags.
 const rotationReadoutEl = document.getElementById('rotation-readout');
+// #3640: the readout used to sit at a fixed 56 px, which assumed the item's
+// name box above it (#product-info) is one line. On a phone a long name wraps to
+// two or three lines and the two were drawn on top of each other. It now sits
+// just under that box wherever the box ends, and follows it when it resizes.
+const rotationReadoutAnchorEl = document.getElementById('product-info');
+const ROTATION_READOUT_DEFAULT_TOP_PX = 56;
+const ROTATION_READOUT_GAP_PX = 4;
+function placeRotationReadout() {
+  const box = rotationReadoutAnchorEl.getBoundingClientRect();
+  const visible = box.height > 0 && getComputedStyle(rotationReadoutAnchorEl).display !== 'none';
+  const top = visible ? Math.round(box.bottom + ROTATION_READOUT_GAP_PX) : ROTATION_READOUT_DEFAULT_TOP_PX;
+  const value = `${top}px`;
+  if (rotationReadoutEl.style.top !== value) rotationReadoutEl.style.top = value;
+}
+if (typeof ResizeObserver !== 'undefined') new ResizeObserver(placeRotationReadout).observe(rotationReadoutAnchorEl);
 function refreshRotationReadout() {
   const object = rotateControls.object;
   let orientation = null;
@@ -936,6 +951,7 @@ function refreshRotationReadout() {
   const text = formatRotationReadout(anglesFromQuaternion(orientation));
   if (rotationReadoutEl.textContent !== text) rotationReadoutEl.textContent = text;
   if (rotationReadoutEl.hidden) rotationReadoutEl.hidden = false;
+  placeRotationReadout();
 }
 rotateControls.addEventListener('dragging-changed', refreshRotationReadout);
 

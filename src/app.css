@@ -697,6 +697,12 @@
         --shop-vertical-button-height: 40px;
         --shop-vertical-gap: 8px;
         --shop-vertical-stack-height: calc(2 * var(--shop-vertical-button-height) + var(--shop-vertical-gap));
+        /* The assistant panel's phone-keyboard fit (#3621): assistantChat.js sets
+           both on the panel itself while the keyboard is open; these are the
+           values with it closed, and declare them so the token check (#3541)
+           finds a definition for what the panel's rule reads. */
+        --assistant-kb-inset: 0px;
+        --assistant-visible-height: 100dvh;
       }
       #shop-fly-btn {
         bottom: var(--shop-fly-bottom);
