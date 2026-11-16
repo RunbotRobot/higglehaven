@@ -1806,13 +1806,13 @@
          reviewing #level-status's result, and that status renders inside
          this same panel, so auto-closing on click would hide the very
          message a Build/Dig failure needs to show. */
-      /* #3576: Community Sign and Community Calendar change their label to
-         "... ✓ (Manage)" once on, which is wider, so the wrapping selection
-         toolbar re-flowed and Delete jumped under the finger. Each button
-         now always reserves the width of its longer label: an invisible,
-         zero-height copy of it (data-width-sizer) sits inside the button, so
-         the button is the same width on and off and nothing after it moves.
-         The real label (textContent) is untouched. */
+      /* #3576: Community Sign and Community Calendar change their label
+         once on, and the wrapping selection toolbar re-flowed when the width
+         changed (Delete jumped under the finger). The on-label is now no
+         wider than the off-label, and each button reserves the off-label's
+         width with an invisible, zero-height copy (data-width-sizer), so the
+         button is the same width on and off and nothing after it moves. The
+         real label (textContent) is untouched. */
       #toggle-community-sign::after,
       #toggle-community-calendar::after {
         content: attr(data-width-sizer);

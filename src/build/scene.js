@@ -3518,8 +3518,10 @@ export function updateSelectionUI() {
   // Once flagged, this same button opens the Manage Posts panel instead of
   // un-flagging directly (see its own click handler) — the label makes
   // that click destination explicit rather than reading like a second
-  // identical toggle.
-  communitySignBtn.textContent = singleMesh?.userData.isCommunitySign ? 'Community Sign ✓ (Manage)' : 'Community Sign';
+  // identical toggle. #3576: the on-label is deliberately no wider than
+  // the off-label (index.html's data-width-sizer reserves the off-label's
+  // width), so flipping the toggle never re-wraps the selection toolbar.
+  communitySignBtn.textContent = singleMesh?.userData.isCommunitySign ? 'Sign ✓ Manage' : 'Community Sign';
   // Community Calendar (docs/API.md's "Community calendar") — same
   // reasoning and same toggle-then-manage button design as Community Sign
   // just above, independent of it.
@@ -3527,7 +3529,7 @@ export function updateSelectionUI() {
   const isCommunityCalendar = !!singleMesh?.userData.isCommunityCalendar;
   communityCalendarBtn.classList.toggle('active', isCommunityCalendar);
   communityCalendarBtn.setAttribute('aria-pressed', String(isCommunityCalendar));
-  communityCalendarBtn.textContent = singleMesh?.userData.isCommunityCalendar ? 'Community Calendar ✓ (Manage)' : 'Community Calendar';
+  communityCalendarBtn.textContent = singleMesh?.userData.isCommunityCalendar ? 'Calendar ✓ Manage' : 'Community Calendar';
   // Backup Chain (#2050/#2051): every placed instance can have one, not
   // just flagged ones, so this is a plain "open the manage panel" button —
   // same single-selection-only gating as Trim/Community Sign/Calendar

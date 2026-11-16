@@ -1,5 +1,5 @@
 // #3576: turning Community Sign on changed that button's label to the wider
-// "Community Sign ✓ (Manage)", the selection toolbar re-wrapped and Delete
+// a wider "...Manage" label, the selection toolbar re-wrapped and Delete
 // moved onto the item. Every toolbar button must stay exactly where it was
 // when the toggle flips, at phone width.
 import { launchPage, chooseIdentity, claimLandlet, finish } from './helpers.mjs';
