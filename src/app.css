@@ -1168,6 +1168,12 @@
          doing, and is never taller than the visible area. The two custom
          properties come from visualViewport (see syncVisibleArea in
          src/shop/assistantChat.js). */
+      #assistant-chat-panel {
+        /* Defaults for what syncVisibleArea sets from JS (#3608), declared so the
+           design-token check (#3541) can see where they come from. */
+        --assistant-kb-inset: 0px;
+        --assistant-visible-height: 100dvh;
+      }
       #assistant-chat-panel.typing {
         bottom: calc(var(--assistant-kb-inset, 0px) + 8px);
         max-height: calc(var(--assistant-visible-height, 100dvh) - 16px);
