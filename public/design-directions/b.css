@@ -1,0 +1,127 @@
+
+/* Design direction B for #3540 (leaf #3601): signs in the world. A picture, not the
+   app. Every size is a multiple of --u (one phone pixel at 390 wide) so the scenes
+   scale down on narrower screens. No inline styles anywhere: the site's policy
+   refuses them. */
+:root {
+  --ink: 22 36 10;
+  --pill: 214 232 190;
+  --panel: 250 240 199;
+  --green: #6ca42e;
+  --wood: #c8a468;
+  --wood-dark: #8d6c3e;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: #eef3e2; color: rgb(var(--ink)); font: 15px/1.5 sans-serif; }
+.intro, .moment, .verdict { max-width: 390px; margin: 0 auto; }
+.intro { padding: 20px 16px 8px; }
+.intro h1 { margin: 0 0 6px; font-size: 22px; }
+.intro p { margin: 0; color: rgb(var(--ink) / 0.8); }
+.moment { container-type: inline-size; padding: 12px 0 0; }
+.moment h2 { margin: 0 16px 8px; font-size: 14px; letter-spacing: 0.04em; text-transform: uppercase; color: rgb(var(--ink) / 0.7); }
+.verdict { padding: 20px 16px 48px; }
+.verdict h2 { font-size: 18px; margin: 0 0 8px; }
+.verdict p { margin: 0 0 12px; }
+
+.scene {
+  --u: calc(100cqw / 390);
+  position: relative;
+  width: 100%;
+  aspect-ratio: 390 / 844;
+  overflow: hidden;
+  background-size: cover;
+  background-position: center;
+}
+.scene * { position: absolute; }
+.scene-walk { background-image: url("b-base-walk.jpg"); }
+.scene-product { background-image: url("b-base-product.jpg"); }
+.scene-settings { background-image: url("b-base-settings.jpg"); }
+
+/* Light comes from the upper left in all three views, so every shadow falls to the lower right. */
+.shadow, .crate-shadow { background: rgb(var(--ink) / 0.28); border-radius: 50%; filter: blur(calc(var(--u) * 3)); }
+
+/* Moment 1: painted words on the grass, and a signpost in the middle distance. */
+.ground-words {
+  left: calc(var(--u) * 248);
+  width: calc(var(--u) * 140);
+  color: rgb(var(--panel) / 0.86);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-shadow: 0 calc(var(--u) * 1) 0 rgb(var(--ink) / 0.25);
+  transform-origin: 50% 100%;
+  transform: perspective(calc(var(--u) * 260)) rotateX(58deg);
+  text-align: center;
+  white-space: nowrap;
+}
+.ground-words-a { top: calc(var(--u) * 642); font-size: calc(var(--u) * 21); }
+.ground-words-b { top: calc(var(--u) * 700); font-size: calc(var(--u) * 14); font-weight: 600; }
+
+.signpost { left: calc(var(--u) * 292); top: calc(var(--u) * 520); width: calc(var(--u) * 96); height: calc(var(--u) * 130); }
+.signpost .shadow { left: calc(var(--u) * 34); top: calc(var(--u) * 122); width: calc(var(--u) * 58); height: calc(var(--u) * 10); transform: rotate(-4deg); }
+.signpost .post { left: calc(var(--u) * 44); top: 0; width: calc(var(--u) * 7); height: calc(var(--u) * 128); background: linear-gradient(90deg, #a98652, var(--wood-dark)); border-radius: calc(var(--u) * 2); }
+.signpost .board {
+  height: calc(var(--u) * 24);
+  background: linear-gradient(180deg, rgb(var(--panel)), #efe0a8);
+  border: calc(var(--u) * 1.5) solid var(--wood-dark);
+  border-radius: calc(var(--u) * 3);
+  color: rgb(var(--ink));
+  font-weight: 700;
+  font-size: calc(var(--u) * 12);
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: calc(var(--u) * 2) calc(var(--u) * 2) 0 rgb(var(--ink) / 0.18);
+}
+.signpost .board span { position: static; }
+.signpost .board-1 { left: calc(var(--u) * 0); top: calc(var(--u) * 6); width: calc(var(--u) * 64); transform: rotate(-3deg); }
+.signpost .board-2 { left: calc(var(--u) * 30); top: calc(var(--u) * 36); width: calc(var(--u) * 64); transform: rotate(2deg); }
+.signpost .board-3 { left: calc(var(--u) * 6); top: calc(var(--u) * 66); width: calc(var(--u) * 64); transform: rotate(-2deg); }
+.signpost .board-2.here { background: linear-gradient(180deg, #8fc24f, var(--green)); color: rgb(var(--panel)); }
+
+/* Moment 2: a crate with a small sign planted beside it. */
+.crate { left: calc(var(--u) * 238); top: calc(var(--u) * 520); width: calc(var(--u) * 120); height: calc(var(--u) * 120); }
+.crate-shadow { left: calc(var(--u) * 24); top: calc(var(--u) * 100); width: calc(var(--u) * 100); height: calc(var(--u) * 16); transform: rotate(-3deg); }
+.crate svg { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+.stake-sign { left: calc(var(--u) * 16); top: calc(var(--u) * 540); width: calc(var(--u) * 190); height: calc(var(--u) * 210); }
+.stake-sign .shadow { left: calc(var(--u) * 52); top: calc(var(--u) * 196); width: calc(var(--u) * 70); height: calc(var(--u) * 12); transform: rotate(-4deg); }
+.stake-sign .stake { left: calc(var(--u) * 78); top: calc(var(--u) * 86); width: calc(var(--u) * 9); height: calc(var(--u) * 118); background: linear-gradient(90deg, #a98652, var(--wood-dark)); border-radius: calc(var(--u) * 2); }
+.stake-sign .plate {
+  left: calc(var(--u) * 6); top: 0; width: calc(var(--u) * 170); height: calc(var(--u) * 104);
+  background: linear-gradient(180deg, rgb(var(--panel)), #efe0a8);
+  border: calc(var(--u) * 2) solid var(--wood-dark);
+  border-radius: calc(var(--u) * 6);
+  transform-origin: 50% 100%;
+  transform: perspective(calc(var(--u) * 520)) rotateY(14deg) rotateX(-4deg);
+  box-shadow: calc(var(--u) * 3) calc(var(--u) * 4) 0 rgb(var(--ink) / 0.16);
+}
+.plate > * { position: static; }
+.plate .name { padding: calc(var(--u) * 8) calc(var(--u) * 10) 0; font-weight: 700; font-size: calc(var(--u) * 16); }
+.plate .price { padding: 0 calc(var(--u) * 10); font-weight: 700; font-size: calc(var(--u) * 24); color: var(--green); line-height: 1.15; }
+.plate .seller { padding: calc(var(--u) * 2) calc(var(--u) * 10) 0; font-size: calc(var(--u) * 12); color: rgb(var(--ink) / 0.72); }
+.plate .buy {
+  position: absolute; right: calc(var(--u) * 10); top: calc(var(--u) * 33);
+  padding: calc(var(--u) * 5) calc(var(--u) * 16);
+  background: linear-gradient(180deg, #86bd45, var(--green));
+  color: rgb(var(--panel)); font-weight: 700; font-size: calc(var(--u) * 15);
+  border-radius: calc(var(--u) * 12);
+  box-shadow: 0 calc(var(--u) * 2) 0 rgb(var(--ink) / 0.25);
+}
+
+/* Moment 3: a notice board by the place you arrive. */
+.notice { left: calc(var(--u) * 214); top: calc(var(--u) * 560); width: calc(var(--u) * 164); height: calc(var(--u) * 260); transform-origin: 50% 100%; transform: perspective(calc(var(--u) * 700)) rotateY(-12deg); }
+.notice .shadow { left: calc(var(--u) * 20); top: calc(var(--u) * 246); width: calc(var(--u) * 150); height: calc(var(--u) * 14); transform: rotate(-3deg); }
+.notice .leg { top: calc(var(--u) * 170); width: calc(var(--u) * 10); height: calc(var(--u) * 90); background: linear-gradient(90deg, #a98652, var(--wood-dark)); border-radius: calc(var(--u) * 2); }
+.notice .leg-l { left: calc(var(--u) * 14); }
+.notice .leg-r { right: calc(var(--u) * 14); }
+.notice .roof { left: calc(var(--u) * 0); top: calc(var(--u) * 6); width: 100%; height: calc(var(--u) * 14); background: linear-gradient(180deg, #b79459, var(--wood-dark)); border-radius: calc(var(--u) * 5) calc(var(--u) * 5) calc(var(--u) * 2) calc(var(--u) * 2); box-shadow: 0 calc(var(--u) * 3) 0 rgb(var(--ink) / 0.18); }
+.notice .boardface {
+  left: calc(var(--u) * 8); top: calc(var(--u) * 22); width: calc(var(--u) * 148); height: calc(var(--u) * 160);
+  background: linear-gradient(180deg, rgb(var(--panel)), #efe0a8);
+  border: calc(var(--u) * 2) solid var(--wood-dark);
+  border-radius: calc(var(--u) * 4);
+  padding: calc(var(--u) * 6) calc(var(--u) * 8);
+  box-shadow: calc(var(--u) * 3) calc(var(--u) * 4) 0 rgb(var(--ink) / 0.16);
+}
+.boardface > * { position: static; }
+.boardface .title { font-weight: 700; font-size: calc(var(--u) * 15); border-bottom: calc(var(--u) * 1.5) solid rgb(var(--ink) / 0.3); padding-bottom: calc(var(--u) * 3); margin-bottom: calc(var(--u) * 3); }
+.boardface .row { display: flex; justify-content: space-between; font-size: calc(var(--u) * 13); line-height: 1; padding: calc(var(--u) * 6) 0; border-bottom: calc(var(--u) * 1) dashed rgb(var(--ink) / 0.22); }
+.boardface .row:last-child { border-bottom: 0; }
+.boardface .row span, .boardface .row i { position: static; font-style: normal; }
