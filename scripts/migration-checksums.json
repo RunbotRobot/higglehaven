@@ -209,5 +209,6 @@
   "0224_assistant_handover.sql": "f49cacc8ed8aa8df41e14428ca3f65c9d15fa439ed1e4591ebed5a8d7138102c",
   "0225_tax_1099_efiling_submission_id.sql": "f064ec8f82177a54efc667824b6e70a56f1a3739db8358969a7a26220ea43c79",
   "0226_assistant_contacts.sql": "d5b1eef4119e2f577804ec0c3d73460f138c3d77d2f248b6640ab436cc2c249b",
-  "0227_assistant_card_followups.sql": "56306d9892cb5f6b8cd4930d93c850a93ae5949153d1f9eab989d3d6e5fdce29"
+  "0227_assistant_card_followups.sql": "56306d9892cb5f6b8cd4930d93c850a93ae5949153d1f9eab989d3d6e5fdce29",
+  "0228_users_card_refusal.sql": "a2b066b5b0794506436b3ffa5b79d1916116a9a8feac17b337bf0e47f15fb4a5"
 }
