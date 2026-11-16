@@ -27,6 +27,7 @@ import { currentMode, setBuilderId, setSellerId } from '../world/state.js';
 import { loadStripeJs, loadTurnstileJs, START_MODE_KEY } from '../main.js';
 import { setAccountSessionEnding } from '../shop/presenceAndContent.js';
 import { resetIdentityFlowPromises } from './identity.js';
+import { describeCardRefusal, VERIFY_INTRO, CARD_STEP_INTRO, ID_INSTEAD_LABEL } from './cardVerifyCopy.js';
 
 export async function requireLogin(view = 'signup', hint) {
   if (currentAuthUser) return currentAuthUser;
@@ -71,6 +72,10 @@ const verifyStatusEl = document.getElementById('verify-status');
 const verifyContinueBtn = document.getElementById('verify-continue-btn');
 const verifyIdInsteadBtn = document.getElementById('verify-id-instead-btn');
 const verifyLogoutBtn = document.getElementById('verify-logout-btn');
+// #3565: the modal's copy lives in cardVerifyCopy.js.
+document.getElementById('verify-modal-intro').textContent = VERIFY_INTRO;
+document.getElementById('verify-card-intro').textContent = CARD_STEP_INTRO;
+verifyIdInsteadBtn.textContent = ID_INSTEAD_LABEL;
 
 function setVerifyStatus(text, type) {
   verifyStatusEl.textContent = text || '';
@@ -187,7 +192,8 @@ verifyContinueBtn.addEventListener('click', async () => {
       const result = await verifyStripeInstance.confirmCardSetup(verifyStripeSetup.clientSecret, {
         payment_method: { card: verifyCardElement },
       });
-      if (result.error) throw new Error(result.error.message || 'Card verification failed.');
+      // #3565: never Stripe's own sentence alone.
+      if (result.error) throw new Error(describeCardRefusal(result.error));
       setupIntentId = result.setupIntent.id;
     }
     const user = await confirmCard(setupIntentId);

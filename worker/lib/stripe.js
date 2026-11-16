@@ -27,6 +27,7 @@ import { purchaseSellerShareCents } from './seller-payouts-tax.js';
 import { fireNotification } from './notifications.js';
 import { finalizeSucceededPaymentIntent } from './purchase-creation.js';
 import { refreshStoredStripeStatus } from './seller-profile.js';
+import { cardNotAcceptedMessage, CARD_ALREADY_USED_MESSAGE } from './card-refusal.js';
 import {
   stripeConfigured, stripeRequest, deriveStripeOnboardingStatus, userFromRow, formatCents,
 } from '../index.js';
@@ -622,10 +623,10 @@ export async function handleConfirmCard(request, env, db) {
     WHERE user_id = ?
   `).bind(funding, accepted ? 1 : 0, user.user_id).run();
   if (fingerprintOwnedByAnotherAccount) {
-    throw new HttpError('This card has already been used to verify a different account.', 409);
+    throw new HttpError(CARD_ALREADY_USED_MESSAGE, 409);
   }
   if (!accepted) {
-    throw new HttpError('Only credit cards are accepted for this step — debit and prepaid cards can\'t be used.', 400);
+    throw new HttpError(cardNotAcceptedMessage(funding), 400);
   }
   const updated = await db.prepare('SELECT * FROM users WHERE user_id = ?').bind(user.user_id).first();
   // #2430: same concurrent-account-deletion race as handleConfirmCard's own
