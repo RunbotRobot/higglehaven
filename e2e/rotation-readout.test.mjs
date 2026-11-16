@@ -51,7 +51,18 @@ await page.click('#mode-rotate');
 await waitReadout(/Turn 0\.0° \(blue ring\) · Tilt 0\.0° \(red ring\) · Tilt 0\.0° \(green ring\)/, 'single item at rest reads 0, 0, 0 in plain words');
 
 const box = await page.evaluate(() => document.getElementById('rotation-readout').getBoundingClientRect().toJSON());
-check(box.bottom <= 140 && box.left >= 0 && box.right <= 390, `the readout sits at the top and inside the viewport (${JSON.stringify(box)})`);
+// #3640: it now sits under the (possibly wrapped) name box, so "at the top" means the top third.
+check(box.bottom <= 844 / 3 && box.left >= 0 && box.right <= 390, `the readout sits at the top and inside the viewport (${JSON.stringify(box)})`);
+// #3640: the readout never overlaps the item's name box above it, however many
+// lines that box wraps to (the tree's name is long enough to wrap at 390 px).
+const overlap = await page.evaluate(() => {
+  const name = document.getElementById('product-info');
+  const readout = document.getElementById('rotation-readout');
+  const n = name.getBoundingClientRect();
+  const r = readout.getBoundingClientRect();
+  return { nameHeight: n.height, nameBottom: n.bottom, readoutTop: r.top, nameText: name.textContent.trim().slice(0, 40) };
+});
+check(overlap.nameHeight > 0 && overlap.readoutTop >= overlap.nameBottom, `the readout starts below the item's name box, not on top of it (${JSON.stringify(overlap)})`);
 const selectable = await page.evaluate(() => {
   const s = getComputedStyle(document.getElementById('rotation-readout'));
   return s.userSelect !== 'none' && s.pointerEvents !== 'none';

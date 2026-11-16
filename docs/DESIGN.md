@@ -51,6 +51,45 @@ piece of interface has to earn the space it takes from it".)
    through fog; any text a user can read, they can copy; a destructive action
    is confirmed in its own in-app modal (restyled, never made easy to miss).
 
+## The direction: one bud
+
+The owner was shown three directions as pages to look at (fog and glass, signs in
+the world, one bud) and chose the third (2026-11-16, #3540):
+
+> Direction C is real nice. It gives a great combination of aesthetic and
+> functionality. We expect users to use gestures with no visible controls, but
+> instructions would be quick and easy to find in the bud (at least, that's our
+> goal). Let's go full-force into the bud plan. The bud could have the
+> higglehaven logo.
+
+Recorded in AGENTS.md as "The interface is one bud". The living reference is
+`public/design-directions/c.html` (with `c.css` and `c.js`); A and B stay beside
+it as a record and are not built. The tracking issue is #3648, and the bud's own
+contract (the names and hooks every leaf builds on) is leaf 1, #3649: it is added
+here when posted. Until then, read c.css.
+
+The resting state of the interface is absent. One small, alive, branded thing is
+the door to everything else, and findability is paid for by teaching, not by
+permanent controls. Four things are built with:
+
+| thing | what it is for | size and shape | how it arrives and leaves | never |
+|---|---|---|---|---|
+| **the bud** | the only standing piece of interface; carries the higglehaven logo; the door to every petal | `--bud-size` (56px), round, `--shadow-bud`; sits in the bottom-right corner clear of the thumb's resting place; at 55% opacity when idle | breathes slowly (`--motion-breath`); says "Menu" in a small word (`--radius-word`) until first opened, then the word goes | carry a count, a second control, or text that stays after it has been learned |
+| **a petal** | one way in: Settings, Friends, Chat, Purchases, Build and Sell, How to move | at least 44px tall and 104px wide, 15px label, `--radius-petal`, pale green fading to pale yellow, `--shadow-petal` | unfolds upward from the bud, 40ms apart, over `--motion-petal` with `--ease-bloom`; folds back when another thing opens | be more than one word, or sit anywhere but over the bud's own column |
+| **a leaf** | a thing opened from a petal (Settings, a friend list, a chat) | `--radius-leaf`, `--shadow-leaf`, panel yellow over a soft white wash; grows from the bud's corner and keeps its close in its upper-right | blooms over `--motion-bloom`, with a fog wash rising under it; goes the same way | cover more of the world than it needs, or open on top of another leaf |
+| **a card that blooms beside a product** | a product's name, price and Buy, where the product is | `--radius-bloom`, a short stem down to the product, one yellow petal (`--petal-yellow`) for Buy | scales up out of the product over `--motion-bloom`; goes when the person walks on | hide the product it is about |
+
+Everything else is a gesture on the world itself: drag to walk, a second finger
+to look, double-tap to fly, tap a product to open its card. A gesture cannot be
+seen until it is taught once, so the bud teaches (it pulses and says Menu until
+first opened) and the instructions live in it, one tap away. Under
+`prefers-reduced-motion` nothing animates.
+
+"Full-force" means no half-way: when a surface moves into the bud, the old
+control for it goes in the same change ("One model, not a hybrid" in AGENTS.md).
+A session that finds something that cannot be done by gesture, or cannot fit a
+petal, says so on #3648; it does not quietly keep the old control.
+
 ## How to use the tokens
 
 Every value below is a CSS custom property in `src/tokens.css`, loaded before
@@ -61,11 +100,12 @@ a literal, so a later restyling is one edit.
 The admin pages (`public/admin-*.css`) keep their plain utility look and are
 not on this system.
 
-Until the owner chooses a direction (#3540) the values are the ones the
-stylesheet already used. Adopting the tokens changed nothing on screen
-(checked by substituting every token back and comparing with the old file). A
-direction change is a change of values in `src/tokens.css`, plus removal of the
-near-duplicates listed under "Where the clutter is".
+The first pass of tokens carried the values the stylesheet already used, so
+adopting them changed nothing on screen (checked by substituting every token
+back and comparing with the old file). The owner has since chosen the bud (next
+section); its tokens are in `src/tokens.css` under "The bud". The old tokens keep
+their values until a bud leaf moves a surface onto the new ones; collapsing the
+near-duplicates listed under "Where the clutter is" is a separate reviewed pass.
 
 ## Colour
 
@@ -91,6 +131,7 @@ active state and one coral for danger.
 | `--leaf-deep` | `#4e7622` | filled success controls |
 | `--sky` | `#4a9bd1` | information, selection of another person's things |
 | `--sun` | `#ffd93d` | the one warm highlight (stars, rewards) |
+| `--petal-yellow` | `#f6d65c` | the one yellow petal: Buy on a product's card, and the open surface's own petal |
 | `--white` | `#fff` | text on a saturated fill and thin rings |
 | `--world-fallback` | `#eef4e0` | the page colour behind the canvas before the scene draws |
 | `--scrim-soft` | black at 22% | a quiet fill behind a preview or well |
@@ -121,8 +162,9 @@ has no surface.
 
 ## Type
 
-One sans family. Today that is the platform's own sans-serif; the chosen
-direction may name a specific face in `--font-sans` and nothing else changes.
+One sans family: the platform's own sans-serif, as the app has always used and
+as direction C's pages do. A specific face may be named in `--font-sans` later
+and nothing else changes.
 
 | token | value | use |
 |---|---|---|
@@ -180,6 +222,11 @@ control that may sit in a settings list is 32px tall.
 | `--radius-2xl` | 14px | dialogs |
 | `--radius-pill` | 999px | the HUD pills and any control meant to feel soft |
 | `--radius-round` | 50% | round buttons (fly, joystick, close) |
+| `--radius-petal` | 24px 5px 24px 5px | a petal of the bud |
+| `--radius-bloom` | 28px 6px 28px 6px | the card that blooms beside a product |
+| `--radius-leaf` | 30px 6px 30px 6px | a leaf that grows from the bud |
+| `--radius-word` | 12px 3px 12px 3px | the small word beside the bud |
+| `--bud-size` | 56px | the bud's width and height (not a radius; kept here with the shapes) |
 
 Soft shapes: a pill or a circle before a rectangle with corners.
 
@@ -189,6 +236,19 @@ Soft shapes: a pill or a circle before a rectangle with corners.
 |---|---|---|
 | `--shadow-card` | 0 6px 18px, ink at 18% | a card that must lift off the scene |
 | `--shadow-text-over-world` | 0 1px 2px, black at 90% | a text label with no surface, so it reads on any scene |
+| `--shadow-bud` | 0 2px 10px, ink at 22% | the bud |
+| `--shadow-petal` | 0 4px 14px, ink at 20% | a petal |
+| `--shadow-leaf` | 0 8px 26px, ink at 20% | a leaf and a card that blooms |
+
+The opacities a surface may use are a short list, not free choice:
+
+| token | value | use |
+|---|---|---|
+| `--alpha-faint` | 0.12 | a quiet fill or a track |
+| `--alpha-line` | 0.25 | a hairline border |
+| `--alpha-half` | 0.5 | a tinted well; disabled |
+| `--alpha-soft` | 0.65 | secondary text, a resting pill |
+| `--alpha-strong` | 0.9 | a surface that text sits on |
 
 Today HUD chrome is a pale-green pill at 0.65 to 0.95 opacity, and dialogs are
 a pale-yellow panel at 0.97. No surface blurs what is behind it. Borders are
@@ -201,6 +261,11 @@ one pixel at ink 25% where they exist at all.
 | `--motion-quick` | 100ms | a press or a hover on a control |
 | `--motion-fade` | 0.4s | a surface or notice coming or going |
 | `--ease-soft` | ease | the default curve |
+| `--motion-breath` | 3.4s | one breath of the bud |
+| `--motion-bloom` | 0.45s | a leaf or a card blooming |
+| `--motion-petal` | 0.42s | a petal unfolding (40ms apart) |
+| `--motion-fog-away` | 6s | a hint thinning away like fog |
+| `--ease-bloom` | cubic-bezier(0.2, 0.9, 0.3, 1.2) | the bloom curve: a soft overshoot, never a bounce off screen |
 
 The world's own motion (fog that resolves into a thing, drift) lives in the
 scene code, not in CSS; see "Things arrive in the world through fog" in AGENTS.md.
@@ -283,5 +348,7 @@ as channels). What the numbers say about the clutter:
   large) plus pill and round would be enough.
 - **22 spacing steps** where 8 would do; 5, 7, 3 and 1px are one-offs.
 
-Collapsing those is a change of values in `src/tokens.css` and the removal of
-the redundant tokens, in one reviewed pass once the direction is chosen.
+The direction is chosen (the bud). Collapsing those is still a change of values
+in `src/tokens.css` and the removal of the redundant tokens, and it moves every
+surface at once, so it is its own reviewed pass with before and after pictures
+(#3656 follow-up), not done here: this change only adds the bud's tokens.

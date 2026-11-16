@@ -83,8 +83,8 @@
   --scrim-soft: rgb(0 0 0 / 0.22);     /* quiet fill behind a preview or well */
   --scrim: rgb(0 0 0 / 0.35);
 
-  /* Type: one sans family. The stack stays the platform's own sans-serif
-     until the owner chooses a direction (#3540). */
+  /* Type: one sans family. The chosen direction (C, the bud) uses the
+     platform's own sans-serif, as the app always has. */
   --font-sans: sans-serif;
   --font-mono: monospace;
   --text-2xs: 11px;
@@ -131,4 +131,35 @@
   --motion-quick: 100ms;
   --motion-fade: 0.4s;
   --ease-soft: ease;
+
+  /* The bud (direction C, chosen by the owner 2026-11-16; #3540, #3648, #3656).
+     Values come from public/design-directions/c.css, the living reference.
+     Nothing in src/app.css reads these yet: the bud leaves (#3649 onward) do,
+     and each leaf that moves a surface into the bud removes the old control in
+     the same change. */
+  --petal-yellow: #f6d65c;             /* the one yellow petal: Buy, and the open surface's own petal */
+  --radius-petal: 24px 5px 24px 5px;   /* a petal: soft on two corners, a point on the others */
+  --radius-bloom: 28px 6px 28px 6px;   /* the card that blooms beside a product */
+  --radius-leaf: 30px 6px 30px 6px;    /* a leaf that grows from the bud */
+  --radius-word: 12px 3px 12px 3px;    /* the small word beside the bud ("Menu") */
+  --bud-size: 56px;
+  --shadow-bud: 0 2px 10px rgb(var(--ink-rgb) / 0.22);
+  --shadow-petal: 0 4px 14px rgb(var(--ink-rgb) / 0.20);
+  --shadow-leaf: 0 8px 26px rgb(var(--ink-rgb) / 0.20);
+
+  /* The short list of opacities a surface may use (the census found 61 colours
+     but 24 hues: most are the ink at free-choice opacities). */
+  --alpha-faint: 0.12;
+  --alpha-line: 0.25;
+  --alpha-half: 0.5;
+  --alpha-soft: 0.65;
+  --alpha-strong: 0.9;
+
+  /* Motion of the bud: it breathes, petals unfold in a stagger, a leaf or card
+     blooms, a hint fades away like fog. Nothing bounces off screen. */
+  --motion-breath: 3.4s;
+  --motion-bloom: 0.45s;
+  --motion-petal: 0.42s;
+  --motion-fog-away: 6s;
+  --ease-bloom: cubic-bezier(0.2, 0.9, 0.3, 1.2);
 }

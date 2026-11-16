@@ -64,6 +64,13 @@
       "y_m": "REAL|1||0",
       "z_m": "REAL|1||0"
     },
+    "assistant_card_followups": {
+      "card_id": "TEXT|0||1",
+      "created_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
+      "kind": "TEXT|1||0",
+      "shopper_user_id": "TEXT|1||0",
+      "told_at": "TEXT|0||0"
+    },
     "assistant_contacts": {
       "assistant_user_id": "TEXT|1||2",
       "first_spoke_at": "TEXT|1|strftime('%Y-%m-%dT%H:%M:%fZ', 'now')|0",
@@ -921,6 +928,10 @@
     "index:idx_archived_landlet_versions_builder_id": {
       "tbl": "archived_landlet_versions",
       "sql": "CREATE INDEX idx_archived_landlet_versions_builder_id ON archived_landlet_versions(builder_id, created_at DESC)"
+    },
+    "index:idx_assistant_card_followups_shopper": {
+      "tbl": "assistant_card_followups",
+      "sql": "CREATE INDEX idx_assistant_card_followups_shopper ON assistant_card_followups (shopper_user_id)"
     },
     "index:idx_assistant_contacts_last_spoke": {
       "tbl": "assistant_contacts",

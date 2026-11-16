@@ -16,3 +16,4 @@ html, body { margin: 0; background: #eef3e2; color: rgb(var(--ink)); font: 15px/
 .direction.coming { opacity: 0.6; pointer-events: none; }
 .direction.coming .thumbs { display: none; }
 .direction.coming .open { background: rgb(var(--ink) / 0.3); }
+.chosen { margin: 0 0 0.6em; }

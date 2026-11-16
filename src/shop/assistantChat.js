@@ -16,7 +16,7 @@ import {
 import { confirmAndBlockPerson } from '../blocks.js';
 import {
   mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, handoverNotice, offerLabel,
-  canLeaveQuestion, questionNotice, questionInLine, leaveLabel, withdrawLabel, pillLabel, hasNewAssistantMessage, chatPollIntervalMs,
+  canLeaveQuestion, questionNotice, questionInLine, leaveLabel, withdrawLabel, pillLabel, hasNewAssistantMessage, assistantTitle, chatPollIntervalMs,
   keyboardInset, threadRows,
 } from './assistantChatLogic.js';
 
@@ -25,6 +25,7 @@ const QUESTION_POLL_INTERVAL_MS = 5000;
 
 const panelEl = document.getElementById('assistant-chat-panel');
 const nameEl = document.getElementById('assistant-chat-name');
+const badgeEl = document.getElementById('assistant-chat-badge');
 const closeEl = document.getElementById('assistant-chat-close');
 const blockEl = document.getElementById('assistant-chat-block');
 const minimizeEl = document.getElementById('assistant-chat-minimize');
@@ -76,6 +77,8 @@ function syncVisibleArea() {
   panelEl.style.setProperty('--assistant-kb-inset', `${inset}px`);
   panelEl.style.setProperty('--assistant-visible-height', `${visible}px`);
   panelEl.classList.toggle('typing', inputFocused && inset > 0);
+  // #3658: with the keyboard up the panel is shorter; keep the newest in view.
+  if (stickToBottom) logEl.scrollTop = logEl.scrollHeight;
 }
 if (window.visualViewport) {
   window.visualViewport.addEventListener('resize', syncVisibleArea);
@@ -127,14 +130,13 @@ function appendRow(name, body, sender) {
   logEl.append(row);
 }
 
-function renderLog() {
+function buildLog() {
   logEl.replaceChildren();
   // #3624: one thread. What was said before comes first, oldest at the top.
   for (const row of threadRows(history, question, assistant?.name)) appendRow(row.name, row.text, row.sender);
   if (question) {
     appendRow('You', question.text, 'shopper');
     if (question.answer) appendRow(question.answer.assistantName || 'An assistant', question.answer.text, 'assistant');
-    logEl.scrollTop = logEl.scrollHeight;
     return;
   }
   if (!assistant) return;
@@ -157,11 +159,29 @@ function renderLog() {
     // assistants); older rows fall back to the one in the panel.
     appendRow(message.sender === 'shopper' ? 'You' : (message.authorName || assistant.name), message.text, message.sender);
   }
-  logEl.scrollTop = logEl.scrollHeight;
 }
 
+// #3658: the log opens, and is restored from the pill, at the newest message,
+// and stays there as messages arrive; a person who has scrolled up to read
+// earlier ones is left where they are. `stickToBottom` follows the person's own
+// scrolling (it is true whenever the log is at, or within a few pixels of, the
+// bottom), so a rebuild of the rows never moves a reader.
+let stickToBottom = true;
+const NEAR_BOTTOM_PX = 24;
+function renderLog() {
+  const before = logEl.scrollTop;
+  buildLog();
+  logEl.scrollTop = stickToBottom ? logEl.scrollHeight : before;
+}
+logEl.addEventListener('scroll', () => {
+  stickToBottom = logEl.scrollHeight - logEl.scrollTop - logEl.clientHeight <= NEAR_BOTTOM_PX;
+});
+
 function render() {
-  nameEl.textContent = assistant ? assistant.name : 'Assistants';
+  // #3612: her name once, and the role badge only beside a name.
+  const title = assistantTitle({ assistant, question, history });
+  nameEl.textContent = title.text;
+  badgeEl.hidden = !title.showBadge;
   formEl.hidden = question !== null;
   leaveEl.hidden = !(canLeave && question === null);
   leaveEl.textContent = leaveLabel;
@@ -170,7 +190,7 @@ function render() {
   blockEl.hidden = !assistant?.builderId;
   panelEl.classList.toggle('minimized', minimized);
   pillEl.hidden = !(isOpen() && minimized);
-  pillEl.textContent = pillLabel(assistant?.name, unread);
+  pillEl.textContent = pillLabel(title.name, unread);
   pillEl.classList.toggle('unread', unread);
   offerEl.hidden = !offer;
   offerEl.textContent = offer ? offerLabel(offer.name) : '';
@@ -329,6 +349,7 @@ export async function openAssistantChat(target) {
   unread = false;
   stopQuestionPolling();
   panelEl.hidden = false;
+  stickToBottom = true; // #3658
   render();
   inputEl.focus();
   try {
@@ -395,6 +416,7 @@ formEl.addEventListener('submit', async (event) => {
   }
   inFlight = true;
   sendEl.disabled = true;
+  stickToBottom = true; // #3658: sending brings the person back to the newest
   errorText = null;
   endedText = null;
   offer = null;
@@ -500,6 +522,7 @@ closeEl.addEventListener('click', () => { closeAssistantChat(); });
 function restorePanel() {
   minimized = false;
   unread = false;
+  stickToBottom = true; // #3658
   render();
 }
 minimizeEl.addEventListener('click', () => {

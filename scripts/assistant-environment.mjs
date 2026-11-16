@@ -3,7 +3,7 @@
 //
 //   node scripts/assistant-environment.mjs setup --commit <40-char commit id>
 //       the environment's setup script for that commit: it downloads the three
-//       programs from the public repository at exactly that commit and checks
+//       programs and the handbook (docs/assistant-handbook.md) from the public repository at exactly that commit and checks
 //       them against checksums computed here, from `git show`, so what the
 //       session runs is what was reviewed. Paste it into the environment's
 //       setup-script field; regenerate it (a new commit) whenever a program
@@ -21,7 +21,7 @@
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { PROGRAM_FILES, buildSetupScript, buildBriefing, permissionRules, DEFAULT_REPO } from './assistant-environment-lib.mjs';
+import { PROGRAM_FILES, HANDBOOK_FILE, HANDBOOK_SOURCE, buildSetupScript, buildBriefing, permissionRules, DEFAULT_REPO } from './assistant-environment-lib.mjs';
 import { parseArgs } from './assistant-lib.mjs';
 
 const fail = (message) => {
@@ -35,8 +35,9 @@ try {
   if (command === 'setup') {
     if (!options.commit) fail('--commit is required (a full 40-character commit id)');
     const files = {};
-    for (const name of PROGRAM_FILES) {
-      const content = execFileSync('git', ['show', `${options.commit}:scripts/${name}`], { maxBuffer: 5 * 1024 * 1024 });
+    const sourceOf = (name) => (name === HANDBOOK_FILE ? HANDBOOK_SOURCE : `scripts/${name}`);
+    for (const name of [...PROGRAM_FILES, HANDBOOK_FILE]) {
+      const content = execFileSync('git', ['show', `${options.commit}:${sourceOf(name)}`], { maxBuffer: 5 * 1024 * 1024 });
       files[name] = createHash('sha256').update(content).digest('hex');
     }
     process.stdout.write(buildSetupScript({ commit: options.commit, files, repo: options.repo || DEFAULT_REPO }));

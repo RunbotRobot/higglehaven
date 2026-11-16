@@ -1235,24 +1235,38 @@ async function fetchTax1099EfilingToken(env, { refererOverride } = {}) {
   return data.AccessToken;
 }
 
-// #3607: what the vendor does with a Referer that is not ours. The token call
-// either hands back a token (accepted) or refuses; a vendor 5xx, a 429 or no
-// answer at all says nothing about whitelisting, so that is rethrown instead of being
-// reported as a refusal. Returns what the refusal looked like (the vendor's status
-// and its own message, with the id scrubbed in case it is echoed back) so the
-// first real answer can be written down; never the id itself.
+// #3607/#3643: what the vendor does with a Referer that is not ours. The token
+// call either hands back a token (accepted), refuses it (a 4xx, which is the answer
+// we are after), or does neither: a vendor 5xx, a 429 or no answer at all says
+// nothing about whitelisting. That last case is reported as "could not tell"
+// (accepted: null) together with exactly what the vendor answered, and is never
+// thrown: the real handshake before it already succeeded, so a probe that cannot
+// be read must not turn a working connection into a failure (#3643). Every
+// outcome carries the vendor's status and its own message, with the id scrubbed in
+// case it is echoed back; never the id itself.
 async function probeTax1099EfilingReferer(env, referer) {
+  const real = env.TAX_1099_EFILING_DOMAIN_REFERENCE_ID;
+  const scrub = (text) => {
+    let out = String(text ?? '').split(referer).join('[id]');
+    if (real) out = out.split(real).join('[id]');
+    return out.slice(0, 200);
+  };
   try {
     await fetchTax1099EfilingToken(env, { refererOverride: referer });
     return { accepted: true };
   } catch (error) {
-    const vendorStatus = error?.extra?.vendorStatus;
-    if (!(error instanceof HttpError) || vendorStatus === undefined || vendorStatus >= 500 || vendorStatus === 429) throw error;
-    const real = env.TAX_1099_EFILING_DOMAIN_REFERENCE_ID;
-    const scrub = (text) => String(text ?? '').split(referer).join('[id]').split(real).join('[id]');
-    return { accepted: false, refusal: { status: vendorStatus, message: scrub(error.message).slice(0, 200) } };
+    const vendorStatus = error instanceof HttpError ? error.extra?.vendorStatus : undefined;
+    if (vendorStatus === undefined) return { accepted: null, answer: { status: null, message: 'No answer from the vendor.' } };
+    const answer = { status: vendorStatus, message: scrub(error.message) };
+    if (vendorStatus >= 500 || vendorStatus === 429) return { accepted: null, answer };
+    return { accepted: false, refusal: answer };
   }
 }
+
+// #3643: a moment between the probes, so a vendor that rate-limits a second
+// token call right after the first is not asked three times in a row.
+const TAX_1099_EFILING_PROBE_SPACING_MS = 1000;
+const pauseBetweenProbes = () => new Promise((resolve) => { setTimeout(resolve, TAX_1099_EFILING_PROBE_SPACING_MS); });
 
 // The real id with its last character changed to a different one of the same kind.
 function wrongReferenceId(referenceId) {
@@ -1461,15 +1475,26 @@ export async function handleTax(request, env, db, route, url) {
     await fetchTax1099EfilingToken(env);
     // #3607: with a Domain Reference Id set, also learn whether the vendor
     // actually checks it (a wrong one is refused) and whether the letter case of
-    // ours matters. Same stateless handshake, three more times at most.
+    // ours matters. Same stateless handshake, two more times at most. #3643: the real
+    // handshake above is the connection; from here on this answers "connected"
+    // whatever the probes find, and says what the vendor answered to each.
     const referenceId = env.TAX_1099_EFILING_DOMAIN_REFERENCE_ID;
     if (!referenceId) return json({ connected: true });
+    await pauseBetweenProbes();
     const wrong = await probeTax1099EfilingReferer(env, wrongReferenceId(referenceId));
+    if (wrong.accepted === null) return json({ connected: true, whitelisting: 'unknown', answer: wrong.answer });
     if (wrong.accepted) return json({ connected: true, whitelisting: 'not_enforced' });
     const result = { connected: true, whitelisting: 'enforced', refusal: wrong.refusal };
     const flipped = flipCase(referenceId);
     if (flipped !== referenceId) {
-      result.referenceIdCase = (await probeTax1099EfilingReferer(env, flipped)).accepted ? 'insensitive' : 'sensitive';
+      await pauseBetweenProbes();
+      const other = await probeTax1099EfilingReferer(env, flipped);
+      if (other.accepted === null) {
+        result.referenceIdCase = 'unknown';
+        result.caseAnswer = other.answer;
+      } else {
+        result.referenceIdCase = other.accepted ? 'insensitive' : 'sensitive';
+      }
     }
     return json(result);
   }

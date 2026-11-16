@@ -10103,13 +10103,18 @@ shape problem, not a local validation gap). Side-effect-free and safe to
 call repeatedly — no filing, no form, no user data touched, just the
 stateless token exchange every real filing call would also need to make
 first. When `TAX_1099_EFILING_DOMAIN_REFERENCE_ID` is set it also makes up to
-two more handshakes (#3607): one with the id's last character changed, which
-sets `whitelisting` to `"enforced"` (the vendor refused it, and `refusal` is
-`{ status, message }`, the vendor's own, with any echo of an id replaced by
+two more handshakes (#3607), a second apart: one with the id's last character
+changed, which sets `whitelisting` to `"enforced"` (the vendor refused it, and `refusal`
+is `{ status, message }`, the vendor's own, with any echo of an id replaced by
 `[id]`) or `"not_enforced"` (accepted); and, when enforced and the id has letters,
 one with every letter's case flipped, which sets `referenceIdCase` to
-`"insensitive"` or `"sensitive"`. A vendor 5xx, a 429 or no answer on a probe is
-not read as a refusal: the route answers 502 instead. The ids themselves are never
+`"insensitive"` or `"sensitive"`. The first, real handshake is the connection (#3643):
+once it succeeds the route always answers `200` with `connected: true`. A probe the
+vendor answers with a 5xx or a 429, or not at all, is "could not tell", never a
+refusal and never a failure: `whitelisting` (or `referenceIdCase`) is `"unknown"`, and
+`answer` (or `caseAnswer`) is `{ status, message }` for what the vendor said (`status`
+is `null` when it said nothing). If the real handshake itself fails the route is still
+`502` with the vendor's message and no probe is made. The ids themselves are never
 returned. The admin page turns this into one plain sentence under the button.
 Without an id configured the answer is still just `{ "connected": true }`. This is the "confirm the first real Sandbox call" step
 `fetchTax1099EfilingToken`'s own comment and the "Unverified against a live
@@ -10349,6 +10354,17 @@ against one budget per client IP.
   purpose). There is no transfer between builders. A refund's clawback also
   debits, but it reverses a credit rather than spending, so it stays. Selling
   land (starting an auction) only credits, so it is allowed.
+- **Selling side and rankings (#3597).** A sale of a product placed on a fleet
+  account's lándlet goes through the ordinary purchase path: the builder's share
+  (`builderShareCents`) is credited to `builders.higgles_balance_cents` with a
+  `higgles_earnings_events` row, and the commission caps, holds and refund
+  clawbacks key on `builder_id` and never read `users.is_fleet`, so nothing
+  refuses or miscounts for a fleet builder (`worker/fleet-lot-sales.test.js`
+  pins the credit). The only fleet checks on the money path are on the buyer
+  (`createPurchaseCheckout` refuses a fleet buyer while payments are live) and on
+  the two debits above. No ranking, leaderboard or top-builders surface exists
+  today (reviews and seller feedback are per seller and a fleet account cannot
+  leave them); a new one must filter `users.is_fleet = 0`.
 - **Visibility.** Fleet avatars are visible to everyone like any other avatar
   until a launch decision says otherwise; there is no search by name in the
   app, so there is nothing to exclude from one.
@@ -12511,6 +12527,21 @@ mention it leaves it alone. **It clears by itself** when the card becomes
 `done` or its `session` is cleared (a session standing down), whatever
 else the same request says, and a card created already `done` never stores
 one.
+
+**`shopperLine` (#3532 part 2, part of #3444)** is the sentence a shopper
+hears about a card an assistant filed for them. It is accepted only together
+with `status: "done"` (otherwise 400) and passes the same checks as
+`publicLine` (one short sentence, no issue number, file name, route or URL).
+When the card was filed through `/api/assistant-inbox/.../escalate` and this
+is its first move to `done`, the shopper gets one notification, "About what
+you passed on: <the sentence>", and the response carries `shopperTold: true`;
+a second `done`, a card an assistant did not file, or a close with no
+sentence tells nobody (`shopperTold: false`). The server never invents the
+sentence: whichever session closes the card writes it, in the shopper's
+terms ("The toilet you reported now looks right from far away.", or "Thanks
+for the idea about the sky; we are keeping it as it is."). The record of who
+to tell (`assistant_card_followups`) is dropped 30 days after the card was
+filed.
 
 `subIssues`/`subIssueSummaries` (#998) are how a top-level tracking
 task's card shows its breakdown — the admin page renders them as a
