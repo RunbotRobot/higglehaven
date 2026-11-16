@@ -924,21 +924,43 @@ rotateControls.addEventListener('objectChange', () => {
 // reads as the orientation most of its members share (see referenceOrientation).
 // The text is selectable (#3303) and stays up between drags.
 const rotationReadoutEl = document.getElementById('rotation-readout');
-// #3640: the readout used to sit at a fixed 56 px, which assumed the item's
-// name box above it (#product-info) is one line. On a phone a long name wraps to
-// two or three lines and the two were drawn on top of each other. It now sits
-// just under that box wherever the box ends, and follows it when it resizes.
-const rotationReadoutAnchorEl = document.getElementById('product-info');
+// #3640, #3573: the top of Build's screen is a stack of three boxes that used to
+// sit at fixed heights, which assumed the item's name box (#product-info) is one
+// line. On a phone a long name wraps to two or three lines, so the name ran into
+// the toolbar row under it (#3573) and the angle readout was drawn over the name
+// (#3640). They now stack: the name, then the toolbar row (its CSS top is
+// max(its usual top, --product-info-bottom)), then the readout under the toolbar.
+// The toolbar stays where it is when Rotate is tapped, so the button under a
+// finger never moves; only the readout, which appears then, comes below it.
+// Each box is measured, and followed when it resizes.
+const productInfoEl = document.getElementById('product-info');
+const gizmoToolbarEl = document.getElementById('gizmo-mode-controls');
 const ROTATION_READOUT_DEFAULT_TOP_PX = 56;
-const ROTATION_READOUT_GAP_PX = 4;
-function placeRotationReadout() {
-  const box = rotationReadoutAnchorEl.getBoundingClientRect();
-  const visible = box.height > 0 && getComputedStyle(rotationReadoutAnchorEl).display !== 'none';
-  const top = visible ? Math.round(box.bottom + ROTATION_READOUT_GAP_PX) : ROTATION_READOUT_DEFAULT_TOP_PX;
+const STACK_GAP_PX = 4;
+function visibleBox(el) {
+  const box = el.getBoundingClientRect();
+  return box.height > 0 && getComputedStyle(el).display !== 'none' ? box : null;
+}
+function placeBuildTopStack() {
+  const nameBox = visibleBox(productInfoEl);
+  const rootStyle = document.documentElement.style;
+  const nameBottom = nameBox ? `${Math.round(nameBox.bottom + STACK_GAP_PX)}px` : '';
+  if (rootStyle.getPropertyValue('--product-info-bottom') !== nameBottom) {
+    if (nameBottom) rootStyle.setProperty('--product-info-bottom', nameBottom);
+    else rootStyle.removeProperty('--product-info-bottom');
+  }
+  // Read the toolbar after the name's variable is set, so its new top is in.
+  const toolbarBox = visibleBox(gizmoToolbarEl);
+  const anchor = toolbarBox || nameBox;
+  const top = anchor ? Math.round(anchor.bottom + STACK_GAP_PX) : ROTATION_READOUT_DEFAULT_TOP_PX;
   const value = `${top}px`;
   if (rotationReadoutEl.style.top !== value) rotationReadoutEl.style.top = value;
 }
-if (typeof ResizeObserver !== 'undefined') new ResizeObserver(placeRotationReadout).observe(rotationReadoutAnchorEl);
+if (typeof ResizeObserver !== 'undefined') {
+  const stackObserver = new ResizeObserver(placeBuildTopStack);
+  stackObserver.observe(productInfoEl);
+  stackObserver.observe(gizmoToolbarEl);
+}
 function refreshRotationReadout() {
   const object = rotateControls.object;
   let orientation = null;
@@ -951,7 +973,7 @@ function refreshRotationReadout() {
   const text = formatRotationReadout(anglesFromQuaternion(orientation));
   if (rotationReadoutEl.textContent !== text) rotationReadoutEl.textContent = text;
   if (rotationReadoutEl.hidden) rotationReadoutEl.hidden = false;
-  placeRotationReadout();
+  placeBuildTopStack();
 }
 rotateControls.addEventListener('dragging-changed', refreshRotationReadout);
 
@@ -2059,7 +2081,6 @@ function deleteInstance(mesh, { sync = true, persist = true } = {}) {
   if (sync) syncDelete(instanceId);
 }
 
-const productInfoEl = document.getElementById('product-info');
 // No longer defaults to an idle "Tap a product to inspect it" hint — that
 // was permanent on-screen real estate spent stating the obvious. The pill
 // itself is still exactly as useful for everything it was already showing
