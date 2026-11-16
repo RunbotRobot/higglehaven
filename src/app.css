@@ -1142,6 +1142,9 @@
          it. Text is selectable and errors stay until the next action ("Any
          text a user can read, they can copy"). */
       #assistant-chat-panel {
+        /* Set from assistantChat.js while the phone keyboard is open (#3621); these are the resting values. */
+        --assistant-kb-inset: 0px;
+        --assistant-visible-height: 100dvh;
         position: fixed;
         z-index: 32;
         left: 8px;

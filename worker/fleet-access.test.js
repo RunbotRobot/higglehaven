@@ -562,6 +562,28 @@ describe('Assistant shifts', () => {
     expect(body.avatars.find((a) => a.userId === login.body.user.userId)).toBeUndefined();
   });
 
+  it('a fresh inbox poll alone puts the assistant in the world, busy from an open conversation (#3636)', async () => {
+    const admin = await signupAdmin('shift-admin-poll');
+    await createGreenbeltLandletAs(admin.session, 'shift-landlet-poll', { x: 300, y: 700 });
+    const login = await fleetLogin('assistant-juniper');
+    const userId = login.body.user.userId;
+    await env.DB.prepare('DELETE FROM assistant_shifts WHERE user_id = ?').bind(userId).run();
+    await env.DB.prepare('UPDATE users SET assistant_seen_at = ? WHERE user_id = ?').bind(new Date().toISOString(), userId).run();
+    const spot = assistantSpot('Juniper', await greenbelt());
+    const viewer = await viewerOn(spot.landletId, 'shift-viewer-poll');
+    let { body } = await api('/presence', viewer.session());
+    expect(body.avatars.find((a) => a.userId === userId).assistant).toEqual({ name: 'Juniper', busy: false });
+    const shopper = await signupBuilder('shift-shopper-poll');
+    const now = new Date().toISOString();
+    await env.DB.prepare(`INSERT INTO assistant_conversations (conversation_id, shopper_user_id, assistant_user_id, status, created_at, last_activity_at)
+      VALUES ('conv-3636', (SELECT user_id FROM builders WHERE builder_id = ?), ?, 'open', ?, ?)`).bind(shopper.builderId, userId, now, now).run();
+    ({ body } = await api('/presence', viewer.session()));
+    expect(body.avatars.find((a) => a.userId === userId).assistant.busy).toBe(true);
+    await env.DB.prepare('UPDATE users SET assistant_seen_at = ? WHERE user_id = ?').bind(new Date(Date.now() - 3600_000).toISOString(), userId).run();
+    ({ body } = await api('/presence', viewer.session()));
+    expect(body.avatars.find((a) => a.userId === userId)).toBeUndefined();
+  });
+
   it('only an assistant account may send a heartbeat; a coding session or a shopper is refused and never appears', async () => {
     const coding = await fleetLogin('higglehaven7');
     expect((await beat(coding.token)).status).toBe(403);

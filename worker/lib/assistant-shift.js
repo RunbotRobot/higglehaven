@@ -76,13 +76,21 @@ export async function handleAssistant(request, db, route) {
 // assistant's spot.
 export async function onShiftAssistantRowsFor(db, landletId, excludeUserIds = []) {
   const staleBefore = new Date(Date.now() - ASSISTANT_SHIFT_STALE_AFTER_MS).toISOString();
+  // One notion of "on shift" (#3636): a fresh in-world heartbeat OR a fresh
+  // inbox poll (users.assistant_seen_at, the signal the chat panel already
+  // trusts) puts her in the world. Busy comes from the heartbeat when that is
+  // fresh, otherwise from whether a conversation is open.
   const { results: shifts } = await db.prepare(`
-    SELECT assistant_shifts.user_id, assistant_shifts.last_seen_at, assistant_shifts.busy,
+    SELECT users.user_id AS user_id,
+      MAX(COALESCE(assistant_shifts.last_seen_at, ''), COALESCE(users.assistant_seen_at, '')) AS last_seen_at,
+      CASE WHEN assistant_shifts.last_seen_at >= ?1 THEN assistant_shifts.busy
+        ELSE EXISTS (SELECT 1 FROM assistant_conversations c WHERE c.status = 'open' AND c.assistant_user_id = users.user_id) END AS busy,
       users.username AS fleet_username, users.is_fleet AS is_fleet, builders.builder_id AS builder_id
-    FROM assistant_shifts
-    JOIN users ON users.user_id = assistant_shifts.user_id
-    JOIN builders ON builders.user_id = assistant_shifts.user_id
-    WHERE assistant_shifts.last_seen_at >= ? AND users.is_fleet = 1
+    FROM users
+    JOIN builders ON builders.user_id = users.user_id
+    LEFT JOIN assistant_shifts ON assistant_shifts.user_id = users.user_id
+    WHERE users.is_fleet = 1
+      AND (assistant_shifts.last_seen_at >= ?1 OR users.assistant_seen_at >= ?1)
   `).bind(staleBefore).all();
   const onShift = shifts.filter((row) => isAssistantUsername(row.fleet_username) && !excludeUserIds.includes(row.user_id));
   if (!onShift.length) return [];
