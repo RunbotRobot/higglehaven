@@ -294,8 +294,12 @@ async function refreshUploadVideoCredits() {
   uploadVideoCreditsEl.textContent = '';
   try {
     const { videoGenerationCredits } = await fetchMyBuilder();
+    // #3585: a refusal states the limit and what lifts it. Credits come only
+    // from collecting credit orbs in the world (no timer), so that is the
+    // thing to say; the count itself is the server's.
     uploadVideoCreditsEl.textContent =
-      `${videoGenerationCredits} free model generation${videoGenerationCredits === 1 ? '' : 's'} remaining`;
+      `${videoGenerationCredits} free model generation${videoGenerationCredits === 1 ? '' : 's'} remaining`
+      + (videoGenerationCredits > 0 ? '' : '. Collect a credit orb in the world to earn one.');
   } catch (err) {
     console.warn('Failed to load the video-generation credit balance:', err);
   }

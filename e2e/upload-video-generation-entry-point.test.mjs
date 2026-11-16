@@ -45,7 +45,12 @@ await page.fill('#upload-price', '5'); // #3252: price is checked on this step
 await page.click('#upload-mode-video-btn');
 
 const videoSectionVisibleAfterToggle = await page.evaluate(() => !document.getElementById('upload-video-section').hidden);
-const fileRowHiddenAfterToggle = await page.evaluate(() => document.getElementById('upload-file-field-row').hidden);
+// #3585: the `hidden` attribute alone is not enough -- a `display:flex` author rule
+// on .field-with-tooltip used to outrank it, leaving the model-file picker on screen
+// beside the video picker. Check what a person can actually see.
+const fileRowHiddenAfterToggle = await page.evaluate(() => document.getElementById('upload-file-field-row').hidden)
+  && !(await page.isVisible('#upload-file-input')) && !(await page.isVisible('#upload-file-field-row'));
+const videoPickerVisibleAfterToggle = await page.isVisible('#upload-video-input');
 const submitLabelInVideoMode = await page.textContent('#upload-submit-btn');
 // #2442/#2521: a fresh builder starts with 0 video_generation_credits
 // (migrations/0127's own default) -- refreshUploadVideoCredits runs as part
@@ -70,7 +75,7 @@ const videoCreditsTextAfterToggle = (await page.textContent('#upload-video-credi
 console.log('video section visible after toggling (should be true):', videoSectionVisibleAfterToggle);
 console.log('manual file row hidden after toggling (should be true):', fileRowHiddenAfterToggle);
 console.log('submit button reads "Generate Model" in video mode (should be true):', submitLabelInVideoMode.trim() === 'Generate Model');
-console.log('video-credits line after toggling into video mode (should be "0 free model generations remaining", #2442):', videoCreditsTextAfterToggle);
+console.log('video-credits line after toggling into video mode (should say 0 remaining and what to do, #2442/#3585):', videoCreditsTextAfterToggle);
 
 await page.setInputFiles('#upload-video-input', FIXTURE_PATH);
 await page.click('#upload-submit-btn');
@@ -125,7 +130,8 @@ console.log('unexpected page errors (should be empty):', unexpectedErrors);
 
 const pass = fileRowVisibleInitially && videoSectionHiddenInitially && videoSectionVisibleAfterToggle
   && fileRowHiddenAfterToggle && submitLabelInVideoMode.trim() === 'Generate Model'
-  && videoCreditsTextAfterToggle === '0 free model generations remaining'
+  && videoPickerVisibleAfterToggle
+  && videoCreditsTextAfterToggle === '0 free model generations remaining. Collect a credit orb in the world to earn one.'
   && reachedTerminalStatus && submitReenabled && backToFileMode && unexpectedErrors.length === 0;
 await finish(browser, {
   pass,
