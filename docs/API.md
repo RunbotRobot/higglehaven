@@ -10331,6 +10331,14 @@ against one budget per client IP.
   feedback (`403`). It cannot buy while Stripe is in live mode (a `rk_live_` or
   `sk_live_` `STRIPE_SECRET_KEY`); test-mode purchases are allowed. Suspension
   and moderation apply to it like any account.
+- **Its higgles are earned and never spent (#3597).** The fleet's own lándlet is
+  paid like any builder's. Higgles leave a builder in exactly two places, and a
+  fleet account is refused at both with `403`: `POST /builders/me/redeem` (cash
+  out, before anything is claimed; the `GET` still reads the balance) and
+  `POST /auctions/:id/bids` (a winning bid is the only debit a builder makes on
+  purpose). There is no transfer between builders. A refund's clawback also
+  debits, but it reverses a credit rather than spending, so it stays. Selling
+  land (starting an auction) only credits, so it is allowed.
 - **Visibility.** Fleet avatars are visible to everyone like any other avatar
   until a launch decision says otherwise; there is no search by name in the
   app, so there is nothing to exclude from one.
