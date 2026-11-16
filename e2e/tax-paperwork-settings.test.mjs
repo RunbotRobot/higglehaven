@@ -56,6 +56,10 @@ console.log('Status before any submission (should say no paperwork on file):', b
 
 // The W-9 radio is checked by default — its own fields (SSN/EIN, State, ZIP)
 // should be visible, and the W-8BEN-only fields should not be.
+// #3566: the form starts closed behind one button (not needed yet), and opens on request.
+const formClosedByDefault = !(await page.locator('.stripe-onboarding-form').first().isVisible());
+console.log('tax form closed until asked for (should be true):', formClosedByDefault);
+await page.getByRole('button', { name: 'Show the tax form' }).click();
 const ssnLabel = page.locator('.stripe-onboarding-form label', { hasText: 'SSN or EIN' });
 const foreignTaxIdLabel = page.locator('.stripe-onboarding-form label', { hasText: 'Foreign tax ID' });
 const ssnVisibleBeforeSwitch = await ssnLabel.isVisible();
@@ -126,10 +130,10 @@ const afterStatus = await taxField.locator('.settings-empty-note').first().textC
 // .test.mjs and others documented in that file's own comment.
 const unexpectedErrors = errors.filter((e) => !e.includes('Failed to load resource'));
 
-const pass = beforeStatus.includes('No tax paperwork on file yet') &&
+const pass = beforeStatus.includes('Not needed yet') && beforeStatus.includes('No tax paperwork on file') && formClosedByDefault &&
   ssnVisibleBeforeSwitch && !foreignTaxIdVisibleBeforeSwitch &&
   !ssnVisibleAfterSwitch && foreignTaxIdVisibleAfterSwitch &&
   formStatusText.includes('available right now') && !formStatusText.includes('not configured') &&
-  afterStatus.includes('No tax paperwork on file yet') &&
+  afterStatus.includes('No tax paperwork on file') &&
   unexpectedErrors.length === 0;
 await finish(browser, { pass, label: 'Settings > General "Tax Paperwork" field submits a real W-9/W-8BEN form (#614)', errors });
