@@ -10405,7 +10405,7 @@ Rules the endpoints keep:
   with a `seq`. Without a cursor it also returns `history`: the earlier part of
   the thread, oldest first, newest 50 at most: messages from earlier conversations
   and left questions (`questionId`, `questionStatus`) with their answers, each
-  `{ sender, text, createdAt, authorName? }`, leaving out the conversation sent
+  `{ sender, text, createdAt, authorName? }`, leaving out the open conversation sent
   alongside. Also `assistantOnShift` and `replyWaitSeconds` (how long the panel
   waits before saying a reply is taking a while and offering to leave the
   question; the number comes from here, never a second copy in the client).

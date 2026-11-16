@@ -305,6 +305,21 @@ describe('the thread', () => {
     expect((await api('/assistant-chat/current', stranger.session())).body.history).toEqual([]);
   });
 
+  it('includes a conversation that just ended in the history, but not the open one', async () => {
+    await endEverything();
+    await goOnShift();
+    const shopper = await adult('ac-thread-recent');
+    await start(shopper, 'Open one');
+    const open = await api('/assistant-chat/current', shopper.session());
+    expect(open.body.history).toEqual([]);
+    await post(shopper.session, '/assistant-chat/end');
+    const ended = await api('/assistant-chat/current', shopper.session());
+    expect(ended.body.conversation.status).toBe('ended');
+    expect(ended.body.history.map((item) => item.text)).toEqual(['Open one']);
+    await next(); // the assistant is told it ended
+    await next();
+  });
+
   it('keeps the thread 30 days from the last message, then deletes it', async () => {
     await endEverything();
     await goOnShift();

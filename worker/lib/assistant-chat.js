@@ -350,7 +350,7 @@ async function handleCurrent(request, db, url) {
   const afterSeq = Number(url.searchParams.get('afterSeq'));
   // #3624: the earlier part of the thread, sent with the first load (no
   // afterSeq) so the poll that follows stays small.
-  const history = afterSeq > 0 ? undefined : await threadHistory(db, user.user_id, row?.conversation_id ?? null);
+  const history = afterSeq > 0 ? undefined : await threadHistory(db, user.user_id, row?.status === 'open' ? row.conversation_id : null);
   if (!row) return json({ conversation: null, messages: [], ...(history ? { history } : {}), replyWaitSeconds: REPLY_WAIT_SECONDS });
   const { results } = await db.prepare(`
     SELECT m.rowid AS seq, m.*, u.username AS author_name FROM assistant_messages m
@@ -371,7 +371,7 @@ async function handleCurrent(request, db, url) {
 // #3624: the person's earlier messages with the assistants, oldest first, at
 // most THREAD_PAGE of the newest. Ordinary messages from earlier conversations
 // and the questions they left (their text, and the answer once there is one) in
-// one list, so the panel can show one thread. The conversation being sent
+// one list, so the panel can show one thread. The open conversation being sent
 // alongside (`exceptConversationId`) is left out; its messages arrive in
 // `messages`. A question withdrawn before anyone read it is not part of the
 // thread.
