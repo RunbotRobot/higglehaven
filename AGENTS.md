@@ -87,11 +87,9 @@ Rules of conduct on the live site:
   account `higglehaven0` (sign in as that account to build or sell there;
   your own account is for looking around). See "The fleet has a lándlet of
   its own in the live world" under "Standing owner decisions" for what it
-  is for and what it must never become. (As of 2026-11-16 the lot is
-  chosen but not yet claimed: the claim is a write to the live map that
-  the permission layer refuses to a session, so higglehaven1 makes it once
-  the owner has typed the words. Until #3431 says it is claimed, treat it
-  as not there.)
+  is for and what it must never become. (Claimed 2026-11-16 on the
+  owner's typed instruction, #3431. It starts empty. Until #3597's guards
+  are in, place nothing there that a shopper could buy.)
 - Never touch another person's content, and never friend, message, flag,
   report or block a real user.
   A coding session never messages a real user, however it got to the site.
