@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
-import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel, canLeaveQuestion, questionNotice, questionInLine, handoverNotice, pillLabel, hasNewAssistantMessage, chatPollIntervalMs, WAITING_POLL_MS, IDLE_POLL_MS } from './assistantChatLogic.js';
+import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel, canLeaveQuestion, questionNotice, questionInLine, handoverNotice, pillLabel, hasNewAssistantMessage, chatPollIntervalMs, WAITING_POLL_MS, IDLE_POLL_MS,
+  keyboardInset,
+} from './assistantChatLogic.js';
 
 const msg = (seq, sender, createdAt = '2026-11-11T10:00:00.000Z') => ({ seq, sender, text: `m${seq}`, createdAt });
 
@@ -131,5 +133,21 @@ describe('minimised panel (#3529)', () => {
     expect(hasNewAssistantMessage(before, [...before, msg(2, 'shopper')])).toBe(false);
     expect(hasNewAssistantMessage(before, [...before, msg(2, 'assistant')])).toBe(true);
     expect(hasNewAssistantMessage([...before, msg(2, 'assistant')], [...before, msg(2, 'assistant')])).toBe(false);
+  });
+});
+
+describe('keyboardInset (#3608)', () => {
+  it('is how much of the layout viewport the keyboard covers', () => {
+    expect(keyboardInset({ innerHeight: 844, visualHeight: 520, visualOffsetTop: 0 })).toBe(324);
+    // the visible area scrolled down inside the layout viewport
+    expect(keyboardInset({ innerHeight: 844, visualHeight: 520, visualOffsetTop: 100 })).toBe(224);
+  });
+  it('is 0 when nothing covers the page, or when the browser resized the layout viewport itself', () => {
+    expect(keyboardInset({ innerHeight: 844, visualHeight: 844, visualOffsetTop: 0 })).toBe(0);
+    expect(keyboardInset({ innerHeight: 520, visualHeight: 520, visualOffsetTop: 0 })).toBe(0);
+  });
+  it('is never negative and ignores numbers that are not', () => {
+    expect(keyboardInset({ innerHeight: 500, visualHeight: 520, visualOffsetTop: 0 })).toBe(0);
+    expect(keyboardInset({ innerHeight: 844, visualHeight: undefined, visualOffsetTop: 0 })).toBe(0);
   });
 });

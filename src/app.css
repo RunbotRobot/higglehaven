@@ -1187,7 +1187,13 @@
         z-index: 17;
         left: 8px;
         right: 8px;
-        bottom: 8px;
+        --assistant-bottom: 8px;
+        bottom: var(--assistant-bottom);
+        /* #3608: never taller than the visible area above its own bottom
+           offset, so its header can never be pushed off the top; the log is
+           the part that shrinks (and scrolls). */
+        max-height: calc(100vh - var(--assistant-bottom) - 8px);
+        max-height: calc(100dvh - var(--assistant-bottom) - 8px);
         max-width: 420px;
         margin: 0 auto;
         display: flex;
@@ -1200,6 +1206,18 @@
         font: 13px/1.4 sans-serif;
         user-select: text;
       }
+      #assistant-chat-panel > :not(#assistant-chat-log) {
+        flex-shrink: 0;
+      }
+      /* #3608: while the text box is focused (the phone keyboard is up) the
+         panel sits just above the keyboard, whatever the Shop controls are
+         doing, and is never taller than the visible area. The two custom
+         properties come from visualViewport (see syncVisibleArea in
+         src/shop/assistantChat.js). */
+      #assistant-chat-panel.typing {
+        bottom: calc(var(--assistant-kb-inset, 0px) + 8px);
+        max-height: calc(var(--assistant-visible-height, 100dvh) - 16px);
+      }
       #assistant-chat-panel[hidden],
       #assistant-chat-panel.minimized {
         display: none;
@@ -1211,10 +1229,10 @@
          those too. Build and Sell have none of these controls (no visible fly
          button), so the panel keeps its place at the bottom there. */
       body:has(#shop-fly-btn.visible) #assistant-chat-panel {
-        bottom: calc(var(--shop-fly-bottom) + var(--shop-fly-size) + 8px);
+        --assistant-bottom: calc(var(--shop-fly-bottom) + var(--shop-fly-size) + 8px);
       }
       body.shop-flying:has(#shop-fly-btn.visible) #assistant-chat-panel {
-        bottom: calc(var(--shop-fly-bottom) + var(--shop-fly-size) + var(--shop-fly-stack-gap) + var(--shop-vertical-stack-height) + 8px);
+        --assistant-bottom: calc(var(--shop-fly-bottom) + var(--shop-fly-size) + var(--shop-fly-stack-gap) + var(--shop-vertical-stack-height) + 8px);
       }
       /* #3529: the minimised panel -- a small pill on the left edge, mid-screen,
          clear of the joysticks (bottom corners), the fly button (bottom centre)
@@ -1289,6 +1307,8 @@
         cursor: pointer;
       }
       #assistant-chat-log {
+        flex: 1 1 auto;
+        min-height: 0;
         max-height: 34vh;
         overflow-y: auto;
         display: flex;
