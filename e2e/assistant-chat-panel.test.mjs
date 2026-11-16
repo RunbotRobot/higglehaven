@@ -92,6 +92,7 @@ await pageA.waitForSelector('#assistant-chat-panel:not([hidden])', { timeout: 50
 const opened = await pageA.evaluate(() => ({
   name: document.getElementById('assistant-chat-name').textContent,
   badge: document.getElementById('assistant-chat-badge').textContent,
+  badgeShown: !document.getElementById('assistant-chat-badge').hidden,
   log: document.getElementById('assistant-chat-log').textContent,
   box: document.getElementById('assistant-chat-panel').getBoundingClientRect().toJSON(),
   closeBox: document.getElementById('assistant-chat-close').getBoundingClientRect().toJSON(),
@@ -274,8 +275,14 @@ const readAnswer = await pageA.evaluate(() => ({
   name: window.__assistantChat.assistantName,
   withdraw: document.getElementById('assistant-chat-withdraw').textContent,
   settingsOpen: document.getElementById('settings-modal').classList.contains('visible'),
+  // #3612: opened from Settings there is no assistant attached, yet the answer names one.
+  title: document.getElementById('assistant-chat-name').textContent,
+  badgeShown: !document.getElementById('assistant-chat-badge').hidden,
 }));
 console.log('answer read after coming back:', JSON.stringify(readAnswer));
+await pageA.click('#assistant-chat-minimize');
+const answerPill = await pageA.evaluate(() => document.getElementById('assistant-chat-pill').textContent);
+await pageA.click('#assistant-chat-pill');
 await pageA.click('#assistant-chat-withdraw');
 await pageA.waitForFunction(() => window.__assistantChat?.question === null, null, { timeout: 5000 });
 await pageA.click('#assistant-chat-close');
@@ -298,7 +305,7 @@ console.log('start after blocking (should be 403):', afterBlock.status, afterBlo
 // failed resource load; it is the only page error this test expects.
 const unexpectedErrors = sessionA.errors.filter((error) => !/status of (403|409)/.test(String(error)));
 const pass = tapped === true
-  && opened.name === ASSISTANT_NAME && opened.badge === 'assistant'
+  && opened.name === ASSISTANT_NAME && opened.badge === 'assistant' && opened.badgeShown
   && opened.log.includes('AI assistant')
   && opened.userSelect !== 'none'
   && fitsPhone && closeUpperRight
@@ -310,6 +317,7 @@ const pass = tapped === true
   && minimised.clear.every((c) => !c.overlapsPill && c.tappable)
   && litPill === `${ASSISTANT_NAME} replied`
   && restored.pillHidden && restored.status === 'open' && restored.log.includes('Head north past the fountain!') && restored.log.includes('Did that work for you?')
+  && readAnswer.title === ASSISTANT_NAME && readAnswer.badgeShown && answerPill === ASSISTANT_NAME
   && ended === `${ASSISTANT_NAME} ended the conversation.`
   && told.body.ended?.endedBy === 'shopper'
   && /helping someone else/.test(offerShown.status) && offerShown.text === 'Clover is free. Talk to Clover instead' && offerShown.kept === 'Is anyone free?'

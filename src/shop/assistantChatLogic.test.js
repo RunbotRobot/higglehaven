@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel, canLeaveQuestion, questionNotice, questionInLine, handoverNotice, pillLabel, hasNewAssistantMessage, chatPollIntervalMs, WAITING_POLL_MS, IDLE_POLL_MS } from './assistantChatLogic.js';
+import { mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, offerLabel, canLeaveQuestion, questionNotice, questionInLine, handoverNotice, pillLabel, hasNewAssistantMessage, chatPollIntervalMs, WAITING_POLL_MS, IDLE_POLL_MS, assistantTitle } from './assistantChatLogic.js';
 
 const msg = (seq, sender, createdAt = '2026-11-11T10:00:00.000Z') => ({ seq, sender, text: `m${seq}`, createdAt });
 
@@ -131,5 +131,28 @@ describe('minimised panel (#3529)', () => {
     expect(hasNewAssistantMessage(before, [...before, msg(2, 'shopper')])).toBe(false);
     expect(hasNewAssistantMessage(before, [...before, msg(2, 'assistant')])).toBe(true);
     expect(hasNewAssistantMessage([...before, msg(2, 'assistant')], [...before, msg(2, 'assistant')])).toBe(false);
+  });
+});
+
+describe('assistantTitle (#3612)', () => {
+  it('uses the attached assistant, with the role badge beside the name', () => {
+    expect(assistantTitle({ assistant: { name: 'Juniper' }, question: null })).toEqual({ name: 'Juniper', text: 'Juniper', showBadge: true });
+  });
+  it('uses whoever answered a left question when no assistant is attached', () => {
+    const question = { answer: { assistantName: 'Juniper', text: 'Hi' } };
+    expect(assistantTitle({ assistant: null, question })).toEqual({ name: 'Juniper', text: 'Juniper', showBadge: true });
+  });
+  it('prefers the attached assistant over a question answer', () => {
+    expect(assistantTitle({ assistant: { name: 'Clover' }, question: { answer: { assistantName: 'Juniper' } } }).name).toBe('Clover');
+  });
+  it('falls back to the general word with no badge beside it', () => {
+    expect(assistantTitle({ assistant: null, question: null })).toEqual({ name: null, text: 'Assistants', showBadge: false });
+    expect(assistantTitle({ assistant: null, question: { answer: null } }).showBadge).toBe(false);
+    expect(assistantTitle({ assistant: { name: '' }, question: { answer: { text: 'x' } } }).text).toBe('Assistants');
+  });
+  it('the pill takes the same name', () => {
+    const title = assistantTitle({ assistant: null, question: { answer: { assistantName: 'Juniper' } } });
+    expect(pillLabel(title.name, true)).toBe('Juniper replied');
+    expect(pillLabel(assistantTitle({}).name, false)).toBe('Assistants');
   });
 });

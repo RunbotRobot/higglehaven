@@ -16,7 +16,7 @@ import {
 import { confirmAndBlockPerson } from '../blocks.js';
 import {
   mergeMessages, replyState, endedNotice, readingNotice, slowNotice, offShiftNotice, disclosureText, freeAssistantOffer, handoverNotice, offerLabel,
-  canLeaveQuestion, questionNotice, questionInLine, leaveLabel, withdrawLabel, doneLabel, pillLabel, hasNewAssistantMessage, chatPollIntervalMs,
+  canLeaveQuestion, questionNotice, questionInLine, leaveLabel, withdrawLabel, doneLabel, pillLabel, hasNewAssistantMessage, assistantTitle, chatPollIntervalMs,
 } from './assistantChatLogic.js';
 
 // A left question is not a live chat, so it is checked less often.
@@ -24,6 +24,7 @@ const QUESTION_POLL_INTERVAL_MS = 5000;
 
 const panelEl = document.getElementById('assistant-chat-panel');
 const nameEl = document.getElementById('assistant-chat-name');
+const badgeEl = document.getElementById('assistant-chat-badge');
 const closeEl = document.getElementById('assistant-chat-close');
 const blockEl = document.getElementById('assistant-chat-block');
 const minimizeEl = document.getElementById('assistant-chat-minimize');
@@ -130,7 +131,10 @@ function renderLog() {
 }
 
 function render() {
-  nameEl.textContent = assistant ? assistant.name : 'Assistants';
+  // #3612: her name once, and the role badge only beside a name.
+  const title = assistantTitle({ assistant, question });
+  nameEl.textContent = title.text;
+  badgeEl.hidden = !title.showBadge;
   formEl.hidden = question !== null;
   leaveEl.hidden = !(canLeave && question === null);
   leaveEl.textContent = leaveLabel;
@@ -139,7 +143,7 @@ function render() {
   blockEl.hidden = !assistant?.builderId;
   panelEl.classList.toggle('minimized', minimized);
   pillEl.hidden = !(isOpen() && minimized);
-  pillEl.textContent = pillLabel(assistant?.name, unread);
+  pillEl.textContent = pillLabel(title.name, unread);
   pillEl.classList.toggle('unread', unread);
   offerEl.hidden = !offer;
   offerEl.textContent = offer ? offerLabel(offer.name) : '';
