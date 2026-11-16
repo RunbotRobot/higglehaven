@@ -80,6 +80,7 @@ await page.reload();
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 20000 });
 const wordAfterReload = await shown('#account-menu-toggle .bud-word');
 await goToMode(page, 'build');
+await page.waitForSelector('body[data-mode="build"]', { timeout: 30000 }); // the mode is decided after the page first paints
 await page.waitForSelector('#mode-nav', { state: 'visible', timeout: 20000 });
 const inBuild = {
   budOff: await page.evaluate(() => document.body.dataset.bud),
