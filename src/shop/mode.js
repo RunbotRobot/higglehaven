@@ -35,14 +35,15 @@
 // plotColorKeyForLandlet) or just never reassigned from here, so a plain
 // reverse-imported read-only binding is enough.
 //
-// SHOP_WALL_MARGIN_M/SHOP_GROUND_HORIZON_COLOR/SHOP_HAZY_HORIZON_COLOR/
-// SHOP_SKY_DOME_COLOR/SHOP_LANDLET_CULL_MARGIN_M, the (dead-write, never
+// SHOP_LANDLET_CULL_MARGIN_M, the (dead-write, never
 // actually read) shopWallMesh/shopWorldObjects fields, and the
-// computeGaplessWorldRadius/applyGroundCurvature helpers (with their own
+// computeGaplessWorldRadius helper (with its own
 // landletWorldPolygon/SHOP_COVERAGE_ANGLE_SAMPLES/SHOP_COVERAGE_RADIUS_STEP_M
 // private helpers) all move here wholesale instead -- nothing outside
 // enterShopMode ever referenced any of them, even back when it still lived
-// in main.js.
+// in main.js. (#3502: the ground disc/wall/dome, with SHOP_WALL_MARGIN_M, the
+// horizon colours and applyGroundCurvature, moved on to shop/enclosure.js so
+// Sell mounts the same enclosure.)
 import * as THREE from 'three';
 import { disposeOwnedMeshResources } from '../sharedModelResources.js';
 import { shopGroundUsesBiomeTexture } from './groundLook.js';
@@ -64,12 +65,12 @@ import {
   fetchMyEquippedAvatar, fetchMyEquippedAnimation, fetchOwnLastPresence,
   fetchMyOwnedAvatars, equipAvatar, fetchMyOwnedAnimations, equipAnimation,
 } from '../api.js';
-import { curvatureDropM, relativeCurvatureDropM } from '../../worker/earthCurvature.js';
+import { createWorldEnclosure } from './enclosure.js';
 import {
   SHOP_HIDDEN_BUILDER_UI_IDS, showShopAccessGate,
   shopStatusEl, shopMoveJoystickEl, shopLookJoystickEl, shopFlyBtn, shopVerticalControlsEl,
   shopSignHintEl, shopCalendarHintEl,
-  SHOP_WALL_HEIGHT_M, SHOP_PLOT_COLORS, plotColorKeyForLandlet, shapeForLandlet, pointInPolygonXY,
+  SHOP_PLOT_COLORS, plotColorKeyForLandlet, shapeForLandlet, pointInPolygonXY,
   shopAvatarPosition, shopAvatarFacing,
   setShopActive, setShopWorldRadiusM, setShopDomeMesh,
   setShopEquippedAvatarSkeletonSignature, setShopLastLocation,
@@ -85,11 +86,7 @@ import {
 } from './flightMovement.js';
 import { mountShopAvatar } from './mountShopAvatar.js';
 import { settingsSectionEl } from '../settings/modal.js';
-import {
-  shopDomeRiseM, resetShopDomeRiseM, paintVerticalGradient,
-  SHOP_SKY_VERTEX_SHADER, SHOP_SKY_FRAGMENT_SHADER, initShopSkyMaterial, updateShopSky,
-  currentShopSkyTimeS,
-} from './sky.js';
+import { updateShopSky, currentShopSkyTimeS } from './sky.js';
 import {
   shopLandlets, pickShopSpawnLocation, setShopBuilderLabels, updateShopLandletInfo,
   resetShopCurrentLandletEntry, accountMenuLandletInfoEl, isAccountSessionEnding,
@@ -108,18 +105,6 @@ import { worldWorkQueue } from '../world/frameBudgetQueue.js';
 import { frameMonitorSample } from '../world/frameMonitor.js';
 import { showNotice } from '../ui/noticeModal.js';
 
-// small ground/wall seam overlap only — see wildGround below (enterShopMode)
-const SHOP_WALL_MARGIN_M = 1.5;
-// A dome caps the wall's open top, and both share one continuous vertical
-// gradient (pale ground-green at the base, through a hazy horizon blend
-// right at the wall/dome seam, up to a deeper sky blue at the dome's own
-// apex) painted directly as vertex colors rather than a texture — see
-// paintVerticalGradient. The illusion this is going for is a horizon that
-// recedes into atmospheric haze and open sky, not a wall the world
-// visibly stops at.
-const SHOP_GROUND_HORIZON_COLOR = new THREE.Color(0xa8d98a); // the wall's own former flat color, now just its base
-const SHOP_HAZY_HORIZON_COLOR = new THREE.Color(0xcfe8dc); // where wall meets dome — both gradients hit this exact color, so the seam is invisible
-const SHOP_SKY_DOME_COLOR = new THREE.Color(0x5a9fd4); // deeper than the flat backdrop sky (0x87ceeb) for a sense of real overhead depth
 // Skip building a ground mesh for a landlet with no chance of being seen
 // (entirely beyond the wall, comfortably past any land's own footprint) —
 // pure cost-cutting as the world grows, never aggressive enough to risk
@@ -128,35 +113,6 @@ const SHOP_LANDLET_CULL_MARGIN_M = 40;
 
 let shopWallMesh = null;
 const shopWorldObjects = []; // ground meshes + the wild backdrop — disposed together on exit
-
-// #135 (docs/SPEC.md §1's "Earth-curvature coordinate system from day
-// one"): a flat CircleGeometry's vertices lie exactly in its own XY plane
-// (z = 0 everywhere) — this nudges each one to where it actually sits on a
-// curved Earth, relative to (worldCenterX, worldCenterY): the mesh's own
-// local origin stays at z = 0 exactly, and every other vertex gets the
-// extra sag or rise relativeCurvatureDropM says it should have relative to
-// that. Z-only, and doesn't reorient the mesh's own local frame to match
-// its true surface normal at each vertex — fine for this function's only
-// call site, wildGround's single, scene-origin-anchored fill circle:
-// sagging visibly toward the rim over real world-radius distances is
-// exactly the effect wanted, and there's no neighboring mesh it needs to
-// blend with at a shared edge. (Per-landlet ground curvature isn't done
-// this way — see #135/#166 — a landlet's own polygon is small enough that
-// positioning/orienting its whole THREE.Group is both simpler and
-// visually indistinguishable from a true per-vertex curve.) Called once
-// right after building a ground mesh's geometry, before it's ever added
-// to the scene.
-function applyGroundCurvature(geometry, worldCenterX, worldCenterY) {
-  const position = geometry.attributes.position;
-  for (let i = 0; i < position.count; i++) {
-    const localX = position.getX(i);
-    const localY = position.getY(i);
-    const drop = relativeCurvatureDropM(worldCenterX + localX, worldCenterY + localY, worldCenterX, worldCenterY);
-    position.setZ(i, position.getZ(i) + drop);
-  }
-  position.needsUpdate = true;
-  geometry.computeVertexNormals();
-}
 
 // The mosaic tessellation guarantees no gaps *between* adjacent cells (see
 // generate-mosaic's own doc comment in worker/index.js), but its outer
@@ -600,107 +556,17 @@ export async function enterShopMode() {
   const shopWorldRadiusM = computeGaplessWorldRadius(allLandlets, world.radiusM);
   setShopWorldRadiusM(shopWorldRadiusM);
 
-  // The visible world stops at the wall — no glimpse of "wild ground" that
-  // isn't actually any land's own polygon. A thin overlap keeps the ground
-  // from leaving a seam right at the wall's own base. Textured (#220) with
-  // the same base brand green the flat fill used before (index.html's
-  // --brand-green) — this used to be a much darker forest green that read
-  // as a heavy, ominous swath across an otherwise bright scene once every
-  // visible landlet resolves against it; the mottling stays subtle for the
-  // same reason.
-  const wildGroundGeometry = new THREE.CircleGeometry(shopWorldRadiusM + SHOP_WALL_MARGIN_M, 64);
-  applyGroundCurvature(wildGroundGeometry, 0, 0); // this mesh's own local origin *is* the world origin
-  const wildGround = new THREE.Mesh(
-    wildGroundGeometry,
-    new THREE.MeshStandardMaterial({ map: createGroundTexture() }),
-  );
-  scene.add(wildGround);
-  shopWorldObjects.push(wildGround);
-
-  // The wall's own ring sits at (essentially) one fixed distance from the
-  // origin all the way around, so — unlike wildGround's per-vertex
-  // applyGroundCurvature above, needed because that mesh spans every
-  // distance from 0 out to shopWorldRadiusM — a single z offset lines its
-  // base up with the already-curved ground it should be resting on instead
-  // of the flat z=0 plane (#166, #203). Shared by the dome below, whose own
-  // base sits on top of the wall's rim.
-  const wallGroundDropM = curvatureDropM(shopWorldRadiusM);
-  const wallGeometry = new THREE.CylinderGeometry(shopWorldRadiusM, shopWorldRadiusM, SHOP_WALL_HEIGHT_M, 64, 1, true);
-  paintVerticalGradient(wallGeometry, (localY, out) => {
-    const t = THREE.MathUtils.clamp((localY + SHOP_WALL_HEIGHT_M / 2) / SHOP_WALL_HEIGHT_M, 0, 1);
-    out.copy(SHOP_GROUND_HORIZON_COLOR).lerp(SHOP_HAZY_HORIZON_COLOR, t);
-  });
-  // A custom shader (unlit, like the MeshBasicMaterial this replaced) so a
-  // soft swirling cloud layer can be painted over the vertex-color gradient
-  // below — see createShopSkyMaterial's own comment. Shared with the dome
-  // (created just below) so both animate in perfect sync off one clock.
-  const shopSkyMaterial = initShopSkyMaterial(shopWorldRadiusM);
-  const wall = new THREE.Mesh(wallGeometry, shopSkyMaterial);
-  wall.rotation.x = Math.PI / 2; // THREE's cylinder stands along local Y by default — this world is Z-up
-  wall.position.z = SHOP_WALL_HEIGHT_M / 2 - wallGroundDropM;
-  scene.add(wall);
-  shopWorldObjects.push(wall);
-  shopWallMesh = wall;
-
-  // Caps the wall's open top so the world reads as fully enclosed — an
-  // upper hemisphere (unit sphere, theta 0..PI/2) whose equator matches
-  // the wall's own rim exactly (same radius, continuous gradient color at
-  // the seam — see SHOP_HAZY_HORIZON_COLOR), non-uniformly scaled (X/Z to
-  // the wall's radius, Y — the pole axis before Z-up rotation — to how far
-  // it currently rises) so growShopDomeIfNeeded can grow it later with a
-  // single scale change, no geometry rebuild.
-  //
-  // owner-report-2026-10-20: widthSegments here used to be 48 against the
-  // wall's own 64 radialSegments just above. Matching *radius* alone
-  // isn't enough for a seamless rim -- a cylinder/sphere's circular edges
-  // are really inscribed N-gons (vertices sit exactly on the circle,
-  // straight edges between them sag slightly inward), so a 48-gon and a
-  // 64-gon inscribed in the very same circle still sag by different
-  // amounts between vertices and only touch exactly at the handful of
-  // angles where a vertex of one happens to land near a vertex of the
-  // other. That periodic sag-mismatch is what read as jaggedness right at
-  // the wall/dome border. Matching widthSegments to the wall's own
-  // radialSegments makes the two rims the same 64-gon at the same angles,
-  // closing the gap.
-  const domeGeometry = new THREE.SphereGeometry(1, 64, 24, 0, Math.PI * 2, 0, Math.PI / 2);
-  paintVerticalGradient(domeGeometry, (localY, out) => {
-    const t = THREE.MathUtils.clamp(localY, 0, 1);
-    out.copy(SHOP_HAZY_HORIZON_COLOR).lerp(SHOP_SKY_DOME_COLOR, t);
-  });
-  resetShopDomeRiseM();
-  // owner-report-2026-10-21: matching segment counts (above) makes the
-  // wall's and dome's rims the same ideal 64-gon, but CylinderGeometry
-  // and SphereGeometry still compute that shared rim's vertex positions
-  // via two different trig code paths (the cylinder's theta parameter
-  // isn't the same floating-point expression as the sphere's equivalent
-  // phi, even though they describe the same circle -- see #2523's own
-  // 90-degree-phase-offset analysis). That leaves a sub-ULP gap/overlap
-  // right at the seam, which the depth test resolves inconsistently --
-  // worse at a distance, where depth-buffer precision is coarser, and
-  // gone up close, exactly matching the owner's own report ("disappears
-  // when I try to get closer"): classic z-fighting, not noise. A
-  // dedicated material for the dome -- sharing the wall's own `uniforms`
-  // object *by reference* (not a deep clone) so both stay on the exact
-  // same clock -- with a small polygonOffset settles the ambiguity
-  // deterministically in the wall's favor instead of leaving it to
-  // whichever float value happens to round which way.
-  const shopDomeMaterial = new THREE.ShaderMaterial({
-    uniforms: shopSkyMaterial.uniforms,
-    vertexShader: SHOP_SKY_VERTEX_SHADER,
-    fragmentShader: SHOP_SKY_FRAGMENT_SHADER,
-    side: THREE.BackSide,
-    extensions: { derivatives: true },
-    polygonOffset: true,
-    polygonOffsetFactor: 1,
-    polygonOffsetUnits: 1,
-  });
-  const shopDomeMesh = new THREE.Mesh(domeGeometry, shopDomeMaterial);
-  shopDomeMesh.rotation.x = Math.PI / 2;
-  shopDomeMesh.position.z = SHOP_WALL_HEIGHT_M - wallGroundDropM;
-  shopDomeMesh.scale.set(shopWorldRadiusM, shopDomeRiseM, shopWorldRadiusM);
-  scene.add(shopDomeMesh);
-  shopWorldObjects.push(shopDomeMesh);
-  setShopDomeMesh(shopDomeMesh);
+  // #3502: the ground disc, wall and dome (with the drifting sky) are the
+  // world's one enclosure (shop/enclosure.js), also mounted around Sell's
+  // showroom. The visible world stops at the wall -- no glimpse of "wild
+  // ground" that isn't actually any land's own polygon.
+  const enclosure = createWorldEnclosure({ radiusM: shopWorldRadiusM });
+  for (const object of enclosure.objects) {
+    scene.add(object);
+    shopWorldObjects.push(object);
+  }
+  shopWallMesh = enclosure.wall;
+  setShopDomeMesh(enclosure.dome);
 
   for (const record of allLandlets) {
     // Nothing this far past the wall could ever show even a sliver — skip
