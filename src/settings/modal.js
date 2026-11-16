@@ -32,7 +32,7 @@ import { openFeedbackModal } from '../feedback/submitFeedbackUI.js';
 import { getUnits, setUnits, unitSuffix } from '../settings.js';
 import { currentMode } from '../world/state.js';
 import { currentAuthUser, setCurrentAuthUser } from '../account/auth.js';
-import { fetchMyTaxEducation, fetchNotificationPreferences, updateNotificationPreferences, submitTaxIdForm } from '../api.js';
+import { fetchMyTaxEducation, fetchNotificationPreferences, updateNotificationPreferences, submitTaxIdForm, fetchTaxSummary } from '../api.js';
 import {
   updateTrimLengthInput, measurePointA, measurePointB, updateMeasureResultText,
 } from '../build/scene.js';
@@ -334,15 +334,38 @@ async function renderTaxPaperworkField() {
       const completedDate = new Date(currentAuthUser.taxFormCompletedAt).toLocaleDateString();
       statusNote.textContent = `${formLabel} on file since ${completedDate}. Submitting again below replaces it.`;
     } else {
-      statusNote.textContent = 'No tax paperwork on file yet — required once your combined earnings ' +
-        'cross this year\'s reporting threshold (see the account menu\'s own notice for where you stand).';
+      statusNote.textContent = 'Not needed yet. No tax paperwork on file; it is required once your combined earnings ' +
+        'cross this year\'s reporting threshold (the account menu shows where you stand).';
     }
   }
   refreshStatusNote();
 
+  // #3566: the form is the heaviest thing this tab holds (a legal name, an
+  // address and an SSN or EIN) and it is only needed once earnings cross the
+  // threshold, so it starts closed behind one button and opens by itself only
+  // when the account has crossed (or is replacing paperwork on file by choice).
+  const toggleField = document.createElement('div');
+  toggleField.className = 'settings-field';
+  const toggleBtn = document.createElement('button');
+  toggleBtn.type = 'button';
+  toggleBtn.className = 'version-action-btn';
+  toggleBtn.setAttribute('aria-expanded', 'false');
+  toggleField.appendChild(toggleBtn);
+  settingsSectionEl.appendChild(toggleField);
+
   const formField = document.createElement('div');
   formField.className = 'settings-field';
+  formField.id = 'tax-paperwork-form-field';
+  toggleBtn.setAttribute('aria-controls', formField.id);
   settingsSectionEl.appendChild(formField);
+
+  function setFormOpen(open) {
+    formField.hidden = !open;
+    toggleBtn.setAttribute('aria-expanded', String(open));
+    toggleBtn.textContent = open ? 'Hide the tax form' : 'Show the tax form';
+  }
+  setFormOpen(false);
+  toggleBtn.addEventListener('click', () => setFormOpen(formField.hidden));
 
   const typeRow = document.createElement('div');
   typeRow.className = 'settings-radio-row';
@@ -444,6 +467,18 @@ async function renderTaxPaperworkField() {
   });
 
   formField.appendChild(form);
+
+  // Open by itself only when paperwork is actually required now. A failed or
+  // slow summary leaves it closed: the button is one tap away.
+  try {
+    const summary = await fetchTaxSummary();
+    if (summary && summary.noticeLevel === 'crossed' && !currentAuthUser.taxFormType) {
+      statusNote.textContent = 'Needed now. Your earnings have crossed this year\'s reporting threshold, so tax paperwork is required to access earnings above it.';
+      setFormOpen(true);
+    }
+  } catch {
+    // Closed is the safe default.
+  }
 }
 
 // #724: renameBuilder/deleteBuilder/renameSeller had real, working,
