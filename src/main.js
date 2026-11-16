@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { hideLoadingScreen } from './ui/loadingScreen.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { getModalFocusable, openModalA11y, closeModalA11y } from './ui/modal.js';
 import { CATALOG as FALLBACK_CATALOG, DEFAULT_INSTANCES } from './catalog.js';
@@ -2208,19 +2209,8 @@ function addBuildModeNeighborOutlines(currentLandletRecord, allLandlets) {
   }
 }
 
-// #1590: fades out the cold-start/mode-switch splash (#loading-screen,
-// visible by default in index.html's own markup) once bootstrap() has
-// settled, whichever of Shop/Build/Sell/layoutPreview it resolved into —
-// including the declined-login dead ends (showShopAccessGate), since those
-// are also "nothing left to load," not stuck-mid-load. Tied to both the
-// resolve and reject side of bootstrapPromise below so an unexpected throw
-// still uncovers the app rather than leaving the wordmark stuck forever.
-function hideLoadingScreen() {
-  const el = document.getElementById('loading-screen');
-  if (!el || el.classList.contains('loading-screen-hidden')) return;
-  el.classList.add('loading-screen-hidden');
-  el.addEventListener('transitionend', () => { el.style.display = 'none'; }, { once: true });
-}
+// #1590/#3562: hideLoadingScreen lives in ui/loadingScreen.js now, so the claim
+// sheet can lift the splash too (bootstrap() does not settle behind it).
 
 // Loads the real catalog + instance list from the backend API, falling
 // back to catalog.js's placeholder data (and the localStorage cache) if
