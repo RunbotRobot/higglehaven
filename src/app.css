@@ -3586,7 +3586,14 @@
         font: var(--text-sm)/var(--leading-normal) var(--font-sans);
       }
       #seller-search-input.seller-filter-control {
-        flex: 1 1 140px;
+        flex: 1 1 100%;
+        min-width: 0;
+      }
+      /* #3588: sort sits beside the category filter on the row under the
+         search box, instead of on a row of its own. */
+      #seller-category-filter.seller-filter-control,
+      #seller-sort-select.seller-filter-control {
+        flex: 1 1 0;
         min-width: 0;
       }
       /* #3583: one scroll, not two. The list used to cap itself at 55vh and
