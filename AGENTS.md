@@ -99,6 +99,21 @@ Rules of conduct on the live site:
   the assistant inbox (`/api/assistant-inbox`, docs/API.md "Assistant chat").
 - No load testing on the live site; stay inside the normal rate limits.
 - Clean up what you place anywhere other than the fleet's own landlet.
+- Building on the fleet's lándlet, where up to twelve sessions share one
+  account (`higglehaven0`) and no session can see another's work in
+  progress (#3597). What the server actually does: every sign-in has its
+  own session, so several can be open at once (only a password change or
+  account deletion signs the others out, so never change that account's
+  password). A Build save sends each item's `expectedUpdatedAt`; an item
+  another session changed since you loaded it is skipped, not overwritten,
+  and handed back as `staleInstances` (a single-item edit answers `409`
+  with the stored state), so reload and redo that edit. Deletes, and a
+  restore of an old version into the editor (`PUT /landlets/:id/draft`
+  replaces the whole draft and keeps no snapshot of what it replaced), have
+  no such check. So: reload before you build, place only things you added,
+  never move or delete another session's items, never restore an old
+  version there, and leave your work standing when you finish; that is now
+  the point of the lot. Its higgles are never spent (guards in code).
 - After a change of yours deploys, look at it on the live site at phone size
   before calling it done, and say what you saw.
 
