@@ -506,6 +506,14 @@
         opacity: 1;
         pointer-events: auto;
       }
+      /* #3570: the account menu opens over this button, whose label then
+         showed through the menu's edge. Two surfaces never overlap: the
+         button steps aside (same fade) while the menu is open and returns
+         when it closes, with its own countdown untouched. */
+      body:has(#account-menu-panel.expanded) #shop-last-location-btn.visible {
+        opacity: 0;
+        pointer-events: none;
+      }
       /* #1995: a brief "+1 free model-generation credit!" confirmation on
          collecting a credit orb — same opacity-fade-in/out shape as
          #shop-last-location-btn just above (a non-jarring fade, not an
