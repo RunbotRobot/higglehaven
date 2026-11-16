@@ -54,6 +54,164 @@ no entry says it is unsure, which is better than a confident wrong answer.
 Money, identity and an account's standing are not explained here. An entry that
 touches one ends by sending the assistant to the runbook's hand-off.
 
+## Arriving and your account
+
+### How do I sign up for an account?
+
+1. Tap the gear at the top left. When nobody is signed in, the first row says "Log In / Sign Up"; tap it.
+2. Tap the "Sign Up" tab.
+3. Fill in "Username" (the name other people see), "Email" and "Password (8+ characters)".
+4. Tick "I confirm I am at least 18 years old". Nobody under 18 can have an account.
+5. Tap "Sign Up".
+
+**You will see:** the window closes, and the first row of the gear menu now shows the person's username instead of "Log In / Sign Up". Tapping it opens their account. A verification email is sent to the address they gave.
+
+**If something goes wrong:**
+- The app says "Account created, but the verification email failed to send": the account exists; in their account panel, "Resend verification email" sends it again.
+- The app says what is wrong with a field (a username or email already taken, a password under 8 characters): read it out and fix that field.
+- Signing up is enough for shopping. The first time they go into Build or Sell, a "Verify to continue" screen asks for more; the next entry covers it.
+- Nothing happens, or the screen looks different from this: ask what they see, and offer to pass it to the team.
+
+```controls any
+#auth-tabs [data-auth-view="signup"] | Sign Up
+#auth-signup-form label:nth-of-type(1) | Username
+#auth-signup-form label:nth-of-type(2) | Email
+#auth-signup-form label:nth-of-type(3) | Password (8+ characters)
+#auth-signup-form .auth-checkbox-label | I confirm I am at least 18 years old
+#auth-signup-form button[type="submit"] | Sign Up
+```
+
+### How do I log in, or get back in if I forgot my password?
+
+1. Tap the gear at the top left, then "Log In / Sign Up". The "Log In" tab is the first one.
+2. Fill in "Email" and "Password", then tap "Log In".
+3. If they forgot the password, tap "Forgot password?" instead, type their email and tap "Send Reset Link".
+4. The email carries a link. It opens a screen that says "Choose a new password": type one (8 or more characters) and tap "Reset Password".
+
+**You will see:** after "Log In", the gear menu shows their username. After "Send Reset Link", the app says "If that email has an account, a reset link was sent." (it says the same whether or not the address has an account). After "Reset Password", it says "Password reset! You can log in with your new password now." and they log in with the new one.
+
+**If something goes wrong:**
+- The email does not arrive: ask them to look in their spam folder, and to check they typed the address they signed up with.
+- A wrong email or password: the app says so; try again or use "Forgot password?".
+- They cannot get in after resetting, or the app says something about their account's standing: do not guess, use the runbook's hand-off.
+
+```controls any
+#auth-tabs [data-auth-view="login"] | Log In
+#auth-login-form label:nth-of-type(1) | Email
+#auth-login-form button[type="submit"] | Log In
+#auth-forgot-btn | Forgot password?
+#auth-forgot-form button[type="submit"] | Send Reset Link
+#auth-reset-form button[type="submit"] | Reset Password
+```
+
+### Why am I asked to confirm I am 18, and how do I verify?
+
+1. The "Verify to continue" screen appears the first time a signed-in person goes into Build or Sell. Its first lines say why: building and selling take two things, confirming they are 18 or older, and proof of it, either a credit card or a government ID.
+2. Tick "I confirm I am at least 18 years old" and tap "Continue".
+3. On the card step, they enter a credit card. A card is never charged; only its type is checked. Credit cards are only issued to adults, which is why they count as proof of age. Debit, prepaid and gift cards (Apple Cash and Cash App included) are not accepted, because people under 18 can hold them.
+4. With no credit card, they tap "Verify with a government ID instead" (the button says "No credit card? Verify with a government ID instead") and follow the steps on the screen that opens. That check is done by the identity service on its own screen, never in the chat.
+5. "Log out instead" leaves the screen without verifying.
+
+**You will see:** once verified, the screen closes and they carry on into Build or Sell.
+
+**If something goes wrong:**
+- The card is refused. The screen says why in plain words (the card has expired, the number or security code does not look right, the bank did not confirm, or it was declined because prepaid, debit and gift cards are not accepted) and always ends with "Nothing was charged". Read the reason back, and offer another credit card or the government ID way in.
+- The ID check will not finish, or they are stuck on this screen: do not guess what is wrong with the check or their account, use the runbook's hand-off.
+- Never ask for a card number or ID details in the chat.
+
+```controls any
+#verify-modal h2 | Verify to continue
+#verify-age-step .auth-checkbox-label | I confirm I am at least 18 years old
+#verify-continue-btn | Continue
+#verify-id-instead-btn | Verify with a government ID instead
+#verify-logout-btn | Log out instead
+```
+
+### Where is Settings, and what is in each tab?
+
+1. Tap the gear at the top left, then "Settings".
+2. Tabs run across the top: "General", "Shop", "Build" and "Sell".
+3. "General" holds "Units" (Meters or Feet), "Version", and "Notifications" (an option to be emailed when one of their placed products sells out). If they have started selling, the tax paperwork is here too.
+4. "Shop" holds "Controls", which reminds them how to walk, look and fly, and "My Avatars" and "My Animations" once they own any.
+5. "Build" and "Sell" hold the settings for those modes, including the person's username (with "Rename") on "Build" and the payout account on "Sell".
+6. At the bottom of every tab are "Ask an assistant" and "Send feedback".
+7. The "×" at the top right closes Settings.
+
+**You will see:** a window with the tab they chose; the tab's name is highlighted.
+
+**If something goes wrong:**
+- A setting they describe is not in the tab named here: ask what they see, and offer to pass it to the team.
+- Anything about tax figures, amounts or payouts is not for the assistant: use the runbook's hand-off.
+
+```controls any
+#settings-btn | Settings
+#settings-tabs [data-section="general"] | General
+#settings-tabs [data-section="shop"] | Shop
+#settings-tabs [data-section="build"] | Build
+#settings-tabs [data-section="sell"] | Sell
+#settings-assistant-btn | Ask an assistant
+#settings-feedback-btn | Send feedback
+#settings-close-btn | Close
+```
+
+### How do I wear an avatar I bought, or apply an animation?
+
+1. Tap the gear at the top left, then "Settings", then the "Shop" tab.
+2. Under "My Avatars", each avatar they own is a row, and the first row is always "Default avatar". Tap "Equip" on the one they want.
+3. Under "My Animations", tap "Apply" on an animation to use it with the avatar they are wearing, or "Clear" to take it off.
+
+**You will see:** their character in the world changes to the avatar. The row they chose says it is equipped.
+
+**If something goes wrong:**
+- "My Avatars" or "My Animations" is not on the tab: they own none yet, so the section is not drawn. Where to buy one is in "How do I buy something?".
+- A message says it could not equip the avatar: read it out; try once more, then offer to pass it to the team.
+- An animation that does not suit the avatar is marked as not matching: the app says so next to it. Read that note out rather than guessing.
+
+```controls any
+#settings-tabs [data-section="shop"] | Shop
+```
+
+### How do I send feedback about a problem?
+
+1. Tap the gear at the top left, then "Settings".
+2. Tap "Send feedback" at the bottom.
+3. A window titled "Submit Feedback" shows a picture of what they were looking at. In the box under "Describe what happened (optional)", say what went wrong, in as much detail as they like.
+4. Tap "Submit". "Cancel" closes it without sending.
+
+**You will see:** the app says "Thanks! Your feedback was submitted." and the window closes by itself.
+
+**If something goes wrong:**
+- It says it could not send: read the words out and ask them to try again in a minute.
+- They would rather talk it through: they can also leave a message here in the assistant window, and the assistant can pass it to the team.
+
+```controls any
+#settings-feedback-btn | Send feedback
+#feedback-modal h2 | Submit Feedback
+#feedback-modal label | Describe what happened (optional)
+#feedback-submit-btn | Submit
+#feedback-cancel-btn | Cancel
+```
+
+### How do I change my password or log out?
+
+1. Tap the gear at the top left, then tap their username (the first row) to open "Account".
+2. To change the password, tap "Change Password". Fill in "Current password" and "New password (8+ characters)" and tap "Change Password" again. This signs them out of every other device, but keeps this one signed in.
+3. To log out, tap "Log Out".
+
+**You will see:** after a password change, the app says "Your password has been changed. You have been signed out of your other devices." After "Log Out", the first row of the gear menu says "Log In / Sign Up" again.
+
+**If something goes wrong:**
+- The app says the current password is wrong: they can log out and use "Forgot password?" from the log in screen.
+- The same panel also has "Change Email" and "Download My Data". "Delete Account" is permanent and cannot be undone: only describe where it is if asked, and never suggest it. Anything about an account's standing goes to the runbook's hand-off.
+
+```controls any
+#auth-change-password-btn | Change Password
+#auth-change-password-form button[type="submit"] | Change Password
+#auth-logout-btn | Log Out
+#auth-change-email-btn | Change Email
+#auth-export-data-btn | Download My Data
+```
+
 ## Getting around and Shop
 
 ### How do I walk around and look around?

@@ -770,7 +770,26 @@ async function fileEscalationCard(db, assistant, { summary, kind, shopperUserId,
       note, note_updated_at, note_author, created_at, updated_at
     ) VALUES (?, 'feedback', (SELECT COALESCE(MAX(note_number), 0) + 1 FROM control_room_tasks), ?, 'queued', '', 'assistant', ?, ?, 'assistant', ?, ?)
   `).bind(cardId, `From assistant ${assistant.username} (${kind}): ${summary.slice(0, 100)}`, note, now, now, now).run();
+  // #3532 part 2: remember who to tell when the team has dealt with it.
+  await db.prepare('INSERT INTO assistant_card_followups (card_id, shopper_user_id, kind, created_at) VALUES (?, ?, ?, ?)')
+    .bind(cardId, shopperUserId, kind, now).run();
   return cardId;
+}
+
+// #3532 part 2: the team marked an assistant-filed card done and wrote one
+// sentence for the shopper, so tell them, once. Best effort and silent when
+// the card was not filed by an assistant, was already told, or the shopper's
+// account is gone. A card closed with no sentence tells nobody: the sentence is
+// written by whichever session closes the card, and nothing invents one.
+export async function tellShopperWhatBecameOfCard(db, cardId, line) {
+  const claimed = await db.prepare(
+    'UPDATE assistant_card_followups SET told_at = ?1 WHERE card_id = ?2 AND told_at IS NULL RETURNING shopper_user_id',
+  ).bind(isoNow(), cardId).first();
+  if (!claimed) return false;
+  const builderId = await builderIdForUser(db, claimed.shopper_user_id);
+  if (!builderId) return false;
+  await fireNotification(db, builderId, `About what you passed on: ${line}`);
+  return true;
 }
 
 async function escalationInput(request) {
@@ -908,4 +927,5 @@ export async function pruneStaleAssistantChat(db) {
   // #3531: the fact that an assistant has spoken to someone goes 30 days after
   // the last time it did.
   await db.prepare('DELETE FROM assistant_contacts WHERE last_spoke_at < ?').bind(isoAgo(CONTACT_KEPT_MS)).run();
+  await db.prepare('DELETE FROM assistant_card_followups WHERE created_at < ?').bind(isoAgo(CONTACT_KEPT_MS)).run();
 }
