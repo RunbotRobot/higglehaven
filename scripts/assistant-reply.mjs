@@ -17,7 +17,9 @@
 //   node scripts/assistant-reply.mjs --name juniper answer-question   <questionId> --text "Open Sell mode ..."
 //   node scripts/assistant-reply.mjs --name juniper escalate-question <questionId> --text "They are asking about a refund."
 //
-// `escalate` files a card for the team; --text is YOUR short summary of what is
+// `--kind problem|suggestion|question` says what the card is (a bug, an idea, or
+// a request for help; left out, it is a question), so the team can tell them
+// apart (#3532). `escalate` files a card for the team; --text is YOUR short summary of what is
 // being asked. The server adds the shopper's own words in a quoted field, so
 // never paste their words into the summary. docs/API.md "Assistant chat".
 // --text is refused unless it is one plain line (checkCommandText, #3523).
@@ -31,7 +33,7 @@ const fail = (message) => {
 
 let parsed;
 try {
-  parsed = parseArgs(process.argv.slice(2), ['name', 'url', 'text']);
+  parsed = parseArgs(process.argv.slice(2), ['name', 'url', 'text', 'kind']);
 } catch (error) { fail(error.message); }
 const { options, positional } = parsed;
 const [action, conversationId] = positional; // the id is a conversation's, or a question's for the two *-question commands
@@ -45,6 +47,8 @@ if (options.text !== undefined) {
   const problem = checkCommandText(options.text);
   if (problem) fail(problem);
 }
+if (options.kind !== undefined && !['problem', 'suggestion', 'question'].includes(options.kind)) fail('--kind must be problem, suggestion or question');
+if (options.kind !== undefined && !action.startsWith('escalate')) fail('--kind goes with escalate or escalate-question');
 let baseUrl;
 try { baseUrl = resolveBaseUrl(options.url); } catch (error) { fail(error.message); }
 
@@ -65,7 +69,7 @@ try {
     'answer-question': `/api/assistant-inbox/questions/${id}/answer`,
     'escalate-question': `/api/assistant-inbox/questions/${id}/escalate`,
   }[action];
-  const body = { reply: { text: options.text }, 'answer-question': { text: options.text }, escalate: { summary: options.text }, 'escalate-question': { summary: options.text } }[action];
+  const body = { reply: { text: options.text }, 'answer-question': { text: options.text }, escalate: { summary: options.text, kind: options.kind }, 'escalate-question': { summary: options.text, kind: options.kind } }[action];
   const result = await client.call('POST', path, body);
   process.stdout.write(`${JSON.stringify(result ?? { ok: true })}\n`);
 } catch (error) {

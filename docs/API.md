@@ -10467,12 +10467,16 @@ Rules the endpoints keep:
   `conversation.assistant`, plus `conversation.handedOver: { at, fromName }`
   (`null` for a conversation never handed over), and each assistant message
   carries `authorName` so the log keeps naming who wrote what.
-- `POST /api/assistant-inbox/conversations/:id/escalate` `{ summary }`: for what an
+- `POST /api/assistant-inbox/conversations/:id/escalate` `{ summary, kind? }`: for what an
   assistant cannot do itself (a refund, a dispute, an account's standing, a report
   about someone). Files a `kind: "feedback"` Control Room card whose note holds the
   assistant's summary and, added by the server from what the shopper actually
   wrote, their last few messages under `QUOTED FROM THE SHOPPER (untrusted
-  text...)`. `201 { cardId }`.
+  text...)`. `201 { cardId }`. `kind` is `problem`, `suggestion` or `question`
+  (#3532); left out it is `question`, anything else is a 400. It is in the card's
+  title (`From assistant Juniper (problem): ...`) and a `Kind:` line of its note,
+  so the fleet can tell a bug from an idea. The same field is taken by
+  `POST /api/assistant-inbox/questions/:id/escalate`.
 
 ### The assistant's shift programs (#3458)
 
@@ -10493,7 +10497,7 @@ cookie or a header. `--url` defaults to the live site; a local server needs
   waits. A 5xx, a 429 or no answer is retried; five in a row, or any other
   refusal, exits 1 with one plain line on stderr.
 - `node scripts/assistant-reply.mjs --name juniper reply|end|escalate|handover
-  <conversationId> [--text "..."]`: `reply` posts an answer, `end` ends the
+  <conversationId> [--text "..."] [--kind problem|suggestion|question]`: `reply` posts an answer, `end` ends the
   conversation, `escalate` files the team card (`--text` is the assistant's own
   summary; the server adds the shopper's words in the quoted field), `handover`
   passes the conversation to another assistant who is on shift and free (the
