@@ -2,6 +2,10 @@
 // list. Two products with prices chosen so name-order and price-order
 // disagree (Alpha Widget $20, Zeta Gadget $5) — proving a sort actually
 // re-orders rather than just happening to already read correctly.
+// #3588: the controls only appear once the list is longer than eight
+// products, so seven "Zz Filler" products ($10, same placeholder category)
+// bring the list to nine; visibleRowLabels() leaves them out so every
+// assertion below still reads about the two products it was written for.
 import { launchPage, chooseIdentity, finish } from './helpers.mjs';
 
 const LABEL = 'Search Filter Sort Tester';
@@ -28,9 +32,12 @@ async function uploadProduct(name, price) {
 
 await uploadProduct('Alpha Widget', 20);
 await uploadProduct('Zeta Gadget', 5);
+const FILLERS = 7;
+for (let i = 1; i <= FILLERS; i += 1) await uploadProduct(`Zz Filler ${i}`, 10);
 
 async function visibleRowLabels() {
-  return page.$$eval('.seller-row-label', (els) => els.map((el) => el.textContent));
+  const labels = await page.$$eval('.seller-row-label', (els) => els.map((el) => el.textContent));
+  return labels.filter((label) => !label.startsWith('Zz Filler'));
 }
 
 const labelsDefault = await visibleRowLabels();
@@ -133,6 +140,19 @@ await page.evaluate(async (id) => {
     body: JSON.stringify({ category: 'Zebra' }),
   });
 }, zetaTemplateId);
+// The fillers share Alpha's category here so the dropdown still holds just
+// the two categories this check is about.
+await page.evaluate(async () => {
+  const res = await fetch('/api/catalog?limit=100');
+  const { templates } = await res.json();
+  for (const t of templates.filter((x) => x.name.startsWith('Zz Filler'))) {
+    await fetch(`/api/catalog/${t.templateId}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ category: 'apple' }),
+    });
+  }
+});
 await page.reload({ waitUntil: 'networkidle' });
 await chooseIdentity(page, { mode: 'sell', label: LABEL, isNew: false });
 await page.waitForSelector('#seller-modal.visible', { timeout: 30000 });

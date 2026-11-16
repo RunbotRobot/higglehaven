@@ -154,6 +154,25 @@ function populateSellerCategoryFilterOptions(templates) {
   sellerCategoryFilterSelect.value = categories.some((c) => c.toLowerCase() === previous.toLowerCase()) ? previous : '';
 }
 
+// #3588 (interface week, #3539): search, category and sort only earn their
+// place once the list is long enough to need them. A seller with two
+// products was offered all three above the first product. "More than
+// eight" is the issue's own suggested threshold; one named constant so it
+// is a single place to tune. When the list drops back under it (a delete),
+// the controls go and their values are reset too, so a filter set while the
+// list was long can never keep hiding products behind controls nobody can
+// reach to clear it.
+const SELLER_FILTER_CONTROLS_MIN_PRODUCTS = 8;
+
+function syncSellerFilterControls(productCount) {
+  const show = productCount > SELLER_FILTER_CONTROLS_MIN_PRODUCTS;
+  sellerFilterControlsEl.hidden = !show;
+  if (show) return;
+  sellerSearchInput.value = '';
+  sellerCategoryFilterSelect.value = '';
+  sellerSortSelect.value = 'name-asc';
+}
+
 function filterAndSortSellerProducts(templates) {
   const query = sellerSearchInput.value.trim().toLowerCase();
   const category = sellerCategoryFilterSelect.value;
@@ -425,11 +444,11 @@ function renderSellerList() {
   const allTemplates = myProducts();
   populateSellerCategoryFilterOptions(allTemplates);
   if (allTemplates.length === 0) {
-    sellerFilterControlsEl.hidden = true;
+    syncSellerFilterControls(0);
     sellerStatusEl.textContent = 'No custom products yet — use "+ Upload Model" to add one.';
     return;
   }
-  sellerFilterControlsEl.hidden = false;
+  syncSellerFilterControls(allTemplates.length);
   const templates = filterAndSortSellerProducts(allTemplates);
   if (templates.length === 0) {
     sellerStatusEl.textContent = 'No products match your search or filter.';
@@ -1940,11 +1959,11 @@ function renderSellerListView() {
   const allTemplates = myProducts();
   populateSellerCategoryFilterOptions(allTemplates);
   if (allTemplates.length === 0) {
-    sellerFilterControlsEl.hidden = true;
+    syncSellerFilterControls(0);
     sellerStatusEl.textContent = 'No custom products yet — use "+ Upload Model" to add one.';
     return;
   }
-  sellerFilterControlsEl.hidden = false;
+  syncSellerFilterControls(allTemplates.length);
   const templates = filterAndSortSellerProducts(allTemplates);
   if (templates.length === 0) {
     sellerStatusEl.textContent = 'No products match your search or filter.';
