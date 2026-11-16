@@ -1183,7 +1183,7 @@ export async function handleLandlets(request, db, route, url) {
         message: `A lándlet (${route[1]}) was reassigned to you by an admin. It's yours to build on now.` },
       ...cancelledAuctionBidderIds.map((bidderBuilderId) => ({
         builderId: bidderBuilderId,
-        message: `Your bid on ${route[1]} was cancelled — the landlet was reassigned by an admin and the auction ended with no winner.`,
+        message: `Your bid on ${route[1]} was cancelled — the lándlet was reassigned by an admin and the auction ended with no winner.`,
       })),
     ]);
     const updated = await requireLandlet(db, route[1]);
