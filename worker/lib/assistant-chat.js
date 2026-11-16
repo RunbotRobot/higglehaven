@@ -475,7 +475,10 @@ async function handleCurrentQuestion(request, db) {
   const user = await requireCurrentUser(request, db);
   await checkRateLimit(db, `assistant-chat-poll:${user.user_id}`, SHOPPER_POLL_RATE_LIMIT_MAX);
   await expireStaleQuestions(db);
-  return questionReply(db, await currentQuestionRow(db, user.user_id));
+  const row = await currentQuestionRow(db, user.user_id);
+  // #3624: an answer read in the panel is not announced as well.
+  if (row?.status === 'answered') await clearReplyNotices(db, user.user_id);
+  return questionReply(db, row);
 }
 
 // Withdraws a question still in line, or closes one that was answered or
@@ -827,8 +830,32 @@ async function handleAnswerQuestion(request, db, questionId) {
   await recordSpoke(db, user.user_id, question.shopper_user_id);
   // The answer is already stored for the shopper; telling them is best effort.
   const builderId = await builderIdForUser(db, question.shopper_user_id);
-  if (builderId) await fireNotification(db, builderId, `${user.username} answered the question you left.`);
+  if (builderId) await fireReplyNotice(db, builderId, user.username);
   return json({ answered: true }, 201);
+}
+
+// #3624: one quiet notification for an answer that arrives while the shopper is
+// away, never one per reply: if the same assistant's note is still unread, it
+// is that one. Reading the answer in the panel clears it (clearReplyNotices).
+// The wording is a conversation's, not a ticket's.
+const replyNoticeText = (name) => `${name} replied.`;
+
+async function fireReplyNotice(db, builderId, assistantUsername) {
+  const message = replyNoticeText(assistantUsername);
+  const unread = await db.prepare('SELECT 1 AS n FROM notifications WHERE builder_id = ? AND message = ? AND read_at IS NULL LIMIT 1')
+    .bind(builderId, message).first();
+  if (!unread) await fireNotification(db, builderId, message);
+}
+
+// The shopper is looking at the answer, so the note about it has done its job.
+async function clearReplyNotices(db, shopperUserId) {
+  const builderId = await builderIdForUser(db, shopperUserId);
+  if (!builderId) return;
+  await db.prepare(`
+    UPDATE notifications SET read_at = ?1
+    WHERE builder_id = ?2 AND read_at IS NULL
+      AND message IN (SELECT username || ' replied.' FROM users WHERE is_fleet = 1)
+  `).bind(isoNow(), builderId).run();
 }
 
 async function handleEscalateQuestion(request, db, questionId) {

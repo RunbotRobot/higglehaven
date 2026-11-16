@@ -342,6 +342,38 @@ describe('the thread', () => {
   });
 });
 
+// #3624: one quiet note for answers that arrive while the person is away.
+describe('the note about an answer', () => {
+  const notes = async (person) => {
+    const { body } = await api('/notifications', person.session());
+    const list = Array.isArray(body) ? body : (body.notifications ?? []);
+    return list.filter((n) => n.message === `${assistantName} replied.`);
+  };
+  async function leaveAndAnswer(person, text, answer) {
+    await post(person.session, '/assistant-chat/question', { text });
+    const handed = await next();
+    await post(assistant.session, `/assistant-inbox/questions/${handed.body.question.questionId}/answer`, { text: answer });
+  }
+
+  it('is one note, not one per answer, and reading the answer in the panel clears it', async () => {
+    await endEverything();
+    await env.DB.prepare('DELETE FROM assistant_questions').run();
+    await goOnShift();
+    const shopper = await adult('ac-note');
+    await leaveAndAnswer(shopper, 'First?', 'One.');
+    await post(shopper.session, '/assistant-chat/question/close');
+    await leaveAndAnswer(shopper, 'Second?', 'Two.');
+    const before = await notes(shopper);
+    expect(before).toHaveLength(1);
+    expect(before[0].readAt).toBeNull();
+    // Opening the panel reads the answer, and the note goes with it.
+    await api('/assistant-chat/question', shopper.session());
+    const after = await notes(shopper);
+    expect(after).toHaveLength(1);
+    expect(after[0].readAt).not.toBeNull();
+  });
+});
+
 describe('retention', () => {
   it('deletes messages and ended conversations past the thread term', async () => {
     await endEverything();
@@ -399,7 +431,8 @@ describe('leaving a question', () => {
     expect(seen.body.question.position).toBeUndefined();
     // A notification told them, even if they had closed the panel.
     const notices = await api('/notifications', first.session());
-    expect(JSON.stringify(notices.body)).toContain(`${assistantName} answered the question you left.`);
+    expect(JSON.stringify(notices.body)).toContain(`${assistantName} replied.`);
+    expect(JSON.stringify(notices.body)).not.toContain('answered the question you left');
     // Answering twice is refused.
     expect((await post(assistant.session, `/assistant-inbox/questions/${questionId}/answer`, { text: 'again' })).response.status).toBe(409);
 

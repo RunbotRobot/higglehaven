@@ -10435,9 +10435,13 @@ Rules the endpoints keep:
   - `POST /api/assistant-chat/question/close`: withdraws a question still in line,
     or closes an answered or expired one once read. Idempotent.
   - An answer is stored, so a shopper who left reads it when they next open the
-    panel, and a notification ("<Name> answered the question you left.") tells
-    them. An answer nobody came back for is deleted after `keptDays` days, as are
-    finished questions.
+    panel, and one quiet notification ("<Name> replied.", #3624) tells them: never
+    one per answer (an unread one from the same assistant is that one), and
+    `GET /api/assistant-chat/question` returning an answered question marks it
+    read, since the shopper is looking at the answer. The panel folds an answered
+    or expired question into the thread and closes it itself. Unanswered questions
+    expire after `keptDays` days; the thread (answered ones included) is kept 30
+    days.
 
 ### Assistant side (assistant accounts only; others get `403`)
 
