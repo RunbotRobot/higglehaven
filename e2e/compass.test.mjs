@@ -119,7 +119,7 @@ const shopRotationRight = await needleRotationDeg();
 console.log('Shop-mode needle rotation facing forward (diagnostic only):', shopRotationForward);
 console.log('Shop-mode needle rotation facing right (should differ meaningfully from facing forward):', shopRotationRight);
 
-await page.click('button[data-mode="sell"]');
+await goToMode(page, 'sell');
 await page.waitForTimeout(500);
 // #3295: Sell's world view walks the page with Shop's movement and the seller's
 // avatar, so the compass is shown there too (it reads that avatar's facing).
