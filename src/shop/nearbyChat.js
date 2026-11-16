@@ -94,6 +94,14 @@ function appendMessage(message) {
   if (!isOwn) {
     const actionsEl = document.createElement('span');
     actionsEl.className = 'shop-nearby-chat-message-actions';
+    // #3551: the actions stay out of the way until the line is tapped, so the
+    // text gets the panel's full width. The text is the control that reveals
+    // them (keyboard and screen reader reach it as a button that says whether
+    // the actions are shown); the buttons themselves are unchanged.
+    actionsEl.hidden = true;
+    textEl.tabIndex = 0;
+    textEl.setAttribute('role', 'button');
+    textEl.setAttribute('aria-expanded', 'false');
     actionsEl.innerHTML = '<button type="button" data-action="mute" title="Mute this sender">Mute</button>'
       + '<button type="button" data-action="report" title="Report this sender">Report</button>'
       + '<button type="button" data-action="block" title="Block this person">Block</button>';
@@ -101,6 +109,25 @@ function appendMessage(message) {
   }
   chatLogEl.appendChild(line);
   chatLogEl.scrollTop = chatLogEl.scrollHeight;
+}
+
+// #3551: one line shows its actions at a time. Tapping the line again, or
+// another line, hides them. Ignored while the person is selecting text, so
+// copying part of a message (#3303) never pops the actions open.
+function setLineActionsOpen(line, open) {
+  const actionsEl = line.querySelector('.shop-nearby-chat-message-actions');
+  const textEl = line.querySelector('.shop-nearby-chat-message-text');
+  if (!actionsEl || !textEl) return;
+  actionsEl.hidden = !open;
+  textEl.setAttribute('aria-expanded', String(open));
+  line.classList.toggle('actions-open', open);
+}
+function toggleLineActions(line) {
+  const open = !line.classList.contains('actions-open');
+  chatLogEl.querySelectorAll('.shop-nearby-chat-message.actions-open').forEach((other) => {
+    if (other !== line) setLineActionsOpen(other, false);
+  });
+  setLineActionsOpen(line, open);
 }
 
 // #2956: removes any of this builder's messages already rendered in the
@@ -184,9 +211,21 @@ if (mutedToggleEl) {
 }
 
 if (chatLogEl) {
+  chatLogEl.addEventListener('keydown', (event) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const textEl = event.target.closest?.('.shop-nearby-chat-message-text[role="button"]');
+    const line = textEl?.closest('.shop-nearby-chat-message');
+    if (!line) return;
+    event.preventDefault();
+    toggleLineActions(line);
+  });
   chatLogEl.addEventListener('click', (event) => {
     const button = event.target.closest('button[data-action]');
     const row = event.target.closest('[data-builder-id]');
+    if (!button && row && event.target.closest('.shop-nearby-chat-message-text[role="button"]')) {
+      if (String(window.getSelection?.() ?? '') === '') toggleLineActions(row);
+      return;
+    }
     if (!button || !row) return;
     const builderId = row.dataset.builderId;
     if (button.dataset.action === 'mute') {
@@ -194,6 +233,7 @@ if (chatLogEl) {
       removeMessagesFromBuilder(builderId);
       renderMutedList();
     } else if (button.dataset.action === 'report') {
+      setLineActionsOpen(row, false);
       reportNearbyChatSender(builderId);
     } else if (button.dataset.action === 'block') {
       // #3140: what makes a block take effect everywhere is #3143; here the

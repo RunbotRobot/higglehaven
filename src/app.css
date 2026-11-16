@@ -1064,8 +1064,9 @@
       .shop-nearby-chat-message {
         word-break: break-word;
         display: flex;
+        flex-wrap: wrap;
         align-items: baseline;
-        gap: 6px;
+        gap: 2px 6px;
       }
       /* #3445: "Juniper · assistant" ahead of an assistant's line. */
       .shop-nearby-chat-message-speaker {
@@ -1074,6 +1075,10 @@
       }
       .shop-nearby-chat-message-text {
         flex: 1 1 auto;
+      }
+      /* #3551: a line with actions is tappable; the text keeps the full width. */
+      .shop-nearby-chat-message-text[role="button"] {
+        cursor: pointer;
       }
       /* Right-aligned/dimmed for the sender's own sent messages -- same
          "which side is mine" convention a chat UI almost always uses,
@@ -1089,7 +1094,10 @@
       .shop-nearby-chat-message-actions {
         display: flex;
         gap: 3px;
-        flex: 0 0 auto;
+        flex: 1 0 100%;
+      }
+      .shop-nearby-chat-message-actions[hidden] {
+        display: none;
       }
       .shop-nearby-chat-message-actions button {
         padding: 1px 5px;
