@@ -3523,12 +3523,17 @@
         flex: 1 1 140px;
         min-width: 0;
       }
+      /* #3583: one scroll, not two. The list used to cap itself at 55vh and
+         scroll inside the modal, which scrolls too, so an opened product's
+         block ended in a hard cut and its Save button sat under the fold.
+         The list now grows to its content and #seller-modal-content is the
+         only scroll area. flex-shrink: 0 keeps the flex column of the modal
+         from squeezing it back into a clipped box. */
       #seller-list {
         display: flex;
         flex-direction: column;
+        flex-shrink: 0;
         gap: 10px;
-        max-height: 55vh;
-        overflow-y: auto;
       }
       #seller-list[hidden],
       #seller-list-view[hidden] {
@@ -3560,8 +3565,8 @@
         display: grid;
         grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
         gap: 10px;
-        max-height: 55vh;
-        overflow-y: auto;
+        /* #3583: same one-scroll rule as #seller-list above. */
+        flex-shrink: 0;
       }
       .seller-card {
         display: flex;
