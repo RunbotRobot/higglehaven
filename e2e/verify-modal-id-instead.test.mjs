@@ -62,6 +62,17 @@ const reasonGiven = /only issued to adults/.test(reasonCopy.cardLine) && /Apple 
   && /never charged/.test(reasonCopy.intro) && /government ID/.test(reasonCopy.idLabel);
 console.log('the modal says why debit, prepaid and gift cards are refused, and offers the ID route (should be true):', reasonGiven);
 
+// #3675: the two buttons are drawn in the brand's pill shape, not as browser
+// defaults (their rules once named ids the markup no longer had). A default
+// button has a ~2px radius and a grey face; the pill's radius is large.
+const pillShape = await page.evaluate(() => ['verify-id-instead-btn', 'verify-continue-btn'].map((id) => {
+  const el = document.getElementById(id);
+  const style = getComputedStyle(el);
+  return { id, radius: parseFloat(style.borderTopLeftRadius), face: style.backgroundColor };
+}));
+const buttonsStyled = pillShape.every((b) => b.radius >= 12) && pillShape[1].face !== 'rgb(239, 239, 239)' && pillShape[1].face !== 'buttonface';
+console.log('verify-modal buttons are pill-shaped, not browser defaults (should be true):', buttonsStyled, JSON.stringify(pillShape));
+
 await page.click('#verify-id-instead-btn');
 const statusAfterClick = await page.waitForFunction(
   () => document.getElementById('verify-status').textContent.includes('available right now'),
@@ -87,7 +98,7 @@ const clearedViaCardPathAfterward = (await page.locator('#shop-status.visible').
 console.log('Gate still clearable via the normal card path after trying ID-instead (should be true):', clearedViaCardPathAfterward);
 
 const pass = idBtnHiddenDuringAgeStep &&
-  idBtnVisibleDuringCardStep && reasonGiven &&
+  idBtnVisibleDuringCardStep && reasonGiven && buttonsStyled &&
   statusAfterClick.includes('available right now') && !statusAfterClick.includes('not configured') &&
   stillGatedAfterFailedIdAttempt &&
   clearedViaCardPathAfterward &&
