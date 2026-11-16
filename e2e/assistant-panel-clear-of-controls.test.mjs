@@ -10,6 +10,17 @@ import { launchPage, chooseIdentity, finish } from './helpers.mjs';
 const LABEL = 'Panel Clear Shopper';
 const LANDLET_ID = 'assistant-panel-clear-landlet';
 
+// #3608: a stand-in for the visual viewport, whose height a test can change
+// without resizing the page -- which is what Android Chrome and iOS Safari do
+// when the keyboard opens.
+const installFakeVisualViewport = (target) => target.addInitScript(() => {
+  const vv = new EventTarget();
+  vv.height = window.innerHeight;
+  vv.offsetTop = 0;
+  Object.defineProperty(window, 'visualViewport', { value: vv, configurable: true });
+  window.__setVisibleHeight = (height) => { vv.height = height; vv.dispatchEvent(new Event('resize')); };
+});
+
 const session = await launchPage({ promptAnswer: LABEL, viewport: { width: 390, height: 844 } });
 const page = session.page;
 let pass = true;
@@ -29,6 +40,7 @@ await fetchJson('/api/landlets', {
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify({ landletId: LANDLET_ID, name: 'Panel Clear Landlet', areaM2: 1000, status: 'claimed', ownerBuilderId: builder.builderId }),
 });
+await installFakeVisualViewport(page);
 await page.reload({ waitUntil: 'networkidle' });
 await page.waitForSelector('#shop-fly-btn.visible', { timeout: 15000 });
 await page.waitForSelector('#shop-status:not(.visible)', { state: 'attached', timeout: 10000 });
@@ -72,6 +84,44 @@ await page.waitForFunction((was) => document.body.classList.contains('shop-flyin
 const second = await covered();
 check(second.hit.length === 0, `${firstState ? 'on the ground' : 'flying'}: the panel covers no movement control (covers: ${second.hit.join(', ') || 'none'}; panel ${JSON.stringify(second.panel)})`);
 check(second.panel.top > 0, 'the panel is still fully on screen');
+
+// #3608: with the phone keyboard up the viewport is about half as tall. The
+// header (title, minimise, close) must stay on screen with the text box
+// focused, flying and on the ground; the log is what gives. A shortened
+// viewport stands in for the keyboard (the visual-viewport arithmetic itself
+// is unit tested).
+async function headerOnScreenWithKeyboard(label) {
+  await page.setViewportSize({ width: 390, height: 420 });
+  await page.focus('#assistant-chat-input');
+  await page.waitForTimeout(300);
+  const box = await page.evaluate(() => {
+    const rect = (id) => document.getElementById(id).getBoundingClientRect().toJSON();
+    return { header: rect('assistant-chat-header'), close: rect('assistant-chat-close'), minimize: rect('assistant-chat-minimize'), input: rect('assistant-chat-input'), vh: window.innerHeight };
+  });
+  check(box.header.top >= 0 && box.header.bottom <= box.vh, `${label}: the panel's header is on screen with the keyboard up (${JSON.stringify(box.header)}, viewport ${box.vh})`);
+  check(box.close.top >= 0 && box.minimize.top >= 0 && box.close.bottom <= box.vh, `${label}: minimise and close are on screen and tappable`);
+  check(box.input.bottom <= box.vh, `${label}: the text box is on screen`);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForTimeout(300);
+
+  // The other way a keyboard shows up: the page keeps its height and only the
+  // visible area shrinks. The panel then sits just above the keyboard.
+  await page.focus('#assistant-chat-input');
+  await page.evaluate(() => window.__setVisibleHeight(420));
+  await page.waitForTimeout(300);
+  const visual = await page.evaluate(() => {
+    const rect = (id) => document.getElementById(id).getBoundingClientRect().toJSON();
+    return { panel: rect('assistant-chat-panel'), header: rect('assistant-chat-header'), input: rect('assistant-chat-input') };
+  });
+  check(visual.header.top >= 0 && visual.panel.bottom <= 420, `${label}: with only the visible area shrunk to 420, the panel is inside it (panel ${JSON.stringify(visual.panel)})`);
+  check(visual.input.bottom <= 420, `${label}: the text box is above the keyboard`);
+  await page.evaluate(() => window.__setVisibleHeight(844));
+  await page.waitForTimeout(300);
+}
+await headerOnScreenWithKeyboard(firstState ? 'on the ground' : 'flying');
+await page.click('#shop-fly-btn');
+await page.waitForFunction((was) => document.body.classList.contains('shop-flying') !== was, !firstState, { timeout: 10000 });
+await headerOnScreenWithKeyboard(firstState ? 'flying' : 'on the ground');
 
 await page.click('#assistant-chat-minimize');
 const tucked = await page.evaluate(() => ({
