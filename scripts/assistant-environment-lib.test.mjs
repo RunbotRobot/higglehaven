@@ -3,7 +3,7 @@ import runbook from '../docs/assistant-runbook.md?raw';
 import {
   PROGRAM_FILES, buildSetupScript, permissionRules, INSTALL_DIR, REPLY_ACTIONS, commandsSection, buildBriefing, COMMANDS_MARKER, SHIFT_BACKGROUND_LIMIT_MS,
 } from './assistant-environment-lib.mjs';
-import { resolveBaseUrl, LIVE_SITE_URL, checkCommandText, TEXT_MAX } from './assistant-lib.mjs';
+import { resolveBaseUrl, LIVE_SITE_URL, checkCommandText, accentLandlets, TEXT_MAX } from './assistant-lib.mjs';
 
 // #3458: the generated setup script and the permission rules.
 const COMMIT = 'a'.repeat(40);
@@ -144,5 +144,22 @@ describe('checkCommandText', () => {
   it('refuses empty and over-long text with a plain sentence', () => {
     expect(checkCommandText('')).not.toBeNull();
     expect(checkCommandText('a'.repeat(TEXT_MAX + 1))).toMatch(/too long/);
+  });
+});
+
+describe('accentLandlets (#3613)', () => {
+  it('puts the accent on landlet and landlets, keeping the capitalisation', () => {
+    expect(accentLandlets('Claim your first landlet. Landlets are free. LANDLET!')).toBe('Claim your first l\u00e1ndlet. L\u00e1ndlets are free. L\u00c1NDLET!');
+  });
+
+  it('leaves already accented text, other words and words that merely contain the letters alone', () => {
+    for (const same of ['l\u00e1ndlet', 'your land', 'landlettuce', 'mylandlet', 'landlord', 'a landlets-free day'.replace('landlets-free', 'plain')]) {
+      expect(accentLandlets(same)).toBe(same);
+    }
+  });
+
+  it('copes with empty input', () => {
+    expect(accentLandlets('')).toBe('');
+    expect(accentLandlets(undefined)).toBe('');
   });
 });

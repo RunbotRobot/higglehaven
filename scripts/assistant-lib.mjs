@@ -34,6 +34,16 @@ export function checkCommandText(text) {
   return null;
 }
 
+// #3613: the word for a person's plot is always "lándlet", with the accent.
+// A model sometimes drops it, so a reply or answer a shopper will read has any
+// unaccented "landlet"/"landlets" (any capitalisation) turned into the accented
+// form before it is sent. Only the whole word changes: "landlettuce" and
+// "mylandlet" are left alone. A bare "land" cannot be fixed here (it may be the
+// ordinary word); the runbook tells the assistant never to use it for a plot.
+export function accentLandlets(text) {
+  return String(text ?? '').replace(/\b(l)(a)(ndlets?)\b/gi, (_, l, a, rest) => `${l}${a === 'A' ? '\u00c1' : '\u00e1'}${rest}`);
+}
+
 export function loginNameFor(name) {
   const lower = String(name || '').trim().toLowerCase();
   const login = lower.startsWith('assistant-') ? lower : `assistant-${lower}`;
