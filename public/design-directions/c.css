@@ -1,0 +1,200 @@
+/* Direction C, "one bud" (#3602, part of #3540 and interface week #3539).
+   A mock-up page, not the app. Brand tokens are the app's own (src/app.css :root):
+   ink 22 36 10, pale green 214 232 190, pale yellow 250 240 199, brand green #6ca42e,
+   spring green 62 199 91; one sans family (the system one, as the app uses). */
+:root {
+  --ink-rgb: 22 36 10;
+  --pill-rgb: 214 232 190;
+  --panel-rgb: 250 240 199;
+  --brand-green: #6ca42e;
+  --spring-rgb: 62 199 91;
+  --yellow: #f6d65c;
+  --ink: rgb(var(--ink-rgb));
+  --ink-soft: rgb(var(--ink-rgb) / 0.65);
+  --s: 1;
+}
+
+* { box-sizing: border-box; }
+
+html { background: rgb(var(--panel-rgb)); }
+
+body {
+  margin: 0 auto;
+  max-width: 430px;
+  padding: 16px 0 40px;
+  font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color: var(--ink);
+  background: rgb(var(--panel-rgb));
+}
+
+.page-head, .moments, .cover, .three { padding: 0 16px; }
+
+.wordmark { height: 40px; width: auto; display: block; }
+h1 { font-size: 22px; line-height: 1.2; margin: 10px 0 6px; font-weight: 600; }
+.lede { margin: 0 0 14px; color: var(--ink-soft); }
+
+.moments { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.moment-btn {
+  font: inherit; font-size: 14px; color: var(--ink);
+  padding: 8px 14px; border-radius: 999px; border: 0;
+  background: rgb(var(--pill-rgb)); cursor: pointer;
+}
+.moment-btn[aria-pressed="true"] { background: var(--brand-green); color: #fff; }
+
+/* The stage is exactly a phone screen (390x844); JS scales it down on a narrower page. */
+.stage-fit {
+  width: calc(390px * var(--s));
+  height: calc(844px * var(--s));
+  margin: 0 auto;
+  overflow: hidden;
+  border-radius: calc(26px * var(--s));
+  box-shadow: 0 6px 24px rgb(var(--ink-rgb) / 0.22);
+}
+.stage {
+  position: relative;
+  width: 390px; height: 844px;
+  transform: scale(var(--s));
+  transform-origin: top left;
+  overflow: hidden;
+  background: #6fb04a;
+  touch-action: manipulation;
+}
+.world { position: absolute; inset: 0; width: 390px; height: 844px; display: block; user-select: none; -webkit-user-drag: none; }
+
+/* A fog wash that rises under whatever has just opened, so surfaces read as condensing out of the world. */
+.stage::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: radial-gradient(120% 70% at 85% 100%, rgb(255 255 255 / 0.30), rgb(255 255 255 / 0) 60%);
+  opacity: 0; transition: opacity .5s ease;
+}
+.stage[data-open="true"]::after, .stage[data-moment="settings"]::after { opacity: 1; }
+
+.hint {
+  position: absolute; left: 18px; bottom: 46px; margin: 0;
+  max-width: 190px; font-size: 13px; line-height: 1.35;
+  padding: 7px 12px; border-radius: 16px 4px 16px 4px;
+  background: rgb(255 255 255 / 0.55); color: var(--ink);
+  backdrop-filter: blur(6px);
+  animation: fog-away 6s ease forwards;
+  pointer-events: none;
+}
+.stage:not([data-moment="walk"]) .hint { display: none; }
+@keyframes fog-away { 0%, 70% { opacity: 1; } 100% { opacity: 0; } }
+
+/* The product's own hotspot: tapping the product is how its card blooms. */
+.hotspot {
+  position: absolute; left: 318px; top: 410px; width: 72px; height: 110px;
+  border: 0; background: transparent; cursor: pointer; padding: 0;
+}
+.hotspot:focus-visible { outline: 2px solid #fff; outline-offset: -4px; border-radius: 18px; }
+.stage[data-moment="product"] .hotspot { pointer-events: none; }
+
+.bloom {
+  position: absolute; left: 214px; top: 530px; width: 168px;
+  padding: 14px 16px 16px;
+  border-radius: 28px 6px 28px 6px;
+  background: linear-gradient(160deg, rgb(255 255 255 / 0.82), rgb(var(--panel-rgb) / 0.86));
+  box-shadow: 0 8px 26px rgb(var(--ink-rgb) / 0.20);
+  backdrop-filter: blur(8px);
+  transform-origin: 85% 0;
+  animation: bloom-in .45s cubic-bezier(.2, .9, .3, 1.2) both;
+}
+.bloom[hidden], .leaf-sheet[hidden] { display: none; }
+.bloom h2 { margin: 0; font-size: 20px; font-weight: 600; }
+.bloom .meta { margin: 2px 0 12px; font-size: 13px; color: var(--ink-soft); }
+.bloom .stem {
+  position: absolute; left: 148px; top: -34px; width: 8px; height: 38px;
+  background: linear-gradient(0deg, rgb(var(--panel-rgb) / 0.9), rgb(var(--pill-rgb) / 0.6));
+  border-radius: 6px 6px 0 0;
+}
+.buy {
+  font: inherit; font-size: 16px; font-weight: 600; color: var(--ink);
+  width: 100%; padding: 11px 0; border: 0; cursor: pointer;
+  border-radius: 22px 4px 22px 4px; background: var(--yellow);
+  box-shadow: 0 3px 10px rgb(var(--ink-rgb) / 0.16);
+}
+.buy:active { transform: translateY(1px); }
+@keyframes bloom-in { from { opacity: 0; transform: scale(.6); } to { opacity: 1; transform: scale(1); } }
+
+.leaf-sheet {
+  position: absolute; left: 16px; right: 16px; bottom: 124px;
+  padding: 14px 16px 12px;
+  border-radius: 30px 6px 30px 6px;
+  background: linear-gradient(165deg, rgb(255 255 255 / 0.84), rgb(var(--panel-rgb) / 0.88));
+  box-shadow: 0 8px 26px rgb(var(--ink-rgb) / 0.20);
+  backdrop-filter: blur(8px);
+  transform-origin: 100% 100%;
+  animation: bloom-in .5s cubic-bezier(.2, .9, .3, 1.15) both;
+}
+.leaf-sheet h2 { margin: 0 0 6px; font-size: 18px; font-weight: 600; }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 0; font-size: 14px; }
+.row.soft { color: var(--ink-soft); font-size: 13px; }
+.row.actions { justify-content: flex-start; padding-top: 10px; }
+.seg { display: inline-flex; background: rgb(var(--pill-rgb)); border-radius: 999px; padding: 2px; }
+.seg-btn { font: inherit; font-size: 13px; color: var(--ink); border: 0; background: transparent; padding: 5px 12px; border-radius: 999px; cursor: pointer; }
+.seg-btn[aria-pressed="true"] { background: var(--brand-green); color: #fff; }
+.switch { width: 44px; height: 26px; border: 0; border-radius: 999px; background: rgb(var(--ink-rgb) / 0.18); position: relative; cursor: pointer; padding: 0; }
+.switch span { position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: #fff; transition: transform .2s ease; }
+.switch[aria-checked="true"] { background: var(--brand-green); }
+.switch[aria-checked="true"] span { transform: translateX(18px); }
+.pill { font: inherit; font-size: 13px; color: rgb(var(--ink-rgb) / 0.85); padding: 8px 16px; border-radius: 999px; border: 1px solid rgb(var(--ink-rgb) / 0.25); background: transparent; cursor: pointer; }
+
+/* The bud, and the petals that unfold from it. */
+.bud-wrap { position: absolute; right: 22px; bottom: 28px; width: 56px; height: 56px; }
+.bud {
+  position: absolute; inset: 0; width: 56px; height: 56px; padding: 0; border: 0;
+  border-radius: 50%; background: rgb(255 255 255 / 0.38); cursor: pointer;
+  box-shadow: 0 2px 10px rgb(var(--ink-rgb) / 0.22);
+  transition: opacity .6s ease, transform .3s ease;
+  animation: breathe 3.4s ease-in-out infinite;
+}
+.bud svg { display: block; }
+.bud-word {
+  position: absolute; right: 62px; top: 17px; font-size: 13px; line-height: 1;
+  padding: 6px 10px; border-radius: 12px 3px 12px 3px; white-space: nowrap;
+  background: rgb(255 255 255 / 0.62); color: var(--ink);
+  transition: opacity .4s ease;
+}
+.stage[data-learned="true"] .bud-word, .stage[data-open="true"] .bud-word { opacity: 0; pointer-events: none; }
+.stage[data-idle="true"][data-open="false"] .bud { opacity: .55; }
+.bud:focus-visible { outline: 3px solid #fff; outline-offset: 2px; }
+@keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+
+.bud-back, .bud-mid { transform-origin: 32px 52px; transition: transform .45s cubic-bezier(.2, .9, .3, 1.2); }
+.stage[data-open="true"] .bud-back { transform: scale(1.12) rotate(-6deg); }
+.stage[data-open="true"] .bud-mid { transform: scale(1.08) rotate(5deg); }
+.stage[data-open="true"] .bud-tip { fill: #ffe98a; }
+
+.petals { list-style: none; margin: 0; padding: 0; position: absolute; right: 0; bottom: 66px; width: 130px; pointer-events: none; }
+.petals li {
+  position: absolute; right: 0; bottom: calc(var(--i) * 50px);
+  transform-origin: 100% 100%;
+  transform: scale(0) rotate(-14deg);
+  opacity: 0;
+  transition: transform .42s cubic-bezier(.2, .9, .3, 1.25), opacity .25s ease;
+  transition-delay: calc(var(--i) * 40ms);
+}
+.stage[data-open="true"] .petals li { transform: scale(1) rotate(calc(var(--i) * 1deg - 2deg)); opacity: 1; pointer-events: auto; }
+.stage[data-open="true"] .petals { pointer-events: auto; }
+.petal {
+  font: inherit; font-size: 15px; font-weight: 500; color: var(--ink);
+  min-width: 104px; min-height: 44px; padding: 10px 18px; border: 0; cursor: pointer;
+  border-radius: 24px 5px 24px 5px;
+  background: linear-gradient(160deg, rgb(var(--pill-rgb) / 0.96), rgb(var(--panel-rgb) / 0.94));
+  box-shadow: 0 4px 14px rgb(var(--ink-rgb) / 0.20);
+  text-align: left; white-space: nowrap;
+}
+.petal:focus-visible { outline: 3px solid #fff; outline-offset: 1px; }
+.stage[data-moment="settings"] .petals li:first-child .petal { background: var(--yellow); }
+
+.cover { margin: 12px 0 0; font-size: 14px; color: var(--ink-soft); }
+.cover strong { color: var(--ink); }
+
+.three { margin-top: 18px; }
+.three h2 { font-size: 15px; margin: 16px 0 4px; font-weight: 600; }
+.three p { margin: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .bud, .bloom, .leaf-sheet, .hint { animation: none; }
+  .petals li, .bud-back, .bud-mid, .stage::after { transition: none; }
+}
