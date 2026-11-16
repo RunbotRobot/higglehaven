@@ -25,6 +25,20 @@ for (const t of named) if (!defined.has(t)) problems.push(`docs/DESIGN.md names 
 
 const known = new Set(defined);
 for (const d of declarations(appCss)) if (d.prop.startsWith('--')) known.add(d.prop);
+// Variables a script sets at run time (element.style.setProperty('--x', ...))
+// are defined too: the stylesheet reads them with a fallback.
+import { readdirSync, statSync } from 'node:fs';
+function jsFiles(dir, out = []) {
+  for (const name of readdirSync(path.join(root, dir))) {
+    const rel = path.join(dir, name);
+    if (statSync(path.join(root, rel)).isDirectory()) jsFiles(rel, out);
+    else if (/\.js$/.test(name) && !/\.test\./.test(name)) out.push(rel);
+  }
+  return out;
+}
+for (const f of jsFiles('src')) {
+  for (const m of read(f).matchAll(/setProperty\(\s*['"`](--[a-z0-9-]+)['"`]/g)) known.add(m[1]);
+}
 const used = new Set([...stripComments(appCss).matchAll(/var\((--[a-z0-9-]+)/g)].map((m) => m[1]));
 for (const v of used) if (!known.has(v)) problems.push(`src/app.css uses var(${v}), which is defined nowhere`);
 

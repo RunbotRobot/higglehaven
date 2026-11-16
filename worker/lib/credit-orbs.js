@@ -63,6 +63,9 @@ const CREDIT_ORB_SPAWN_MARGIN_FACTOR = 0.8;
 // concurrent-caller races: two overlapping cron ticks can never both spawn
 // one, because D1/SQLite serializes writes and the second caller's own
 // NOT EXISTS subquery sees the first caller's already-committed INSERT.
+// #3597 piece 3 (AGENTS.md, "The fleet has a lándlet of its own in the live world and may use it
+// freely; it is never used to steer people"): Orbs land on a random greenbelt (unclaimed) landlet, so a claimed lot, the fleet's included, never draws people to itself. Never add a branch that favours the
+// fleet's lot here; scripts/fleet-lot-never-steers.test.mjs pins it.
 export async function spawnCreditOrbIfDue(db) {
   const cutoff = new Date(Date.now() - CREDIT_ORB_SPAWN_INTERVAL_MS).toISOString();
   const halfSpan = (LANDLET_SIDE_M / 2) * CREDIT_ORB_SPAWN_MARGIN_FACTOR;

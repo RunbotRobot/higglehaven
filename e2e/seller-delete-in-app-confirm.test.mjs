@@ -57,7 +57,13 @@ await page.waitForSelector('#confirm-modal.visible', { timeout: 5000 });
 const modalMessage = await page.textContent('#confirm-modal-message');
 const messageNamesProduct = modalMessage.includes(PRODUCT_NAME);
 const focusOnSafeChoice = await page.evaluate(() => document.activeElement?.id === 'confirm-modal-cancel-btn');
-const rowStillHasDelete = await deleteBtn.isVisible();
+// #3586: while this confirm modal is open the Seller modal behind it is hidden
+// (visibility: hidden, one sheet at a time), so isVisible() is false for the row's
+// Delete button. The check is that the row still has its Delete button, not
+// that it is painted under a modal: one button in the DOM, not removed by display.
+const rowStillHasDelete = await deleteBtn.evaluateAll(
+  (btns) => btns.length === 1 && getComputedStyle(btns[0]).display !== 'none',
+);
 
 // Never mind -> modal closes, nothing deleted, focus returns to Delete.
 await page.click('#confirm-modal-cancel-btn');
