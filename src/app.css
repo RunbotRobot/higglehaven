@@ -1178,13 +1178,21 @@
         font: 12px/1.4 sans-serif;
         cursor: pointer;
       }
+      /* #3626: stacking. The assistant window and its pill sit above every panel
+         and modal in every mode (Settings, My Products, Build's catalog, a
+         product card...), so whatever the person was looking at stays open
+         behind it and they can ask about it. Only what must win is above it: the
+         destructive-action confirmation and the age/ID verification (35), and
+         sign-in (40). Keep those three above 32; see
+         scripts/assistant-stacking.test.mjs, which fails if another panel paints
+         over the assistant. */
       /* #3447: the assistant chat panel -- a bottom sheet, since the person
          tapped something in the world and the world should stay visible above
          it. Text is selectable and errors stay until the next action ("Any
          text a user can read, they can copy"). */
       #assistant-chat-panel {
         position: fixed;
-        z-index: 17;
+        z-index: 32;
         left: 8px;
         right: 8px;
         bottom: 8px;
@@ -1221,7 +1229,7 @@
          and the mode buttons (top right). */
       #assistant-chat-pill {
         position: fixed;
-        z-index: 17;
+        z-index: 32;
         left: 8px;
         top: 38%;
         min-height: 36px;
@@ -3059,7 +3067,7 @@
       #confirm-modal {
         position: fixed;
         inset: 0;
-        z-index: 26;
+        z-index: 35;
         display: none;
         align-items: center;
         justify-content: center;
@@ -3391,7 +3399,7 @@
       #verify-modal {
         position: fixed;
         inset: 0;
-        z-index: 25;
+        z-index: 35;
         display: none;
         align-items: center;
         justify-content: center;
